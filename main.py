@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 # ============================================================
 # AI INFINITY v10.0
-# Research → Reason → Verify → Remember → Improve
+# Research -> Reason -> Verify -> Remember -> Improve
 # ============================================================
 
 VERSION = "10.0"
@@ -51,14 +51,12 @@ MAX_MEMORY = 300
 app = FastAPI(
     title=APP_NAME,
     version=VERSION,
-    description=(
-        "Free-first resilient AI orchestration platform."
-    )
+    description="Free-first resilient AI orchestration platform."
 )
 
 
 # ============================================================
-# THREAD-SAFE PROVIDER STATS
+# STATS
 # ============================================================
 
 STATS_LOCK = threading.Lock()
@@ -98,7 +96,7 @@ def stat_failure(provider: str):
 
 
 # ============================================================
-# SPECIALIST MINDS
+# MINDS
 # ============================================================
 
 MINDS = [
@@ -112,7 +110,7 @@ MINDS = [
 
 
 # ============================================================
-# REQUEST MODELS
+# MODELS
 # ============================================================
 
 class TaskRequest(BaseModel):
@@ -211,7 +209,7 @@ def load_memory():
 
 
 # ============================================================
-# TEXT HELPERS
+# HELPERS
 # ============================================================
 
 def clean_text(
@@ -233,9 +231,7 @@ def clean_text(
     return text[:limit]
 
 
-def safe_json(
-    value: Any
-) -> str:
+def safe_json(value: Any) -> str:
 
     try:
 
@@ -512,14 +508,10 @@ def verify_sources(
                 timeout=8
             )
 
-            status_code = (
-                response.status_code
-            )
+            status_code = response.status_code
 
             reachable = (
-                200 <=
-                status_code <
-                400
+                200 <= status_code < 400
             )
 
         except Exception:
@@ -542,14 +534,10 @@ def verify_sources(
                     stream=True
                 )
 
-                status_code = (
-                    response.status_code
-                )
+                status_code = response.status_code
 
                 reachable = (
-                    200 <=
-                    status_code <
-                    400
+                    200 <= status_code < 400
                 )
 
             except Exception:
@@ -571,7 +559,6 @@ def verify_sources(
 
 # ============================================================
 # HUGGING FACE
-# PRIMARY REASONING PROVIDER
 # ============================================================
 
 def provider_huggingface(
@@ -581,9 +568,7 @@ def provider_huggingface(
     if not HF_TOKEN:
         return None
 
-    stat_attempt(
-        "huggingface"
-    )
+    stat_attempt("huggingface")
 
     url = (
         "https://router.huggingface.co"
@@ -611,7 +596,6 @@ def provider_huggingface(
         "deepseek-ai/DeepSeek-R1:fastest"
     ]
 
-    # Remove duplicates
     models = list(
         dict.fromkeys(models)
     )
@@ -696,7 +680,6 @@ def provider_huggingface(
 
 # ============================================================
 # POLLINATIONS
-# SECONDARY PROVIDER
 # ============================================================
 
 def provider_pollinations(
@@ -728,11 +711,8 @@ def provider_pollinations(
     }
 
     models = [
-
         "openai",
-
         "openai-fast",
-
         "openai-large"
     ]
 
@@ -816,9 +796,7 @@ def provider_pollinations(
 # LOCAL FALLBACK
 # ============================================================
 
-def provider_local_fallback(
-    prompt: str
-) -> str:
+def provider_local_fallback() -> str:
 
     stat_attempt(
         "local_fallback"
@@ -829,23 +807,21 @@ def provider_local_fallback(
     )
 
     return (
-        "AI provider output was unavailable. "
-        "AI Infinity preserved the evidence, "
-        "execution state and provenance instead "
-        "of inventing an answer. Enable HF_TOKEN "
-        "or POLLINATIONS_API_KEY for model reasoning."
+        "AI providers were unavailable. "
+        "AI Infinity preserved the task, "
+        "evidence and provenance instead "
+        "of inventing model output."
     )
 
 
 # ============================================================
-# UNIVERSAL ROUTER
+# UNIVERSAL AI ROUTER
 # ============================================================
 
 def ai_generate(
     prompt: str
 ) -> Dict[str, Any]:
 
-    # PRIMARY → SECONDARY → FALLBACK
     providers = [
 
         (
@@ -903,9 +879,7 @@ def ai_generate(
             1,
 
         "text":
-            provider_local_fallback(
-                prompt
-            )
+            provider_local_fallback()
     }
 
 
@@ -970,11 +944,11 @@ Rules:
 # ============================================================
 
 def calculate_confidence(
-    evidence: List[Dict[str, Any]],
-    mind_results: List[Dict[str, Any]],
-    synthesis: Dict[str, Any],
-    verification: Optional[Dict[str, Any]]
-) -> Dict[str, Any]:
+    evidence,
+    mind_results,
+    synthesis,
+    verification
+):
 
     score = 0.35
 
@@ -987,11 +961,10 @@ def calculate_confidence(
         )
     )
 
-    if reachable:
-        score += min(
-            0.25,
-            reachable * 0.04
-        )
+    score += min(
+        0.25,
+        reachable * 0.04
+    )
 
     successful_minds = sum(
         1
@@ -1013,11 +986,13 @@ def calculate_confidence(
 
         score += 0.10
 
-    if verification and verification.get(
-        "provider"
-    ) != "local_fallback":
+    if verification:
 
-        score += 0.05
+        if verification.get(
+            "provider"
+        ) != "local_fallback":
+
+            score += 0.05
 
     score = max(
         0.0,
@@ -1064,24 +1039,20 @@ def calculate_confidence(
 
 
 # ============================================================
-# MAIN PIPELINE
+# PIPELINE
 # ============================================================
 
 def execute_pipeline(
     objective: str,
     do_research: bool = True,
     do_verify: bool = True
-) -> Dict[str, Any]:
+):
 
     started = time.time()
 
     intent = classify_intent(
         objective
     )
-
-    # --------------------------------------------------------
-    # RESEARCH
-    # --------------------------------------------------------
 
     research = []
 
@@ -1090,10 +1061,6 @@ def execute_pipeline(
         research = web_research(
             objective
         )
-
-    # --------------------------------------------------------
-    # VERIFY SOURCES
-    # --------------------------------------------------------
 
     verified_sources = []
 
@@ -1108,10 +1075,6 @@ def execute_pipeline(
         if verified_sources
         else research
     )
-
-    # --------------------------------------------------------
-    # SPECIALIST MINDS
-    # --------------------------------------------------------
 
     mind_results = []
 
@@ -1158,10 +1121,6 @@ def execute_pipeline(
                         str(exc)
                 })
 
-    # --------------------------------------------------------
-    # SYNTHESIS
-    # --------------------------------------------------------
-
     synthesis_prompt = f"""
 You are the CENTRAL SYNTHESIS ENGINE of AI Infinity.
 
@@ -1179,17 +1138,17 @@ SPECIALIST ANALYSIS:
 
 Produce the best practical answer.
 
-IMPORTANT:
+Rules:
 
 - Answer the objective directly.
-- Use the evidence.
-- Do not invent facts.
+- Use available evidence.
+- Never invent facts.
 - Separate FACTS, UNCERTAINTIES and RECOMMENDATIONS.
-- If evidence conflicts, explicitly say so.
-- Make recommendations actionable.
+- If evidence conflicts, state that clearly.
+- Make recommendations concrete.
 - End with exactly ONE immediate next action.
 
-Output structure:
+Structure:
 
 ANSWER
 
@@ -1205,10 +1164,6 @@ ONE IMMEDIATE NEXT ACTION
     synthesis = ai_generate(
         synthesis_prompt
     )
-
-    # --------------------------------------------------------
-    # VERIFICATION
-    # --------------------------------------------------------
 
     verification = None
 
@@ -1232,7 +1187,7 @@ SPECIALIST ANALYSIS:
 Check:
 
 1. Does the answer answer the objective?
-2. Are claims supported by evidence?
+2. Are claims supported?
 3. Are unsupported claims clearly marked?
 4. Are facts separated from recommendations?
 5. Are contradictions identified?
@@ -1255,10 +1210,6 @@ Only list corrections if necessary.
             verification_prompt
         )
 
-    # --------------------------------------------------------
-    # CONFIDENCE
-    # --------------------------------------------------------
-
     confidence = calculate_confidence(
 
         evidence,
@@ -1269,10 +1220,6 @@ Only list corrections if necessary.
 
         verification
     )
-
-    # --------------------------------------------------------
-    # PROVENANCE
-    # --------------------------------------------------------
 
     provenance = {
 
@@ -1311,10 +1258,6 @@ Only list corrections if necessary.
         "generated_at":
             time.time()
     }
-
-    # --------------------------------------------------------
-    # PLAN
-    # --------------------------------------------------------
 
     execution_plan = [
 
@@ -1499,7 +1442,7 @@ def remember(
 
 
 # ============================================================
-# TASK RUNNER
+# TASK
 # ============================================================
 
 def run_task(
@@ -1507,22 +1450,19 @@ def run_task(
 ):
 
     objective = clean_text(
-
         payload.command
         or payload.objective,
-
         10000
     )
 
     if not objective:
 
         raise HTTPException(
-
             status_code=422,
-
-            detail:
+            detail=(
                 "Provide either "
                 "'command' or 'objective'."
+            )
         )
 
     task_id = (
@@ -1611,6 +1551,9 @@ def run_task(
                 result
         }
 
+    except HTTPException:
+        raise
+
     except Exception as exc:
 
         tasks = load_tasks()
@@ -1635,16 +1578,13 @@ def run_task(
         )
 
         raise HTTPException(
-
             status_code=500,
-
-            detail:
-                str(exc)
+            detail=str(exc)
         )
 
 
 # ============================================================
-# WEB UI
+# UI
 # ============================================================
 
 @app.get(
@@ -1663,7 +1603,7 @@ def home():
 <meta name="viewport"
 content="width=device-width,initial-scale=1">
 
-<title>AI Infinity v10</title>
+<title>AI Infinity</title>
 
 <style>
 
@@ -1684,16 +1624,6 @@ body {
     margin: auto;
 }
 
-h1 {
-    font-size: 38px;
-    margin-bottom: 5px;
-}
-
-.subtitle {
-    opacity: .7;
-    margin-bottom: 25px;
-}
-
 .card {
     background: #111827;
     border: 1px solid #263044;
@@ -1702,24 +1632,43 @@ h1 {
     margin-bottom: 15px;
 }
 
+h1 {
+    font-size: 38px;
+    margin: 0 0 5px;
+}
+
+.subtitle {
+    opacity: .7;
+    margin-bottom: 15px;
+}
+
+.badge {
+    display: inline-block;
+    background: #1d293d;
+    border-radius: 20px;
+    padding: 6px 10px;
+    margin: 3px;
+    font-size: 13px;
+}
+
 textarea {
     width: 100%;
     min-height: 170px;
-    resize: vertical;
+    padding: 15px;
     border-radius: 12px;
     border: 1px solid #344057;
     background: #080d18;
     color: white;
-    padding: 15px;
     font-size: 16px;
+    resize: vertical;
 }
 
 button {
     width: 100%;
+    margin-top: 12px;
+    padding: 16px;
     border: 0;
     border-radius: 12px;
-    padding: 16px;
-    margin-top: 12px;
     background: #315efb;
     color: white;
     font-size: 16px;
@@ -1733,17 +1682,7 @@ button:disabled {
 pre {
     white-space: pre-wrap;
     word-break: break-word;
-    overflow-x: auto;
     font-size: 13px;
-}
-
-.badge {
-    display: inline-block;
-    padding: 6px 10px;
-    border-radius: 20px;
-    background: #1d293d;
-    margin-right: 5px;
-    margin-bottom: 5px;
 }
 
 </style>
@@ -1762,11 +1701,12 @@ pre {
 Research → Reason → Verify → Remember → Improve
 </div>
 
-<div class="badge">v10.0</div>
-<div class="badge">Multi-Mind</div>
-<div class="badge">Web Research</div>
-<div class="badge">Verification</div>
-<div class="badge">Memory</div>
+<span class="badge">v10.0</span>
+<span class="badge">6 Minds</span>
+<span class="badge">Web Research</span>
+<span class="badge">Verification</span>
+<span class="badge">Memory</span>
+<span class="badge">Provenance</span>
 
 </div>
 
@@ -1926,7 +1866,7 @@ def health():
 
 
 # ============================================================
-# TASK
+# ENDPOINTS
 # ============================================================
 
 @app.post("/task")
@@ -1939,10 +1879,6 @@ def create_task(
     )
 
 
-# ============================================================
-# RUN ALIAS
-# ============================================================
-
 @app.post("/run")
 def run_alias(
     payload: TaskRequest
@@ -1952,10 +1888,6 @@ def run_alias(
         payload
     )
 
-
-# ============================================================
-# GET TASK
-# ============================================================
 
 @app.get("/task/{task_id}")
 def get_task(
@@ -1977,10 +1909,6 @@ def get_task(
 
     return task
 
-
-# ============================================================
-# RESEARCH
-# ============================================================
 
 @app.post("/research")
 def research(
@@ -2007,10 +1935,6 @@ def research(
     }
 
 
-# ============================================================
-# MEMORY
-# ============================================================
-
 @app.get("/memory")
 def memory():
 
@@ -2025,10 +1949,6 @@ def memory():
             items
     }
 
-
-# ============================================================
-# STATS
-# ============================================================
 
 @app.get("/stats")
 def stats():
@@ -2064,10 +1984,6 @@ def stats():
             True
     }
 
-
-# ============================================================
-# CONFIG
-# ============================================================
 
 @app.get("/config")
 def config():
