@@ -2,7 +2,6 @@ import os
 import json
 import time
 import uuid
-import math
 import re
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -15,18 +14,13 @@ from pydantic import BaseModel, Field
 
 
 # ============================================================
-# AI INFINITY 8
-# Resilient Multi-Provider AI Engine
+# AI INFINITY v9.0
+# Research → Reason → Verify → Remember
+# Free-first resilient AI orchestration engine
 # ============================================================
 
-VERSION = "8.0"
+VERSION = "9.0"
 APP_NAME = "AI Infinity"
-
-app = FastAPI(
-    title=APP_NAME,
-    version=VERSION,
-    description="Free-first resilient AI orchestration platform"
-)
 
 BASE = Path("/tmp/ai-infinity")
 BASE.mkdir(parents=True, exist_ok=True)
@@ -37,417 +31,43 @@ MEMORY_FILE = BASE / "memory.json"
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
 POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "").strip()
 
+POLLINATIONS_BASE_URL = os.getenv(
+    "POLLINATIONS_BASE_URL",
+    "https://gen.pollinations.ai"
+).rstrip("/")
+
 TIMEOUT = 25
 MAX_RETRIES = 2
 
 
-# ============================================================
-# STORAGE
-# ============================================================
-
-def load_json(path: Path, default):
-    try:
-        if path.exists():
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return default
-
-
-def save_json(path: Path, data):
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-
-
-def load_tasks():
-    return load_json(TASKS_FILE, {})
-
-
-def save_tasks(data):
-    save_json(TASKS_FILE, data)
-
-
-def load_memory():
-    return load_json(MEMORY_FILE, [])
-
-
-def save_memory(data):
-    save_json(MEMORY_FILE, data[-100:])
+app = FastAPI(
+    title=APP_NAME,
+    version=VERSION,
+    description=(
+        "Free-first resilient AI orchestration platform: "
+        "research, specialist reasoning, synthesis, verification and memory."
+    ),
+)
 
 
 # ============================================================
-# MODELS
-# ============================================================
-
-class TaskRequest(BaseModel):
-    command: str = Field(..., min_length=1, max_length=10000)
-    duration_minutes: int = Field(default=1, ge=1, le=120)
-
-
-class ResearchRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=2000)
-
-
-# ============================================================
-# BASIC HELPERS
-# ============================================================
-
-def clean_text(text: Any, limit: int = 12000) -> str:
-    if text is None:
-        return ""
-    text = str(text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text[:limit]
-
-
-def safe_json(data):
-    try:
-        return json.dumps(data, ensure_ascii=False, indent=2)
-    except Exception:
-        return str(data)
-
-
-# ============================================================
-# FREE WEB RESEARCH
-# ============================================================
-
-def web_research(query: str, max_results: int = 5) -> List[Dict[str, str]]:
-    results = []
-
-    try:
-        url = "https://html.duckduckgo.com/html/"
-        response = requests.get(
-            url,
-            params={"q": query},
-            headers={
-                "User-Agent": "Mozilla/5.0 AI-Infinity/8.0"
-            },
-            timeout=15
-        )
-
-        if response.status_code != 200:
-            return []
-
-        html = response.text
-
-        blocks = re.findall(
-            r'<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
-            html,
-            flags=re.I | re.S
-        )
-
-        for href, title in blocks[:max_results]:
-            title = re.sub("<.*?>", "", title)
-            title = clean_text(title, 300)
-
-            if title:
-                results.append({
-                    "title": title,
-                    "url": href
-                })
-
-    except Exception:
-        return []
-
-    return results
-
-
-# ============================================================
-# PROVIDER 1 — POLLINATIONS
-# ============================================================
-
-def provider_pollinations(prompt: str) -> Optional[str]:
-    models = [
-        "openai",
-        "openai-large"
-    ]
-
-    for model in models:
-        try:
-            url = "https://text.pollinations.ai/"
-
-            params = {
-                "model": model,
-                "prompt": prompt
-            }
-
-            headers = {
-                "User-Agent": "AI-Infinity/8.0"
-            }
-
-            if POLLINATIONS_API_KEY:
-                headers["Authorization"] = f"Bearer {POLLINATIONS_API_KEY}"
-
-            response = requests.get(
-                url,
-                params=params,
-                headers=headers,
-                timeout=TIMEOUT
-            )
-
-            if response.status_code == 200:
-                text = clean_text(response.text, 15000)
-
-                if text and len(text) > 10:
-                    return text
-
-        except Exception:
-            continue
-
-    return None
-
-
-# ============================================================
-# PROVIDER 2 — HUGGING FACE
-# ============================================================
-
-def provider_huggingface(prompt: str) -> Optional[str]:
-
-    if not HF_TOKEN:
-        return None
-
-    models = [
-        "HuggingFaceH4/zephyr-7b-beta",
-        "mistralai/Mistral-7B-Instruct-v0.2"
-    ]
-
-    headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
-        "Content-Type": "application/json",
-        "User-Agent": "AI-Infinity/8.0"
-    }
-
-    for model in models:
-
-        try:
-            url = (
-                "https://api-inference.huggingface.co/models/"
-                + model
-            )
-
-            payload = {
-                "inputs": prompt,
-                "parameters": {
-                    "max_new_tokens": 700,
-                    "temperature": 0.3,
-                    "return_full_text": False
-                }
-            }
-
-            response = requests.post(
-                url,
-                headers=headers,
-                json=payload,
-                timeout=TIMEOUT
-            )
-
-            if response.status_code != 200:
-                continue
-
-            data = response.json()
-
-            if isinstance(data, list) and data:
-                text = data[0].get("generated_text", "")
-
-                if text:
-                    return clean_text(text, 15000)
-
-            if isinstance(data, dict):
-                text = data.get("generated_text", "")
-
-                if text:
-                    return clean_text(text, 15000)
-
-        except Exception:
-            continue
-
-    return None
-
-
-# ============================================================
-# PROVIDER 3 — FREE DIRECT FALLBACK
-# ============================================================
-
-def provider_free_fallback(prompt: str) -> Optional[str]:
-    """
-    Last-resort deterministic fallback.
-
-    This does not pretend to be an external LLM.
-    It gives the orchestration engine useful output
-    when every external provider is unavailable.
-    """
-
-    prompt_lower = prompt.lower()
-
-    if "next 3" in prompt_lower or "upgrade" in prompt_lower:
-        return (
-            "AI Infinity should prioritize three concrete upgrades: "
-            "1) resilient multi-provider execution, "
-            "2) persistent structured memory, "
-            "3) controlled real-world tool execution. "
-            "The immediate priority is resilient provider execution."
-        )
-
-    if "summarize" in prompt_lower:
-        return (
-            "The available information was processed successfully, "
-            "but external AI generation was unavailable. "
-            "The system should retry through its provider fallback chain."
-        )
-
-    return (
-        "AI Infinity completed its orchestration pipeline. "
-        "External AI providers were unavailable, so the system used "
-        "its safe local fallback instead of inventing provider output."
-    )
-
-
-# ============================================================
-# RESILIENT AI ROUTER
+# PROVIDER STATS
 # ============================================================
 
 PROVIDER_STATS = {
     "pollinations": {
         "attempts": 0,
-        "successes": 0
+        "successes": 0,
     },
     "huggingface": {
         "attempts": 0,
-        "successes": 0
+        "successes": 0,
     },
     "local_fallback": {
         "attempts": 0,
-        "successes": 0
-    }
+        "successes": 0,
+    },
 }
-
-
-def call_provider(name: str, prompt: str) -> Optional[str]:
-
-    PROVIDER_STATS[name]["attempts"] += 1
-
-    result = None
-
-    if name == "pollinations":
-        result = provider_pollinations(prompt)
-
-    elif name == "huggingface":
-        result = provider_huggingface(prompt)
-
-    elif name == "local_fallback":
-        result = provider_free_fallback(prompt)
-
-    if result:
-        PROVIDER_STATS[name]["successes"] += 1
-        return result
-
-    return None
-
-
-def ai_generate(prompt: str) -> Dict[str, Any]:
-
-    providers = [
-        "pollinations",
-        "huggingface",
-        "local_fallback"
-    ]
-
-    for provider in providers:
-
-        for attempt in range(MAX_RETRIES):
-
-            result = call_provider(provider, prompt)
-
-            if result:
-                return {
-                    "success": True,
-                    "provider": provider,
-                    "attempt": attempt + 1,
-                    "text": result
-                }
-
-            if provider != "local_fallback":
-                time.sleep(0.5)
-
-    return {
-        "success": False,
-        "provider": None,
-        "attempt": MAX_RETRIES,
-        "text": (
-            "No generation provider returned a usable response."
-        )
-    }
-
-
-# ============================================================
-# INTENT
-# ============================================================
-
-def classify_intent(command: str) -> str:
-
-    text = command.lower()
-
-    if any(x in text for x in [
-        "build",
-        "create",
-        "make",
-        "develop",
-        "code",
-        "app",
-        "website"
-    ]):
-        return "build"
-
-    if any(x in text for x in [
-        "research",
-        "investigate",
-        "find",
-        "analyze",
-        "study"
-    ]):
-        return "research"
-
-    if any(x in text for x in [
-        "business",
-        "money",
-        "profit",
-        "market",
-        "startup"
-    ]):
-        return "business"
-
-    if any(x in text for x in [
-        "technical",
-        "bug",
-        "error",
-        "api",
-        "server",
-        "deployment"
-    ]):
-        return "technical"
-
-    if any(x in text for x in [
-        "automate",
-        "automation",
-        "workflow",
-        "agent"
-    ]):
-        return "automation"
-
-    if any(x in text for x in [
-        "write",
-        "story",
-        "creative",
-        "idea",
-        "design"
-    ]):
-        return "creative"
-
-    return "general"
 
 
 # ============================================================
@@ -460,17 +80,588 @@ MINDS = [
     "Critical Mind",
     "Optimizer Mind",
     "Verification Mind",
-    "Future Mind"
+    "Future Mind",
 ]
 
+
+# ============================================================
+# REQUEST MODELS
+# ============================================================
+
+class TaskRequest(BaseModel):
+    # Both are accepted.
+    # This fixes the previous "command field required" problem.
+    command: Optional[str] = Field(
+        default=None,
+        max_length=10000
+    )
+
+    objective: Optional[str] = Field(
+        default=None,
+        max_length=10000
+    )
+
+    research: bool = True
+    verify: bool = True
+    remember: bool = True
+
+    duration_minutes: int = Field(
+        default=1,
+        ge=1,
+        le=120
+    )
+
+
+class ResearchRequest(BaseModel):
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=2000
+    )
+
+
+# ============================================================
+# STORAGE
+# ============================================================
+
+def load_json(path: Path, default: Any) -> Any:
+    try:
+        if path.exists():
+            with path.open("r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+
+    return default
+
+
+def save_json(path: Path, data: Any) -> None:
+    try:
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(
+                data,
+                f,
+                ensure_ascii=False,
+                indent=2
+            )
+    except Exception:
+        pass
+
+
+def load_tasks() -> Dict[str, Any]:
+    return load_json(TASKS_FILE, {})
+
+
+def save_tasks(data: Dict[str, Any]) -> None:
+    save_json(TASKS_FILE, data)
+
+
+def load_memory() -> List[Dict[str, Any]]:
+    return load_json(MEMORY_FILE, [])
+
+
+def save_memory(data: List[Dict[str, Any]]) -> None:
+    save_json(MEMORY_FILE, data[-200:])
+
+
+# ============================================================
+# HELPERS
+# ============================================================
+
+def clean_text(
+    value: Any,
+    limit: int = 15000
+) -> str:
+
+    if value is None:
+        return ""
+
+    text = str(value)
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    ).strip()
+
+    return text[:limit]
+
+
+def safe_json(value: Any) -> str:
+    try:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            indent=2
+        )
+    except Exception:
+        return str(value)
+
+
+# ============================================================
+# FREE WEB RESEARCH
+# ============================================================
+
+def web_research(
+    query: str,
+    max_results: int = 6
+) -> List[Dict[str, str]]:
+
+    results = []
+
+    try:
+
+        response = requests.get(
+            "https://html.duckduckgo.com/html/",
+            params={
+                "q": query
+            },
+            headers={
+                "User-Agent":
+                    "Mozilla/5.0 AI-Infinity/9.0"
+            },
+            timeout=15
+        )
+
+        if response.status_code != 200:
+            return results
+
+        blocks = re.findall(
+            r'<a[^>]+class="result__a"[^>]*'
+            r'href="([^"]+)"[^>]*>(.*?)</a>',
+            response.text,
+            flags=re.I | re.S
+        )
+
+        for href, title in blocks[:max_results]:
+
+            title = re.sub(
+                r"<.*?>",
+                "",
+                title
+            )
+
+            title = clean_text(
+                title,
+                300
+            )
+
+            if title:
+
+                results.append({
+                    "title": title,
+                    "url": href
+                })
+
+    except Exception:
+        pass
+
+    return results
+
+
+# ============================================================
+# SOURCE VERIFICATION
+# ============================================================
+
+def verify_sources(
+    results: List[Dict[str, str]]
+) -> List[Dict[str, Any]]:
+
+    checked = []
+
+    for item in results[:6]:
+
+        url = item.get(
+            "url",
+            ""
+        )
+
+        status = None
+        reachable = False
+
+        try:
+
+            response = requests.head(
+                url,
+                allow_redirects=True,
+                headers={
+                    "User-Agent":
+                        "Mozilla/5.0 AI-Infinity/9.0"
+                },
+                timeout=8
+            )
+
+            status = response.status_code
+
+            reachable = (
+                200 <= response.status_code < 400
+            )
+
+        except Exception:
+
+            try:
+
+                response = requests.get(
+                    url,
+                    allow_redirects=True,
+                    headers={
+                        "User-Agent":
+                            "Mozilla/5.0 AI-Infinity/9.0"
+                    },
+                    timeout=8,
+                    stream=True
+                )
+
+                status = response.status_code
+
+                reachable = (
+                    200 <= response.status_code < 400
+                )
+
+            except Exception:
+                pass
+
+        checked.append({
+            **item,
+            "reachable": reachable,
+            "status_code": status
+        })
+
+    return checked
+
+
+# ============================================================
+# PROVIDER 1
+# POLLINATIONS
+# ============================================================
+
+def provider_pollinations(
+    prompt: str
+) -> Optional[str]:
+
+    if not POLLINATIONS_API_KEY:
+        return None
+
+    url = (
+        f"{POLLINATIONS_BASE_URL}"
+        "/v1/chat/completions"
+    )
+
+    headers = {
+        "Authorization":
+            f"Bearer {POLLINATIONS_API_KEY}",
+        "Content-Type":
+            "application/json",
+        "User-Agent":
+            "AI-Infinity/9.0"
+    }
+
+    models = [
+        "openai",
+        "openai-fast",
+        "openai-large"
+    ]
+
+    for model in models:
+
+        try:
+
+            response = requests.post(
+                url,
+                headers=headers,
+                json={
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    "temperature": 0.2,
+                    "max_tokens": 900
+                },
+                timeout=TIMEOUT
+            )
+
+            if response.status_code != 200:
+                continue
+
+            data = response.json()
+
+            text = (
+                data
+                .get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+            )
+
+            if text:
+                return clean_text(text)
+
+        except Exception:
+            continue
+
+    return None
+
+
+# ============================================================
+# PROVIDER 2
+# HUGGING FACE
+# ============================================================
+
+def provider_huggingface(
+    prompt: str
+) -> Optional[str]:
+
+    if not HF_TOKEN:
+        return None
+
+    url = (
+        "https://router.huggingface.co"
+        "/v1/chat/completions"
+    )
+
+    headers = {
+        "Authorization":
+            f"Bearer {HF_TOKEN}",
+        "Content-Type":
+            "application/json",
+        "User-Agent":
+            "AI-Infinity/9.0"
+    }
+
+    models = [
+        os.getenv(
+            "HF_MODEL",
+            "openai/gpt-oss-120b:fastest"
+        ),
+        "deepseek-ai/DeepSeek-R1:fastest"
+    ]
+
+    for model in models:
+
+        try:
+
+            response = requests.post(
+                url,
+                headers=headers,
+                json={
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    "temperature": 0.2,
+                    "max_tokens": 900,
+                    "stream": False
+                },
+                timeout=TIMEOUT
+            )
+
+            if response.status_code != 200:
+                continue
+
+            data = response.json()
+
+            text = (
+                data
+                .get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+            )
+
+            if text:
+                return clean_text(text)
+
+        except Exception:
+            continue
+
+    return None
+
+
+# ============================================================
+# LOCAL FALLBACK
+# ============================================================
+
+def provider_free_fallback(
+    prompt: str
+) -> str:
+
+    return (
+        "External AI providers were unavailable. "
+        "AI Infinity completed the safe local "
+        "orchestration path without pretending that "
+        "unavailable model output was real. "
+        "Retry with an enabled provider for full reasoning."
+    )
+
+
+# ============================================================
+# UNIVERSAL AI ROUTER
+# ============================================================
+
+def call_provider(
+    name: str,
+    prompt: str
+) -> Optional[str]:
+
+    PROVIDER_STATS[name]["attempts"] += 1
+
+    result = None
+
+    if name == "pollinations":
+
+        result = provider_pollinations(
+            prompt
+        )
+
+    elif name == "huggingface":
+
+        result = provider_huggingface(
+            prompt
+        )
+
+    elif name == "local_fallback":
+
+        result = provider_free_fallback(
+            prompt
+        )
+
+    if result:
+
+        PROVIDER_STATS[name]["successes"] += 1
+
+    return result
+
+
+def ai_generate(
+    prompt: str
+) -> Dict[str, Any]:
+
+    providers = [
+        "pollinations",
+        "huggingface",
+        "local_fallback"
+    ]
+
+    for provider in providers:
+
+        for attempt in range(
+            1,
+            MAX_RETRIES + 1
+        ):
+
+            result = call_provider(
+                provider,
+                prompt
+            )
+
+            if result:
+
+                return {
+                    "success": True,
+                    "provider": provider,
+                    "attempt": attempt,
+                    "text": result
+                }
+
+            if provider != "local_fallback":
+
+                time.sleep(0.4)
+
+    return {
+        "success": False,
+        "provider": None,
+        "attempt": MAX_RETRIES,
+        "text": "No provider returned a usable response."
+    }
+
+
+# ============================================================
+# INTENT ENGINE
+# ============================================================
+
+def classify_intent(
+    command: str
+) -> str:
+
+    text = command.lower()
+
+    groups = {
+
+        "build": [
+            "build",
+            "create",
+            "make",
+            "develop",
+            "code",
+            "app",
+            "website"
+        ],
+
+        "research": [
+            "research",
+            "investigate",
+            "find",
+            "analyze",
+            "study"
+        ],
+
+        "business": [
+            "business",
+            "money",
+            "profit",
+            "market",
+            "startup"
+        ],
+
+        "technical": [
+            "technical",
+            "bug",
+            "error",
+            "api",
+            "server",
+            "deployment"
+        ],
+
+        "automation": [
+            "automate",
+            "automation",
+            "workflow",
+            "agent"
+        ],
+
+        "creative": [
+            "write",
+            "story",
+            "creative",
+            "idea",
+            "design"
+        ]
+    }
+
+    for intent, words in groups.items():
+
+        if any(
+            word in text
+            for word in words
+        ):
+            return intent
+
+    return "general"
+
+
+# ============================================================
+# SPECIALIST MIND
+# ============================================================
 
 def run_mind(
     mind: str,
     objective: str,
-    research: List[Dict[str, str]]
+    research: List[Dict[str, Any]]
 ) -> Dict[str, Any]:
-
-    research_text = safe_json(research)
 
     prompt = f"""
 You are the {mind} inside AI Infinity.
@@ -478,18 +669,18 @@ You are the {mind} inside AI Infinity.
 OBJECTIVE:
 {objective}
 
-AVAILABLE WEB RESEARCH:
-{research_text}
+AVAILABLE EVIDENCE:
+{safe_json(research)}
 
-Analyze the objective from your specialist perspective.
+Return exactly:
 
-Return:
 1. Key finding
-2. Important risks
+2. Risk or uncertainty
 3. Concrete recommendation
 4. One actionable next step
 
-Be concise, factual and practical.
+Be factual, concise and practical.
+Do not invent evidence.
 """
 
     result = ai_generate(prompt)
@@ -503,43 +694,89 @@ Be concise, factual and practical.
 
 
 # ============================================================
-# PIPELINE
+# CORE PIPELINE
 # ============================================================
 
-def execute_pipeline(objective: str) -> Dict[str, Any]:
+def execute_pipeline(
+    objective: str,
+    do_research: bool = True,
+    do_verify: bool = True
+) -> Dict[str, Any]:
 
-    intent = classify_intent(objective)
+    intent = classify_intent(
+        objective
+    )
 
-    research = web_research(objective, max_results=5)
+    # --------------------------------------------------------
+    # RESEARCH
+    # --------------------------------------------------------
+
+    research = (
+        web_research(objective)
+        if do_research
+        else []
+    )
+
+    # --------------------------------------------------------
+    # VERIFY SOURCES
+    # --------------------------------------------------------
+
+    verified_sources = (
+        verify_sources(research)
+        if do_verify and research
+        else []
+    )
+
+    evidence = (
+        verified_sources
+        or research
+    )
+
+    # --------------------------------------------------------
+    # SPECIALIST MINDS
+    # --------------------------------------------------------
 
     mind_results = []
 
-    with ThreadPoolExecutor(max_workers=6) as executor:
+    with ThreadPoolExecutor(
+        max_workers=len(MINDS)
+    ) as executor:
 
         futures = [
             executor.submit(
                 run_mind,
                 mind,
                 objective,
-                research
+                evidence
             )
             for mind in MINDS
         ]
 
-        for future in as_completed(futures):
+        for future in as_completed(
+            futures
+        ):
 
             try:
-                mind_results.append(future.result())
+
+                mind_results.append(
+                    future.result()
+                )
+
             except Exception as exc:
+
                 mind_results.append({
                     "mind": "unknown",
                     "provider": None,
                     "success": False,
-                    "analysis": f"Mind execution error: {exc}"
+                    "analysis": str(exc)
                 })
 
+    # --------------------------------------------------------
+    # SYNTHESIS
+    # --------------------------------------------------------
+
     synthesis_prompt = f"""
-You are the central synthesis engine of AI Infinity.
+You are the central AI Infinity synthesis engine.
 
 OBJECTIVE:
 {objective}
@@ -547,28 +784,39 @@ OBJECTIVE:
 INTENT:
 {intent}
 
-WEB RESEARCH:
-{safe_json(research)}
+RESEARCH:
+{safe_json(evidence)}
 
 SPECIALIST MINDS:
 {safe_json(mind_results)}
 
-Create the final answer.
+Create the best practical answer.
 
-Requirements:
+RULES:
+
 - Answer the objective directly.
-- Identify the most important findings.
-- Give exactly 3 concrete upgrades or actions when the objective asks for 3.
-- Clearly identify ONE immediate next action when requested.
-- Do not invent facts.
-- If research is empty, explicitly say so.
-- Keep the answer practical.
+- Separate facts from recommendations.
+- Never invent missing evidence.
+- State uncertainty when evidence is missing.
+- If the user requests 3 items, provide exactly 3.
+- Make actions concrete.
+- End with ONE immediate next action.
 """
 
-    synthesis = ai_generate(synthesis_prompt)
+    synthesis = ai_generate(
+        synthesis_prompt
+    )
 
-    verification_prompt = f"""
-Verify the following proposed AI Infinity answer.
+    # --------------------------------------------------------
+    # VERIFICATION
+    # --------------------------------------------------------
+
+    verification = None
+
+    if do_verify:
+
+        verification_prompt = f"""
+Verify this AI Infinity result.
 
 OBJECTIVE:
 {objective}
@@ -576,48 +824,116 @@ OBJECTIVE:
 ANSWER:
 {synthesis["text"]}
 
+RESEARCH:
+{safe_json(evidence)}
+
 Check:
+
 1. Does it answer the objective?
 2. Are unsupported claims present?
-3. Are the actions concrete?
-4. Is there one clearly identified next action?
+3. Are there contradictions?
+4. Are recommendations concrete?
+5. Is uncertainty clearly stated?
 
-Return a concise verification report.
+Return:
+
+PASS or NEEDS_REVIEW
+
+Then give the 3 most important checks.
 """
 
-    verification = ai_generate(verification_prompt)
+        verification = ai_generate(
+            verification_prompt
+        )
 
-    execution_plan = [
-        {
-            "step": 1,
-            "action": "Use the resilient provider router",
-            "status": "available"
-        },
-        {
-            "step": 2,
-            "action": "Process the specialist analyses",
-            "status": "completed"
-        },
-        {
-            "step": 3,
-            "action": "Synthesize and verify the result",
-            "status": "completed"
-        }
-    ]
+    # --------------------------------------------------------
+    # FINAL PIPELINE RESULT
+    # --------------------------------------------------------
 
     return {
-        "objective": objective,
-        "intent": intent,
-        "research_results": research,
-        "specialist_minds": mind_results,
-        "synthesis": synthesis,
-        "verification": verification,
-        "execution_plan": execution_plan,
-        "providers": {
-            "pollinations": PROVIDER_STATS["pollinations"],
-            "huggingface": PROVIDER_STATS["huggingface"],
-            "local_fallback": PROVIDER_STATS["local_fallback"]
-        }
+
+        "objective":
+            objective,
+
+        "intent":
+            intent,
+
+        "research_results":
+            research,
+
+        "verified_sources":
+            verified_sources,
+
+        "specialist_minds":
+            mind_results,
+
+        "synthesis":
+            synthesis,
+
+        "verification":
+            verification,
+
+        "execution_plan": [
+
+            {
+                "step": 1,
+                "action":
+                    "Understand and classify objective",
+                "status":
+                    "completed"
+            },
+
+            {
+                "step": 2,
+                "action":
+                    "Research and verify evidence",
+                "status":
+                    (
+                        "completed"
+                        if do_research
+                        else "skipped"
+                    )
+            },
+
+            {
+                "step": 3,
+                "action":
+                    "Run specialist minds in parallel",
+                "status":
+                    "completed"
+            },
+
+            {
+                "step": 4,
+                "action":
+                    "Synthesize final answer",
+                "status":
+                    "completed"
+            },
+
+            {
+                "step": 5,
+                "action":
+                    "Verify final result",
+                "status":
+                    (
+                        "completed"
+                        if do_verify
+                        else "skipped"
+                    )
+            },
+
+            {
+                "step": 6,
+                "action":
+                    "Store reusable memory",
+                "status":
+                    "available"
+            }
+        ],
+
+        "providers":
+            PROVIDER_STATS
     }
 
 
@@ -625,364 +941,569 @@ Return a concise verification report.
 # MEMORY
 # ============================================================
 
-def remember(objective: str, result: Dict[str, Any]):
+def remember(
+    objective: str,
+    result: Dict[str, Any]
+) -> None:
 
     memory = load_memory()
 
     memory.append({
-        "id": str(uuid.uuid4()),
-        "timestamp": time.time(),
-        "objective": objective,
-        "intent": result.get("intent"),
-        "provider": result.get("synthesis", {}).get("provider"),
-        "success": result.get("synthesis", {}).get("success")
+
+        "id":
+            "mem-" +
+            uuid.uuid4().hex[:12],
+
+        "timestamp":
+            time.time(),
+
+        "objective":
+            objective,
+
+        "intent":
+            result.get(
+                "intent"
+            ),
+
+        "provider":
+            result
+            .get("synthesis", {})
+            .get("provider"),
+
+        "success":
+            result
+            .get("synthesis", {})
+            .get("success"),
+
+        "summary":
+            clean_text(
+                result
+                .get("synthesis", {})
+                .get("text", ""),
+                1200
+            )
     })
 
-    save_memory(memory)
+    save_memory(
+        memory
+    )
 
 
 # ============================================================
 # TASK EXECUTION
 # ============================================================
 
-def create_task(command: str) -> Dict[str, Any]:
+def run_task(
+    payload: TaskRequest
+) -> Dict[str, Any]:
 
-    task_id = "task-" + uuid.uuid4().hex[:12]
+    objective = clean_text(
+        payload.command
+        or payload.objective,
+        10000
+    )
 
-    task = {
-        "task_id": task_id,
-        "status": "running",
-        "objective": command,
-        "created_at": time.time()
-    }
+    if not objective:
+
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Provide either "
+                "'command' or 'objective'."
+            )
+        )
+
+    task_id = (
+        "task-" +
+        uuid.uuid4().hex[:12]
+    )
 
     tasks = load_tasks()
-    tasks[task_id] = task
-    save_tasks(tasks)
+
+    tasks[task_id] = {
+
+        "task_id":
+            task_id,
+
+        "status":
+            "running",
+
+        "objective":
+            objective,
+
+        "created_at":
+            time.time()
+    }
+
+    save_tasks(
+        tasks
+    )
 
     try:
 
-        result = execute_pipeline(command)
+        result = execute_pipeline(
+            objective,
+            payload.research,
+            payload.verify
+        )
 
-        task.update({
-            "status": "completed",
-            "result": result,
-            "completed_at": time.time()
-        })
+        if payload.remember:
 
-        remember(command, result)
+            remember(
+                objective,
+                result
+            )
+
+        tasks = load_tasks()
+
+        tasks[task_id] = {
+
+            **tasks.get(
+                task_id,
+                {}
+            ),
+
+            "status":
+                "completed",
+
+            "result":
+                result,
+
+            "completed_at":
+                time.time()
+        }
+
+        save_tasks(
+            tasks
+        )
+
+        return {
+
+            "task_id":
+                task_id,
+
+            "status":
+                "completed",
+
+            "objective":
+                objective,
+
+            "result":
+                result
+        }
 
     except Exception as exc:
 
-        task.update({
-            "status": "failed",
-            "error": str(exc),
-            "completed_at": time.time()
-        })
+        tasks = load_tasks()
 
-    tasks[task_id] = task
-    save_tasks(tasks)
+        tasks[task_id] = {
 
-    return task
+            **tasks.get(
+                task_id,
+                {}
+            ),
 
+            "status":
+                "failed",
 
-# ============================================================
-# API
-# ============================================================
+            "error":
+                str(exc)
+        }
 
-@app.get("/health")
-def health():
-
-    return {
-        "status": "healthy",
-        "service": APP_NAME,
-        "version": VERSION,
-        "engine": "resilient-multi-provider"
-    }
-
-
-@app.get("/capabilities")
-def capabilities():
-
-    return {
-        "version": VERSION,
-        "capabilities": [
-            "Multi-provider AI",
-            "Automatic provider fallback",
-            "Provider retry system",
-            "Free web research",
-            "6 specialist minds",
-            "Parallel orchestration",
-            "Synthesis",
-            "Verification",
-            "Memory",
-            "Execution planning",
-            "Free-first architecture"
-        ],
-        "providers": [
-            "Pollinations",
-            "Hugging Face",
-            "Local fallback"
-        ]
-    }
-
-
-@app.get("/stats")
-def stats():
-
-    tasks = load_tasks()
-    memory = load_memory()
-
-    return {
-        "version": VERSION,
-        "tasks": len(tasks),
-        "memories": len(memory),
-        "provider_stats": PROVIDER_STATS
-    }
-
-
-@app.get("/memory")
-def memory():
-
-    return {
-        "count": len(load_memory()),
-        "items": load_memory()
-    }
-
-
-@app.get("/tasks")
-def tasks():
-
-    data = load_tasks()
-
-    return {
-        "count": len(data),
-        "tasks": list(data.values())[-50:]
-    }
-
-
-@app.get("/task/{task_id}")
-def get_task(task_id: str):
-
-    tasks = load_tasks()
-
-    if task_id not in tasks:
-        raise HTTPException(
-            status_code=404,
-            detail="Task not found"
+        save_tasks(
+            tasks
         )
 
-    return tasks[task_id]
-
-
-@app.post("/task")
-def task(request: TaskRequest):
-
-    return create_task(request.command)
-
-
-@app.post("/research")
-def research(request: ResearchRequest):
-
-    results = web_research(
-        request.query,
-        max_results=10
-    )
-
-    return {
-        "query": request.query,
-        "count": len(results),
-        "results": results
-    }
+        raise HTTPException(
+            status_code=500,
+            detail=str(exc)
+        )
 
 
 # ============================================================
 # WEB UI
 # ============================================================
 
-HTML = """
-<!DOCTYPE html>
+@app.get(
+    "/",
+    response_class=HTMLResponse
+)
+def home():
+
+    return """
+<!doctype html>
+
 <html>
+
 <head>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AI Infinity 8</title>
+
+<meta name="viewport"
+      content="width=device-width,initial-scale=1">
+
+<title>AI Infinity</title>
 
 <style>
-body {
-    font-family: Arial, sans-serif;
-    background: #0b0b0f;
-    color: #fff;
-    margin: 0;
-    padding: 20px;
-}
 
-.container {
-    max-width: 900px;
-    margin: auto;
+body {
+    font-family: system-ui, sans-serif;
+    max-width: 760px;
+    margin: 30px auto;
+    padding: 20px;
+    background: #0b1020;
+    color: white;
 }
 
 h1 {
-    font-size: 32px;
-}
-
-.badge {
-    display: inline-block;
-    padding: 6px 10px;
-    border-radius: 20px;
-    background: #222;
-    margin-bottom: 15px;
+    font-size: 34px;
 }
 
 textarea {
     width: 100%;
-    min-height: 130px;
-    padding: 14px;
     box-sizing: border-box;
+    padding: 15px;
     border-radius: 12px;
-    border: 1px solid #444;
-    background: #15151c;
+    border: 1px solid #334;
+    background: #11182c;
     color: white;
     font-size: 16px;
 }
 
 button {
+    width: 100%;
+    padding: 15px;
     margin-top: 12px;
-    padding: 14px 22px;
+    border-radius: 12px;
     border: 0;
-    border-radius: 10px;
-    background: #ffffff;
-    color: #000;
+    background: #2457ff;
+    color: white;
+    font-weight: 700;
     font-size: 16px;
-    font-weight: bold;
 }
 
 pre {
     white-space: pre-wrap;
-    background: #15151c;
+    background: #11182c;
     padding: 15px;
     border-radius: 12px;
     overflow-x: auto;
 }
 
-.card {
-    background: #121219;
-    border-radius: 15px;
-    padding: 18px;
-    margin-top: 18px;
-}
-
-.small {
-    opacity: .7;
-    font-size: 14px;
-}
 </style>
+
 </head>
 
 <body>
 
-<div class="container">
+<h1>∞ AI Infinity</h1>
 
-<h1>AI Infinity ∞</h1>
-
-<div class="badge">
-AI Infinity 8 — Resilient AI Engine
-</div>
-
-<p class="small">
-Multiple AI providers • Research • 6 Minds • Verification • Memory
+<p>
+Research → Reason → Verify → Remember
 </p>
 
-<div class="card">
+<textarea
+    id="q"
+    rows="8"
+    placeholder="Enter your objective..."
+></textarea>
 
-<textarea id="command"
-placeholder="Tell AI Infinity what you want..."></textarea>
-
-<br>
-
-<button onclick="runTask()">
+<button onclick="runAI()">
 RUN AI INFINITY
 </button>
 
-</div>
-
-<div class="card">
-
-<h2>Result</h2>
-
-<pre id="result">Waiting...</pre>
-
-</div>
-
-</div>
+<pre id="out">Ready.</pre>
 
 <script>
 
-async function runTask() {
+async function runAI() {
 
-    const command =
-        document.getElementById("command").value;
+    const q =
+        document.getElementById("q").value;
 
-    if (!command.trim()) {
-        alert("Enter a mission first.");
+    const out =
+        document.getElementById("out");
+
+    if (!q.trim()) {
+
+        out.textContent =
+            "Enter an objective first.";
+
         return;
     }
 
-    document.getElementById("result").textContent =
+    out.textContent =
         "AI Infinity is working...";
 
     try {
 
-        const response = await fetch("/task", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                command: command,
-                duration_minutes: 1
-            })
-        });
+        const response =
+            await fetch(
+                "/task",
+                {
+                    method: "POST",
 
-        const data = await response.json();
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
 
-        document.getElementById("result").textContent =
-            JSON.stringify(data, null, 2);
+                    body: JSON.stringify({
+                        objective: q,
+                        research: true,
+                        verify: true,
+                        remember: true
+                    })
+                }
+            );
+
+        const data =
+            await response.json();
+
+        out.textContent =
+            JSON.stringify(
+                data,
+                null,
+                2
+            );
 
     } catch (error) {
 
-        document.getElementById("result").textContent =
-            "Error: " + error;
-
+        out.textContent =
+            String(error);
     }
 }
 
 </script>
 
 </body>
+
 </html>
 """
 
 
-@app.get("/", response_class=HTMLResponse)
-def home():
+# ============================================================
+# HEALTH
+# ============================================================
 
-    return HTML
+@app.get("/health")
+def health():
+
+    return {
+
+        "status":
+            "ok",
+
+        "app":
+            APP_NAME,
+
+        "version":
+            VERSION,
+
+        "pipeline":
+            [
+                "intent",
+                "research",
+                "specialist_minds",
+                "synthesis",
+                "verification",
+                "memory"
+            ],
+
+        "providers": {
+
+            "pollinations_configured":
+                bool(
+                    POLLINATIONS_API_KEY
+                ),
+
+            "huggingface_configured":
+                bool(
+                    HF_TOKEN
+                ),
+
+            "local_fallback":
+                True
+        }
+    }
 
 
 # ============================================================
-# STARTUP
+# MAIN TASK ENDPOINT
 # ============================================================
 
-@app.on_event("startup")
-def startup():
+@app.post("/task")
+def create_task(
+    payload: TaskRequest
+):
 
-    if not TASKS_FILE.exists():
-        save_tasks({})
-
-    if not MEMORY_FILE.exists():
-        save_memory([])
-
-    print(
-        f"{APP_NAME} {VERSION} started — "
-        "Resilient Multi-Provider Engine"
+    return run_task(
+        payload
     )
+
+
+# ============================================================
+# COMPATIBILITY ALIAS
+# ============================================================
+
+@app.post("/run")
+def run_alias(
+    payload: TaskRequest
+):
+
+    return run_task(
+        payload
+    )
+
+
+# ============================================================
+# GET TASK
+# ============================================================
+
+@app.get(
+    "/task/{task_id}"
+)
+def get_task(
+    task_id: str
+):
+
+    tasks = load_tasks()
+
+    task = tasks.get(
+        task_id
+    )
+
+    if not task:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Task not found"
+        )
+
+    return task
+
+
+# ============================================================
+# RESEARCH ENDPOINT
+# ============================================================
+
+@app.post("/research")
+def research(
+    payload: ResearchRequest
+):
+
+    results = web_research(
+        payload.query,
+        max_results=10
+    )
+
+    return {
+
+        "query":
+            payload.query,
+
+        "results":
+            results,
+
+        "verified":
+            verify_sources(
+                results
+            )
+    }
+
+
+# ============================================================
+# MEMORY ENDPOINT
+# ============================================================
+
+@app.get("/memory")
+def memory():
+
+    items = load_memory()
+
+    return {
+
+        "count":
+            len(items),
+
+        "items":
+            items
+    }
+
+
+# ============================================================
+# STATS
+# ============================================================
+
+@app.get("/stats")
+def stats():
+
+    tasks = load_tasks()
+
+    return {
+
+        "app":
+            APP_NAME,
+
+        "version":
+            VERSION,
+
+        "tasks":
+            len(tasks),
+
+        "memory_items":
+            len(
+                load_memory()
+            ),
+
+        "providers":
+            PROVIDER_STATS,
+
+        "free_first":
+            True
+    }
+
+
+# ============================================================
+# CONFIG
+# ============================================================
+
+@app.get("/config")
+def config():
+
+    return {
+
+        "app":
+            APP_NAME,
+
+        "version":
+            VERSION,
+
+        "pipeline":
+            [
+                "intent",
+                "research",
+                "specialist_minds",
+                "synthesis",
+                "verification",
+                "memory"
+            ],
+
+        "provider_order":
+            [
+                "pollinations",
+                "huggingface",
+                "local_fallback"
+            ],
+
+        "api_keys_present":
+            {
+                "POLLINATIONS_API_KEY":
+                    bool(
+                        POLLINATIONS_API_KEY
+                    ),
+
+                "HF_TOKEN":
+                    bool(
+                        HF_TOKEN
+                    )
+            }
+    }
