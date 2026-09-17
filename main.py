@@ -1,414 +1,953 @@
 import os
+import re
 import json
-import sqlite3
 import uuid
-import hashlib
+import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Optional, List, Dict, Any
 
+import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-APP_NAME = "AI Infinity"
+APP = "AI Infinity"
 VERSION = "3.0.0"
-
-DB_PATH = Path(os.getenv("AI_INFINITY_DB", "/tmp/ai_infinity.db"))
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+DB = os.getenv("AI_INFINITY_DB", "/tmp/ai_infinity.db")
+TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "20"))
 
 app = FastAPI(
-    title=APP_NAME,
+    title=APP,
     version=VERSION,
-    description="Free-first Autonomous Intelligence Fabric"
+    description="Free-first Intelligence Fabric"
 )
 
 
-# =========================
+# =========================================================
 # DATABASE
-# =========================
+# =========================================================
+
+def connect():
+    c = sqlite3.connect(DB)
+    c.row_factory = sqlite3.Row
+    return c
+
 
 def now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
 def init_db():
-    with db() as c:
-        c.executescript("""
-        CREATE TABLE IF NOT EXISTS tasks (
-            id TEXT PRIMARY KEY,
-            objective TEXT NOT NULL,
-            status TEXT NOT NULL,
-            plan TEXT NOT NULL,
-            result TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
+    c = connect()
 
-        CREATE TABLE IF NOT EXISTS memories (
-            id TEXT PRIMARY KEY,
-            content TEXT NOT NULL,
-            source TEXT,
-            confidence REAL DEFAULT 0.5,
-            created_at TEXT NOT NULL
-        );
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY,
+        objective TEXT,
+        status TEXT,
+        created_at TEXT,
+        result TEXT
+    );
 
-        CREATE TABLE IF NOT EXISTS resources (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            endpoint TEXT,
-            capabilities TEXT NOT NULL,
-            cost TEXT DEFAULT 'free',
-            enabled INTEGER DEFAULT 1,
-            created_at TEXT NOT NULL
-        );
+    CREATE TABLE IF NOT EXISTS memories (
+        id TEXT PRIMARY KEY,
+        kind TEXT,
+        content TEXT,
+        source TEXT,
+        confidence REAL,
+        created_at TEXT
+    );
 
-        CREATE TABLE IF NOT EXISTS genomes (
-            id TEXT PRIMARY KEY,
-            objective TEXT NOT NULL,
-            genome TEXT NOT NULL,
-            score REAL,
-            created_at TEXT NOT NULL
-        );
+    CREATE TABLE IF NOT EXISTS evidence (
+        id TEXT PRIMARY KEY,
+        task_id TEXT,
+        title TEXT,
+        url TEXT,
+        snippet TEXT,
+        source TEXT,
+        retrieved_at TEXT
+    );
 
-        CREATE TABLE IF NOT EXISTS events (
-            id TEXT PRIMARY KEY,
-            event_type TEXT NOT NULL,
-            payload TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
+    CREATE TABLE IF NOT EXISTS events (
+        id TEXT PRIMARY KEY,
+        kind TEXT,
+        payload TEXT,
+        created_at TEXT
+    );
 
-        CREATE TABLE IF NOT EXISTS dreams (
-            id TEXT PRIMARY KEY,
-            objective TEXT NOT NULL,
-            ideas TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
+    CREATE TABLE IF NOT EXISTS genomes (
+        id TEXT PRIMARY KEY,
+        objective TEXT,
+        genome TEXT,
+        created_at TEXT
+    );
+    """)
 
-        CREATE TABLE IF NOT EXISTS simulations (
-            id TEXT PRIMARY KEY,
-            objective TEXT NOT NULL,
-            assumptions TEXT NOT NULL,
-            scenarios TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS hypotheses (
-            id TEXT PRIMARY KEY,
-            statement TEXT NOT NULL,
-            status TEXT NOT NULL,
-            evidence TEXT,
-            created_at TEXT NOT NULL
-        );
-        """)
+    c.commit()
+    c.close()
 
 
 init_db()
 
 
-def event(event_type: str, payload: Dict[str, Any]):
-    with db() as c:
-        c.execute(
-            "INSERT INTO events VALUES (?, ?, ?, ?)",
-            (
-                str(uuid.uuid4()),
-                event_type,
-                json.dumps(payload),
-                now()
-            )
+def log_event(kind, payload):
+    c = connect()
+    c.execute(
+        "INSERT INTO events VALUES (?,?,?,?)",
+        (
+            str(uuid.uuid4()),
+            kind,
+            json.dumps(payload, ensure_ascii=False),
+            now()
         )
+    )
+    c.commit()
+    c.close()
 
 
-# =========================
+# =========================================================
 # REQUEST MODELS
-# =========================
+# =========================================================
+
+class AskRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=20000)
+    research: bool = True
+    model: Optional[str] = None
+
+
+class ResearchRequest(BaseModel):
+    query: str = Field(min_length=2, max_length=1000)
+    max_results: int = Field(default=6, ge=1, le=10)
+
 
 class IntentRequest(BaseModel):
-    objective: str = Field(min_length=1, max_length=10000)
-
-
-class ResourceRequest(BaseModel):
-    name: str
-    kind: str = "model"
-    endpoint: Optional[str] = None
-    capabilities: List[str] = []
-    cost: str = "free"
+    objective: str = Field(min_length=3, max_length=20000)
 
 
 class VerifyRequest(BaseModel):
     claim: str
-    evidence: List[str] = []
+    evidence: List[Dict[str, Any]] = []
 
 
 class MemoryRequest(BaseModel):
     content: str
-    source: Optional[str] = None
+    kind: str = "knowledge"
+    source: str = "unknown"
     confidence: float = Field(default=0.5, ge=0, le=1)
 
 
-class GenomeRequest(BaseModel):
-    objective: str
-    strategy: Dict[str, Any]
-    score: Optional[float] = None
+# =========================================================
+# UTILITIES
+# =========================================================
+
+def clean(text):
+    return re.sub(r"\s+", " ", text or "").strip()
 
 
-class SimulationRequest(BaseModel):
-    objective: str
-    assumptions: List[str] = []
+def domains(objective):
+    text = objective.lower()
 
-
-class DreamRequest(BaseModel):
-    objective: str
-
-
-class HypothesisRequest(BaseModel):
-    statement: str
-
-
-# =========================
-# INTELLIGENCE CORE
-# =========================
-
-SPECIALISTS = [
-    "researcher",
-    "strategist",
-    "builder",
-    "critic",
-    "verifier"
-]
-
-
-def understand_intent(objective: str):
-
-    text = objective.strip()
-    low = text.lower()
-
-    domains = []
-
-    mapping = {
-        "software": [
-            "code",
-            "app",
-            "software",
-            "api",
-            "github",
-            "website"
-        ],
+    groups = {
         "research": [
-            "research",
-            "study",
-            "paper",
-            "investigate",
-            "find"
+            "research", "investigate", "study",
+            "find", "analyze"
+        ],
+        "software": [
+            "software", "code", "app",
+            "api", "website", "github"
         ],
         "business": [
-            "business",
-            "profit",
-            "customer",
-            "market",
-            "startup"
-        ],
-        "content": [
-            "video",
-            "content",
-            "youtube",
-            "article",
-            "write"
+            "business", "market",
+            "customer", "profit", "revenue"
         ],
         "science": [
-            "science",
-            "experiment",
-            "hypothesis",
-            "laboratory"
+            "science", "experiment",
+            "hypothesis", "scientific"
+        ],
+        "content": [
+            "video", "content",
+            "image", "article"
         ]
     }
 
-    for domain, words in mapping.items():
-        if any(word in low for word in words):
-            domains.append(domain)
+    found = []
+
+    for name, words in groups.items():
+        if any(word in text for word in words):
+            found.append(name)
+
+    return found or ["general"]
+
+
+# =========================================================
+# WEB RESEARCH
+# =========================================================
+
+def web_research(query, maximum=6):
+    results = []
+
+    try:
+        r = requests.get(
+            "https://html.duckduckgo.com/html/",
+            params={"q": query},
+            headers={
+                "User-Agent":
+                "Mozilla/5.0 AI-Infinity/3.0"
+            },
+            timeout=TIMEOUT
+        )
+
+        if r.ok:
+
+            blocks = re.findall(
+                r'<div class="result[^>]*>(.*?)</div>\s*</div>',
+                r.text,
+                re.S
+            )
+
+            for block in blocks:
+
+                a = re.search(
+                    r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+                    block,
+                    re.S
+                )
+
+                s = re.search(
+                    r'class="result__snippet"[^>]*>(.*?)</a?>',
+                    block,
+                    re.S
+                )
+
+                if not a:
+                    continue
+
+                url = a.group(1)
+
+                title = clean(
+                    re.sub("<.*?>", "", a.group(2))
+                )
+
+                snippet = clean(
+                    re.sub("<.*?>", "", s.group(1))
+                ) if s else ""
+
+                results.append({
+                    "title": title,
+                    "url": url,
+                    "snippet": snippet,
+                    "source": "DuckDuckGo"
+                })
+
+                if len(results) >= maximum:
+                    break
+
+    except Exception as e:
+        log_event(
+            "research_error",
+            {"error": str(e)}
+        )
+
+    # Wikipedia fallback
+    if len(results) < maximum:
+
+        try:
+            r = requests.get(
+                "https://en.wikipedia.org/w/api.php",
+                params={
+                    "action": "query",
+                    "list": "search",
+                    "srsearch": query,
+                    "format": "json",
+                    "srlimit": maximum
+                },
+                headers={
+                    "User-Agent": "AI-Infinity/3.0"
+                },
+                timeout=TIMEOUT
+            )
+
+            if r.ok:
+
+                items = (
+                    r.json()
+                    .get("query", {})
+                    .get("search", [])
+                )
+
+                for item in items:
+
+                    title = item.get("title", "")
+
+                    results.append({
+                        "title": title,
+                        "url":
+                            "https://en.wikipedia.org/wiki/"
+                            + title.replace(" ", "_"),
+                        "snippet": clean(
+                            re.sub(
+                                "<.*?>",
+                                "",
+                                item.get("snippet", "")
+                            )
+                        ),
+                        "source": "Wikipedia"
+                    })
+
+                    if len(results) >= maximum:
+                        break
+
+        except Exception as e:
+            log_event(
+                "research_error",
+                {"provider": "wikipedia", "error": str(e)}
+            )
+
+    # Remove duplicates
+    output = []
+    seen = set()
+
+    for result in results:
+
+        if result["url"] not in seen:
+
+            seen.add(result["url"])
+            output.append(result)
+
+    log_event(
+        "research_completed",
+        {
+            "query": query,
+            "results": len(output)
+        }
+    )
+
+    return output[:maximum]
+
+
+# =========================================================
+# AI MODEL ROUTER
+# =========================================================
+
+def ollama(prompt, model=None):
+
+    url = os.getenv(
+        "OLLAMA_URL",
+        "http://127.0.0.1:11434"
+    )
+
+    model = model or os.getenv(
+        "OLLAMA_MODEL",
+        "llama3.2:3b"
+    )
+
+    try:
+
+        r = requests.post(
+            url.rstrip("/") + "/api/generate",
+            json={
+                "model": model,
+                "prompt": prompt,
+                "stream": False
+            },
+            timeout=60
+        )
+
+        if r.ok:
+
+            return {
+                "text": r.json().get("response", ""),
+                "provider": "ollama",
+                "model": model
+            }
+
+    except Exception as e:
+
+        log_event(
+            "model_error",
+            {
+                "provider": "ollama",
+                "error": str(e)
+            }
+        )
+
+    return None
+
+
+def huggingface(prompt, model=None):
+
+    token = os.getenv("HF_TOKEN")
+
+    if not token:
+        return None
+
+    model = model or os.getenv(
+        "HF_MODEL",
+        "Qwen/Qwen2.5-0.5B-Instruct"
+    )
+
+    try:
+
+        r = requests.post(
+            "https://api-inference.huggingface.co/models/"
+            + model,
+            headers={
+                "Authorization": "Bearer " + token
+            },
+            json={
+                "inputs": prompt,
+                "parameters": {
+                    "max_new_tokens": 700,
+                    "return_full_text": False
+                }
+            },
+            timeout=60
+        )
+
+        if r.ok:
+
+            data = r.json()
+
+            if isinstance(data, list) and data:
+
+                return {
+                    "text":
+                        data[0].get(
+                            "generated_text",
+                            ""
+                        ),
+                    "provider": "huggingface",
+                    "model": model
+                }
+
+    except Exception as e:
+
+        log_event(
+            "model_error",
+            {
+                "provider": "huggingface",
+                "error": str(e)
+            }
+        )
+
+    return None
+
+
+def ai_generate(prompt, model=None):
+
+    # Local-first
+    result = ollama(prompt, model)
+
+    if result:
+        return result
+
+    # Optional hosted provider
+    result = huggingface(prompt, model)
+
+    if result:
+        return result
 
     return {
-        "objective": text,
-        "domains": domains or ["general"],
-        "constraints": [
-            "free-first",
-            "no automatic spending",
-            "auditable"
-        ],
-        "specialists": SPECIALISTS,
-        "timestamp": now()
+        "text": None,
+        "provider": "none",
+        "model": None,
+        "message":
+            "No AI model provider configured. "
+            "Research and orchestration remain available."
     }
 
 
-def create_plan(objective: str):
+# =========================================================
+# INTELLIGENCE PLANNER
+# =========================================================
 
-    intent = understand_intent(objective)
-    domain = intent["domains"][0]
+def create_plan(objective):
 
-    return [
-        {
-            "step": 1,
-            "action": "understand",
-            "owner": "researcher",
-            "description":
-                f"Understand the {domain} objective and requirements."
-        },
-        {
-            "step": 2,
-            "action": "resource_discovery",
-            "owner": "strategist",
-            "description":
-                "Identify available free/local resources."
-        },
-        {
-            "step": 3,
-            "action": "strategy",
-            "owner": "strategist",
-            "description":
-                "Generate multiple executable strategies."
-        },
-        {
-            "step": 4,
-            "action": "simulation",
-            "owner": "critic",
-            "description":
-                "Test assumptions and alternative scenarios."
-        },
-        {
-            "step": 5,
-            "action": "execution",
-            "owner": "builder",
-            "description":
-                "Execute authorized and reversible actions."
-        },
-        {
-            "step": 6,
-            "action": "verification",
-            "owner": "verifier",
-            "description":
-                "Check the result and record evidence."
-        },
-        {
-            "step": 7,
-            "action": "learning",
-            "owner": "researcher",
-            "description":
-                "Store reusable lessons and Intelligence Genome."
+    return {
+        "objective": objective,
+
+        "domains": domains(objective),
+
+        "temporary_minds": [
+            "researcher",
+            "strategist",
+            "builder",
+            "critic",
+            "verifier"
+        ],
+
+        "execution_graph": [
+            "understand_intent",
+            "research",
+            "generate_strategies",
+            "simulate",
+            "execute_reversible_work",
+            "verify",
+            "learn",
+            "store_intelligence_genome"
+        ],
+
+        "governor": {
+            "free_first": True,
+            "local_first": True,
+            "automatic_spending": False,
+            "automatic_self_deployment": False,
+            "consequential_actions_require_authorization": True
         }
+    }
+
+
+# =========================================================
+# ORCHESTRATOR
+# =========================================================
+
+def orchestrate(objective, do_research=True, model=None):
+
+    task_id = "task-" + uuid.uuid4().hex[:12]
+
+    blueprint = create_plan(objective)
+
+    sources = []
+
+    if do_research:
+        sources = web_research(objective, 6)
+
+    research_text = json.dumps(
+        sources,
+        ensure_ascii=False
+    )
+
+    prompt = f"""
+You are an intelligence specialist inside AI Infinity.
+
+OBJECTIVE:
+{objective}
+
+AVAILABLE RESEARCH:
+{research_text[:12000]}
+
+Create a practical execution strategy.
+
+Separate your answer into:
+
+1. Source-backed observations
+2. Unknowns
+3. Hypotheses
+4. Competing strategies
+5. Recommended experiments
+6. Verification tests
+7. Failure recovery
+
+Rules:
+- Do not invent evidence.
+- Simulation is not evidence.
+- Prefer reversible actions.
+- Do not spend money automatically.
+- Do not deploy self-modifications automatically.
+"""
+
+    intelligence = ai_generate(
+        prompt,
+        model
+    )
+
+    result = {
+        "task_id": task_id,
+        "status": "planned",
+        "objective": objective,
+        "architecture": blueprint,
+        "research": sources,
+        "intelligence": intelligence,
+        "verification": {
+            "status": "pending",
+            "required": True
+        }
+    }
+
+    c = connect()
+
+    c.execute(
+        "INSERT INTO tasks VALUES (?,?,?,?,?)",
+        (
+            task_id,
+            objective,
+            "planned",
+            now(),
+            json.dumps(
+                result,
+                ensure_ascii=False
+            )
+        )
+    )
+
+    for source in sources:
+
+        c.execute(
+            "INSERT INTO evidence VALUES (?,?,?,?,?,?,?)",
+            (
+                str(uuid.uuid4()),
+                task_id,
+                source["title"],
+                source["url"],
+                source["snippet"],
+                source["source"],
+                now()
+            )
+        )
+
+    c.commit()
+    c.close()
+
+    log_event(
+        "task_created",
+        {
+            "task_id": task_id,
+            "objective": objective
+        }
+    )
+
+    return result
+
+
+# =========================================================
+# VERIFICATION
+# =========================================================
+
+def verify(claim, evidence):
+
+    valid = [
+        item
+        for item in evidence
+        if item.get("url") or item.get("source")
     ]
 
+    return {
+        "claim": claim,
+        "status":
+            "evidence_available"
+            if valid
+            else "unverified",
 
-def choose_resources(capability=None):
+        "evidence_count": len(valid),
 
-    with db() as c:
-        rows = c.execute(
-            """
-            SELECT * FROM resources
-            WHERE enabled=1 AND cost='free'
-            """
-        ).fetchall()
+        "important_note":
+            "Presence of a source does not prove the claim. "
+            "Independent verification is required.",
 
-    results = []
-
-    for r in rows:
-
-        caps = json.loads(r["capabilities"])
-
-        if (
-            not capability
-            or capability.lower()
-            in [x.lower() for x in caps]
-        ):
-            results.append(dict(r))
-
-    return results
+        "evidence": valid
+    }
 
 
-# =========================
-# HOME
-# =========================
+# =========================================================
+# API
+# =========================================================
 
 @app.get("/health")
 def health():
 
     return {
         "status": "ok",
-        "service": APP_NAME,
-        "version": VERSION,
-        "time": now()
+        "service": APP,
+        "version": VERSION
     }
 
 
-@app.get("/", response_class=HTMLResponse)
-def home():
+@app.get("/v1/status")
+def status():
 
-    return """
+    return {
+        "service": APP,
+        "version": VERSION,
+
+        "capabilities": [
+            "intent",
+            "web_research",
+            "ai_model_routing",
+            "orchestration",
+            "evidence",
+            "verification",
+            "memory",
+            "audit_events"
+        ],
+
+        "providers": {
+            "ollama": bool(
+                os.getenv("OLLAMA_URL")
+            ),
+            "huggingface": bool(
+                os.getenv("HF_TOKEN")
+            )
+        },
+
+        "governor": {
+            "free_first": True,
+            "automatic_spending": False,
+            "automatic_deployment": False
+        }
+    }
+
+
+@app.post("/v1/intent")
+def intent(req: IntentRequest):
+
+    return {
+        "objective": req.objective,
+        "domains": domains(req.objective),
+        "constraints": [
+            "free-first",
+            "auditable",
+            "verification-required"
+        ]
+    }
+
+
+@app.post("/v1/research")
+def research(req: ResearchRequest):
+
+    return {
+        "query": req.query,
+        "results": web_research(
+            req.query,
+            req.max_results
+        )
+    }
+
+
+@app.post("/v1/orchestrate")
+def api_orchestrate(req: AskRequest):
+
+    return orchestrate(
+        req.prompt,
+        req.research,
+        req.model
+    )
+
+
+@app.post("/v1/ask")
+def ask(req: AskRequest):
+
+    sources = (
+        web_research(req.prompt, 6)
+        if req.research
+        else []
+    )
+
+    prompt = f"""
+Answer the following user request.
+
+USER:
+{req.prompt}
+
+RESEARCH:
+{json.dumps(sources, ensure_ascii=False)}
+
+Rules:
+- distinguish facts from hypotheses
+- do not invent sources
+- mention uncertainty
+"""
+
+    answer = ai_generate(
+        prompt,
+        req.model
+    )
+
+    return {
+        "request": req.prompt,
+        "research": sources,
+        "answer": answer
+    }
+
+
+@app.post("/v1/verify")
+def api_verify(req: VerifyRequest):
+
+    return verify(
+        req.claim,
+        req.evidence
+    )
+
+
+@app.post("/v1/memory")
+def add_memory(req: MemoryRequest):
+
+    memory_id = "mem-" + uuid.uuid4().hex[:12]
+
+    c = connect()
+
+    c.execute(
+        "INSERT INTO memories VALUES (?,?,?,?,?,?)",
+        (
+            memory_id,
+            req.kind,
+            req.content,
+            req.source,
+            req.confidence,
+            now()
+        )
+    )
+
+    c.commit()
+    c.close()
+
+    return {
+        "id": memory_id,
+        "status": "stored"
+    }
+
+
+@app.get("/v1/memory")
+def get_memory(limit: int = 50):
+
+    c = connect()
+
+    rows = c.execute(
+        """
+        SELECT *
+        FROM memories
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (min(limit, 200),)
+    ).fetchall()
+
+    c.close()
+
+    return {
+        "memories": [
+            dict(row)
+            for row in rows
+        ]
+    }
+
+
+@app.get("/v1/tasks/{task_id}")
+def task(task_id: str):
+
+    c = connect()
+
+    row = c.execute(
+        "SELECT * FROM tasks WHERE id=?",
+        (task_id,)
+    ).fetchone()
+
+    c.close()
+
+    if not row:
+        raise HTTPException(
+            404,
+            "Task not found"
+        )
+
+    result = dict(row)
+
+    result["result"] = json.loads(
+        result["result"]
+    )
+
+    return result
+
+
+@app.get("/v1/events")
+def events(limit: int = 50):
+
+    c = connect()
+
+    rows = c.execute(
+        """
+        SELECT *
+        FROM events
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (min(limit, 200),)
+    ).fetchall()
+
+    c.close()
+
+    return {
+        "events": [
+            dict(row)
+            for row in rows
+        ]
+    }
+
+
+# =========================================================
+# WEB UI
+# =========================================================
+
+PAGE = """
 <!DOCTYPE html>
 <html>
 <head>
-
 <meta name="viewport"
-      content="width=device-width,initial-scale=1">
+content="width=device-width,initial-scale=1">
 
 <title>AI Infinity</title>
 
 <style>
 
 body {
-    font-family: system-ui;
-    margin: 0;
-    background: #0b1020;
-    color: #eef2ff;
+    margin:0;
+    background:#080d1c;
+    color:#eef2ff;
+    font-family:system-ui;
+    padding:22px;
 }
 
 main {
-    max-width: 850px;
-    margin: auto;
-    padding: 28px;
+    max-width:760px;
+    margin:auto;
+}
+
+h1 {
+    font-size:42px;
+    margin-bottom:5px;
+}
+
+.sub {
+    opacity:.75;
+    margin-bottom:20px;
 }
 
 .card {
-    background: #141b31;
-    border: 1px solid #2a3558;
-    border-radius: 18px;
-    padding: 20px;
+    background:#121a32;
+    border:1px solid #2b3761;
+    border-radius:22px;
+    padding:20px;
 }
 
 textarea {
-    width: 100%;
-    min-height: 130px;
-    box-sizing: border-box;
-    border-radius: 12px;
-    padding: 14px;
-    background: #0e1426;
-    color: white;
-    border: 1px solid #354264;
+    width:100%;
+    box-sizing:border-box;
+    min-height:170px;
+    background:#070b17;
+    color:white;
+    border:1px solid #39466f;
+    border-radius:14px;
+    padding:16px;
+    font-size:16px;
 }
 
 button {
-    margin: 8px 8px 0 0;
-    padding: 12px 16px;
-    border: 0;
-    border-radius: 10px;
-    cursor: pointer;
+    border:0;
+    border-radius:12px;
+    padding:14px 18px;
+    margin:10px 5px 0 0;
+    font-size:15px;
 }
 
 pre {
-    white-space: pre-wrap;
-    background: #080c18;
-    padding: 14px;
-    border-radius: 12px;
+    white-space:pre-wrap;
+    overflow:auto;
+    background:#050812;
+    border-radius:14px;
+    padding:16px;
+    margin-top:18px;
 }
 
 </style>
-
 </head>
 
 <body>
@@ -417,906 +956,116 @@ pre {
 
 <h1>∞ AI Infinity</h1>
 
-<p>
+<div class="sub">
 Free-first Intelligence Fabric
 <br>
-Orchestrate → Simulate → Verify → Learn
-</p>
+Research → Reason → Verify → Learn
+</div>
 
 <div class="card">
 
-<textarea
-id="objective"
-placeholder="Tell AI Infinity what you want to accomplish..."
-></textarea>
+<textarea id="q"
+placeholder="Tell AI Infinity what you want to accomplish..."></textarea>
 
-<button onclick="run('/v1/orchestrate')">
-Create Intelligence Plan
+<br>
+
+<button onclick="run('orchestrate')">
+Orchestrate
 </button>
 
-<button onclick="run('/v1/dream')">
-Dream / Discover Strategies
+<button onclick="run('research')">
+Research
 </button>
 
-<button onclick="run('/v1/simulate')">
-Counterfactual Simulation
+<button onclick="run('ask')">
+Ask AI
 </button>
 
 <pre id="out">Ready.</pre>
 
 </div>
 
+</main>
+
 <script>
 
-async function run(path) {
+async function run(type) {
 
-    const objective =
-        document.getElementById("objective")
+    const q =
+        document.getElementById("q")
         .value.trim();
 
-    if (!objective) {
-
+    if (!q) {
         document.getElementById("out")
         .textContent =
         "Enter an objective first.";
-
         return;
     }
 
-    const r = await fetch(
-        path,
-        {
-            method: "POST",
-            headers: {
-                "Content-Type":
-                "application/json"
-            },
-            body: JSON.stringify({
-                objective: objective
-            })
-        }
-    );
-
     document.getElementById("out")
+    .textContent = "AI Infinity is working...";
+
+    let body;
+
+    if (type === "research") {
+
+        body = {
+            query:q,
+            max_results:6
+        };
+
+    } else {
+
+        body = {
+            prompt:q,
+            research:true
+        };
+
+    }
+
+    try {
+
+        const response =
+            await fetch(
+                "/v1/" + type,
+                {
+                    method:"POST",
+                    headers:{
+                        "Content-Type":
+                        "application/json"
+                    },
+                    body:JSON.stringify(body)
+                }
+            );
+
+        const data =
+            await response.json();
+
+        document.getElementById("out")
         .textContent =
-        await r.text();
+        JSON.stringify(
+            data,
+            null,
+            2
+        );
+
+    } catch(error) {
+
+        document.getElementById("out")
+        .textContent =
+        "Error: " + error;
+
+    }
+
 }
 
 </script>
-
-</main>
 
 </body>
 </html>
 """
 
 
-# =========================
-# INTENT
-# =========================
-
-@app.post("/v1/intent")
-def intent(req: IntentRequest):
-
-    result = understand_intent(
-        req.objective
-    )
-
-    event(
-        "intent.created",
-        result
-    )
-
-    return result
-
-
-# =========================
-# ORCHESTRATOR
-# =========================
-
-@app.post("/v1/orchestrate")
-def orchestrate(req: IntentRequest):
-
-    task_id = (
-        "task-" +
-        uuid.uuid4().hex[:12]
-    )
-
-    plan = create_plan(
-        req.objective
-    )
-
-    with db() as c:
-
-        timestamp = now()
-
-        c.execute(
-            """
-            INSERT INTO tasks
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                task_id,
-                req.objective,
-                "planned",
-                json.dumps(plan),
-                None,
-                timestamp,
-                timestamp
-            )
-        )
-
-    result = {
-
-        "task_id": task_id,
-
-        "status": "planned",
-
-        "objective":
-            req.objective,
-
-        "intent":
-            understand_intent(
-                req.objective
-            ),
-
-        "plan":
-            plan,
-
-        "safety": {
-
-            "automatic_spending": False,
-
-            "automatic_self_deployment":
-                False,
-
-            "simulation_is_evidence":
-                False,
-
-            "consequential_actions_require_authorization":
-                True
-        }
-    }
-
-    event(
-        "task.created",
-        result
-    )
-
-    return result
-
-
-@app.get("/v1/tasks/{task_id}")
-def task(task_id: str):
-
-    with db() as c:
-
-        row = c.execute(
-            "SELECT * FROM tasks WHERE id=?",
-            (task_id,)
-        ).fetchone()
-
-    if not row:
-
-        raise HTTPException(
-            404,
-            "Task not found"
-        )
-
-    return dict(row)
-
-
-# =========================
-# RESOURCES
-# =========================
-
-@app.post("/v1/resources")
-def register_resource(
-    req: ResourceRequest
-):
-
-    rid = (
-        "res-" +
-        uuid.uuid4().hex[:12]
-    )
-
-    with db() as c:
-
-        c.execute(
-            """
-            INSERT INTO resources
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                rid,
-                req.name,
-                req.kind,
-                req.endpoint,
-                json.dumps(
-                    req.capabilities
-                ),
-                req.cost,
-                1,
-                now()
-            )
-        )
-
-    event(
-        "resource.registered",
-        {
-            "id": rid,
-            "name": req.name
-        }
-    )
-
-    return {
-        "id": rid,
-        **req.model_dump()
-    }
-
-
-@app.get("/v1/resources")
-def resources():
-
-    with db() as c:
-
-        rows = c.execute(
-            """
-            SELECT * FROM resources
-            ORDER BY created_at DESC
-            """
-        ).fetchall()
-
-    return [
-        dict(r)
-        for r in rows
-    ]
-
-
-@app.get("/v1/resources/select")
-def resource_select(
-    capability: Optional[str] = None
-):
-
-    return {
-        "capability": capability,
-        "resources":
-            choose_resources(
-                capability
-            )
-    }
-
-
-# =========================
-# DREAM ENGINE
-# =========================
-
-@app.post("/v1/dream")
-def dream(req: DreamRequest):
-
-    ideas = [
-
-        "Reverse the problem and ask what would make the objective unnecessary.",
-
-        "Create three competing strategies and benchmark them on the same test.",
-
-        "Remove the most expensive dependency and search for a local/open alternative.",
-
-        "Change the representation of the problem and test whether a simpler solution appears.",
-
-        "Use an independent critic to identify hidden assumptions and failure modes."
-    ]
-
-    did = (
-        "dream-" +
-        uuid.uuid4().hex[:12]
-    )
-
-    with db() as c:
-
-        c.execute(
-            """
-            INSERT INTO dreams
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                did,
-                req.objective,
-                json.dumps(ideas),
-                now()
-            )
-        )
-
-    event(
-        "dream.created",
-        {
-            "id": did,
-            "objective":
-                req.objective
-        }
-    )
-
-    return {
-
-        "id": did,
-
-        "objective":
-            req.objective,
-
-        "ideas":
-            ideas,
-
-        "note":
-            "Dream outputs are hypotheses for testing, not verified facts."
-    }
-
-
-@app.get("/v1/dreams")
-def dreams():
-
-    with db() as c:
-
-        rows = c.execute(
-            """
-            SELECT * FROM dreams
-            ORDER BY created_at DESC
-            """
-        ).fetchall()
-
-    return [
-        dict(r)
-        for r in rows
-    ]
-
-
-# =========================
-# SIMULATION
-# =========================
-
-@app.post("/v1/simulate")
-def simulate(
-    req: SimulationRequest
-):
-
-    assumptions = (
-        req.assumptions
-        or
-        [
-            "free resources remain available",
-            "required inputs are accessible",
-            "actions are reversible"
-        ]
-    )
-
-    scenarios = [
-
-        {
-            "name": "baseline",
-            "assumption_change": "none",
-            "expected":
-                "Execute the current plan and measure results."
-        },
-
-        {
-            "name":
-                "resource_constrained",
-
-            "assumption_change":
-                "preferred resource unavailable",
-
-            "expected":
-                "Fall back to another free/local resource."
-        },
-
-        {
-            "name": "failure",
-
-            "assumption_change":
-                "critical step fails",
-
-            "expected":
-                "Diagnose, retry alternatively, or rollback."
-        }
-    ]
-
-    sid = (
-        "sim-" +
-        uuid.uuid4().hex[:12]
-    )
-
-    with db() as c:
-
-        c.execute(
-            """
-            INSERT INTO simulations
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                sid,
-                req.objective,
-                json.dumps(
-                    assumptions
-                ),
-                json.dumps(
-                    scenarios
-                ),
-                now()
-            )
-        )
-
-    event(
-        "simulation.created",
-        {
-            "id": sid,
-            "objective":
-                req.objective
-        }
-    )
-
-    return {
-
-        "id": sid,
-
-        "objective":
-            req.objective,
-
-        "assumptions":
-            assumptions,
-
-        "scenarios":
-            scenarios,
-
-        "warning":
-            "Simulation is not evidence of what will happen in reality."
-    }
-
-
-@app.get("/v1/simulations")
-def simulations():
-
-    with db() as c:
-
-        rows = c.execute(
-            """
-            SELECT * FROM simulations
-            ORDER BY created_at DESC
-            """
-        ).fetchall()
-
-    return [
-        dict(r)
-        for r in rows
-    ]
-
-
-# =========================
-# MEMORY
-# =========================
-
-@app.post("/v1/memory")
-def save_memory(
-    req: MemoryRequest
-):
-
-    mid = (
-        "mem-" +
-        uuid.uuid4().hex[:12]
-    )
-
-    with db() as c:
-
-        c.execute(
-            """
-            INSERT INTO memories
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                mid,
-                req.content,
-                req.source,
-                req.confidence,
-                now()
-            )
-        )
-
-    event(
-        "memory.saved",
-        {"id": mid}
-    )
-
-    return {
-        "id": mid,
-        **req.model_dump()
-    }
-
-
-@app.get("/v1/memory")
-def memories(limit: int = 50):
-
-    limit = max(
-        1,
-        min(limit, 500)
-    )
-
-    with db() as c:
-
-        rows = c.execute(
-            """
-            SELECT * FROM memories
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            (limit,)
-        ).fetchall()
-
-    return [
-        dict(r)
-        for r in rows
-    ]
-
-
-# =========================
-# VERIFICATION
-# =========================
-
-@app.post("/v1/verify")
-def verify(
-    req: VerifyRequest
-):
-
-    evidence = [
-        x.strip()
-        for x in req.evidence
-        if x.strip()
-    ]
-
-    if not evidence:
-
-        status = "unverified"
-
-        confidence = 0.0
-
-        reason = (
-            "No evidence supplied."
-        )
-
-    else:
-
-        status = (
-            "supported_by_supplied_evidence"
-        )
-
-        confidence = min(
-            0.95,
-            0.5 + 0.1 * len(evidence)
-        )
-
-        reason = (
-            "Evidence was supplied, "
-            "but this endpoint does not "
-            "independently prove the claim."
-        )
-
-    result = {
-
-        "claim":
-            req.claim,
-
-        "status":
-            status,
-
-        "confidence":
-            confidence,
-
-        "evidence":
-            evidence,
-
-        "reason":
-            reason
-    }
-
-    event(
-        "verification.completed",
-        result
-    )
-
-    return result
-
-
-# =========================
-# INTELLIGENCE GENOME
-# =========================
-
-@app.post("/v1/genomes")
-def genome(
-    req: GenomeRequest
-):
-
-    gid = (
-        "genome-" +
-        uuid.uuid4().hex[:12]
-    )
-
-    payload = {
-
-        "objective":
-            req.objective,
-
-        "strategy":
-            req.strategy,
-
-        "score":
-            req.score,
-
-        "created_at":
-            now(),
-
-        "version":
-            1
-    }
-
-    digest = hashlib.sha256(
-        json.dumps(
-            payload,
-            sort_keys=True
-        ).encode()
-    ).hexdigest()
-
-    payload["fingerprint"] = digest
-
-    with db() as c:
-
-        c.execute(
-            """
-            INSERT INTO genomes
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                gid,
-                req.objective,
-                json.dumps(payload),
-                req.score,
-                now()
-            )
-        )
-
-    return {
-        "id": gid,
-        "genome": payload
-    }
-
-
-@app.get("/v1/genomes")
-def genomes():
-
-    with db() as c:
-
-        rows = c.execute(
-            """
-            SELECT * FROM genomes
-            ORDER BY created_at DESC
-            """
-        ).fetchall()
-
-    return [
-        dict(r)
-        for r in rows
-    ]
-
-
-# =========================
-# HYPOTHESES
-# =========================
-
-@app.post("/v1/hypotheses")
-def hypothesis(
-    req: HypothesisRequest
-):
-
-    hid = (
-        "hyp-" +
-        uuid.uuid4().hex[:12]
-    )
-
-    with db() as c:
-
-        c.execute(
-            """
-            INSERT INTO hypotheses
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                hid,
-                req.statement,
-                "proposed",
-                None,
-                now()
-            )
-        )
-
-    return {
-
-        "id": hid,
-
-        "statement":
-            req.statement,
-
-        "status":
-            "proposed"
-    }
-
-
-@app.get("/v1/hypotheses")
-def hypotheses():
-
-    with db() as c:
-
-        rows = c.execute(
-            """
-            SELECT * FROM hypotheses
-            ORDER BY created_at DESC
-            """
-        ).fetchall()
-
-    return [
-        dict(r)
-        for r in rows
-    ]
-
-
-# =========================
-# SECURITY
-# =========================
-
-@app.get("/v1/security/policy")
-def security_policy():
-
-    return {
-
-        "mode":
-            "free-first",
-
-        "automatic_spending":
-            False,
-
-        "automatic_paid_services":
-            False,
-
-        "credential_exfiltration":
-            False,
-
-        "uncontrolled_self_modification":
-            False,
-
-        "automatic_self_deployment":
-            False,
-
-        "consequential_actions":
-            "authorization_required",
-
-        "simulation_is_evidence":
-            False,
-
-        "audit_log":
-            True
-    }
-
-
-# =========================
-# SYSTEM STATUS
-# =========================
-
-@app.get("/v1/status")
-def status():
-
-    with db() as c:
-
-        counts = {}
-
-        tables = [
-            "tasks",
-            "memories",
-            "resources",
-            "genomes",
-            "events",
-            "dreams",
-            "simulations",
-            "hypotheses"
-        ]
-
-        for table in tables:
-
-            counts[table] = c.execute(
-                f"SELECT COUNT(*) FROM {table}"
-            ).fetchone()[0]
-
-    return {
-
-        "name":
-            APP_NAME,
-
-        "version":
-            VERSION,
-
-        "status":
-            "online",
-
-        "storage":
-            str(DB_PATH),
-
-        "counts":
-            counts,
-
-        "capabilities": [
-
-            "intent modeling",
-
-            "task planning",
-
-            "free-resource registry",
-
-            "temporary specialist configurations",
-
-            "dream engine",
-
-            "counterfactual simulation",
-
-            "memory",
-
-            "evidence recording",
-
-            "intelligence genomes",
-
-            "hypothesis tracking",
-
-            "audit events",
-
-            "free-first safety governor"
-        ],
-
-        "not_yet_implemented": [
-
-            "full external web research",
-
-            "arbitrary tool execution",
-
-            "true OS/container sandbox",
-
-            "cryptographic mesh identity",
-
-            "distributed synchronization",
-
-            "physical-world actuation",
-
-            "automatic model routing"
-        ]
-    }
-
-
-# =========================
-# AUDIT EVENTS
-# =========================
-
-@app.get("/v1/events")
-def events(limit: int = 100):
-
-    limit = max(
-        1,
-        min(limit, 500)
-    )
-
-    with db() as c:
-
-        rows = c.execute(
-            """
-            SELECT * FROM events
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            (limit,)
-        ).fetchall()
-
-    return [
-        dict(r)
-        for r in rows
-    ]
+@app.get("/", response_class=HTMLResponse)
+def home():
+    return PAGE
