@@ -1,112 +1,126 @@
 import os
+import re
 import json
 import time
 import uuid
-import re
+import hashlib
 import threading
 from pathlib import Path
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional
+from urllib.parse import quote_plus, urlparse, parse_qs
 
 import requests
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from bs4 import BeautifulSoup
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 
 # ============================================================
-# AI INFINITY v10.0
-# Research -> Reason -> Verify -> Remember -> Improve
+# AI INFINITY v11
+# Evidence-First Autonomous Intelligence Core
 # ============================================================
 
-VERSION = "10.0"
+VERSION = "11.0"
+
 APP_NAME = "AI Infinity"
 
-BASE = Path("/tmp/ai-infinity")
-BASE.mkdir(parents=True, exist_ok=True)
+BASE = Path(os.getenv("AI_INFINITY_DATA", "/tmp/ai-infinity"))
+TASK_DIR = BASE / "tasks"
+MEMORY_DIR = BASE / "memory"
+KNOWLEDGE_DIR = BASE / "knowledge"
 
-TASKS_FILE = BASE / "tasks.json"
-MEMORY_FILE = BASE / "memory.json"
+for directory in (BASE, TASK_DIR, MEMORY_DIR, KNOWLEDGE_DIR):
+    directory.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
-POLLINATIONS_API_KEY = os.getenv(
-    "POLLINATIONS_API_KEY", ""
-).strip()
+POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "").strip()
 
-POLLINATIONS_BASE_URL = os.getenv(
-    "POLLINATIONS_BASE_URL",
-    "https://gen.pollinations.ai"
-).rstrip("/")
+HF_BASE_URL = "https://router.huggingface.co/v1/chat/completions"
+POLLINATIONS_BASE_URL = "https://gen.pollinations.ai/v1/chat/completions"
 
 HF_MODEL = os.getenv(
     "HF_MODEL",
     "openai/gpt-oss-120b:fastest"
 )
 
-TIMEOUT = 35
-MAX_RETRIES = 2
-MAX_RESEARCH = 6
-MAX_MEMORY = 300
+HF_BACKUP_MODEL = os.getenv(
+    "HF_BACKUP_MODEL",
+    "deepseek-ai/DeepSeek-R1:fastest"
+)
+
+POLLINATIONS_MODEL = os.getenv(
+    "POLLINATIONS_MODEL",
+    "openai"
+)
+
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "45"))
+RESEARCH_TIMEOUT = int(os.getenv("RESEARCH_TIMEOUT", "15"))
+
+MAX_RESEARCH_RESULTS = int(os.getenv("MAX_RESEARCH_RESULTS", "8"))
+MAX_SOURCE_CHARS = int(os.getenv("MAX_SOURCE_CHARS", "7000"))
+MAX_MEMORY_ITEMS = int(os.getenv("MAX_MEMORY_ITEMS", "100"))
+MAX_TASKS = int(os.getenv("MAX_TASKS", "200"))
+
+MAX_COMMAND_LENGTH = 12000
+
+
+# ============================================================
+# APP
+# ============================================================
 
 app = FastAPI(
     title=APP_NAME,
     version=VERSION,
-    description="Free-first resilient AI orchestration platform."
+    description=(
+        "AI Infinity v11 - evidence-first multi-mind AI "
+        "orchestration and autonomous reasoning platform."
+    ),
 )
 
 
 # ============================================================
-# STATS
+# TELEMETRY
 # ============================================================
 
-STATS_LOCK = threading.Lock()
+telemetry_lock = threading.Lock()
 
-PROVIDER_STATS = {
-    "huggingface": {
-        "attempts": 0,
-        "successes": 0,
-        "failures": 0
+telemetry = {
+    "started_at": time.time(),
+    "tasks": 0,
+    "completed": 0,
+    "failed": 0,
+    "research_requests": 0,
+    "sources_found": 0,
+    "sources_verified": 0,
+    "memory_writes": 0,
+    "provider_attempts": {
+        "huggingface": 0,
+        "pollinations": 0,
+        "local_fallback": 0,
     },
-    "pollinations": {
-        "attempts": 0,
-        "successes": 0,
-        "failures": 0
+    "provider_successes": {
+        "huggingface": 0,
+        "pollinations": 0,
+        "local_fallback": 0,
     },
-    "local_fallback": {
-        "attempts": 0,
-        "successes": 0,
-        "failures": 0
-    }
+    "provider_failures": {
+        "huggingface": 0,
+        "pollinations": 0,
+        "local_fallback": 0,
+    },
 }
 
 
-def stat_attempt(provider: str):
-    with STATS_LOCK:
-        PROVIDER_STATS[provider]["attempts"] += 1
-
-
-def stat_success(provider: str):
-    with STATS_LOCK:
-        PROVIDER_STATS[provider]["successes"] += 1
-
-
-def stat_failure(provider: str):
-    with STATS_LOCK:
-        PROVIDER_STATS[provider]["failures"] += 1
-
-
-# ============================================================
-# MINDS
-# ============================================================
-
-MINDS = [
-    "Research Mind",
-    "Builder Mind",
-    "Critical Mind",
-    "Optimizer Mind",
-    "Verification Mind",
-    "Future Mind"
-]
+def metric(group, key):
+    with telemetry_lock:
+        telemetry[group][key] += 1
 
 
 # ============================================================
@@ -114,195 +128,139 @@ MINDS = [
 # ============================================================
 
 class TaskRequest(BaseModel):
-
-    command: Optional[str] = Field(
+    command: str | None = Field(
         default=None,
-        max_length=10000
+        max_length=MAX_COMMAND_LENGTH
     )
 
-    objective: Optional[str] = Field(
+    objective: str | None = Field(
         default=None,
-        max_length=10000
+        max_length=MAX_COMMAND_LENGTH
     )
 
     research: bool = True
     verify: bool = True
     remember: bool = True
 
-    duration_minutes: int = Field(
-        default=1,
+    max_sources: int = Field(
+        default=MAX_RESEARCH_RESULTS,
         ge=1,
-        le=120
+        le=15
     )
 
 
 class ResearchRequest(BaseModel):
-
     query: str = Field(
-        ...,
-        min_length=1,
-        max_length=2000
+        min_length=2,
+        max_length=5000
+    )
+
+    max_results: int = Field(
+        default=8,
+        ge=1,
+        le=15
     )
 
 
 # ============================================================
-# STORAGE
+# UTILITY FUNCTIONS
 # ============================================================
 
-def load_json(path: Path, default: Any) -> Any:
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def safe_filename(value):
+    value = re.sub(r"[^a-zA-Z0-9_.-]+", "-", value)
+    return value[:100]
+
+
+def atomic_write(path: Path, data):
+    temp = path.with_suffix(path.suffix + ".tmp")
+
+    with open(temp, "w", encoding="utf-8") as file:
+        json.dump(
+            data,
+            file,
+            indent=2,
+            ensure_ascii=False
+        )
+
+    temp.replace(path)
+
+
+def read_json(path: Path, default=None):
+    if not path.exists():
+        return default
 
     try:
-
-        if path.exists():
-
-            with path.open(
-                "r",
-                encoding="utf-8"
-            ) as f:
-
-                return json.load(f)
-
+        with open(path, "r", encoding="utf-8") as file:
+            return json.load(file)
     except Exception:
-        pass
-
-    return default
+        return default
 
 
-def save_json(path: Path, data: Any):
-
+def normalize_url(url):
     try:
+        parsed = urlparse(url)
 
-        temp = path.with_suffix(
-            path.suffix + ".tmp"
-        )
+        if parsed.scheme not in ("http", "https"):
+            return None
 
-        with temp.open(
-            "w",
-            encoding="utf-8"
-        ) as f:
+        query = parse_qs(parsed.query)
 
-            json.dump(
-                data,
-                f,
-                ensure_ascii=False,
-                indent=2
-            )
+        # Remove common tracking parameters.
+        blocked = {
+            "utm_source",
+            "utm_medium",
+            "utm_campaign",
+            "utm_term",
+            "utm_content",
+            "fbclid",
+            "gclid",
+        }
 
-        temp.replace(path)
+        clean_query = []
 
-    except Exception:
-        pass
-
-
-def load_tasks():
-    return load_json(
-        TASKS_FILE,
-        {}
-    )
-
-
-def load_memory():
-    return load_json(
-        MEMORY_FILE,
-        []
-    )
-
-
-# ============================================================
-# HELPERS
-# ============================================================
-
-def clean_text(
-    value: Any,
-    limit: int = 15000
-) -> str:
-
-    if value is None:
-        return ""
-
-    text = str(value)
-
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    ).strip()
-
-    return text[:limit]
-
-
-def safe_json(value: Any) -> str:
-
-    try:
-
-        return json.dumps(
-            value,
-            ensure_ascii=False,
-            indent=2
-        )
-
-    except Exception:
-
-        return str(value)
-
-
-def extract_content(
-    data: Dict[str, Any]
-) -> str:
-
-    try:
-
-        choices = data.get(
-            "choices",
-            []
-        )
-
-        if not choices:
-            return ""
-
-        message = choices[0].get(
-            "message",
-            {}
-        )
-
-        content = message.get(
-            "content",
-            ""
-        )
-
-        if isinstance(
-            content,
-            list
-        ):
-
-            parts = []
-
-            for item in content:
-
-                if isinstance(
-                    item,
-                    dict
-                ):
-
-                    text = item.get(
-                        "text",
-                        ""
+        for key, values in query.items():
+            if key.lower() not in blocked:
+                for value in values:
+                    clean_query.append(
+                        f"{quote_plus(key)}={quote_plus(value)}"
                     )
 
-                    if text:
-                        parts.append(
-                            str(text)
-                        )
+        path = parsed.path or "/"
 
-            content = "\n".join(parts)
-
-        return clean_text(
-            content,
-            20000
+        result = (
+            f"{parsed.scheme}://"
+            f"{parsed.netloc}"
+            f"{path}"
         )
 
-    except Exception:
+        if clean_query:
+            result += "?" + "&".join(clean_query)
 
+        return result
+
+    except Exception:
+        return None
+
+
+def source_id(url):
+    return hashlib.sha256(
+        url.encode("utf-8")
+    ).hexdigest()[:16]
+
+
+def clean_text(text):
+    text = re.sub(r"\s+", " ", text or "")
+    return text.strip()
+
+
+def extract_domain(url):
+    try:
+        return urlparse(url).netloc.lower()
+    except Exception:
         return ""
 
 
@@ -310,632 +268,942 @@ def extract_content(
 # INTENT
 # ============================================================
 
-def classify_intent(
-    objective: str
-) -> str:
-
+def classify_intent(objective):
     text = objective.lower()
 
-    groups = {
+    if any(word in text for word in [
+        "build",
+        "create",
+        "develop",
+        "implement",
+        "code",
+        "upgrade",
+        "fix",
+        "deploy",
+    ]):
+        return "build"
 
-        "build": [
-            "build",
-            "create",
-            "make",
-            "develop",
-            "code",
-            "app",
-            "website",
-            "software"
-        ],
+    if any(word in text for word in [
+        "research",
+        "investigate",
+        "analyze",
+        "analysis",
+        "compare",
+        "find out",
+        "study",
+    ]):
+        return "research"
 
-        "research": [
-            "research",
-            "investigate",
-            "find",
-            "analyze",
-            "analyse",
-            "study",
-            "compare"
-        ],
+    if any(word in text for word in [
+        "plan",
+        "roadmap",
+        "strategy",
+        "next",
+        "future",
+    ]):
+        return "strategy"
 
-        "technical": [
-            "technical",
-            "bug",
-            "error",
-            "api",
-            "server",
-            "deployment",
-            "deploy",
-            "github",
-            "render"
-        ],
-
-        "business": [
-            "business",
-            "money",
-            "profit",
-            "market",
-            "startup",
-            "revenue"
-        ],
-
-        "automation": [
-            "automate",
-            "automation",
-            "workflow",
-            "agent"
-        ],
-
-        "creative": [
-            "write",
-            "story",
-            "creative",
-            "idea",
-            "design",
-            "video"
-        ]
-    }
-
-    for intent, words in groups.items():
-
-        if any(
-            word in text
-            for word in words
-        ):
-
-            return intent
+    if any(word in text for word in [
+        "test",
+        "verify",
+        "check",
+        "audit",
+        "validate",
+    ]):
+        return "verification"
 
     return "general"
 
 
 # ============================================================
-# WEB RESEARCH
+# WEB RESEARCH ENGINE
 # ============================================================
 
-def web_research(
-    query: str,
-    max_results: int = MAX_RESEARCH
-) -> List[Dict[str, Any]]:
+def search_duckduckgo(query, max_results=8):
+    """
+    Evidence retrieval layer.
 
-    results = []
+    Uses DuckDuckGo's HTML interface so AI Infinity can
+    operate without requiring a paid search API.
+    """
+
+    metric("research_requests", "value") if False else None
+
+    url = (
+        "https://html.duckduckgo.com/html/?q="
+        + quote_plus(query)
+    )
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 "
+            "(Linux; Android 10) "
+            "AppleWebKit/537.36 "
+            "Chrome/120 Safari/537.36"
+        )
+    }
 
     try:
-
         response = requests.get(
-
-            "https://html.duckduckgo.com/html/",
-
-            params={
-                "q": query
-            },
-
-            headers={
-                "User-Agent":
-                    "Mozilla/5.0 AI-Infinity/10.0"
-            },
-
-            timeout=15
+            url,
+            headers=headers,
+            timeout=RESEARCH_TIMEOUT
         )
 
-        if response.status_code != 200:
-            return results
+        response.raise_for_status()
 
-        blocks = re.findall(
-
-            r'<a[^>]+class="result__a"'
-            r'[^>]*href="([^"]+)"'
-            r'[^>]*>(.*?)</a>',
-
+        soup = BeautifulSoup(
             response.text,
-
-            flags=re.I | re.S
+            "html.parser"
         )
 
-        for href, title in blocks:
+        results = []
+        seen = set()
+
+        for item in soup.select(".result"):
+            link = item.select_one(".result__a")
+
+            if not link:
+                continue
+
+            href = link.get("href", "").strip()
+
+            if not href:
+                continue
+
+            # DuckDuckGo sometimes wraps destination URLs.
+            if "uddg=" in href:
+                try:
+                    href = parse_qs(
+                        urlparse(href).query
+                    ).get("uddg", [href])[0]
+                except Exception:
+                    pass
+
+            clean_url = normalize_url(href)
+
+            if not clean_url:
+                continue
+
+            if clean_url in seen:
+                continue
+
+            seen.add(clean_url)
+
+            title = clean_text(
+                link.get_text(" ", strip=True)
+            )
+
+            snippet_node = item.select_one(
+                ".result__snippet"
+            )
+
+            snippet = clean_text(
+                snippet_node.get_text(
+                    " ",
+                    strip=True
+                ) if snippet_node else ""
+            )
+
+            results.append({
+                "id": source_id(clean_url),
+                "title": title,
+                "url": clean_url,
+                "domain": extract_domain(clean_url),
+                "snippet": snippet,
+                "retrieved_at": now_iso(),
+            })
 
             if len(results) >= max_results:
                 break
 
-            title = re.sub(
-                r"<.*?>",
-                "",
-                title
-            )
+        with telemetry_lock:
+            telemetry["sources_found"] += len(results)
 
-            title = clean_text(
-                title,
-                300
-            )
+        return results
 
-            if title:
-
-                results.append({
-
-                    "id":
-                        "src-" +
-                        uuid.uuid4().hex[:8],
-
-                    "title":
-                        title,
-
-                    "url":
-                        href,
-
-                    "source_type":
-                        "web_search"
-                })
-
-    except Exception:
-        pass
-
-    return results
+    except Exception as exc:
+        return [{
+            "error": "research_search_failed",
+            "message": str(exc)
+        }]
 
 
-# ============================================================
-# SOURCE VERIFICATION
-# ============================================================
+def fetch_source(url):
+    """
+    Fetch and extract readable text from a source.
+    """
 
-def verify_sources(
-    results: List[Dict[str, Any]]
-) -> List[Dict[str, Any]]:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 "
+            "(compatible; AI-Infinity/11.0)"
+        )
+    }
 
-    checked = []
-
-    for item in results[:MAX_RESEARCH]:
-
-        url = item.get(
-            "url",
-            ""
+    try:
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=RESEARCH_TIMEOUT,
+            allow_redirects=True
         )
 
-        reachable = False
-        status_code = None
+        response.raise_for_status()
 
-        try:
+        content_type = (
+            response.headers
+            .get("content-type", "")
+            .lower()
+        )
 
-            response = requests.head(
+        if "text/html" not in content_type:
+            return {
+                "success": False,
+                "url": url,
+                "reason": "not_html"
+            }
 
-                url,
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser"
+        )
 
-                allow_redirects=True,
+        for element in soup([
+            "script",
+            "style",
+            "noscript",
+            "svg",
+            "nav",
+            "footer",
+            "header",
+            "form",
+        ]):
+            element.decompose()
 
-                headers={
-                    "User-Agent":
-                        "Mozilla/5.0 AI-Infinity/10.0"
-                },
-
-                timeout=8
+        title = clean_text(
+            soup.title.get_text(
+                " ",
+                strip=True
             )
+            if soup.title
+            else ""
+        )
 
-            status_code = response.status_code
+        main = (
+            soup.find("main")
+            or soup.find("article")
+            or soup.body
+        )
 
-            reachable = (
-                200 <= status_code < 400
+        text = clean_text(
+            main.get_text(
+                " ",
+                strip=True
             )
+            if main
+            else ""
+        )
 
-        except Exception:
+        text = text[:MAX_SOURCE_CHARS]
 
-            try:
+        if not text:
+            return {
+                "success": False,
+                "url": url,
+                "reason": "empty"
+            }
 
-                response = requests.get(
+        return {
+            "success": True,
+            "url": url,
+            "final_url": response.url,
+            "title": title,
+            "domain": extract_domain(response.url),
+            "text": text,
+            "status_code": response.status_code,
+            "retrieved_at": now_iso(),
+        }
 
-                    url,
+    except Exception as exc:
+        return {
+            "success": False,
+            "url": url,
+            "reason": str(exc)
+        }
 
-                    allow_redirects=True,
 
-                    headers={
-                        "User-Agent":
-                            "Mozilla/5.0 AI-Infinity/10.0"
-                    },
+def verify_source(source):
+    """
+    Verification means the URL responds and contains
+    readable material. It does not mean the source's
+    claims are automatically true.
+    """
 
-                    timeout=8,
+    url = source.get("url")
 
-                    stream=True
+    if not url:
+        return {
+            **source,
+            "verified": False,
+            "verification_reason": "missing_url",
+        }
+
+    fetched = fetch_source(url)
+
+    if fetched.get("success"):
+        return {
+            **source,
+            **fetched,
+            "verified": True,
+            "verification_reason": (
+                "URL reachable and readable content extracted"
+            ),
+        }
+
+    return {
+        **source,
+        "verified": False,
+        "verification_reason": fetched.get(
+            "reason",
+            "source_unavailable"
+        ),
+    }
+
+
+def research(objective, max_results=8, verify=True):
+    """
+    Full evidence pipeline:
+
+    query
+      ↓
+    search
+      ↓
+    deduplicate
+      ↓
+    fetch
+      ↓
+    verify
+      ↓
+    evidence package
+    """
+
+    metric("research_requests", "research_requests")
+
+    search_results = search_duckduckgo(
+        objective,
+        max_results=max_results
+    )
+
+    valid_results = [
+        item for item in search_results
+        if item.get("url")
+    ]
+
+    if not valid_results:
+        return {
+            "query": objective,
+            "search_results": [],
+            "verified_sources": [],
+            "evidence": [],
+            "sources_found": 0,
+            "sources_verified": 0,
+        }
+
+    verified = []
+
+    if verify:
+        workers = min(6, len(valid_results))
+
+        with ThreadPoolExecutor(
+            max_workers=workers
+        ) as executor:
+
+            futures = [
+                executor.submit(
+                    verify_source,
+                    item
                 )
+                for item in valid_results
+            ]
 
-                status_code = response.status_code
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
 
-                reachable = (
-                    200 <= status_code < 400
-                )
+                    if result.get("verified"):
+                        verified.append(result)
 
-            except Exception:
-                pass
+                except Exception:
+                    continue
 
-        checked.append({
+    else:
+        verified = valid_results
 
-            **item,
+    with telemetry_lock:
+        telemetry["sources_verified"] += len(
+            verified
+        )
 
-            "reachable":
-                reachable,
+    evidence = []
 
-            "status_code":
-                status_code
+    for item in verified:
+        evidence.append({
+            "source_id": item.get("id"),
+            "title": item.get("title"),
+            "domain": item.get("domain"),
+            "url": item.get("url"),
+            "snippet": item.get("snippet", ""),
+            "text": item.get("text", "")[:MAX_SOURCE_CHARS],
+            "retrieved_at": item.get(
+                "retrieved_at",
+                now_iso()
+            ),
         })
 
-    return checked
-
-
-# ============================================================
-# HUGGING FACE
-# ============================================================
-
-def provider_huggingface(
-    prompt: str
-) -> Optional[str]:
-
-    if not HF_TOKEN:
-        return None
-
-    stat_attempt("huggingface")
-
-    url = (
-        "https://router.huggingface.co"
-        "/v1/chat/completions"
-    )
-
-    headers = {
-
-        "Authorization":
-            f"Bearer {HF_TOKEN}",
-
-        "Content-Type":
-            "application/json",
-
-        "User-Agent":
-            "AI-Infinity/10.0"
+    return {
+        "query": objective,
+        "search_results": search_results,
+        "verified_sources": verified,
+        "evidence": evidence,
+        "sources_found": len(valid_results),
+        "sources_verified": len(verified),
     }
 
-    models = [
-
-        HF_MODEL,
-
-        "openai/gpt-oss-120b:fastest",
-
-        "deepseek-ai/DeepSeek-R1:fastest"
-    ]
-
-    models = list(
-        dict.fromkeys(models)
-    )
-
-    for model in models:
-
-        try:
-
-            response = requests.post(
-
-                url,
-
-                headers=headers,
-
-                json={
-
-                    "model":
-                        model,
-
-                    "messages": [
-
-                        {
-                            "role":
-                                "system",
-
-                            "content":
-                                (
-                                    "You are a reliable "
-                                    "reasoning engine inside "
-                                    "AI Infinity. Be factual, "
-                                    "practical and explicit "
-                                    "about uncertainty."
-                                )
-                        },
-
-                        {
-                            "role":
-                                "user",
-
-                            "content":
-                                prompt
-                        }
-                    ],
-
-                    "temperature":
-                        0.2,
-
-                    "max_tokens":
-                        1400,
-
-                    "stream":
-                        False
-                },
-
-                timeout=TIMEOUT
-            )
-
-            if response.status_code != 200:
-                continue
-
-            text = extract_content(
-                response.json()
-            )
-
-            if text:
-
-                stat_success(
-                    "huggingface"
-                )
-
-                return text
-
-        except Exception:
-            continue
-
-    stat_failure(
-        "huggingface"
-    )
-
-    return None
-
 
 # ============================================================
-# POLLINATIONS
+# EVIDENCE PACK
 # ============================================================
 
-def provider_pollinations(
-    prompt: str
-) -> Optional[str]:
-
-    if not POLLINATIONS_API_KEY:
-        return None
-
-    stat_attempt(
-        "pollinations"
+def build_evidence_pack(research_result):
+    evidence = research_result.get(
+        "evidence",
+        []
     )
 
-    url = (
-        f"{POLLINATIONS_BASE_URL}"
-        "/v1/chat/completions"
-    )
+    if not evidence:
+        return (
+            "NO VERIFIED EXTERNAL EVIDENCE WAS FOUND.\n"
+            "Do not invent sources or claim that web research "
+            "confirmed something."
+        )
 
-    headers = {
+    blocks = []
 
-        "Authorization":
-            f"Bearer {POLLINATIONS_API_KEY}",
+    for index, item in enumerate(evidence, 1):
+        blocks.append(
+            f"""
+SOURCE {index}
+Title: {item.get('title', '')}
+Domain: {item.get('domain', '')}
+URL: {item.get('url', '')}
+Snippet: {item.get('snippet', '')}
+Content:
+{item.get('text', '')}
+"""
+        )
 
-        "Content-Type":
-            "application/json",
-
-        "User-Agent":
-            "AI-Infinity/10.0"
-    }
-
-    models = [
-        "openai",
-        "openai-fast",
-        "openai-large"
-    ]
-
-    for model in models:
-
-        try:
-
-            response = requests.post(
-
-                url,
-
-                headers=headers,
-
-                json={
-
-                    "model":
-                        model,
-
-                    "messages": [
-
-                        {
-                            "role":
-                                "system",
-
-                            "content":
-                                (
-                                    "You are a reliable "
-                                    "reasoning engine inside "
-                                    "AI Infinity."
-                                )
-                        },
-
-                        {
-                            "role":
-                                "user",
-
-                            "content":
-                                prompt
-                        }
-                    ],
-
-                    "temperature":
-                        0.2,
-
-                    "max_tokens":
-                        1400,
-
-                    "stream":
-                        False
-                },
-
-                timeout=TIMEOUT
-            )
-
-            if response.status_code != 200:
-                continue
-
-            text = extract_content(
-                response.json()
-            )
-
-            if text:
-
-                stat_success(
-                    "pollinations"
-                )
-
-                return text
-
-        except Exception:
-            continue
-
-    stat_failure(
-        "pollinations"
-    )
-
-    return None
+    return "\n".join(blocks)
 
 
 # ============================================================
 # LOCAL FALLBACK
 # ============================================================
 
-def provider_local_fallback() -> str:
+def local_fallback(prompt, role="AI Infinity"):
+    metric("provider_attempts", "local_fallback")
 
-    stat_attempt(
-        "local_fallback"
+    text = (
+        f"{role} local fallback.\n\n"
+        f"Objective:\n{prompt[:3000]}\n\n"
+        "External model inference was unavailable. "
+        "This result is a fallback and should not be "
+        "treated as independently verified."
     )
 
-    stat_success(
-        "local_fallback"
-    )
-
-    return (
-        "AI providers were unavailable. "
-        "AI Infinity preserved the task, "
-        "evidence and provenance instead "
-        "of inventing model output."
-    )
-
-
-# ============================================================
-# UNIVERSAL AI ROUTER
-# ============================================================
-
-def ai_generate(
-    prompt: str
-) -> Dict[str, Any]:
-
-    providers = [
-
-        (
-            "huggingface",
-            provider_huggingface
-        ),
-
-        (
-            "pollinations",
-            provider_pollinations
-        )
-    ]
-
-    for provider_name, provider_fn in providers:
-
-        for attempt in range(
-            1,
-            MAX_RETRIES + 1
-        ):
-
-            result = provider_fn(
-                prompt
-            )
-
-            if result:
-
-                return {
-
-                    "success":
-                        True,
-
-                    "provider":
-                        provider_name,
-
-                    "attempt":
-                        attempt,
-
-                    "text":
-                        result
-                }
-
-            time.sleep(
-                0.25
-            )
+    metric("provider_successes", "local_fallback")
 
     return {
-
-        "success":
-            True,
-
-        "provider":
-            "local_fallback",
-
-        "attempt":
-            1,
-
-        "text":
-            provider_local_fallback()
+        "success": True,
+        "provider": "local_fallback",
+        "text": text,
     }
 
 
 # ============================================================
-# SPECIALIST MIND
+# LLM PROVIDERS
 # ============================================================
 
-def run_mind(
-    mind: str,
-    objective: str,
-    evidence: List[Dict[str, Any]]
-) -> Dict[str, Any]:
+def call_huggingface(
+    messages,
+    model=None,
+    temperature=0.3,
+    max_tokens=1400
+):
+    if not HF_TOKEN:
+        return None
 
-    prompt = f"""
-You are the {mind} inside AI Infinity.
+    metric("provider_attempts", "huggingface")
 
+    payload = {
+        "model": model or HF_MODEL,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.post(
+            HF_BASE_URL,
+            headers=headers,
+            json=payload,
+            timeout=REQUEST_TIMEOUT
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        text = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+
+        if not text:
+            raise ValueError(
+                "Hugging Face returned empty content"
+            )
+
+        metric(
+            "provider_successes",
+            "huggingface"
+        )
+
+        return {
+            "success": True,
+            "provider": "huggingface",
+            "model": model or HF_MODEL,
+            "text": text,
+        }
+
+    except Exception as exc:
+        metric(
+            "provider_failures",
+            "huggingface"
+        )
+
+        return {
+            "success": False,
+            "provider": "huggingface",
+            "error": str(exc),
+        }
+
+
+def call_pollinations(
+    messages,
+    temperature=0.3,
+    max_tokens=1400
+):
+    if not POLLINATIONS_API_KEY:
+        return None
+
+    metric(
+        "provider_attempts",
+        "pollinations"
+    )
+
+    payload = {
+        "model": POLLINATIONS_MODEL,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+
+    headers = {
+        "Authorization": (
+            f"Bearer {POLLINATIONS_API_KEY}"
+        ),
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.post(
+            POLLINATIONS_BASE_URL,
+            headers=headers,
+            json=payload,
+            timeout=REQUEST_TIMEOUT
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        text = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+
+        if not text:
+            raise ValueError(
+                "Pollinations returned empty content"
+            )
+
+        metric(
+            "provider_successes",
+            "pollinations"
+        )
+
+        return {
+            "success": True,
+            "provider": "pollinations",
+            "model": POLLINATIONS_MODEL,
+            "text": text,
+        }
+
+    except Exception as exc:
+        metric(
+            "provider_failures",
+            "pollinations"
+        )
+
+        return {
+            "success": False,
+            "provider": "pollinations",
+            "error": str(exc),
+        }
+
+
+def ask_ai(
+    messages,
+    temperature=0.3,
+    max_tokens=1400
+):
+    """
+    Provider router:
+
+    1. Hugging Face primary
+    2. Hugging Face backup model
+    3. Pollinations
+    4. Local fallback
+    """
+
+    result = call_huggingface(
+        messages,
+        model=HF_MODEL,
+        temperature=temperature,
+        max_tokens=max_tokens
+    )
+
+    if result and result.get("success"):
+        return result
+
+    result = call_huggingface(
+        messages,
+        model=HF_BACKUP_MODEL,
+        temperature=temperature,
+        max_tokens=max_tokens
+    )
+
+    if result and result.get("success"):
+        return result
+
+    result = call_pollinations(
+        messages,
+        temperature=temperature,
+        max_tokens=max_tokens
+    )
+
+    if result and result.get("success"):
+        return result
+
+    return local_fallback(
+        messages[-1].get("content", ""),
+        role="AI Infinity Router"
+    )
+
+
+# ============================================================
+# SPECIALIST MINDS
+# ============================================================
+
+MINDS = [
+    {
+        "name": "Research Mind",
+        "mission": (
+            "Extract the strongest factual findings from "
+            "the supplied evidence. Separate facts from "
+            "inference."
+        ),
+    },
+    {
+        "name": "Builder Mind",
+        "mission": (
+            "Turn the objective and evidence into concrete "
+            "technical implementation steps."
+        ),
+    },
+    {
+        "name": "Critical Mind",
+        "mission": (
+            "Find contradictions, missing evidence, risks, "
+            "failure modes, and unsupported claims."
+        ),
+    },
+    {
+        "name": "Optimizer Mind",
+        "mission": (
+            "Find the simplest, cheapest, fastest path "
+            "to useful real-world results."
+        ),
+    },
+    {
+        "name": "Verification Mind",
+        "mission": (
+            "Check whether conclusions are actually supported "
+            "by the evidence. Reject fabricated certainty."
+        ),
+    },
+    {
+        "name": "Future Mind",
+        "mission": (
+            "Explore scalable next-generation possibilities "
+            "while clearly distinguishing ideas from facts."
+        ),
+    },
+]
+
+
+def run_mind(mind, objective, intent, evidence_pack):
+    system_prompt = f"""
+You are the {mind['name']} inside AI Infinity.
+
+Your role:
+{mind['mission']}
+
+Rules:
+1. Never fabricate evidence.
+2. Never pretend an unverified claim is verified.
+3. Use the supplied evidence when available.
+4. Clearly label inference, recommendation, and uncertainty.
+5. Produce practical output.
+6. Keep the answer focused on the user's objective.
+"""
+
+    user_prompt = f"""
 OBJECTIVE:
 {objective}
 
-EVIDENCE:
-{safe_json(evidence)}
+INTENT:
+{intent}
 
-Analyze the objective from your specialist role.
+EVIDENCE PACKAGE:
+{evidence_pack}
 
 Return:
 
 1. Key finding
 2. Evidence used
-3. Risk or uncertainty
+3. Important uncertainty
 4. Concrete recommendation
 5. One actionable next step
-
-Rules:
-- Never invent evidence.
-- Distinguish evidence from recommendation.
-- Be concise.
-- Be practical.
 """
 
-    result = ai_generate(
-        prompt
+    result = ask_ai(
+        [
+            {
+                "role": "system",
+                "content": system_prompt,
+            },
+            {
+                "role": "user",
+                "content": user_prompt,
+            },
+        ],
+        temperature=0.25,
+        max_tokens=1500
     )
 
     return {
+        "mind": mind["name"],
+        "provider": result.get("provider"),
+        "model": result.get("model"),
+        "success": result.get("success", False),
+        "analysis": result.get("text", ""),
+    }
 
-        "mind":
-            mind,
 
-        "provider":
-            result["provider"],
+# ============================================================
+# SYNTHESIS
+# ============================================================
 
-        "success":
-            result["success"],
+def synthesize(
+    objective,
+    intent,
+    research_result,
+    specialists
+):
+    evidence_pack = build_evidence_pack(
+        research_result
+    )
 
-        "analysis":
-            result["text"]
+    specialist_text = "\n\n".join(
+        [
+            (
+                f"### {item['mind']}\n"
+                f"{item['analysis']}"
+            )
+            for item in specialists
+            if item.get("success")
+        ]
+    )
+
+    system_prompt = """
+You are the central synthesis intelligence of AI Infinity.
+
+Your job is to combine independent specialist analyses
+into one accurate, practical answer.
+
+Evidence rules:
+- Verified evidence outranks speculation.
+- Specialist opinions are not automatically facts.
+- If evidence is missing, explicitly say so.
+- Never invent citations.
+- Do not claim that a URL proves a statement merely
+  because the URL was reachable.
+- Distinguish facts, inference, recommendations,
+  and uncertainty.
+
+Produce:
+1. Executive answer
+2. Evidence-backed findings
+3. Recommended actions
+4. Risks and uncertainties
+5. Immediate next action
+"""
+
+    user_prompt = f"""
+OBJECTIVE:
+{objective}
+
+INTENT:
+{intent}
+
+EVIDENCE:
+{evidence_pack}
+
+SPECIALIST ANALYSES:
+{specialist_text}
+"""
+
+    result = ask_ai(
+        [
+            {
+                "role": "system",
+                "content": system_prompt,
+            },
+            {
+                "role": "user",
+                "content": user_prompt,
+            },
+        ],
+        temperature=0.2,
+        max_tokens=2200
+    )
+
+    return {
+        "success": result.get("success", False),
+        "provider": result.get("provider"),
+        "model": result.get("model"),
+        "text": result.get("text", ""),
+    }
+
+
+# ============================================================
+# VERIFICATION
+# ============================================================
+
+def verify_synthesis(
+    objective,
+    synthesis,
+    research_result
+):
+    evidence_count = research_result.get(
+        "sources_verified",
+        0
+    )
+
+    evidence_text = build_evidence_pack(
+        research_result
+    )
+
+    system_prompt = """
+You are the final verification gate for AI Infinity.
+
+Check the proposed answer against the supplied evidence.
+
+Return exactly these sections:
+
+VERDICT:
+SUPPORTED / NEEDS_REVIEW
+
+EVIDENCE_COVERAGE:
+Explain how much of the answer is supported.
+
+UNSUPPORTED_OR_WEAK:
+List claims that need caution.
+
+CORRECTIONS:
+State corrections if necessary.
+
+FINAL_NOTE:
+One concise statement about reliability.
+
+Never create new evidence.
+"""
+
+    user_prompt = f"""
+OBJECTIVE:
+{objective}
+
+VERIFIED SOURCE COUNT:
+{evidence_count}
+
+EVIDENCE:
+{evidence_text}
+
+SYNTHESIS:
+{synthesis}
+"""
+
+    result = ask_ai(
+        [
+            {
+                "role": "system",
+                "content": system_prompt,
+            },
+            {
+                "role": "user",
+                "content": user_prompt,
+            },
+        ],
+        temperature=0.1,
+        max_tokens=1200
+    )
+
+    return {
+        "success": result.get("success", False),
+        "provider": result.get("provider"),
+        "model": result.get("model"),
+        "text": result.get("text", ""),
     }
 
 
@@ -944,440 +1212,62 @@ Rules:
 # ============================================================
 
 def calculate_confidence(
-    evidence,
-    mind_results,
+    research_result,
+    specialists,
     synthesis,
     verification
 ):
-
-    score = 0.35
-
-    reachable = sum(
-        1
-        for item in evidence
-        if item.get(
-            "reachable",
-            False
-        )
-    )
-
-    score += min(
-        0.25,
-        reachable * 0.04
+    verified = research_result.get(
+        "sources_verified",
+        0
     )
 
     successful_minds = sum(
         1
-        for mind in mind_results
-        if mind.get(
-            "success",
-            False
-        )
+        for item in specialists
+        if item.get("success")
+    )
+
+    synthesis_ok = bool(
+        synthesis.get("success")
+    )
+
+    verification_ok = bool(
+        verification.get("success")
+    )
+
+    score = 0.30
+
+    score += min(
+        verified * 0.07,
+        0.35
     )
 
     score += min(
-        0.25,
-        successful_minds * 0.04
+        successful_minds * 0.04,
+        0.24
     )
 
-    if synthesis.get(
-        "provider"
-    ) != "local_fallback":
+    if synthesis_ok:
+        score += 0.06
 
-        score += 0.10
+    if verification_ok:
+        score += 0.05
 
-    if verification:
-
-        if verification.get(
-            "provider"
-        ) != "local_fallback":
-
-            score += 0.05
-
-    score = max(
-        0.0,
-        min(
-            score,
-            0.95
-        )
-    )
+    score = min(score, 0.99)
 
     return {
-
-        "score":
-            round(score, 2),
-
-        "percentage":
-            f"{round(score * 100)}%",
-
+        "score": round(score, 2),
+        "percentage": f"{round(score * 100)}%",
         "basis": {
-
-            "verified_evidence":
-                reachable,
-
-            "successful_specialist_minds":
-                successful_minds,
-
-            "synthesis_provider":
-                synthesis.get(
-                    "provider"
-                ),
-
-            "verification_provider":
-                (
-                    verification.get(
-                        "provider"
-                    )
-                    if verification
-                    else None
-                )
+            "verified_evidence": verified,
+            "successful_specialist_minds": successful_minds,
+            "synthesis_success": synthesis_ok,
+            "verification_success": verification_ok,
         },
-
-        "note":
+        "note": (
             "Heuristic confidence, not a probability."
-    }
-
-
-# ============================================================
-# PIPELINE
-# ============================================================
-
-def execute_pipeline(
-    objective: str,
-    do_research: bool = True,
-    do_verify: bool = True
-):
-
-    started = time.time()
-
-    intent = classify_intent(
-        objective
-    )
-
-    research = []
-
-    if do_research:
-
-        research = web_research(
-            objective
-        )
-
-    verified_sources = []
-
-    if research:
-
-        verified_sources = verify_sources(
-            research
-        )
-
-    evidence = (
-        verified_sources
-        if verified_sources
-        else research
-    )
-
-    mind_results = []
-
-    with ThreadPoolExecutor(
-        max_workers=len(MINDS)
-    ) as executor:
-
-        futures = [
-
-            executor.submit(
-                run_mind,
-                mind,
-                objective,
-                evidence
-            )
-
-            for mind in MINDS
-        ]
-
-        for future in as_completed(
-            futures
-        ):
-
-            try:
-
-                mind_results.append(
-                    future.result()
-                )
-
-            except Exception as exc:
-
-                mind_results.append({
-
-                    "mind":
-                        "unknown",
-
-                    "provider":
-                        "local",
-
-                    "success":
-                        False,
-
-                    "analysis":
-                        str(exc)
-                })
-
-    synthesis_prompt = f"""
-You are the CENTRAL SYNTHESIS ENGINE of AI Infinity.
-
-OBJECTIVE:
-{objective}
-
-INTENT:
-{intent}
-
-VERIFIED EVIDENCE:
-{safe_json(evidence)}
-
-SPECIALIST ANALYSIS:
-{safe_json(mind_results)}
-
-Produce the best practical answer.
-
-Rules:
-
-- Answer the objective directly.
-- Use available evidence.
-- Never invent facts.
-- Separate FACTS, UNCERTAINTIES and RECOMMENDATIONS.
-- If evidence conflicts, state that clearly.
-- Make recommendations concrete.
-- End with exactly ONE immediate next action.
-
-Structure:
-
-ANSWER
-
-KEY FACTS
-
-UNCERTAINTIES
-
-RECOMMENDATIONS
-
-ONE IMMEDIATE NEXT ACTION
-"""
-
-    synthesis = ai_generate(
-        synthesis_prompt
-    )
-
-    verification = None
-
-    if do_verify:
-
-        verification_prompt = f"""
-You are the final verification engine of AI Infinity.
-
-OBJECTIVE:
-{objective}
-
-SYNTHESIS:
-{synthesis["text"]}
-
-EVIDENCE:
-{safe_json(evidence)}
-
-SPECIALIST ANALYSIS:
-{safe_json(mind_results)}
-
-Check:
-
-1. Does the answer answer the objective?
-2. Are claims supported?
-3. Are unsupported claims clearly marked?
-4. Are facts separated from recommendations?
-5. Are contradictions identified?
-6. Is the next action concrete?
-
-Return:
-
-VERDICT: PASS or NEEDS_REVIEW
-
-CRITICAL_CHECKS:
-1.
-2.
-3.
-
-CORRECTIONS:
-Only list corrections if necessary.
-"""
-
-        verification = ai_generate(
-            verification_prompt
-        )
-
-    confidence = calculate_confidence(
-
-        evidence,
-
-        mind_results,
-
-        synthesis,
-
-        verification
-    )
-
-    provenance = {
-
-        "objective":
-            objective,
-
-        "intent":
-            intent,
-
-        "research_enabled":
-            do_research,
-
-        "verification_enabled":
-            do_verify,
-
-        "sources_considered":
-            len(evidence),
-
-        "specialist_minds":
-            len(mind_results),
-
-        "synthesis_provider":
-            synthesis.get(
-                "provider"
-            ),
-
-        "verification_provider":
-            (
-                verification.get(
-                    "provider"
-                )
-                if verification
-                else None
-            ),
-
-        "generated_at":
-            time.time()
-    }
-
-    execution_plan = [
-
-        {
-            "step": 1,
-            "action":
-                "Classify objective",
-            "status":
-                "completed"
-        },
-
-        {
-            "step": 2,
-            "action":
-                "Research external evidence",
-            "status":
-                (
-                    "completed"
-                    if do_research
-                    else "skipped"
-                )
-        },
-
-        {
-            "step": 3,
-            "action":
-                "Verify sources",
-            "status":
-                (
-                    "completed"
-                    if verified_sources
-                    else "no_verified_sources"
-                )
-        },
-
-        {
-            "step": 4,
-            "action":
-                "Run six specialist minds",
-            "status":
-                "completed"
-        },
-
-        {
-            "step": 5,
-            "action":
-                "Synthesize answer",
-            "status":
-                "completed"
-        },
-
-        {
-            "step": 6,
-            "action":
-                "Verify synthesis",
-            "status":
-                (
-                    "completed"
-                    if do_verify
-                    else "skipped"
-                )
-        },
-
-        {
-            "step": 7,
-            "action":
-                "Calculate confidence",
-            "status":
-                "completed"
-        },
-
-        {
-            "step": 8,
-            "action":
-                "Store reusable memory",
-            "status":
-                "available"
-        }
-    ]
-
-    return {
-
-        "objective":
-            objective,
-
-        "intent":
-            intent,
-
-        "research_results":
-            research,
-
-        "verified_sources":
-            verified_sources,
-
-        "specialist_minds":
-            mind_results,
-
-        "synthesis":
-            synthesis,
-
-        "verification":
-            verification,
-
-        "confidence":
-            confidence,
-
-        "provenance":
-            provenance,
-
-        "execution_plan":
-            execution_plan,
-
-        "providers":
-            PROVIDER_STATS,
-
-        "duration_seconds":
-            round(
-                time.time() - started,
-                2
-            )
+        ),
     }
 
 
@@ -1385,206 +1275,407 @@ Only list corrections if necessary.
 # MEMORY
 # ============================================================
 
-def remember(
-    objective: str,
-    result: Dict[str, Any]
+def memory_path():
+    return MEMORY_DIR / "memory.json"
+
+
+def load_memory():
+    return read_json(
+        memory_path(),
+        default=[]
+    )
+
+
+def save_memory(
+    objective,
+    result,
+    task_id
 ):
+    memory = load_memory()
+
+    item = {
+        "id": str(uuid.uuid4()),
+        "task_id": task_id,
+        "objective": objective,
+        "summary": result.get(
+            "synthesis",
+            {}
+        ).get("text", "")[:6000],
+        "verified_sources": result.get(
+            "research",
+            {}
+        ).get(
+            "sources_verified",
+            0
+        ),
+        "created_at": now_iso(),
+    }
+
+    memory.insert(0, item)
+
+    memory = memory[:MAX_MEMORY_ITEMS]
+
+    atomic_write(
+        memory_path(),
+        memory
+    )
+
+    metric(
+        "memory_writes",
+        "memory_writes"
+    )
+
+    return item
+
+
+def find_related_memory(objective):
+    """
+    Lightweight local memory retrieval.
+    No embeddings or paid database required.
+    """
 
     memory = load_memory()
 
-    synthesis = result.get(
-        "synthesis",
-        {}
-    )
+    if not memory:
+        return []
 
-    memory.append({
-
-        "id":
-            "mem-" +
-            uuid.uuid4().hex[:12],
-
-        "timestamp":
-            time.time(),
-
-        "objective":
-            objective,
-
-        "intent":
-            result.get(
-                "intent"
-            ),
-
-        "provider":
-            synthesis.get(
-                "provider"
-            ),
-
-        "confidence":
-            result.get(
-                "confidence",
-                {}
-            ),
-
-        "summary":
-            clean_text(
-                synthesis.get(
-                    "text",
-                    ""
-                ),
-                2000
-            )
-    })
-
-    save_json(
-        MEMORY_FILE,
-        memory[-MAX_MEMORY:]
-    )
-
-
-# ============================================================
-# TASK
-# ============================================================
-
-def run_task(
-    payload: TaskRequest
-):
-
-    objective = clean_text(
-        payload.command
-        or payload.objective,
-        10000
-    )
-
-    if not objective:
-
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "Provide either "
-                "'command' or 'objective'."
-            )
+    words = {
+        word.lower()
+        for word in re.findall(
+            r"[a-zA-Z0-9]{4,}",
+            objective
         )
-
-    task_id = (
-        "task-" +
-        uuid.uuid4().hex[:12]
-    )
-
-    tasks = load_tasks()
-
-    tasks[task_id] = {
-
-        "task_id":
-            task_id,
-
-        "status":
-            "running",
-
-        "objective":
-            objective,
-
-        "created_at":
-            time.time()
     }
 
-    save_json(
-        TASKS_FILE,
-        tasks
-    )
+    scored = []
 
-    try:
+    for item in memory:
+        text = (
+            item.get("objective", "")
+            + " "
+            + item.get("summary", "")
+        ).lower()
 
-        result = execute_pipeline(
-
-            objective,
-
-            do_research=
-                payload.research,
-
-            do_verify=
-                payload.verify
+        overlap = sum(
+            1
+            for word in words
+            if word in text
         )
 
-        if payload.remember:
-
-            remember(
-                objective,
-                result
+        if overlap:
+            scored.append(
+                (
+                    overlap,
+                    item
+                )
             )
 
-        tasks = load_tasks()
+    scored.sort(
+        key=lambda x: x[0],
+        reverse=True
+    )
 
-        tasks[task_id] = {
-
-            **tasks.get(
-                task_id,
-                {}
-            ),
-
-            "status":
-                "completed",
-
-            "result":
-                result,
-
-            "completed_at":
-                time.time()
-        }
-
-        save_json(
-            TASKS_FILE,
-            tasks
-        )
-
-        return {
-
-            "task_id":
-                task_id,
-
-            "status":
-                "completed",
-
-            "objective":
-                objective,
-
-            "result":
-                result
-        }
-
-    except HTTPException:
-        raise
-
-    except Exception as exc:
-
-        tasks = load_tasks()
-
-        tasks[task_id] = {
-
-            **tasks.get(
-                task_id,
-                {}
-            ),
-
-            "status":
-                "failed",
-
-            "error":
-                str(exc)
-        }
-
-        save_json(
-            TASKS_FILE,
-            tasks
-        )
-
-        raise HTTPException(
-            status_code=500,
-            detail=str(exc)
-        )
+    return [
+        item
+        for _, item in scored[:5]
+    ]
 
 
 # ============================================================
-# UI
+# TASK EXECUTION
+# ============================================================
+
+def execute_task(
+    task_id,
+    objective,
+    research_enabled=True,
+    verification_enabled=True,
+    remember=True,
+    max_sources=8
+):
+    started = time.time()
+
+    intent = classify_intent(
+        objective
+    )
+
+    related_memory = find_related_memory(
+        objective
+    )
+
+    # --------------------------------------------------------
+    # STEP 1 - RESEARCH
+    # --------------------------------------------------------
+
+    if research_enabled:
+        research_result = research(
+            objective,
+            max_results=max_sources,
+            verify=verification_enabled
+        )
+    else:
+        research_result = {
+            "query": objective,
+            "search_results": [],
+            "verified_sources": [],
+            "evidence": [],
+            "sources_found": 0,
+            "sources_verified": 0,
+        }
+
+    evidence_pack = build_evidence_pack(
+        research_result
+    )
+
+    # --------------------------------------------------------
+    # STEP 2 - SPECIALIST MINDS
+    # --------------------------------------------------------
+
+    specialists = []
+
+    with ThreadPoolExecutor(
+        max_workers=len(MINDS)
+    ) as executor:
+
+        futures = [
+            executor.submit(
+                run_mind,
+                mind,
+                objective,
+                intent,
+                evidence_pack
+            )
+            for mind in MINDS
+        ]
+
+        for future in as_completed(futures):
+            try:
+                specialists.append(
+                    future.result()
+                )
+            except Exception as exc:
+                specialists.append({
+                    "mind": "Unknown Mind",
+                    "provider": "error",
+                    "success": False,
+                    "analysis": str(exc),
+                })
+
+    specialists.sort(
+        key=lambda item: item.get("mind", "")
+    )
+
+    # --------------------------------------------------------
+    # STEP 3 - SYNTHESIS
+    # --------------------------------------------------------
+
+    synthesis = synthesize(
+        objective,
+        intent,
+        research_result,
+        specialists
+    )
+
+    # --------------------------------------------------------
+    # STEP 4 - FINAL VERIFICATION
+    # --------------------------------------------------------
+
+    if verification_enabled:
+        verification = verify_synthesis(
+            objective,
+            synthesis.get("text", ""),
+            research_result
+        )
+    else:
+        verification = {
+            "success": False,
+            "provider": None,
+            "text": "Verification disabled.",
+        }
+
+    # --------------------------------------------------------
+    # STEP 5 - CONFIDENCE
+    # --------------------------------------------------------
+
+    confidence = calculate_confidence(
+        research_result,
+        specialists,
+        synthesis,
+        verification
+    )
+
+    result = {
+        "objective": objective,
+        "intent": intent,
+
+        "research": research_result,
+
+        "memory_context": {
+            "related_items": related_memory,
+            "count": len(related_memory),
+        },
+
+        "specialist_minds": specialists,
+
+        "synthesis": synthesis,
+
+        "verification": verification,
+
+        "confidence": confidence,
+
+        "execution_plan": [
+            {
+                "step": 1,
+                "action": "Classify objective",
+                "status": "completed",
+            },
+            {
+                "step": 2,
+                "action": "Research external evidence",
+                "status": (
+                    "completed"
+                    if research_enabled
+                    else "disabled"
+                ),
+            },
+            {
+                "step": 3,
+                "action": "Verify external sources",
+                "status": (
+                    "completed"
+                    if research_result.get(
+                        "sources_verified",
+                        0
+                    ) > 0
+                    else "no_verified_sources"
+                ),
+            },
+            {
+                "step": 4,
+                "action": "Run six specialist minds",
+                "status": "completed",
+            },
+            {
+                "step": 5,
+                "action": "Synthesize answer",
+                "status": (
+                    "completed"
+                    if synthesis.get("success")
+                    else "failed"
+                ),
+            },
+            {
+                "step": 6,
+                "action": "Verify synthesis",
+                "status": (
+                    "completed"
+                    if verification.get("success")
+                    else "failed_or_disabled"
+                ),
+            },
+            {
+                "step": 7,
+                "action": "Calculate confidence",
+                "status": "completed",
+            },
+            {
+                "step": 8,
+                "action": "Store reusable memory",
+                "status": (
+                    "completed"
+                    if remember
+                    else "disabled"
+                ),
+            },
+        ],
+
+        "providers": get_provider_stats(),
+
+        "duration_seconds": round(
+            time.time() - started,
+            2
+        ),
+
+        "generated_at": time.time(),
+    }
+
+    # --------------------------------------------------------
+    # STEP 6 - MEMORY
+    # --------------------------------------------------------
+
+    if remember:
+        try:
+            memory_item = save_memory(
+                objective,
+                result,
+                task_id
+            )
+
+            result["memory_saved"] = memory_item
+
+        except Exception as exc:
+            result["memory_saved"] = {
+                "success": False,
+                "error": str(exc),
+            }
+
+    return result
+
+
+def save_task(task_id, data):
+    path = TASK_DIR / f"{safe_filename(task_id)}.json"
+    atomic_write(path, data)
+
+
+def load_task(task_id):
+    path = TASK_DIR / f"{safe_filename(task_id)}.json"
+
+    return read_json(
+        path,
+        default=None
+    )
+
+
+def create_task_record(
+    task_id,
+    objective
+):
+    return {
+        "task_id": task_id,
+        "status": "running",
+        "objective": objective,
+        "created_at": now_iso(),
+    }
+
+
+# ============================================================
+# PROVIDER STATS
+# ============================================================
+
+def get_provider_stats():
+    with telemetry_lock:
+        return {
+            provider: {
+                "attempts": telemetry[
+                    "provider_attempts"
+                ][provider],
+                "successes": telemetry[
+                    "provider_successes"
+                ][provider],
+                "failures": telemetry[
+                    "provider_failures"
+                ][provider],
+            }
+            for provider in [
+                "huggingface",
+                "pollinations",
+                "local_fallback",
+            ]
+        }
+
+
+# ============================================================
+# ENDPOINTS
 # ============================================================
 
 @app.get(
@@ -1592,87 +1683,86 @@ def run_task(
     response_class=HTMLResponse
 )
 def home():
-
     return """
 <!DOCTYPE html>
-
-<html>
-
+<html lang="en">
 <head>
-
-<meta name="viewport"
-content="width=device-width,initial-scale=1">
-
+<meta charset="UTF-8">
+<meta
+ name="viewport"
+ content="width=device-width,
+ initial-scale=1.0,
+ maximum-scale=1.0"
+>
 <title>AI Infinity</title>
 
 <style>
-
 * {
     box-sizing: border-box;
 }
 
 body {
     margin: 0;
-    padding: 20px;
-    font-family: system-ui, sans-serif;
-    background: #070b14;
-    color: white;
+    background: #070b12;
+    color: #f4f7fb;
+    font-family:
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
 }
 
 .container {
+    width: 100%;
     max-width: 850px;
     margin: auto;
+    padding: 22px 16px 50px;
+}
+
+.logo {
+    font-size: 32px;
+    font-weight: 800;
+    margin-bottom: 5px;
+}
+
+.subtitle {
+    opacity: .65;
+    margin-bottom: 25px;
 }
 
 .card {
-    background: #111827;
-    border: 1px solid #263044;
-    border-radius: 16px;
+    background: #101722;
+    border: 1px solid #202c3b;
+    border-radius: 18px;
     padding: 18px;
     margin-bottom: 15px;
 }
 
-h1 {
-    font-size: 38px;
-    margin: 0 0 5px;
-}
-
-.subtitle {
-    opacity: .7;
-    margin-bottom: 15px;
-}
-
-.badge {
-    display: inline-block;
-    background: #1d293d;
-    border-radius: 20px;
-    padding: 6px 10px;
-    margin: 3px;
-    font-size: 13px;
-}
-
 textarea {
     width: 100%;
-    min-height: 170px;
-    padding: 15px;
-    border-radius: 12px;
-    border: 1px solid #344057;
-    background: #080d18;
-    color: white;
-    font-size: 16px;
+    min-height: 150px;
     resize: vertical;
+    background: #080d15;
+    color: white;
+    border: 1px solid #263548;
+    border-radius: 14px;
+    padding: 15px;
+    font-size: 16px;
+    outline: none;
 }
 
 button {
     width: 100%;
-    margin-top: 12px;
-    padding: 16px;
     border: 0;
-    border-radius: 12px;
-    background: #315efb;
-    color: white;
+    border-radius: 14px;
+    padding: 15px;
+    margin-top: 12px;
     font-size: 16px;
     font-weight: 700;
+    cursor: pointer;
+    background: #ffffff;
+    color: #070b12;
 }
 
 button:disabled {
@@ -1681,55 +1771,68 @@ button:disabled {
 
 pre {
     white-space: pre-wrap;
-    word-break: break-word;
-    font-size: 13px;
+    word-wrap: break-word;
+    line-height: 1.55;
+    color: #dce5ef;
 }
 
-</style>
+.status {
+    margin-top: 12px;
+    opacity: .7;
+}
 
+.badge {
+    display: inline-block;
+    padding: 5px 9px;
+    border-radius: 999px;
+    background: #182536;
+    margin: 3px;
+    font-size: 12px;
+}
+</style>
 </head>
 
 <body>
 
 <div class="container">
 
-<div class="card">
-
-<h1>∞ AI Infinity</h1>
+<div class="logo">∞ AI Infinity</div>
 
 <div class="subtitle">
-Research → Reason → Verify → Remember → Improve
-</div>
-
-<span class="badge">v10.0</span>
-<span class="badge">6 Minds</span>
-<span class="badge">Web Research</span>
-<span class="badge">Verification</span>
-<span class="badge">Memory</span>
-<span class="badge">Provenance</span>
-
+Evidence-first multi-mind intelligence
 </div>
 
 <div class="card">
 
 <textarea
-id="objective"
-placeholder="What should AI Infinity accomplish?"
+ id="objective"
+ placeholder="Tell AI Infinity what you want..."
 ></textarea>
 
 <button
-id="run"
-onclick="runAI()">
-
-RUN AI INFINITY
-
+ id="run"
+ onclick="runTask()"
+>
+Run AI Infinity
 </button>
+
+<div
+ id="status"
+ class="status"
+></div>
 
 </div>
 
-<div class="card">
+<div
+ id="result"
+ class="card"
+ style="display:none"
+>
+<h3>Result</h3>
 
-<pre id="output">Ready.</pre>
+<div id="badges"></div>
+
+<pre id="output"></pre>
 
 </div>
 
@@ -1737,7 +1840,22 @@ RUN AI INFINITY
 
 <script>
 
-async function runAI() {
+async function runTask() {
+
+    const button =
+        document.getElementById("run");
+
+    const status =
+        document.getElementById("status");
+
+    const result =
+        document.getElementById("result");
+
+    const output =
+        document.getElementById("output");
+
+    const badges =
+        document.getElementById("badges");
 
     const objective =
         document
@@ -1745,72 +1863,85 @@ async function runAI() {
         .value
         .trim();
 
-    const output =
-        document
-        .getElementById("output");
-
-    const button =
-        document
-        .getElementById("run");
-
     if (!objective) {
-
-        output.textContent =
+        status.textContent =
             "Enter an objective first.";
-
         return;
     }
 
     button.disabled = true;
 
-    output.textContent =
-        "AI Infinity is working...\\n\\n" +
-        "Research → 6 Minds → Synthesis → Verification";
+    status.textContent =
+        "AI Infinity is researching, thinking, synthesizing and verifying...";
+
+    result.style.display = "none";
 
     try {
 
         const response =
-            await fetch(
-                "/task",
-                {
-                    method: "POST",
-
-                    headers: {
-                        "Content-Type":
-                            "application/json"
-                    },
-
-                    body: JSON.stringify({
-
-                        objective:
-                            objective,
-
-                        research:
-                            true,
-
-                        verify:
-                            true,
-
-                        remember:
-                            true
-                    })
-                }
-            );
+            await fetch("/task", {
+                method: "POST",
+                headers: {
+                    "Content-Type":
+                        "application/json"
+                },
+                body: JSON.stringify({
+                    objective: objective,
+                    research: true,
+                    verify: true,
+                    remember: true,
+                    max_sources: 8
+                })
+            });
 
         const data =
             await response.json();
 
-        output.textContent =
-            JSON.stringify(
-                data,
-                null,
-                2
+        if (!response.ok) {
+            throw new Error(
+                data.detail ||
+                "Task failed"
             );
+        }
+
+        result.style.display =
+            "block";
+
+        const confidence =
+            data.confidence?.percentage
+            || "N/A";
+
+        const verified =
+            data.research?.sources_verified
+            || 0;
+
+        badges.innerHTML =
+            `<span class="badge">
+                Confidence: ${confidence}
+             </span>
+             <span class="badge">
+                Verified sources: ${verified}
+             </span>
+             <span class="badge">
+                Minds: ${
+                    data.specialist_minds?.length || 0
+                }
+             </span>
+             <span class="badge">
+                ${data.duration_seconds || 0}s
+             </span>`;
+
+        output.textContent =
+            data.synthesis?.text
+            || "No synthesis returned.";
+
+        status.textContent =
+            "Completed.";
 
     } catch (error) {
 
-        output.textContent =
-            "ERROR: " + error;
+        status.textContent =
+            "Error: " + error.message;
 
     } finally {
 
@@ -1821,223 +1952,331 @@ async function runAI() {
 </script>
 
 </body>
-
 </html>
 """
 
 
-# ============================================================
-# HEALTH
-# ============================================================
-
 @app.get("/health")
 def health():
-
     return {
-
-        "status":
-            "ok",
-
-        "app":
-            APP_NAME,
-
-        "version":
-            VERSION,
-
-        "architecture":
-            "Research → Reason → Verify → Remember → Improve",
-
-        "minds":
-            MINDS,
-
-        "providers":
-            {
-
-                "huggingface":
-                    bool(HF_TOKEN),
-
-                "pollinations":
-                    bool(POLLINATIONS_API_KEY),
-
-                "local_fallback":
-                    True
-            }
-    }
-
-
-# ============================================================
-# ENDPOINTS
-# ============================================================
-
-@app.post("/task")
-def create_task(
-    payload: TaskRequest
-):
-
-    return run_task(
-        payload
-    )
-
-
-@app.post("/run")
-def run_alias(
-    payload: TaskRequest
-):
-
-    return run_task(
-        payload
-    )
-
-
-@app.get("/task/{task_id}")
-def get_task(
-    task_id: str
-):
-
-    tasks = load_tasks()
-
-    task = tasks.get(
-        task_id
-    )
-
-    if not task:
-
-        raise HTTPException(
-            status_code=404,
-            detail="Task not found"
-        )
-
-    return task
-
-
-@app.post("/research")
-def research(
-    payload: ResearchRequest
-):
-
-    results = web_research(
-        payload.query,
-        max_results=10
-    )
-
-    return {
-
-        "query":
-            payload.query,
-
-        "results":
-            results,
-
-        "verified":
-            verify_sources(
-                results
-            )
-    }
-
-
-@app.get("/memory")
-def memory():
-
-    items = load_memory()
-
-    return {
-
-        "count":
-            len(items),
-
-        "items":
-            items
-    }
-
-
-@app.get("/stats")
-def stats():
-
-    return {
-
-        "app":
-            APP_NAME,
-
-        "version":
-            VERSION,
-
-        "tasks":
-            len(load_tasks()),
-
-        "memory_items":
-            len(load_memory()),
-
-        "providers":
-            PROVIDER_STATS,
-
-        "provider_priority":
-            [
-                "huggingface",
-                "pollinations",
-                "local_fallback"
-            ],
-
-        "minds":
-            MINDS,
-
-        "free_first":
-            True
+        "status": "ok",
+        "service": APP_NAME,
+        "version": VERSION,
+        "engine": "evidence-first",
+        "time": now_iso(),
     }
 
 
 @app.get("/config")
 def config():
+    return {
+        "service": APP_NAME,
+        "version": VERSION,
+        "research_engine": True,
+        "source_verification": True,
+        "six_specialist_minds": True,
+        "persistent_memory": True,
+        "provider_failover": True,
+        "huggingface_configured": bool(HF_TOKEN),
+        "pollinations_configured": bool(
+            POLLINATIONS_API_KEY
+        ),
+        "models": {
+            "primary": HF_MODEL,
+            "backup": HF_BACKUP_MODEL,
+            "pollinations": POLLINATIONS_MODEL,
+        },
+    }
+
+
+@app.get("/stats")
+def stats():
+    return {
+        "service": APP_NAME,
+        "version": VERSION,
+        "uptime_seconds": round(
+            time.time()
+            - telemetry["started_at"],
+            2
+        ),
+        "tasks": telemetry["tasks"],
+        "completed": telemetry["completed"],
+        "failed": telemetry["failed"],
+        "research_requests": telemetry[
+            "research_requests"
+        ],
+        "sources_found": telemetry[
+            "sources_found"
+        ],
+        "sources_verified": telemetry[
+            "sources_verified"
+        ],
+        "memory_writes": telemetry[
+            "memory_writes"
+        ],
+        "providers": get_provider_stats(),
+    }
+
+
+@app.post("/research")
+def research_endpoint(request: ResearchRequest):
+    result = research(
+        request.query,
+        max_results=request.max_results,
+        verify=True
+    )
 
     return {
-
-        "app":
-            APP_NAME,
-
-        "version":
-            VERSION,
-
-        "pipeline":
-            [
-                "intent",
-                "research",
-                "source_verification",
-                "six_specialist_minds",
-                "synthesis",
-                "verification",
-                "confidence",
-                "provenance",
-                "memory"
-            ],
-
-        "provider_order":
-            [
-                "huggingface",
-                "pollinations",
-                "local_fallback"
-            ],
-
-        "models":
-            {
-                "huggingface":
-                    HF_MODEL,
-
-                "pollinations":
-                    [
-                        "openai",
-                        "openai-fast",
-                        "openai-large"
-                    ]
-            },
-
-        "api_keys_present":
-            {
-
-                "HF_TOKEN":
-                    bool(HF_TOKEN),
-
-                "POLLINATIONS_API_KEY":
-                    bool(
-                        POLLINATIONS_API_KEY
-                    )
-            }
+        "success": True,
+        "version": VERSION,
+        **result,
     }
+
+
+@app.get("/memory")
+def memory_endpoint(
+    limit: int = Query(
+        default=20,
+        ge=1,
+        le=100
+    )
+):
+    memory = load_memory()
+
+    return {
+        "count": len(memory),
+        "items": memory[:limit],
+    }
+
+
+@app.post("/task")
+def task_endpoint(request: TaskRequest):
+
+    objective = (
+        request.command
+        or request.objective
+        or ""
+    ).strip()
+
+    if not objective:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Provide either "
+                "'command' or 'objective'."
+            )
+        )
+
+    task_id = (
+        "task-"
+        + uuid.uuid4().hex[:12]
+    )
+
+    metric("tasks", "tasks")
+
+    task_record = create_task_record(
+        task_id,
+        objective
+    )
+
+    save_task(
+        task_id,
+        task_record
+    )
+
+    try:
+
+        result = execute_task(
+            task_id=task_id,
+            objective=objective,
+            research_enabled=request.research,
+            verification_enabled=request.verify,
+            remember=request.remember,
+            max_sources=request.max_sources,
+        )
+
+        final_record = {
+            **task_record,
+            "status": "completed",
+            "result": result,
+            "completed_at": now_iso(),
+        }
+
+        save_task(
+            task_id,
+            final_record
+        )
+
+        metric(
+            "completed",
+            "completed"
+        )
+
+        return {
+            "task_id": task_id,
+            "status": "completed",
+            **result,
+        }
+
+    except Exception as exc:
+
+        metric(
+            "failed",
+            "failed"
+        )
+
+        failed_record = {
+            **task_record,
+            "status": "failed",
+            "error": str(exc),
+            "failed_at": now_iso(),
+        }
+
+        save_task(
+            task_id,
+            failed_record
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(exc)
+        )
+
+
+@app.post("/run")
+def run_alias(request: TaskRequest):
+    return task_endpoint(request)
+
+
+@app.get("/task/{task_id}")
+def task_status(task_id: str):
+
+    data = load_task(task_id)
+
+    if data is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Task not found."
+        )
+
+    return data
+
+
+@app.get("/tasks")
+def list_tasks(
+    limit: int = Query(
+        default=20,
+        ge=1,
+        le=100
+    )
+):
+    files = sorted(
+        TASK_DIR.glob("task-*.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True
+    )
+
+    results = []
+
+    for path in files[:limit]:
+        data = read_json(
+            path,
+            default={}
+        )
+
+        results.append({
+            "task_id": data.get("task_id"),
+            "status": data.get("status"),
+            "objective": data.get("objective"),
+            "created_at": data.get(
+                "created_at"
+            ),
+            "completed_at": data.get(
+                "completed_at"
+            ),
+        })
+
+    return {
+        "count": len(results),
+        "items": results,
+    }
+
+
+# ============================================================
+# STARTUP
+# ============================================================
+
+@app.on_event("startup")
+def startup_event():
+
+    BASE.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    TASK_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    MEMORY_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    KNOWLEDGE_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    print(
+        f"{APP_NAME} v{VERSION} online."
+    )
+
+    print(
+        "Research engine: ENABLED"
+    )
+
+    print(
+        "Six specialist minds: ENABLED"
+    )
+
+    print(
+        "Evidence verification: ENABLED"
+    )
+
+    print(
+        "Persistent memory: ENABLED"
+    )
+
+    print(
+        "Hugging Face: "
+        + ("CONFIGURED" if HF_TOKEN else "NOT CONFIGURED")
+    )
+
+    print(
+        "Pollinations: "
+        + (
+            "CONFIGURED"
+            if POLLINATIONS_API_KEY
+            else "NOT CONFIGURED"
+        )
+    )
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+if __name__ == "__main__":
+    import uvicorn
+
+    port = int(
+        os.getenv("PORT", "8000")
+    )
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=port
+    )
