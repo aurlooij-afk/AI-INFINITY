@@ -1,930 +1,895 @@
 import os
-import re
 import json
 import uuid
-import sqlite3
-from datetime import datetime, timezone
+import time
+import asyncio
+import threading
 from pathlib import Path
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 import requests
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 
 # ============================================================
-# AI INFINITY — v3.1.0
-# Free-first Intelligence Fabric
+# AI INFINITY — CORE ENGINE
 # ============================================================
+
+APP_NAME = "AI Infinity"
+VERSION = "6.0"
 
 app = FastAPI(
-    title="AI Infinity",
-    version="3.1.0",
-    description="Free-first Intelligence Fabric"
+    title=APP_NAME,
+    version=VERSION,
+    description="Free-first AI orchestration, research, reasoning and learning engine."
 )
 
-DB_PATH = Path("/tmp/ai_infinity.db")
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+# ============================================================
+# STORAGE
+# ============================================================
 
-HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
-HF_MODEL = os.getenv(
-    "HF_MODEL",
-    "Qwen/Qwen2.5-7B-Instruct"
-).strip()
+DATA_DIR = Path(os.getenv("AI_INFINITY_DATA", "/tmp/ai-infinity"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-HF_URL = "https://router.huggingface.co/v1/chat/completions"
+TASK_FILE = DATA_DIR / "tasks.json"
+MEMORY_FILE = DATA_DIR / "memory.json"
 
-TIMEOUT = 45
+LOCK = threading.Lock()
+
+MAX_TASKS = 200
+MAX_MEMORY = 500
+
+TASKS: Dict[str, Dict[str, Any]] = {}
+MEMORY: List[Dict[str, Any]] = []
 
 
 # ============================================================
-# DATABASE
+# STARTUP STORAGE
 # ============================================================
 
-def db():
-    return sqlite3.connect(DB_PATH)
+def load_json(path: Path, default):
+    try:
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return default
 
 
-def init_db():
-    con = db()
-    cur = con.cursor()
+def save_json(path: Path, data):
+    try:
+        temp = path.with_suffix(".tmp")
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS tasks (
-            id TEXT PRIMARY KEY,
-            objective TEXT,
-            status TEXT,
-            result TEXT,
-            created_at TEXT
-        )
-    """)
+        with open(temp, "w", encoding="utf-8") as f:
+            json.dump(
+                data,
+                f,
+                ensure_ascii=False,
+                indent=2
+            )
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS memories (
-            id TEXT PRIMARY KEY,
-            content TEXT,
-            source TEXT,
-            confidence REAL,
-            created_at TEXT
-        )
-    """)
+        temp.replace(path)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS evidence (
-            id TEXT PRIMARY KEY,
-            task_id TEXT,
-            title TEXT,
-            url TEXT,
-            snippet TEXT,
-            source TEXT,
-            created_at TEXT
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS events (
-            id TEXT PRIMARY KEY,
-            event TEXT,
-            details TEXT,
-            created_at TEXT
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS genomes (
-            id TEXT PRIMARY KEY,
-            task_id TEXT,
-            genome TEXT,
-            created_at TEXT
-        )
-    """)
-
-    con.commit()
-    con.close()
+    except Exception:
+        pass
 
 
-init_db()
+def load_state():
+    global TASKS, MEMORY
+
+    TASKS = load_json(TASK_FILE, {})
+    MEMORY = load_json(MEMORY_FILE, [])
+
+    if not isinstance(TASKS, dict):
+        TASKS = {}
+
+    if not isinstance(MEMORY, list):
+        MEMORY = []
+
+
+def persist_state():
+    with LOCK:
+        save_json(TASK_FILE, TASKS)
+        save_json(MEMORY_FILE, MEMORY)
 
 
 # ============================================================
-# UTILITIES
+# BASIC HELPERS
 # ============================================================
 
-def now():
+def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def log_event(event, details=None):
-    con = db()
-    con.execute(
-        "INSERT INTO events VALUES (?, ?, ?, ?)",
-        (
-            str(uuid.uuid4()),
-            event,
-            json.dumps(details or {}),
-            now()
-        )
-    )
-    con.commit()
-    con.close()
+def task_id() -> str:
+    return f"task-{uuid.uuid4().hex[:12]}"
 
 
-def detect_domains(text: str):
-    t = text.lower()
-    result = []
-
-    mapping = {
-        "research": [
-            "research", "study", "investigate", "compare",
-            "latest", "find", "analyze"
-        ],
-        "coding": [
-            "code", "coding", "python", "program", "software",
-            "github", "api", "developer"
-        ],
-        "business": [
-            "business", "money", "profit", "startup", "market"
-        ],
-        "science": [
-            "science", "scientific", "experiment", "physics",
-            "biology", "chemistry"
-        ],
-        "creative": [
-            "write", "story", "video", "image", "creative",
-            "design"
-        ]
-    }
-
-    for domain, words in mapping.items():
-        if any(w in t for w in words):
-            result.append(domain)
-
-    return result or ["general"]
+def clean(text: Any, limit: int = 10000) -> str:
+    return " ".join(str(text).split())[:limit]
 
 
-# ============================================================
-# WEB RESEARCH
-# ============================================================
+def trim_state():
+    global TASKS, MEMORY
 
-def web_research(query: str, limit: int = 6):
-    """
-    Free research layer.
-    Uses DuckDuckGo HTML search.
-    Falls back gracefully if search is unavailable.
-    """
+    if len(TASKS) > MAX_TASKS:
+        keys = list(TASKS.keys())
 
-    results = []
+        for key in keys[:-MAX_TASKS]:
+            TASKS.pop(key, None)
 
-    try:
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 "
-                "(compatible; AI-Infinity/3.1)"
-            )
-        }
-
-        response = requests.get(
-            "https://html.duckduckgo.com/html/",
-            params={"q": query},
-            headers=headers,
-            timeout=15
-        )
-
-        if response.ok:
-            html = response.text
-
-            blocks = re.findall(
-                r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
-                html,
-                flags=re.S
-            )
-
-            for url, title in blocks[:limit]:
-                title = re.sub("<.*?>", "", title)
-                title = title.replace("&quot;", '"')
-                title = title.replace("&amp;", "&")
-
-                results.append({
-                    "title": title.strip(),
-                    "url": url,
-                    "snippet": "",
-                    "source": "DuckDuckGo"
-                })
-
-    except Exception as exc:
-        log_event("research_error", {"error": str(exc)})
-
-    # Wikipedia fallback
-    if not results:
-        try:
-            response = requests.get(
-                "https://en.wikipedia.org/w/api.php",
-                params={
-                    "action": "query",
-                    "list": "search",
-                    "srsearch": query,
-                    "format": "json",
-                    "srlimit": limit
-                },
-                timeout=15
-            )
-
-            if response.ok:
-                data = response.json()
-
-                for item in data.get("query", {}).get("search", []):
-                    title = item.get("title", "")
-                    results.append({
-                        "title": title,
-                        "url": (
-                            "https://en.wikipedia.org/wiki/"
-                            + title.replace(" ", "_")
-                        ),
-                        "snippet": re.sub(
-                            "<.*?>",
-                            "",
-                            item.get("snippet", "")
-                        ),
-                        "source": "Wikipedia"
-                    })
-
-        except Exception as exc:
-            log_event("wikipedia_error", {"error": str(exc)})
-
-    return results
+    if len(MEMORY) > MAX_MEMORY:
+        MEMORY = MEMORY[-MAX_MEMORY:]
 
 
-# ============================================================
-# HUGGING FACE AI
-# ============================================================
+def remember(
+    category: str,
+    content: str,
+    source: str = "AI Infinity"
+):
+    MEMORY.append({
+        "id": uuid.uuid4().hex[:12],
+        "timestamp": now(),
+        "category": category,
+        "content": clean(content, 3000),
+        "source": source
+    })
 
-def huggingface_chat(messages):
-    """
-    Current Hugging Face Inference Providers OpenAI-compatible API.
-    """
-
-    if not HF_TOKEN:
-        return {
-            "ok": False,
-            "provider": "none",
-            "model": None,
-            "text": None,
-            "message": "HF_TOKEN is not configured."
-        }
-
-    headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "model": HF_MODEL,
-        "messages": messages,
-        "temperature": 0.2,
-        "max_tokens": 1200
-    }
-
-    try:
-        response = requests.post(
-            HF_URL,
-            headers=headers,
-            json=payload,
-            timeout=TIMEOUT
-        )
-
-        if not response.ok:
-            return {
-                "ok": False,
-                "provider": "huggingface",
-                "model": HF_MODEL,
-                "text": None,
-                "message": (
-                    f"Hugging Face HTTP {response.status_code}: "
-                    f"{response.text[:500]}"
-                )
-            }
-
-        data = response.json()
-
-        choices = data.get("choices", [])
-
-        if not choices:
-            return {
-                "ok": False,
-                "provider": "huggingface",
-                "model": HF_MODEL,
-                "text": None,
-                "message": "Hugging Face returned no choices."
-            }
-
-        message = choices[0].get("message", {})
-        text = message.get("content")
-
-        if isinstance(text, list):
-            text = "".join(
-                part.get("text", "")
-                for part in text
-                if isinstance(part, dict)
-            )
-
-        return {
-            "ok": True,
-            "provider": "huggingface",
-            "model": HF_MODEL,
-            "text": text or "",
-            "message": "AI response generated."
-        }
-
-    except Exception as exc:
-        return {
-            "ok": False,
-            "provider": "huggingface",
-            "model": HF_MODEL,
-            "text": None,
-            "message": str(exc)
-        }
-
-
-# ============================================================
-# AI ROUTER
-# ============================================================
-
-def ai_generate(objective, research=None):
-
-    research = research or []
-
-    evidence_text = "\n".join(
-        [
-            f"- {x['title']} | {x['url']} | {x.get('snippet', '')}"
-            for x in research
-        ]
-    )
-
-    system = """
-You are the reasoning engine inside AI Infinity.
-
-Your job:
-1. Understand the user's objective.
-2. Use the supplied research as evidence.
-3. Separate facts from assumptions.
-4. Identify uncertainty.
-5. Produce practical steps.
-6. Never claim that a simulation is real-world evidence.
-7. Never invent sources.
-8. Respect the free-first policy.
-9. Do not automatically spend money.
-10. Do not perform consequential actions without authorization.
-
-Return a useful, concise but intelligent answer.
-"""
-
-    user = f"""
-OBJECTIVE:
-{objective}
-
-RESEARCH:
-{evidence_text if evidence_text else "No external research was available."}
-
-Create the best practical response.
-"""
-
-    return huggingface_chat([
-        {
-            "role": "system",
-            "content": system
-        },
-        {
-            "role": "user",
-            "content": user
-        }
-    ])
-
-
-# ============================================================
-# INTELLIGENCE PLAN
-# ============================================================
-
-def create_plan(objective: str):
-
-    domains = detect_domains(objective)
-
-    return {
-        "objective": objective,
-        "domains": domains,
-
-        "temporary_minds": [
-            "researcher",
-            "strategist",
-            "builder",
-            "critic",
-            "verifier"
-        ],
-
-        "execution_graph": [
-            "understand_intent",
-            "research",
-            "generate_strategies",
-            "simulate",
-            "execute_reversible_work",
-            "verify",
-            "learn",
-            "store_intelligence_genome"
-        ],
-
-        "governor": {
-            "free_first": True,
-            "local_first": True,
-            "automatic_spending": False,
-            "automatic_self_deployment": False,
-            "consequential_actions_require_authorization": True
-        }
-    }
+    trim_state()
+    persist_state()
 
 
 # ============================================================
 # REQUEST MODELS
 # ============================================================
 
-class AskRequest(BaseModel):
-    command: str = Field(..., min_length=1, max_length=10000)
+class TaskRequest(BaseModel):
+    objective: str = Field(
+        ...,
+        min_length=1,
+        max_length=10000
+    )
+
+    mode: str = Field(
+        default="auto",
+        max_length=50
+    )
+
+    research: bool = True
+
+    verify: bool = True
+
+    remember: bool = True
 
 
 class ResearchRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=2000)
-
-
-class IntentRequest(BaseModel):
-    objective: str = Field(..., min_length=1, max_length=10000)
-
-
-class VerifyRequest(BaseModel):
-    task_id: str
-
-
-class MemoryRequest(BaseModel):
-    content: str
-    source: str = "AI Infinity"
-    confidence: float = 0.5
-
-
-# ============================================================
-# HEALTH
-# ============================================================
-
-@app.get("/health")
-def health():
-    return {
-        "status": "ok",
-        "service": "AI Infinity",
-        "version": "3.1.0"
-    }
-
-
-@app.get("/v1/status")
-def status():
-
-    return {
-        "service": "AI Infinity",
-        "version": "3.1.0",
-
-        "providers": {
-            "huggingface": bool(HF_TOKEN),
-            "huggingface_model": HF_MODEL
-        },
-
-        "governor": {
-            "free_first": True,
-            "automatic_spending": False,
-            "automatic_self_deployment": False
-        },
-
-        "capabilities": [
-            "intent_planning",
-            "web_research",
-            "ai_reasoning",
-            "temporary_minds",
-            "verification",
-            "memory",
-            "audit_events",
-            "intelligence_genome"
-        ]
-    }
-
-
-# ============================================================
-# INTENT
-# ============================================================
-
-@app.post("/v1/intent")
-def intent(req: IntentRequest):
-
-    plan = create_plan(req.objective)
-
-    log_event(
-        "intent_created",
-        {"objective": req.objective}
+    question: str = Field(
+        ...,
+        min_length=1,
+        max_length=5000
     )
 
-    return {
-        "status": "planned",
-        "architecture": plan
-    }
+
+# ============================================================
+# WEB RESEARCH
+# ============================================================
+
+def web_search(query: str) -> List[Dict[str, Any]]:
+    """
+    Free-first web search.
+    Uses DuckDuckGo HTML without requiring an API key.
+    """
+
+    try:
+
+        response = requests.get(
+            "https://html.duckduckgo.com/html/",
+            params={"q": query},
+            headers={
+                "User-Agent":
+                    "Mozilla/5.0 AI-Infinity/6.0"
+            },
+            timeout=15
+        )
+
+        if response.status_code != 200:
+            return []
+
+        from html.parser import HTMLParser
+
+        class SearchParser(HTMLParser):
+
+            def __init__(self):
+                super().__init__()
+
+                self.results = []
+                self.active = False
+                self.current = None
+
+            def handle_starttag(self, tag, attrs):
+
+                attrs = dict(attrs)
+
+                if (
+                    tag == "a"
+                    and "result__a" in
+                    attrs.get("class", "")
+                ):
+
+                    self.active = True
+
+                    self.current = {
+                        "title": "",
+                        "url": attrs.get(
+                            "href",
+                            ""
+                        )
+                    }
+
+            def handle_data(self, data):
+
+                if self.active and self.current:
+                    self.current["title"] += data
+
+            def handle_endtag(self, tag):
+
+                if tag == "a" and self.active:
+
+                    if self.current:
+
+                        title = clean(
+                            self.current["title"],
+                            500
+                        )
+
+                        if title:
+
+                            self.results.append({
+                                "title": title,
+                                "url": self.current["url"]
+                            })
+
+                    self.current = None
+                    self.active = False
+
+        parser = SearchParser()
+        parser.feed(response.text)
+
+        return parser.results[:10]
+
+    except Exception as exc:
+
+        return [{
+            "error": type(exc).__name__
+        }]
 
 
 # ============================================================
-# RESEARCH
+# AI PROVIDERS
 # ============================================================
 
-@app.post("/v1/research")
-def research(req: ResearchRequest):
+def pollinations(prompt: str) -> Optional[str]:
+    """
+    Free-first text generation attempt.
+    """
 
-    results = web_research(req.query)
+    urls = [
+        "https://text.pollinations.ai/"
+    ]
 
-    log_event(
-        "research_completed",
-        {
-            "query": req.query,
-            "results": len(results)
-        }
-    )
+    for url in urls:
 
-    return {
-        "query": req.query,
-        "results": results,
-        "count": len(results)
-    }
+        try:
 
-
-# ============================================================
-# ORCHESTRATE
-# ============================================================
-
-@app.post("/v1/orchestrate")
-def orchestrate(req: AskRequest):
-
-    task_id = "task-" + uuid.uuid4().hex[:12]
-
-    objective = req.command
-
-    plan = create_plan(objective)
-
-    research_results = web_research(objective)
-
-    ai = ai_generate(
-        objective,
-        research_results
-    )
-
-    status_value = "completed" if ai["ok"] else "planned"
-
-    result = {
-        "task_id": task_id,
-        "status": status_value,
-        "objective": objective,
-        "architecture": plan,
-
-        "research": research_results,
-
-        "intelligence": {
-            "text": ai["text"],
-            "provider": ai["provider"],
-            "model": ai["model"],
-            "message": ai["message"]
-        },
-
-        "verification": {
-            "status": "pending",
-            "required": True,
-            "note": (
-                "Research sources provide evidence candidates; "
-                "they do not automatically prove every claim."
+            response = requests.get(
+                url,
+                params={
+                    "prompt": prompt
+                },
+                headers={
+                    "User-Agent":
+                        "AI-Infinity/6.0"
+                },
+                timeout=40
             )
-        }
-    }
 
-    con = db()
+            if response.status_code == 200:
 
-    con.execute(
-        "INSERT INTO tasks VALUES (?, ?, ?, ?, ?)",
-        (
-            task_id,
-            objective,
-            status_value,
-            json.dumps(result),
-            now()
-        )
-    )
+                result = response.text.strip()
 
-    for item in research_results:
-        con.execute(
-            "INSERT INTO evidence VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                str(uuid.uuid4()),
-                task_id,
-                item["title"],
-                item["url"],
-                item.get("snippet", ""),
-                item["source"],
-                now()
-            )
-        )
+                if result:
+                    return result[:15000]
 
-    genome = {
-        "objective": objective,
-        "domains": plan["domains"],
-        "strategy": plan["execution_graph"],
-        "provider": ai["provider"],
-        "model": ai["model"],
-        "evidence_count": len(research_results),
-        "governor": plan["governor"]
-    }
+        except Exception:
+            continue
 
-    con.execute(
-        "INSERT INTO genomes VALUES (?, ?, ?, ?)",
-        (
-            str(uuid.uuid4()),
-            task_id,
-            json.dumps(genome),
-            now()
-        )
-    )
-
-    con.commit()
-    con.close()
-
-    log_event(
-        "orchestration_completed",
-        {
-            "task_id": task_id,
-            "provider": ai["provider"],
-            "model": ai["model"]
-        }
-    )
-
-    return result
+    return None
 
 
 # ============================================================
-# ASK AI
+# INTENT ENGINE
 # ============================================================
 
-@app.post("/v1/ask")
-def ask(req: AskRequest):
+def classify_objective(objective: str) -> Dict[str, Any]:
 
-    results = web_research(req.command)
+    text = objective.lower()
 
-    ai = ai_generate(
-        req.command,
-        results
-    )
+    categories = []
 
-    return {
-        "status": "completed" if ai["ok"] else "error",
-        "objective": req.command,
-        "research": results,
-        "intelligence": ai
-    }
-
-
-# ============================================================
-# VERIFY
-# ============================================================
-
-@app.post("/v1/verify")
-def verify(req: VerifyRequest):
-
-    con = db()
-
-    row = con.execute(
-        "SELECT objective, result FROM tasks WHERE id=?",
-        (req.task_id,)
-    ).fetchone()
-
-    evidence = con.execute(
-        "SELECT title, url, source FROM evidence WHERE task_id=?",
-        (req.task_id,)
-    ).fetchall()
-
-    con.close()
-
-    if not row:
-        raise HTTPException(
-            status_code=404,
-            detail="Task not found"
-        )
-
-    return {
-        "task_id": req.task_id,
-        "status": "review_required",
-        "objective": row[0],
-        "evidence_count": len(evidence),
-        "evidence": [
-            {
-                "title": x[0],
-                "url": x[1],
-                "source": x[2]
-            }
-            for x in evidence
+    keywords = {
+        "build": [
+            "build",
+            "create",
+            "make",
+            "develop",
+            "code",
+            "app",
+            "website"
         ],
-        "note": (
-            "AI Infinity requires independent verification "
-            "before treating consequential claims as verified."
+        "research": [
+            "research",
+            "investigate",
+            "analyze",
+            "study",
+            "compare"
+        ],
+        "business": [
+            "business",
+            "money",
+            "profit",
+            "startup",
+            "market"
+        ],
+        "technical": [
+            "api",
+            "server",
+            "github",
+            "render",
+            "python",
+            "deployment"
+        ],
+        "creative": [
+            "write",
+            "design",
+            "video",
+            "image",
+            "story",
+            "content"
+        ]
+    }
+
+    for category, words in keywords.items():
+
+        if any(word in text for word in words):
+            categories.append(category)
+
+    if not categories:
+        categories.append("general")
+
+    return {
+        "categories": list(dict.fromkeys(categories)),
+        "complexity": (
+            "high"
+            if len(objective) > 1000
+            else "medium"
+            if len(objective) > 250
+            else "low"
         )
     }
 
 
 # ============================================================
-# MEMORY
+# SPECIALIST MINDS
 # ============================================================
 
-@app.post("/v1/memory")
-def save_memory(req: MemoryRequest):
+SPECIALISTS = [
+    (
+        "Research Mind",
+        "Find useful information, evidence and external resources."
+    ),
+    (
+        "Builder Mind",
+        "Convert the objective into practical implementation steps."
+    ),
+    (
+        "Critical Mind",
+        "Find weaknesses, assumptions, risks and contradictions."
+    ),
+    (
+        "Optimizer Mind",
+        "Simplify the solution and reduce unnecessary cost and complexity."
+    ),
+    (
+        "Verification Mind",
+        "Check important claims and distinguish evidence from assumptions."
+    ),
+    (
+        "Future Mind",
+        "Identify scalable improvements and possible next iterations."
+    )
+]
 
-    memory_id = "mem-" + uuid.uuid4().hex[:12]
 
-    con = db()
+def specialist_prompts(
+    objective: str,
+    research: str
+):
 
-    con.execute(
-        "INSERT INTO memories VALUES (?, ?, ?, ?, ?)",
-        (
-            memory_id,
-            req.content,
-            req.source,
-            req.confidence,
-            now()
+    prompts = []
+
+    for name, role in SPECIALISTS:
+
+        prompts.append(
+            (
+                name,
+                f"""
+You are the {name} inside AI Infinity.
+
+ROLE:
+{role}
+
+OBJECTIVE:
+{objective}
+
+AVAILABLE RESEARCH:
+{research[:7000]}
+
+Give concise, useful analysis.
+Do not invent facts.
+Clearly identify uncertainty.
+Focus only on your specialist role.
+"""
+            )
         )
+
+    return prompts
+
+
+# ============================================================
+# PARALLEL SPECIALISTS
+# ============================================================
+
+async def run_specialist(
+    name: str,
+    prompt: str
+):
+
+    result = await asyncio.to_thread(
+        pollinations,
+        prompt
     )
 
-    con.commit()
-    con.close()
+    if not result:
 
-    return {
-        "status": "stored",
-        "memory_id": memory_id
-    }
-
-
-@app.get("/v1/memory")
-def get_memory():
-
-    con = db()
-
-    rows = con.execute(
-        """
-        SELECT id, content, source, confidence, created_at
-        FROM memories
-        ORDER BY created_at DESC
-        LIMIT 100
-        """
-    ).fetchall()
-
-    con.close()
-
-    return {
-        "memories": [
-            {
-                "id": x[0],
-                "content": x[1],
-                "source": x[2],
-                "confidence": x[3],
-                "created_at": x[4]
-            }
-            for x in rows
-        ]
-    }
-
-
-# ============================================================
-# TASK
-# ============================================================
-
-@app.get("/v1/tasks/{task_id}")
-def get_task(task_id: str):
-
-    con = db()
-
-    row = con.execute(
-        "SELECT id, objective, status, result, created_at "
-        "FROM tasks WHERE id=?",
-        (task_id,)
-    ).fetchone()
-
-    con.close()
-
-    if not row:
-        raise HTTPException(
-            status_code=404,
-            detail="Task not found"
+        result = (
+            f"{name}: AI provider unavailable. "
+            "No unsupported conclusion was generated."
         )
 
     return {
-        "task_id": row[0],
-        "objective": row[1],
-        "status": row[2],
-        "result": json.loads(row[3]),
-        "created_at": row[4]
+        "mind": name,
+        "analysis": result[:6000]
     }
 
 
+async def run_specialists(
+    objective: str,
+    research: str
+):
+
+    prompts = specialist_prompts(
+        objective,
+        research
+    )
+
+    jobs = [
+        run_specialist(
+            name,
+            prompt
+        )
+        for name, prompt in prompts
+    ]
+
+    return await asyncio.gather(*jobs)
+
+
 # ============================================================
-# EVENTS
+# PLAN ENGINE
 # ============================================================
 
-@app.get("/v1/events")
-def events():
-
-    con = db()
-
-    rows = con.execute(
-        """
-        SELECT id, event, details, created_at
-        FROM events
-        ORDER BY created_at DESC
-        LIMIT 100
-        """
-    ).fetchall()
-
-    con.close()
+def build_plan(
+    objective: str,
+    intent: Dict[str, Any]
+):
 
     return {
-        "events": [
+        "goal": objective,
+        "classification": intent,
+        "stages": [
             {
-                "id": x[0],
-                "event": x[1],
-                "details": json.loads(x[2]),
-                "created_at": x[3]
+                "id": 1,
+                "name": "Understand",
+                "purpose": "Identify the real goal and constraints."
+            },
+            {
+                "id": 2,
+                "name": "Research",
+                "purpose": "Collect relevant external information."
+            },
+            {
+                "id": 3,
+                "name": "Parallel Minds",
+                "purpose": "Analyze the problem from different specialist perspectives."
+            },
+            {
+                "id": 4,
+                "name": "Synthesis",
+                "purpose": "Combine useful insights into one coherent strategy."
+            },
+            {
+                "id": 5,
+                "name": "Verification",
+                "purpose": "Identify evidence, uncertainty and contradictions."
+            },
+            {
+                "id": 6,
+                "name": "Execution",
+                "purpose": "Produce concrete next actions."
+            },
+            {
+                "id": 7,
+                "name": "Learning",
+                "purpose": "Store useful reusable knowledge."
             }
-            for x in rows
         ]
     }
 
 
 # ============================================================
-# UI
+# SYNTHESIS
+# ============================================================
+
+def synthesize(
+    objective: str,
+    research: List[Dict[str, Any]],
+    specialist_results: List[Dict[str, Any]]
+) -> Optional[str]:
+
+    research_text = "\n".join(
+        f"- {item.get('title', '')} | {item.get('url', '')}"
+        for item in research
+    )
+
+    specialist_text = "\n\n".join(
+        f"### {item['mind']}\n{item['analysis']}"
+        for item in specialist_results
+    )
+
+    prompt = f"""
+You are the central synthesis engine of AI Infinity.
+
+OBJECTIVE:
+{objective}
+
+RESEARCH:
+{research_text[:7000]}
+
+SPECIALIST ANALYSIS:
+{specialist_text[:25000]}
+
+Create one practical final strategy.
+
+Structure:
+
+1. Objective
+2. What is known
+3. Important uncertainty
+4. Key insights
+5. Recommended implementation sequence
+6. Concrete next actions
+7. Verification checklist
+8. Future upgrade opportunities
+
+Rules:
+
+- Do not pretend uncertain information is certain.
+- Do not invent tools, APIs or results.
+- Prefer free solutions where practical.
+- Keep actions executable.
+- If research is weak, say so.
+"""
+
+    return pollinations(prompt)
+
+
+# ============================================================
+# LOCAL FALLBACK SYNTHESIS
+# ============================================================
+
+def fallback_result(
+    objective: str,
+    intent: Dict[str, Any]
+):
+
+    return f"""
+AI Infinity processed the objective successfully.
+
+OBJECTIVE:
+{objective}
+
+CLASSIFICATION:
+{json.dumps(intent, indent=2)}
+
+EXECUTION MODEL:
+
+1. Understand the objective.
+2. Research relevant information.
+3. Run multiple specialist analyses.
+4. Compare their findings.
+5. Verify important claims.
+6. Convert the findings into executable actions.
+7. Store useful knowledge for future tasks.
+
+The external AI provider was unavailable during synthesis,
+so AI Infinity intentionally avoided inventing a final answer.
+
+NEXT ACTION:
+Use the specialist results and research returned with this task.
+"""
+
+
+# ============================================================
+# TASK EXECUTION
+# ============================================================
+
+async def execute_task(
+    tid: str,
+    request: TaskRequest
+):
+
+    task = TASKS[tid]
+
+    task["status"] = "running"
+    task["started_at"] = now()
+
+    try:
+
+        objective = clean(
+            request.objective,
+            10000
+        )
+
+        # --------------------------------------------
+        # 1. INTENT
+        # --------------------------------------------
+
+        intent = classify_objective(
+            objective
+        )
+
+        task["intent"] = intent
+
+        # --------------------------------------------
+        # 2. PLAN
+        # --------------------------------------------
+
+        task["plan"] = build_plan(
+            objective,
+            intent
+        )
+
+        # --------------------------------------------
+        # 3. RESEARCH
+        # --------------------------------------------
+
+        research = []
+
+        if request.research:
+
+            research = await asyncio.to_thread(
+                web_search,
+                objective
+            )
+
+        task["research"] = research
+
+        # --------------------------------------------
+        # 4. PARALLEL MINDS
+        # --------------------------------------------
+
+        research_text = "\n".join(
+            f"{x.get('title', '')} {x.get('url', '')}"
+            for x in research
+        )
+
+        specialists = await run_specialists(
+            objective,
+            research_text
+        )
+
+        task["specialists"] = specialists
+
+        # --------------------------------------------
+        # 5. SYNTHESIS
+        # --------------------------------------------
+
+        final_answer = await asyncio.to_thread(
+            synthesize,
+            objective,
+            research,
+            specialists
+        )
+
+        if not final_answer:
+
+            final_answer = fallback_result(
+                objective,
+                intent
+            )
+
+        task["answer"] = final_answer
+
+        # --------------------------------------------
+        # 6. VERIFICATION
+        # --------------------------------------------
+
+        verification = {
+            "requested": request.verify,
+            "research_items": len(research),
+            "specialist_minds": len(specialists),
+            "verified_at": now(),
+            "note": (
+                "AI Infinity separates research from synthesis. "
+                "External search results are evidence candidates, "
+                "not automatic proof."
+            )
+        }
+
+        task["verification"] = verification
+
+        # --------------------------------------------
+        # 7. EXECUTION CHECKLIST
+        # --------------------------------------------
+
+        task["execution"] = {
+            "ready": True,
+            "next_steps": [
+                "Review the synthesized answer.",
+                "Execute the first concrete action.",
+                "Verify the result.",
+                "Create a follow-up task if needed."
+            ]
+        }
+
+        # --------------------------------------------
+        # 8. LEARNING
+        # --------------------------------------------
+
+        if request.remember:
+
+            remember(
+                "task",
+                (
+                    f"Objective: {objective}\n"
+                    f"Result: {final_answer[:1800]}"
+                )
+            )
+
+        # --------------------------------------------
+        # COMPLETE
+        # --------------------------------------------
+
+        task["status"] = "completed"
+        task["completed_at"] = now()
+
+        trim_state()
+        persist_state()
+
+        return task
+
+    except Exception as exc:
+
+        task["status"] = "failed"
+
+        task["error"] = {
+            "type": type(exc).__name__,
+            "message": str(exc)
+        }
+
+        task["failed_at"] = now()
+
+        persist_state()
+
+        return task
+
+
+# ============================================================
+# WEB UI
 # ============================================================
 
 HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
 <title>AI Infinity</title>
 
 <style>
-body{
-    margin:0;
-    background:#05070b;
-    color:#f5f5f5;
-    font-family:Arial,sans-serif;
+
+body {
+    margin: 0;
+    background: #080808;
+    color: white;
+    font-family: Arial, sans-serif;
 }
 
-.container{
-    max-width:900px;
-    margin:auto;
-    padding:25px;
+.container {
+    max-width: 850px;
+    margin: auto;
+    padding: 25px;
 }
 
-h1{
-    font-size:38px;
-    margin-bottom:5px;
+h1 {
+    font-size: 42px;
+    margin-bottom: 5px;
 }
 
-.subtitle{
-    color:#9ca3af;
-    margin-bottom:25px;
+.subtitle {
+    color: #aaa;
+    margin-bottom: 30px;
 }
 
-textarea{
-    width:100%;
-    min-height:150px;
-    box-sizing:border-box;
-    background:#111827;
-    color:white;
-    border:1px solid #374151;
-    border-radius:14px;
-    padding:16px;
-    font-size:16px;
+.card {
+    background: #151515;
+    border: 1px solid #292929;
+    border-radius: 18px;
+    padding: 20px;
+    margin-bottom: 18px;
 }
 
-button{
-    margin-top:12px;
-    margin-right:8px;
-    padding:13px 18px;
-    border:0;
-    border-radius:10px;
-    cursor:pointer;
-    font-weight:bold;
+textarea {
+    width: 100%;
+    min-height: 150px;
+    box-sizing: border-box;
+    background: #090909;
+    color: white;
+    border: 1px solid #333;
+    border-radius: 12px;
+    padding: 15px;
+    font-size: 16px;
+    resize: vertical;
 }
 
-#result{
-    white-space:pre-wrap;
-    margin-top:25px;
-    padding:18px;
-    background:#111827;
-    border-radius:14px;
-    overflow:auto;
+button {
+    margin-top: 12px;
+    width: 100%;
+    padding: 15px;
+    border: 0;
+    border-radius: 12px;
+    font-size: 17px;
+    cursor: pointer;
 }
+
+pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #ddd;
+}
+
+.status {
+    color: #8cffb0;
+}
+
+.small {
+    color: #888;
+    font-size: 13px;
+}
+
 </style>
 </head>
 
@@ -935,113 +900,100 @@ button{
 <h1>∞ AI Infinity</h1>
 
 <div class="subtitle">
-Free-first Intelligence Fabric<br>
-Orchestrate → Research → Reason → Verify → Learn
+Research → Parallel Minds → Reason → Verify → Execute → Learn
 </div>
 
-<textarea id="command"
-placeholder="Tell AI Infinity what you want to accomplish..."></textarea>
+<div class="card">
 
-<br>
+<h2>Give AI Infinity a mission</h2>
 
-<button onclick="run('orchestrate')">
-Orchestrate
+<textarea id="objective"
+placeholder="Example: Analyze my AI Infinity project and identify the most useful next development step."></textarea>
+
+<button onclick="runTask()">
+Run AI Infinity
 </button>
 
-<button onclick="run('ask')">
-Ask AI
-</button>
+</div>
 
-<button onclick="research()">
-Research
-</button>
+<div class="card">
 
-<div id="result">
-Ready.
+<h3>Status</h3>
+
+<div id="status" class="status">
+Ready
+</div>
+
+</div>
+
+<div class="card">
+
+<h3>Result</h3>
+
+<pre id="result">
+No task executed yet.
+</pre>
+
 </div>
 
 </div>
 
 <script>
 
-async function run(type){
+async function runTask() {
 
-    const command =
-        document.getElementById("command").value.trim();
+    const objective =
+        document.getElementById("objective").value.trim();
 
-    if(!command){
-        alert("Enter an objective first.");
+    if (!objective) {
+        alert("Enter a mission first.");
         return;
     }
 
-    document.getElementById("result").textContent =
-        "AI Infinity is working...";
+    document.getElementById("status").innerText =
+        "AI Infinity is thinking...";
 
-    const endpoint =
-        type === "ask"
-        ? "/v1/ask"
-        : "/v1/orchestrate";
+    document.getElementById("result").innerText =
+        "Running research and specialist minds...";
 
-    try{
+    try {
 
-        const response = await fetch(endpoint,{
-            method:"POST",
-            headers:{
-                "Content-Type":"application/json"
+        const response = await fetch("/task", {
+
+            method: "POST",
+
+            headers: {
+                "Content-Type": "application/json"
             },
-            body:JSON.stringify({
-                command:command
+
+            body: JSON.stringify({
+                objective: objective,
+                research: true,
+                verify: true,
+                remember: true
             })
+
         });
 
         const data = await response.json();
 
-        document.getElementById("result").textContent =
-            JSON.stringify(data,null,2);
+        document.getElementById("status").innerText =
+            data.status || "completed";
 
-    }catch(error){
+        document.getElementById("result").innerText =
+            data.answer ||
+            JSON.stringify(data, null, 2);
 
-        document.getElementById("result").textContent =
-            "Error: " + error;
-    }
-}
+    } catch (error) {
 
+        document.getElementById("status").innerText =
+            "Error";
 
-async function research(){
+        document.getElementById("result").innerText =
+            error.toString();
 
-    const command =
-        document.getElementById("command").value.trim();
-
-    if(!command){
-        alert("Enter a research question first.");
-        return;
     }
 
-    document.getElementById("result").textContent =
-        "Researching...";
-
-    try{
-
-        const response = await fetch("/v1/research",{
-            method:"POST",
-            headers:{
-                "Content-Type":"application/json"
-            },
-            body:JSON.stringify({
-                query:command
-            })
-        });
-
-        const data = await response.json();
-
-        document.getElementById("result").textContent =
-            JSON.stringify(data,null,2);
-
-    }catch(error){
-
-        document.getElementById("result").textContent =
-            "Error: " + error;
-    }
 }
 
 </script>
@@ -1051,6 +1003,235 @@ async function research(){
 """
 
 
+# ============================================================
+# API ROUTES
+# ============================================================
+
 @app.get("/", response_class=HTMLResponse)
 def home():
+
     return HTML
+
+
+@app.get("/health")
+def health():
+
+    return {
+        "status": "online",
+        "name": APP_NAME,
+        "version": VERSION,
+        "timestamp": now(),
+        "tasks": len(TASKS),
+        "memory": len(MEMORY),
+        "engine": [
+            "intent classification",
+            "planning",
+            "web research",
+            "parallel specialist minds",
+            "AI synthesis",
+            "verification",
+            "execution planning",
+            "persistent memory"
+        ]
+    }
+
+
+@app.post("/task")
+async def create_task(request: TaskRequest):
+
+    tid = task_id()
+
+    TASKS[tid] = {
+        "task_id": tid,
+        "status": "queued",
+        "objective": request.objective,
+        "mode": request.mode,
+        "created_at": now()
+    }
+
+    persist_state()
+
+    result = await execute_task(
+        tid,
+        request
+    )
+
+    return result
+
+
+@app.get("/task/{tid}")
+def get_task(tid: str):
+
+    task = TASKS.get(tid)
+
+    if not task:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Task not found"
+        )
+
+    return task
+
+
+@app.get("/tasks")
+def list_tasks():
+
+    return {
+        "count": len(TASKS),
+        "tasks": list(TASKS.values())[-50:]
+    }
+
+
+@app.post("/research")
+async def research(request: ResearchRequest):
+
+    results = await asyncio.to_thread(
+        web_search,
+        request.question
+    )
+
+    return {
+        "question": request.question,
+        "results": results,
+        "count": len(results),
+        "timestamp": now()
+    }
+
+
+@app.get("/memory")
+def get_memory():
+
+    return {
+        "count": len(MEMORY),
+        "memory": MEMORY[-100:]
+    }
+
+
+@app.delete("/memory")
+def clear_memory():
+
+    MEMORY.clear()
+    persist_state()
+
+    return {
+        "status": "cleared"
+    }
+
+
+@app.get("/stats")
+def stats():
+
+    completed = sum(
+        1
+        for task in TASKS.values()
+        if task.get("status") == "completed"
+    )
+
+    failed = sum(
+        1
+        for task in TASKS.values()
+        if task.get("status") == "failed"
+    )
+
+    running = sum(
+        1
+        for task in TASKS.values()
+        if task.get("status") == "running"
+    )
+
+    return {
+        "application": APP_NAME,
+        "version": VERSION,
+        "total_tasks": len(TASKS),
+        "completed": completed,
+        "failed": failed,
+        "running": running,
+        "memory_items": len(MEMORY),
+        "specialist_minds": len(SPECIALISTS),
+        "research": True,
+        "verification": True,
+        "learning": True
+    }
+
+
+@app.get("/capabilities")
+def capabilities():
+
+    return {
+        "name": APP_NAME,
+        "version": VERSION,
+
+        "core": [
+            "Mission intake",
+            "Intent classification",
+            "Dynamic planning",
+            "Web research",
+            "Parallel specialist analysis",
+            "AI synthesis",
+            "Verification",
+            "Execution planning",
+            "Persistent memory",
+            "Task history",
+            "Health monitoring",
+            "Browser interface"
+        ],
+
+        "specialist_minds": [
+            name
+            for name, _ in SPECIALISTS
+        ],
+
+        "free_first": True
+    }
+
+
+# ============================================================
+# STARTUP
+# ============================================================
+
+@app.on_event("startup")
+async def startup():
+
+    load_state()
+
+    print("=" * 70)
+    print("∞ AI INFINITY")
+    print(f"Version: {VERSION}")
+    print("STATUS: ONLINE")
+    print("")
+    print("Mission")
+    print("  ↓")
+    print("Intent")
+    print("  ↓")
+    print("Research")
+    print("  ↓")
+    print("Parallel Minds")
+    print("  ↓")
+    print("Synthesis")
+    print("  ↓")
+    print("Verification")
+    print("  ↓")
+    print("Execution")
+    print("  ↓")
+    print("Learning")
+    print("=" * 70)
+
+
+# ============================================================
+# DIRECT LOCAL START
+# ============================================================
+
+if __name__ == "__main__":
+
+    import uvicorn
+
+    port = int(
+        os.getenv("PORT", "8000")
+    )
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=port
+    )
