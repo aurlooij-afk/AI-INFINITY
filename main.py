@@ -10,26 +10,22 @@ from typing import Any, Dict, List, Optional
 
 import requests
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 
 # ============================================================
-# AI INFINITY — CORE ENGINE
+# AI INFINITY 7 — REAL EXECUTION CORE
 # ============================================================
 
 APP_NAME = "AI Infinity"
-VERSION = "6.0"
+VERSION = "7.0"
 
 app = FastAPI(
     title=APP_NAME,
     version=VERSION,
-    description="Free-first AI orchestration, research, reasoning and learning engine."
+    description="Free-first AI orchestration, research, reasoning, verification and execution engine."
 )
-
-# ============================================================
-# STORAGE
-# ============================================================
 
 DATA_DIR = Path(os.getenv("AI_INFINITY_DATA", "/tmp/ai-infinity"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -41,14 +37,28 @@ LOCK = threading.Lock()
 
 MAX_TASKS = 200
 MAX_MEMORY = 500
+MAX_RESEARCH = 8
+MAX_SPECIALISTS = 6
 
 TASKS: Dict[str, Dict[str, Any]] = {}
 MEMORY: List[Dict[str, Any]] = []
 
 
 # ============================================================
-# STARTUP STORAGE
+# TIME / STORAGE
 # ============================================================
+
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def make_id(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
+
+
+def clean(value: Any, limit: int = 10000) -> str:
+    return " ".join(str(value).split())[:limit]
+
 
 def load_json(path: Path, default):
     try:
@@ -62,18 +72,10 @@ def load_json(path: Path, default):
 
 def save_json(path: Path, data):
     try:
-        temp = path.with_suffix(".tmp")
-
-        with open(temp, "w", encoding="utf-8") as f:
-            json.dump(
-                data,
-                f,
-                ensure_ascii=False,
-                indent=2
-            )
-
-        temp.replace(path)
-
+        tmp = path.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        tmp.replace(path)
     except Exception:
         pass
 
@@ -97,28 +99,11 @@ def persist_state():
         save_json(MEMORY_FILE, MEMORY)
 
 
-# ============================================================
-# BASIC HELPERS
-# ============================================================
-
-def now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def task_id() -> str:
-    return f"task-{uuid.uuid4().hex[:12]}"
-
-
-def clean(text: Any, limit: int = 10000) -> str:
-    return " ".join(str(text).split())[:limit]
-
-
 def trim_state():
     global TASKS, MEMORY
 
     if len(TASKS) > MAX_TASKS:
         keys = list(TASKS.keys())
-
         for key in keys[:-MAX_TASKS]:
             TASKS.pop(key, None)
 
@@ -126,13 +111,9 @@ def trim_state():
         MEMORY = MEMORY[-MAX_MEMORY:]
 
 
-def remember(
-    category: str,
-    content: str,
-    source: str = "AI Infinity"
-):
+def remember(category: str, content: str, source: str = APP_NAME):
     MEMORY.append({
-        "id": uuid.uuid4().hex[:12],
+        "id": make_id("mem"),
         "timestamp": now(),
         "category": category,
         "content": clean(content, 3000),
@@ -148,30 +129,135 @@ def remember(
 # ============================================================
 
 class TaskRequest(BaseModel):
-    objective: str = Field(
-        ...,
-        min_length=1,
-        max_length=10000
-    )
-
-    mode: str = Field(
-        default="auto",
-        max_length=50
-    )
-
+    objective: str = Field(..., min_length=1, max_length=10000)
+    mode: str = Field(default="auto", max_length=50)
     research: bool = True
-
     verify: bool = True
-
     remember: bool = True
 
 
 class ResearchRequest(BaseModel):
-    question: str = Field(
-        ...,
-        min_length=1,
-        max_length=5000
-    )
+    question: str = Field(..., min_length=1, max_length=5000)
+
+
+# ============================================================
+# FREE AI PROVIDER ROUTER
+# ============================================================
+
+def provider_pollinations(prompt: str) -> Optional[str]:
+    urls = [
+        "https://text.pollinations.ai/"
+    ]
+
+    for url in urls:
+        try:
+            response = requests.get(
+                url,
+                params={"prompt": prompt},
+                headers={"User-Agent": "AI-Infinity/7.0"},
+                timeout=35
+            )
+
+            if response.status_code == 200:
+                text = response.text.strip()
+
+                if text:
+                    return text[:16000]
+
+        except Exception:
+            continue
+
+    return None
+
+
+def provider_huggingface(prompt: str) -> Optional[str]:
+    token = os.getenv("HF_TOKEN")
+
+    if not token:
+        return None
+
+    models = [
+        "Qwen/Qwen2.5-7B-Instruct",
+        "microsoft/Phi-3.5-mini-instruct"
+    ]
+
+    for model in models:
+        try:
+            url = f"https://api-inference.huggingface.co/models/{model}"
+
+            response = requests.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "inputs": prompt,
+                    "parameters": {
+                        "max_new_tokens": 1200,
+                        "temperature": 0.2,
+                        "return_full_text": False
+                    }
+                },
+                timeout=45
+            )
+
+            if response.status_code != 200:
+                continue
+
+            data = response.json()
+
+            if isinstance(data, list) and data:
+                text = data[0].get("generated_text")
+
+                if text:
+                    return str(text)[:16000]
+
+            if isinstance(data, dict):
+                text = data.get("generated_text")
+
+                if text:
+                    return str(text)[:16000]
+
+        except Exception:
+            continue
+
+    return None
+
+
+def ai_generate(prompt: str) -> Dict[str, Any]:
+    """
+    Multi-provider free-first router.
+
+    Provider order:
+    1. Pollinations
+    2. Hugging Face when HF_TOKEN exists
+    """
+
+    providers = [
+        ("pollinations", provider_pollinations),
+        ("huggingface", provider_huggingface)
+    ]
+
+    started = time.time()
+
+    for name, provider in providers:
+        result = provider(prompt)
+
+        if result:
+            return {
+                "ok": True,
+                "provider": name,
+                "text": result,
+                "latency_seconds": round(time.time() - started, 2)
+            }
+
+    return {
+        "ok": False,
+        "provider": None,
+        "text": None,
+        "latency_seconds": round(time.time() - started, 2)
+    }
 
 
 # ============================================================
@@ -179,19 +265,12 @@ class ResearchRequest(BaseModel):
 # ============================================================
 
 def web_search(query: str) -> List[Dict[str, Any]]:
-    """
-    Free-first web search.
-    Uses DuckDuckGo HTML without requiring an API key.
-    """
-
     try:
-
         response = requests.get(
             "https://html.duckduckgo.com/html/",
             params={"q": query},
             headers={
-                "User-Agent":
-                    "Mozilla/5.0 AI-Infinity/6.0"
+                "User-Agent": "Mozilla/5.0 AI-Infinity/7.0"
             },
             timeout=15
         )
@@ -201,184 +280,110 @@ def web_search(query: str) -> List[Dict[str, Any]]:
 
         from html.parser import HTMLParser
 
-        class SearchParser(HTMLParser):
+        class Parser(HTMLParser):
 
             def __init__(self):
                 super().__init__()
-
                 self.results = []
                 self.active = False
                 self.current = None
 
             def handle_starttag(self, tag, attrs):
-
                 attrs = dict(attrs)
 
                 if (
                     tag == "a"
-                    and "result__a" in
-                    attrs.get("class", "")
+                    and "result__a" in attrs.get("class", "")
                 ):
-
                     self.active = True
-
                     self.current = {
                         "title": "",
-                        "url": attrs.get(
-                            "href",
-                            ""
-                        )
+                        "url": attrs.get("href", "")
                     }
 
             def handle_data(self, data):
-
                 if self.active and self.current:
                     self.current["title"] += data
 
             def handle_endtag(self, tag):
-
                 if tag == "a" and self.active:
-
                     if self.current:
-
                         title = clean(
                             self.current["title"],
                             500
                         )
 
                         if title:
-
                             self.results.append({
                                 "title": title,
                                 "url": self.current["url"]
                             })
 
-                    self.current = None
                     self.active = False
+                    self.current = None
 
-        parser = SearchParser()
+        parser = Parser()
         parser.feed(response.text)
 
-        return parser.results[:10]
+        return parser.results[:MAX_RESEARCH]
 
-    except Exception as exc:
-
-        return [{
-            "error": type(exc).__name__
-        }]
+    except Exception:
+        return []
 
 
 # ============================================================
-# AI PROVIDERS
-# ============================================================
-
-def pollinations(prompt: str) -> Optional[str]:
-    """
-    Free-first text generation attempt.
-    """
-
-    urls = [
-        "https://text.pollinations.ai/"
-    ]
-
-    for url in urls:
-
-        try:
-
-            response = requests.get(
-                url,
-                params={
-                    "prompt": prompt
-                },
-                headers={
-                    "User-Agent":
-                        "AI-Infinity/6.0"
-                },
-                timeout=40
-            )
-
-            if response.status_code == 200:
-
-                result = response.text.strip()
-
-                if result:
-                    return result[:15000]
-
-        except Exception:
-            continue
-
-    return None
-
-
-# ============================================================
-# INTENT ENGINE
+# INTELLIGENCE CLASSIFIER
 # ============================================================
 
 def classify_objective(objective: str) -> Dict[str, Any]:
 
     text = objective.lower()
 
-    categories = []
-
     keywords = {
         "build": [
-            "build",
-            "create",
-            "make",
-            "develop",
-            "code",
-            "app",
-            "website"
+            "build", "create", "make", "develop",
+            "code", "app", "website", "software"
         ],
         "research": [
-            "research",
-            "investigate",
-            "analyze",
-            "study",
-            "compare"
+            "research", "investigate", "analyze",
+            "study", "compare", "find"
         ],
         "business": [
-            "business",
-            "money",
-            "profit",
-            "startup",
-            "market"
+            "business", "money", "profit",
+            "startup", "market", "customer"
         ],
         "technical": [
-            "api",
-            "server",
-            "github",
-            "render",
-            "python",
-            "deployment"
+            "api", "server", "github", "render",
+            "python", "deployment", "database"
         ],
         "creative": [
-            "write",
-            "design",
-            "video",
-            "image",
-            "story",
-            "content"
+            "write", "design", "video",
+            "image", "story", "content"
+        ],
+        "automation": [
+            "automate", "automation", "agent",
+            "workflow", "automatic"
         ]
     }
 
-    for category, words in keywords.items():
+    categories = []
 
+    for category, words in keywords.items():
         if any(word in text for word in words):
             categories.append(category)
 
     if not categories:
-        categories.append("general")
+        categories = ["general"]
+
+    complexity = (
+        "high" if len(objective) > 1000
+        else "medium" if len(objective) > 250
+        else "low"
+    )
 
     return {
         "categories": list(dict.fromkeys(categories)),
-        "complexity": (
-            "high"
-            if len(objective) > 1000
-            else "medium"
-            if len(objective) > 250
-            else "low"
-        )
+        "complexity": complexity
     }
 
 
@@ -389,109 +394,118 @@ def classify_objective(objective: str) -> Dict[str, Any]:
 SPECIALISTS = [
     (
         "Research Mind",
-        "Find useful information, evidence and external resources."
+        "Find useful evidence, sources and missing information."
     ),
     (
         "Builder Mind",
-        "Convert the objective into practical implementation steps."
+        "Turn the objective into concrete implementation steps."
     ),
     (
         "Critical Mind",
-        "Find weaknesses, assumptions, risks and contradictions."
+        "Find weaknesses, risks, contradictions and assumptions."
     ),
     (
         "Optimizer Mind",
-        "Simplify the solution and reduce unnecessary cost and complexity."
+        "Reduce cost, complexity and unnecessary work."
     ),
     (
         "Verification Mind",
-        "Check important claims and distinguish evidence from assumptions."
+        "Separate evidence, uncertainty and unsupported claims."
     ),
     (
         "Future Mind",
-        "Identify scalable improvements and possible next iterations."
+        "Identify scalable improvements and future capabilities."
     )
 ]
 
 
-def specialist_prompts(
+def specialist_prompt(
+    name: str,
+    role: str,
     objective: str,
-    research: str
-):
+    research: str,
+    memory: str
+) -> str:
 
-    prompts = []
+    return f"""
+You are the {name} inside AI Infinity 7.
 
-    for name, role in SPECIALISTS:
-
-        prompts.append(
-            (
-                name,
-                f"""
-You are the {name} inside AI Infinity.
-
-ROLE:
+YOUR ROLE:
 {role}
 
-OBJECTIVE:
+MISSION:
 {objective}
 
-AVAILABLE RESEARCH:
+WEB RESEARCH:
 {research[:7000]}
 
-Give concise, useful analysis.
-Do not invent facts.
-Clearly identify uncertainty.
-Focus only on your specialist role.
+RELEVANT MEMORY:
+{memory[:4000]}
+
+Return concise, practical analysis.
+
+Rules:
+- Do not invent facts.
+- Identify uncertainty.
+- Stay within your specialist role.
+- Prefer free solutions.
+- Give actionable information.
 """
-            )
-        )
 
-    return prompts
-
-
-# ============================================================
-# PARALLEL SPECIALISTS
-# ============================================================
 
 async def run_specialist(
     name: str,
-    prompt: str
+    role: str,
+    objective: str,
+    research: str,
+    memory: str
 ):
 
+    prompt = specialist_prompt(
+        name,
+        role,
+        objective,
+        research,
+        memory
+    )
+
     result = await asyncio.to_thread(
-        pollinations,
+        ai_generate,
         prompt
     )
 
-    if not result:
-
-        result = (
-            f"{name}: AI provider unavailable. "
-            "No unsupported conclusion was generated."
-        )
+    if result["ok"]:
+        return {
+            "mind": name,
+            "provider": result["provider"],
+            "analysis": result["text"][:7000]
+        }
 
     return {
         "mind": name,
-        "analysis": result[:6000]
+        "provider": None,
+        "analysis": (
+            f"{name}: provider unavailable. "
+            "No unsupported conclusion generated."
+        )
     }
 
 
 async def run_specialists(
     objective: str,
-    research: str
+    research: str,
+    memory: str
 ):
-
-    prompts = specialist_prompts(
-        objective,
-        research
-    )
 
     jobs = [
         run_specialist(
             name,
-            prompt
+            role,
+            objective,
+            research,
+            memory
         )
-        for name, prompt in prompts
+        for name, role in SPECIALISTS
     ]
 
     return await asyncio.gather(*jobs)
@@ -509,42 +523,14 @@ def build_plan(
     return {
         "goal": objective,
         "classification": intent,
-        "stages": [
-            {
-                "id": 1,
-                "name": "Understand",
-                "purpose": "Identify the real goal and constraints."
-            },
-            {
-                "id": 2,
-                "name": "Research",
-                "purpose": "Collect relevant external information."
-            },
-            {
-                "id": 3,
-                "name": "Parallel Minds",
-                "purpose": "Analyze the problem from different specialist perspectives."
-            },
-            {
-                "id": 4,
-                "name": "Synthesis",
-                "purpose": "Combine useful insights into one coherent strategy."
-            },
-            {
-                "id": 5,
-                "name": "Verification",
-                "purpose": "Identify evidence, uncertainty and contradictions."
-            },
-            {
-                "id": 6,
-                "name": "Execution",
-                "purpose": "Produce concrete next actions."
-            },
-            {
-                "id": 7,
-                "name": "Learning",
-                "purpose": "Store useful reusable knowledge."
-            }
+        "pipeline": [
+            "Understand",
+            "Research",
+            "Parallel Minds",
+            "Synthesis",
+            "Verification",
+            "Execution",
+            "Learning"
         ]
     }
 
@@ -556,94 +542,152 @@ def build_plan(
 def synthesize(
     objective: str,
     research: List[Dict[str, Any]],
-    specialist_results: List[Dict[str, Any]]
-) -> Optional[str]:
+    specialists: List[Dict[str, Any]],
+    memory: str
+):
 
     research_text = "\n".join(
-        f"- {item.get('title', '')} | {item.get('url', '')}"
-        for item in research
+        f"- {x.get('title', '')} | {x.get('url', '')}"
+        for x in research
     )
 
     specialist_text = "\n\n".join(
-        f"### {item['mind']}\n{item['analysis']}"
-        for item in specialist_results
+        f"### {x['mind']}\n{x['analysis']}"
+        for x in specialists
     )
 
     prompt = f"""
-You are the central synthesis engine of AI Infinity.
+You are the central intelligence engine of AI Infinity 7.
 
-OBJECTIVE:
+MISSION:
 {objective}
 
 RESEARCH:
 {research_text[:7000]}
 
-SPECIALIST ANALYSIS:
-{specialist_text[:25000]}
+SPECIALIST MINDS:
+{specialist_text[:30000]}
 
-Create one practical final strategy.
+MEMORY:
+{memory[:5000]}
 
-Structure:
+Produce one practical result.
 
-1. Objective
-2. What is known
-3. Important uncertainty
-4. Key insights
-5. Recommended implementation sequence
-6. Concrete next actions
-7. Verification checklist
-8. Future upgrade opportunities
+FORMAT:
 
-Rules:
+OBJECTIVE
+What the user is trying to accomplish.
 
-- Do not pretend uncertain information is certain.
-- Do not invent tools, APIs or results.
-- Prefer free solutions where practical.
-- Keep actions executable.
-- If research is weak, say so.
+KNOWN
+Facts/evidence available.
+
+UNCERTAINTY
+What cannot be verified.
+
+INSIGHTS
+Most useful conclusions from the available evidence.
+
+ACTION PLAN
+Concrete implementation sequence.
+
+NEXT ACTION
+The single most useful immediate action.
+
+VERIFICATION
+How the result should be checked.
+
+FUTURE
+Useful upgrades.
+
+RULES:
+- Never invent facts.
+- Never claim an action happened when it did not.
+- Clearly distinguish evidence from assumptions.
+- Prefer free-first solutions.
+- Be concise but useful.
 """
 
-    return pollinations(prompt)
+    result = ai_generate(prompt)
+
+    if result["ok"]:
+        return {
+            "answer": result["text"],
+            "provider": result["provider"]
+        }
+
+    return {
+        "answer": fallback_answer(
+            objective,
+            len(research),
+            len(specialists)
+        ),
+        "provider": None
+    }
 
 
-# ============================================================
-# LOCAL FALLBACK SYNTHESIS
-# ============================================================
-
-def fallback_result(
+def fallback_answer(
     objective: str,
-    intent: Dict[str, Any]
+    research_count: int,
+    specialist_count: int
 ):
 
     return f"""
-AI Infinity processed the objective successfully.
+AI Infinity 7 completed its orchestration pipeline.
 
 OBJECTIVE:
 {objective}
 
-CLASSIFICATION:
-{json.dumps(intent, indent=2)}
+PIPELINE:
+✓ Mission understood
+✓ Intent classified
+✓ Research attempted
+✓ {specialist_count} specialist minds executed
+✓ {research_count} research results collected
+✓ Verification layer prepared
+✓ Execution plan prepared
+✓ Learning layer available
 
-EXECUTION MODEL:
-
-1. Understand the objective.
-2. Research relevant information.
-3. Run multiple specialist analyses.
-4. Compare their findings.
-5. Verify important claims.
-6. Convert the findings into executable actions.
-7. Store useful knowledge for future tasks.
-
-The external AI provider was unavailable during synthesis,
-so AI Infinity intentionally avoided inventing a final answer.
+The external AI generation providers were unavailable during final
+synthesis, so AI Infinity did not invent a final answer.
 
 NEXT ACTION:
-Use the specialist results and research returned with this task.
+Retry the mission when an AI provider is available.
 """
 
 
 # ============================================================
-# TASK EXECUTION
+# VERIFICATION ENGINE
+# ============================================================
+
+def verify_result(
+    objective: str,
+    research: List[Dict[str, Any]],
+    specialists: List[Dict[str, Any]],
+    answer: str
+):
+
+    warnings = []
+
+    if not research:
+        warnings.append("No external research results were returned.")
+
+    if not specialists:
+        warnings.append("No specialist results were returned.")
+
+    if not answer.strip():
+        warnings.append("Final answer is empty.")
+
+    return {
+        "passed": len(warnings) == 0,
+        "warnings": warnings,
+        "research_count": len(research),
+        "specialist_count": len(specialists),
+        "checked_at": now()
+    }
+
+
+# ============================================================
+# TASK ENGINE
 # ============================================================
 
 async def execute_task(
@@ -663,33 +707,35 @@ async def execute_task(
             10000
         )
 
-        # --------------------------------------------
-        # 1. INTENT
-        # --------------------------------------------
+        # 1 — UNDERSTAND
 
-        intent = classify_objective(
-            objective
-        )
+        intent = classify_objective(objective)
 
         task["intent"] = intent
 
-        # --------------------------------------------
-        # 2. PLAN
-        # --------------------------------------------
+        # 2 — PLAN
 
         task["plan"] = build_plan(
             objective,
             intent
         )
 
-        # --------------------------------------------
-        # 3. RESEARCH
-        # --------------------------------------------
+        # 3 — MEMORY CONTEXT
+
+        memory_items = MEMORY[-20:]
+
+        memory_text = "\n".join(
+            f"- {x.get('category')}: {x.get('content')}"
+            for x in memory_items
+        )
+
+        task["memory_context_items"] = len(memory_items)
+
+        # 4 — RESEARCH
 
         research = []
 
         if request.research:
-
             research = await asyncio.to_thread(
                 web_search,
                 objective
@@ -697,77 +743,69 @@ async def execute_task(
 
         task["research"] = research
 
-        # --------------------------------------------
-        # 4. PARALLEL MINDS
-        # --------------------------------------------
-
         research_text = "\n".join(
             f"{x.get('title', '')} {x.get('url', '')}"
             for x in research
         )
 
+        # 5 — PARALLEL MINDS
+
         specialists = await run_specialists(
             objective,
-            research_text
+            research_text,
+            memory_text
         )
 
         task["specialists"] = specialists
 
-        # --------------------------------------------
-        # 5. SYNTHESIS
-        # --------------------------------------------
+        # 6 — SYNTHESIS
 
-        final_answer = await asyncio.to_thread(
+        synthesis = await asyncio.to_thread(
             synthesize,
             objective,
             research,
-            specialists
+            specialists,
+            memory_text
         )
 
-        if not final_answer:
+        task["answer"] = synthesis["answer"]
+        task["provider"] = synthesis["provider"]
 
-            final_answer = fallback_result(
+        # 7 — VERIFICATION
+
+        if request.verify:
+
+            verification = verify_result(
                 objective,
-                intent
+                research,
+                specialists,
+                synthesis["answer"]
             )
 
-        task["answer"] = final_answer
+        else:
 
-        # --------------------------------------------
-        # 6. VERIFICATION
-        # --------------------------------------------
-
-        verification = {
-            "requested": request.verify,
-            "research_items": len(research),
-            "specialist_minds": len(specialists),
-            "verified_at": now(),
-            "note": (
-                "AI Infinity separates research from synthesis. "
-                "External search results are evidence candidates, "
-                "not automatic proof."
-            )
-        }
+            verification = {
+                "passed": True,
+                "warnings": ["Verification was disabled."],
+                "checked_at": now()
+            }
 
         task["verification"] = verification
 
-        # --------------------------------------------
-        # 7. EXECUTION CHECKLIST
-        # --------------------------------------------
+        # 8 — EXECUTION PLAN
 
         task["execution"] = {
             "ready": True,
-            "next_steps": [
-                "Review the synthesized answer.",
-                "Execute the first concrete action.",
-                "Verify the result.",
-                "Create a follow-up task if needed."
+            "controlled": True,
+            "actions": [
+                "Review the generated strategy.",
+                "Execute the next action.",
+                "Verify the real-world result.",
+                "Feed the result back into AI Infinity."
             ]
         }
 
-        # --------------------------------------------
-        # 8. LEARNING
-        # --------------------------------------------
+        # 9 — LEARNING
 
         if request.remember:
 
@@ -775,13 +813,12 @@ async def execute_task(
                 "task",
                 (
                     f"Objective: {objective}\n"
-                    f"Result: {final_answer[:1800]}"
+                    f"Provider: {synthesis['provider']}\n"
+                    f"Result: {synthesis['answer'][:1800]}"
                 )
             )
 
-        # --------------------------------------------
-        # COMPLETE
-        # --------------------------------------------
+        # 10 — COMPLETE
 
         task["status"] = "completed"
         task["completed_at"] = now()
@@ -817,76 +854,90 @@ HTML = """
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
-<title>AI Infinity</title>
+<title>AI Infinity 7</title>
 
 <style>
 
+* {
+    box-sizing: border-box;
+}
+
 body {
     margin: 0;
-    background: #080808;
-    color: white;
+    background: #070707;
+    color: #fff;
     font-family: Arial, sans-serif;
 }
 
 .container {
-    max-width: 850px;
+    max-width: 900px;
     margin: auto;
-    padding: 25px;
+    padding: 20px;
 }
 
-h1 {
-    font-size: 42px;
-    margin-bottom: 5px;
+.logo {
+    font-size: 44px;
+    font-weight: bold;
 }
 
 .subtitle {
-    color: #aaa;
-    margin-bottom: 30px;
+    color: #999;
+    margin: 8px 0 25px;
 }
 
 .card {
-    background: #151515;
+    background: #141414;
     border: 1px solid #292929;
     border-radius: 18px;
-    padding: 20px;
-    margin-bottom: 18px;
+    padding: 18px;
+    margin-bottom: 16px;
 }
 
 textarea {
     width: 100%;
-    min-height: 150px;
-    box-sizing: border-box;
-    background: #090909;
-    color: white;
-    border: 1px solid #333;
-    border-radius: 12px;
-    padding: 15px;
-    font-size: 16px;
+    min-height: 160px;
     resize: vertical;
+    padding: 15px;
+    border-radius: 12px;
+    border: 1px solid #333;
+    background: #090909;
+    color: #fff;
+    font-size: 16px;
 }
 
 button {
-    margin-top: 12px;
     width: 100%;
-    padding: 15px;
+    padding: 16px;
+    margin-top: 12px;
     border: 0;
     border-radius: 12px;
+    background: #fff;
+    color: #000;
     font-size: 17px;
-    cursor: pointer;
+    font-weight: bold;
+}
+
+button:disabled {
+    opacity: .5;
+}
+
+#status {
+    color: #8cffb0;
 }
 
 pre {
     white-space: pre-wrap;
     word-break: break-word;
     color: #ddd;
+    line-height: 1.5;
 }
 
-.status {
-    color: #8cffb0;
-}
-
-.small {
-    color: #888;
+.badge {
+    display: inline-block;
+    padding: 7px 10px;
+    border-radius: 10px;
+    background: #222;
+    margin: 4px;
     font-size: 13px;
 }
 
@@ -897,10 +948,10 @@ pre {
 
 <div class="container">
 
-<h1>∞ AI Infinity</h1>
+<div class="logo">∞ AI Infinity 7</div>
 
 <div class="subtitle">
-Research → Parallel Minds → Reason → Verify → Execute → Learn
+One mission → research → parallel minds → synthesis → verification → execution → learning
 </div>
 
 <div class="card">
@@ -908,10 +959,10 @@ Research → Parallel Minds → Reason → Verify → Execute → Learn
 <h2>Give AI Infinity a mission</h2>
 
 <textarea id="objective"
-placeholder="Example: Analyze my AI Infinity project and identify the most useful next development step."></textarea>
+placeholder="Tell AI Infinity what you want done..."></textarea>
 
-<button onclick="runTask()">
-Run AI Infinity
+<button id="run" onclick="runTask()">
+RUN AI INFINITY
 </button>
 
 </div>
@@ -920,7 +971,7 @@ Run AI Infinity
 
 <h3>Status</h3>
 
-<div id="status" class="status">
+<div id="status">
 Ready
 </div>
 
@@ -930,9 +981,21 @@ Ready
 
 <h3>Result</h3>
 
-<pre id="result">
-No task executed yet.
-</pre>
+<pre id="result">No mission executed yet.</pre>
+
+</div>
+
+<div class="card">
+
+<h3>Capabilities</h3>
+
+<div class="badge">Multi-provider AI</div>
+<div class="badge">Web research</div>
+<div class="badge">6 specialist minds</div>
+<div class="badge">Verification</div>
+<div class="badge">Memory</div>
+<div class="badge">Execution planning</div>
+<div class="badge">Free-first</div>
 
 </div>
 
@@ -942,19 +1005,23 @@ No task executed yet.
 
 async function runTask() {
 
-    const objective =
-        document.getElementById("objective").value.trim();
+    const box = document.getElementById("objective");
+    const button = document.getElementById("run");
+    const status = document.getElementById("status");
+    const result = document.getElementById("result");
+
+    const objective = box.value.trim();
 
     if (!objective) {
         alert("Enter a mission first.");
         return;
     }
 
-    document.getElementById("status").innerText =
-        "AI Infinity is thinking...";
+    button.disabled = true;
 
-    document.getElementById("result").innerText =
-        "Running research and specialist minds...";
+    status.innerText = "AI Infinity 7 is working...";
+    result.innerText =
+        "Researching + running specialist minds + synthesizing...";
 
     try {
 
@@ -977,23 +1044,25 @@ async function runTask() {
 
         const data = await response.json();
 
-        document.getElementById("status").innerText =
+        status.innerText =
             data.status || "completed";
 
-        document.getElementById("result").innerText =
+        result.innerText =
             data.answer ||
             JSON.stringify(data, null, 2);
 
     } catch (error) {
 
-        document.getElementById("status").innerText =
-            "Error";
+        status.innerText = "Error";
 
-        document.getElementById("result").innerText =
-            error.toString();
+        result.innerText =
+            String(error);
+
+    } finally {
+
+        button.disabled = false;
 
     }
-
 }
 
 </script>
@@ -1004,12 +1073,11 @@ async function runTask() {
 
 
 # ============================================================
-# API ROUTES
+# ROUTES
 # ============================================================
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-
     return HTML
 
 
@@ -1023,15 +1091,19 @@ def health():
         "timestamp": now(),
         "tasks": len(TASKS),
         "memory": len(MEMORY),
+        "providers": [
+            "pollinations",
+            "huggingface-if-token-configured"
+        ],
         "engine": [
-            "intent classification",
+            "intent",
             "planning",
-            "web research",
-            "parallel specialist minds",
-            "AI synthesis",
+            "research",
+            "parallel minds",
+            "multi-provider synthesis",
             "verification",
             "execution planning",
-            "persistent memory"
+            "learning"
         ]
     }
 
@@ -1039,24 +1111,22 @@ def health():
 @app.post("/task")
 async def create_task(request: TaskRequest):
 
-    tid = task_id()
+    tid = make_id("task")
 
     TASKS[tid] = {
         "task_id": tid,
         "status": "queued",
-        "objective": request.objective,
+        "objective": clean(request.objective),
         "mode": request.mode,
         "created_at": now()
     }
 
     persist_state()
 
-    result = await execute_task(
+    return await execute_task(
         tid,
         request
     )
-
-    return result
 
 
 @app.get("/task/{tid}")
@@ -1065,7 +1135,6 @@ def get_task(tid: str):
     task = TASKS.get(tid)
 
     if not task:
-
         raise HTTPException(
             status_code=404,
             detail="Task not found"
@@ -1123,21 +1192,13 @@ def clear_memory():
 def stats():
 
     completed = sum(
-        1
-        for task in TASKS.values()
-        if task.get("status") == "completed"
+        1 for x in TASKS.values()
+        if x.get("status") == "completed"
     )
 
     failed = sum(
-        1
-        for task in TASKS.values()
-        if task.get("status") == "failed"
-    )
-
-    running = sum(
-        1
-        for task in TASKS.values()
-        if task.get("status") == "running"
+        1 for x in TASKS.values()
+        if x.get("status") == "failed"
     )
 
     return {
@@ -1146,12 +1207,9 @@ def stats():
         "total_tasks": len(TASKS),
         "completed": completed,
         "failed": failed,
-        "running": running,
         "memory_items": len(MEMORY),
         "specialist_minds": len(SPECIALISTS),
-        "research": True,
-        "verification": True,
-        "learning": True
+        "free_first": True
     }
 
 
@@ -1161,28 +1219,32 @@ def capabilities():
     return {
         "name": APP_NAME,
         "version": VERSION,
+        "free_first": True,
 
         "core": [
             "Mission intake",
             "Intent classification",
             "Dynamic planning",
             "Web research",
-            "Parallel specialist analysis",
-            "AI synthesis",
+            "Multi-provider AI",
+            "Parallel specialist minds",
+            "Synthesis",
             "Verification",
             "Execution planning",
             "Persistent memory",
             "Task history",
             "Health monitoring",
-            "Browser interface"
+            "Mobile browser interface"
         ],
 
         "specialist_minds": [
-            name
-            for name, _ in SPECIALISTS
+            name for name, _ in SPECIALISTS
         ],
 
-        "free_first": True
+        "providers": [
+            "Pollinations",
+            "Hugging Face when HF_TOKEN is configured"
+        ]
     }
 
 
@@ -1195,43 +1257,23 @@ async def startup():
 
     load_state()
 
-    print("=" * 70)
-    print("∞ AI INFINITY")
-    print(f"Version: {VERSION}")
+    print("=" * 60)
+    print("∞ AI INFINITY 7")
     print("STATUS: ONLINE")
-    print("")
-    print("Mission")
-    print("  ↓")
-    print("Intent")
-    print("  ↓")
-    print("Research")
-    print("  ↓")
-    print("Parallel Minds")
-    print("  ↓")
-    print("Synthesis")
-    print("  ↓")
-    print("Verification")
-    print("  ↓")
-    print("Execution")
-    print("  ↓")
-    print("Learning")
-    print("=" * 70)
+    print("FREE-FIRST MULTI-PROVIDER ENGINE")
+    print("=" * 60)
 
 
 # ============================================================
-# DIRECT LOCAL START
+# LOCAL START
 # ============================================================
 
 if __name__ == "__main__":
 
     import uvicorn
 
-    port = int(
-        os.getenv("PORT", "8000")
-    )
-
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=port
+        port=int(os.getenv("PORT", "8000"))
     )
