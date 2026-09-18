@@ -2692,4 +2692,874 @@ def run_infinity(
 
         final_result = {
             "task_id": task_id,
-            "status": "completed
+            "status": "completed",
+            "version": VERSION,
+            "objective": objective,
+            "intent": intent,
+            "world_model": world_model,
+            "dream_engine": {
+                "strategies": strategies,
+            },
+            "counterfactual_universe": {
+                "scenarios":
+                    counterfactuals,
+                "warning":
+                    "Hypothetical only.",
+            },
+            "temporary_minds": minds,
+            "intelligence_compiler":
+                compiler,
+            "research":
+                research_result,
+            "execution":
+                execution_result,
+            "verification":
+                verification_result,
+            "memory": {
+                "saved":
+                    memory_id,
+            },
+            "intelligence_genome":
+                genome,
+            "evolution":
+                evolution,
+            "safety": {
+                "arbitrary_shell_execution":
+                    False,
+                "automatic_spending":
+                    False,
+                "automatic_self_modification":
+                    False,
+                "authorized_actions_only":
+                    True,
+                "evidence_gate":
+                    True,
+            },
+        }
+
+        update_task(
+            task_id,
+            "completed",
+            final_result,
+        )
+
+        return final_result
+
+    except Exception as exc:
+
+        failure = diagnose_failure(
+            task_id,
+            "master_loop",
+            str(exc),
+        )
+
+        result = {
+            "task_id": task_id,
+            "status": "failed",
+            "version": VERSION,
+            "objective": objective,
+            "failure": failure,
+        }
+
+        update_task(
+            task_id,
+            "failed",
+            result,
+        )
+
+        return result
+
+
+# ============================================================
+# API MODELS
+# ============================================================
+
+class RunRequest(BaseModel):
+
+    objective: str = Field(
+        ...,
+        min_length=1,
+        max_length=20000,
+    )
+
+    research: bool = True
+    verify: bool = True
+    remember: bool = True
+
+
+class ExecuteRequest(BaseModel):
+
+    action: str
+    objective: str = ""
+
+
+class ResearchRequest(BaseModel):
+
+    question: str = Field(
+        ...,
+        min_length=2,
+        max_length=10000,
+    )
+
+
+# ============================================================
+# HEALTH
+# ============================================================
+
+@app.get("/health")
+def health():
+
+    return {
+        "status": "ok",
+        "service": SERVICE,
+        "version": VERSION,
+        "research": True,
+        "real_web_discovery": True,
+        "source_fetching": True,
+        "evidence_gate": True,
+        "provenance": True,
+        "memory": True,
+        "verification": True,
+        "free_first": True,
+    }
+
+
+# ============================================================
+# STATUS
+# ============================================================
+
+@app.get("/v1/status")
+def status():
+
+    connection = db()
+
+    counts = {}
+
+    for table in (
+        "tasks",
+        "memories",
+        "genomes",
+        "executions",
+        "failures",
+        "events",
+        "evidence",
+        "research",
+        "sources",
+    ):
+
+        row = connection.execute(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM {table}
+            """
+        ).fetchone()
+
+        counts[table] = row["count"]
+
+    connection.close()
+
+    return {
+        "service": SERVICE,
+        "version": VERSION,
+        "status": "online",
+        "architecture":
+            "Research → Evidence → Reason → Verify → Learn",
+        "capabilities": {
+            "intent_engine": True,
+            "world_model": True,
+            "dream_engine": True,
+            "counterfactual_engine": True,
+            "temporary_minds": True,
+            "web_discovery": True,
+            "source_fetching": True,
+            "evidence_fabric": True,
+            "evidence_gate": True,
+            "provenance": True,
+            "verification": True,
+            "memory": True,
+            "intelligence_genome": True,
+            "self_healing": True,
+            "safe_execution_registry": True,
+        },
+        "safety": {
+            "arbitrary_shell_execution": False,
+            "automatic_spending": False,
+            "automatic_self_modification": False,
+        },
+        "database": counts,
+    }
+
+
+# ============================================================
+# RUN
+# ============================================================
+
+@app.post("/v1/run")
+def run_endpoint(
+    request: RunRequest,
+):
+
+    return run_infinity(
+        objective=request.objective,
+        research=request.research,
+        verify=request.verify,
+        remember=request.remember,
+    )
+
+
+# ============================================================
+# RESEARCH
+# ============================================================
+
+@app.post("/v1/research")
+def research_endpoint(
+    request: ResearchRequest,
+):
+
+    task_id = create_task(
+        request.question
+    )
+
+    result = run_research(
+        task_id,
+        request.question,
+    )
+
+    update_task(
+        task_id,
+        "completed",
+        result,
+    )
+
+    return {
+        "task_id": task_id,
+        "version": VERSION,
+        **result,
+    }
+
+
+# ============================================================
+# EXECUTE
+# ============================================================
+
+@app.post("/v1/execute")
+def execute_endpoint(
+    request: ExecuteRequest,
+):
+
+    task_id = create_task(
+        request.objective
+        or request.action
+    )
+
+    result = execute_registered_action(
+        task_id,
+        request.action,
+        request.objective,
+    )
+
+    update_task(
+        task_id,
+        "completed",
+        result,
+    )
+
+    return {
+        "task_id": task_id,
+        **result,
+    }
+
+
+# ============================================================
+# TASK
+# ============================================================
+
+@app.get("/v1/tasks/{task_id}")
+def task_endpoint(
+    task_id: str,
+):
+
+    result = get_task(
+        task_id
+    )
+
+    if not result:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Task not found",
+        )
+
+    return result
+
+
+# ============================================================
+# MEMORY
+# ============================================================
+
+@app.get("/v1/memory")
+def memory_endpoint(
+    q: str = "",
+):
+
+    if q:
+
+        memories = search_memory(
+            q
+        )
+
+    else:
+
+        connection = db()
+
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM memories
+            ORDER BY created_at DESC
+            LIMIT 20
+            """
+        ).fetchall()
+
+        connection.close()
+
+        memories = [
+            dict(row)
+            for row in rows
+        ]
+
+    return {
+        "count":
+            len(memories),
+        "memories":
+            memories,
+    }
+
+
+# ============================================================
+# GENOMES
+# ============================================================
+
+@app.get("/v1/genomes")
+def genomes_endpoint():
+
+    connection = db()
+
+    rows = connection.execute(
+        """
+        SELECT *
+        FROM genomes
+        ORDER BY created_at DESC
+        LIMIT 20
+        """
+    ).fetchall()
+
+    connection.close()
+
+    result = []
+
+    for row in rows:
+
+        item = dict(row)
+
+        try:
+            item["genome"] = json.loads(
+                item.pop(
+                    "genome_json"
+                )
+            )
+
+        except Exception:
+            item["genome"] = item.pop(
+                "genome_json",
+                None,
+            )
+
+        result.append(item)
+
+    return {
+        "count":
+            len(result),
+        "genomes":
+            result,
+    }
+
+
+# ============================================================
+# EVIDENCE
+# ============================================================
+
+@app.get("/v1/evidence")
+def evidence_endpoint(
+    task_id: str = "",
+):
+
+    connection = db()
+
+    if task_id:
+
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM evidence
+            WHERE task_id = ?
+            ORDER BY retrieved_at DESC
+            LIMIT 100
+            """,
+            (task_id,),
+        ).fetchall()
+
+    else:
+
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM evidence
+            ORDER BY retrieved_at DESC
+            LIMIT 100
+            """
+        ).fetchall()
+
+    connection.close()
+
+    result = []
+
+    for row in rows:
+
+        item = dict(row)
+
+        try:
+            item["metadata"] = json.loads(
+                item.pop(
+                    "metadata_json"
+                )
+            )
+        except Exception:
+            item["metadata"] = {}
+
+        result.append(item)
+
+    return {
+        "count":
+            len(result),
+        "evidence":
+            result,
+    }
+
+
+# ============================================================
+# RESEARCH HISTORY
+# ============================================================
+
+@app.get("/v1/research")
+def research_history():
+
+    connection = db()
+
+    rows = connection.execute(
+        """
+        SELECT *
+        FROM research
+        ORDER BY created_at DESC
+        LIMIT 30
+        """
+    ).fetchall()
+
+    connection.close()
+
+    result = []
+
+    for row in rows:
+
+        item = dict(row)
+
+        try:
+            item["evidence"] = json.loads(
+                item.pop(
+                    "evidence_json"
+                )
+            )
+        except Exception:
+            item["evidence"] = []
+
+        result.append(item)
+
+    return {
+        "count":
+            len(result),
+        "research":
+            result,
+    }
+
+
+# ============================================================
+# SOURCES
+# ============================================================
+
+@app.get("/v1/sources")
+def sources_endpoint(
+    task_id: str = "",
+):
+
+    connection = db()
+
+    if task_id:
+
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM sources
+            WHERE task_id = ?
+            ORDER BY retrieved_at DESC
+            LIMIT 100
+            """,
+            (task_id,),
+        ).fetchall()
+
+    else:
+
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM sources
+            ORDER BY retrieved_at DESC
+            LIMIT 100
+            """
+        ).fetchall()
+
+    connection.close()
+
+    result = []
+
+    for row in rows:
+
+        item = dict(row)
+
+        try:
+            item["metadata"] = json.loads(
+                item.pop(
+                    "metadata_json"
+                )
+            )
+        except Exception:
+            item["metadata"] = {}
+
+        result.append(item)
+
+    return {
+        "count":
+            len(result),
+        "sources":
+            result,
+    }
+
+
+# ============================================================
+# FAILURES
+# ============================================================
+
+@app.get("/v1/failures")
+def failures_endpoint():
+
+    connection = db()
+
+    rows = connection.execute(
+        """
+        SELECT *
+        FROM failures
+        ORDER BY created_at DESC
+        LIMIT 30
+        """
+    ).fetchall()
+
+    connection.close()
+
+    result = []
+
+    for row in rows:
+
+        item = dict(row)
+
+        try:
+            item["recovery"] = json.loads(
+                item.pop(
+                    "recovery_json"
+                )
+            )
+        except Exception:
+            item["recovery"] = {}
+
+        result.append(item)
+
+    return {
+        "count":
+            len(result),
+        "failures":
+            result,
+    }
+
+
+# ============================================================
+# AUDIT
+# ============================================================
+
+@app.get("/v1/audit")
+def audit_endpoint():
+
+    connection = db()
+
+    rows = connection.execute(
+        """
+        SELECT *
+        FROM events
+        ORDER BY created_at DESC
+        LIMIT 100
+        """
+    ).fetchall()
+
+    connection.close()
+
+    result = []
+
+    for row in rows:
+
+        item = dict(row)
+
+        try:
+            item["payload"] = json.loads(
+                item.pop(
+                    "payload_json"
+                )
+            )
+        except Exception:
+            item["payload"] = {}
+
+        result.append(item)
+
+    return {
+        "count":
+            len(result),
+        "events":
+            result,
+    }
+
+
+# ============================================================
+# ROOT UI
+# ============================================================
+
+HTML = """
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport"
+content="width=device-width,initial-scale=1">
+
+<title>AI Infinity TARGET-2.1</title>
+
+<style>
+
+body {
+    font-family: Arial, sans-serif;
+    max-width: 900px;
+    margin: auto;
+    padding: 20px;
+    background: #080d13;
+    color: #f8fafc;
+}
+
+.card {
+    background: #111827;
+    border-radius: 16px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+textarea {
+    width: 100%;
+    min-height: 180px;
+    box-sizing: border-box;
+    padding: 14px;
+    border-radius: 12px;
+    border: 1px solid #334155;
+    background: #020617;
+    color: white;
+    font-size: 15px;
+}
+
+button {
+    padding: 13px 20px;
+    margin-top: 12px;
+    border: 0;
+    border-radius: 10px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: #020617;
+    padding: 15px;
+    border-radius: 12px;
+    overflow-x: auto;
+}
+
+.badge {
+    display: inline-block;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: #1e293b;
+    margin: 3px;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="card">
+
+<h1>♾️ AI Infinity</h1>
+
+<p>
+<span class="badge">TARGET-2.1</span>
+<span class="badge">Web Research</span>
+<span class="badge">Evidence Gate</span>
+<span class="badge">Provenance</span>
+<span class="badge">Memory</span>
+<span class="badge">Verification</span>
+</p>
+
+<p>
+Research → Evidence → Reason → Verify → Learn
+</p>
+
+</div>
+
+<div class="card">
+
+<h2>Run Objective</h2>
+
+<textarea id="objective"
+placeholder="Research AI agent reliability.
+Collect multiple public sources.
+Separate evidence-supported facts from assumptions.
+Verify the evidence and save the result."></textarea>
+
+<br>
+
+<button onclick="runObjective()">
+Run AI Infinity
+</button>
+
+</div>
+
+<div class="card">
+
+<h2>Result</h2>
+
+<pre id="result">Ready.</pre>
+
+</div>
+
+<script>
+
+async function runObjective() {
+
+    const objective =
+        document.getElementById(
+            "objective"
+        ).value.trim();
+
+    if (!objective) {
+        return;
+    }
+
+    document.getElementById(
+        "result"
+    ).textContent =
+        "AI Infinity is researching...";
+
+    try {
+
+        const response =
+            await fetch(
+                "/v1/run",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
+                    body:
+                        JSON.stringify({
+                            objective:
+                                objective,
+                            research: true,
+                            verify: true,
+                            remember: true
+                        })
+                }
+            );
+
+        const data =
+            await response.json();
+
+        document.getElementById(
+            "result"
+        ).textContent =
+            JSON.stringify(
+                data,
+                null,
+                2
+            );
+
+    } catch (error) {
+
+        document.getElementById(
+            "result"
+        ).textContent =
+            String(error);
+    }
+}
+
+</script>
+
+</body>
+</html>
+"""
+
+
+@app.get(
+    "/",
+    response_class=HTMLResponse,
+)
+def root():
+
+    return HTML
+
+
+# ============================================================
+# STARTUP
+# ============================================================
+
+@app.on_event("startup")
+def startup():
+
+    init_db()
+
+    log_event(
+        None,
+        "system_start",
+        {
+            "service":
+                SERVICE,
+            "version":
+                VERSION,
+            "architecture":
+                "Research → Evidence → Reason → Verify → Learn",
+        },
+    )
