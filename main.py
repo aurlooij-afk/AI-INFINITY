@@ -1,14 +1,29 @@
 """
-AI Infinity — TARGET-3.2.0
-Mission Intelligence Core
+AI Infinity — TARGET-3.3.0
+Action & Tool Orchestration Core
 
-Flow:
-Intent → Plan → Research → Synthesize → Verify → Learn → Deliver
+Mission flow:
+Intent
+  ↓
+Plan
+  ↓
+Research
+  ↓
+Reason
+  ↓
+Verify
+  ↓
+Execute
+  ↓
+Observe
+  ↓
+Recover
+  ↓
+Learn
+  ↓
+Deliver
 
-Free-first:
-OpenAI-compatible provider → Pollinations → deterministic fallback
-
-No additional Python packages required.
+Free-first / zero-new-dependencies architecture.
 """
 
 from __future__ import annotations
@@ -19,7 +34,6 @@ import json
 import os
 import re
 import threading
-import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -38,19 +52,20 @@ from pydantic import BaseModel, Field
 # CORE
 # ============================================================
 
-VERSION = "TARGET-3.2.0"
+VERSION = "TARGET-3.3.0"
 PROJECT = "AI Infinity"
 
 BASE = Path("/tmp/ai_infinity")
 MEMORY_FILE = BASE / "memory.json"
 SKILLS_FILE = BASE / "skills.json"
+ACTIONS_FILE = BASE / "actions.json"
 
 BASE.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(
     title="AI Infinity",
     version=VERSION,
-    description="Free-first Mission Intelligence Engine",
+    description="Free-first Action & Tool Orchestration Engine",
 )
 
 app.add_middleware(
@@ -69,12 +84,16 @@ app.add_middleware(
 MISSIONS: Dict[str, Dict[str, Any]] = {}
 LOCK = threading.Lock()
 
+MEMORY: List[Dict[str, Any]] = []
+SKILLS: List[Dict[str, Any]] = []
+ACTIONS: List[Dict[str, Any]] = []
+
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def safe_id(prefix: str = "mission") -> str:
+def make_id(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
 
@@ -97,8 +116,9 @@ def save_json(path: Path, data: Any) -> None:
         pass
 
 
-MEMORY: List[Dict[str, Any]] = load_json(MEMORY_FILE, [])
-SKILLS: List[Dict[str, Any]] = load_json(SKILLS_FILE, [])
+MEMORY = load_json(MEMORY_FILE, [])
+SKILLS = load_json(SKILLS_FILE, [])
+ACTIONS = load_json(ACTIONS_FILE, [])
 
 
 # ============================================================
@@ -110,7 +130,9 @@ class MissionRequest(BaseModel):
     research: bool = True
     verify: bool = True
     remember: bool = True
+    execute: bool = True
     max_sources: int = Field(default=6, ge=1, le=12)
+    max_actions: int = Field(default=5, ge=1, le=10)
 
 
 class TaskRequest(BaseModel):
@@ -123,6 +145,11 @@ class MemoryRequest(BaseModel):
     tags: List[str] = Field(default_factory=list)
 
 
+class ActionRequest(BaseModel):
+    action: str = Field(..., min_length=2, max_length=10000)
+    target: Optional[str] = Field(default=None, max_length=2000)
+
+
 # ============================================================
 # INTENT
 # ============================================================
@@ -130,65 +157,101 @@ class MemoryRequest(BaseModel):
 def classify_intent(text: str) -> Dict[str, Any]:
     t = text.lower()
 
-    research_words = [
-        "research", "analyze", "analysis", "investigate",
-        "study", "compare", "find", "latest", "evidence",
-        "sources", "what is", "how does",
-    ]
-
-    build_words = [
-        "build", "create", "make", "develop", "implement",
-        "code", "design", "launch",
-    ]
-
-    planning_words = [
-        "plan", "strategy", "roadmap", "steps", "prepare",
-    ]
-
-    verify_words = [
-        "verify", "check", "validate", "fact check",
-        "confirm", "test",
-    ]
-
-    if any(w in t for w in build_words):
-        category = "build"
-    elif any(w in t for w in verify_words):
-        category = "verification"
-    elif any(w in t for w in planning_words):
-        category = "planning"
-    elif any(w in t for w in research_words):
-        category = "research"
-    else:
-        category = "general"
-
-    signals = {
-        "research": any(w in t for w in research_words),
-        "build": any(w in t for w in build_words),
-        "planning": any(w in t for w in planning_words),
-        "verification": any(w in t for w in verify_words),
+    groups = {
+        "research": [
+            "research",
+            "analyze",
+            "analysis",
+            "investigate",
+            "study",
+            "compare",
+            "find",
+            "latest",
+            "evidence",
+            "sources",
+        ],
+        "build": [
+            "build",
+            "create",
+            "make",
+            "develop",
+            "implement",
+            "code",
+            "design",
+            "launch",
+        ],
+        "planning": [
+            "plan",
+            "strategy",
+            "roadmap",
+            "steps",
+            "prepare",
+        ],
+        "verification": [
+            "verify",
+            "check",
+            "validate",
+            "confirm",
+            "test",
+        ],
+        "execution": [
+            "execute",
+            "run",
+            "do",
+            "perform",
+            "automate",
+            "send",
+            "generate",
+            "deploy",
+        ],
     }
+
+    scores = {
+        name: sum(1 for word in words if word in t)
+        for name, words in groups.items()
+    }
+
+    category = max(
+        scores,
+        key=scores.get,
+    ) if any(scores.values()) else "general"
+
+    highest = scores.get(category, 0)
+
+    confidence = (
+        min(0.95, 0.55 + highest * 0.08)
+        if category != "general"
+        else 0.50
+    )
 
     return {
         "category": category,
-        "signals": signals,
-        "confidence": 0.82 if category != "general" else 0.58,
+        "scores": scores,
+        "confidence": round(confidence, 2),
     }
 
 
 # ============================================================
-# PLANNING
+# MISSION PLANNER
 # ============================================================
 
 def build_plan(
     objective: str,
     research: bool,
     verify: bool,
+    execute: bool,
 ) -> List[Dict[str, Any]]:
+
     stages = [
         {
             "id": "understand",
             "name": "Understand",
-            "purpose": "Convert the objective into a precise mission.",
+            "purpose": "Interpret the requested outcome.",
+        },
+        {
+            "id": "plan",
+            "name": "Plan",
+            "purpose": "Construct an ordered mission strategy.",
         },
     ]
 
@@ -197,15 +260,15 @@ def build_plan(
             {
                 "id": "research",
                 "name": "Research",
-                "purpose": "Collect relevant external evidence.",
+                "purpose": "Collect external evidence.",
             }
         )
 
     stages.append(
         {
-            "id": "synthesize",
-            "name": "Synthesize",
-            "purpose": "Combine evidence into a useful answer.",
+            "id": "reason",
+            "name": "Reason",
+            "purpose": "Synthesize available evidence.",
         }
     )
 
@@ -214,8 +277,29 @@ def build_plan(
             {
                 "id": "verify",
                 "name": "Verify",
-                "purpose": "Check important claims against available evidence.",
+                "purpose": "Check important claims.",
             }
+        )
+
+    if execute:
+        stages.extend(
+            [
+                {
+                    "id": "execute",
+                    "name": "Execute",
+                    "purpose": "Perform safe supported actions.",
+                },
+                {
+                    "id": "observe",
+                    "name": "Observe",
+                    "purpose": "Measure action results.",
+                },
+                {
+                    "id": "recover",
+                    "name": "Recover",
+                    "purpose": "Retry or safely degrade failed actions.",
+                },
+            ]
         )
 
     stages.extend(
@@ -223,12 +307,12 @@ def build_plan(
             {
                 "id": "learn",
                 "name": "Learn",
-                "purpose": "Extract reusable mission knowledge.",
+                "purpose": "Store reusable mission intelligence.",
             },
             {
                 "id": "deliver",
                 "name": "Deliver",
-                "purpose": "Return a structured mission outcome.",
+                "purpose": "Return structured results.",
             },
         ]
     )
@@ -240,19 +324,17 @@ def build_plan(
 # WEB RESEARCH
 # ============================================================
 
-def search_web(query: str, limit: int = 6) -> List[Dict[str, str]]:
-    """
-    Lightweight free web discovery through DuckDuckGo HTML.
-    """
+def search_web(
+    query: str,
+    limit: int = 6,
+) -> List[Dict[str, str]]:
+
     try:
         response = requests.get(
             "https://html.duckduckgo.com/html/",
             params={"q": query},
             headers={
-                "User-Agent": (
-                    "Mozilla/5.0 "
-                    "AI-Infinity/3.2"
-                )
+                "User-Agent": "Mozilla/5.0 AI-Infinity/3.3"
             },
             timeout=20,
         )
@@ -260,19 +342,27 @@ def search_web(query: str, limit: int = 6) -> List[Dict[str, str]]:
         if response.status_code != 200:
             return []
 
-        html = response.text
-
-        results: List[Dict[str, str]] = []
-
         pattern = re.compile(
             r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
             re.I | re.S,
         )
 
-        for match in pattern.finditer(html):
+        results = []
+
+        for match in pattern.finditer(response.text):
             url = match.group(1)
-            title = re.sub("<.*?>", "", match.group(2))
-            title = re.sub(r"\s+", " ", title).strip()
+
+            title = re.sub(
+                r"<.*?>",
+                "",
+                match.group(2),
+            )
+
+            title = re.sub(
+                r"\s+",
+                " ",
+                title,
+            ).strip()
 
             if url.startswith("//"):
                 url = "https:" + url
@@ -294,13 +384,18 @@ def search_web(query: str, limit: int = 6) -> List[Dict[str, str]]:
         return []
 
 
-def read_source(item: Dict[str, str]) -> Dict[str, Any]:
+def read_source(
+    item: Dict[str, str],
+) -> Dict[str, Any]:
+
     url = item.get("url", "")
 
     try:
         response = requests.get(
             url,
-            headers={"User-Agent": "Mozilla/5.0 AI-Infinity/3.2"},
+            headers={
+                "User-Agent": "Mozilla/5.0 AI-Infinity/3.3"
+            },
             timeout=15,
         )
 
@@ -320,8 +415,17 @@ def read_source(item: Dict[str, str]) -> Dict[str, Any]:
             flags=re.I | re.S,
         )
 
-        text = re.sub(r"<[^>]+>", " ", text)
-        text = re.sub(r"\s+", " ", text).strip()
+        text = re.sub(
+            r"<[^>]+>",
+            " ",
+            text,
+        )
+
+        text = re.sub(
+            r"\s+",
+            " ",
+            text,
+        ).strip()
 
         return {
             "title": item.get("title", ""),
@@ -344,24 +448,34 @@ def research_objective(
     objective: str,
     max_sources: int,
 ) -> List[Dict[str, Any]]:
-    results = search_web(objective, max_sources)
 
-    if not results:
+    discovered = search_web(
+        objective,
+        max_sources,
+    )
+
+    if not discovered:
         return []
 
-    sources: List[Dict[str, Any]] = []
+    sources = []
 
-    workers = min(6, max(1, len(results)))
+    with ThreadPoolExecutor(
+        max_workers=min(6, len(discovered))
+    ) as executor:
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
-            executor.submit(read_source, item)
-            for item in results
+            executor.submit(
+                read_source,
+                item,
+            )
+            for item in discovered
         ]
 
         for future in as_completed(futures):
             try:
-                sources.append(future.result())
+                sources.append(
+                    future.result()
+                )
             except Exception:
                 pass
 
@@ -369,46 +483,61 @@ def research_objective(
 
 
 # ============================================================
-# PROVIDERS
+# AI PROVIDERS
 # ============================================================
 
-def call_openai_compatible(prompt: str) -> Optional[str]:
-    base_url = os.getenv("AI_BASE_URL", "").strip()
-    api_key = os.getenv("AI_API_KEY", "").strip()
-    model = os.getenv("AI_MODEL", "").strip()
+def call_openai_compatible(
+    prompt: str,
+) -> Optional[str]:
+
+    base_url = os.getenv(
+        "AI_BASE_URL",
+        "",
+    ).strip()
+
+    api_key = os.getenv(
+        "AI_API_KEY",
+        "",
+    ).strip()
+
+    model = os.getenv(
+        "AI_MODEL",
+        "",
+    ).strip()
 
     if not base_url or not api_key or not model:
         return None
 
-    url = base_url.rstrip("/") + "/chat/completions"
-
-    payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are the reasoning engine inside AI Infinity. "
-                    "Produce factual, structured, concise results. "
-                    "Separate evidence from inference."
-                ),
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
-        ],
-        "temperature": 0.2,
-    }
-
     try:
         response = requests.post(
-            url,
+            base_url.rstrip("/")
+            + "/chat/completions",
+
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            json=payload,
+
+            json={
+                "model": model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are AI Infinity's reasoning "
+                            "and execution-planning engine. "
+                            "Be factual and structured. "
+                            "Never invent completed actions."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+                "temperature": 0.2,
+            },
+
             timeout=60,
         )
 
@@ -417,28 +546,42 @@ def call_openai_compatible(prompt: str) -> Optional[str]:
 
         data = response.json()
 
-        choices = data.get("choices", [])
+        choices = data.get(
+            "choices",
+            [],
+        )
 
         if not choices:
             return None
 
-        content = choices[0].get("message", {}).get("content")
+        content = choices[0].get(
+            "message",
+            {},
+        ).get("content")
 
-        if content:
-            return str(content).strip()
+        return (
+            str(content).strip()
+            if content
+            else None
+        )
 
     except Exception:
         return None
 
-    return None
 
+def call_pollinations(
+    prompt: str,
+) -> Optional[str]:
 
-def call_pollinations(prompt: str) -> Optional[str]:
     try:
         response = requests.get(
             "https://text.pollinations.ai/",
-            params={"prompt": prompt},
-            headers={"User-Agent": "AI-Infinity/3.2"},
+            params={
+                "prompt": prompt,
+            },
+            headers={
+                "User-Agent": "AI-Infinity/3.3",
+            },
             timeout=60,
         )
 
@@ -455,70 +598,65 @@ def call_pollinations(prompt: str) -> Optional[str]:
 
 
 # ============================================================
-# DETERMINISTIC FALLBACK
+# REASONING
 # ============================================================
 
 def deterministic_reasoning(
     objective: str,
     sources: List[Dict[str, Any]],
 ) -> str:
+
     source_lines = []
 
     for source in sources[:8]:
         source_lines.append(
-            f"- {source.get('title', 'Untitled')} — "
-            f"{source.get('url', '')}"
+            "- "
+            + source.get("title", "Untitled")
+            + " — "
+            + source.get("url", "")
         )
 
-    source_text = "\n".join(source_lines)
-
-    if not source_text:
-        source_text = "- No external sources were successfully retrieved."
+    if not source_lines:
+        source_lines = [
+            "- No external sources successfully retrieved."
+        ]
 
     return (
-        "Mission analysis\n\n"
+        "AI Infinity Mission Analysis\n\n"
         f"Objective:\n{objective}\n\n"
-        "Approach:\n"
-        "1. Clarify the requested outcome.\n"
-        "2. Gather available evidence.\n"
-        "3. Separate evidence from inference.\n"
-        "4. Identify practical next actions.\n"
-        "5. Verify important claims where possible.\n\n"
-        "Available sources:\n"
-        f"{source_text}\n\n"
-        "Result:\n"
-        "The mission was processed by the AI Infinity "
-        "free-first reasoning pipeline."
+        "Execution strategy:\n"
+        "1. Understand the objective.\n"
+        "2. Gather evidence when requested.\n"
+        "3. Synthesize findings.\n"
+        "4. Verify important claims.\n"
+        "5. Execute only supported/safe local actions.\n"
+        "6. Observe the result.\n"
+        "7. Recover from recoverable failures.\n\n"
+        "Sources:\n"
+        + "\n".join(source_lines)
     )
 
 
-# ============================================================
-# SYNTHESIS
-# ============================================================
-
-def create_prompt(
+def synthesize(
     objective: str,
     sources: List[Dict[str, Any]],
     intent: Dict[str, Any],
-) -> str:
-    evidence_blocks = []
+) -> Dict[str, Any]:
+
+    evidence = []
 
     for source in sources[:8]:
-        content = source.get("content", "")
-
-        evidence_blocks.append(
+        evidence.append(
             "\n".join(
                 [
                     f"TITLE: {source.get('title', '')}",
                     f"URL: {source.get('url', '')}",
-                    f"CONTENT: {content[:5000]}",
+                    f"CONTENT: {source.get('content', '')[:5000]}",
                 ]
             )
         )
 
-    evidence = "\n\n--- SOURCE ---\n\n".join(evidence_blocks)
-
-    return f"""
+    prompt = f"""
 AI INFINITY MISSION
 
 OBJECTIVE:
@@ -528,31 +666,34 @@ INTENT:
 {json.dumps(intent, ensure_ascii=False)}
 
 EVIDENCE:
-{evidence if evidence else "No external evidence available."}
+{
+    chr(10).join(evidence)
+    if evidence
+    else "No external evidence."
+}
 
-Produce a structured result with:
+Return:
 
 1. Mission interpretation
 2. Evidence-supported findings
-3. Important uncertainty
-4. Practical conclusions
-5. Recommended next actions
+3. Uncertainty
+4. Proposed actions
+5. Expected observations
+6. Recovery strategy
 
-Do not invent sources.
-Do not present unsupported assumptions as facts.
+Never claim an external action happened unless AI Infinity
+actually performed it.
 """
 
-
-def synthesize(
-    objective: str,
-    sources: List[Dict[str, Any]],
-    intent: Dict[str, Any],
-) -> Dict[str, Any]:
-    prompt = create_prompt(objective, sources, intent)
-
     providers = [
-        ("openai-compatible", call_openai_compatible),
-        ("pollinations", call_pollinations),
+        (
+            "openai-compatible",
+            call_openai_compatible,
+        ),
+        (
+            "pollinations",
+            call_pollinations,
+        ),
     ]
 
     for name, provider in providers:
@@ -564,12 +705,16 @@ def synthesize(
                     "provider": name,
                     "text": result,
                 }
+
         except Exception:
-            continue
+            pass
 
     return {
         "provider": "deterministic",
-        "text": deterministic_reasoning(objective, sources),
+        "text": deterministic_reasoning(
+            objective,
+            sources,
+        ),
     }
 
 
@@ -577,44 +722,39 @@ def synthesize(
 # VERIFICATION
 # ============================================================
 
-def extract_claims(text: str) -> List[str]:
-    lines = [
-        line.strip("- • \t")
-        for line in text.splitlines()
-    ]
-
-    claims = []
-
-    for line in lines:
-        if len(line) >= 35:
-            claims.append(line[:500])
-
-        if len(claims) >= 8:
-            break
-
-    return claims
-
-
 def verify_result(
     result_text: str,
     sources: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    claims = extract_claims(result_text)
 
-    combined_source_text = " ".join(
-        source.get("content", "").lower()
+    claims = [
+        line.strip("- • \t")
+        for line in result_text.splitlines()
+        if len(line.strip()) >= 35
+    ][:10]
+
+    combined = " ".join(
+        source.get(
+            "content",
+            "",
+        ).lower()
         for source in sources
     )
 
-    supported = 0
     checks = []
+    supported = 0
 
     for claim in claims:
-        words = re.findall(r"[a-zA-Z0-9]{5,}", claim.lower())
 
-        meaningful = [
-            word for word in words
-            if word not in {
+        words = re.findall(
+            r"[a-zA-Z0-9]{5,}",
+            claim.lower(),
+        )
+
+        words = [
+            w
+            for w in words
+            if w not in {
                 "about",
                 "which",
                 "there",
@@ -631,61 +771,315 @@ def verify_result(
 
         matches = sum(
             1
-            for word in meaningful[:12]
-            if word in combined_source_text
+            for word in words[:12]
+            if word in combined
         )
 
-        is_supported = matches >= 2 if meaningful else False
+        ok = (
+            matches >= 2
+            if words
+            else False
+        )
 
-        if is_supported:
+        if ok:
             supported += 1
 
         checks.append(
             {
                 "claim": claim,
-                "supported": is_supported,
+                "supported": ok,
                 "match_count": matches,
             }
         )
 
     if claims:
-        score = round(supported / len(claims), 2)
+        confidence = round(
+            supported / len(claims),
+            2,
+        )
     elif sources:
-        score = 0.55
+        confidence = 0.55
     else:
-        score = 0.35
+        confidence = 0.35
 
     return {
         "checked_claims": len(claims),
         "supported_claims": supported,
-        "confidence": score,
+        "confidence": confidence,
         "checks": checks,
     }
 
 
 # ============================================================
-# EVIDENCE LEDGER
+# ACTION ENGINE
+# ============================================================
+
+SAFE_ACTIONS = {
+    "status",
+    "health",
+    "version",
+    "capabilities",
+    "time",
+    "memory_count",
+    "skills_count",
+}
+
+
+def normalize_action(
+    action: str,
+) -> str:
+
+    action = action.lower().strip()
+
+    aliases = {
+        "check status": "status",
+        "system status": "status",
+        "check health": "health",
+        "health check": "health",
+        "get version": "version",
+        "what time is it": "time",
+        "list capabilities": "capabilities",
+        "show capabilities": "capabilities",
+        "memory": "memory_count",
+        "skills": "skills_count",
+    }
+
+    return aliases.get(
+        action,
+        action,
+    )
+
+
+def execute_safe_action(
+    action: str,
+    target: Optional[str] = None,
+) -> Dict[str, Any]:
+
+    normalized = normalize_action(action)
+
+    action_id = make_id("action")
+
+    started = now()
+
+    result: Dict[str, Any] = {
+        "action_id": action_id,
+        "requested": action,
+        "normalized": normalized,
+        "target": target,
+        "status": "started",
+        "started_at": started,
+    }
+
+    try:
+
+        if normalized == "status":
+            value = {
+                "project": PROJECT,
+                "version": VERSION,
+                "status": "online",
+                "missions": len(MISSIONS),
+            }
+
+        elif normalized == "health":
+            value = {
+                "status": "healthy",
+                "version": VERSION,
+            }
+
+        elif normalized == "version":
+            value = {
+                "project": PROJECT,
+                "version": VERSION,
+            }
+
+        elif normalized == "capabilities":
+            value = {
+                "research": True,
+                "reasoning": True,
+                "verification": True,
+                "execution": True,
+                "observation": True,
+                "recovery": True,
+                "learning": True,
+            }
+
+        elif normalized == "time":
+            value = {
+                "utc": now(),
+            }
+
+        elif normalized == "memory_count":
+            value = {
+                "count": len(MEMORY),
+            }
+
+        elif normalized == "skills_count":
+            value = {
+                "count": len(SKILLS),
+            }
+
+        else:
+            result.update(
+                {
+                    "status": "blocked",
+                    "reason": (
+                        "Action is not in the safe built-in "
+                        "action registry."
+                    ),
+                }
+            )
+
+            result["completed_at"] = now()
+
+            return result
+
+        result.update(
+            {
+                "status": "completed",
+                "result": value,
+                "completed_at": now(),
+            }
+        )
+
+    except Exception as exc:
+
+        result.update(
+            {
+                "status": "failed",
+                "error": str(exc)[:500],
+                "completed_at": now(),
+            }
+        )
+
+    return result
+
+
+def observe_action(
+    action_result: Dict[str, Any],
+) -> Dict[str, Any]:
+
+    status = action_result.get(
+        "status",
+        "unknown",
+    )
+
+    return {
+        "observed_at": now(),
+        "action_id": action_result.get(
+            "action_id"
+        ),
+        "status": status,
+        "success": status == "completed",
+        "has_result": "result" in action_result,
+    }
+
+
+def recover_action(
+    action: str,
+    target: Optional[str],
+    previous: Dict[str, Any],
+) -> Dict[str, Any]:
+
+    if previous.get("status") != "failed":
+        return {
+            "attempted": False,
+            "reason": "No recovery required.",
+        }
+
+    retry = execute_safe_action(
+        action,
+        target,
+    )
+
+    return {
+        "attempted": True,
+        "retry": retry,
+        "recovered": retry.get("status") == "completed",
+    }
+
+
+def record_action(
+    action_result: Dict[str, Any],
+) -> None:
+
+    ACTIONS.append(action_result)
+
+    if len(ACTIONS) > 500:
+        del ACTIONS[:-500]
+
+    save_json(
+        ACTIONS_FILE,
+        ACTIONS,
+    )
+
+
+# ============================================================
+# ACTION EXTRACTION
+# ============================================================
+
+def propose_actions(
+    objective: str,
+    max_actions: int,
+) -> List[str]:
+
+    text = objective.lower()
+
+    proposed: List[str] = []
+
+    if "status" in text:
+        proposed.append("status")
+
+    if "health" in text:
+        proposed.append("health")
+
+    if "version" in text:
+        proposed.append("version")
+
+    if "capabilities" in text:
+        proposed.append("capabilities")
+
+    if "time" in text:
+        proposed.append("time")
+
+    if "memory" in text:
+        proposed.append("memory_count")
+
+    if "skills" in text:
+        proposed.append("skills_count")
+
+    return proposed[:max_actions]
+
+
+# ============================================================
+# EVIDENCE
 # ============================================================
 
 def make_evidence_ledger(
     sources: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
+
     ledger = []
 
     for source in sources:
-        url = source.get("url", "")
-        content = source.get("content", "")
+
+        content = source.get(
+            "content",
+            "",
+        )
 
         digest = hashlib.sha256(
-            content.encode("utf-8", errors="ignore")
+            content.encode(
+                "utf-8",
+                errors="ignore",
+            )
         ).hexdigest()[:16]
 
         ledger.append(
             {
                 "evidence_id": f"ev-{digest}",
                 "title": source.get("title", ""),
-                "url": url,
-                "status": source.get("status", "unknown"),
+                "url": source.get("url", ""),
+                "status": source.get("status"),
                 "content_hash": digest,
             }
         )
@@ -694,10 +1088,13 @@ def make_evidence_ledger(
 
 
 # ============================================================
-# LEARNING / SKILLS
+# LEARNING
 # ============================================================
 
-def objective_signature(objective: str) -> str:
+def objective_signature(
+    objective: str,
+) -> str:
+
     normalized = re.sub(
         r"\s+",
         " ",
@@ -712,25 +1109,32 @@ def objective_signature(objective: str) -> str:
 def learn_skill(
     objective: str,
     intent: Dict[str, Any],
-    verification: Dict[str, Any],
+    confidence: float,
     provider: str,
 ) -> Dict[str, Any]:
+
     skill = {
-        "skill_id": f"skill-{uuid.uuid4().hex[:10]}",
-        "signature": objective_signature(objective),
-        "intent": intent.get("category"),
+        "skill_id": make_id("skill"),
+        "signature": objective_signature(
+            objective
+        ),
+        "intent": intent.get(
+            "category"
+        ),
         "provider": provider,
-        "confidence": verification.get("confidence", 0),
+        "confidence": confidence,
         "learned_at": now(),
     }
 
     SKILLS.append(skill)
 
-    # Keep local memory bounded.
     if len(SKILLS) > 200:
         del SKILLS[:-200]
 
-    save_json(SKILLS_FILE, SKILLS)
+    save_json(
+        SKILLS_FILE,
+        SKILLS,
+    )
 
     return skill
 
@@ -738,68 +1142,102 @@ def learn_skill(
 def remember_mission(
     mission: Dict[str, Any],
 ) -> None:
+
     MEMORY.append(
         {
-            "mission_id": mission.get("mission_id"),
-            "objective": mission.get("objective"),
-            "intent": mission.get("intent"),
-            "confidence": mission.get("confidence"),
-            "provider": mission.get("provider"),
-            "created_at": mission.get("created_at"),
-            "completed_at": mission.get("completed_at"),
+            "mission_id": mission.get(
+                "mission_id"
+            ),
+            "objective": mission.get(
+                "objective"
+            ),
+            "intent": mission.get(
+                "intent"
+            ),
+            "confidence": mission.get(
+                "confidence"
+            ),
+            "provider": mission.get(
+                "provider"
+            ),
+            "actions": mission.get(
+                "actions"
+            ),
+            "created_at": mission.get(
+                "created_at"
+            ),
+            "completed_at": mission.get(
+                "completed_at"
+            ),
         }
     )
 
     if len(MEMORY) > 500:
         del MEMORY[:-500]
 
-    save_json(MEMORY_FILE, MEMORY)
+    save_json(
+        MEMORY_FILE,
+        MEMORY,
+    )
 
 
 # ============================================================
 # MISSION EXECUTION
 # ============================================================
 
-def execute_mission(mission_id: str) -> None:
+def execute_mission(
+    mission_id: str,
+) -> None:
+
     with LOCK:
-        mission = MISSIONS.get(mission_id)
+        mission = MISSIONS.get(
+            mission_id
+        )
 
     if not mission:
         return
 
     try:
+
         mission["status"] = "running"
         mission["stage"] = "understand"
         mission["started_at"] = now()
 
-        objective = mission["objective"]
-        research = mission["research"]
-        verify = mission["verify"]
+        objective = mission[
+            "objective"
+        ]
 
-        # ----------------------------------------
+        # ------------------------------------
         # UNDERSTAND
-        # ----------------------------------------
+        # ------------------------------------
 
-        intent = classify_intent(objective)
-        mission["intent"] = intent
-
-        mission["stage"] = "planning"
-
-        plan = build_plan(
-            objective,
-            research,
-            verify,
+        intent = classify_intent(
+            objective
         )
 
-        mission["plan"] = plan
+        mission["intent"] = intent
 
-        # ----------------------------------------
+        # ------------------------------------
+        # PLAN
+        # ------------------------------------
+
+        mission["stage"] = "plan"
+
+        mission["plan"] = build_plan(
+            objective,
+            mission["research"],
+            mission["verify"],
+            mission["execute"],
+        )
+
+        # ------------------------------------
         # RESEARCH
-        # ----------------------------------------
+        # ------------------------------------
 
-        sources: List[Dict[str, Any]] = []
+        sources = []
 
-        if research:
+        if mission["research"]:
+
             mission["stage"] = "research"
 
             sources = research_objective(
@@ -809,22 +1247,30 @@ def execute_mission(mission_id: str) -> None:
 
         mission["sources"] = [
             {
-                "title": s.get("title"),
-                "url": s.get("url"),
-                "status": s.get("status"),
+                "title": source.get(
+                    "title"
+                ),
+                "url": source.get(
+                    "url"
+                ),
+                "status": source.get(
+                    "status"
+                ),
             }
-            for s in sources
+            for source in sources
         ]
 
-        mission["evidence_ledger"] = make_evidence_ledger(
+        mission[
+            "evidence_ledger"
+        ] = make_evidence_ledger(
             sources
         )
 
-        # ----------------------------------------
-        # SYNTHESIZE
-        # ----------------------------------------
+        # ------------------------------------
+        # REASON
+        # ------------------------------------
 
-        mission["stage"] = "synthesize"
+        mission["stage"] = "reason"
 
         synthesis = synthesize(
             objective,
@@ -832,21 +1278,29 @@ def execute_mission(mission_id: str) -> None:
             intent,
         )
 
-        mission["provider"] = synthesis["provider"]
-        mission["result"] = synthesis["text"]
+        mission["provider"] = (
+            synthesis["provider"]
+        )
 
-        # ----------------------------------------
+        mission["result"] = (
+            synthesis["text"]
+        )
+
+        # ------------------------------------
         # VERIFY
-        # ----------------------------------------
+        # ------------------------------------
 
         mission["stage"] = "verify"
 
-        if verify:
+        if mission["verify"]:
+
             verification = verify_result(
                 synthesis["text"],
                 sources,
             )
+
         else:
+
             verification = {
                 "checked_claims": 0,
                 "supported_claims": 0,
@@ -854,59 +1308,168 @@ def execute_mission(mission_id: str) -> None:
                 "checks": [],
             }
 
-        mission["verification"] = verification
-        mission["confidence"] = verification["confidence"]
+        mission[
+            "verification"
+        ] = verification
 
-        # ----------------------------------------
+        mission[
+            "confidence"
+        ] = verification[
+            "confidence"
+        ]
+
+        # ------------------------------------
+        # EXECUTE
+        # ------------------------------------
+
+        actions = []
+
+        if mission["execute"]:
+
+            mission["stage"] = "execute"
+
+            proposed = propose_actions(
+                objective,
+                mission["max_actions"],
+            )
+
+            for action in proposed:
+
+                action_result = (
+                    execute_safe_action(
+                        action
+                    )
+                )
+
+                record_action(
+                    action_result
+                )
+
+                actions.append(
+                    action_result
+                )
+
+        mission["actions"] = actions
+
+        # ------------------------------------
+        # OBSERVE
+        # ------------------------------------
+
+        mission["stage"] = "observe"
+
+        observations = [
+            observe_action(action)
+            for action in actions
+        ]
+
+        mission[
+            "observations"
+        ] = observations
+
+        # ------------------------------------
+        # RECOVER
+        # ------------------------------------
+
+        mission["stage"] = "recover"
+
+        recoveries = []
+
+        for action in actions:
+
+            if action.get(
+                "status"
+            ) == "failed":
+
+                recovery = recover_action(
+                    action.get(
+                        "requested",
+                        "",
+                    ),
+                    action.get(
+                        "target"
+                    ),
+                    action,
+                )
+
+                recoveries.append(
+                    recovery
+                )
+
+        mission[
+            "recoveries"
+        ] = recoveries
+
+        # ------------------------------------
         # LEARN
-        # ----------------------------------------
+        # ------------------------------------
 
         mission["stage"] = "learn"
 
         skill = learn_skill(
             objective,
             intent,
-            verification,
-            synthesis["provider"],
+            mission["confidence"],
+            mission["provider"],
         )
 
-        mission["learned_skill"] = skill
+        mission[
+            "learned_skill"
+        ] = skill
 
         if mission["remember"]:
-            remember_mission(mission)
+            remember_mission(
+                mission
+            )
 
-        # ----------------------------------------
+        # ------------------------------------
         # DELIVER
-        # ----------------------------------------
+        # ------------------------------------
 
         mission["stage"] = "deliver"
         mission["status"] = "completed"
         mission["completed_at"] = now()
 
-        started = mission.get("started_at")
-        if started:
-            try:
-                start_dt = datetime.fromisoformat(started)
-                end_dt = datetime.fromisoformat(
-                    mission["completed_at"]
-                )
-                mission["duration_seconds"] = round(
-                    (end_dt - start_dt).total_seconds(),
-                    2,
-                )
-            except Exception:
-                mission["duration_seconds"] = None
+        started = mission.get(
+            "started_at"
+        )
+
+        try:
+            start_dt = datetime.fromisoformat(
+                started
+            )
+
+            end_dt = datetime.fromisoformat(
+                mission["completed_at"]
+            )
+
+            mission[
+                "duration_seconds"
+            ] = round(
+                (
+                    end_dt - start_dt
+                ).total_seconds(),
+                2,
+            )
+
+        except Exception:
+            mission[
+                "duration_seconds"
+            ] = None
 
     except Exception as exc:
+
         mission["status"] = "failed"
         mission["stage"] = "error"
-        mission["error"] = str(exc)[:1000]
+        mission["error"] = str(exc)[
+            :1000
+        ]
         mission["completed_at"] = now()
 
 
-async def start_background_mission(
+async def run_background_mission(
     mission_id: str,
 ) -> None:
+
     await asyncio.to_thread(
         execute_mission,
         mission_id,
@@ -914,24 +1477,29 @@ async def start_background_mission(
 
 
 # ============================================================
-# ENDPOINTS
+# BASIC ENDPOINTS
 # ============================================================
 
 @app.get("/")
 def root():
+
     return {
         "project": PROJECT,
         "version": VERSION,
         "status": "online",
-        "message": "AI Infinity Mission Intelligence Core is online.",
+        "message": (
+            "AI Infinity Action & Tool "
+            "Orchestration Core is online."
+        ),
         "mode": "one-command",
         "architecture": (
-            "intent → plan → research → synthesize → "
-            "verify → learn → deliver"
+            "intent → plan → research → reason → "
+            "verify → execute → observe → recover "
+            "→ learn → deliver"
         ),
         "capabilities": [
             "intent-routing",
-            "adaptive-mission-planning",
+            "adaptive-planning",
             "web-research",
             "parallel-source-reading",
             "evidence-ledger",
@@ -939,6 +1507,9 @@ def root():
             "reasoning",
             "verification",
             "confidence-estimation",
+            "safe-action-execution",
+            "observation",
+            "failure-recovery",
             "mission-learning",
             "reusable-skills",
             "memory",
@@ -951,6 +1522,7 @@ def root():
 
 @app.get("/health")
 def health():
+
     return {
         "status": "healthy",
         "project": PROJECT,
@@ -961,6 +1533,7 @@ def health():
 
 @app.get("/version")
 def version():
+
     return {
         "project": PROJECT,
         "version": VERSION,
@@ -969,9 +1542,21 @@ def version():
     }
 
 
-@app.post("/mission", status_code=202)
-async def create_mission(request: MissionRequest):
-    mission_id = safe_id("mission")
+# ============================================================
+# MISSIONS
+# ============================================================
+
+@app.post(
+    "/mission",
+    status_code=202,
+)
+async def create_mission(
+    request: MissionRequest,
+):
+
+    mission_id = make_id(
+        "mission"
+    )
 
     mission = {
         "mission_id": mission_id,
@@ -981,34 +1566,57 @@ async def create_mission(request: MissionRequest):
         "research": request.research,
         "verify": request.verify,
         "remember": request.remember,
+        "execute": request.execute,
         "max_sources": request.max_sources,
+        "max_actions": request.max_actions,
         "created_at": now(),
     }
 
     with LOCK:
-        MISSIONS[mission_id] = mission
+        MISSIONS[
+            mission_id
+        ] = mission
 
     asyncio.create_task(
-        start_background_mission(mission_id)
+        run_background_mission(
+            mission_id
+        )
     )
 
     return {
         "mission_id": mission_id,
         "status": "queued",
         "version": VERSION,
-        "poll": f"/mission/{mission_id}",
+        "poll": (
+            f"/mission/{mission_id}"
+        ),
     }
 
 
-@app.post("/missions", status_code=202)
-async def create_mission_alias(request: MissionRequest):
-    return await create_mission(request)
+@app.post(
+    "/missions",
+    status_code=202,
+)
+async def create_mission_alias(
+    request: MissionRequest,
+):
+
+    return await create_mission(
+        request
+    )
 
 
-@app.get("/mission/{mission_id}")
-def get_mission(mission_id: str):
+@app.get(
+    "/mission/{mission_id}"
+)
+def get_mission(
+    mission_id: str,
+):
+
     with LOCK:
-        mission = MISSIONS.get(mission_id)
+        mission = MISSIONS.get(
+            mission_id
+        )
 
     if not mission:
         raise HTTPException(
@@ -1019,15 +1627,29 @@ def get_mission(mission_id: str):
     return mission
 
 
-@app.get("/missions/{mission_id}")
-def get_mission_alias(mission_id: str):
-    return get_mission(mission_id)
+@app.get(
+    "/missions/{mission_id}"
+)
+def get_mission_alias(
+    mission_id: str,
+):
+
+    return get_mission(
+        mission_id
+    )
 
 
-@app.get("/mission-status/{mission_id}")
-def mission_status(mission_id: str):
+@app.get(
+    "/mission-status/{mission_id}"
+)
+def mission_status(
+    mission_id: str,
+):
+
     with LOCK:
-        mission = MISSIONS.get(mission_id)
+        mission = MISSIONS.get(
+            mission_id
+        )
 
     if not mission:
         raise HTTPException(
@@ -1037,53 +1659,151 @@ def mission_status(mission_id: str):
 
     return {
         "mission_id": mission_id,
-        "status": mission.get("status"),
-        "stage": mission.get("stage"),
-        "confidence": mission.get("confidence"),
-        "provider": mission.get("provider"),
+        "status": mission.get(
+            "status"
+        ),
+        "stage": mission.get(
+            "stage"
+        ),
+        "confidence": mission.get(
+            "confidence"
+        ),
+        "provider": mission.get(
+            "provider"
+        ),
+        "action_count": len(
+            mission.get(
+                "actions",
+                []
+            )
+        ),
         "version": VERSION,
     }
+
+
+# ============================================================
+# DIRECT ACTION API
+# ============================================================
+
+@app.post(
+    "/action",
+    status_code=200,
+)
+def action_endpoint(
+    request: ActionRequest,
+):
+
+    result = execute_safe_action(
+        request.action,
+        request.target,
+    )
+
+    record_action(
+        result
+    )
+
+    return result
+
+
+@app.get("/actions")
+def list_actions():
+
+    return {
+        "count": len(ACTIONS),
+        "actions": ACTIONS[-100:],
+    }
+
+
+@app.get("/actions/{action_id}")
+def get_action(
+    action_id: str,
+):
+
+    for action in reversed(ACTIONS):
+
+        if action.get(
+            "action_id"
+        ) == action_id:
+
+            return action
+
+    raise HTTPException(
+        status_code=404,
+        detail="Action not found",
+    )
 
 
 # ============================================================
 # TASK COMPATIBILITY
 # ============================================================
 
-@app.post("/task", status_code=202)
-async def create_task(request: TaskRequest):
-    mission_request = MissionRequest(
-        objective=request.command,
-        research=True,
-        verify=True,
-        remember=True,
+@app.post(
+    "/task",
+    status_code=202,
+)
+async def create_task(
+    request: TaskRequest,
+):
+
+    return await create_mission(
+        MissionRequest(
+            objective=request.command,
+            research=True,
+            verify=True,
+            remember=True,
+            execute=True,
+        )
     )
 
-    return await create_mission(mission_request)
+
+@app.post(
+    "/tasks",
+    status_code=202,
+)
+async def create_task_alias(
+    request: TaskRequest,
+):
+
+    return await create_task(
+        request
+    )
 
 
-@app.post("/tasks", status_code=202)
-async def create_task_alias(request: TaskRequest):
-    return await create_task(request)
+@app.get(
+    "/task/{task_id}"
+)
+def get_task(
+    task_id: str,
+):
+
+    return get_mission(
+        task_id
+    )
 
 
-@app.get("/task/{task_id}")
-def get_task(task_id: str):
-    return get_mission(task_id)
+@app.get(
+    "/tasks/{task_id}"
+)
+def get_task_alias(
+    task_id: str,
+):
 
-
-@app.get("/tasks/{task_id}")
-def get_task_alias(task_id: str):
-    return get_mission(task_id)
+    return get_mission(
+        task_id
+    )
 
 
 @app.get("/tasks")
 def list_tasks():
+
     with LOCK:
-        items = list(MISSIONS.values())
+        missions = list(
+            MISSIONS.values()
+        )
 
     return {
-        "count": len(items),
-        "tasks": items[-50:],
+        "count": len(missions),
+        "tasks": missions[-50:],
     }
 
 
@@ -1092,9 +1812,14 @@ def list_tasks():
 # ============================================================
 
 @app.post("/memory")
-def add_memory(request: MemoryRequest):
+def add_memory(
+    request: MemoryRequest,
+):
+
     item = {
-        "memory_id": f"mem-{uuid.uuid4().hex[:10]}",
+        "memory_id": make_id(
+            "memory"
+        ),
         "content": request.content,
         "tags": request.tags,
         "created_at": now(),
@@ -1105,7 +1830,10 @@ def add_memory(request: MemoryRequest):
     if len(MEMORY) > 500:
         del MEMORY[:-500]
 
-    save_json(MEMORY_FILE, MEMORY)
+    save_json(
+        MEMORY_FILE,
+        MEMORY,
+    )
 
     return {
         "status": "stored",
@@ -1115,6 +1843,7 @@ def add_memory(request: MemoryRequest):
 
 @app.get("/memory")
 def get_memory():
+
     return {
         "count": len(MEMORY),
         "memory": MEMORY[-100:],
@@ -1122,10 +1851,14 @@ def get_memory():
 
 
 @app.get("/memory/search")
-def search_memory(q: str = ""):
+def search_memory(
+    q: str = "",
+):
+
     query = q.lower().strip()
 
     if not query:
+
         return {
             "count": len(MEMORY),
             "results": MEMORY[-50:],
@@ -1152,6 +1885,7 @@ def search_memory(q: str = ""):
 
 @app.get("/skills")
 def get_skills():
+
     return {
         "count": len(SKILLS),
         "skills": SKILLS[-100:],
@@ -1159,10 +1893,14 @@ def get_skills():
 
 
 @app.get("/skills/search")
-def search_skills(q: str = ""):
+def search_skills(
+    q: str = "",
+):
+
     query = q.lower().strip()
 
     if not query:
+
         return {
             "count": len(SKILLS),
             "results": SKILLS[-50:],
@@ -1188,13 +1926,23 @@ def search_skills(q: str = ""):
 # ============================================================
 
 @app.post("/intent")
-def intent_endpoint(request: MissionRequest):
-    return classify_intent(request.objective)
+def intent_endpoint(
+    request: MissionRequest,
+):
+
+    return classify_intent(
+        request.objective
+    )
 
 
 @app.post("/plan")
-def plan_endpoint(request: MissionRequest):
-    intent = classify_intent(request.objective)
+def plan_endpoint(
+    request: MissionRequest,
+):
+
+    intent = classify_intent(
+        request.objective
+    )
 
     return {
         "objective": request.objective,
@@ -1203,17 +1951,19 @@ def plan_endpoint(request: MissionRequest):
             request.objective,
             request.research,
             request.verify,
+            request.execute,
         ),
         "version": VERSION,
     }
 
 
 # ============================================================
-# CAPABILITIES / STATUS
+# CAPABILITIES
 # ============================================================
 
 @app.get("/capabilities")
 def capabilities():
+
     return {
         "version": VERSION,
         "capabilities": [
@@ -1227,6 +1977,9 @@ def capabilities():
             "reasoning",
             "verification",
             "confidence-estimation",
+            "safe-action-execution",
+            "observation",
+            "failure-recovery",
             "mission-learning",
             "reusable-skills",
             "memory",
@@ -1234,11 +1987,20 @@ def capabilities():
             "structured-outcomes",
             "free-first",
         ],
+        "safe_actions": sorted(
+            SAFE_ACTIONS
+        ),
         "providers": {
             "openai_compatible": bool(
-                os.getenv("AI_BASE_URL")
-                and os.getenv("AI_API_KEY")
-                and os.getenv("AI_MODEL")
+                os.getenv(
+                    "AI_BASE_URL"
+                )
+                and os.getenv(
+                    "AI_API_KEY"
+                )
+                and os.getenv(
+                    "AI_MODEL"
+                )
             ),
             "pollinations": True,
             "deterministic": True,
@@ -1246,21 +2008,32 @@ def capabilities():
     }
 
 
+# ============================================================
+# STATUS
+# ============================================================
+
 @app.get("/status")
 def status():
+
     with LOCK:
-        mission_count = len(MISSIONS)
+        missions = list(
+            MISSIONS.values()
+        )
 
     completed = sum(
         1
-        for mission in MISSIONS.values()
-        if mission.get("status") == "completed"
+        for mission in missions
+        if mission.get(
+            "status"
+        ) == "completed"
     )
 
     running = sum(
         1
-        for mission in MISSIONS.values()
-        if mission.get("status") in {
+        for mission in missions
+        if mission.get(
+            "status"
+        ) in {
             "queued",
             "running",
         }
@@ -1268,8 +2041,18 @@ def status():
 
     failed = sum(
         1
-        for mission in MISSIONS.values()
-        if mission.get("status") == "failed"
+        for mission in missions
+        if mission.get(
+            "status"
+        ) == "failed"
+    )
+
+    action_success = sum(
+        1
+        for action in ACTIONS
+        if action.get(
+            "status"
+        ) == "completed"
     )
 
     return {
@@ -1277,10 +2060,14 @@ def status():
         "version": VERSION,
         "status": "online",
         "missions": {
-            "total": mission_count,
+            "total": len(missions),
             "completed": completed,
             "running": running,
             "failed": failed,
+        },
+        "actions": {
+            "total": len(ACTIONS),
+            "successful": action_success,
         },
         "memory_items": len(MEMORY),
         "learned_skills": len(SKILLS),
@@ -1290,7 +2077,7 @@ def status():
 
 
 # ============================================================
-# GLOBAL ERROR HANDLER
+# ERROR HANDLER
 # ============================================================
 
 @app.exception_handler(Exception)
@@ -1298,6 +2085,7 @@ async def global_exception_handler(
     request,
     exc: Exception,
 ):
+
     return JSONResponse(
         status_code=500,
         content={
@@ -1314,7 +2102,11 @@ async def global_exception_handler(
 
 @app.on_event("startup")
 def startup():
-    BASE.mkdir(parents=True, exist_ok=True)
+
+    BASE.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
 
 # ============================================================
@@ -1322,10 +2114,16 @@ def startup():
 # ============================================================
 
 if __name__ == "__main__":
+
     import uvicorn
 
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=int(os.getenv("PORT", "8000")),
+        port=int(
+            os.getenv(
+                "PORT",
+                "8000",
+            )
+        ),
     )
