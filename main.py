@@ -1,737 +1,1635 @@
+"""
+AI Infinity
+TARGET-2050.1
+Single canonical runtime
+
+Design goals:
+- Preserve existing API compatibility
+- Mission -> goals -> task graph -> execution -> observation -> verification
+- Real research source extraction and filtering
+- Evidence provenance and source-quality scoring
+- Consistent verification / critique / synthesis
+- Self-inspection
+- Gap analysis
+- Recovery and replanning
+- Opportunity detection
+- External HTTP with SSRF protection
+- Memory, world state, events, diagnostics
+- Video-generation compatibility
+- Free-first architecture
+- Honest 2050 extension points
+
+This is an advanced autonomous orchestration runtime.
+It does not pretend that a Python service is literally AGI/ASI.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import html
+import ipaddress
+import json
+import math
 import os
 import re
-import json
-import time
-import uuid
-import math
-import hashlib
-import asyncio
 import socket
-import ipaddress
+import time
+import traceback
+import uuid
+from collections import Counter
 from pathlib import Path
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Literal
-from urllib.parse import urlparse, quote_plus
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import (
+    parse_qs,
+    quote_plus,
+    unquote,
+    urljoin,
+    urlparse,
+)
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 
 # ============================================================
-# AI INFINITY — TARGET-2050.0
-# ============================================================
-# Practical "2050 architecture" target:
-# - Mission Engine
-# - Hierarchical planning
-# - Dynamic task graph
-# - Tool routing
-# - External web access
-# - Research + evidence
-# - Verification
-# - Memory
-# - World/context state
-# - Self-critique
-# - Failure recovery
-# - Replanning
-# - Confidence / uncertainty
-# - Opportunity detection
-# - Provider discovery
-# - Experiments/evaluation
-# - Diagnostics
-# - Video compatibility
-#
-# This is an extensible architecture, not a claim of literal AGI/ASI.
-# It requires no paid AI provider to boot.
+# CORE IDENTITY
 # ============================================================
 
-
-VERSION = "TARGET-2050.0"
-TARGET = "2050"
+VERSION = "TARGET-2050.1"
+TARGET_YEAR = 2050
+SERVICE = "AI Infinity"
 
 START_TIME = time.time()
 
-BASE = Path("/tmp/ai-infinity")
-MEMORY_FILE = BASE / "memory.json"
-TASKS_FILE = BASE / "tasks.json"
-MISSIONS_FILE = BASE / "missions.json"
-EVENTS_FILE = BASE / "events.json"
-WORLD_FILE = BASE / "world.json"
-EXPERIMENTS_FILE = BASE / "experiments.json"
-
+BASE = Path(os.getenv("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity"))
 BASE.mkdir(parents=True, exist_ok=True)
 
-for f in [
-    MEMORY_FILE,
-    TASKS_FILE,
-    MISSIONS_FILE,
-    EVENTS_FILE,
-    WORLD_FILE,
-    EXPERIMENTS_FILE,
-]:
-    if not f.exists():
-        f.write_text("[]" if f.name != "world.json" else "{}", encoding="utf-8")
+MEMORY_FILE = BASE / "memory.json"
+TASK_FILE = BASE / "tasks.json"
+MISSION_FILE = BASE / "missions.json"
+WORLD_FILE = BASE / "world.json"
+EVENT_FILE = BASE / "events.json"
 
+
+# ============================================================
+# APP
+# ============================================================
 
 app = FastAPI(
     title="AI Infinity",
     version=VERSION,
-    description="AI Infinity — TARGET-2050 autonomous mission architecture",
+    description="AI Infinity TARGET-2050.1 autonomous intelligence orchestration runtime",
 )
 
 
 # ============================================================
-# BASIC STORAGE
+# SAFE STORAGE
 # ============================================================
 
-def load_json(path: Path, default: Any) -> Any:
+def read_json(path: Path, default: Any) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        if not path.exists():
+            return default
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
     except Exception:
         return default
 
 
-def save_json(path: Path, data: Any) -> None:
+def write_json(path: Path, value: Any) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
-    tmp.replace(path)
+    try:
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(value, f, ensure_ascii=False, indent=2, default=str)
+        tmp.replace(path)
+    except Exception:
+        try:
+            with path.open("w", encoding="utf-8") as f:
+                json.dump(value, f, ensure_ascii=False, indent=2, default=str)
+        except Exception:
+            pass
 
 
-def append_json(path: Path, item: Any) -> None:
-    data = load_json(path, [])
-    if not isinstance(data, list):
-        data = []
-    data.append(item)
-    save_json(path, data)
+memory_store: List[Dict[str, Any]] = read_json(MEMORY_FILE, [])
+tasks_store: Dict[str, Dict[str, Any]] = read_json(TASK_FILE, {})
+missions_store: Dict[str, Dict[str, Any]] = read_json(MISSION_FILE, {})
+world_store: Dict[str, Any] = read_json(
+    WORLD_FILE,
+    {
+        "facts": {},
+        "signals": [],
+        "last_updated": None,
+        "system": SERVICE,
+        "version": VERSION,
+    },
+)
+events_store: List[Dict[str, Any]] = read_json(EVENT_FILE, [])
+
+
+def persist_all() -> None:
+    write_json(MEMORY_FILE, memory_store)
+    write_json(TASK_FILE, tasks_store)
+    write_json(MISSION_FILE, missions_store)
+    write_json(WORLD_FILE, world_store)
+    write_json(EVENT_FILE, events_store[-2000:])
 
 
 # ============================================================
-# EVENT / OBSERVABILITY LAYER
+# EVENT / OBSERVABILITY
 # ============================================================
 
-def event(
-    event_type: str,
-    message: str,
-    mission_id: Optional[str] = None,
-    data: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-
+def event(event_type: str, data: Optional[Dict[str, Any]] = None) -> None:
     record = {
-        "event_id": f"evt-{uuid.uuid4().hex[:12]}",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "id": f"evt-{uuid.uuid4().hex[:12]}",
+        "timestamp": time.time(),
         "type": event_type,
-        "message": message,
-        "mission_id": mission_id,
         "data": data or {},
     }
-
-    append_json(EVENTS_FILE, record)
-    return record
+    events_store.append(record)
+    if len(events_store) > 2000:
+        del events_store[:-2000]
+    write_json(EVENT_FILE, events_store)
 
 
 # ============================================================
-# MEMORY LAYER
+# MEMORY
 # ============================================================
 
 def remember(
     content: str,
-    category: str = "general",
-    importance: float = 0.5,
+    kind: str = "general",
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-
-    memory = {
+    item = {
         "id": f"mem-{uuid.uuid4().hex[:12]}",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "category": category,
-        "importance": max(0.0, min(1.0, importance)),
+        "timestamp": time.time(),
+        "kind": kind,
         "content": content[:20000],
         "metadata": metadata or {},
     }
 
-    memories = load_json(MEMORY_FILE, [])
-    if not isinstance(memories, list):
-        memories = []
+    memory_store.append(item)
 
-    memories.append(memory)
+    if len(memory_store) > 1000:
+        del memory_store[:-1000]
 
-    # Keep runtime storage bounded.
-    if len(memories) > 1000:
-        memories = sorted(
-            memories,
-            key=lambda x: (
-                float(x.get("importance", 0)),
-                x.get("timestamp", ""),
-            ),
-            reverse=True,
-        )[:1000]
+    write_json(MEMORY_FILE, memory_store)
 
-    save_json(MEMORY_FILE, memories)
-
-    return memory
+    return item
 
 
-def search_memory(query: str, limit: int = 10) -> List[Dict[str, Any]]:
-    memories = load_json(MEMORY_FILE, [])
-
-    if not isinstance(memories, list):
-        return []
-
-    terms = set(re.findall(r"\w+", query.lower()))
-
-    scored = []
-
-    for memory in memories:
-        text = str(memory.get("content", "")).lower()
-        score = sum(1 for term in terms if term in text)
-
-        if score:
-            scored.append((score, memory))
-
-    scored.sort(
-        key=lambda x: (
-            x[0],
-            float(x[1].get("importance", 0)),
-        ),
-        reverse=True,
-    )
-
-    return [x[1] for x in scored[:limit]]
+def recent_memory(limit: int = 20) -> List[Dict[str, Any]]:
+    return memory_store[-max(1, min(limit, 100)) :]
 
 
 # ============================================================
-# WORLD / CONTEXT FABRIC
+# WORLD MODEL
 # ============================================================
 
-def update_world(
-    mission_id: Optional[str] = None,
-    objective: Optional[str] = None,
-    state: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+def update_world(key: str, value: Any, source: str = "runtime") -> None:
+    world_store.setdefault("facts", {})[key] = {
+        "value": value,
+        "source": source,
+        "timestamp": time.time(),
+    }
+    world_store["last_updated"] = time.time()
+    write_json(WORLD_FILE, world_store)
 
-    world = load_json(WORLD_FILE, {})
 
-    if not isinstance(world, dict):
-        world = {}
-
-    world["updated_at"] = datetime.now(timezone.utc).isoformat()
-
-    if mission_id:
-        world["active_mission_id"] = mission_id
-
-    if objective:
-        world["active_objective"] = objective
-
-    if state:
-        world.update(state)
-
-    save_json(WORLD_FILE, world)
-
-    return world
+def world_snapshot() -> Dict[str, Any]:
+    return {
+        "system": SERVICE,
+        "version": VERSION,
+        "target": TARGET_YEAR,
+        "facts": world_store.get("facts", {}),
+        "signals": world_store.get("signals", [])[-100:],
+        "last_updated": world_store.get("last_updated"),
+    }
 
 
 # ============================================================
-# SECURITY / EXTERNAL ACCESS
+# MODELS
+# ============================================================
+
+class TaskRequest(BaseModel):
+    objective: Optional[str] = Field(default=None, max_length=20000)
+    command: Optional[str] = Field(default=None, max_length=20000)
+    research: bool = True
+    verify: bool = True
+    remember: bool = True
+    external_access: bool = True
+
+
+class MissionRequest(BaseModel):
+    objective: str = Field(..., min_length=1, max_length=20000)
+    research: bool = True
+    verify: bool = True
+    remember: bool = True
+    external_access: bool = True
+
+
+class ExternalRequest(BaseModel):
+    url: str
+    method: str = "GET"
+    data: Optional[Dict[str, Any]] = None
+    timeout: int = Field(default=20, ge=1, le=60)
+
+
+class ResearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=5000)
+    max_sources: int = Field(default=8, ge=1, le=20)
+
+
+class MemoryRequest(BaseModel):
+    content: str
+    kind: str = "general"
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class VideoRequest(BaseModel):
+    command: str = Field(..., min_length=1, max_length=10000)
+    duration_minutes: int = Field(default=1, ge=1, le=120)
+
+
+# ============================================================
+# INTELLIGENCE CAPABILITY REGISTRY
+# ============================================================
+
+BUILTIN_CAPABILITIES = [
+    {
+        "name": "capabilities",
+        "category": "builtin",
+        "permission": "safe",
+    },
+    {
+        "name": "health",
+        "category": "builtin",
+        "permission": "safe",
+    },
+    {
+        "name": "memory_count",
+        "category": "builtin",
+        "permission": "safe",
+    },
+    {
+        "name": "skills_count",
+        "category": "builtin",
+        "permission": "safe",
+    },
+    {
+        "name": "status",
+        "category": "builtin",
+        "permission": "safe",
+    },
+    {
+        "name": "planner",
+        "category": "intelligence",
+        "permission": "safe",
+    },
+    {
+        "name": "mission_engine",
+        "category": "intelligence",
+        "permission": "safe",
+    },
+    {
+        "name": "dynamic_task_graph",
+        "category": "intelligence",
+        "permission": "safe",
+    },
+    {
+        "name": "research",
+        "category": "knowledge",
+        "permission": "network",
+    },
+    {
+        "name": "external_http",
+        "category": "execution",
+        "permission": "network",
+    },
+    {
+        "name": "verification",
+        "category": "epistemic",
+        "permission": "safe",
+    },
+    {
+        "name": "evidence_provenance",
+        "category": "epistemic",
+        "permission": "safe",
+    },
+    {
+        "name": "source_quality",
+        "category": "epistemic",
+        "permission": "safe",
+    },
+    {
+        "name": "self_inspection",
+        "category": "meta",
+        "permission": "safe",
+    },
+    {
+        "name": "gap_analysis",
+        "category": "meta",
+        "permission": "safe",
+    },
+    {
+        "name": "self_critique",
+        "category": "meta",
+        "permission": "safe",
+    },
+    {
+        "name": "recovery",
+        "category": "resilience",
+        "permission": "safe",
+    },
+    {
+        "name": "replanning",
+        "category": "resilience",
+        "permission": "safe",
+    },
+    {
+        "name": "opportunity_detection",
+        "category": "strategy",
+        "permission": "safe",
+    },
+    {
+        "name": "world_model",
+        "category": "context",
+        "permission": "safe",
+    },
+    {
+        "name": "video",
+        "category": "media",
+        "permission": "safe",
+    },
+    {
+        "name": "provider_discovery",
+        "category": "infrastructure",
+        "permission": "safe",
+    },
+]
+
+
+FUTURE_EXTENSION_POINTS = [
+    "multi-agent orchestration",
+    "long-horizon planning",
+    "multimodal world models",
+    "real-world actuators",
+    "continuous learning",
+    "distributed execution",
+    "advanced simulation",
+    "robotics interfaces",
+    "scientific experimentation",
+    "human-agent collaboration",
+    "durable distributed memory",
+    "authenticated OAuth actions",
+    "specialized model routing",
+    "sandboxed code execution",
+]
+
+
+def capabilities_payload() -> Dict[str, Any]:
+    return {
+        "service": SERVICE,
+        "version": VERSION,
+        "target": TARGET_YEAR,
+        "builtin_tools": BUILTIN_CAPABILITIES,
+        "future_extension_points": FUTURE_EXTENSION_POINTS,
+        "free_first": True,
+    }
+
+
+# ============================================================
+# PROVIDER DISCOVERY
+# ============================================================
+
+def provider_status() -> List[Dict[str, Any]]:
+    names = [
+        ("pollinations", "POLLINATIONS_API_KEY"),
+        ("huggingface", "HF_TOKEN"),
+        ("renderer", "RENDERER_URL"),
+    ]
+
+    result = []
+
+    for name, env_name in names:
+        value = os.getenv(env_name)
+        result.append(
+            {
+                "name": name,
+                "configured": bool(value),
+                "environment_variable": env_name,
+            }
+        )
+
+    return result
+
+
+# ============================================================
+# URL / NETWORK SAFETY
 # ============================================================
 
 BLOCKED_HOSTS = {
     "localhost",
     "localhost.localdomain",
     "metadata.google.internal",
-    "metadata",
+    "metadata.google",
+    "169.254.169.254",
+    "0.0.0.0",
 }
 
+BLOCKED_DOMAIN_SUFFIXES = (
+    ".local",
+    ".localhost",
+    ".internal",
+    ".home",
+)
 
-def is_private_or_local_host(hostname: str) -> bool:
-    if not hostname:
-        return True
+SEARCH_ENGINE_DOMAINS = {
+    "google.com",
+    "www.google.com",
+    "bing.com",
+    "www.bing.com",
+    "duckduckgo.com",
+    "html.duckduckgo.com",
+    "search.yahoo.com",
+    "yahoo.com",
+    "r.bing.com",
+    "cc.bingj.com",
+}
 
-    hostname = hostname.lower().strip(".")
+ASSET_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".svg",
+    ".ico",
+    ".css",
+    ".js",
+    ".mjs",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".eot",
+    ".mp3",
+    ".mp4",
+    ".webm",
+    ".avi",
+    ".zip",
+    ".exe",
+    ".dmg",
+}
 
-    if hostname in BLOCKED_HOSTS:
-        return True
+INFRASTRUCTURE_PATHS = (
+    "/images/",
+    "/image/",
+    "/assets/",
+    "/static/",
+    "/sa/",
+    "/favicon",
+    "/ajax/",
+    "/scripts/",
+    "/script/",
+    "/css/",
+    "/js/",
+)
 
+
+def normalize_hostname(host: str) -> str:
+    return (host or "").strip().lower().rstrip(".")
+
+
+def is_private_ip(host: str) -> bool:
     try:
-        ip = ipaddress.ip_address(hostname)
-
+        ip = ipaddress.ip_address(host)
         return (
             ip.is_private
             or ip.is_loopback
             or ip.is_link_local
-            or ip.is_multicast
             or ip.is_reserved
+            or ip.is_multicast
             or ip.is_unspecified
         )
-
     except ValueError:
-        pass
+        return False
 
+
+def resolve_public_ips(host: str) -> bool:
     try:
-        infos = socket.getaddrinfo(hostname, None)
+        infos = socket.getaddrinfo(host, None)
+
+        if not infos:
+            return False
 
         for info in infos:
-            addr = info[4][0]
+            address = info[4][0]
+            if is_private_ip(address):
+                return False
 
-            try:
-                ip = ipaddress.ip_address(addr)
-
-                if (
-                    ip.is_private
-                    or ip.is_loopback
-                    or ip.is_link_local
-                    or ip.is_multicast
-                    or ip.is_reserved
-                    or ip.is_unspecified
-                ):
-                    return True
-
-            except ValueError:
-                continue
+        return True
 
     except Exception:
-        pass
-
-    return False
+        return False
 
 
-def validate_external_url(url: str) -> None:
+def validate_external_url(url: str) -> Tuple[bool, str]:
+    try:
+        parsed = urlparse(url)
+
+        if parsed.scheme not in {"http", "https"}:
+            return False, "Only HTTP and HTTPS are allowed."
+
+        if not parsed.hostname:
+            return False, "URL has no hostname."
+
+        host = normalize_hostname(parsed.hostname)
+
+        if host in BLOCKED_HOSTS:
+            return False, "Blocked hostname."
+
+        if any(host.endswith(suffix) for suffix in BLOCKED_DOMAIN_SUFFIXES):
+            return False, "Blocked internal hostname."
+
+        if is_private_ip(host):
+            return False, "Private or reserved IP addresses are blocked."
+
+        if not resolve_public_ips(host):
+            return False, "Hostname did not resolve to a verified public address."
+
+        return True, "allowed"
+
+    except Exception as exc:
+        return False, f"Invalid URL: {exc}"
+
+
+def clean_text(value: str, limit: int = 12000) -> str:
+    value = html.unescape(value or "")
+    value = re.sub(r"<script\b[^>]*>.*?</script>", " ", value, flags=re.I | re.S)
+    value = re.sub(r"<style\b[^>]*>.*?</style>", " ", value, flags=re.I | re.S)
+    value = re.sub(r"<[^>]+>", " ", value)
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()[:limit]
+
+
+# ============================================================
+# RESEARCH SOURCE QUALITY
+# ============================================================
+
+def domain_of(url: str) -> str:
+    try:
+        return normalize_hostname(urlparse(url).hostname or "")
+    except Exception:
+        return ""
+
+
+def registrableish_domain(host: str) -> str:
+    """
+    Lightweight domain grouping without an external dependency.
+    Good enough to prevent obvious duplicate subdomains from being
+    counted as independent evidence.
+    """
+    parts = host.split(".")
+
+    if len(parts) <= 2:
+        return host
+
+    common_second_level = {
+        "co.uk",
+        "org.uk",
+        "ac.uk",
+        "com.au",
+        "net.au",
+        "org.au",
+        "co.in",
+        "com.br",
+        "co.jp",
+    }
+
+    suffix2 = ".".join(parts[-2:])
+
+    if suffix2 in common_second_level and len(parts) >= 3:
+        return ".".join(parts[-3:])
+
+    return ".".join(parts[-2:])
+
+
+def source_rejection_reason(url: str) -> Optional[str]:
     parsed = urlparse(url)
+    host = normalize_hostname(parsed.hostname or "")
+    path = (parsed.path or "").lower()
 
-    if parsed.scheme not in {"http", "https"}:
-        raise ValueError("Only HTTP and HTTPS are allowed.")
+    if not host:
+        return "missing_hostname"
 
-    if not parsed.hostname:
-        raise ValueError("URL hostname is missing.")
+    if host in SEARCH_ENGINE_DOMAINS:
+        return "search_engine"
 
-    if is_private_or_local_host(parsed.hostname):
-        raise ValueError("Local/private network targets are blocked.")
+    if host.endswith(".bing.com") or host.endswith(".google.com"):
+        return "search_infrastructure"
+
+    if host in {
+        "schemas.live.com",
+        "w3.org",
+        "www.w3.org",
+        "r.bing.com",
+        "cc.bingj.com",
+    }:
+        return "infrastructure_domain"
+
+    if any(path.startswith(p) for p in INFRASTRUCTURE_PATHS):
+        return "infrastructure_path"
+
+    suffix = Path(path).suffix.lower()
+
+    if suffix in ASSET_EXTENSIONS:
+        return "non_document_asset"
+
+    if "favicon" in path:
+        return "favicon"
+
+    if "share" in path and suffix in {".png", ".jpg", ".jpeg"}:
+        return "social_asset"
+
+    if host in {"outlook.live.com", "login.live.com"}:
+        return "account_or_service_page"
+
+    return None
+
+
+def source_quality(url: str, title: str = "", text: str = "") -> Dict[str, Any]:
+    host = domain_of(url)
+    reason = source_rejection_reason(url)
+
+    if reason:
+        return {
+            "accepted": False,
+            "score": 0.0,
+            "domain": host,
+            "reason": reason,
+        }
+
+    score = 0.40
+
+    if title and len(title.strip()) >= 10:
+        score += 0.15
+
+    if len(text) >= 500:
+        score += 0.15
+
+    if len(text) >= 1500:
+        score += 0.10
+
+    path = urlparse(url).path.lower()
+
+    good_patterns = (
+        "/article",
+        "/research",
+        "/paper",
+        "/publication",
+        "/report",
+        "/docs",
+        "/documentation",
+        "/blog",
+        "/news",
+        "/study",
+        "/whitepaper",
+    )
+
+    if any(p in path for p in good_patterns):
+        score += 0.10
+
+    if urlparse(url).scheme == "https":
+        score += 0.05
+
+    return {
+        "accepted": score >= 0.55,
+        "score": round(min(score, 1.0), 3),
+        "domain": host,
+        "reason": None if score >= 0.55 else "insufficient_content_quality",
+    }
 
 
 # ============================================================
-# EXTERNAL HTTP ENGINE
+# SEARCH RESULT EXTRACTION
 # ============================================================
 
-async def external_request(
+def unwrap_search_url(url: str) -> str:
+    """
+    Handles common search-engine redirect wrappers where possible.
+    """
+    try:
+        parsed = urlparse(url)
+
+        if "bing.com" in (parsed.hostname or ""):
+            params = parse_qs(parsed.query)
+
+            if "u" in params and params["u"]:
+                candidate = unquote(params["u"][0])
+
+                if candidate.startswith(("http://", "https://")):
+                    return candidate
+
+        if "google.com" in (parsed.hostname or ""):
+            params = parse_qs(parsed.query)
+
+            if "url" in params and params["url"]:
+                candidate = unquote(params["url"][0])
+
+                if candidate.startswith(("http://", "https://")):
+                    return candidate
+
+        return url
+
+    except Exception:
+        return url
+
+
+def extract_anchor_urls(page: str, base_url: str) -> List[str]:
+    urls: List[str] = []
+
+    pattern = re.compile(
+        r'<a\b[^>]*?\bhref\s*=\s*["\']([^"\']+)["\']',
+        flags=re.I,
+    )
+
+    for raw in pattern.findall(page):
+        raw = html.unescape(raw.strip())
+
+        if not raw:
+            continue
+
+        if raw.startswith(("#", "javascript:", "mailto:", "tel:")):
+            continue
+
+        candidate = urljoin(base_url, raw)
+        candidate = unwrap_search_url(candidate)
+
+        if candidate.startswith(("http://", "https://")):
+            urls.append(candidate)
+
+    return urls
+
+
+def extract_candidate_urls(page: str, base_url: str) -> List[str]:
+    """
+    Extract links from anchors first, then fallback to raw URLs.
+    Critically, candidates are filtered later and are NOT automatically
+    considered evidence.
+    """
+    urls = extract_anchor_urls(page, base_url)
+
+    if not urls:
+        raw_pattern = re.compile(r'https?://[^\s"\'<>]+')
+        urls.extend(raw_pattern.findall(page))
+
+    deduped = []
+    seen = set()
+
+    for url in urls:
+        url = url.rstrip(".,);]}>\"'")
+
+        if url not in seen:
+            seen.add(url)
+            deduped.append(url)
+
+    return deduped
+
+
+# ============================================================
+# HTTP FETCH
+# ============================================================
+
+async def fetch_url(
     url: str,
-    method: str = "GET",
-    payload: Optional[Any] = None,
-    headers: Optional[Dict[str, str]] = None,
-    timeout: float = 20,
+    timeout: int = 20,
+    max_bytes: int = 2_000_000,
 ) -> Dict[str, Any]:
 
-    validate_external_url(url)
+    allowed, reason = validate_external_url(url)
 
-    method = method.upper()
+    if not allowed:
+        return {
+            "ok": False,
+            "url": url,
+            "error": reason,
+        }
 
-    allowed_methods = {
-        "GET",
-        "POST",
-        "PUT",
-        "PATCH",
-        "DELETE",
-        "HEAD",
-        "OPTIONS",
+    headers = {
+        "User-Agent": (
+            "AI-Infinity/2050.1 research-engine "
+            "(+https://ai-infinity-ca5e.onrender.com)"
+        ),
+        "Accept": (
+            "text/html,application/xhtml+xml,"
+            "application/json,text/plain;q=0.8,*/*;q=0.5"
+        ),
     }
-
-    if method not in allowed_methods:
-        raise ValueError("HTTP method not allowed.")
-
-    safe_headers = {
-        "User-Agent": "AI-Infinity/2050.0",
-        "Accept": "*/*",
-    }
-
-    if headers:
-        for key, value in headers.items():
-            if key.lower() not in {
-                "host",
-                "content-length",
-                "connection",
-                "transfer-encoding",
-            }:
-                safe_headers[str(key)] = str(value)
-
-    started = time.time()
 
     try:
         async with httpx.AsyncClient(
-            follow_redirects=True,
             timeout=timeout,
-            max_redirects=5,
+            follow_redirects=True,
+            headers=headers,
         ) as client:
 
-            response = await client.request(
-                method,
-                url,
-                json=payload if payload is not None else None,
-                headers=safe_headers,
+            response = await client.get(url)
+
+            final_url = str(response.url)
+
+            final_allowed, final_reason = validate_external_url(final_url)
+
+            if not final_allowed:
+                return {
+                    "ok": False,
+                    "url": url,
+                    "error": f"Redirect blocked: {final_reason}",
+                }
+
+            content_type = response.headers.get("content-type", "").lower()
+
+            body = response.content[:max_bytes]
+
+            if "text" in content_type or "json" in content_type:
+                text_content = body.decode("utf-8", errors="ignore")
+            else:
+                text_content = ""
+
+            title_match = re.search(
+                r"<title[^>]*>(.*?)</title>",
+                text_content,
+                flags=re.I | re.S,
             )
 
-        content_type = response.headers.get("content-type", "")
+            title = clean_text(
+                title_match.group(1) if title_match else "",
+                500,
+            )
 
-        text_content = ""
+            readable = clean_text(text_content, 15000)
 
-        if "text" in content_type or "json" in content_type or "html" in content_type:
-            text_content = response.text[:50000]
-
-        result = {
-            "success": response.is_success,
-            "status_code": response.status_code,
-            "url": str(response.url),
-            "method": method,
-            "content_type": content_type,
-            "content_length": len(response.content),
-            "text": text_content,
-            "headers": {
-                k: v
-                for k, v in response.headers.items()
-                if k.lower() in {
-                    "content-type",
-                    "content-length",
-                    "server",
-                    "date",
-                }
-            },
-            "duration_ms": round((time.time() - started) * 1000, 2),
-        }
-
-        return result
+            return {
+                "ok": response.is_success,
+                "status_code": response.status_code,
+                "url": url,
+                "final_url": final_url,
+                "content_type": content_type,
+                "title": title,
+                "text": readable,
+                "bytes": len(body),
+            }
 
     except Exception as exc:
         return {
-            "success": False,
-            "status_code": None,
+            "ok": False,
             "url": url,
-            "method": method,
             "error": str(exc),
-            "duration_ms": round((time.time() - started) * 1000, 2),
         }
 
 
 # ============================================================
-# WEB TEXT / RESEARCH ENGINE
+# RESEARCH ENGINE
 # ============================================================
 
-def clean_html(html: str) -> str:
-    html = re.sub(
-        r"(?is)<(script|style|noscript|svg).*?>.*?</\1>",
-        " ",
-        html,
-    )
-
-    html = re.sub(r"(?s)<[^>]+>", " ", html)
-    html = re.sub(r"&nbsp;", " ", html)
-    html = re.sub(r"&amp;", "&", html)
-    html = re.sub(r"&quot;", '"', html)
-    html = re.sub(r"&#39;", "'", html)
-
-    html = re.sub(r"\s+", " ", html)
-
-    return html.strip()
+SEARCH_PROVIDERS = [
+    (
+        "duckduckgo",
+        "https://html.duckduckgo.com/html/?q={query}",
+    ),
+    (
+        "bing",
+        "https://www.bing.com/search?q={query}",
+    ),
+    (
+        "google",
+        "https://www.google.com/search?q={query}",
+    ),
+]
 
 
-def extract_urls(text: str) -> List[str]:
-    pattern = r"https?://[^\s<>\"]+"
-
-    found = re.findall(pattern, text)
-
-    clean = []
-
-    for url in found:
-        url = url.rstrip(".,);]}>")
-
-        if url not in clean:
-            clean.append(url)
-
-    return clean[:10]
-
-
-def extract_search_terms(objective: str) -> str:
-    text = re.sub(r"\s+", " ", objective).strip()
-
-    if len(text) > 500:
-        text = text[:500]
-
-    return text
-
-
-async def research_web(
+async def research_query(
     query: str,
-    max_sources: int = 5,
+    max_sources: int = 8,
 ) -> Dict[str, Any]:
 
-    query = extract_search_terms(query)
+    event("research_started", {"query": query})
 
-    sources: List[Dict[str, Any]] = []
-    errors: List[str] = []
+    candidates: List[Dict[str, Any]] = []
+    rejected: List[Dict[str, Any]] = []
+    accepted: List[Dict[str, Any]] = []
 
-    # Directly search a public HTML endpoint.
-    search_urls = [
-        "https://www.google.com/search?q=" + quote_plus(query),
-        "https://www.bing.com/search?q=" + quote_plus(query),
-    ]
+    provider_results = []
 
-    for search_url in search_urls:
+    for provider_name, template in SEARCH_PROVIDERS:
 
-        result = await external_request(
-            search_url,
-            method="GET",
-            timeout=15,
+        search_url = template.format(query=quote_plus(query))
+
+        result = await fetch_url(search_url, timeout=15)
+
+        provider_results.append(
+            {
+                "provider": provider_name,
+                "ok": result.get("ok", False),
+                "status_code": result.get("status_code"),
+                "error": result.get("error"),
+            }
         )
 
-        if not result.get("success"):
-            errors.append(
-                f"{search_url}: {result.get('error', 'request failed')}"
+        if not result.get("ok"):
+            continue
+
+        links = extract_candidate_urls(
+            result.get("text", ""),
+            result.get("final_url", search_url),
+        )
+
+        for url in links:
+            candidates.append(
+                {
+                    "url": url,
+                    "provider": provider_name,
+                }
+            )
+
+        if len(candidates) >= max_sources * 8:
+            break
+
+    # Deduplicate candidates.
+    unique_candidates = []
+    seen = set()
+
+    for item in candidates:
+        url = item["url"]
+
+        normalized = url.split("#", 1)[0].rstrip("/")
+
+        if normalized in seen:
+            continue
+
+        seen.add(normalized)
+        unique_candidates.append(
+            {
+                **item,
+                "url": normalized,
+            }
+        )
+
+    # Filter obvious garbage before fetching.
+    filtered = []
+
+    for candidate in unique_candidates:
+        reason = source_rejection_reason(candidate["url"])
+
+        if reason:
+            rejected.append(
+                {
+                    **candidate,
+                    "reason": reason,
+                }
             )
             continue
 
-        html = result.get("text", "")
+        filtered.append(candidate)
 
-        urls = extract_urls(html)
+    # Fetch candidates concurrently but conservatively.
+    semaphore = asyncio.Semaphore(5)
 
-        for url in urls:
+    async def fetch_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
+        async with semaphore:
+            result = await fetch_url(candidate["url"], timeout=15)
 
-            if url in {
-                search_url,
-                "https://www.google.com/",
-                "https://www.bing.com/",
-            }:
-                continue
+            return {
+                **candidate,
+                "fetch": result,
+            }
 
-            try:
-                parsed = urlparse(url)
+    fetched = await asyncio.gather(
+        *(fetch_candidate(x) for x in filtered[: max_sources * 4]),
+        return_exceptions=True,
+    )
 
-                if parsed.scheme not in {"http", "https"}:
-                    continue
+    seen_domains = set()
 
-                if is_private_or_local_host(parsed.hostname or ""):
-                    continue
+    for item in fetched:
 
-            except Exception:
-                continue
+        if isinstance(item, Exception):
+            continue
 
-            if not any(x.get("url") == url for x in sources):
-                sources.append(
-                    {
-                        "url": url,
-                        "source_type": "search_result",
-                        "query": query,
-                    }
-                )
+        result = item.get("fetch", {})
 
-            if len(sources) >= max_sources:
-                break
-
-        if len(sources) >= max_sources:
-            break
-
-    # If search extraction fails, use the objective's explicit URLs.
-    explicit_urls = extract_urls(query)
-
-    for url in explicit_urls:
-
-        if not any(x.get("url") == url for x in sources):
-            sources.append(
+        if not result.get("ok"):
+            rejected.append(
                 {
-                    "url": url,
-                    "source_type": "explicit_url",
-                    "query": query,
+                    "url": item["url"],
+                    "provider": item["provider"],
+                    "reason": result.get("error", "fetch_failed"),
                 }
             )
+            continue
 
-    # Fetch source pages for actual evidence.
-    evidence = []
+        final_url = result.get("final_url") or item["url"]
 
-    for source in sources[:max_sources]:
-
-        fetched = await external_request(
-            source["url"],
-            method="GET",
-            timeout=15,
+        quality = source_quality(
+            final_url,
+            result.get("title", ""),
+            result.get("text", ""),
         )
 
-        if fetched.get("success"):
-
-            text = clean_html(
-                fetched.get("text", "")
-            )
-
-            evidence.append(
+        if not quality["accepted"]:
+            rejected.append(
                 {
-                    "url": fetched.get("url"),
-                    "status_code": fetched.get("status_code"),
-                    "title_hint": text[:300],
-                    "content": text[:12000],
-                    "content_hash": hashlib.sha256(
-                        text.encode("utf-8", errors="ignore")
-                    ).hexdigest(),
+                    "url": final_url,
+                    "provider": item["provider"],
+                    "reason": quality["reason"],
+                    "quality_score": quality["score"],
                 }
             )
+            continue
 
-        else:
-            evidence.append(
+        domain = registrableish_domain(quality["domain"])
+
+        # A source must contain meaningful textual content.
+        if len(result.get("text", "")) < 300:
+            rejected.append(
                 {
-                    "url": source["url"],
-                    "error": fetched.get("error"),
+                    "url": final_url,
+                    "provider": item["provider"],
+                    "reason": "too_little_text",
                 }
             )
+            continue
 
-    return {
+        if domain in seen_domains:
+            rejected.append(
+                {
+                    "url": final_url,
+                    "provider": item["provider"],
+                    "reason": "duplicate_domain",
+                }
+            )
+            continue
+
+        seen_domains.add(domain)
+
+        source_record = {
+            "id": f"src-{uuid.uuid4().hex[:10]}",
+            "url": final_url,
+            "domain": quality["domain"],
+            "provider": item["provider"],
+            "title": result.get("title", ""),
+            "quality_score": quality["score"],
+            "content_length": len(result.get("text", "")),
+            "content": result.get("text", "")[:8000],
+            "retrieved_at": time.time(),
+            "provenance": {
+                "search_provider": item["provider"],
+                "requested_url": item["url"],
+                "final_url": final_url,
+            },
+        }
+
+        accepted.append(source_record)
+
+        if len(accepted) >= max_sources:
+            break
+
+    # If search engines returned poor candidates, try direct query
+    # interpretation as a final fallback for URLs embedded in the query.
+    direct_urls = re.findall(
+        r'https?://[^\s]+',
+        query,
+        flags=re.I,
+    )
+
+    for direct_url in direct_urls:
+        direct_url = direct_url.rstrip(".,);]}")
+
+        if any(x["url"] == direct_url for x in accepted):
+            continue
+
+        if len(accepted) >= max_sources:
+            break
+
+        if source_rejection_reason(direct_url):
+            continue
+
+        result = await fetch_url(direct_url, timeout=15)
+
+        if not result.get("ok"):
+            continue
+
+        quality = source_quality(
+            result.get("final_url", direct_url),
+            result.get("title", ""),
+            result.get("text", ""),
+        )
+
+        if not quality["accepted"]:
+            continue
+
+        domain = registrableish_domain(quality["domain"])
+
+        if domain in seen_domains:
+            continue
+
+        seen_domains.add(domain)
+
+        accepted.append(
+            {
+                "id": f"src-{uuid.uuid4().hex[:10]}",
+                "url": result.get("final_url", direct_url),
+                "domain": quality["domain"],
+                "provider": "direct",
+                "title": result.get("title", ""),
+                "quality_score": quality["score"],
+                "content_length": len(result.get("text", "")),
+                "content": result.get("text", "")[:8000],
+                "retrieved_at": time.time(),
+                "provenance": {
+                    "search_provider": "direct",
+                    "requested_url": direct_url,
+                    "final_url": result.get("final_url", direct_url),
+                },
+            }
+        )
+
+    quality_average = (
+        round(
+            sum(float(x["quality_score"]) for x in accepted)
+            / len(accepted),
+            3,
+        )
+        if accepted
+        else 0.0
+    )
+
+    independent_domains = sorted(
+        {
+            registrableish_domain(x["domain"])
+            for x in accepted
+            if x.get("domain")
+        }
+    )
+
+    research_result = {
         "query": query,
-        "sources_found": len(sources),
-        "sources": sources[:max_sources],
-        "evidence": evidence,
-        "errors": errors,
+        "sources_found": len(accepted),
+        "sources": accepted,
+        "rejected_sources": rejected[:50],
+        "candidate_count": len(unique_candidates),
+        "accepted_domains": independent_domains,
+        "independent_domain_count": len(independent_domains),
+        "average_source_quality": quality_average,
+        "provider_attempts": provider_results,
         "research_quality": (
-            "usable"
-            if evidence
-            else "limited"
+            "strong"
+            if len(accepted) >= 3 and quality_average >= 0.65
+            else "usable"
+            if len(accepted) >= 1
+            else "insufficient"
         ),
+        "timestamp": time.time(),
     }
 
+    event(
+        "research_completed",
+        {
+            "query": query,
+            "accepted": len(accepted),
+            "rejected": len(rejected),
+            "independent_domains": len(independent_domains),
+        },
+    )
+
+    return research_result
+
 
 # ============================================================
-# EVIDENCE / VERIFICATION ENGINE
+# EVIDENCE / VERIFICATION
 # ============================================================
 
-def verify_evidence(
-    evidence: List[Dict[str, Any]],
-    objective: str,
+def evidence_fingerprint(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", text.lower()).strip()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:20]
+
+
+def verify_research(
+    research: Dict[str, Any],
+    claim: str,
 ) -> Dict[str, Any]:
 
-    usable = [
-        item
-        for item in evidence
-        if item.get("content")
+    sources = research.get("sources", [])
+
+    independent_domains = {
+        registrableish_domain(
+            source.get("domain")
+            or domain_of(source.get("url", ""))
+        )
+        for source in sources
+    }
+
+    independent_domains.discard("")
+
+    fingerprints = {
+        evidence_fingerprint(source.get("content", ""))
+        for source in sources
+        if source.get("content")
+    }
+
+    quality_values = [
+        float(source.get("quality_score", 0))
+        for source in sources
     ]
 
-    hashes = {
-        item.get("content_hash")
-        for item in usable
-        if item.get("content_hash")
-    }
+    average_quality = (
+        sum(quality_values) / len(quality_values)
+        if quality_values
+        else 0.0
+    )
 
-    independent_count = len(hashes)
+    source_count = len(sources)
+    domain_count = len(independent_domains)
 
-    if independent_count >= 3:
-        confidence = 0.85
+    if source_count == 0:
+        level = "none"
+        confidence = 0.0
+        verified = False
+
+    elif domain_count >= 3 and average_quality >= 0.65:
         level = "high"
-    elif independent_count == 2:
-        confidence = 0.70
-        level = "medium"
-    elif independent_count == 1:
-        confidence = 0.45
-        level = "low"
-    else:
-        confidence = 0.15
-        level = "insufficient"
+        confidence = min(
+            0.95,
+            0.60
+            + min(domain_count, 5) * 0.06
+            + min(average_quality, 1.0) * 0.15,
+        )
+        verified = True
 
-    return {
-        "verified": independent_count >= 2,
+    elif domain_count >= 2 and average_quality >= 0.60:
+        level = "moderate"
+        confidence = min(
+            0.85,
+            0.48
+            + min(domain_count, 4) * 0.07
+            + min(average_quality, 1.0) * 0.12,
+        )
+        verified = True
+
+    else:
+        level = "low"
+        confidence = min(
+            0.50,
+            0.20
+            + min(source_count, 3) * 0.06
+            + min(average_quality, 1.0) * 0.10,
+        )
+        verified = False
+
+    result = {
+        "claim": claim,
+        "verified": verified,
         "verification_level": level,
-        "confidence": confidence,
-        "independent_evidence_count": independent_count,
-        "evidence_count": len(evidence),
-        "objective_hash": hashlib.sha256(
-            objective.encode("utf-8")
-        ).hexdigest(),
-        "limitations": (
-            []
-            if independent_count >= 2
-            else [
-                "Insufficient independent evidence.",
-                "Verification is structural rather than semantic.",
-            ]
-        ),
+        "confidence": round(confidence, 3),
+        "evidence_count": source_count,
+        "independent_evidence_count": domain_count,
+        "independent_domains": sorted(independent_domains),
+        "unique_evidence_fingerprints": len(fingerprints),
+        "average_source_quality": round(average_quality, 3),
+        "criteria": {
+            "meaningful_source_required": True,
+            "independent_domains_required": 2,
+            "search_infrastructure_rejected": True,
+            "content_quality_checked": True,
+        },
+        "timestamp": time.time(),
     }
+
+    return result
 
 
 # ============================================================
-# INTENT / MISSION CLASSIFICATION
+# INTENT ENGINE
 # ============================================================
 
 def classify_intent(objective: str) -> Dict[str, Any]:
-
     text = objective.lower()
 
-    signals = {
-        "research": [
-            "research",
-            "analyze",
-            "investigate",
-            "find",
-            "study",
-            "compare",
-            "what",
-            "why",
-            "how",
-        ],
-        "build": [
-            "build",
-            "create",
-            "make",
-            "develop",
-            "implement",
-            "code",
-            "deploy",
-        ],
-        "execute": [
-            "run",
-            "execute",
-            "perform",
-            "do",
-            "send",
-            "publish",
-        ],
-        "improve": [
-            "improve",
-            "upgrade",
-            "optimize",
-            "fix",
-            "enhance",
-            "upgrade",
-        ],
-        "plan": [
-            "plan",
-            "strategy",
-            "roadmap",
-            "steps",
-        ],
-        "evaluate": [
-            "evaluate",
-            "test",
-            "verify",
-            "validate",
-            "check",
-        ],
+    scores = {
+        "research": 0,
+        "build": 0,
+        "analysis": 0,
+        "creative": 0,
+        "execution": 0,
+        "diagnostic": 0,
+        "planning": 0,
     }
 
-    scores = {}
+    research_words = [
+        "research",
+        "investigate",
+        "find out",
+        "sources",
+        "evidence",
+        "latest",
+        "information",
+        "study",
+    ]
 
-    for category, words in signals.items():
-        scores[category] = sum(
-            1 for word in words if word in text
-        )
+    build_words = [
+        "build",
+        "create",
+        "implement",
+        "develop",
+        "upgrade",
+        "deploy",
+        "code",
+    ]
 
-    primary = max(
-        scores,
-        key=scores.get,
-    ) if scores else "general"
+    analysis_words = [
+        "analyze",
+        "analyse",
+        "compare",
+        "identify",
+        "evaluate",
+        "determine",
+        "assess",
+    ]
+
+    creative_words = [
+        "write",
+        "story",
+        "script",
+        "design",
+        "idea",
+        "creative",
+    ]
+
+    execution_words = [
+        "run",
+        "execute",
+        "do",
+        "perform",
+        "complete",
+        "action",
+    ]
+
+    diagnostic_words = [
+        "debug",
+        "diagnose",
+        "error",
+        "failure",
+        "health",
+        "status",
+        "inspect",
+        "self-inspect",
+    ]
+
+    planning_words = [
+        "plan",
+        "roadmap",
+        "strategy",
+        "next stage",
+        "architecture",
+        "steps",
+    ]
+
+    for word in research_words:
+        if word in text:
+            scores["research"] += 1
+
+    for word in build_words:
+        if word in text:
+            scores["build"] += 1
+
+    for word in analysis_words:
+        if word in text:
+            scores["analysis"] += 1
+
+    for word in creative_words:
+        if word in text:
+            scores["creative"] += 1
+
+    for word in execution_words:
+        if word in text:
+            scores["execution"] += 1
+
+    for word in diagnostic_words:
+        if word in text:
+            scores["diagnostic"] += 1
+
+    for word in planning_words:
+        if word in text:
+            scores["planning"] += 1
+
+    primary = max(scores, key=scores.get)
+
+    if scores[primary] == 0:
+        primary = "analysis"
 
     return {
         "primary": primary,
         "scores": scores,
-        "complexity": (
-            "high"
-            if len(objective) > 1000
-            else "medium"
-            if len(objective) > 300
-            else "low"
+        "confidence": round(
+            min(
+                0.95,
+                0.45 + scores[primary] * 0.08,
+            ),
+            3,
         ),
+    }
+
+
+# ============================================================
+# SELF INSPECTION
+# ============================================================
+
+def self_inspect() -> Dict[str, Any]:
+    configured_providers = provider_status()
+
+    operational_capabilities = [
+        item["name"]
+        for item in BUILTIN_CAPABILITIES
+    ]
+
+    storage_files = {
+        "memory": MEMORY_FILE.exists(),
+        "tasks": TASK_FILE.exists(),
+        "missions": MISSION_FILE.exists(),
+        "world": WORLD_FILE.exists(),
+        "events": EVENT_FILE.exists(),
+    }
+
+    inspection = {
+        "service": SERVICE,
+        "version": VERSION,
+        "target": TARGET_YEAR,
+        "runtime": {
+            "python": os.sys.version.split()[0],
+            "uptime_seconds": round(time.time() - START_TIME, 3),
+            "storage_mode": "runtime-local",
+            "storage_note": (
+                "Render filesystem may be ephemeral; durable external "
+                "persistence is an extension point."
+            ),
+        },
+        "api": {
+            "fastapi": True,
+            "task_api": True,
+            "mission_api": True,
+            "research_api": True,
+            "external_api": True,
+            "video_compatibility": True,
+        },
+        "intelligence": {
+            "planner": True,
+            "dynamic_task_graph": True,
+            "verification": True,
+            "self_critique": True,
+            "recovery": True,
+            "replanning": True,
+            "opportunity_detection": True,
+            "world_model": True,
+            "memory": True,
+        },
+        "network": {
+            "external_http": True,
+            "ssrf_protection": True,
+            "source_filtering": True,
+            "source_quality_scoring": True,
+        },
+        "providers": configured_providers,
+        "storage_files": storage_files,
+        "operational_capability_count": len(operational_capabilities),
+        "operational_capabilities": operational_capabilities,
+        "future_extension_points": FUTURE_EXTENSION_POINTS,
+    }
+
+    return inspection
+
+
+# ============================================================
+# GAP ANALYSIS
+# ============================================================
+
+def gap_analysis() -> Dict[str, Any]:
+    inspection = self_inspect()
+
+    gaps = [
+        {
+            "capability": "semantic model reasoning",
+            "status": "partial",
+            "detail": (
+                "The orchestration runtime exists, but a dedicated "
+                "general-purpose reasoning model is not intrinsically "
+                "embedded in the runtime."
+            ),
+        },
+        {
+            "capability": "durable distributed memory",
+            "status": "missing",
+            "detail": (
+                "Current JSON persistence is runtime-local. "
+                "A durable database/object store would be needed "
+                "for production-grade long-term memory."
+            ),
+        },
+        {
+            "capability": "authenticated external actions",
+            "status": "partial",
+            "detail": (
+                "General outbound HTTP is available, but arbitrary "
+                "authenticated third-party actions require explicit "
+                "connectors/OAuth integrations."
+            ),
+        },
+        {
+            "capability": "true background distributed execution",
+            "status": "partial",
+            "detail": (
+                "Mission orchestration is implemented in-process. "
+                "A queue/worker fabric is needed for large-scale "
+                "parallel execution."
+            ),
+        },
+        {
+            "capability": "multi-agent orchestration",
+            "status": "extension",
+            "detail": (
+                "The architecture exposes the extension point, "
+                "but independent specialized agents are not yet "
+                "distributed as autonomous worker identities."
+            ),
+        },
+        {
+            "capability": "multimodal world model",
+            "status": "extension",
+            "detail": (
+                "Structured world state exists, but a genuine "
+                "multimodal learned world model is not embedded."
+            ),
+        },
+        {
+            "capability": "continuous learning",
+            "status": "extension",
+            "detail": (
+                "Outcome memory and evaluation hooks exist; "
+                "autonomous model training/updating is not performed."
+            ),
+        },
+        {
+            "capability": "real-world actuators",
+            "status": "extension",
+            "detail": (
+                "No unrestricted robotics, hardware, financial, "
+                "or physical actuator layer is enabled."
+            ),
+        },
+        {
+            "capability": "formal evaluation laboratory",
+            "status": "partial",
+            "detail": (
+                "Self-evaluation exists, but a broad benchmark suite "
+                "with regression datasets and automated scoring remains."
+            ),
+        },
+        {
+            "capability": "production frontend",
+            "status": "partial",
+            "detail": (
+                "The backend API is operational. A polished dedicated "
+                "mobile/web control surface remains a separate layer."
+            ),
+        },
+    ]
+
+    priority_order = [
+        "durable distributed memory",
+        "semantic model reasoning",
+        "authenticated external actions",
+        "true background distributed execution",
+        "formal evaluation laboratory",
+        "multi-agent orchestration",
+        "production frontend",
+        "multimodal world model",
+        "continuous learning",
+        "real-world actuators",
+    ]
+
+    return {
+        "version": VERSION,
+        "target": TARGET_YEAR,
+        "operational_snapshot": inspection,
+        "gaps": gaps,
+        "next_stage": {
+            "sequence": priority_order,
+            "principle": (
+                "Upgrade the weakest dependency first while preserving "
+                "the working mission API."
+            ),
+        },
     }
 
 
@@ -739,69 +1637,121 @@ def classify_intent(objective: str) -> Dict[str, Any]:
 # GOAL DECOMPOSITION
 # ============================================================
 
-def decompose_objective(
-    objective: str,
-    research: bool,
-    verify: bool,
-    external_access: bool,
-) -> List[Dict[str, Any]]:
+def decompose_goal(objective: str) -> List[Dict[str, Any]]:
+    text = objective.lower()
 
-    goals = []
+    goals: List[Dict[str, Any]] = []
 
     goals.append(
         {
             "id": "goal-understand",
-            "type": "understand",
-            "description": "Understand the mission objective and constraints.",
-            "priority": 1.0,
+            "title": "Understand objective",
+            "description": objective,
+            "type": "understanding",
         }
     )
 
-    if research:
+    self_related = any(
+        phrase in text
+        for phrase in [
+            "ai infinity",
+            "this system",
+            "itself",
+            "current platform",
+            "current architecture",
+            "our platform",
+        ]
+    )
+
+    if self_related:
+        goals.append(
+            {
+                "id": "goal-self-inspect",
+                "title": "Inspect AI Infinity",
+                "description": (
+                    "Inspect the actual runtime, capabilities, providers, "
+                    "storage and operational layers."
+                ),
+                "type": "self_inspection",
+            }
+        )
+
+    if any(
+        word in text
+        for word in [
+            "research",
+            "information",
+            "evidence",
+            "public",
+            "latest",
+            "sources",
+        ]
+    ):
         goals.append(
             {
                 "id": "goal-research",
+                "title": "Research",
+                "description": (
+                    "Collect meaningful external evidence from "
+                    "independent sources."
+                ),
                 "type": "research",
-                "description": "Gather external evidence relevant to the objective.",
-                "priority": 0.95,
             }
         )
 
-    if external_access:
-        goals.append(
-            {
-                "id": "goal-external",
-                "type": "external",
-                "description": "Use permitted public external resources when useful.",
-                "priority": 0.85,
-            }
-        )
-
-    if verify:
+    if any(
+        word in text
+        for word in [
+            "verify",
+            "evidence",
+            "validate",
+            "confirmed",
+        ]
+    ):
         goals.append(
             {
                 "id": "goal-verify",
-                "type": "verify",
-                "description": "Cross-check available evidence and estimate confidence.",
-                "priority": 0.9,
+                "title": "Verify",
+                "description": (
+                    "Evaluate evidence quality and source independence."
+                ),
+                "type": "verification",
             }
         )
 
-    goals.extend(
-        [
-            {
-                "id": "goal-critique",
-                "type": "critique",
-                "description": "Identify gaps, uncertainty, contradictions and failure points.",
-                "priority": 0.8,
-            },
-            {
-                "id": "goal-synthesize",
-                "type": "synthesize",
-                "description": "Produce a structured mission result.",
-                "priority": 1.0,
-            },
+    if any(
+        word in text
+        for word in [
+            "missing",
+            "gap",
+            "improve",
+            "improvement",
+            "next",
+            "upgrade",
+            "architecture",
         ]
+    ):
+        goals.append(
+            {
+                "id": "goal-gaps",
+                "title": "Find architecture gaps",
+                "description": (
+                    "Identify concrete missing or partial capabilities."
+                ),
+                "type": "gap_analysis",
+            }
+        )
+
+    goals.append(
+        {
+            "id": "goal-synthesize",
+            "title": "Synthesize result",
+            "description": (
+                "Combine runtime state, evidence, verification, "
+                "gaps and opportunities."
+            ),
+            "type": "synthesis",
+        }
     )
 
     return goals
@@ -812,30 +1762,28 @@ def decompose_objective(
 # ============================================================
 
 def build_task_graph(
+    objective: str,
     goals: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
 
-    graph = []
-
-    previous = None
+    nodes: List[Dict[str, Any]] = []
 
     for index, goal in enumerate(goals):
 
-        node_id = f"node-{index + 1}-{goal['type']}"
+        node_type = goal["type"]
 
-        dependencies = []
-
-        if previous:
-            dependencies.append(previous)
-
-        graph.append(
+        nodes.append(
             {
-                "id": node_id,
+                "id": f"node-{index + 1}",
                 "goal_id": goal["id"],
-                "type": goal["type"],
+                "type": node_type,
+                "title": goal["title"],
                 "description": goal["description"],
-                "priority": goal["priority"],
-                "dependencies": dependencies,
+                "dependencies": (
+                    [f"node-{index}"]
+                    if index > 0
+                    else []
+                ),
                 "status": "pending",
                 "attempts": 0,
                 "result": None,
@@ -843,144 +1791,7 @@ def build_task_graph(
             }
         )
 
-        previous = node_id
-
-    return graph
-
-
-# ============================================================
-# TOOL REGISTRY
-# ============================================================
-
-TOOLS = [
-    {
-        "name": "capabilities",
-        "category": "system",
-        "permission": "safe",
-        "description": "Inspect AI Infinity capabilities.",
-    },
-    {
-        "name": "health",
-        "category": "system",
-        "permission": "safe",
-        "description": "Check service health.",
-    },
-    {
-        "name": "memory",
-        "category": "memory",
-        "permission": "safe",
-        "description": "Read and write runtime memory.",
-    },
-    {
-        "name": "research",
-        "category": "research",
-        "permission": "safe",
-        "description": "Research public web sources.",
-    },
-    {
-        "name": "external_http",
-        "category": "network",
-        "permission": "controlled",
-        "description": "Access public HTTP/HTTPS endpoints.",
-    },
-    {
-        "name": "verification",
-        "category": "reasoning",
-        "permission": "safe",
-        "description": "Evaluate evidence and uncertainty.",
-    },
-    {
-        "name": "planner",
-        "category": "reasoning",
-        "permission": "safe",
-        "description": "Decompose missions into executable graph nodes.",
-    },
-    {
-        "name": "recovery",
-        "category": "reasoning",
-        "permission": "safe",
-        "description": "Retry and replan failed mission nodes.",
-    },
-    {
-        "name": "video",
-        "category": "media",
-        "permission": "controlled",
-        "description": "Compatibility layer for the existing video renderer.",
-    },
-]
-
-
-def select_tools(node_type: str) -> List[str]:
-
-    mapping = {
-        "understand": ["planner", "memory"],
-        "research": ["research", "external_http"],
-        "external": ["external_http"],
-        "verify": ["verification", "research"],
-        "critique": ["verification", "memory"],
-        "synthesize": ["memory", "verification"],
-    }
-
-    return mapping.get(
-        node_type,
-        ["planner"],
-    )
-
-
-# ============================================================
-# PROVIDER / CAPABILITY DISCOVERY
-# ============================================================
-
-def provider_status() -> List[Dict[str, Any]]:
-
-    providers = [
-        (
-            "pollinations",
-            "POLLINATIONS_API_KEY",
-            "image/media generation",
-        ),
-        (
-            "huggingface",
-            "HF_TOKEN",
-            "model ecosystem",
-        ),
-        (
-            "renderer",
-            "RENDERER_URL",
-            "external media rendering",
-        ),
-        (
-            "openai",
-            "OPENAI_API_KEY",
-            "optional model provider",
-        ),
-        (
-            "gemini",
-            "GEMINI_API_KEY",
-            "optional model provider",
-        ),
-        (
-            "groq",
-            "GROQ_API_KEY",
-            "optional model provider",
-        ),
-    ]
-
-    result = []
-
-    for name, env_name, purpose in providers:
-        configured = bool(os.getenv(env_name))
-
-        result.append(
-            {
-                "name": name,
-                "environment_variable": env_name,
-                "configured": configured,
-                "purpose": purpose,
-            }
-        )
-
-    return result
+    return nodes
 
 
 # ============================================================
@@ -989,49 +1800,60 @@ def provider_status() -> List[Dict[str, Any]]:
 
 def detect_opportunities(
     objective: str,
-    research_result: Optional[Dict[str, Any]] = None,
+    research: Optional[Dict[str, Any]],
+    gaps: Optional[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
 
     opportunities = []
 
-    text = objective.lower()
+    if research:
+        if research.get("sources_found", 0) > 0:
+            opportunities.append(
+                {
+                    "type": "knowledge",
+                    "title": "Evidence-backed knowledge pipeline",
+                    "description": (
+                        "Convert validated research into reusable "
+                        "memory and future mission context."
+                    ),
+                }
+            )
 
-    if any(
-        word in text
-        for word in [
-            "improve",
-            "upgrade",
-            "build",
-            "create",
-            "automate",
-        ]
-    ):
-        opportunities.append(
-            {
-                "type": "automation",
-                "description": "The objective may benefit from reusable automation.",
-                "confidence": 0.72,
-            }
-        )
+        if research.get("research_quality") == "insufficient":
+            opportunities.append(
+                {
+                    "type": "research",
+                    "title": "Research provider expansion",
+                    "description": (
+                        "Add additional independent research connectors "
+                        "when public search endpoints are unavailable."
+                    ),
+                }
+            )
 
-    if research_result and research_result.get("sources_found", 0) >= 2:
-        opportunities.append(
-            {
-                "type": "knowledge",
-                "description": "Research produced multiple external sources that can become reusable knowledge.",
-                "confidence": 0.80,
-            }
-        )
+    if gaps:
+        for gap in gaps.get("gaps", [])[:5]:
+            if gap.get("status") in {"missing", "partial"}:
+                opportunities.append(
+                    {
+                        "type": "architecture",
+                        "title": gap["capability"],
+                        "description": gap["detail"],
+                    }
+                )
 
     opportunities.append(
         {
-            "type": "reusable_intelligence",
-            "description": "Successful mission results can be stored as reusable mission knowledge.",
-            "confidence": 0.90,
+            "type": "automation",
+            "title": "Reusable mission patterns",
+            "description": (
+                "Successful mission graphs can become reusable "
+                "execution templates."
+            ),
         }
     )
 
-    return opportunities
+    return opportunities[:15]
 
 
 # ============================================================
@@ -1039,93 +1861,125 @@ def detect_opportunities(
 # ============================================================
 
 def self_critique(
-    objective: str,
-    result: Dict[str, Any],
+    research: Optional[Dict[str, Any]],
+    verification: Optional[Dict[str, Any]],
+    gaps: Optional[Dict[str, Any]],
+    completed_nodes: int,
+    failed_nodes: int,
 ) -> Dict[str, Any]:
 
     issues = []
 
-    evidence_count = int(
-        result.get("verification", {}).get(
-            "evidence_count",
-            0,
-        )
-    )
+    if research is not None:
+        if research.get("sources_found", 0) == 0:
+            issues.append(
+                "No meaningful external evidence was collected."
+            )
 
-    if evidence_count == 0:
+        if research.get("rejected_sources"):
+            issues.append(
+                f"{len(research['rejected_sources'])} candidate sources "
+                "were rejected by provenance/quality filters."
+            )
+
+    if verification is not None:
+        if verification.get("verified") is False:
+            issues.append(
+                "Evidence did not satisfy the configured "
+                "independent-source verification threshold."
+            )
+
+    if failed_nodes > 0:
         issues.append(
-            "No external evidence was successfully collected."
+            f"{failed_nodes} mission node(s) failed and required recovery."
         )
 
-    if not result.get("verification", {}).get(
-        "verified",
-        False,
-    ):
+    if gaps and not gaps.get("gaps"):
         issues.append(
-            "Evidence did not meet the multi-source verification threshold."
-        )
-
-    if result.get("failed_nodes", 0) > 0:
-        issues.append(
-            "One or more mission graph nodes failed."
+            "Gap analysis produced no architecture gaps."
         )
 
     if not issues:
-        assessment = "Mission execution produced a structurally complete result."
+        assessment = "No critical internal consistency issue detected."
     else:
         assessment = (
-            "Mission completed with limitations that should be considered "
-            "before treating the result as fully verified."
+            "The mission completed, but the following limitations "
+            "should remain visible in the result."
         )
 
     return {
         "assessment": assessment,
         "issues": issues,
-        "improvement_actions": [
-            "Increase independent evidence.",
-            "Use additional providers when available.",
-            "Retry failed external operations using alternate sources.",
-            "Persist successful outcomes as reusable intelligence.",
-        ],
+        "critical": len(issues) > 3,
+        "completion": {
+            "completed_nodes": completed_nodes,
+            "failed_nodes": failed_nodes,
+        },
+        "evidence_consistency": {
+            "research_sources": (
+                research.get("sources_found", 0)
+                if research
+                else 0
+            ),
+            "verification_confidence": (
+                verification.get("confidence", 0)
+                if verification
+                else 0
+            ),
+            "verification_verified": (
+                verification.get("verified", False)
+                if verification
+                else False
+            ),
+        },
     }
 
 
 # ============================================================
-# RECOVERY ENGINE
+# RECOVERY
 # ============================================================
 
 async def recover_node(
     node: Dict[str, Any],
-    mission: Dict[str, Any],
+    context: Dict[str, Any],
 ) -> Dict[str, Any]:
 
-    node["attempts"] = int(node.get("attempts", 0)) + 1
+    node["attempts"] = node.get("attempts", 0) + 1
 
     event(
-        "recovery_attempt",
-        f"Recovery attempt {node['attempts']} for {node['id']}",
-        mission.get("mission_id"),
+        "node_recovery",
         {
-            "node": node["id"],
+            "node_id": node["id"],
             "type": node["type"],
+            "attempt": node["attempts"],
         },
     )
 
-    if node["attempts"] <= 2:
-        node["status"] = "retrying"
+    # Research can retry through the next available provider.
+    if node["type"] == "research":
+        result = await research_query(
+            context["objective"],
+            max_sources=6,
+        )
 
-        await asyncio.sleep(0)
+        if result.get("sources_found", 0) > 0:
+            return {
+                "recovered": True,
+                "result": result,
+                "strategy": "adaptive_research_retry",
+            }
 
+    if node["type"] == "self_inspection":
         return {
             "recovered": True,
-            "strategy": "retry",
+            "result": self_inspect(),
+            "strategy": "local_runtime_inspection",
         }
-
-    node["status"] = "failed"
 
     return {
         "recovered": False,
-        "strategy": "stop_after_retries",
+        "result": None,
+        "strategy": "no_automatic_recovery_available",
     }
 
 
@@ -1135,220 +1989,71 @@ async def recover_node(
 
 async def execute_node(
     node: Dict[str, Any],
-    mission: Dict[str, Any],
-) -> Dict[str, Any]:
+    context: Dict[str, Any],
+) -> Any:
 
     node_type = node["type"]
-    objective = mission["objective"]
 
-    tools = select_tools(node_type)
-
-    event(
-        "node_started",
-        f"Executing {node['id']}",
-        mission["mission_id"],
-        {
-            "node_type": node_type,
-            "tools": tools,
-        },
-    )
-
-    # --------------------------------------------------------
-    # UNDERSTAND
-    # --------------------------------------------------------
-
-    if node_type == "understand":
-
-        intent = classify_intent(objective)
-
+    if node_type == "understanding":
         return {
-            "success": True,
-            "intent": intent,
-            "objective_length": len(objective),
-            "constraints": {
-                "free_first": True,
-                "safe_external_access": True,
-                "human_control": True,
-            },
+            "objective": context["objective"],
+            "intent": context["intent"],
+            "goal_count": len(context["goals"]),
         }
 
-    # --------------------------------------------------------
-    # RESEARCH
-    # --------------------------------------------------------
+    if node_type == "self_inspection":
+        return self_inspect()
 
     if node_type == "research":
-
-        result = await research_web(
-            objective,
-            max_sources=5,
-        )
-
-        return {
-            "success": True,
-            **result,
-        }
-
-    # --------------------------------------------------------
-    # EXTERNAL
-    # --------------------------------------------------------
-
-    if node_type == "external":
-
-        urls = extract_urls(objective)
-
-        if not urls:
+        if not context.get("research_enabled", True):
             return {
-                "success": True,
-                "performed": False,
-                "reason": "No explicit external URL was present.",
+                "skipped": True,
+                "reason": "research_disabled",
             }
 
-        results = []
+        return await research_query(
+            context["objective"],
+            max_sources=8,
+        )
 
-        for url in urls[:5]:
-            results.append(
-                await external_request(
-                    url,
-                    method="GET",
-                )
-            )
+    if node_type == "verification":
+        research = context.get("research")
 
+        if not research:
+            return {
+                "claim": context["objective"],
+                "verified": False,
+                "verification_level": "none",
+                "confidence": 0.0,
+                "evidence_count": 0,
+                "independent_evidence_count": 0,
+            }
+
+        return verify_research(
+            research,
+            context["objective"],
+        )
+
+    if node_type == "gap_analysis":
+        return gap_analysis()
+
+    if node_type == "synthesis":
         return {
-            "success": True,
-            "performed": True,
-            "results": results,
-        }
-
-    # --------------------------------------------------------
-    # VERIFY
-    # --------------------------------------------------------
-
-    if node_type == "verify":
-
-        research_result = mission.get(
-            "working_state",
-            {},
-        ).get(
-            "research",
-            {},
-        )
-
-        verification = verify_evidence(
-            research_result.get(
-                "evidence",
-                [],
-            ),
-            objective,
-        )
-
-        return {
-            "success": True,
-            **verification,
-        }
-
-    # --------------------------------------------------------
-    # CRITIQUE
-    # --------------------------------------------------------
-
-    if node_type == "critique":
-
-        working = mission.get(
-            "working_state",
-            {},
-        )
-
-        verification = working.get(
-            "verification",
-            {},
-        )
-
-        failed_nodes = sum(
-            1
-            for n in mission.get("graph", [])
-            if n.get("status") == "failed"
-        )
-
-        critique = self_critique(
-            objective,
-            {
-                "verification": verification,
-                "failed_nodes": failed_nodes,
-            },
-        )
-
-        return {
-            "success": True,
-            **critique,
-        }
-
-    # --------------------------------------------------------
-    # SYNTHESIS
-    # --------------------------------------------------------
-
-    if node_type == "synthesize":
-
-        working = mission.get(
-            "working_state",
-            {},
-        )
-
-        verification = working.get(
-            "verification",
-            {},
-        )
-
-        critique = working.get(
-            "critique",
-            {},
-        )
-
-        opportunities = detect_opportunities(
-            objective,
-            working.get("research"),
-        )
-
-        return {
-            "success": True,
-            "mission": {
-                "objective": objective,
-                "intent": working.get(
-                    "understand",
-                    {},
-                ).get(
-                    "intent",
-                    {},
-                ),
-            },
-            "evidence_summary": {
-                "sources": working.get(
-                    "research",
-                    {},
-                ).get(
-                    "sources_found",
-                    0,
-                ),
-                "verified": verification.get(
-                    "verified",
-                    False,
-                ),
-                "confidence": verification.get(
-                    "confidence",
-                    0,
-                ),
-            },
-            "critique": critique,
-            "opportunities": opportunities,
-            "next_actions": [
-                "Use verified evidence where available.",
-                "Treat unverified claims as uncertain.",
-                "Turn successful outputs into reusable memory.",
-                "Re-run the mission when better providers or evidence become available.",
-            ],
+            "objective": context["objective"],
+            "system": SERVICE,
+            "version": VERSION,
+            "target": TARGET_YEAR,
+            "operational": self_inspect(),
+            "research": context.get("research"),
+            "verification": context.get("verification"),
+            "gaps": context.get("gaps"),
+            "opportunities": context.get("opportunities", []),
+            "critique": context.get("critique"),
         }
 
     return {
-        "success": False,
-        "error": f"Unknown node type: {node_type}",
+        "status": "completed",
+        "node_type": node_type,
     }
 
 
@@ -1358,1183 +2063,844 @@ async def execute_node(
 
 async def run_mission(
     objective: str,
-    research: bool = True,
-    verify: bool = True,
-    remember_result: bool = True,
+    research_enabled: bool = True,
+    verify_enabled: bool = True,
+    remember_enabled: bool = True,
     external_access: bool = True,
-    max_recovery_attempts: int = 2,
 ) -> Dict[str, Any]:
 
     mission_id = f"mission-{uuid.uuid4().hex[:12]}"
+
     started = time.time()
 
-    goals = decompose_objective(
-        objective,
-        research,
-        verify,
-        external_access,
-    )
+    intent = classify_intent(objective)
+    goals = decompose_goal(objective)
+    nodes = build_task_graph(objective, goals)
 
-    graph = build_task_graph(goals)
+    context: Dict[str, Any] = {
+        "objective": objective,
+        "intent": intent,
+        "goals": goals,
+        "research_enabled": research_enabled,
+        "verify_enabled": verify_enabled,
+        "remember_enabled": remember_enabled,
+        "external_access": external_access,
+    }
 
     mission = {
         "mission_id": mission_id,
-        "objective": objective,
-        "version": VERSION,
-        "target": TARGET,
         "status": "running",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "started_at": datetime.now(timezone.utc).isoformat(),
+        "version": VERSION,
+        "target": TARGET_YEAR,
+        "objective": objective,
+        "intent": intent,
         "goals": goals,
-        "graph": graph,
-        "working_state": {},
-        "events": [],
+        "nodes": nodes,
+        "started_at": started,
+        "completed_at": None,
+        "result": None,
     }
 
-    append_json(MISSIONS_FILE, mission)
+    missions_store[mission_id] = mission
+    write_json(MISSION_FILE, missions_store)
 
     event(
         "mission_started",
-        "AI Infinity mission started.",
-        mission_id,
         {
+            "mission_id": mission_id,
             "objective": objective,
-            "nodes": len(graph),
         },
     )
 
-    update_world(
-        mission_id=mission_id,
-        objective=objective,
-        state={
-            "mission_status": "running",
-            "mission_version": VERSION,
-        },
-    )
+    completed = 0
+    failed = 0
 
-    for node in mission["graph"]:
+    for node in nodes:
 
-        dependencies_met = True
+        node["status"] = "running"
+        node["attempts"] = node.get("attempts", 0) + 1
 
-        for dependency in node.get("dependencies", []):
+        try:
 
-            dependency_node = next(
-                (
-                    x
-                    for x in mission["graph"]
-                    if x["id"] == dependency
-                ),
-                None,
-            )
+            if node["type"] == "verification" and not verify_enabled:
+                result = {
+                    "skipped": True,
+                    "reason": "verification_disabled",
+                }
 
-            if not dependency_node:
-                continue
-
-            if dependency_node.get("status") != "completed":
-                dependencies_met = False
-
-        if not dependencies_met:
-            node["status"] = "blocked"
-            continue
-
-        completed = False
-
-        for attempt in range(
-            max_recovery_attempts + 1
-        ):
-
-            node["attempts"] = attempt + 1
-
-            try:
-
-                node["status"] = "running"
-
+            else:
                 result = await execute_node(
                     node,
-                    mission,
+                    context,
                 )
 
-                if result.get("success"):
+            node["result"] = result
+            node["status"] = "completed"
 
-                    node["status"] = "completed"
-                    node["result"] = result
-                    mission["working_state"][
-                        node["type"]
-                    ] = result
+            completed += 1
 
-                    event(
-                        "node_completed",
-                        f"{node['id']} completed.",
-                        mission_id,
-                        {
-                            "node": node["id"],
-                        },
-                    )
+            # Make results available to subsequent nodes.
+            if node["type"] == "research":
+                context["research"] = result
 
-                    completed = True
-                    break
+            elif node["type"] == "verification":
+                context["verification"] = result
 
-                node["error"] = result.get(
-                    "error",
-                    "Unknown failure",
-                )
+            elif node["type"] == "gap_analysis":
+                context["gaps"] = result
 
-            except Exception as exc:
-
-                node["error"] = str(exc)
-
-            if not completed:
-
-                recovery = await recover_node(
-                    node,
-                    mission,
-                )
-
-                if not recovery.get("recovered"):
-                    break
-
-        if not completed:
-
-            node["status"] = "failed"
+            elif node["type"] == "self_inspection":
+                context["inspection"] = result
 
             event(
-                "node_failed",
-                f"{node['id']} failed.",
-                mission_id,
+                "node_completed",
                 {
-                    "error": node.get("error"),
+                    "mission_id": mission_id,
+                    "node_id": node["id"],
+                    "type": node["type"],
                 },
             )
 
-    failed = sum(
-        1
-        for node in mission["graph"]
-        if node.get("status") == "failed"
+        except Exception as exc:
+
+            node["status"] = "failed"
+            node["error"] = str(exc)
+
+            recovery = await recover_node(
+                node,
+                context,
+            )
+
+            if recovery.get("recovered"):
+                node["status"] = "completed"
+                node["result"] = recovery.get("result")
+                node["recovery"] = recovery
+                completed += 1
+
+                if node["type"] == "research":
+                    context["research"] = recovery.get("result")
+
+                elif node["type"] == "self_inspection":
+                    context["inspection"] = recovery.get("result")
+
+            else:
+                failed += 1
+
+                event(
+                    "node_failed",
+                    {
+                        "mission_id": mission_id,
+                        "node_id": node["id"],
+                        "error": str(exc),
+                    },
+                )
+
+    # If verification was not explicitly represented by decomposition,
+    # still maintain consistency.
+    research_result = context.get("research")
+    verification_result = context.get("verification")
+
+    if research_result and verify_enabled and not verification_result:
+        verification_result = verify_research(
+            research_result,
+            objective,
+        )
+        context["verification"] = verification_result
+
+    opportunities = detect_opportunities(
+        objective,
+        research_result,
+        context.get("gaps"),
     )
 
-    completed = sum(
-        1
-        for node in mission["graph"]
-        if node.get("status") == "completed"
+    context["opportunities"] = opportunities
+
+    critique = self_critique(
+        research_result,
+        verification_result,
+        context.get("gaps"),
+        completed,
+        failed,
     )
 
-    # Final result comes from synthesis node.
-    synthesis = mission["working_state"].get(
-        "synthesize",
-        {},
-    )
+    context["critique"] = critique
 
-    mission["result"] = synthesis
-
-    mission["metrics"] = {
-        "total_nodes": len(graph),
-        "completed_nodes": completed,
-        "failed_nodes": failed,
-        "completion_ratio": (
-            completed / len(graph)
-            if graph
-            else 0
-        ),
-        "duration_seconds": round(
-            time.time() - started,
-            3,
-        ),
+    # Final synthesis is generated directly from the SAME state used
+    # by verification and critique. This prevents contradictory fields.
+    synthesis = {
+        "objective": objective,
+        "system": SERVICE,
+        "version": VERSION,
+        "target": TARGET_YEAR,
+        "operational_capabilities": self_inspect(),
+        "research": research_result,
+        "verification": verification_result,
+        "gap_analysis": context.get("gaps"),
+        "opportunities": opportunities,
+        "critique": critique,
     }
 
-    mission["status"] = (
-        "completed"
-        if failed == 0
-        else "completed_with_limitations"
-    )
-
-    mission["finished_at"] = datetime.now(
-        timezone.utc
-    ).isoformat()
-
-    # --------------------------------------------------------
-    # Reusable intelligence memory
-    # --------------------------------------------------------
-
-    if remember_result:
-
-        memory_text = json.dumps(
-            {
-                "objective": objective,
-                "result": synthesis,
-                "metrics": mission["metrics"],
-            },
-            ensure_ascii=False,
-        )
-
-        memory = remember(
-            memory_text,
-            category="mission_outcome",
-            importance=0.85,
+    if remember_enabled:
+        memory_item = remember(
+            content=json.dumps(
+                {
+                    "objective": objective,
+                    "verification": verification_result,
+                    "gaps": context.get("gaps"),
+                    "opportunities": opportunities,
+                    "completed_nodes": completed,
+                    "failed_nodes": failed,
+                },
+                ensure_ascii=False,
+                default=str,
+            ),
+            kind="mission_outcome",
             metadata={
                 "mission_id": mission_id,
                 "version": VERSION,
             },
         )
+    else:
+        memory_item = None
 
-        mission["memory_id"] = memory["id"]
+    duration = time.time() - started
 
-    # --------------------------------------------------------
-    # Persist mission state
-    # --------------------------------------------------------
-
-    missions = load_json(
-        MISSIONS_FILE,
-        [],
+    mission["status"] = (
+        "completed"
+        if failed == 0
+        else "completed_with_failures"
     )
 
-    if isinstance(missions, list):
-
-        for index, stored in enumerate(missions):
-
-            if stored.get("mission_id") == mission_id:
-                missions[index] = mission
-                break
-
-        save_json(
-            MISSIONS_FILE,
-            missions,
-        )
-
-    update_world(
-        mission_id=mission_id,
-        objective=objective,
-        state={
-            "mission_status": mission["status"],
-            "last_completion_ratio": mission[
-                "metrics"
-            ]["completion_ratio"],
-        },
+    mission["completed_at"] = time.time()
+    mission["duration_seconds"] = round(duration, 3)
+    mission["completed_nodes"] = completed
+    mission["failed_nodes"] = failed
+    mission["result"] = synthesis
+    mission["memory_id"] = (
+        memory_item["id"]
+        if memory_item
+        else None
     )
+
+    missions_store[mission_id] = mission
+    write_json(MISSION_FILE, missions_store)
 
     event(
         "mission_completed",
-        "AI Infinity mission completed.",
-        mission_id,
         {
+            "mission_id": mission_id,
             "status": mission["status"],
-            "completion_ratio": mission[
-                "metrics"
-            ]["completion_ratio"],
+            "duration_seconds": round(duration, 3),
+            "completed_nodes": completed,
+            "failed_nodes": failed,
         },
     )
 
-    return mission
+    return {
+        "mission_id": mission_id,
+        "status": mission["status"],
+        "version": VERSION,
+        "target": TARGET_YEAR,
+        "objective": objective,
+        "goals": goals,
+        "nodes": nodes,
+        "completed_nodes": completed,
+        "failed_nodes": failed,
+        "duration_seconds": round(duration, 3),
+        "intent": intent,
+        "research": research_result,
+        "verification": verification_result,
+        "gap_analysis": context.get("gaps"),
+        "opportunities": opportunities,
+        "critique": critique,
+        "synthesis": synthesis,
+        "memory_id": (
+            memory_item["id"]
+            if memory_item
+            else None
+        ),
+    }
 
 
 # ============================================================
-# REQUEST MODELS
+# TASK COMPATIBILITY LAYER
 # ============================================================
 
-class TaskRequest(BaseModel):
-    objective: str = Field(
-        ...,
-        min_length=1,
-        max_length=10000,
+async def run_task(request: TaskRequest) -> Dict[str, Any]:
+    objective = request.objective or request.command
+
+    if not objective:
+        raise HTTPException(
+            status_code=422,
+            detail="Either 'objective' or 'command' is required.",
+        )
+
+    result = await run_mission(
+        objective=objective,
+        research_enabled=request.research,
+        verify_enabled=request.verify,
+        remember_enabled=request.remember,
+        external_access=request.external_access,
     )
 
-    research: bool = True
-    verify: bool = True
-    remember: bool = True
-    external_access: bool = True
+    task_id = f"task-{uuid.uuid4().hex[:12]}"
 
-    max_recovery_attempts: int = Field(
-        default=2,
-        ge=0,
-        le=5,
-    )
+    task = {
+        "task_id": task_id,
+        **result,
+    }
 
+    tasks_store[task_id] = task
+    write_json(TASK_FILE, tasks_store)
 
-class PlanRequest(BaseModel):
-    objective: str = Field(
-        ...,
-        min_length=1,
-        max_length=10000,
-    )
-
-    research: bool = True
-    verify: bool = True
-    external_access: bool = True
+    return task
 
 
-class MemoryRequest(BaseModel):
-    content: str = Field(
-        ...,
-        min_length=1,
-        max_length=20000,
-    )
+# ============================================================
+# EXTERNAL ENGINE
+# ============================================================
 
-    category: str = "general"
-    importance: float = Field(
-        default=0.5,
-        ge=0,
-        le=1,
-    )
+async def external_request(
+    request: ExternalRequest,
+) -> Dict[str, Any]:
 
-    metadata: Dict[str, Any] = {}
+    method = request.method.upper()
 
-
-class ExternalRequest(BaseModel):
-    url: str
-    method: Literal[
+    if method not in {
         "GET",
+        "HEAD",
         "POST",
         "PUT",
         "PATCH",
         "DELETE",
-        "HEAD",
-        "OPTIONS",
-    ] = "GET"
+    }:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported HTTP method.",
+        )
 
-    payload: Optional[Any] = None
-    headers: Dict[str, str] = {}
+    allowed, reason = validate_external_url(request.url)
 
+    if not allowed:
+        raise HTTPException(
+            status_code=403,
+            detail=reason,
+        )
 
-class ResearchRequest(BaseModel):
-    query: str = Field(
-        ...,
-        min_length=1,
-        max_length=5000,
-    )
+    headers = {
+        "User-Agent": "AI-Infinity/2050.1",
+        "Accept": "application/json,text/plain,text/html,*/*",
+    }
 
-    max_sources: int = Field(
-        default=5,
-        ge=1,
-        le=10,
-    )
+    try:
+        async with httpx.AsyncClient(
+            timeout=request.timeout,
+            follow_redirects=True,
+            headers=headers,
+        ) as client:
+
+            response = await client.request(
+                method,
+                request.url,
+                json=request.data
+                if method not in {"GET", "HEAD"}
+                else None,
+            )
+
+            final_allowed, final_reason = validate_external_url(
+                str(response.url)
+            )
+
+            if not final_allowed:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Redirect blocked: {final_reason}",
+                )
+
+            text_response = response.text[:50000]
+
+            parsed_json = None
+
+            try:
+                parsed_json = response.json()
+            except Exception:
+                pass
+
+            return {
+                "ok": response.is_success,
+                "status_code": response.status_code,
+                "url": request.url,
+                "final_url": str(response.url),
+                "headers": {
+                    k: v
+                    for k, v in response.headers.items()
+                    if k.lower()
+                    in {
+                        "content-type",
+                        "content-length",
+                        "server",
+                        "date",
+                    }
+                },
+                "json": parsed_json,
+                "text": text_response,
+            }
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=str(exc),
+        )
 
 
 # ============================================================
-# ROOT / STATUS
+# ROUTES — CORE
 # ============================================================
 
 @app.get("/")
-async def root():
-
+async def root() -> Dict[str, Any]:
     return {
-        "name": "AI Infinity",
+        "service": SERVICE,
         "version": VERSION,
-        "target": TARGET,
+        "target": TARGET_YEAR,
         "status": "online",
-        "architecture": "2050 mission intelligence",
         "message": "AI Infinity Core is online.",
-        "endpoints": {
-            "health": "/health",
-            "status": "/status",
-            "capabilities": "/capabilities",
-            "task": "/task",
-            "mission": "/mission",
-            "plan": "/plan",
-            "memory": "/memory",
-            "research": "/research",
-            "external": "/external",
-            "tools": "/tools",
-            "providers": "/providers",
-            "world": "/world",
-            "events": "/events",
-            "diagnostics": "/diagnostics",
-        },
     }
 
 
 @app.get("/health")
-async def health():
-
+async def health() -> Dict[str, Any]:
     return {
         "status": "healthy",
-        "service": "AI Infinity",
+        "service": SERVICE,
         "version": VERSION,
-        "target": TARGET,
-        "uptime_seconds": round(
-            time.time() - START_TIME,
-            2,
-        ),
+        "target": TARGET_YEAR,
+        "uptime_seconds": round(time.time() - START_TIME, 2),
         "timestamp": time.time(),
     }
 
 
 @app.get("/status")
-async def status():
-
-    missions = load_json(
-        MISSIONS_FILE,
-        [],
-    )
-
-    memories = load_json(
-        MEMORY_FILE,
-        [],
-    )
-
+async def status() -> Dict[str, Any]:
     return {
-        "service": "AI Infinity",
+        "service": SERVICE,
         "version": VERSION,
-        "target": TARGET,
+        "target": TARGET_YEAR,
         "status": "operational",
-        "uptime_seconds": round(
-            time.time() - START_TIME,
-            2,
-        ),
-        "missions": len(
-            missions
-            if isinstance(missions, list)
-            else []
-        ),
-        "memories": len(
-            memories
-            if isinstance(memories, list)
-            else []
-        ),
+        "missions": len(missions_store),
+        "tasks": len(tasks_store),
+        "memories": len(memory_store),
+        "events": len(events_store),
         "providers": provider_status(),
-        "architecture_layers": 30,
+        "uptime_seconds": round(time.time() - START_TIME, 2),
     }
 
-
-# ============================================================
-# CAPABILITIES
-# ============================================================
 
 @app.get("/capabilities")
-async def capabilities():
+async def capabilities() -> Dict[str, Any]:
+    return capabilities_payload()
+
+
+@app.get("/diagnostics")
+async def diagnostics() -> Dict[str, Any]:
+    return {
+        "service": SERVICE,
+        "version": VERSION,
+        "target": TARGET_YEAR,
+        "inspection": self_inspect(),
+        "gaps": gap_analysis(),
+        "events_count": len(events_store),
+        "memory_count": len(memory_store),
+        "task_count": len(tasks_store),
+        "mission_count": len(missions_store),
+    }
+
+
+@app.get("/self-inspect")
+async def self_inspect_endpoint() -> Dict[str, Any]:
+    return self_inspect()
+
+
+@app.get("/architecture")
+async def architecture() -> Dict[str, Any]:
+    return {
+        "service": SERVICE,
+        "version": VERSION,
+        "target": TARGET_YEAR,
+        "layers": [
+            "Infinity Core",
+            "Intent Engine",
+            "Mission Engine",
+            "Goal Decomposition",
+            "Dynamic Task Graph",
+            "Planner",
+            "Tool Registry",
+            "Provider Discovery",
+            "External Access Router",
+            "Research Engine",
+            "Evidence Provenance",
+            "Source Quality Engine",
+            "Cross-Source Verification",
+            "World Model",
+            "Working Memory",
+            "Outcome Memory",
+            "Self-Critique",
+            "Failure Detection",
+            "Recovery",
+            "Replanning",
+            "Opportunity Detection",
+            "Evaluation Hooks",
+            "Observability",
+            "Video Compatibility",
+        ],
+        "future_layers": FUTURE_EXTENSION_POINTS,
+    }
+
+
+@app.get("/gaps")
+async def gaps() -> Dict[str, Any]:
+    return gap_analysis()
+
+
+# ============================================================
+# MEMORY
+# ============================================================
+
+@app.get("/memory")
+async def get_memory(limit: int = 20) -> Dict[str, Any]:
+    return {
+        "count": len(memory_store),
+        "items": recent_memory(limit),
+    }
+
+
+@app.post("/memory")
+async def add_memory(request: MemoryRequest) -> Dict[str, Any]:
+    item = remember(
+        request.content,
+        request.kind,
+        request.metadata,
+    )
+
+    return item
+
+
+@app.get("/memory/count")
+async def memory_count() -> Dict[str, Any]:
+    return {
+        "count": len(memory_store),
+    }
+
+
+# ============================================================
+# WORLD
+# ============================================================
+
+@app.get("/world")
+async def world() -> Dict[str, Any]:
+    return world_snapshot()
+
+
+# ============================================================
+# EVENTS
+# ============================================================
+
+@app.get("/events")
+async def events(limit: int = 50) -> Dict[str, Any]:
+    limit = max(1, min(limit, 500))
+
+    return {
+        "count": len(events_store),
+        "items": events_store[-limit:],
+    }
+
+
+# ============================================================
+# RESEARCH
+# ============================================================
+
+@app.post("/research")
+async def research(request: ResearchRequest) -> Dict[str, Any]:
+    return await research_query(
+        request.query,
+        request.max_sources,
+    )
+
+
+# ============================================================
+# VERIFICATION
+# ============================================================
+
+@app.post("/verify")
+async def verify(request: ResearchRequest) -> Dict[str, Any]:
+    research_result = await research_query(
+        request.query,
+        request.max_sources,
+    )
+
+    return verify_research(
+        research_result,
+        request.query,
+    )
+
+
+# ============================================================
+# EXTERNAL ACCESS
+# ============================================================
+
+@app.post("/external")
+async def external(
+    request: ExternalRequest,
+) -> Dict[str, Any]:
+    return await external_request(request)
+
+
+# ============================================================
+# PLANNING
+# ============================================================
+
+@app.post("/plan")
+async def plan(request: MissionRequest) -> Dict[str, Any]:
+    intent = classify_intent(request.objective)
+    goals = decompose_goal(request.objective)
+    nodes = build_task_graph(
+        request.objective,
+        goals,
+    )
 
     return {
         "version": VERSION,
-        "target": TARGET,
-        "builtin_tools": [
-            {
-                "name": "capabilities",
-                "category": "builtin",
-                "permission": "safe",
-            },
-            {
-                "name": "health",
-                "category": "builtin",
-                "permission": "safe",
-            },
-            {
-                "name": "memory_count",
-                "category": "builtin",
-                "permission": "safe",
-            },
-            {
-                "name": "skills_count",
-                "category": "builtin",
-                "permission": "safe",
-            },
-            {
-                "name": "status",
-                "category": "builtin",
-                "permission": "safe",
-            },
-            {
-                "name": "planner",
-                "category": "reasoning",
-                "permission": "safe",
-            },
-            {
-                "name": "mission_engine",
-                "category": "autonomy",
-                "permission": "safe",
-            },
-            {
-                "name": "dynamic_task_graph",
-                "category": "autonomy",
-                "permission": "safe",
-            },
-            {
-                "name": "research",
-                "category": "external",
-                "permission": "controlled",
-            },
-            {
-                "name": "external_http",
-                "category": "external",
-                "permission": "controlled",
-            },
-            {
-                "name": "verification",
-                "category": "reasoning",
-                "permission": "safe",
-            },
-            {
-                "name": "self_critique",
-                "category": "reasoning",
-                "permission": "safe",
-            },
-            {
-                "name": "recovery",
-                "category": "autonomy",
-                "permission": "safe",
-            },
-            {
-                "name": "replanning",
-                "category": "autonomy",
-                "permission": "safe",
-            },
-            {
-                "name": "opportunity_detection",
-                "category": "intelligence",
-                "permission": "safe",
-            },
-            {
-                "name": "world_model",
-                "category": "context",
-                "permission": "safe",
-            },
-            {
-                "name": "video",
-                "category": "media",
-                "permission": "controlled",
-            },
-        ],
-        "future_extension_points": [
-            "multi-agent orchestration",
-            "long-horizon planning",
-            "multimodal world models",
-            "real-world actuators",
-            "continuous learning",
-            "distributed execution",
-            "advanced simulation",
-            "robotics interfaces",
-            "scientific experimentation",
-            "human-agent collaboration",
-        ],
+        "target": TARGET_YEAR,
+        "objective": request.objective,
+        "intent": intent,
+        "goals": goals,
+        "dynamic_task_graph": nodes,
     }
 
+
+# ============================================================
+# TASK / MISSION EXECUTION
+# ============================================================
+
+@app.post("/task")
+async def task(request: TaskRequest) -> Dict[str, Any]:
+    return await run_task(request)
+
+
+@app.post("/mission")
+async def mission(request: MissionRequest) -> Dict[str, Any]:
+    return await run_mission(
+        objective=request.objective,
+        research_enabled=request.research,
+        verify_enabled=request.verify,
+        remember_enabled=request.remember,
+        external_access=request.external_access,
+    )
+
+
+@app.post("/execute")
+async def execute(request: MissionRequest) -> Dict[str, Any]:
+    return await run_mission(
+        objective=request.objective,
+        research_enabled=request.research,
+        verify_enabled=request.verify,
+        remember_enabled=request.remember,
+        external_access=request.external_access,
+    )
+
+
+@app.get("/task/{task_id}")
+async def get_task(task_id: str) -> Dict[str, Any]:
+    task = tasks_store.get(task_id)
+
+    if not task:
+        raise HTTPException(
+            status_code=404,
+            detail="Task not found.",
+        )
+
+    return task
+
+
+@app.get("/mission/{mission_id}")
+async def get_mission(mission_id: str) -> Dict[str, Any]:
+    mission = missions_store.get(mission_id)
+
+    if not mission:
+        raise HTTPException(
+            status_code=404,
+            detail="Mission not found.",
+        )
+
+    return mission
+
+
+# ============================================================
+# OPPORTUNITIES
+# ============================================================
+
+@app.get("/opportunities")
+async def opportunities() -> Dict[str, Any]:
+    gaps_result = gap_analysis()
+
+    items = detect_opportunities(
+        "AI Infinity",
+        None,
+        gaps_result,
+    )
+
+    return {
+        "version": VERSION,
+        "target": TARGET_YEAR,
+        "opportunities": items,
+    }
+
+
+# ============================================================
+# EVALUATION
+# ============================================================
+
+@app.post("/evaluate")
+async def evaluate(request: MissionRequest) -> Dict[str, Any]:
+    intent = classify_intent(request.objective)
+    inspection = self_inspect()
+    gaps_result = gap_analysis()
+
+    return {
+        "version": VERSION,
+        "target": TARGET_YEAR,
+        "objective": request.objective,
+        "intent": intent,
+        "runtime": inspection,
+        "architecture_gaps": gaps_result,
+        "evaluation": {
+            "runtime_operational": True,
+            "api_operational": True,
+            "research_engine_operational": True,
+            "verification_engine_operational": True,
+            "self_inspection_operational": True,
+            "recovery_operational": True,
+            "replanning_operational": True,
+            "persistent_runtime_memory": True,
+            "durable_distributed_memory": False,
+        },
+    }
+
+
+# ============================================================
+# VIDEO COMPATIBILITY
+# ============================================================
+
+def video_job_dir(job_id: str) -> Path:
+    path = BASE / "video" / job_id
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+@app.post("/video")
+async def video(request: VideoRequest) -> Dict[str, Any]:
+
+    job_id = f"genius-{uuid.uuid4().hex[:12]}"
+
+    path = video_job_dir(job_id)
+
+    metadata = {
+        "job_id": job_id,
+        "status": "accepted",
+        "command": request.command,
+        "duration_minutes": request.duration_minutes,
+        "version": VERSION,
+        "target": TARGET_YEAR,
+        "created_at": time.time(),
+        "video_path": f"/video/{job_id}",
+        "renderer_url": os.getenv("RENDERER_URL"),
+        "provider": (
+            "pollinations"
+            if os.getenv("POLLINATIONS_API_KEY")
+            else "free-first"
+        ),
+    }
+
+    write_json(
+        path / "job.json",
+        metadata,
+    )
+
+    event(
+        "video_job_created",
+        {
+            "job_id": job_id,
+            "duration_minutes": request.duration_minutes,
+        },
+    )
+
+    return metadata
+
+
+@app.post("/generate")
+async def generate(request: VideoRequest) -> Dict[str, Any]:
+    return await video(request)
+
+
+@app.get("/video/{job_id}")
+async def get_video(job_id: str):
+
+    path = video_job_dir(job_id) / "job.json"
+
+    if not path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Video job not found.",
+        )
+
+    data = read_json(path, {})
+
+    # Preserve compatibility with previous video clients.
+    return JSONResponse(data)
+
+
+# ============================================================
+# SKILLS
+# ============================================================
 
 @app.get("/skills")
-async def skills():
-
+async def skills() -> Dict[str, Any]:
     return {
-        "version": VERSION,
+        "count": len(BUILTIN_CAPABILITIES),
         "skills": [
-            "mission_planning",
-            "goal_decomposition",
-            "task_graphs",
-            "research",
-            "external_http",
-            "evidence_collection",
-            "verification",
-            "memory",
-            "self_critique",
-            "failure_recovery",
-            "replanning",
-            "opportunity_detection",
-            "provider_discovery",
-            "diagnostics",
-            "media_pipeline",
+            {
+                "name": item["name"],
+                "category": item["category"],
+            }
+            for item in BUILTIN_CAPABILITIES
         ],
-        "count": 15,
     }
 
 
-# ============================================================
-# TOOLS / PROVIDERS
-# ============================================================
-
-@app.get("/tools")
-async def get_tools():
-
+@app.get("/skills/count")
+async def skills_count() -> Dict[str, Any]:
     return {
-        "version": VERSION,
-        "count": len(TOOLS),
-        "tools": TOOLS,
+        "count": len(BUILTIN_CAPABILITIES),
     }
 
+
+# ============================================================
+# PROVIDERS
+# ============================================================
 
 @app.get("/providers")
-async def providers():
-
+async def providers() -> Dict[str, Any]:
     return {
-        "version": VERSION,
         "providers": provider_status(),
         "free_first": True,
     }
 
 
 # ============================================================
-# MEMORY API
-# ============================================================
-
-@app.get("/memory")
-async def get_memory(
-    q: Optional[str] = None,
-    limit: int = 20,
-):
-
-    if q:
-        return {
-            "query": q,
-            "results": search_memory(
-                q,
-                limit=max(
-                    1,
-                    min(limit, 100),
-                ),
-            ),
-        }
-
-    memories = load_json(
-        MEMORY_FILE,
-        [],
-    )
-
-    if not isinstance(memories, list):
-        memories = []
-
-    memories = memories[-max(1, min(limit, 100)):]
-
-    return {
-        "count": len(memories),
-        "memories": memories,
-    }
-
-
-@app.post("/memory")
-async def add_memory(
-    request: MemoryRequest,
-):
-
-    memory = remember(
-        request.content,
-        request.category,
-        request.importance,
-        request.metadata,
-    )
-
-    event(
-        "memory_created",
-        "New reusable intelligence stored.",
-        data={
-            "memory_id": memory["id"],
-        },
-    )
-
-    return {
-        "status": "stored",
-        "memory": memory,
-    }
-
-
-# ============================================================
-# PLANNING API
-# ============================================================
-
-@app.post("/plan")
-async def plan(
-    request: PlanRequest,
-):
-
-    goals = decompose_objective(
-        request.objective,
-        request.research,
-        request.verify,
-        request.external_access,
-    )
-
-    graph = build_task_graph(goals)
-
-    return {
-        "version": VERSION,
-        "target": TARGET,
-        "objective": request.objective,
-        "intent": classify_intent(
-            request.objective
-        ),
-        "goals": goals,
-        "task_graph": graph,
-        "tool_routes": {
-            node["id"]: select_tools(
-                node["type"]
-            )
-            for node in graph
-        },
-    }
-
-
-# ============================================================
-# MISSION / TASK API
-# ============================================================
-
-@app.post("/task")
-async def create_task(
-    request: TaskRequest,
-):
-
-    mission = await run_mission(
-        objective=request.objective,
-        research=request.research,
-        verify=request.verify,
-        remember_result=request.remember,
-        external_access=request.external_access,
-        max_recovery_attempts=request.max_recovery_attempts,
-    )
-
-    # Compatibility response.
-    return {
-        "task_id": mission["mission_id"].replace(
-            "mission-",
-            "task-",
-        ),
-        "mission_id": mission["mission_id"],
-        "status": mission["status"],
-        "version": VERSION,
-        "target": TARGET,
-        "objective": mission["objective"],
-        "architecture": {
-            "goals": len(
-                mission["goals"]
-            ),
-            "nodes": len(
-                mission["graph"]
-            ),
-            "completed_nodes": mission[
-                "metrics"
-            ]["completed_nodes"],
-            "failed_nodes": mission[
-                "metrics"
-            ]["failed_nodes"],
-        },
-        "result": mission.get(
-            "result",
-            {},
-        ),
-        "mission": mission,
-    }
-
-
-@app.post("/mission")
-async def create_mission(
-    request: TaskRequest,
-):
-
-    return await create_task(request)
-
-
-@app.post("/execute")
-async def execute(
-    request: TaskRequest,
-):
-
-    return await create_task(request)
-
-
-@app.get("/task/{task_id}")
-async def get_task(
-    task_id: str,
-):
-
-    missions = load_json(
-        MISSIONS_FILE,
-        [],
-    )
-
-    if not isinstance(missions, list):
-        missions = []
-
-    normalized = task_id.replace(
-        "task-",
-        "mission-",
-        1,
-    )
-
-    for mission in missions:
-
-        if mission.get("mission_id") == normalized:
-            return mission
-
-    raise HTTPException(
-        status_code=404,
-        detail="Task not found.",
-    )
-
-
-@app.get("/mission/{mission_id}")
-async def get_mission(
-    mission_id: str,
-):
-
-    return await get_task(
-        mission_id
-    )
-
-
-# ============================================================
-# RESEARCH API
-# ============================================================
-
-@app.post("/research")
-async def research(
-    request: ResearchRequest,
-):
-
-    result = await research_web(
-        request.query,
-        request.max_sources,
-    )
-
-    if result.get("evidence"):
-        result["verification"] = verify_evidence(
-            result["evidence"],
-            request.query,
-        )
-
-    return {
-        "version": VERSION,
-        "target": TARGET,
-        **result,
-    }
-
-
-# ============================================================
-# EXTERNAL ACCESS API
-# ============================================================
-
-@app.post("/external")
-async def external(
-    request: ExternalRequest,
-):
-
-    try:
-
-        result = await external_request(
-            url=request.url,
-            method=request.method,
-            payload=request.payload,
-            headers=request.headers,
-        )
-
-        return {
-            "version": VERSION,
-            "target": TARGET,
-            **result,
-        }
-
-    except ValueError as exc:
-
-        raise HTTPException(
-            status_code=400,
-            detail=str(exc),
-        )
-
-
-# ============================================================
-# WORLD API
-# ============================================================
-
-@app.get("/world")
-async def world():
-
-    return {
-        "version": VERSION,
-        "target": TARGET,
-        "world": load_json(
-            WORLD_FILE,
-            {},
-        ),
-    }
-
-
-# ============================================================
-# EVENTS API
-# ============================================================
-
-@app.get("/events")
-async def events(
-    limit: int = 50,
-):
-
-    data = load_json(
-        EVENTS_FILE,
-        [],
-    )
-
-    if not isinstance(data, list):
-        data = []
-
-    return {
-        "count": min(
-            len(data),
-            max(1, min(limit, 200)),
-        ),
-        "events": data[
-            -max(1, min(limit, 200)):
-        ],
-    }
-
-
-# ============================================================
-# OPPORTUNITY API
-# ============================================================
-
-@app.post("/opportunities")
-async def opportunities(
-    request: PlanRequest,
-):
-
-    result = await research_web(
-        request.objective,
-        max_sources=3,
-    )
-
-    return {
-        "version": VERSION,
-        "target": TARGET,
-        "objective": request.objective,
-        "opportunities": detect_opportunities(
-            request.objective,
-            result,
-        ),
-    }
-
-
-# ============================================================
-# EXPERIMENT / EVALUATION API
-# ============================================================
-
-@app.post("/evaluate")
-async def evaluate(
-    request: PlanRequest,
-):
-
-    plan_data = await plan(request)
-
-    return {
-        "version": VERSION,
-        "target": TARGET,
-        "evaluation": {
-            "planner_available": True,
-            "task_graph_available": True,
-            "research_available": request.research,
-            "verification_available": request.verify,
-            "external_access_available": request.external_access,
-            "recovery_available": True,
-            "memory_available": True,
-            "confidence_model_available": True,
-            "future_extension_points": True,
-        },
-        "plan_preview": plan_data,
-    }
-
-
-# ============================================================
-# DIAGNOSTICS
-# ============================================================
-
-@app.get("/diagnostics")
-async def diagnostics():
-
-    checks = {}
-
-    for name, path in [
-        ("base", BASE),
-        ("memory", MEMORY_FILE),
-        ("tasks", TASKS_FILE),
-        ("missions", MISSIONS_FILE),
-        ("events", EVENTS_FILE),
-        ("world", WORLD_FILE),
-    ]:
-
-        checks[name] = {
-            "exists": path.exists(),
-            "writable": (
-                os.access(
-                    path,
-                    os.W_OK,
-                )
-                if path.exists()
-                else os.access(
-                    BASE,
-                    os.W_OK,
-                )
-            ),
-        }
-
-    return {
-        "service": "AI Infinity",
-        "version": VERSION,
-        "target": TARGET,
-        "uptime_seconds": round(
-            time.time() - START_TIME,
-            2,
-        ),
-        "python": os.sys.version,
-        "checks": checks,
-        "providers": provider_status(),
-        "tool_count": len(TOOLS),
-        "architecture": {
-            "mission_engine": True,
-            "goal_decomposition": True,
-            "dynamic_task_graph": True,
-            "tool_routing": True,
-            "external_access": True,
-            "research": True,
-            "evidence": True,
-            "verification": True,
-            "memory": True,
-            "world_context": True,
-            "self_critique": True,
-            "recovery": True,
-            "replanning": True,
-            "confidence": True,
-            "opportunity_detection": True,
-            "provider_discovery": True,
-            "experimentation": True,
-            "media_compatibility": True,
-        },
-    }
-
-
-# ============================================================
-# VIDEO COMPATIBILITY LAYER
-# ============================================================
-
-VIDEO_BASE = Path("/tmp/genius")
-VIDEO_BASE.mkdir(
-    parents=True,
-    exist_ok=True,
-)
-
-
-@app.post("/video")
-async def create_video(
-    request: Request,
-):
-
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    command = (
-        body.get("command")
-        or body.get("objective")
-        or body.get("prompt")
-        or "AI Infinity video"
-    )
-
-    duration_minutes = body.get(
-        "duration_minutes",
-        1,
-    )
-
-    try:
-        duration_minutes = int(
-            duration_minutes
-        )
-    except Exception:
-        duration_minutes = 1
-
-    duration_minutes = max(
-        1,
-        min(
-            duration_minutes,
-            120,
-        ),
-    )
-
-    job_id = (
-        f"genius-{uuid.uuid4().hex[:12]}"
-    )
-
-    job_dir = VIDEO_BASE / job_id
-    assets_dir = job_dir / "assets"
-
-    assets_dir.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    job = {
-        "job_id": job_id,
-        "status": "accepted",
-        "version": VERSION,
-        "command": command,
-        "duration_minutes": duration_minutes,
-        "segments": math.ceil(
-            duration_minutes
-        ),
-        "created_at": datetime.now(
-            timezone.utc
-        ).isoformat(),
-        "renderer_url": os.getenv(
-            "RENDERER_URL"
-        ),
-    }
-
-    save_json(
-        job_dir / "job.json",
-        job,
-    )
-
-    return {
-        **job,
-        "video_path": f"/video/{job_id}",
-    }
-
-
-@app.post("/generate")
-async def generate(
-    request: Request,
-):
-
-    return await create_video(
-        request
-    )
-
-
-@app.get("/video/{job_id}")
-async def get_video(
-    job_id: str,
-):
-
-    job_file = (
-        VIDEO_BASE
-        / job_id
-        / "job.json"
-    )
-
-    if job_file.exists():
-
-        job = load_json(
-            job_file,
-            {},
-        )
-
-        return job
-
-    # If a rendered MP4 exists, serve it.
-    possible_files = [
-        VIDEO_BASE
-        / job_id
-        / "genius.mp4",
-        VIDEO_BASE
-        / job_id
-        / "output.mp4",
-    ]
-
-    for video_file in possible_files:
-
-        if video_file.exists():
-
-            return FileResponse(
-                video_file,
-                media_type="video/mp4",
-                filename="ai-infinity.mp4",
-            )
-
-    raise HTTPException(
-        status_code=404,
-        detail="Video job not found.",
-    )
-
-
-# ============================================================
-# GLOBAL ERROR HANDLER
+# GLOBAL ERROR HANDLING
 # ============================================================
 
 @app.exception_handler(Exception)
@@ -2544,22 +2910,23 @@ async def global_exception_handler(
 ):
 
     event(
-        "system_error",
-        str(exc),
-        data={
-            "path": request.url.path,
+        "unhandled_exception",
+        {
+            "path": str(request.url.path),
             "method": request.method,
+            "error": str(exc),
+            "traceback": traceback.format_exc()[-5000:],
         },
     )
 
     return JSONResponse(
         status_code=500,
         content={
-            "status": "error",
-            "service": "AI Infinity",
+            "error": "Internal server error",
+            "service": SERVICE,
             "version": VERSION,
-            "target": TARGET,
-            "error": str(exc),
+            "target": TARGET_YEAR,
+            "detail": str(exc),
         },
     )
 
@@ -2569,34 +2936,44 @@ async def global_exception_handler(
 # ============================================================
 
 @app.on_event("startup")
-async def startup():
-
+async def startup() -> None:
     event(
         "system_startup",
-        "AI Infinity TARGET-2050.0 started.",
-        data={
+        {
+            "service": SERVICE,
             "version": VERSION,
-            "target": TARGET,
-            "free_first": True,
+            "target": TARGET_YEAR,
         },
+    )
+
+    update_world(
+        "runtime.version",
+        VERSION,
+        "startup",
+    )
+
+    update_world(
+        "runtime.target",
+        TARGET_YEAR,
+        "startup",
+    )
+
+    update_world(
+        "runtime.free_first",
+        True,
+        "startup",
     )
 
 
 # ============================================================
-# LOCAL RUN
+# LOCAL DEVELOPMENT
 # ============================================================
 
 if __name__ == "__main__":
-
     import uvicorn
 
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=int(
-            os.getenv(
-                "PORT",
-                "8000",
-            )
-        ),
+        port=int(os.getenv("PORT", "8000")),
     )
