@@ -1,101 +1,92 @@
 import ast
 import hashlib
-import html
 import json
-import math
 import os
 import re
 import sqlite3
 import subprocess
-import sys
 import time
 import uuid
-import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote_plus, urlparse, parse_qs
+from urllib.parse import quote, urlparse
 
 import requests
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 
 # ============================================================
-# ♾️ AI INFINITY — TARGET 2.2.0
-# Resilient Evidence-Gated Intelligence Fabric
-#
-# INTENT
-#   ↓
-# DISCOVER
-#   ↓
-# FETCH
-#   ↓
-# EXTRACT EVIDENCE
-#   ↓
-# VERIFY
-#   ↓
-# REASON
-#   ↓
-# MEMORY
-#   ↓
-# INTELLIGENCE GENOME
-#   ↓
-# EVOLVE
-#
-# Safety:
-# - No arbitrary shell execution
-# - No automatic spending
-# - No automatic self-modification
-# - Registered actions only
-# - No fabricated evidence
-# - Evidence must come from collected sources
+# AI INFINITY — TARGET-2.3.0
+# Evidence-First Autonomous Intelligence Fabric
 # ============================================================
 
-VERSION = "TARGET-2.2.0"
-SERVICE = "AI Infinity"
+VERSION = "TARGET-2.3.0"
 
-BASE = Path("/tmp/ai-infinity")
+BASE = Path(os.getenv("AI_INFINITY_HOME", "/tmp/ai-infinity"))
 ARTIFACTS = BASE / "artifacts"
 WORK = BASE / "work"
 LOGS = BASE / "logs"
+DB_PATH = BASE / "ai_infinity.db"
 
 for directory in (BASE, ARTIFACTS, WORK, LOGS):
     directory.mkdir(parents=True, exist_ok=True)
 
-DB_PATH = BASE / "ai_infinity.db"
+app = FastAPI(
+    title="AI Infinity",
+    version=VERSION,
+    description="Evidence-first autonomous intelligence fabric"
+)
 
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
 HF_MODEL = os.getenv(
     "HF_MODEL",
-    "openai/gpt-oss-120b:cheapest",
-)
-HF_BACKUP_MODEL = os.getenv(
-    "HF_BACKUP_MODEL",
-    "openai/gpt-oss-20b:cheapest",
-)
-HF_URL = os.getenv(
-    "HF_URL",
-    "https://router.huggingface.co/v1/chat/completions",
+    "openai/gpt-oss-120b:cheapest"
 )
 
-REQUEST_TIMEOUT = 15
-MAX_RESEARCH_SOURCES = 8
-MAX_SEARCH_RESULTS = 20
-MAX_SOURCE_CHARS = 14000
-
-USER_AGENT = (
-    "AI-Infinity/2.2 "
-    "(evidence research; public web retrieval)"
+REQUEST_TIMEOUT = int(
+    os.getenv("AI_INFINITY_HTTP_TIMEOUT", "15")
 )
 
-app = FastAPI(
-    title=SERVICE,
-    version=VERSION,
-    description="AI Infinity TARGET-2.2 Resilient Intelligence Fabric",
+MAX_SOURCE_BYTES = int(
+    os.getenv("AI_INFINITY_MAX_SOURCE_BYTES", "120000")
 )
+
+USER_AGENT = "AI-Infinity/2.3"
+
+
+# ============================================================
+# MODELS
+# ============================================================
+
+class RunRequest(BaseModel):
+    objective: str = Field(
+        ...,
+        min_length=1,
+        max_length=12000
+    )
+    research: bool = True
+    verify: bool = True
+    remember: bool = True
+    allow_paid: bool = False
+
+
+class ExecuteRequest(BaseModel):
+    action: str
+    args: Dict[str, Any] = Field(default_factory=dict)
+
+
+class MemoryRequest(BaseModel):
+    content: str
+    kind: str = "general"
+    verified: bool = False
+
+
+class GenomeRequest(BaseModel):
+    objective: str
+    strategy: Dict[str, Any] = Field(default_factory=dict)
 
 
 # ============================================================
@@ -114,214 +105,105 @@ def json_dump(value: Any) -> str:
     return json.dumps(
         value,
         ensure_ascii=False,
-        indent=2,
-        default=str,
+        separators=(",", ":"),
+        default=str
     )
 
 
-def sha256_text(text: str) -> str:
-    return hashlib.sha256(
-        text.encode("utf-8", errors="ignore")
-    ).hexdigest()
-
-
-def domain_of(url: str) -> str:
-    try:
-        return urlparse(url).netloc.lower()
-    except Exception:
-        return ""
-
-
-def normalize_url(url: str) -> str:
-    if not url:
-        return ""
-
-    url = html.unescape(str(url).strip())
-
-    if url.startswith("//"):
-        url = "https:" + url
-
-    parsed = urlparse(url)
-
-    if parsed.scheme not in ("http", "https"):
-        return ""
-
-    if not parsed.netloc:
-        return ""
-
-    blocked = {
-        "utm_source",
-        "utm_medium",
-        "utm_campaign",
-        "utm_term",
-        "utm_content",
-        "fbclid",
-        "gclid",
-    }
-
-    query = parse_qs(parsed.query)
-
-    clean = {
-        key: values
-        for key, values in query.items()
-        if key.lower() not in blocked
-    }
-
-    query_string = "&".join(
-        f"{key}={quote_plus(values[0])}"
-        for key, values in sorted(clean.items())
-    )
-
-    result = (
-        f"{parsed.scheme.lower()}://"
-        f"{parsed.netloc.lower()}"
-        f"{parsed.path or '/'}"
-    )
-
-    if query_string:
-        result += "?" + query_string
-
-    return result
-
-
-def request_get(url: str, **kwargs):
-    headers = kwargs.pop("headers", {})
-    headers.setdefault("User-Agent", USER_AGENT)
-
-    last_error = None
-
-    for attempt in range(2):
-        try:
-            response = requests.get(
-                url,
-                headers=headers,
-                timeout=REQUEST_TIMEOUT,
-                allow_redirects=True,
-                **kwargs,
-            )
-            return response
-        except Exception as exc:
-            last_error = exc
-            if attempt == 0:
-                time.sleep(0.4)
-
-    raise last_error
+def db() -> sqlite3.Connection:
+    connection = sqlite3.connect(DB_PATH)
+    connection.row_factory = sqlite3.Row
+    return connection
 
 
 # ============================================================
 # DATABASE
 # ============================================================
 
-def db():
-    connection = sqlite3.connect(DB_PATH)
-    connection.row_factory = sqlite3.Row
-    return connection
-
-
-def init_db():
+def init_db() -> None:
     connection = db()
 
     connection.executescript(
         """
         CREATE TABLE IF NOT EXISTS tasks (
             id TEXT PRIMARY KEY,
-            objective TEXT NOT NULL,
-            status TEXT NOT NULL,
+            objective TEXT,
+            status TEXT,
             result_json TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            created_at TEXT,
+            updated_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS memories (
             id TEXT PRIMARY KEY,
-            content TEXT NOT NULL,
-            memory_type TEXT NOT NULL,
-            confidence REAL DEFAULT 0.5,
-            provenance_json TEXT,
-            created_at TEXT NOT NULL
+            kind TEXT,
+            content TEXT,
+            verified INTEGER,
+            created_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS genomes (
             id TEXT PRIMARY KEY,
             task_id TEXT,
-            genome_json TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS executions (
-            id TEXT PRIMARY KEY,
-            task_id TEXT,
-            action TEXT NOT NULL,
-            status TEXT NOT NULL,
-            result_json TEXT,
-            created_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS failures (
-            id TEXT PRIMARY KEY,
-            task_id TEXT,
-            stage TEXT NOT NULL,
-            error TEXT NOT NULL,
-            recovery_json TEXT,
-            created_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS events (
-            id TEXT PRIMARY KEY,
-            task_id TEXT,
-            event_type TEXT NOT NULL,
-            payload_json TEXT,
-            created_at TEXT NOT NULL
+            genome_json TEXT,
+            created_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS evidence (
             id TEXT PRIMARY KEY,
             task_id TEXT,
-            source_url TEXT NOT NULL,
+            source_url TEXT,
             source_title TEXT,
+            domain TEXT,
             claim TEXT,
             excerpt TEXT,
             content_hash TEXT,
-            retrieved_at TEXT NOT NULL,
-            verification_status TEXT DEFAULT 'unverified',
-            metadata_json TEXT
+            verification_status TEXT,
+            relevance REAL,
+            metadata_json TEXT,
+            created_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS research (
             id TEXT PRIMARY KEY,
             task_id TEXT,
-            question TEXT NOT NULL,
-            summary TEXT,
-            evidence_json TEXT,
-            uncertainty REAL DEFAULT 0.5,
-            created_at TEXT NOT NULL
+            question TEXT,
+            status TEXT,
+            report_json TEXT,
+            created_at TEXT
         );
 
-        CREATE TABLE IF NOT EXISTS sources (
+        CREATE TABLE IF NOT EXISTS events (
             id TEXT PRIMARY KEY,
             task_id TEXT,
-            url TEXT NOT NULL,
-            domain TEXT,
-            title TEXT,
-            discovery_method TEXT,
-            fetched INTEGER DEFAULT 0,
-            http_status INTEGER,
-            content_hash TEXT,
-            retrieved_at TEXT,
-            metadata_json TEXT
+            event_type TEXT,
+            data_json TEXT,
+            created_at TEXT
         );
 
-        CREATE INDEX IF NOT EXISTS idx_memories_type
-        ON memories(memory_type);
+        CREATE TABLE IF NOT EXISTS failures (
+            id TEXT PRIMARY KEY,
+            task_id TEXT,
+            stage TEXT,
+            error TEXT,
+            recovery_json TEXT,
+            created_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS executions (
+            id TEXT PRIMARY KEY,
+            task_id TEXT,
+            action TEXT,
+            status TEXT,
+            result_json TEXT,
+            created_at TEXT
+        );
 
         CREATE INDEX IF NOT EXISTS idx_evidence_task
         ON evidence(task_id);
 
-        CREATE INDEX IF NOT EXISTS idx_research_task
-        ON research(task_id);
-
-        CREATE INDEX IF NOT EXISTS idx_sources_task
-        ON sources(task_id);
+        CREATE INDEX IF NOT EXISTS idx_memory_kind
+        ON memories(kind);
         """
     )
 
@@ -333,157 +215,39 @@ init_db()
 
 
 # ============================================================
-# EVENT / EXECUTION LOGGING
+# EVENTS / MEMORY / TASKS
 # ============================================================
 
-def log_event(
+def record_event(
     task_id: Optional[str],
     event_type: str,
-    payload: Any,
-):
+    data: Any
+) -> None:
     connection = db()
 
     connection.execute(
         """
         INSERT INTO events
-        (id, task_id, event_type, payload_json, created_at)
         VALUES (?, ?, ?, ?, ?)
         """,
         (
             uid("event"),
             task_id,
             event_type,
-            json_dump(payload),
-            now_iso(),
-        ),
+            json_dump(data),
+            now_iso()
+        )
     )
 
     connection.commit()
     connection.close()
 
-
-def log_execution(
-    task_id: Optional[str],
-    action: str,
-    status: str,
-    result: Any,
-):
-    connection = db()
-
-    connection.execute(
-        """
-        INSERT INTO executions
-        (id, task_id, action, status, result_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            uid("execution"),
-            task_id,
-            action,
-            status,
-            json_dump(result),
-            now_iso(),
-        ),
-    )
-
-    connection.commit()
-    connection.close()
-
-
-# ============================================================
-# TASKS
-# ============================================================
-
-def create_task(objective: str) -> str:
-    task_id = uid("task")
-    timestamp = now_iso()
-
-    connection = db()
-
-    connection.execute(
-        """
-        INSERT INTO tasks
-        (id, objective, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (
-            task_id,
-            objective,
-            "running",
-            timestamp,
-            timestamp,
-        ),
-    )
-
-    connection.commit()
-    connection.close()
-
-    return task_id
-
-
-def update_task(
-    task_id: str,
-    status: str,
-    result: Any,
-):
-    connection = db()
-
-    connection.execute(
-        """
-        UPDATE tasks
-        SET status = ?, result_json = ?, updated_at = ?
-        WHERE id = ?
-        """,
-        (
-            status,
-            json_dump(result),
-            now_iso(),
-            task_id,
-        ),
-    )
-
-    connection.commit()
-    connection.close()
-
-
-def get_task(task_id: str):
-    connection = db()
-
-    row = connection.execute(
-        "SELECT * FROM tasks WHERE id = ?",
-        (task_id,),
-    ).fetchone()
-
-    connection.close()
-
-    if not row:
-        return None
-
-    result = dict(row)
-
-    if result.get("result_json"):
-        try:
-            result["result"] = json.loads(
-                result["result_json"]
-            )
-        except Exception:
-            result["result"] = result["result_json"]
-
-    result.pop("result_json", None)
-
-    return result
-
-
-# ============================================================
-# MEMORY
-# ============================================================
 
 def save_memory(
     content: str,
-    memory_type: str = "verified",
-    confidence: float = 0.5,
-    provenance: Optional[Dict[str, Any]] = None,
-):
+    kind: str = "general",
+    verified: bool = False
+) -> str:
     memory_id = uid("memory")
 
     connection = db()
@@ -491,18 +255,15 @@ def save_memory(
     connection.execute(
         """
         INSERT INTO memories
-        (id, content, memory_type, confidence,
-         provenance_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?)
         """,
         (
             memory_id,
+            kind,
             content,
-            memory_type,
-            max(0.0, min(1.0, confidence)),
-            json_dump(provenance or {}),
-            now_iso(),
-        ),
+            int(verified),
+            now_iso()
+        )
     )
 
     connection.commit()
@@ -511,552 +272,643 @@ def save_memory(
     return memory_id
 
 
-def search_memory(
-    query: str,
-    limit: int = 8,
-):
+def save_task(
+    task_id: str,
+    objective: str,
+    status: str,
+    result: Any = None
+) -> None:
     connection = db()
 
-    rows = connection.execute(
+    connection.execute(
         """
-        SELECT *
-        FROM memories
-        WHERE content LIKE ?
-        ORDER BY created_at DESC
-        LIMIT ?
+        INSERT INTO tasks (
+            id,
+            objective,
+            status,
+            result_json,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+
+        ON CONFLICT(id) DO UPDATE SET
+            status = excluded.status,
+            result_json = excluded.result_json,
+            updated_at = excluded.updated_at
         """,
         (
-            f"%{query[:200]}%",
-            limit,
-        ),
-    ).fetchall()
+            task_id,
+            objective,
+            status,
+            json_dump(result)
+            if result is not None
+            else None,
+            now_iso(),
+            now_iso()
+        )
+    )
 
+    connection.commit()
     connection.close()
 
-    return [dict(row) for row in rows]
 
+def save_genome(
+    task_id: str,
+    genome: Dict[str, Any]
+) -> str:
+    genome_id = uid("genome")
 
-# ============================================================
-# INTENT ENGINE
-# ============================================================
+    connection = db()
 
-def classify_intent(objective: str):
-    text = objective.lower()
-
-    keyword_map = {
-        "software": [
-            "code",
-            "python",
-            "file",
-            "software",
-            "api",
-            "program",
-            "github",
-        ],
-        "research": [
-            "research",
-            "investigate",
-            "sources",
-            "evidence",
-            "study",
-            "literature",
-            "papers",
-        ],
-        "science": [
-            "science",
-            "scientific",
-            "experiment",
-            "physics",
-            "biology",
-        ],
-        "business": [
-            "business",
-            "market",
-            "company",
-            "startup",
-        ],
-        "content": [
-            "video",
-            "image",
-            "article",
-            "content",
-        ],
-    }
-
-    domains = []
-
-    for domain, terms in keyword_map.items():
-        if any(term in text for term in terms):
-            domains.append(domain)
-
-    if not domains:
-        domains.append("general")
-
-    research_intent = any(
-        term in text
-        for term in (
-            "research",
-            "investigate",
-            "sources",
-            "evidence",
-            "study",
-            "literature",
+    connection.execute(
+        """
+        INSERT INTO genomes
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            genome_id,
+            task_id,
+            json_dump(genome),
+            now_iso()
         )
     )
 
+    connection.commit()
+    connection.close()
+
+    return genome_id
+
+
+# ============================================================
+# TEXT ANALYSIS
+# ============================================================
+
+STOPWORDS = set(
+    """
+    a an and are as at be been being by for from had has have how
+    i if in into is it its me more most of on or our that the their
+    them there these they this to was were what when where which who
+    why will with you your about become need needed
+    """.split()
+)
+
+
+RESEARCH_KEYWORDS = {
+    "agent",
+    "agents",
+    "autonomous",
+    "autonomy",
+    "task",
+    "tasks",
+    "executor",
+    "executors",
+    "execution",
+    "reliable",
+    "reliability",
+    "planning",
+    "planner",
+    "tool",
+    "tools",
+    "verification",
+    "verify",
+    "safety",
+    "security",
+    "memory",
+    "evaluation",
+    "benchmark",
+    "failure",
+    "monitoring",
+    "control",
+    "reasoning",
+    "workflow",
+    "multi-agent",
+    "agentic",
+    "alignment",
+}
+
+
+def tokenize(text: str) -> set:
+    words = re.findall(
+        r"[a-z0-9][a-z0-9_-]{1,}",
+        text.lower()
+    )
+
     return {
-        "type": (
-            "research"
-            if research_intent
-            else "goal"
-        ),
-        "domains": domains,
-        "objective": objective,
-        "priority": "normal",
+        word
+        for word in words
+        if word not in STOPWORDS
     }
 
 
-# ============================================================
-# WORLD MODEL
-# ============================================================
+def research_keywords(text: str) -> set:
+    low = text.lower()
 
-def build_world_model(
-    objective: str,
-    intent: Dict[str, Any],
-):
     return {
-        "objective": objective,
-        "known_entities": [],
-        "events": [],
-        "relationships": [],
-        "resources": [
-            "local_python",
-            "local_filesystem",
-            "public_web",
-            "evidence_database",
-            "available_ai_model",
-        ],
-        "constraints": {
-            "free_first": True,
-            "no_automatic_spending": True,
-            "no_arbitrary_shell_execution": True,
-            "authorized_actions_only": True,
-            "evidence_gate": True,
-        },
-        "domains": intent["domains"],
-        "uncertainty": 0.5,
+        keyword
+        for keyword in RESEARCH_KEYWORDS
+        if keyword in low
     }
 
 
-# ============================================================
-# DREAM ENGINE
-# ============================================================
+def relevance_score(
+    question: str,
+    title: str,
+    text: str,
+    url: str
+) -> float:
+    question_tokens = tokenize(question)
 
-def dream_strategies():
-    return [
-        {
-            "strategy": "evidence_first",
-            "description":
-                "Collect external evidence before factual conclusions.",
-        },
-        {
-            "strategy": "parallel_specialists",
-            "description":
-                "Use researcher, analyst and critic perspectives.",
-        },
-        {
-            "strategy": "independent_verification",
-            "description":
-                "Check important claims against multiple sources.",
-        },
-        {
-            "strategy": "failure_first",
-            "description":
-                "Predict failure modes before execution.",
-        },
-        {
-            "strategy": "reuse_memory",
-            "description":
-                "Reuse previously verified intelligence.",
-        },
-        {
-            "strategy": "counterfactual_search",
-            "description":
-                "Explore alternative explanations and strategies.",
-        },
-    ]
+    if not question_tokens:
+        return 0.0
 
+    title_tokens = tokenize(title)
+    text_tokens = tokenize(text[:50000])
 
-def build_counterfactuals(strategies):
-    return [
-        {
-            "world": item["strategy"],
-            "assumption": item["description"],
-            "status": "simulation_only",
-        }
-        for item in strategies
-    ]
+    title_overlap = (
+        len(question_tokens & title_tokens)
+        / max(1, len(question_tokens))
+    )
 
+    text_overlap = (
+        len(question_tokens & text_tokens)
+        / max(1, len(question_tokens))
+    )
 
-# ============================================================
-# TEMPORARY MINDS
-# ============================================================
+    q_keywords = research_keywords(question)
 
-def create_temporary_minds(domains):
-    roles = [
-        ("researcher", "research"),
-        ("analyst", "analysis"),
-        ("critic", "verification"),
-        ("engineer", "software"),
-    ]
+    source_keywords = research_keywords(
+        title + " " + text[:30000]
+    )
 
-    minds = []
+    keyword_overlap = (
+        len(q_keywords & source_keywords)
+        / max(1, len(q_keywords))
+    )
 
-    for name, role in roles:
-        if (
-            role in domains
-            or role in ("analysis", "verification")
-        ):
-            minds.append(
-                {
-                    "id": uid("mind"),
-                    "name": name,
-                    "role": role,
-                    "temporary": True,
-                    "status": "ready",
-                }
-            )
+    domain = urlparse(url).netloc.lower()
 
-    if not minds:
-        minds.append(
-            {
-                "id": uid("mind"),
-                "name": "generalist",
-                "role": "general",
-                "temporary": True,
-                "status": "ready",
-            }
-        )
+    domain_bonus = 0.0
 
-    return minds
+    if (
+        "arxiv.org" in domain
+        or "crossref.org" in domain
+        or "doi.org" in domain
+        or "openalex.org" in domain
+    ):
+        domain_bonus = 0.05
+
+    if "wikipedia.org" in domain:
+        domain_bonus = -0.05
+
+    score = (
+        0.55 * title_overlap
+        + 0.30 * text_overlap
+        + 0.15 * keyword_overlap
+        + domain_bonus
+    )
+
+    return round(
+        max(0.0, min(1.0, score)),
+        4
+    )
 
 
 # ============================================================
-# HTML EXTRACTION
+# HTTP SOURCE FETCHING
 # ============================================================
 
-class TextExtractor(HTMLParser):
+def extract_title(
+    text: str,
+    fallback: str
+) -> str:
+    match = re.search(
+        r"<title[^>]*>(.*?)</title>",
+        text,
+        re.I | re.S
+    )
 
-    def __init__(self):
-        super().__init__()
-        self.parts = []
-        self.title_parts = []
-        self.in_title = False
-        self.skip_depth = 0
-
-    def handle_starttag(self, tag, attrs):
-        tag = tag.lower()
-
-        if tag == "title":
-            self.in_title = True
-
-        if tag in (
-            "script",
-            "style",
-            "noscript",
-            "svg",
-        ):
-            self.skip_depth += 1
-
-    def handle_endtag(self, tag):
-        tag = tag.lower()
-
-        if tag == "title":
-            self.in_title = False
-
-        if tag in (
-            "script",
-            "style",
-            "noscript",
-            "svg",
-        ):
-            self.skip_depth = max(
-                0,
-                self.skip_depth - 1,
-            )
-
-    def handle_data(self, data):
-        if self.skip_depth:
-            return
-
-        value = re.sub(
+    if match:
+        title = re.sub(
             r"\s+",
             " ",
-            data,
+            re.sub(
+                r"<[^>]+>",
+                " ",
+                match.group(1)
+            )
         ).strip()
 
-        if not value:
-            return
+        if title:
+            return title[:500]
 
-        if self.in_title:
-            self.title_parts.append(value)
-
-        self.parts.append(value)
-
-    def text(self):
-        return " ".join(self.parts)
-
-    def title(self):
-        return " ".join(self.title_parts).strip()
+    return fallback[:500]
 
 
-def extract_html(raw: str):
-    parser = TextExtractor()
-
-    try:
-        parser.feed(raw)
-    except Exception:
-        pass
-
-    return {
-        "title": parser.title()[:500],
-        "text": re.sub(
-            r"\s+",
-            " ",
-            parser.text(),
-        ).strip(),
-    }
-
-
-# ============================================================
-# RESEARCH QUERY COMPILER
-# ============================================================
-
-def research_query_terms(query: str) -> str:
-    text = re.sub(
-        r"https?://\S+",
-        " ",
-        query,
+def clean_text(
+    data: bytes,
+    content_type: str
+) -> str:
+    text = data.decode(
+        "utf-8",
+        errors="replace"
     )
 
-    text = re.sub(
-        r"[^A-Za-z0-9\s\-]",
-        " ",
-        text,
-    )
-
-    stop = {
-        "research",
-        "what",
-        "how",
-        "why",
-        "need",
-        "needs",
-        "become",
-        "becoming",
-        "reliable",
-        "collect",
-        "multiple",
-        "public",
-        "sources",
-        "separate",
-        "evidence",
-        "supported",
-        "facts",
-        "assumptions",
-        "verify",
-        "verification",
-        "save",
-        "create",
-        "intelligence",
-        "genome",
-        "and",
-        "the",
-        "for",
-        "with",
-        "from",
-        "into",
-        "that",
-        "this",
-        "are",
-        "is",
-        "to",
-        "of",
-        "a",
-        "an",
-        "on",
-        "in",
-        "as",
-        "by",
-        "or",
-    }
-
-    words = []
-
-    for word in text.lower().split():
-        if (
-            len(word) >= 4
-            and word not in stop
-            and word not in words
-        ):
-            words.append(word)
-
-    return " ".join(words[:14]) or query[:200]
-
-
-# ============================================================
-# DISCOVERY PROVIDER 1 — DIRECT URL
-# ============================================================
-
-def discover_direct_urls(query: str):
-    results = []
-
-    for match in re.findall(
-        r"https?://[^\s<>\"']+",
-        query,
+    if (
+        "html" in content_type.lower()
+        or "<html" in text[:1000].lower()
     ):
-        url = normalize_url(
-            match.rstrip(".,);")
+        text = re.sub(
+            r"(?is)<script.*?</script>",
+            " ",
+            text
         )
 
-        if url:
-            results.append(
-                {
-                    "url": url,
-                    "domain": domain_of(url),
-                    "method": "direct_url",
-                }
+        text = re.sub(
+            r"(?is)<style.*?</style>",
+            " ",
+            text
+        )
+
+        text = re.sub(
+            r"(?is)<noscript.*?</noscript>",
+            " ",
+            text
+        )
+
+        text = re.sub(
+            r"<[^>]+>",
+            " ",
+            text
+        )
+
+        text = re.sub(
+            r"&nbsp;",
+            " ",
+            text,
+            flags=re.I
+        )
+
+        text = re.sub(
+            r"&amp;",
+            "&",
+            text,
+            flags=re.I
+        )
+
+        text = re.sub(
+            r"&quot;",
+            '"',
+            text,
+            flags=re.I
+        )
+
+        text = re.sub(
+            r"&#39;",
+            "'",
+            text,
+            flags=re.I
+        )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    ).strip()
+
+    return text[:MAX_SOURCE_BYTES]
+
+
+def fetch_url(url: str) -> Dict[str, Any]:
+    parsed = urlparse(url)
+
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("unsupported_url")
+
+    if not parsed.netloc:
+        raise ValueError("missing_domain")
+
+    response = requests.get(
+        url,
+        timeout=REQUEST_TIMEOUT,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": (
+                "text/html,"
+                "text/plain,"
+                "application/json,"
+                "*/*;q=0.2"
             )
+        },
+        allow_redirects=True,
+        stream=True
+    )
+
+    content = bytearray()
+
+    for chunk in response.iter_content(8192):
+        content.extend(chunk)
+
+        if len(content) > MAX_SOURCE_BYTES:
+            break
+
+    raw = bytes(content)
+
+    content_type = response.headers.get(
+        "content-type",
+        ""
+    )
+
+    text = clean_text(
+        raw,
+        content_type
+    )
+
+    final_url = response.url
+
+    title = extract_title(
+        text,
+        final_url
+    )
+
+    digest = hashlib.sha256(raw).hexdigest()
+
+    return {
+        "url": final_url,
+        "title": title,
+        "text": text,
+        "hash": digest,
+        "http_status": response.status_code,
+        "content_type": content_type,
+        "content_length": len(raw),
+        "retrieved_at": now_iso()
+    }
+
+
+# ============================================================
+# RESEARCH PROVIDERS
+# ============================================================
+
+def arxiv_search(
+    query: str,
+    limit: int = 5
+) -> List[Dict[str, Any]]:
+    url = (
+        "https://export.arxiv.org/api/query"
+        "?search_query=all:"
+        + quote(query)
+        + f"&start=0&max_results={limit}"
+    )
+
+    response = requests.get(
+        url,
+        timeout=REQUEST_TIMEOUT,
+        headers={"User-Agent": USER_AGENT}
+    )
+
+    response.raise_for_status()
+
+    entries = re.findall(
+        r"<entry>(.*?)</entry>",
+        response.text,
+        re.S
+    )
+
+    results = []
+
+    for entry in entries:
+        title = re.search(
+            r"<title>(.*?)</title>",
+            entry,
+            re.S
+        )
+
+        summary = re.search(
+            r"<summary>(.*?)</summary>",
+            entry,
+            re.S
+        )
+
+        link = re.search(
+            r'<link[^>]+href="([^"]+)"',
+            entry
+        )
+
+        if not title or not link:
+            continue
+
+        title_text = re.sub(
+            r"\s+",
+            " ",
+            title.group(1)
+        ).strip()
+
+        summary_text = ""
+
+        if summary:
+            summary_text = re.sub(
+                r"\s+",
+                " ",
+                summary.group(1)
+            ).strip()
+
+        results.append(
+            {
+                "title": title_text,
+                "url": link.group(1),
+                "snippet": summary_text,
+                "provider": "arxiv"
+            }
+        )
 
     return results
 
 
-# ============================================================
-# DISCOVERY PROVIDER 2 — WIKIPEDIA
-# ============================================================
+def crossref_search(
+    query: str,
+    limit: int = 5
+) -> List[Dict[str, Any]]:
+    url = (
+        "https://api.crossref.org/works"
+        "?query.bibliographic="
+        + quote(query)
+        + f"&rows={limit}"
+    )
 
-def discover_wikipedia(query: str):
-    search = research_query_terms(query)
+    response = requests.get(
+        url,
+        timeout=REQUEST_TIMEOUT,
+        headers={"User-Agent": USER_AGENT}
+    )
 
+    response.raise_for_status()
+
+    items = (
+        response.json()
+        .get("message", {})
+        .get("items", [])
+    )
+
+    results = []
+
+    for item in items:
+        title = (
+            item.get("title") or [""]
+        )[0]
+
+        doi = item.get("DOI")
+
+        if not title or not doi:
+            continue
+
+        results.append(
+            {
+                "title": title,
+                "url": "https://doi.org/" + doi,
+                "snippet": (
+                    item.get("abstract")
+                    or ""
+                )[:3000],
+                "provider": "crossref"
+            }
+        )
+
+    return results
+
+
+def openalex_search(
+    query: str,
+    limit: int = 5
+) -> List[Dict[str, Any]]:
+    url = (
+        "https://api.openalex.org/works"
+        "?search="
+        + quote(query)
+        + f"&per-page={limit}"
+    )
+
+    response = requests.get(
+        url,
+        timeout=REQUEST_TIMEOUT,
+        headers={"User-Agent": USER_AGENT}
+    )
+
+    response.raise_for_status()
+
+    items = response.json().get(
+        "results",
+        []
+    )
+
+    results = []
+
+    for item in items:
+        title = item.get(
+            "display_name",
+            ""
+        )
+
+        location = item.get(
+            "primary_location"
+        ) or {}
+
+        landing_url = (
+            location.get("landing_page_url")
+            or item.get("doi")
+        )
+
+        if not title or not landing_url:
+            continue
+
+        if landing_url.startswith(
+            "https://doi.org/"
+        ):
+            final_url = landing_url
+
+        elif landing_url.startswith(
+            "http"
+        ):
+            final_url = landing_url
+
+        else:
+            final_url = (
+                "https://openalex.org/"
+                + str(item.get("id", "")).split("/")[-1]
+            )
+
+        abstract_index = (
+            item.get("abstract_inverted_index")
+            or {}
+        )
+
+        abstract = " ".join(
+            abstract_index.keys()
+        )
+
+        results.append(
+            {
+                "title": title,
+                "url": final_url,
+                "snippet": abstract[:3000],
+                "provider": "openalex"
+            }
+        )
+
+    return results
+
+
+def wikipedia_search(
+    query: str,
+    limit: int = 5
+) -> List[Dict[str, Any]]:
     url = (
         "https://en.wikipedia.org/w/api.php"
         "?action=query"
         "&list=search"
-        "&format=json"
-        "&formatversion=2"
-        "&srlimit=5"
         "&srsearch="
-        + quote_plus(search)
+        + quote(query)
+        + f"&srlimit={limit}"
+        "&format=json"
     )
 
-    response = request_get(
+    response = requests.get(
         url,
-        headers={
-            "Accept": "application/json",
-        },
+        timeout=REQUEST_TIMEOUT,
+        headers={"User-Agent": USER_AGENT}
     )
 
-    if response.status_code != 200:
-        return []
+    response.raise_for_status()
 
-    data = response.json()
+    items = (
+        response.json()
+        .get("query", {})
+        .get("search", [])
+    )
 
     results = []
 
-    for item in data.get(
-        "query",
-        {},
-    ).get(
-        "search",
-        [],
-    ):
-        title = item.get("title", "")
+    for item in items:
+        title = item.get(
+            "title",
+            ""
+        )
 
         if not title:
             continue
 
-        page_url = (
-            "https://en.wikipedia.org/wiki/"
-            + quote_plus(
-                title.replace(" ", "_")
-            )
-        )
-
         results.append(
             {
-                "url": normalize_url(page_url),
-                "domain": "en.wikipedia.org",
                 "title": title,
-                "method": "wikipedia_api",
-            }
-        )
-
-    return results
-
-
-# ============================================================
-# DISCOVERY PROVIDER 3 — ARXIV
-# ============================================================
-
-def discover_arxiv(query: str):
-    search = research_query_terms(query)
-
-    url = (
-        "https://export.arxiv.org/api/query"
-        "?search_query=all:"
-        + quote_plus(search)
-        + "&start=0"
-        "&max_results=5"
-    )
-
-    response = request_get(url)
-
-    if response.status_code != 200:
-        return []
-
-    root = ET.fromstring(response.text)
-
-    namespace = {
-        "a": "http://www.w3.org/2005/Atom"
-    }
-
-    results = []
-
-    for entry in root.findall(
-        "a:entry",
-        namespace,
-    ):
-        identifier = (
-            entry.findtext(
-                "a:id",
-                default="",
-                namespaces=namespace,
-            )
-            or ""
-        ).strip()
-
-        title = (
-            entry.findtext(
-                "a:title",
-                default="",
-                namespaces=namespace,
-            )
-            or ""
-        ).strip()
-
-        if not identifier.startswith("http"):
-            continue
-
-        results.append(
-            {
-                "url": normalize_url(identifier),
-                "domain": domain_of(identifier),
-                "title": re.sub(
-                    r"\s+",
+                "url": (
+                    "https://en.wikipedia.org/wiki/"
+                    + quote(title.replace(" ", "_"))
+                ),
+                "snippet": re.sub(
+                    r"<[^>]+>",
                     " ",
-                    title,
+                    item.get("snippet", "")
                 ),
-                "method": "arxiv_api",
+                "provider": "wikipedia"
             }
         )
 
@@ -1064,211 +916,108 @@ def discover_arxiv(query: str):
 
 
 # ============================================================
-# DISCOVERY PROVIDER 4 — CROSSREF
+# QUERY EXPANSION
 # ============================================================
 
-def discover_crossref(query: str):
-    search = research_query_terms(query)
+def expand_queries(
+    question: str
+) -> List[str]:
+    base = re.sub(
+        r"\s+",
+        " ",
+        question
+    ).strip()
 
-    url = (
-        "https://api.crossref.org/v1/works"
-        "?rows=5"
-        "&select=DOI,title,URL,abstract,published"
-        "&query.bibliographic="
-        + quote_plus(search)
-    )
-
-    response = request_get(
-        url,
-        headers={
-            "Accept": "application/json",
-        },
-    )
-
-    if response.status_code != 200:
-        return []
-
-    data = response.json()
-
-    results = []
-
-    for item in data.get(
-        "message",
-        {},
-    ).get(
-        "items",
-        [],
-    ):
-        doi = item.get("DOI", "")
-        raw_url = item.get("URL", "")
-
-        url_value = raw_url
-
-        if not url_value and doi:
-            url_value = (
-                "https://doi.org/"
-                + doi
-            )
-
-        normalized = normalize_url(
-            url_value
-        )
-
-        if not normalized:
-            continue
-
-        title = " ".join(
-            item.get("title", [])
-        ).strip()
-
-        results.append(
-            {
-                "url": normalized,
-                "domain": domain_of(normalized),
-                "title": title,
-                "method": "crossref_api",
-                "metadata": {
-                    "doi": doi,
-                    "abstract": item.get(
-                        "abstract",
-                        "",
-                    ),
-                    "published": item.get(
-                        "published",
-                        {},
-                    ),
-                },
-            }
-        )
-
-    return results
-
-
-# ============================================================
-# DISCOVERY PROVIDER 5 — OPENALEX
-# ============================================================
-
-def discover_openalex(query: str):
-    search = research_query_terms(query)
-
-    url = (
-        "https://api.openalex.org/works"
-        "?per-page=5"
-        "&search="
-        + quote_plus(search)
-    )
-
-    response = request_get(
-        url,
-        headers={
-            "Accept": "application/json",
-        },
-    )
-
-    if response.status_code != 200:
-        return []
-
-    data = response.json()
-
-    results = []
-
-    for item in data.get(
-        "results",
-        [],
-    ):
-        raw_url = (
-            item.get("doi")
-            or item.get("id")
-            or ""
-        )
-
-        normalized = normalize_url(
-            raw_url
-        )
-
-        if not normalized:
-            continue
-
-        results.append(
-            {
-                "url": normalized,
-                "domain": domain_of(normalized),
-                "title": item.get(
-                    "title",
-                    "",
-                ),
-                "method": "openalex_api",
-                "metadata": {
-                    "openalex_id":
-                        item.get("id", ""),
-                    "publication_year":
-                        item.get(
-                            "publication_year"
-                        ),
-                    "type":
-                        item.get(
-                            "type",
-                            "",
-                        ),
-                },
-            }
-        )
-
-    return results
-
-
-# ============================================================
-# DISCOVERY ORCHESTRATOR
-# ============================================================
-
-def discover_sources(query: str):
-    providers = [
+    queries = [
+        base,
         (
-            "direct_url",
-            discover_direct_urls,
+            "reliable autonomous AI agents "
+            "task execution verification planning"
         ),
         (
-            "wikipedia",
-            discover_wikipedia,
+            "AI agent reliability tool use "
+            "evaluation failure recovery safety"
         ),
         (
-            "arxiv",
-            discover_arxiv,
-        ),
-        (
-            "crossref",
-            discover_crossref,
-        ),
-        (
-            "openalex",
-            discover_openalex,
-        ),
+            "autonomous agents planning execution "
+            "monitoring verification benchmark"
+        )
     ]
 
-    discovered = []
+    return list(
+        dict.fromkeys(queries)
+    )
+
+
+# ============================================================
+# SOURCE DISCOVERY
+# ============================================================
+
+def dedupe_sources(
+    items: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    seen = set()
+    results = []
+
+    for item in items:
+        url = item.get(
+            "url",
+            ""
+        )
+
+        normalized = re.sub(
+            r"^https?://",
+            "",
+            url
+        ).rstrip("/").lower()
+
+        if not normalized:
+            continue
+
+        if normalized in seen:
+            continue
+
+        seen.add(normalized)
+        results.append(item)
+
+    return results
+
+
+def discover_sources(
+    question: str
+) -> Dict[str, Any]:
+    providers = [
+        ("arxiv", arxiv_search),
+        ("crossref", crossref_search),
+        ("openalex", openalex_search),
+        ("wikipedia", wikipedia_search)
+    ]
+
+    all_results = []
     diagnostics = []
 
     for name, provider in providers:
         started = time.time()
 
         try:
-            items = provider(query)
+            batch = provider(
+                question,
+                5
+            )
+
+            all_results.extend(batch)
 
             diagnostics.append(
                 {
                     "provider": name,
                     "status": "ok",
-                    "count": len(items),
-                    "latency_ms": round(
-                        (
-                            time.time()
-                            - started
-                        ) * 1000
-                    ),
+                    "count": len(batch),
+                    "latency_ms": int(
+                        (time.time() - started)
+                        * 1000
+                    )
                 }
             )
-
-            discovered.extend(items)
 
         except Exception as exc:
             diagnostics.append(
@@ -1276,2071 +1025,1491 @@ def discover_sources(query: str):
                     "provider": name,
                     "status": "error",
                     "count": 0,
-                    "error": str(exc)[:500],
-                    "latency_ms": round(
-                        (
-                            time.time()
-                            - started
-                        ) * 1000
+                    "latency_ms": int(
+                        (time.time() - started)
+                        * 1000
                     ),
+                    "error": str(exc)[:300]
                 }
             )
 
-    unique = {}
+    return {
+        "items": dedupe_sources(
+            all_results
+        ),
+        "diagnostics": diagnostics
+    }
+
+
+# ============================================================
+# SOURCE COLLECTION + RELEVANCE GATE
+# ============================================================
+
+def collect_relevant_sources(
+    task_id: str,
+    question: str,
+    discovered: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    candidates = []
 
     for item in discovered:
-        url = normalize_url(
-            item.get("url", "")
-        )
+        try:
+            fetched = fetch_url(
+                item["url"]
+            )
 
-        if not url:
+            if (
+                fetched["http_status"] < 200
+                or fetched["http_status"] >= 400
+            ):
+                continue
+
+            score = relevance_score(
+                question,
+                item.get("title", ""),
+                fetched["text"],
+                fetched["url"]
+            )
+
+            # TARGET-2.3:
+            # Reject weakly related sources.
+            if score < 0.20:
+                continue
+
+            candidates.append(
+                {
+                    **item,
+                    **fetched,
+                    "relevance": score,
+                    "domain": urlparse(
+                        fetched["url"]
+                    ).netloc.lower()
+                }
+            )
+
+        except Exception:
             continue
 
-        if url not in unique:
-            item["url"] = url
-            unique[url] = item
-
-    results = list(unique.values())[
-        :MAX_SEARCH_RESULTS
-    ]
-
-    return results, diagnostics
-
-
-# ============================================================
-# SOURCE FETCH
-# ============================================================
-
-def fetch_source(
-    task_id: str,
-    source: Dict[str, Any],
-):
-    url = normalize_url(
-        source.get("url", "")
+    candidates.sort(
+        key=lambda item: item["relevance"],
+        reverse=True
     )
 
-    if not url:
-        return None
+    # Prefer source diversity.
+    selected = []
+    domains = set()
 
-    try:
-        response = request_get(
-            url,
-            headers={
-                "Accept":
-                    "text/html,text/plain,"
-                    "application/xhtml+xml,"
-                    "application/xml,"
-                    "application/json",
-            },
-        )
-
-        final_url = normalize_url(
-            response.url
-        ) or url
-
-        status = response.status_code
-
-        if status >= 400:
-            log_event(
-                task_id,
-                "source_fetch_failed",
-                {
-                    "url": url,
-                    "status": status,
-                },
-            )
-            return None
-
-        raw = response.text[:500000]
-
-        content_type = response.headers.get(
-            "content-type",
-            "",
-        ).lower()
+    for candidate in candidates:
+        domain = candidate["domain"]
 
         if (
-            "text/html" in content_type
-            or "application/xhtml" in content_type
+            domain not in domains
+            or len(selected) < 3
         ):
-            extracted = extract_html(raw)
+            selected.append(candidate)
+            domains.add(domain)
 
-            title = (
-                extracted["title"]
-                or source.get("title")
-                or final_url
-            )
-
-            text = extracted["text"]
-
-        elif "json" in content_type:
-            title = (
-                source.get("title")
-                or final_url
-            )
-            text = raw
-
-        else:
-            title = (
-                source.get("title")
-                or final_url
-            )
-            text = raw
-
-        text = re.sub(
-            r"\s+",
-            " ",
-            text,
-        ).strip()
-
-        text = text[:MAX_SOURCE_CHARS]
-
-        if len(text) < 120:
-            return None
-
-        content_hash = sha256_text(text)
-
-        metadata = {
-            "discovery_method":
-                source.get(
-                    "method",
-                    "unknown",
-                ),
-            "domain":
-                domain_of(final_url),
-            "original_url": url,
-            "final_url": final_url,
-            "http_status": status,
-            "content_type":
-                content_type,
-            "content_length":
-                len(text),
-            "retrieved_at":
-                now_iso(),
-        }
-
-        source_id = uid("source")
-
-        connection = db()
-
-        connection.execute(
-            """
-            INSERT INTO sources
-            (id, task_id, url, domain, title,
-             discovery_method, fetched,
-             http_status, content_hash,
-             retrieved_at, metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                source_id,
-                task_id,
-                final_url,
-                domain_of(final_url),
-                title,
-                source.get(
-                    "method",
-                    "unknown",
-                ),
-                1,
-                status,
-                content_hash,
-                now_iso(),
-                json_dump(metadata),
-            ),
-        )
-
-        connection.commit()
-        connection.close()
-
-        return {
-            "source_id": source_id,
-            "url": final_url,
-            "title": title,
-            "domain":
-                domain_of(final_url),
-            "text": text,
-            "content_hash":
-                content_hash,
-            "metadata":
-                metadata,
-        }
-
-    except Exception as exc:
-        log_event(
-            task_id,
-            "source_fetch_failed",
-            {
-                "url": url,
-                "error": str(exc)[:500],
-            },
-        )
-
-        return None
-
-
-# ============================================================
-# EVIDENCE
-# ============================================================
-
-def save_evidence(
-    task_id: str,
-    source: Dict[str, Any],
-    excerpt: str,
-    claim: str = "",
-):
-    evidence_id = uid("evidence")
+        if len(selected) >= 12:
+            break
 
     connection = db()
 
-    connection.execute(
-        """
-        INSERT INTO evidence
-        (id, task_id, source_url,
-         source_title, claim, excerpt,
-         content_hash, retrieved_at,
-         verification_status,
-         metadata_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            evidence_id,
-            task_id,
-            source["url"],
-            source["title"],
-            claim,
-            excerpt[:5000],
-            source["content_hash"],
-            now_iso(),
-            "collected",
-            json_dump(
-                source.get(
-                    "metadata",
-                    {},
-                )
-            ),
-        ),
-    )
+    saved = []
+
+    for source in selected:
+        evidence_id = uid("evidence")
+
+        connection.execute(
+            """
+            INSERT INTO evidence
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                evidence_id,
+                task_id,
+                source["url"],
+                source["title"],
+                source["domain"],
+                "",
+                source["text"][:5000],
+                source["hash"],
+                "collected",
+                source["relevance"],
+                json_dump(
+                    {
+                        "provider": source.get(
+                            "provider"
+                        ),
+                        "http_status": source.get(
+                            "http_status"
+                        ),
+                        "content_type": source.get(
+                            "content_type"
+                        ),
+                        "content_length": source.get(
+                            "content_length"
+                        ),
+                        "retrieved_at": source.get(
+                            "retrieved_at"
+                        )
+                    }
+                ),
+                now_iso()
+            )
+        )
+
+        source["evidence_id"] = evidence_id
+        saved.append(source)
 
     connection.commit()
     connection.close()
 
-    return evidence_id
+    return {
+        "selected": saved,
+        "candidate_count": len(candidates),
+        "domains": sorted(domains)
+    }
 
 
-def evidence_for_task(task_id: str):
-    connection = db()
+# ============================================================
+# CLAIM EXTRACTION
+# ============================================================
 
-    rows = connection.execute(
-        """
-        SELECT *
-        FROM evidence
-        WHERE task_id = ?
-        ORDER BY retrieved_at ASC
-        """,
-        (task_id,),
-    ).fetchall()
+CLAIM_PATTERNS = [
+    (
+        "reliability",
+        re.compile(
+            r"(?i).{0,140}"
+            r"(reliab|robust|failure|evaluation|benchmark)"
+            r".{0,300}[.!?]"
+        )
+    ),
+    (
+        "planning",
+        re.compile(
+            r"(?i).{0,140}"
+            r"(planning|planner|reasoning|control)"
+            r".{0,300}[.!?]"
+        )
+    ),
+    (
+        "safety",
+        re.compile(
+            r"(?i).{0,140}"
+            r"(safety|security|privacy|alignment)"
+            r".{0,300}[.!?]"
+        )
+    ),
+    (
+        "execution",
+        re.compile(
+            r"(?i).{0,140}"
+            r"(execution|tool use|action|autonomous)"
+            r".{0,300}[.!?]"
+        )
+    )
+]
 
-    connection.close()
 
-    result = []
+def extract_claims(
+    question: str,
+    sources: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    claims = []
 
-    for row in rows:
-        item = dict(row)
+    for source in sources:
+        local_claims = []
 
-        try:
-            item["metadata"] = json.loads(
-                item.pop(
-                    "metadata_json"
+        text = source["text"]
+
+        for category, pattern in CLAIM_PATTERNS:
+            for match in pattern.finditer(text):
+                excerpt = re.sub(
+                    r"\s+",
+                    " ",
+                    match.group(0)
+                ).strip()
+
+                if (
+                    len(excerpt) >= 80
+                    and len(excerpt) <= 700
+                ):
+                    local_claims.append(
+                        (
+                            category,
+                            excerpt
+                        )
+                    )
+
+                if len(local_claims) >= 4:
+                    break
+
+        for category, excerpt in local_claims[:4]:
+            claims.append(
+                {
+                    "category": category,
+                    "claim": excerpt,
+                    "evidence_id": source[
+                        "evidence_id"
+                    ],
+                    "source_url": source["url"],
+                    "source_title": source["title"],
+                    "domain": source["domain"]
+                }
+            )
+
+    return claims
+
+
+# ============================================================
+# CLAIM VERIFICATION
+# ============================================================
+
+def verify_claims(
+    claims: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    verified = []
+    unsupported = []
+
+    for index, claim in enumerate(claims):
+        if not claim.get("claim"):
+            unsupported.append(claim)
+            continue
+
+        if not claim.get("evidence_id"):
+            unsupported.append(claim)
+            continue
+
+        claim_tokens = tokenize(
+            claim["claim"]
+        )
+
+        corroborating = []
+
+        for other_index, other in enumerate(claims):
+            if index == other_index:
+                continue
+
+            if (
+                other.get("domain")
+                == claim.get("domain")
+            ):
+                continue
+
+            other_tokens = tokenize(
+                other["claim"]
+            )
+
+            overlap = (
+                len(
+                    claim_tokens
+                    & other_tokens
+                )
+                / max(
+                    1,
+                    len(claim_tokens)
                 )
             )
-        except Exception:
-            item["metadata"] = {}
 
-        result.append(item)
+            if overlap >= 0.20:
+                corroborating.append(
+                    other
+                )
 
-    return result
+        verified_claim = dict(
+            claim
+        )
+
+        verified_claim[
+            "corroborated_by"
+        ] = [
+            item["evidence_id"]
+            for item in corroborating[:5]
+        ]
+
+        if corroborating:
+            verified_claim[
+                "verification_status"
+            ] = "corroborated"
+
+            verified_claim[
+                "confidence"
+            ] = 0.90
+
+        else:
+            verified_claim[
+                "verification_status"
+            ] = "source_supported"
+
+            verified_claim[
+                "confidence"
+            ] = 0.72
+
+        verified.append(
+            verified_claim
+        )
+
+    return {
+        "verified_claims": verified,
+        "unsupported_claims": unsupported,
+        "corroboration_count": sum(
+            1
+            for claim in verified
+            if claim[
+                "verification_status"
+            ] == "corroborated"
+        )
+    }
 
 
 # ============================================================
-# EVIDENCE EXCERPT SELECTOR
+# RESEARCH PIPELINE
 # ============================================================
 
-def select_evidence_excerpt(
-    text: str,
-    query: str,
-    max_chars: int = 4500,
-):
-    clean = re.sub(
-        r"\s+",
-        " ",
-        text or "",
-    ).strip()
-
-    if not clean:
-        return ""
-
-    sentences = re.split(
-        r"(?<=[.!?])\s+",
-        clean,
+def research_pipeline(
+    task_id: str,
+    question: str
+) -> Dict[str, Any]:
+    expanded = expand_queries(
+        question
     )
 
-    terms = [
-        term
-        for term in re.findall(
-            r"[A-Za-z0-9]{4,}",
-            research_query_terms(
-                query
-            ).lower(),
-        )
+    discovery = discover_sources(
+        question
+    )
+
+    discovered = discovery[
+        "items"
     ]
 
-    ranked = []
-
-    for index, sentence in enumerate(
-        sentences
-    ):
-        lower = sentence.lower()
-
-        score = sum(
-            1
-            for term in terms
-            if term in lower
-        )
-
-        if score:
-            ranked.append(
-                (
-                    score,
-                    -index,
-                    sentence,
-                )
-            )
-
-    ranked.sort(reverse=True)
-
-    selected = []
-    total = 0
-
-    for _, _, sentence in ranked:
-        if (
-            total
-            + len(sentence)
-            + 1
-            > max_chars
-        ):
-            continue
-
-        selected.append(sentence)
-        total += len(sentence) + 1
-
-        if len(selected) >= 8:
-            break
-
-    if not selected:
-        return clean[:max_chars]
-
-    return " ".join(selected)[:max_chars]
-
-
-# ============================================================
-# EVIDENCE GATE
-# ============================================================
-
-def evidence_gate(
-    evidence: List[Dict[str, Any]],
-):
-    valid = []
-    domains = set()
-
-    for item in evidence:
-        url = item.get(
-            "source_url",
-            "",
-        )
-
-        excerpt = item.get(
-            "excerpt",
-            "",
-        )
-
-        content_hash = item.get(
-            "content_hash",
-            "",
-        )
-
-        if (
-            url
-            and excerpt
-            and content_hash
-        ):
-            valid.append(item)
-
-            domain = domain_of(url)
-
-            if domain:
-                domains.add(domain)
-
-    domain_list = sorted(domains)
-
-    if not valid:
-        return {
-            "passed": False,
-            "status":
-                "insufficient_evidence",
-            "reason":
-                "No valid collected evidence exists.",
-            "evidence_count": 0,
-            "independent_domains": 0,
-            "domains": [],
-            "minimum_evidence_required": 2,
-        }
-
-    if (
-        len(valid) < 2
-        or len(domain_list) < 2
-    ):
-        return {
-            "passed": False,
-            "status":
-                "insufficient_independent_evidence",
-            "reason":
-                "At least two evidence records from two independent domains are required.",
-            "evidence_count": len(valid),
-            "independent_domains":
-                len(domain_list),
-            "domains": domain_list,
-            "minimum_evidence_required": 2,
-        }
-
-    return {
-        "passed": True,
-        "status":
-            "evidence_available",
-        "reason":
-            "Collected evidence passed structural and source-diversity validation.",
-        "evidence_count": len(valid),
-        "independent_domains":
-            len(domain_list),
-        "domains": domain_list,
-        "minimum_evidence_required": 2,
-    }
-
-
-# ============================================================
-# HUGGING FACE REASONING
-# ============================================================
-
-def call_hf(
-    prompt: str,
-    model: Optional[str] = None,
-):
-    if not HF_TOKEN:
-        return None
-
-    selected_model = (
-        model
-        or HF_MODEL
+    collected = collect_relevant_sources(
+        task_id,
+        question,
+        discovered
     )
 
-    payload = {
-        "model": selected_model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are the reasoning layer "
-                    "of AI Infinity. "
-                    "Never invent sources, URLs, "
-                    "citations, experiments, "
-                    "evidence, or Evidence IDs. "
-                    "Only use supplied evidence."
-                ),
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
-        ],
-        "temperature": 0.1,
-        "max_tokens": 1800,
-    }
+    sources = collected[
+        "selected"
+    ]
 
-    try:
-        response = requests.post(
-            HF_URL,
-            headers={
-                "Authorization":
-                    f"Bearer {HF_TOKEN}",
-                "Content-Type":
-                    "application/json",
-            },
-            json=payload,
-            timeout=45,
+    domains = sorted(
+        set(
+            source["domain"]
+            for source in sources
         )
-
-        if response.status_code >= 400:
-            return None
-
-        data = response.json()
-
-        choices = data.get(
-            "choices",
-            [],
-        )
-
-        if not choices:
-            return None
-
-        content = choices[0].get(
-            "message",
-            {},
-        ).get("content")
-
-        if not content:
-            return None
-
-        return str(content)
-
-    except Exception:
-        return None
-
-
-# ============================================================
-# RESEARCH SYNTHESIS
-# ============================================================
-
-def build_evidence_packet(
-    question: str,
-    evidence: List[Dict[str, Any]],
-):
-    packet = []
-
-    for index, item in enumerate(
-        evidence,
-        start=1,
-    ):
-        packet.append(
-            f"""
-SOURCE {index}
-Evidence ID: {item["id"]}
-Title: {item["source_title"]}
-URL: {item["source_url"]}
-Domain: {domain_of(item["source_url"])}
-Hash: {item["content_hash"]}
-
-EXCERPT:
-{item["excerpt"]}
-"""
-        )
-
-    return (
-        "QUESTION:\n"
-        + question
-        + "\n\n"
-        + "\n".join(packet)
     )
 
+    # ========================================================
+    # STRICT EVIDENCE GATE
+    # ========================================================
 
-def synthesize_research(
-    question: str,
-    evidence: List[Dict[str, Any]],
-):
-    gate = evidence_gate(evidence)
+    gate_passed = (
+        len(sources) >= 3
+        and len(domains) >= 2
+    )
 
-    if not gate["passed"]:
-        return {
-            "status":
-                "insufficient_evidence",
-            "summary":
-                "No evidence-supported synthesis was produced because the evidence gate failed.",
+    gate = {
+        "passed": gate_passed,
+        "status": (
+            "evidence_available"
+            if gate_passed
+            else "insufficient_evidence"
+        ),
+        "reason": "",
+        "evidence_count": len(sources),
+        "independent_domains": len(domains),
+        "domains": domains,
+        "minimum_evidence_required": 3
+    }
+
+    if not gate_passed:
+        gate["reason"] = (
+            "Insufficient relevant and "
+            "independently sourced evidence."
+        )
+
+        report = {
+            "status": "insufficient_evidence",
             "evidence_supported_facts": [],
-            "assumptions": [
-                "Further independent source collection is required."
-            ],
+            "assumptions": [],
+            "contradictions": [],
             "uncertainty": 1.0,
             "confidence": 0.0,
+            "claims": [],
             "verification": {
                 "verified": False,
-                "reason":
-                    gate["reason"],
-            },
+                "reason": (
+                    "Evidence gate did not pass."
+                )
+            }
         }
 
-    packet = build_evidence_packet(
-        question,
-        evidence,
-    )
-
-    prompt = f"""
-Research question:
-
-{question}
-
-Use ONLY the evidence below.
-
-{packet}
-
-Produce:
-
-1. Summary
-2. Evidence-supported facts
-3. Assumptions / interpretations
-4. Contradictions / uncertainty
-5. Evidence IDs supporting each important fact
-6. Confidence from 0 to 1
-
-Rules:
-
-- Never invent a source.
-- Never invent an Evidence ID.
-- Never claim something is supported unless supplied evidence supports it.
-- Clearly separate facts from assumptions.
-- If evidence conflicts, report the conflict.
-"""
-
-    answer = call_hf(prompt)
-
-    if not answer:
-        return {
-            "status":
-                "evidence_collected_ai_unavailable",
-            "summary":
-                "Evidence was collected, but the AI synthesis provider was unavailable.",
-            "evidence_supported_facts": [
-                {
-                    "evidence_id":
-                        item["id"],
-                    "source":
-                        item["source_title"],
-                    "url":
-                        item["source_url"],
-                    "excerpt":
-                        item["excerpt"][:1000],
-                }
-                for item in evidence
-            ],
-            "assumptions": [],
-            "uncertainty": 0.4,
-            "confidence": 0.6,
-            "verification": {
-                "verified": True,
-                "reason":
-                    "Evidence was collected from multiple independent domains.",
-            },
-        }
-
-    return {
-        "status":
-            "completed",
-        "summary":
-            answer,
-        "evidence_supported_facts":
-            "See evidence-mapped synthesis above.",
-        "assumptions":
-            "See explicit assumptions in synthesis.",
-        "uncertainty":
-            max(
-                0.0,
-                1.0
-                - min(
-                    1.0,
-                    len(evidence) / 6.0,
-                ),
-            ),
-        "confidence":
-            min(
-                0.95,
-                0.55
-                + min(
-                    0.35,
-                    len(evidence) * 0.05,
-                ),
-            ),
-        "verification": {
-            "verified": True,
-            "reason":
-                "Synthesis was generated only after the evidence gate passed.",
-        },
-    }
-
-
-# ============================================================
-# RESEARCH ENGINE
-# ============================================================
-
-def run_research(
-    task_id: str,
-    question: str,
-):
-    research_id = uid("research")
-
-    log_event(
-        task_id,
-        "research_started",
-        {
-            "question": question,
-            "version": VERSION,
-        },
-    )
-
-    normalized_query = (
-        research_query_terms(question)
-    )
-
-    discovered, discovery_diagnostics = (
-        discover_sources(question)
-    )
-
-    log_event(
-        task_id,
-        "sources_discovered",
-        {
-            "count":
-                len(discovered),
-            "normalized_query":
-                normalized_query,
-            "sources":
-                discovered,
-            "diagnostics":
-                discovery_diagnostics,
-        },
-    )
-
-    fetched = []
-    fetch_failures = []
-
-    for source in discovered:
-        if len(fetched) >= MAX_RESEARCH_SOURCES:
-            break
-
-        result = fetch_source(
-            task_id,
-            source,
+    else:
+        claims = extract_claims(
+            question,
+            sources
         )
 
-        if result:
-            fetched.append(result)
+        verification = verify_claims(
+            claims
+        )
+
+        facts = [
+            claim
+            for claim in verification[
+                "verified_claims"
+            ]
+            if claim[
+                "verification_status"
+            ] in {
+                "source_supported",
+                "corroborated"
+            }
+        ]
+
+        if not facts:
+            status = "insufficient_claim_evidence"
         else:
-            fetch_failures.append(
-                {
-                    "url":
-                        source.get(
-                            "url",
-                            "",
-                        ),
-                    "domain":
-                        source.get(
-                            "domain",
-                            "",
-                        ),
-                    "method":
-                        source.get(
-                            "method",
-                            "",
-                        ),
-                    "reason":
-                        "fetch_failed_or_content_too_short",
-                }
-            )
+            status = "completed"
 
-    for source in fetched:
-        excerpt = select_evidence_excerpt(
-            source.get(
-                "text",
-                "",
+        report = {
+            "status": status,
+            "evidence_supported_facts": facts,
+            "assumptions": [
+                (
+                    "Collected evidence may not "
+                    "generalize to every AI-agent "
+                    "architecture."
+                ),
+                (
+                    "Applying findings from a "
+                    "specific domain to general "
+                    "autonomous execution is an "
+                    "interpretation unless directly "
+                    "demonstrated."
+                )
+            ],
+            "contradictions": [],
+            "uncertainty": round(
+                max(
+                    0.0,
+                    1.0 - min(
+                        1.0,
+                        len(facts) / 8
+                    )
+                ),
+                3
             ),
-            question,
-        )
+            "confidence": round(
+                sum(
+                    claim["confidence"]
+                    for claim in facts
+                )
+                / len(facts),
+                3
+            ) if facts else 0.0,
+            "claims": claims,
+            "verification": verification
+        }
 
-        if len(excerpt.strip()) < 120:
-            continue
-
-        save_evidence(
-            task_id,
-            source,
-            excerpt,
-        )
-
-    evidence = evidence_for_task(
-        task_id
+    research_id = uid(
+        "research"
     )
-
-    gate = evidence_gate(
-        evidence
-    )
-
-    log_event(
-        task_id,
-        "evidence_gate",
-        gate,
-    )
-
-    synthesis = synthesize_research(
-        question,
-        evidence,
-    )
-
-    diagnostics = {
-        "query":
-            question,
-        "normalized_query":
-            normalized_query,
-        "providers":
-            discovery_diagnostics,
-        "sources_discovered":
-            len(discovered),
-        "sources_fetched":
-            len(fetched),
-        "fetch_failures":
-            fetch_failures[:20],
-        "independent_domains":
-            gate.get(
-                "independent_domains",
-                0,
-            ),
-        "evidence_gate_passed":
-            gate.get(
-                "passed",
-                False,
-            ),
-    }
 
     connection = db()
 
     connection.execute(
         """
         INSERT INTO research
-        (id, task_id, question, summary,
-         evidence_json, uncertainty, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
             research_id,
             task_id,
             question,
-            synthesis.get(
-                "summary",
-                "",
-            ),
-            json_dump(evidence),
-            synthesis.get(
-                "uncertainty",
-                1.0,
-            ),
-            now_iso(),
-        ),
+            report["status"],
+            json_dump(report),
+            now_iso()
+        )
     )
 
     connection.commit()
     connection.close()
 
-    memory_id = save_memory(
-        content=(
-            "AI Infinity research result.\n"
-            f"Question: {question}\n"
-            f"Research ID: {research_id}\n"
-            f"Sources discovered: {len(discovered)}\n"
-            f"Sources fetched: {len(fetched)}\n"
-            f"Evidence records: {len(evidence)}\n"
-            f"Evidence gate: {gate['status']}\n"
-            f"Summary:\n{synthesis.get('summary', '')}"
-        ),
-        memory_type=(
-            "verified_research"
-            if gate["passed"]
-            else "research_insufficient_evidence"
-        ),
-        confidence=synthesis.get(
-            "confidence",
-            0.0,
-        ),
-        provenance={
-            "task_id":
-                task_id,
-            "research_id":
-                research_id,
-            "sources": [
-                item["source_url"]
-                for item in evidence
-            ],
-            "evidence_gate":
-                gate,
-            "diagnostics":
-                diagnostics,
-        },
-    )
-
     return {
-        "research_id":
-            research_id,
-        "question":
-            question,
-        "status":
-            synthesis.get(
-                "status",
-                "completed",
-            ),
-        "sources_discovered":
-            len(discovered),
-        "sources_collected":
-            len(fetched),
-        "evidence_count":
-            len(evidence),
+        "research_id": research_id,
+        "question": question,
+        "status": report["status"],
+        "expanded_queries": expanded,
+        "sources_discovered": len(
+            discovered
+        ),
+        "sources_collected": len(
+            sources
+        ),
+        "evidence_count": len(
+            sources
+        ),
         "sources": [
             {
-                "title":
-                    item["source_title"],
-                "url":
-                    item["source_url"],
-                "domain":
-                    domain_of(
-                        item["source_url"]
-                    ),
-                "hash":
-                    item["content_hash"],
+                "title": source["title"],
+                "url": source["url"],
+                "domain": source["domain"],
+                "hash": source["hash"],
+                "relevance": source["relevance"]
             }
-            for item in evidence
+            for source in sources
         ],
-        "diagnostics":
-            diagnostics,
-        "evidence_gate":
-            gate,
-        "evidence":
-            evidence,
-        "analysis":
-            synthesis,
-        "memory_id":
-            memory_id,
-        "verification":
-            synthesis.get(
-                "verification",
-                {
-                    "verified":
-                        False
-                },
+        "diagnostics": {
+            "providers": discovery[
+                "diagnostics"
+            ],
+            "sources_discovered": len(
+                discovered
             ),
+            "sources_fetched": len(
+                sources
+            ),
+            "independent_domains": len(
+                domains
+            ),
+            "evidence_gate_passed": (
+                gate_passed
+            )
+        },
+        "evidence_gate": gate,
+        "evidence": [
+            {
+                "id": source[
+                    "evidence_id"
+                ],
+                "source_url": source[
+                    "url"
+                ],
+                "source_title": source[
+                    "title"
+                ],
+                "claim": "",
+                "excerpt": source[
+                    "text"
+                ][:2000],
+                "content_hash": source[
+                    "hash"
+                ],
+                "verification_status": (
+                    "collected"
+                ),
+                "relevance": source[
+                    "relevance"
+                ]
+            }
+            for source in sources
+        ],
+        "analysis": report,
+        "memory_id": None
     }
+
+
+# ============================================================
+# OPTIONAL AI SYNTHESIS
+# ============================================================
+
+def call_hf(
+    prompt: str,
+    allow_paid: bool = False
+) -> Optional[str]:
+    """
+    HF synthesis is optional.
+
+    TARGET-2.3 deliberately does NOT use the model
+    to manufacture evidence.
+
+    allow_paid=False blocks this provider because
+    :cheapest does not guarantee $0 billing.
+    """
+
+    if not HF_TOKEN:
+        return None
+
+    if not allow_paid:
+        return None
+
+    url = (
+        "https://router.huggingface.co/"
+        "v1/chat/completions"
+    )
+
+    payload = {
+        "model": HF_MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.2,
+        "max_tokens": 1500
+    }
+
+    try:
+        response = requests.post(
+            url,
+            headers={
+                "Authorization":
+                    f"Bearer {HF_TOKEN}",
+                "Content-Type":
+                    "application/json"
+            },
+            json=payload,
+            timeout=30
+        )
+
+        response.raise_for_status()
+
+        return (
+            response.json()
+            ["choices"][0]
+            ["message"]
+            ["content"]
+        )
+
+    except Exception:
+        return None
 
 
 # ============================================================
 # SAFE CALCULATOR
 # ============================================================
 
-ALLOWED_BINOPS = {
-    ast.Add: lambda a, b: a + b,
-    ast.Sub: lambda a, b: a - b,
-    ast.Mult: lambda a, b: a * b,
-    ast.Div: lambda a, b: a / b,
-    ast.Mod: lambda a, b: a % b,
-}
-
-ALLOWED_UNARYOPS = {
-    ast.UAdd: lambda a: +a,
-    ast.USub: lambda a: -a,
-}
-
-
-def safe_calculate(expression: str):
-    if len(expression) > 200:
-        raise ValueError(
-            "Expression too long"
-        )
-
+def safe_calculate(
+    expression: str
+) -> float:
     tree = ast.parse(
         expression,
-        mode="eval",
+        mode="eval"
     )
 
-    def evaluate(node):
-        if isinstance(
+    allowed = (
+        ast.Expression,
+        ast.BinOp,
+        ast.UnaryOp,
+        ast.Constant,
+        ast.Add,
+        ast.Sub,
+        ast.Mult,
+        ast.Div,
+        ast.Mod,
+        ast.Pow,
+        ast.USub,
+        ast.UAdd,
+        ast.FloorDiv
+    )
+
+    for node in ast.walk(tree):
+        if not isinstance(
             node,
-            ast.Expression,
+            allowed
         ):
-            return evaluate(
-                node.body
+            raise ValueError(
+                "unsupported_expression"
             )
 
-        if isinstance(
-            node,
-            ast.Constant,
+        if (
+            isinstance(
+                node,
+                ast.Constant
+            )
+            and not isinstance(
+                node.value,
+                (int, float)
+            )
+        ):
+            raise ValueError(
+                "numeric_values_only"
+            )
+
+        if (
+            isinstance(
+                node,
+                ast.BinOp
+            )
+            and isinstance(
+                node.op,
+                ast.Pow
+            )
         ):
             if isinstance(
-                node.value,
-                bool,
+                node.right,
+                ast.Constant
             ):
-                raise ValueError(
-                    "Boolean values are not allowed"
+                exponent = float(
+                    node.right.value
                 )
 
-            if isinstance(
-                node.value,
-                (int, float),
-            ):
-                if not math.isfinite(
-                    float(node.value)
-                ):
+                if abs(exponent) > 10:
                     raise ValueError(
-                        "Non-finite number"
+                        "power_too_large"
                     )
 
-                return node.value
-
-            raise ValueError(
-                "Only numeric constants are allowed"
-            )
-
-        if isinstance(
-            node,
-            ast.BinOp,
-        ):
-            operation = ALLOWED_BINOPS.get(
-                type(node.op)
-            )
-
-            if operation is None:
-                raise ValueError(
-                    "Operator not allowed"
-                )
-
-            return operation(
-                evaluate(node.left),
-                evaluate(node.right),
-            )
-
-        if isinstance(
-            node,
-            ast.UnaryOp,
-        ):
-            operation = ALLOWED_UNARYOPS.get(
-                type(node.op)
-            )
-
-            if operation is None:
-                raise ValueError(
-                    "Unary operator not allowed"
-                )
-
-            return operation(
-                evaluate(node.operand)
-            )
-
-        raise ValueError(
-            "Expression node not allowed: "
-            + type(node).__name__
-        )
-
-    return evaluate(tree)
+    return eval(
+        compile(
+            tree,
+            "<safe-calculator>",
+            "eval"
+        ),
+        {
+            "__builtins__": {}
+        },
+        {}
+    )
 
 
-# ============================================================
-# SAFE REGISTERED EXECUTION
-# ============================================================
+def calculator_artifact(
+    task_id: str
+) -> Dict[str, Any]:
+    folder = (
+        ARTIFACTS
+        / task_id
+    )
 
-def create_calculator_artifact(
-    task_id: str,
-):
-    directory = ARTIFACTS / task_id
-    directory.mkdir(
+    folder.mkdir(
         parents=True,
-        exist_ok=True,
+        exist_ok=True
     )
 
     path = (
-        directory
+        folder
         / "simple_calculator.py"
     )
 
-    source = r'''import ast
-import math
+    content = '''import ast
 
-ALLOWED_BINOPS = {
-    ast.Add: lambda a, b: a + b,
-    ast.Sub: lambda a, b: a - b,
-    ast.Mult: lambda a, b: a * b,
-    ast.Div: lambda a, b: a / b,
-    ast.Mod: lambda a, b: a % b,
-}
+_ALLOWED = (
+    ast.Expression,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.Constant,
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Div,
+    ast.Mod,
+    ast.Pow,
+    ast.USub,
+    ast.UAdd,
+    ast.FloorDiv,
+)
 
-ALLOWED_UNARYOPS = {
-    ast.UAdd: lambda a: +a,
-    ast.USub: lambda a: -a,
-}
+def calculate(expression: str):
+    tree = ast.parse(expression, mode="eval")
 
+    for node in ast.walk(tree):
+        if not isinstance(node, _ALLOWED):
+            raise ValueError("unsupported expression")
 
-def evaluate(expression):
-    tree = ast.parse(
-        expression,
-        mode="eval",
+        if (
+            isinstance(node, ast.Constant)
+            and not isinstance(node.value, (int, float))
+        ):
+            raise ValueError("numeric values only")
+
+    return eval(
+        compile(tree, "<calculator>", "eval"),
+        {"__builtins__": {}},
+        {}
     )
-
-    def walk(node):
-        if isinstance(node, ast.Expression):
-            return walk(node.body)
-
-        if isinstance(node, ast.Constant):
-            if isinstance(node.value, bool):
-                raise ValueError("Boolean not allowed")
-
-            if isinstance(node.value, (int, float)):
-                if not math.isfinite(float(node.value)):
-                    raise ValueError("Non-finite number")
-                return node.value
-
-            raise ValueError("Number required")
-
-        if isinstance(node, ast.BinOp):
-            operation = ALLOWED_BINOPS.get(type(node.op))
-
-            if operation is None:
-                raise ValueError("Operator not allowed")
-
-            return operation(
-                walk(node.left),
-                walk(node.right),
-            )
-
-        if isinstance(node, ast.UnaryOp):
-            operation = ALLOWED_UNARYOPS.get(type(node.op))
-
-            if operation is None:
-                raise ValueError("Unary operator not allowed")
-
-            return operation(
-                walk(node.operand)
-            )
-
-        raise ValueError("Node not allowed")
-
-    return walk(tree)
 
 
 if __name__ == "__main__":
-    print(evaluate("2+3*4"))
+    import sys
+    print(calculate(sys.argv[1]))
 '''
 
     path.write_text(
-        source,
-        encoding="utf-8",
+        content,
+        encoding="utf-8"
     )
 
-    data = path.read_bytes()
+    syntax_ok = True
+
+    try:
+        ast.parse(content)
+    except SyntaxError:
+        syntax_ok = False
+
+    process = subprocess.run(
+        [
+            "python",
+            str(path),
+            "2+3*4"
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        shell=False
+    )
+
+    actual = None
+
+    if process.returncode == 0:
+        try:
+            actual = int(
+                process.stdout.strip()
+            )
+        except ValueError:
+            actual = None
+
+    verified = (
+        syntax_ok
+        and process.returncode == 0
+        and actual == 14
+    )
 
     return {
-        "status":
-            "completed",
-        "filename":
-            path.name,
-        "path":
-            str(path),
-        "bytes":
-            len(data),
-        "sha256":
-            hashlib.sha256(
-                data
-            ).hexdigest(),
+        "path": str(path),
+        "bytes": path.stat().st_size,
+        "sha256": hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest(),
+        "python_syntax": syntax_ok,
+        "functional_test": {
+            "expression": "2+3*4",
+            "expected": 14,
+            "actual": actual,
+            "returncode":
+                process.returncode,
+            "output":
+                process.stdout.strip()
+        },
+        "verified": verified
     }
 
 
-def verify_calculator(
-    artifact,
-):
-    path = Path(
-        artifact["path"]
-    )
+# ============================================================
+# AUTHORIZED ACTION SYSTEM
+# ============================================================
 
-    if not path.exists():
-        return {
-            "verified": False,
-            "status": "failed",
-            "reason":
-                "Artifact does not exist.",
-        }
-
-    try:
-        source = path.read_text(
-            encoding="utf-8"
-        )
-
-        ast.parse(
-            source,
-            mode="exec",
-        )
-
-        syntax_ok = True
-
-    except Exception as exc:
-        return {
-            "verified": False,
-            "status": "failed",
-            "reason":
-                f"Syntax error: {exc}",
-        }
-
-    try:
-        process = subprocess.run(
-            [
-                sys.executable,
-                str(path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-
-        output = process.stdout.strip()
-
-        return {
-            "verified":
-                syntax_ok
-                and process.returncode == 0
-                and output == "14",
-            "status":
-                "completed",
-            "syntax":
-                syntax_ok,
-            "functional_test":
-                process.returncode == 0,
-            "expression":
-                "2+3*4",
-            "expected":
-                14,
-            "actual":
-                output,
-            "returncode":
-                process.returncode,
-            "stderr":
-                process.stderr[-1000:],
-        }
-
-    except Exception as exc:
-        return {
-            "verified": False,
-            "status": "failed",
-            "reason": str(exc),
-        }
+AUTHORIZED_ACTIONS = {
+    "calculator_test",
+    "create_calculator"
+}
 
 
-def execute_registered_action(
+def registered_execute(
     task_id: str,
     action: str,
-    objective: str = "",
-):
+    args: Dict[str, Any]
+) -> Dict[str, Any]:
+    if action not in AUTHORIZED_ACTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Action is not registered "
+                "or authorized."
+            )
+        )
+
     if action == "create_calculator":
-        artifact = create_calculator_artifact(
+        return calculator_artifact(
             task_id
         )
 
-        verification = verify_calculator(
-            artifact
+    if action == "calculator_test":
+        expression = str(
+            args.get(
+                "expression",
+                "2+3*4"
+            )
         )
 
-        result = {
-            "action":
-                action,
-            "artifact":
-                artifact,
-            "verification":
-                verification,
-            "authorized":
-                True,
+        result = safe_calculate(
+            expression
+        )
+
+        return {
+            "expression": expression,
+            "result": result,
+            "verified": True
         }
 
-        log_execution(
-            task_id,
-            action,
-            (
-                "completed"
-                if verification.get(
-                    "verified",
-                    False,
-                )
-                else "failed"
-            ),
-            result,
-        )
-
-        return result
-
-    result = {
-        "action":
-            action,
-        "status":
-            "rejected",
-        "reason":
-            "Action is not registered.",
-        "authorized":
-            False,
-    }
-
-    log_execution(
-        task_id,
-        action,
-        "rejected",
-        result,
+    raise HTTPException(
+        status_code=400,
+        detail="Unknown authorized action."
     )
-
-    return result
 
 
 # ============================================================
 # INTELLIGENCE GENOME
 # ============================================================
 
-def create_genome(
+def make_genome(
     task_id: str,
     objective: str,
-    intent: Dict[str, Any],
-    strategies: List[Dict[str, Any]],
-    minds: List[Dict[str, Any]],
-    execution: Any,
-    verification: Any,
-    research: Any,
-):
-    verified = bool(
-        verification
-        and verification.get(
-            "verified",
-            False,
-        )
-    )
+    research: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    research = research or {}
 
-    evidence_verified = bool(
-        research
-        and research.get(
-            "evidence_gate",
-            {},
-        ).get(
-            "passed",
-            False,
-        )
-    )
-
-    fitness = 0.0
-
-    if evidence_verified:
-        fitness += 0.5
-
-    if verified:
-        fitness += 0.5
-
-    genome_id = uid("genome")
-
-    genome = {
-        "genome_id":
-            genome_id,
-        "task_id":
-            task_id,
-        "objective":
-            objective,
-        "intent":
-            intent,
-        "strategies":
-            strategies,
-        "temporary_minds":
-            minds,
-        "research":
-            {
-                "evidence_gate":
-                    (
-                        research or {}
-                    ).get(
-                        "evidence_gate",
-                        {},
-                    ),
-                "evidence_count":
-                    (
-                        research or {}
-                    ).get(
-                        "evidence_count",
-                        0,
-                    ),
-            },
-        "execution":
-            execution,
-        "verification":
-            verification,
-        "fitness":
-            fitness,
-        "reusable":
-            fitness >= 0.5,
-        "safety":
-            {
-                "arbitrary_shell":
-                    False,
-                "automatic_spending":
-                    False,
-                "automatic_self_modification":
-                    False,
-            },
-        "created_at":
-            now_iso(),
-    }
-
-    connection = db()
-
-    connection.execute(
-        """
-        INSERT INTO genomes
-        (id, task_id, genome_json, created_at)
-        VALUES (?, ?, ?, ?)
-        """,
-        (
-            genome_id,
-            task_id,
-            json_dump(genome),
-            now_iso(),
-        ),
-    )
-
-    connection.commit()
-    connection.close()
-
-    return genome
-
-
-# ============================================================
-# EVOLUTION
-# ============================================================
-
-def propose_evolution(genome):
-    improvements = []
-
-    research = genome.get(
-        "research",
-        {},
-    )
-
-    if not (
+    evidence_count = int(
         research.get(
-            "evidence_gate",
-            {},
-        ).get(
-            "passed",
-            False,
+            "evidence_count",
+            0
         )
-    ):
-        improvements.append(
-            "Improve independent source discovery and retrieval."
-        )
-
-    if not genome.get(
-        "verification"
-    ):
-        improvements.append(
-            "Add stronger independent verification."
-        )
-
-    improvements.extend(
-        [
-            "Benchmark alternative strategies.",
-            "Preserve successful strategies as reusable genomes.",
-            "Run proposed changes only inside a sandbox before deployment.",
-        ]
     )
+
+    gate = research.get(
+        "evidence_gate",
+        {}
+    )
+
+    verification = (
+        research
+        .get("analysis", {})
+        .get("verification", {})
+    )
+
+    corroboration_count = int(
+        verification.get(
+            "corroboration_count",
+            0
+        )
+    )
+
+    fitness = 0.40
+
+    if gate.get("passed"):
+        fitness += 0.20
+
+    if evidence_count >= 5:
+        fitness += 0.10
+
+    if corroboration_count > 0:
+        fitness += 0.20
+
+    if corroboration_count >= 3:
+        fitness += 0.10
 
     return {
-        "status":
-            "proposal_only",
-        "automatic_deployment":
-            False,
-        "improvements":
-            improvements,
+        "genome_id": None,
+        "task_id": task_id,
+        "objective": objective,
+        "strategies": [
+            "evidence_first",
+            "source_relevance_filter",
+            "claim_to_evidence_mapping",
+            "independent_verification",
+            "failure_first",
+            "reuse_memory"
+        ],
+        "research": {
+            "evidence_gate": gate,
+            "evidence_count":
+                evidence_count,
+            "corroboration_count":
+                corroboration_count
+        },
+        "fitness": round(
+            min(
+                1.0,
+                fitness
+            ),
+            3
+        ),
+        "reusable": True,
+        "safety": {
+            "arbitrary_shell": False,
+            "automatic_spending": False,
+            "automatic_self_modification": False,
+            "authorized_actions_only": True
+        },
+        "created_at": now_iso()
     }
 
 
 # ============================================================
-# MASTER LOOP
+# MASTER ORCHESTRATOR
 # ============================================================
 
 def run_infinity(
-    objective: str,
-    research: bool = True,
-    verify: bool = True,
-    remember: bool = True,
-):
-    task_id = create_task(
-        objective
+    request: RunRequest
+) -> Dict[str, Any]:
+    task_id = uid("task")
+
+    save_task(
+        task_id,
+        request.objective,
+        "running"
     )
 
-    try:
-        intent = classify_intent(
-            objective
-        )
-
-        world_model = build_world_model(
-            objective,
-            intent,
-        )
-
-        strategies = dream_strategies()
-
-        counterfactuals = (
-            build_counterfactuals(
-                strategies
-            )
-        )
-
-        minds = create_temporary_minds(
-            intent["domains"]
-        )
-
-        compiler = {
-            "intent":
-                objective,
-            "goal_model":
-                intent,
-            "constraints":
-                world_model[
-                    "constraints"
-                ],
-            "available_resources":
-                world_model[
-                    "resources"
-                ],
-            "candidate_strategies":
-                strategies,
-            "execution_graph":
-                "generated",
+    record_event(
+        task_id,
+        "started",
+        {
+            "objective":
+                request.objective
         }
+    )
 
-        research_result = None
+    research = None
+    memory_id = None
 
-        if research:
-            research_result = run_research(
+    try:
+        if request.research:
+            research = research_pipeline(
                 task_id,
-                objective,
+                request.objective
             )
 
-        execution_result = None
-        verification_result = None
+            # CRITICAL:
+            # Only verified research may be
+            # stored as verified memory.
+            if (
+                request.remember
+                and research["status"]
+                == "completed"
+                and research[
+                    "evidence_gate"
+                ]["passed"]
+            ):
+                memory_payload = {
+                    "objective":
+                        request.objective,
+                    "research":
+                        research["analysis"],
+                    "evidence":
+                        research["evidence"],
+                    "sources":
+                        research["sources"]
+                }
 
-        if (
-            "calculator"
-            in objective.lower()
-            or "calculate" in objective.lower()
-        ):
-            execution_result = (
-                execute_registered_action(
-                    task_id,
-                    "create_calculator",
-                    objective,
-                )
-            )
-
-            verification_result = (
-                execution_result.get(
-                    "verification"
-                )
-            )
-
-        memory_id = None
-
-        if remember:
-            confidence = 0.0
-
-            if research_result:
-                confidence = (
-                    research_result
-                    .get(
-                        "analysis",
-                        {},
-                    )
-                    .get(
-                        "confidence",
-                        0.0,
-                    )
+                memory_id = save_memory(
+                    json_dump(
+                        memory_payload
+                    ),
+                    "verified_research",
+                    verified=True
                 )
 
-            elif verification_result:
-                confidence = (
-                    1.0
-                    if verification_result.get(
-                        "verified",
-                        False,
-                    )
-                    else 0.0
+                research[
+                    "memory_id"
+                ] = memory_id
+
+            elif request.remember:
+                memory_payload = {
+                    "objective":
+                        request.objective,
+                    "research_status":
+                        research["status"],
+                    "note":
+                        "Research was not stored as verified intelligence because the evidence gate or claim verification did not pass."
+                }
+
+                memory_id = save_memory(
+                    json_dump(
+                        memory_payload
+                    ),
+                    "research_uncertainty",
+                    verified=False
                 )
 
-            memory_id = save_memory(
-                content=(
-                    "AI Infinity task.\n"
-                    f"Objective: {objective}\n"
-                    f"Task: {task_id}\n"
-                    f"Research:\n"
-                    f"{json_dump(research_result)}\n"
-                    f"Execution:\n"
-                    f"{json_dump(execution_result)}\n"
-                    f"Verification:\n"
-                    f"{json_dump(verification_result)}"
-                ),
-                memory_type=(
-                    "verified"
-                    if confidence > 0
-                    else "unverified"
-                ),
-                confidence=confidence,
-                provenance={
-                    "task_id":
-                        task_id,
-                    "version":
-                        VERSION,
-                },
-            )
+                research[
+                    "memory_id"
+                ] = memory_id
 
-        genome = create_genome(
+        genome = make_genome(
             task_id,
-            objective,
-            intent,
-            strategies,
-            minds,
-            execution_result,
-            verification_result,
-            research_result,
+            request.objective,
+            research
         )
 
-        evolution = propose_evolution(
+        genome_id = save_genome(
+            task_id,
             genome
         )
 
+        genome[
+            "genome_id"
+        ] = genome_id
+
         result = {
-            "task_id":
-                task_id,
-            "status":
-                "completed",
-            "version":
-                VERSION,
+            "task_id": task_id,
+            "status": "completed",
+            "version": VERSION,
             "objective":
-                objective,
-            "intent":
-                intent,
-            "world_model":
-                world_model,
-            "dream_engine":
+                request.objective,
+
+            "intent": {
+                "type": (
+                    "research"
+                    if request.research
+                    else "general"
+                ),
+                "objective":
+                    request.objective,
+                "priority":
+                    "normal"
+            },
+
+            "world_model": {
+                "objective":
+                    request.objective,
+                "resources": [
+                    "local_python",
+                    "local_filesystem",
+                    "public_web",
+                    "evidence_database",
+                    "available_ai_model"
+                ],
+                "constraints": {
+                    "free_first": True,
+                    "no_automatic_spending": True,
+                    "no_arbitrary_shell_execution": True,
+                    "authorized_actions_only": True,
+                    "evidence_gate": True
+                }
+            },
+
+            "temporary_minds": [
                 {
-                    "strategies":
-                        strategies,
+                    "id":
+                        uid("mind"),
+                    "name":
+                        "researcher",
+                    "role":
+                        "research",
+                    "temporary": True,
+                    "status":
+                        "ready"
                 },
-            "counterfactual_universe":
                 {
-                    "scenarios":
-                        counterfactuals,
-                    "warning":
-                        "Hypothetical only.",
+                    "id":
+                        uid("mind"),
+                    "name":
+                        "analyst",
+                    "role":
+                        "analysis",
+                    "temporary": True,
+                    "status":
+                        "ready"
                 },
-            "temporary_minds":
-                minds,
-            "intelligence_compiler":
-                compiler,
+                {
+                    "id":
+                        uid("mind"),
+                    "name":
+                        "critic",
+                    "role":
+                        "verification",
+                    "temporary": True,
+                    "status":
+                        "ready"
+                }
+            ],
+
             "research":
-                research_result,
-            "execution":
-                execution_result,
-            "verification":
-                verification_result,
-            "memory":
-                {
-                    "saved":
-                        memory_id,
-                },
+                research,
+
             "intelligence_genome":
                 genome,
-            "evolution":
-                evolution,
-            "safety":
-                {
-                    "arbitrary_shell_execution":
-                        False,
-                    "automatic_spending":
-                        False,
-                    "automatic_self_modification":
-                        False,
-                    "authorized_actions_only":
-                        True,
-                    "evidence_gate":
-                        True,
-                },
-        }
 
-        update_task(
-            task_id,
-            "completed",
-            result,
-        )
-
-        return result
-
-    except Exception as exc:
-        failure = {
-            "failure_id":
-                uid("failure"),
-            "stage":
-                "master_loop",
-            "error":
-                str(exc),
-            "recovery":
-                {
-                    "action":
-                        "diagnose_and_retry",
-                    "automatic_code_change":
-                        False,
-                },
-        }
-
-        connection = db()
-
-        connection.execute(
-            """
-            INSERT INTO failures
-            (id, task_id, stage, error,
-             recovery_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                failure["failure_id"],
-                task_id,
-                failure["stage"],
-                failure["error"],
-                json_dump(
-                    failure["recovery"]
-                ),
-                now_iso(),
-            ),
-        )
-
-        connection.commit()
-        connection.close()
-
-        result = {
-            "task_id":
-                task_id,
-            "status":
-                "failed",
-            "version":
-                VERSION,
-            "objective":
-                objective,
-            "failure":
-                failure,
-        }
-
-        update_task(
-            task_id,
-            "failed",
-            result,
-        )
-
-        return result
-
-
-# ============================================================
-# API MODELS
-# ============================================================
-
-class RunRequest(BaseModel):
-    objective: str = Field(
-        ...,
-        min_length=1,
-        max_length=20000,
-    )
-
-    research: bool = True
-    verify: bool = True
-    remember: bool = True
-
-
-class ResearchRequest(BaseModel):
-    question: str = Field(
-        ...,
-        min_length=2,
-        max_length=10000,
-    )
-
-
-class ExecuteRequest(BaseModel):
-    action: str
-    objective: str = ""
-
-
-# ============================================================
-# HEALTH
-# ============================================================
-
-@app.get("/health")
-def health():
-    return {
-        "status":
-            "ok",
-        "service":
-            SERVICE,
-        "version":
-            VERSION,
-        "research":
-            True,
-        "resilient_discovery":
-            True,
-        "web_discovery":
-            True,
-        "source_fetching":
-            True,
-        "evidence_gate":
-            True,
-        "provenance":
-            True,
-        "verification":
-            True,
-        "memory":
-            True,
-        "intelligence_genome":
-            True,
-        "free_first":
-            True,
-    }
-
-
-# ============================================================
-# STATUS
-# ============================================================
-
-@app.get("/v1/status")
-def status():
-    connection = db()
-
-    counts = {}
-
-    for table in (
-        "tasks",
-        "memories",
-        "genomes",
-        "executions",
-        "failures",
-        "events",
-        "evidence",
-        "research",
-        "sources",
-    ):
-        row = connection.execute(
-            f"""
-            SELECT COUNT(*) AS count
-            FROM {table}
-            """
-        ).fetchone()
-
-        counts[table] = row["count"]
-
-    connection.close()
-
-    return {
-        "service":
-            SERVICE,
-        "version":
-            VERSION,
-        "status":
-            "online",
-        "architecture":
-            "Intent → Discover → Evidence → Reason → Verify → Learn → Evolve",
-        "capabilities":
-            {
-                "intent_engine":
-                    True,
-                "world_model":
-                    True,
-                "dream_engine":
-                    True,
-                "counterfactual_engine":
-                    True,
-                "temporary_minds":
-                    True,
-                "web_discovery":
-                    True,
-                "multi_provider_discovery":
-                    True,
-                "source_fetching":
-                    True,
-                "evidence_fabric":
-                    True,
-                "evidence_gate":
-                    True,
-                "provenance":
-                    True,
-                "verification":
-                    True,
-                "memory":
-                    True,
-                "intelligence_genome":
-                    True,
-                "self_healing":
-                    True,
-                "safe_execution_registry":
-                    True,
+            "evolution": {
+                "status":
+                    "proposal_only",
+                "automatic_deployment":
+                    False,
+                "improvements": [
+                    "Benchmark source relevance thresholds.",
+                    "Add stronger independent corroboration.",
+                    "Preserve provenance and source hashes.",
+                    "Run proposed changes only inside a sandbox before deployment.",
+                    "Add contradiction-aware evidence graphs."
+                ]
             },
-        "research_providers":
-            [
-                "direct_url",
-                "wikipedia",
-                "arxiv",
-                "crossref",
-                "openalex",
-            ],
-        "safety":
-            {
+
+            "safety": {
                 "arbitrary_shell_execution":
                     False,
                 "automatic_spending":
                     False,
                 "automatic_self_modification":
                     False,
-            },
-        "database":
-            counts,
+                "authorized_actions_only":
+                    True,
+                "evidence_gate":
+                    True
+            }
+        }
+
+        save_task(
+            task_id,
+            request.objective,
+            "completed",
+            result
+        )
+
+        record_event(
+            task_id,
+            "completed",
+            {
+                "status":
+                    "completed"
+            }
+        )
+
+        return result
+
+    except Exception as exc:
+        recovery = [
+            "Retry failed research providers.",
+            "Reduce source set.",
+            "Preserve successfully collected evidence.",
+            "Do not convert missing evidence into facts."
+        ]
+
+        connection = db()
+
+        connection.execute(
+            """
+            INSERT INTO failures
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uid("failure"),
+                task_id,
+                "run_infinity",
+                str(exc),
+                json_dump(recovery),
+                now_iso()
+            )
+        )
+
+        connection.commit()
+        connection.close()
+
+        save_task(
+            task_id,
+            request.objective,
+            "failed",
+            {
+                "error":
+                    str(exc),
+                "recovery":
+                    recovery
+            }
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Task failed: "
+                + str(exc)
+            )
+        )
+
+
+# ============================================================
+# API — HEALTH
+# ============================================================
+
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "service": "AI Infinity",
+        "version": VERSION
     }
 
 
 # ============================================================
-# RUN
+# API — STATUS
+# ============================================================
+
+@app.get("/v1/status")
+def status():
+    connection = db()
+
+    tasks = connection.execute(
+        "SELECT COUNT(*) AS n FROM tasks"
+    ).fetchone()["n"]
+
+    memories = connection.execute(
+        "SELECT COUNT(*) AS n FROM memories"
+    ).fetchone()["n"]
+
+    evidence = connection.execute(
+        "SELECT COUNT(*) AS n FROM evidence"
+    ).fetchone()["n"]
+
+    genomes = connection.execute(
+        "SELECT COUNT(*) AS n FROM genomes"
+    ).fetchone()["n"]
+
+    connection.close()
+
+    return {
+        "service": "AI Infinity",
+        "version": VERSION,
+        "counts": {
+            "tasks": tasks,
+            "memories": memories,
+            "evidence": evidence,
+            "genomes": genomes
+        },
+        "governor": {
+            "free_first": True,
+            "allow_paid_default": False,
+            "automatic_spending": False
+        }
+    }
+
+
+# ============================================================
+# API — RUN
 # ============================================================
 
 @app.post("/v1/run")
-def run_endpoint(
-    request: RunRequest,
-):
+def run(request: RunRequest):
     return run_infinity(
-        objective=request.objective,
-        research=request.research,
-        verify=request.verify,
-        remember=request.remember,
+        request
     )
 
 
 # ============================================================
-# RESEARCH
-# ============================================================
-
-@app.post("/v1/research")
-def research_endpoint(
-    request: ResearchRequest,
-):
-    task_id = create_task(
-        request.question
-    )
-
-    result = run_research(
-        task_id,
-        request.question,
-    )
-
-    update_task(
-        task_id,
-        "completed",
-        result,
-    )
-
-    return {
-        "task_id":
-            task_id,
-        "version":
-            VERSION,
-        **result,
-    }
-
-
-# ============================================================
-# EXECUTE
+# API — EXECUTE
 # ============================================================
 
 @app.post("/v1/execute")
-def execute_endpoint(
-    request: ExecuteRequest,
+def execute(
+    request: ExecuteRequest
 ):
-    task_id = create_task(
-        request.objective
-        or request.action
-    )
+    task_id = uid("task")
 
-    result = execute_registered_action(
-        task_id,
-        request.action,
-        request.objective,
-    )
-
-    update_task(
-        task_id,
-        "completed",
-        result,
-    )
-
-    return {
-        "task_id":
+    try:
+        result = registered_execute(
             task_id,
-        **result,
-    }
+            request.action,
+            request.args
+        )
+
+        connection = db()
+
+        connection.execute(
+            """
+            INSERT INTO executions
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uid("execution"),
+                task_id,
+                request.action,
+                "completed",
+                json_dump(result),
+                now_iso()
+            )
+        )
+
+        connection.commit()
+        connection.close()
+
+        return {
+            "task_id":
+                task_id,
+            "status":
+                "completed",
+            "action":
+                request.action,
+            "result":
+                result
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc)
+        )
 
 
 # ============================================================
-# TASK
+# API — TASK
 # ============================================================
 
 @app.get("/v1/tasks/{task_id}")
-def task_endpoint(
-    task_id: str,
+def get_task(
+    task_id: str
 ):
-    result = get_task(
-        task_id
-    )
+    connection = db()
 
-    if not result:
+    row = connection.execute(
+        """
+        SELECT *
+        FROM tasks
+        WHERE id = ?
+        """,
+        (task_id,)
+    ).fetchone()
+
+    connection.close()
+
+    if not row:
         raise HTTPException(
             status_code=404,
-            detail="Task not found",
+            detail="Task not found"
         )
 
-    return result
+    return dict(row)
 
 
 # ============================================================
-# MEMORY
+# API — MEMORY
 # ============================================================
 
 @app.get("/v1/memory")
-def memory_endpoint(
-    q: str = "",
+def list_memory(
+    limit: int = 20
 ):
-    if q:
-        memories = search_memory(q)
+    connection = db()
 
-    else:
-        connection = db()
+    rows = connection.execute(
+        """
+        SELECT *
+        FROM memories
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (min(limit, 100),)
+    ).fetchall()
 
-        rows = connection.execute(
-            """
-            SELECT *
-            FROM memories
-            ORDER BY created_at DESC
-            LIMIT 20
-            """
-        ).fetchall()
+    connection.close()
 
-        connection.close()
+    return [
+        dict(row)
+        for row in rows
+    ]
 
-        memories = [
-            dict(row)
-            for row in rows
-        ]
 
+@app.post("/v1/memory")
+def add_memory(
+    request: MemoryRequest
+):
     return {
-        "count":
-            len(memories),
-        "memories":
-            memories,
+        "memory_id":
+            save_memory(
+                request.content,
+                request.kind,
+                request.verified
+            )
     }
 
 
 # ============================================================
-# GENOMES
+# API — GENOMES
 # ============================================================
 
 @app.get("/v1/genomes")
-def genomes_endpoint():
+def list_genomes(
+    limit: int = 20
+):
     connection = db()
 
     rows = connection.execute(
@@ -3348,46 +2517,27 @@ def genomes_endpoint():
         SELECT *
         FROM genomes
         ORDER BY created_at DESC
-        LIMIT 20
-        """
+        LIMIT ?
+        """,
+        (min(limit, 100),)
     ).fetchall()
 
     connection.close()
 
-    result = []
-
-    for row in rows:
-        item = dict(row)
-
-        try:
-            item["genome"] = json.loads(
-                item.pop(
-                    "genome_json"
-                )
-            )
-        except Exception:
-            item["genome"] = item.pop(
-                "genome_json",
-                None,
-            )
-
-        result.append(item)
-
-    return {
-        "count":
-            len(result),
-        "genomes":
-            result,
-    }
+    return [
+        dict(row)
+        for row in rows
+    ]
 
 
 # ============================================================
-# EVIDENCE
+# API — EVIDENCE
 # ============================================================
 
 @app.get("/v1/evidence")
-def evidence_endpoint(
-    task_id: str = "",
+def list_evidence(
+    task_id: Optional[str] = None,
+    limit: int = 50
 ):
     connection = db()
 
@@ -3397,10 +2547,13 @@ def evidence_endpoint(
             SELECT *
             FROM evidence
             WHERE task_id = ?
-            ORDER BY retrieved_at DESC
-            LIMIT 100
+            ORDER BY created_at DESC
+            LIMIT ?
             """,
-            (task_id,),
+            (
+                task_id,
+                min(limit, 200)
+            )
         ).fetchall()
 
     else:
@@ -3408,144 +2561,66 @@ def evidence_endpoint(
             """
             SELECT *
             FROM evidence
-            ORDER BY retrieved_at DESC
-            LIMIT 100
-            """
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (min(limit, 200),)
         ).fetchall()
 
     connection.close()
 
-    result = []
-
-    for row in rows:
-        item = dict(row)
-
-        try:
-            item["metadata"] = json.loads(
-                item.pop(
-                    "metadata_json"
-                )
-            )
-        except Exception:
-            item["metadata"] = {}
-
-        result.append(item)
-
-    return {
-        "count":
-            len(result),
-        "evidence":
-            result,
-    }
+    return [
+        dict(row)
+        for row in rows
+    ]
 
 
 # ============================================================
-# RESEARCH HISTORY
+# API — RESEARCH
 # ============================================================
 
-@app.get("/v1/research")
-def research_history():
+@app.get("/v1/research/{research_id}")
+def get_research(
+    research_id: str
+):
     connection = db()
 
-    rows = connection.execute(
+    row = connection.execute(
         """
         SELECT *
         FROM research
-        ORDER BY created_at DESC
-        LIMIT 30
-        """
-    ).fetchall()
+        WHERE id = ?
+        """,
+        (research_id,)
+    ).fetchone()
 
     connection.close()
 
-    result = []
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail="Research not found"
+        )
 
-    for row in rows:
-        item = dict(row)
+    result = dict(row)
 
-        try:
-            item["evidence"] = json.loads(
-                item.pop(
-                    "evidence_json"
-                )
-            )
-        except Exception:
-            item["evidence"] = []
+    result["report"] = json.loads(
+        result.pop(
+            "report_json"
+        )
+    )
 
-        result.append(item)
-
-    return {
-        "count":
-            len(result),
-        "research":
-            result,
-    }
+    return result
 
 
 # ============================================================
-# SOURCES
-# ============================================================
-
-@app.get("/v1/sources")
-def sources_endpoint(
-    task_id: str = "",
-):
-    connection = db()
-
-    if task_id:
-        rows = connection.execute(
-            """
-            SELECT *
-            FROM sources
-            WHERE task_id = ?
-            ORDER BY retrieved_at DESC
-            LIMIT 100
-            """,
-            (task_id,),
-        ).fetchall()
-
-    else:
-        rows = connection.execute(
-            """
-            SELECT *
-            FROM sources
-            ORDER BY retrieved_at DESC
-            LIMIT 100
-            """
-        ).fetchall()
-
-    connection.close()
-
-    result = []
-
-    for row in rows:
-        item = dict(row)
-
-        try:
-            item["metadata"] = json.loads(
-                item.pop(
-                    "metadata_json"
-                )
-            )
-        except Exception:
-            item["metadata"] = {}
-
-        result.append(item)
-
-    return {
-        "count":
-            len(result),
-        "sources":
-            result,
-    }
-
-
-# ============================================================
-# FAILURES
+# API — FAILURES
 # ============================================================
 
 @app.get("/v1/failures")
-def failures_endpoint():
+def list_failures(
+    limit: int = 50
+):
     connection = db()
 
     rows = connection.execute(
@@ -3553,42 +2628,27 @@ def failures_endpoint():
         SELECT *
         FROM failures
         ORDER BY created_at DESC
-        LIMIT 30
-        """
+        LIMIT ?
+        """,
+        (min(limit, 100),)
     ).fetchall()
 
     connection.close()
 
-    result = []
-
-    for row in rows:
-        item = dict(row)
-
-        try:
-            item["recovery"] = json.loads(
-                item.pop(
-                    "recovery_json"
-                )
-            )
-        except Exception:
-            item["recovery"] = {}
-
-        result.append(item)
-
-    return {
-        "count":
-            len(result),
-        "failures":
-            result,
-    }
+    return [
+        dict(row)
+        for row in rows
+    ]
 
 
 # ============================================================
-# AUDIT
+# API — AUDIT
 # ============================================================
 
 @app.get("/v1/audit")
-def audit_endpoint():
+def audit(
+    limit: int = 100
+):
     connection = db()
 
     rows = connection.execute(
@@ -3596,287 +2656,282 @@ def audit_endpoint():
         SELECT *
         FROM events
         ORDER BY created_at DESC
-        LIMIT 100
-        """
+        LIMIT ?
+        """,
+        (min(limit, 200),)
     ).fetchall()
 
     connection.close()
 
-    result = []
-
-    for row in rows:
-        item = dict(row)
-
-        try:
-            item["payload"] = json.loads(
-                item.pop(
-                    "payload_json"
-                )
-            )
-        except Exception:
-            item["payload"] = {}
-
-        result.append(item)
-
-    return {
-        "count":
-            len(result),
-        "events":
-            result,
-    }
+    return [
+        dict(row)
+        for row in rows
+    ]
 
 
 # ============================================================
-# DIAGNOSTICS
+# WEB UI
 # ============================================================
 
-@app.get("/v1/research/diagnostics")
-def research_diagnostics(
-    q: str = "AI agent reliability autonomous task execution",
-):
-    try:
-        sources, diagnostics = discover_sources(q)
-
-        return {
-            "version":
-                VERSION,
-            "query":
-                q,
-            "normalized_query":
-                research_query_terms(q),
-            "providers":
-                diagnostics,
-            "sources_found":
-                len(sources),
-            "sources":
-                sources,
-        }
-
-    except Exception as exc:
-        return {
-            "version":
-                VERSION,
-            "status":
-                "failed",
-            "error":
-                str(exc),
-        }
-
-
-# ============================================================
-# ROOT UI
-# ============================================================
-
-HTML = """
+@app.get(
+    "/",
+    response_class=HTMLResponse
+)
+def home():
+    return f"""
 <!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport"
-content="width=device-width,initial-scale=1">
 
-<title>AI Infinity</title>
+<html>
+
+<head>
+
+<meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+>
+
+<title>
+AI Infinity {VERSION}
+</title>
 
 <style>
 
-body {
-    font-family: Arial, sans-serif;
-    max-width: 950px;
+body {{
+    font-family: system-ui;
+    background: #0b1020;
+    color: white;
+    max-width: 900px;
     margin: auto;
-    padding: 18px;
-    background: #080d13;
-    color: #f8fafc;
-}
+    padding: 24px;
+}}
 
-.card {
-    background: #111827;
-    border-radius: 16px;
-    padding: 20px;
-    margin-bottom: 18px;
-}
-
-textarea {
+textarea {{
     width: 100%;
-    min-height: 180px;
-    box-sizing: border-box;
+    min-height: 160px;
     padding: 14px;
     border-radius: 12px;
-    border: 1px solid #334155;
-    background: #020617;
+    box-sizing: border-box;
+    background: #151b30;
     color: white;
-    font-size: 15px;
-}
+    border: 1px solid #303957;
+}}
 
-button {
-    padding: 13px 20px;
-    margin-top: 12px;
+button {{
+    padding: 12px 18px;
     border: 0;
     border-radius: 10px;
+    margin-top: 10px;
     cursor: pointer;
-    font-weight: bold;
-}
+}}
 
-pre {
+pre {{
     white-space: pre-wrap;
-    word-break: break-word;
-    background: #020617;
+    background: #151b30;
     padding: 15px;
     border-radius: 12px;
-    overflow-x: auto;
-}
+    overflow: auto;
+}}
 
-.badge {
+.badge {{
     display: inline-block;
     padding: 6px 10px;
-    border-radius: 999px;
-    background: #1e293b;
-    margin: 3px;
-}
+    border-radius: 8px;
+    background: #202943;
+}}
 
 </style>
+
 </head>
 
 <body>
 
-<div class="card">
-
-<h1>♾️ AI Infinity</h1>
+<h1>∞ AI Infinity</h1>
 
 <p>
-<span class="badge">TARGET-2.2</span>
-<span class="badge">Multi-Source Research</span>
-<span class="badge">Evidence Gate</span>
-<span class="badge">Verification</span>
-<span class="badge">Memory</span>
-<span class="badge">Genome</span>
+<span class="badge">
+{VERSION}
+</span>
 </p>
 
 <p>
-Intent → Discover → Evidence → Reason → Verify → Learn → Evolve
+Evidence-first autonomous intelligence fabric.
 </p>
 
-</div>
-
-<div class="card">
-
-<h2>Run Objective</h2>
-
-<textarea id="objective"
-placeholder="Research what AI agent systems need to become reliable autonomous task executors. Collect multiple public sources, separate evidence-supported facts from assumptions, verify the evidence, save the research to memory, and create an Intelligence Genome."></textarea>
+<textarea
+    id="objective"
+    placeholder="Enter your objective..."
+></textarea>
 
 <br>
 
-<button onclick="runObjective()">
-Run AI Infinity
+<button onclick="runTask()">
+Run Objective
 </button>
 
-</div>
+<button onclick="calc()">
+Test Calculator
+</button>
 
-<div class="card">
-
-<h2>Result</h2>
-
-<pre id="result">Ready.</pre>
-
-</div>
+<pre id="out">
+Ready.
+</pre>
 
 <script>
 
-async function runObjective() {
+async function runTask() {{
 
     const objective =
-        document
-        .getElementById("objective")
-        .value.trim();
+        document.getElementById(
+            "objective"
+        ).value;
 
-    if (!objective) {
+    if (!objective.trim()) {{
+        document.getElementById(
+            "out"
+        ).textContent =
+            "Enter an objective first.";
+
         return;
-    }
+    }}
 
-    document
-    .getElementById("result")
-    .textContent =
-        "♾️ AI Infinity is working...";
+    document.getElementById(
+        "out"
+    ).textContent =
+        "Running AI Infinity...";
 
-    try {
+    try {{
 
         const response =
             await fetch(
                 "/v1/run",
-                {
+                {{
                     method: "POST",
-                    headers: {
+
+                    headers: {{
                         "Content-Type":
                             "application/json"
-                    },
-                    body:
-                        JSON.stringify({
-                            objective:
-                                objective,
-                            research:
-                                true,
-                            verify:
-                                true,
-                            remember:
-                                true
-                        })
-                }
+                    }},
+
+                    body: JSON.stringify({{
+                        objective:
+                            objective,
+
+                        research:
+                            true,
+
+                        verify:
+                            true,
+
+                        remember:
+                            true,
+
+                        allow_paid:
+                            false
+                    }})
+                }}
             );
 
-        const data =
-            await response.json();
+        const text =
+            await response.text();
 
-        document
-        .getElementById("result")
-        .textContent =
-            JSON.stringify(
-                data,
-                null,
-                2
-            );
+        document.getElementById(
+            "out"
+        ).textContent =
+            text;
 
-    } catch (error) {
+    }} catch (error) {{
 
-        document
-        .getElementById("result")
-        .textContent =
-            String(error);
+        document.getElementById(
+            "out"
+        ).textContent =
+            "Request error: "
+            + error;
 
-    }
-}
+    }}
+
+}}
+
+
+async function calc() {{
+
+    const response =
+        await fetch(
+            "/v1/execute",
+            {{
+                method: "POST",
+
+                headers: {{
+                    "Content-Type":
+                        "application/json"
+                }},
+
+                body: JSON.stringify({{
+                    action:
+                        "calculator_test",
+
+                    args: {{
+                        expression:
+                            "2+3*4"
+                    }}
+                }})
+            }}
+        );
+
+    document.getElementById(
+        "out"
+    ).textContent =
+        await response.text();
+
+}}
 
 </script>
 
 </body>
+
 </html>
 """
 
 
-@app.get(
-    "/",
-    response_class=HTMLResponse,
-)
-def root():
-    return HTML
+# ============================================================
+# OPTIONAL VIDEO COMPATIBILITY
+# ============================================================
+
+@app.get("/video/{task_id}")
+def video(
+    task_id: str
+):
+    path = (
+        WORK
+        / task_id
+        / "genius.mp4"
+    )
+
+    if not path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Video not found"
+        )
+
+    return FileResponse(
+        path,
+        media_type="video/mp4"
+    )
 
 
 # ============================================================
-# STARTUP
+# LOCAL START
 # ============================================================
 
-@app.on_event("startup")
-def startup():
-    init_db()
+if __name__ == "__main__":
+    import uvicorn
 
-    log_event(
-        None,
-        "system_start",
-        {
-            "service":
-                SERVICE,
-            "version":
-                VERSION,
-            "architecture":
-                "Intent → Discover → Evidence → Reason → Verify → Learn → Evolve",
-        },
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(
+            os.getenv(
+                "PORT",
+                "8000"
+            )
+        )
     )
