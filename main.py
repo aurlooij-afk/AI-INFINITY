@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 # audit trails, and an Intelligence Genome.
 # ============================================================
 
-VERSION = "TARGET-2.3.1"
+VERSION = "TARGET-2.3.2"
 BASE = Path(os.getenv("AI_INFINITY_HOME", "/tmp/ai-infinity"))
 ARTIFACTS = BASE / "artifacts"
 WORK = BASE / "work"
@@ -44,7 +44,7 @@ HTTP_TIMEOUT = int(os.getenv("AI_INFINITY_HTTP_TIMEOUT", "15"))
 MAX_SOURCE_BYTES = int(os.getenv("AI_INFINITY_MAX_SOURCE_BYTES", "120000"))
 MAX_DISCOVERY_PER_QUERY = int(os.getenv("AI_INFINITY_DISCOVERY_PER_QUERY", "4"))
 MAX_COLLECTED_SOURCES = int(os.getenv("AI_INFINITY_MAX_SOURCES", "12"))
-USER_AGENT = "AI-Infinity/2.3.1"
+USER_AGENT = "AI-Infinity/2.3.2"
 
 
 class RunRequest(BaseModel):
@@ -164,18 +164,22 @@ def domain_of(url: str) -> str:
 
 
 def relevance(question: str, title: str, text: str, url: str) -> float:
-    q = tokens(question)
-    if not q: return 0.0
+    q_text = research_anchor(question)
+    q = tokens(q_text)
+    if not q:
+        return 0.0
     tt, tx = tokens(title), tokens(text[:50000])
     title_overlap = len(q & tt) / max(1, len(q))
-    text_overlap = len(q & tx) / max(1, len(q))
-    qk = keyword_hits(question); sk = keyword_hits(title + " " + text[:30000])
+    text_overlap = len(q & tx) / max(1, min(len(q), 12))
+    qk = keyword_hits(q_text)
+    sk = keyword_hits(title + " " + text[:30000])
     kh = len(qk & sk) / max(1, len(qk))
     d = domain_of(url)
     bonus = 0.06 if any(x in d for x in ("arxiv.org","doi.org","crossref.org","openalex.org")) else 0.0
-    if "wikipedia.org" in d: bonus -= 0.04
-    return round(max(0.0, min(1.0, 0.52*title_overlap + 0.33*text_overlap + 0.15*kh + bonus)), 4)
-
+    if "wikipedia.org" in d:
+        bonus -= 0.05
+    score = 0.48*title_overlap + 0.37*text_overlap + 0.15*kh + bonus
+    return round(max(0.0, min(1.0, score)), 4)
 
 def fetch_url(url: str) -> Dict[str, Any]:
     p = urlparse(url)
@@ -229,87 +233,155 @@ def wikipedia_search(query: str, limit: int) -> List[Dict[str,Any]]:
     return out
 
 
+def research_anchor(question: str) -> str:
+    """Compress a long objective into search terms that public indexes can match."""
+    words = [w for w in re.findall(r"[a-z0-9][a-z0-9_-]{2,}", question.lower()) if w not in STOP]
+    preferred = list(keyword_hits(question))
+    ordered = []
+    for w in preferred + words:
+        if w not in ordered:
+            ordered.append(w)
+    return " ".join(ordered[:18])
+
+
 def expand_queries(question: str) -> List[str]:
-    base=re.sub(r"\s+"," ",question).strip()
-    candidates=[base,
-      base+" evidence studies benchmarks reliability",
-      base+" failure recovery verification evaluation",
-      base+" safety tool use planning monitoring",
-      "independent evidence for "+base,
-      "systematic review research "+base]
-    return list(dict.fromkeys(candidates))
+    base = re.sub(r"\\s+", " ", question).strip()
+    anchor = research_anchor(question)
+    queries = [
+        anchor,
+        anchor + " evidence studies benchmarks",
+        anchor + " reliability evaluation failure recovery",
+        anchor + " safety tool use planning monitoring",
+        anchor + " verification autonomous agents",
+        "systematic review " + anchor,
+        "independent evidence " + anchor,
+    ]
+    return list(dict.fromkeys(q for q in queries if q.strip()))
 
 
 def discover_sources(question: str) -> Dict[str,Any]:
-    providers=[("arxiv",arxiv_search),("crossref",crossref_search),("openalex",openalex_search),("wikipedia",wikipedia_search)]
+    providers=[
+        ("arxiv",arxiv_search),
+        ("crossref",crossref_search),
+        ("openalex",openalex_search),
+        ("wikipedia",wikipedia_search)
+    ]
     items=[]; diagnostics=[]; queries=expand_queries(question)
     for q in queries:
         for name,fn in providers:
             try:
                 batch=fn(q,MAX_DISCOVERY_PER_QUERY)
-                for x in batch: x["query"]=q
-                items.extend(batch); diagnostics.append({"query":q,"provider":name,"count":len(batch),"status":"ok"})
+                for x in batch:
+                    x["query"]=q
+                    x["provider"]=name
+                items.extend(batch)
+                diagnostics.append({"query":q,"provider":name,"count":len(batch),"status":"ok"})
             except Exception as exc:
                 diagnostics.append({"query":q,"provider":name,"count":0,"status":"error","error":str(exc)[:300]})
     seen=set(); unique=[]
     for x in items:
         key=canonical_url(x.get("url",""))
-        if key and key not in seen: seen.add(key); unique.append(x)
-    return {"queries":queries,"items":unique,"diagnostics":diagnostics}
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(x)
+    return {"queries":queries,"search_anchor":research_anchor(question),"items":unique,"diagnostics":diagnostics}
+
+def source_family(url: str) -> str:
+    d = domain_of(url)
+    if "arxiv.org" in d:
+        return "research-index"
+    if "openalex.org" in d:
+        return "bibliographic-index"
+    if "crossref.org" in d or "doi.org" in d:
+        return "doi-index"
+    if "wikipedia.org" in d:
+        return "encyclopedia"
+    return d
 
 
 def collect_sources(task_id: str, question: str, discovered: List[Dict[str,Any]]) -> List[Dict[str,Any]]:
     candidates=[]
     for item in discovered:
         try:
-            got=fetch_url(item["url"]); score=relevance(question,got["title"],got["text"],got["url"])
-            if got["http_status"] >= 400 or len(got["text"]) < 80 or score < 0.18: continue
-            got.update({"provider":item.get("provider"),"query":item.get("query"),"relevance":score})
+            got=fetch_url(item["url"])
+            score=relevance(question,got["title"],got["text"],got["url"])
+            if got["http_status"] >= 400 or len(got["text"]) < 120 or score < 0.12:
+                continue
+            got.update({
+                "provider":item.get("provider"),
+                "query":item.get("query"),
+                "relevance":score,
+                "source_family":source_family(got["url"])
+            })
             candidates.append(got)
         except Exception:
             continue
+
+    # Prefer strong, relevant evidence while deliberately diversifying domains and source families.
     candidates.sort(key=lambda x:(x["relevance"], len(x["text"])), reverse=True)
-    selected=[]; hashes=set(); domains=set()
-    # First pass maximizes independent domain/family diversity.
+    selected=[]; hashes=set(); domains=set(); families=set()
+
     for x in candidates:
-        if x["hash"] in hashes: continue
-        d=domain_of(x["url"])
-        if d not in domains or len(selected) < 3:
-            selected.append(x); hashes.add(x["hash"]); domains.add(d)
-        if len(selected)>=MAX_COLLECTED_SOURCES: break
+        if x["hash"] in hashes:
+            continue
+        d=domain_of(x["url"]); fam=x["source_family"]
+        if d not in domains or fam not in families or len(selected) < 3:
+            selected.append(x); hashes.add(x["hash"]); domains.add(d); families.add(fam)
+        if len(selected)>=MAX_COLLECTED_SOURCES:
+            break
+
     for x in candidates:
-        if len(selected)>=MAX_COLLECTED_SOURCES: break
+        if len(selected)>=MAX_COLLECTED_SOURCES:
+            break
         if x["hash"] not in hashes:
             selected.append(x); hashes.add(x["hash"])
+
     c=db()
     for x in selected:
         eid=uid("evidence"); x["evidence_id"]=eid
         excerpt=x["text"][:1400]
-        c.execute("INSERT INTO evidence VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(eid,task_id,x["url"],x["title"],domain_of(x["url"]),"",excerpt,x["hash"],"collected",x["relevance"],dump({"provider":x.get("provider"),"query":x.get("query"),"retrieved_at":x.get("retrieved_at"),"http_status":x.get("http_status")}),now_iso()))
-    c.commit(); c.close(); return selected
-
+        c.execute(
+            "INSERT INTO evidence VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (eid,task_id,x["url"],x["title"],domain_of(x["url"]),"",excerpt,x["hash"],
+             "collected",x["relevance"],
+             dump({"provider":x.get("provider"),"query":x.get("query"),
+                   "source_family":x.get("source_family"),
+                   "retrieved_at":x.get("retrieved_at"),
+                   "http_status":x.get("http_status")}),now_iso())
+        )
+    c.commit(); c.close()
+    return selected
 
 def extract_claims(question: str, sources: List[Dict[str,Any]]) -> List[Dict[str,Any]]:
     claims=[]; seen=set()
     patterns=[
-      r"[^.!?]{0,180}(?:reliable|reliability|verification|verified|safety|failure|planning|monitoring|evaluation|benchmark|tool use|recovery)[^.!?]{0,220}[.!?]",
-      r"[^.!?]{0,180}(?:shows|found|demonstrates|reports|concludes|suggests|indicates)[^.!?]{0,220}[.!?]"
+      r"[^.!?]{0,180}(?:reliable|reliability|verification|verified|safety|failure|planning|monitoring|evaluation|benchmark|tool use|recovery|autonomous)[^.!?]{0,260}[.!?]",
+      r"[^.!?]{0,180}(?:shows|found|demonstrates|reports|concludes|suggests|indicates)[^.!?]{0,260}[.!?]"
     ]
-    for s in sources:
-        text=s["text"][:40000]
+    for source in sources:
+        text=source["text"][:40000]
         found=[]
-        for p in patterns: found += re.findall(p,text,re.I)
-        for raw in found[:10]:
+        for p in patterns:
+            found += re.findall(p,text,re.I)
+        for raw in found[:12]:
             claim=re.sub(r"\s+"," ",raw).strip()
-            if len(claim)<45: continue
+            if len(claim)<45:
+                continue
             key=" ".join(sorted(tokens(claim)))
-            if key in seen: continue
+            if key in seen:
+                continue
             seen.add(key)
-            ov=len(tokens(question)&tokens(claim))/max(1,len(tokens(question)))
-            if ov < 0.03 and not (keyword_hits(question)&keyword_hits(claim)): continue
-            claims.append({"claim_id":uid("claim"),"text":claim,"evidence_ids":[s["evidence_id"]],"domains":[domain_of(s["url"])],"source_urls":[s["url"]]})
+            ov=len(tokens(research_anchor(question))&tokens(claim))/max(1,len(tokens(research_anchor(question))))
+            if ov < 0.05 and not (keyword_hits(question)&keyword_hits(claim)):
+                continue
+            claims.append({
+                "claim_id":uid("claim"),
+                "text":claim,
+                "evidence_ids":[source["evidence_id"]],
+                "domains":[domain_of(source["url"])],
+                "source_urls":[source["url"]]
+            })
     return claims[:30]
-
 
 def similarity(a: str,b: str)->float:
     A,B=tokens(a),tokens(b)
@@ -317,51 +389,87 @@ def similarity(a: str,b: str)->float:
 
 
 def verify_claims(claims: List[Dict[str,Any]], sources: List[Dict[str,Any]]) -> Dict[str,Any]:
-    by_domain={domain_of(s["url"]):s for s in sources}
     for c in claims:
-        support=[]; contradictions=[]
-        for s in sources:
-            if similarity(c["text"],s["text"][:50000]) >= 0.08:
-                support.append(s)
-                if s["evidence_id"] not in c["evidence_ids"]:
-                    c["evidence_ids"].append(s["evidence_id"]); c["source_urls"].append(s["url"]); c["domains"].append(domain_of(s["url"]))
-        c["domains"]=list(dict.fromkeys(c["domains"])); c["source_urls"]=list(dict.fromkeys(c["source_urls"]))
+        support=[]
+        for src in sources:
+            sim=similarity(c["text"],src["text"][:50000])
+            if sim >= 0.07:
+                support.append((src,sim))
+                if src["evidence_id"] not in c["evidence_ids"]:
+                    c["evidence_ids"].append(src["evidence_id"])
+                    c["source_urls"].append(src["url"])
+                    c["domains"].append(domain_of(src["url"]))
+
+        c["domains"]=list(dict.fromkeys(c["domains"]))
+        c["source_urls"]=list(dict.fromkeys(c["source_urls"]))
         c["mapped_evidence"]=len(c["evidence_ids"])
         c["independent_domains"]=len(c["domains"])
         c["corroborated"]=len(c["domains"])>=2
-        # Conservative contradiction signal: only compare closely related excerpts
-        # and require opposite polarity plus substantial lexical overlap.
-        basepol=(len(tokens(c["text"])&POSITIVE),len(tokens(c["text"])&NEGATIVE))
-        for s in support:
-            st=s["text"][:30000]
-            if similarity(c["text"],st) < 0.18: continue
-            sp=(len(tokens(st)&POSITIVE),len(tokens(st)&NEGATIVE))
-            if basepol[0]>=1 and sp[1]>=2 and sp[1]>sp[0]+1: contradictions.append({"claim_id":c["claim_id"],"source":s["url"],"type":"polarity_conflict"})
-            if basepol[1]>=1 and sp[0]>=2 and sp[0]>sp[1]+1: contradictions.append({"claim_id":c["claim_id"],"source":s["url"],"type":"polarity_conflict"})
+
+        contradictions=[]
+        base_tokens=tokens(c["text"])
+        base_pos=len(base_tokens & POSITIVE)
+        base_neg=len(base_tokens & NEGATIVE)
+
+        # Conservative contradiction heuristic: only flag a close semantic match
+        # when the opposing polarity is materially stronger in another source.
+        for src,sim in support:
+            if sim < 0.18 or src["url"] in c["source_urls"][:1]:
+                continue
+            st_tokens=tokens(src["text"][:30000])
+            sp=len(st_tokens & POSITIVE); sn=len(st_tokens & NEGATIVE)
+            if base_pos>=2 and sn>=4 and sn>sp+2:
+                contradictions.append({"claim_id":c["claim_id"],"source":src["url"],"type":"polarity_conflict"})
+            elif base_neg>=2 and sp>=4 and sp>sn+2:
+                contradictions.append({"claim_id":c["claim_id"],"source":src["url"],"type":"polarity_conflict"})
+
         c["contradictions"]=contradictions
         c["verification_status"]="corroborated" if c["corroborated"] else "source_supported"
         c["confidence"]=0.90 if c["corroborated"] else 0.72
+
     unsupported=[c for c in claims if c["mapped_evidence"]<1]
     contradictions=[x for c in claims for x in c.get("contradictions",[])]
-    return {"claims":claims,"unsupported_claims":unsupported,"contradictions":contradictions,"corroborated_claims":sum(1 for c in claims if c["corroborated"])}
-
+    return {
+        "claims":claims,
+        "unsupported_claims":unsupported,
+        "contradictions":contradictions,
+        "corroborated_claims":sum(1 for c in claims if c["corroborated"])
+    }
 
 def evidence_gate(sources: List[Dict[str,Any]], verification: Dict[str,Any]) -> Dict[str,Any]:
     domains={domain_of(s["url"]) for s in sources}
+    families={s.get("source_family",source_family(s["url"])) for s in sources}
     claims=verification.get("claims",[])
     mapped=sum(1 for c in claims if c.get("mapped_evidence",0)>=1)
     unsupported=len(verification.get("unsupported_claims",[]))
     contradictions=len(verification.get("contradictions",[]))
-    checks={"minimum_sources":len(sources)>=3,"independent_domains":len(domains)>=2,"mapped_claims":mapped>=3,"no_unsupported_claims":unsupported==0,"no_unresolved_contradictions":contradictions==0}
+    checks={
+        "minimum_sources":len(sources)>=3,
+        "independent_domains":len(domains)>=2,
+        "source_family_diversity":len(families)>=2,
+        "mapped_claims":mapped>=3,
+        "no_unsupported_claims":unsupported==0,
+        "no_unresolved_contradictions":contradictions==0
+    }
     passed=all(checks.values())
     reasons=[]
     if not checks["minimum_sources"]: reasons.append("fewer_than_3_relevant_sources")
     if not checks["independent_domains"]: reasons.append("fewer_than_2_independent_domains")
+    if not checks["source_family_diversity"]: reasons.append("insufficient_source_family_diversity")
     if not checks["mapped_claims"]: reasons.append("fewer_than_3_mapped_claims")
     if not checks["no_unsupported_claims"]: reasons.append("unsupported_claims_present")
     if not checks["no_unresolved_contradictions"]: reasons.append("contradictions_present")
-    return {"passed":passed,"checks":checks,"source_count":len(sources),"domain_count":len(domains),"mapped_claim_count":mapped,"unsupported_claim_count":unsupported,"contradiction_count":contradictions,"reasons":reasons}
-
+    return {
+        "passed":passed,
+        "checks":checks,
+        "source_count":len(sources),
+        "domain_count":len(domains),
+        "source_family_count":len(families),
+        "mapped_claim_count":mapped,
+        "unsupported_claim_count":unsupported,
+        "contradiction_count":contradictions,
+        "reasons":reasons
+    }
 
 def call_ai(prompt: str) -> Optional[str]:
     if not HF_TOKEN: return None
@@ -392,7 +500,7 @@ def research_pipeline(task_id: str, question: str) -> Dict[str,Any]:
     verification=verify_claims(claims,sources)
     gate=evidence_gate(sources,verification)
     analysis=grounded_analysis(question,sources,verification,gate)
-    report={"version":VERSION,"question":question,"queries":discovery["queries"],"discovery":discovery["diagnostics"],"sources": [{k:s[k] for k in ("evidence_id","url","title","provider","query","relevance","hash","retrieved_at") } for s in sources],"evidence": [{"evidence_id":s["evidence_id"],"url":s["url"],"domain":domain_of(s["url"]),"title":s["title"],"excerpt":s["text"][:1400],"hash":s["hash"],"relevance":s["relevance"]} for s in sources],"claims":verification["claims"],"verification":verification,"contradictions":verification["contradictions"],"evidence_gate":gate,"analysis":analysis,"status":"completed" if gate["passed"] else "insufficient_evidence","provenance":{"query_count":len(discovery["queries"]),"source_count":len(sources),"domains":sorted({domain_of(s["url"]) for s in sources}),"source_hashes":sorted({s["hash"] for s in sources})}}
+    report={"version":VERSION,"question":question,"queries":discovery["queries"],"discovery":discovery["diagnostics"],"sources": [{k:s[k] for k in ("evidence_id","url","title","provider","query","relevance","hash","retrieved_at","source_family") } for s in sources],"evidence": [{"evidence_id":s["evidence_id"],"url":s["url"],"domain":domain_of(s["url"]),"title":s["title"],"excerpt":s["text"][:1400],"hash":s["hash"],"relevance":s["relevance"],"source_family":s.get("source_family",source_family(s["url"]))} for s in sources],"claims":verification["claims"],"verification":verification,"contradictions":verification["contradictions"],"evidence_gate":gate,"analysis":analysis,"status":"completed" if gate["passed"] else "insufficient_evidence","provenance":{"query_count":len(discovery["queries"]),"source_count":len(sources),"domains":sorted({domain_of(s["url"]) for s in sources}),"source_families":sorted({s.get("source_family",source_family(s["url"])) for s in sources}),"source_hashes":sorted({s["hash"] for s in sources})}}
     rid=save_research(task_id,question,report["status"],report); report["research_id"]=rid; event(task_id,"research_completed",{"status":report["status"],"gate":gate}); return report
 
 
