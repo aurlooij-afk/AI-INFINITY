@@ -1,13 +1,15 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
-from urllib.parse import urlparse, urljoin, parse_qs, unquote, urlencode
+from urllib.parse import (
+    urlparse, urljoin, parse_qs, unquote, urlencode
+)
 from pathlib import Path
 from datetime import datetime, timezone
 import sqlite3
 import json
-import re
 import uuid
+import re
 import socket
 import ipaddress
 import html as html_lib
@@ -19,20 +21,42 @@ BASE = Path("/tmp/ai-infinity")
 BASE.mkdir(parents=True, exist_ok=True)
 DB = BASE / "infinity.db"
 
-app = FastAPI(title="AI Infinity", version=VERSION)
+app = FastAPI(
+    title="AI Infinity",
+    version=VERSION
+)
+
 
 # ============================================================
-# SEARCH / EVIDENCE SECURITY
+# GLOBAL JSON ERROR HANDLER
+# ============================================================
+
+@app.exception_handler(Exception)
+async def global_error_handler(
+    request: Request,
+    exc: Exception
+):
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "version": VERSION,
+            "error": "Internal Server Error",
+            "detail": str(exc),
+            "path": str(request.url.path)
+        }
+    )
+
+
+# ============================================================
+# SEARCH SECURITY
 # ============================================================
 
 SEARCH_INFRA = {
     "google.com",
-    "www.google.com",
     "support.google.com",
     "bing.com",
-    "www.bing.com",
     "duckduckgo.com",
-    "www.duckduckgo.com",
     "search.yahoo.com",
     "r.bing.com",
     "cc.bingj.com",
@@ -41,14 +65,16 @@ SEARCH_INFRA = {
 }
 
 BAD_PATH = re.compile(
-    r"/(search|support|help|preferences|settings|accounts|login|signin|"
-    r"websearch|feedback|intl)(/|$)",
-    re.I,
+    r"/(search|support|help|preferences|settings|"
+    r"accounts|login|signin|websearch|feedback|intl)"
+    r"(/|$)",
+    re.I
 )
 
 BAD_EXT = re.compile(
-    r"\.(?:js|css|png|jpg|jpeg|gif|svg|ico|woff2?|ttf|map|xml)$",
-    re.I,
+    r"\.(js|css|png|jpg|jpeg|gif|svg|ico|"
+    r"woff|woff2|ttf|map|xml)$",
+    re.I
 )
 
 TRACKING = {
@@ -61,8 +87,7 @@ TRACKING = {
     "ved",
     "ei",
     "oq",
-    "source",
-    "sclient",
+    "sclient"
 }
 
 
@@ -75,84 +100,82 @@ def now():
 
 
 def db():
-    c = sqlite3.connect(DB)
-    c.row_factory = sqlite3.Row
-    return c
+    connection = sqlite3.connect(DB)
+    connection.row_factory = sqlite3.Row
+    return connection
 
 
 def init_db():
-    c = db()
+    connection = db()
 
-    c.executescript(
-        """
-        PRAGMA journal_mode=WAL;
-        PRAGMA synchronous=NORMAL;
+    connection.executescript("""
+    PRAGMA journal_mode=WAL;
+    PRAGMA synchronous=NORMAL;
 
-        CREATE TABLE IF NOT EXISTS events(
-            id TEXT PRIMARY KEY,
-            ts TEXT,
-            kind TEXT,
-            data TEXT
-        );
+    CREATE TABLE IF NOT EXISTS events(
+        id TEXT PRIMARY KEY,
+        ts TEXT,
+        kind TEXT,
+        data TEXT
+    );
 
-        CREATE TABLE IF NOT EXISTS memory(
-            id TEXT PRIMARY KEY,
-            ts TEXT,
-            objective TEXT,
-            result TEXT
-        );
+    CREATE TABLE IF NOT EXISTS memory(
+        id TEXT PRIMARY KEY,
+        ts TEXT,
+        objective TEXT,
+        result TEXT
+    );
 
-        CREATE TABLE IF NOT EXISTS missions(
-            id TEXT PRIMARY KEY,
-            ts TEXT,
-            objective TEXT,
-            status TEXT,
-            result TEXT
-        );
+    CREATE TABLE IF NOT EXISTS missions(
+        id TEXT PRIMARY KEY,
+        ts TEXT,
+        objective TEXT,
+        status TEXT,
+        result TEXT
+    );
 
-        CREATE TABLE IF NOT EXISTS tasks(
-            id TEXT PRIMARY KEY,
-            ts TEXT,
-            mission_id TEXT,
-            node TEXT,
-            status TEXT,
-            result TEXT
-        );
+    CREATE TABLE IF NOT EXISTS tasks(
+        id TEXT PRIMARY KEY,
+        ts TEXT,
+        mission_id TEXT,
+        node TEXT,
+        status TEXT,
+        result TEXT
+    );
 
-        CREATE TABLE IF NOT EXISTS evaluations(
-            id TEXT PRIMARY KEY,
-            ts TEXT,
-            mission_id TEXT,
-            data TEXT
-        );
+    CREATE TABLE IF NOT EXISTS evaluations(
+        id TEXT PRIMARY KEY,
+        ts TEXT,
+        mission_id TEXT,
+        data TEXT
+    );
 
-        CREATE TABLE IF NOT EXISTS opportunities(
-            id TEXT PRIMARY KEY,
-            ts TEXT,
-            title TEXT,
-            description TEXT,
-            priority REAL
-        );
+    CREATE TABLE IF NOT EXISTS opportunities(
+        id TEXT PRIMARY KEY,
+        ts TEXT,
+        title TEXT,
+        description TEXT,
+        priority REAL
+    );
 
-        CREATE TABLE IF NOT EXISTS world(
-            id TEXT PRIMARY KEY,
-            ts TEXT,
-            key TEXT,
-            value TEXT
-        );
+    CREATE TABLE IF NOT EXISTS world(
+        id TEXT PRIMARY KEY,
+        ts TEXT,
+        key TEXT,
+        value TEXT
+    );
 
-        CREATE TABLE IF NOT EXISTS regression(
-            id TEXT PRIMARY KEY,
-            ts TEXT,
-            name TEXT,
-            passed INTEGER,
-            detail TEXT
-        );
-        """
-    )
+    CREATE TABLE IF NOT EXISTS regression(
+        id TEXT PRIMARY KEY,
+        ts TEXT,
+        name TEXT,
+        passed INTEGER,
+        detail TEXT
+    );
+    """)
 
-    c.commit()
-    c.close()
+    connection.commit()
+    connection.close()
 
 
 init_db()
@@ -171,16 +194,25 @@ class ExecuteRequest(BaseModel):
 
 
 class ResearchRequest(BaseModel):
-    query: str = Field(min_length=2, max_length=10000)
+    query: str = Field(
+        min_length=2,
+        max_length=10000
+    )
 
 
 class VerifyRequest(BaseModel):
-    claim: str = Field(min_length=2, max_length=10000)
+    claim: str = Field(
+        min_length=2,
+        max_length=10000
+    )
     sources: list[dict] = []
 
 
 class PlanRequest(BaseModel):
-    objective: str
+    objective: str = Field(
+        min_length=1,
+        max_length=10000
+    )
 
 
 class ExternalRequest(BaseModel):
@@ -190,24 +222,31 @@ class ExternalRequest(BaseModel):
 
 
 # ============================================================
-# EVENTS
+# EVENT LOG
 # ============================================================
 
 def event(kind, data):
-    c = db()
+    connection = db()
 
-    c.execute(
-        "INSERT INTO events VALUES(?,?,?,?)",
+    connection.execute(
+        """
+        INSERT INTO events
+        (id, ts, kind, data)
+        VALUES (?, ?, ?, ?)
+        """,
         (
             str(uuid.uuid4()),
             now(),
             kind,
-            json.dumps(data, default=str),
-        ),
+            json.dumps(
+                data,
+                default=str
+            )
+        )
     )
 
-    c.commit()
-    c.close()
+    connection.commit()
+    connection.close()
 
 
 # ============================================================
@@ -218,22 +257,26 @@ def host_is_safe(host):
     if not host:
         return False
 
-    h = host.lower().rstrip(".")
+    host = host.lower().rstrip(".")
 
-    if h in {
+    if host in {
         "localhost",
-        "localhost.localdomain",
+        "localhost.localdomain"
     }:
         return False
 
-    if h.endswith(".local"):
+    if host.endswith(".local"):
         return False
 
     try:
-        infos = socket.getaddrinfo(h, None)
+        infos = socket.getaddrinfo(
+            host,
+            None
+        )
 
-        for x in infos:
-            ip = ipaddress.ip_address(x[4][0])
+        for info in infos:
+            address = info[4][0]
+            ip = ipaddress.ip_address(address)
 
             if (
                 ip.is_private
@@ -253,15 +296,17 @@ def host_is_safe(host):
 
 def safe_url(url):
     try:
-        p = urlparse(url)
+        parsed = urlparse(url)
 
-        if p.scheme not in ("http", "https"):
+        if parsed.scheme not in {
+            "http",
+            "https"
+        }:
             return False
 
-        if not host_is_safe(p.hostname):
-            return False
-
-        return True
+        return host_is_safe(
+            parsed.hostname
+        )
 
     except Exception:
         return False
@@ -273,33 +318,44 @@ def safe_url(url):
 
 def domain(url):
     try:
-        return (
-            urlparse(url)
-            .hostname
+        host = (
+            urlparse(url).hostname
             or ""
-        ).lower().removeprefix("www.")
+        )
+
+        return host.lower().removeprefix(
+            "www."
+        )
 
     except Exception:
         return ""
 
 
 def normalize_url(url, base=None):
-    if base:
-        url = urljoin(base, url)
-
-    if url.startswith("//"):
-        url = "https:" + url
 
     try:
-        p = urlparse(url)
 
-        if p.scheme not in ("http", "https"):
+        if base:
+            url = urljoin(
+                base,
+                url
+            )
+
+        if url.startswith("//"):
+            url = "https:" + url
+
+        parsed = urlparse(url)
+
+        if parsed.scheme not in {
+            "http",
+            "https"
+        }:
             return None
 
-        if not p.hostname:
+        if not parsed.hostname:
             return None
 
-        host = p.hostname.lower().rstrip(".")
+        host = parsed.hostname.lower().rstrip(".")
 
         if host in {
             x.removeprefix("www.")
@@ -307,41 +363,48 @@ def normalize_url(url, base=None):
         }:
             return None
 
-        if BAD_PATH.search(p.path or ""):
+        if BAD_PATH.search(
+            parsed.path or ""
+        ):
             return None
 
-        if BAD_EXT.search(p.path or ""):
+        if BAD_EXT.search(
+            parsed.path or ""
+        ):
             return None
 
-        qs = parse_qs(
-            p.query,
-            keep_blank_values=True,
+        params = parse_qs(
+            parsed.query,
+            keep_blank_values=True
         )
 
         kept = []
 
-        for k, vals in qs.items():
-            kl = k.lower()
+        for key, values in params.items():
 
-            if kl.startswith("utm_"):
+            lower = key.lower()
+
+            if lower.startswith("utm_"):
                 continue
 
-            if kl in TRACKING:
+            if lower in TRACKING:
                 continue
 
-            for v in vals[:2]:
-                kept.append((k, v))
-
-        path = p.path or "/"
+            for value in values[:2]:
+                kept.append(
+                    (key, value)
+                )
 
         clean = (
-            f"{p.scheme}://{host}{path}"
+            f"{parsed.scheme}://"
+            f"{host}"
+            f"{parsed.path or '/'}"
         )
 
         if kept:
             clean += "?" + urlencode(
                 kept,
-                doseq=True,
+                doseq=True
             )
 
         return clean
@@ -351,56 +414,56 @@ def normalize_url(url, base=None):
 
 
 # ============================================================
-# TEXT / CONTAMINATION DETECTION
+# TEXT QUALITY / CONTAMINATION
 # ============================================================
 
-def clean_title(s):
-    s = html_lib.unescape(
-        re.sub(
-            r"\s+",
-            " ",
-            re.sub(
-                "<[^>]+>",
-                " ",
-                s or "",
-            ),
-        )
+def clean_title(value):
+
+    value = re.sub(
+        r"<[^>]+>",
+        " ",
+        value or ""
+    )
+
+    value = html_lib.unescape(
+        value
+    )
+
+    value = re.sub(
+        r"\s+",
+        " ",
+        value
     ).strip()
 
-    return s[:300]
+    return value[:300]
 
 
 def meaningful(text):
-    text = re.sub(
-        r"\s+",
-        " ",
-        html_lib.unescape(text or ""),
-    ).strip()
+
+    text = html_lib.unescape(
+        text or ""
+    )
 
     words = re.findall(
         r"[A-Za-z][A-Za-z0-9'-]{2,}",
-        text,
+        text
     )
 
     if len(words) < 80:
         return False
 
-    css_patterns = re.findall(
-        r"(?:"
-        r"@keyframes|"
-        r"font-size|"
-        r"z-index|"
-        r"webkit-|"
-        r"background-size|"
-        r"\{[^}]{0,120}\}"
-        r")",
+    css_hits = re.findall(
+        r"@keyframes|font-size|"
+        r"z-index|webkit-|background-size|"
+        r"border-radius|display:\s*(flex|grid)|"
+        r"\{[^}]{0,150}\}",
         text,
-        re.I,
+        re.I
     )
 
-    if len(css_patterns) > max(
-        2,
-        len(words) // 100,
+    if len(css_hits) > max(
+        3,
+        len(words) // 80
     ):
         return False
 
@@ -408,24 +471,28 @@ def meaningful(text):
 
 
 def html_text(raw):
-    x = re.sub(
-        r"(?is)<(script|style|noscript|svg|nav|footer|header)[^>]*>.*?</\1>",
+
+    text = re.sub(
+        r"(?is)<(script|style|noscript|svg|"
+        r"nav|footer|header)[^>]*>.*?</\1>",
         " ",
-        raw,
+        raw
     )
 
-    x = re.sub(
+    text = re.sub(
         r"(?is)<[^>]+>",
         " ",
-        x,
+        text
     )
 
-    x = html_lib.unescape(x)
+    text = html_lib.unescape(
+        text
+    )
 
     return re.sub(
         r"\s+",
         " ",
-        x,
+        text
     ).strip()
 
 
@@ -434,12 +501,13 @@ def html_text(raw):
 # ============================================================
 
 def quality(url, text, title):
-    d = domain(url)
 
-    if not d:
+    current_domain = domain(url)
+
+    if not current_domain:
         return 0
 
-    if d in {
+    if current_domain in {
         x.removeprefix("www.")
         for x in SEARCH_INFRA
     }:
@@ -448,55 +516,63 @@ def quality(url, text, title):
     if not meaningful(text):
         return 0
 
-    q = 0.35
+    score = 0.35
 
-    if d.endswith(".edu"):
-        q += 0.30
+    if current_domain.endswith(".edu"):
+        score += 0.30
 
-    if d.endswith(".gov"):
-        q += 0.30
+    if current_domain.endswith(".gov"):
+        score += 0.30
 
-    high_quality_domains = {
+    preferred = {
         "arxiv.org",
         "nature.com",
         "science.org",
         "acm.org",
         "ieee.org",
         "stanford.edu",
-        "mit.edu",
+        "mit.edu"
     }
 
     if any(
-        d == x or d.endswith("." + x)
-        for x in high_quality_domains
+        current_domain == x
+        or current_domain.endswith(
+            "." + x
+        )
+        for x in preferred
     ):
-        q += 0.25
+        score += 0.25
 
     if len(text) > 1500:
-        q += 0.10
+        score += 0.10
 
     return round(
-        min(q, 1.0),
-        2,
+        min(score, 1.0),
+        2
     )
 
 
 # ============================================================
-# PROVIDER-SPECIFIC SEARCH RESULT PARSERS
+# SEARCH RESULT PARSING
 # ============================================================
 
-def extract_links(raw, provider):
-    out = []
+def extract_links(
+    raw,
+    provider
+):
+
+    results = []
 
     if provider == "duckduckgo":
 
         patterns = [
             r'<a[^>]+class="[^"]*result__a[^"]*"'
-            r'[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+            r'[^>]+href="([^"]+)"'
+            r'[^>]*>(.*?)</a>',
 
             r'<a[^>]+href="([^"]+)"'
             r'[^>]*class="[^"]*result__a[^"]*"'
-            r'[^>]*>(.*?)</a>',
+            r'[^>]*>(.*?)</a>'
         ]
 
     elif provider == "bing":
@@ -505,7 +581,7 @@ def extract_links(raw, provider):
             r'<li[^>]+class="[^"]*b_algo[^"]*"'
             r'[\s\S]*?<h2[^>]*>'
             r'<a[^>]+href="([^"]+)"'
-            r'[^>]*>(.*?)</a>',
+            r'[^>]*>(.*?)</a>'
         ]
 
     else:
@@ -515,113 +591,89 @@ def extract_links(raw, provider):
             r'[^>]*>(.*?)</a>',
 
             r'<a[^>]+href="(https?://[^"]+)"'
-            r'[^>]*>(.*?)</a>',
+            r'[^>]*>(.*?)</a>'
         ]
 
     for pattern in patterns:
 
-        for m in re.finditer(
+        for match in re.finditer(
             pattern,
             raw,
-            re.I,
+            re.I
         ):
+
             url = html_lib.unescape(
-                m.group(1)
+                match.group(1)
             )
 
             title = clean_title(
-                m.group(2)
+                match.group(2)
             )
 
-            if url.startswith("/url?"):
-                q = parse_qs(
+            if url.startswith(
+                "/url?"
+            ):
+
+                params = parse_qs(
                     urlparse(url).query
                 )
 
                 url = (
-                    q.get("q", [None])[0]
-                    or q.get("url", [None])[0]
+                    params.get(
+                        "q",
+                        [None]
+                    )[0]
+                    or params.get(
+                        "url",
+                        [None]
+                    )[0]
                 )
 
             url = unquote(
                 url or ""
             )
 
-            clean = normalize_url(url)
-
-            if not clean:
-                continue
-
-            if not title:
-                continue
-
-            if len(title) <= 8:
-                continue
-
-            out.append(
-                {
-                    "url": clean,
-                    "title": title,
-                    "provider": provider,
-                }
+            normalized = normalize_url(
+                url
             )
 
-    # Conservative fallback
-    if not out:
-
-        for m in re.finditer(
-            r'<a[^>]+href="(https?://[^"]+)"'
-            r'[^>]*>(.*?)</a>',
-            raw,
-            re.I,
-        ):
-
-            clean = normalize_url(
-                html_lib.unescape(m.group(1))
-            )
-
-            title = clean_title(
-                m.group(2)
-            )
-
-            if not clean:
+            if not normalized:
                 continue
 
-            if len(title) <= 12:
+            if len(title) < 10:
                 continue
 
             if re.search(
-                r"(search help|sign in|settings|feedback|search)$",
+                r"search help|sign in|"
+                r"settings|feedback|"
+                r"google search|bing search",
                 title,
-                re.I,
+                re.I
             ):
                 continue
 
-            out.append(
+            results.append(
                 {
-                    "url": clean,
+                    "url": normalized,
                     "title": title,
-                    "provider": provider,
+                    "provider": provider
                 }
             )
 
+    unique = []
     seen = set()
-    final = []
 
-    for x in out:
+    for result in results:
 
-        key = (
-            x["url"],
-            x["title"].lower(),
-        )
+        key = result["url"]
 
         if key in seen:
             continue
 
         seen.add(key)
-        final.append(x)
+        unique.append(result)
 
-    return final[:15]
+    return unique[:15]
 
 
 # ============================================================
@@ -631,8 +683,9 @@ def extract_links(raw, provider):
 async def search_provider(
     client,
     query,
-    provider,
+    provider
 ):
+
     if provider == "duckduckgo":
 
         url = (
@@ -654,7 +707,7 @@ async def search_provider(
             + urlencode(
                 {
                     "q": query,
-                    "num": 10,
+                    "num": 10
                 }
             )
         )
@@ -666,9 +719,9 @@ async def search_provider(
             headers={
                 "User-Agent":
                     "Mozilla/5.0 "
-                    "AI-Infinity-Research/2050.5"
+                    "AI-Infinity/2050.5"
             },
-            timeout=12,
+            timeout=12
         )
 
         if response.status_code >= 400:
@@ -680,64 +733,68 @@ async def search_provider(
         return (
             extract_links(
                 response.text,
-                provider,
+                provider
             ),
-            "ok",
+            "ok"
         )
 
-    except Exception as e:
+    except Exception as exc:
 
-        return [], type(e).__name__
+        return [], type(exc).__name__
 
 
 # ============================================================
-# ADAPTIVE QUERY ENGINE
+# ADAPTIVE QUERIES
 # ============================================================
 
 def query_variants(query):
 
-    base = re.sub(
+    query = re.sub(
         r"\s+",
         " ",
-        query,
+        query
     ).strip()
 
     return [
-        base,
+        query,
 
-        base
+        query
         + " evidence research benchmark",
 
-        base
+        query
         + " independent sources study report",
 
-        base
-        + " site:arxiv.org OR "
-          "site:nature.com OR "
-          "site:acm.org",
+        query
+        + " scientific evidence",
+
+        query
+        + " site:arxiv.org",
+
+        query
+        + " site:nature.com"
     ]
 
 
 # ============================================================
-# SOURCE FETCHER
+# SOURCE FETCH
 # ============================================================
 
 async def fetch_source(
     client,
-    item,
+    candidate
 ):
 
     try:
 
         response = await client.get(
-            item["url"],
+            candidate["url"],
             headers={
                 "User-Agent":
                     "Mozilla/5.0 "
-                    "AI-Infinity-Research/2050.5"
+                    "AI-Infinity/2050.5"
             },
             timeout=15,
-            follow_redirects=True,
+            follow_redirects=True
         )
 
         final_url = normalize_url(
@@ -761,35 +818,37 @@ async def fetch_source(
                 "contaminated_or_too_short"
             )
 
-        q = quality(
+        score = quality(
             final_url,
             text,
-            item["title"],
+            candidate["title"]
         )
 
-        if q <= 0:
+        if score <= 0:
             return None, (
                 "low_quality_or_contaminated"
             )
 
         return (
             {
-                **item,
+                **candidate,
                 "url": final_url,
-                "domain": domain(final_url),
+                "domain": domain(
+                    final_url
+                ),
                 "text": text[:12000],
-                "quality": q,
+                "quality": score
             },
-            "accepted",
+            "accepted"
         )
 
-    except Exception as e:
+    except Exception as exc:
 
-        return None, type(e).__name__
+        return None, type(exc).__name__
 
 
 # ============================================================
-# EVIDENCE ACQUISITION ENGINE
+# EVIDENCE ENGINE
 # ============================================================
 
 async def research(query):
@@ -797,10 +856,11 @@ async def research(query):
     providers = [
         "duckduckgo",
         "bing",
-        "google",
+        "google"
     ]
 
     candidates = []
+    rejected = []
     provider_health = {}
 
     variants = query_variants(
@@ -809,9 +869,9 @@ async def research(query):
 
     async with httpx.AsyncClient() as client:
 
-        for round_number, q in enumerate(
+        for round_number, variant in enumerate(
             variants,
-            1,
+            1
         ):
 
             for provider in providers:
@@ -819,8 +879,8 @@ async def research(query):
                 rows, status = (
                     await search_provider(
                         client,
-                        q,
-                        provider,
+                        variant,
+                        provider
                     )
                 )
 
@@ -830,122 +890,125 @@ async def research(query):
 
                 candidates.extend(rows)
 
-            # Stop broad search once
-            # meaningful domain diversity exists.
-            if len(
-                {
-                    domain(x["url"])
-                    for x in candidates
-                    if domain(x["url"])
-                }
-            ) >= 8:
+            raw_domains = {
+                domain(x["url"])
+                for x in candidates
+                if domain(x["url"])
+            }
+
+            if len(raw_domains) >= 8:
                 break
 
-        # One candidate per domain initially.
-        domain_candidates = {}
+        by_domain = {}
 
-        for item in candidates:
+        for candidate in candidates:
 
-            d = domain(
-                item["url"]
+            current_domain = domain(
+                candidate["url"]
             )
 
-            if not d:
+            if not current_domain:
                 continue
 
-            if d not in domain_candidates:
-                domain_candidates[d] = item
+            if current_domain not in by_domain:
+                by_domain[
+                    current_domain
+                ] = candidate
 
         accepted = []
-        rejected = []
 
-        for item in list(
-            domain_candidates.values()
-        )[:12]:
+        for candidate in list(
+            by_domain.values()
+        )[:15]:
 
             source, reason = (
                 await fetch_source(
                     client,
-                    item,
+                    candidate
                 )
             )
 
             if source:
-
                 accepted.append(source)
 
             else:
-
                 rejected.append(
                     {
-                        **item,
-                        "reason": reason,
+                        "url":
+                            candidate["url"],
+                        "title":
+                            candidate["title"],
+                        "provider":
+                            candidate["provider"],
+                        "reason":
+                            reason
                     }
                 )
 
-    independent_domains = list(
+    domains = list(
         dict.fromkeys(
             x["domain"]
             for x in accepted
         )
     )
 
-    average_quality = round(
-        sum(
-            x["quality"]
-            for x in accepted
+    average_quality = (
+        round(
+            sum(
+                x["quality"]
+                for x in accepted
+            ) / len(accepted),
+            2
         )
-        / len(accepted),
-        2,
-    ) if accepted else 0
+        if accepted
+        else 0
+    )
 
     if (
-        len(independent_domains) >= 3
+        len(domains) >= 3
         and average_quality >= 0.65
     ):
-
         strength = "strong"
 
     elif (
-        len(independent_domains) >= 2
+        len(domains) >= 2
         and average_quality >= 0.45
     ):
-
         strength = "moderate"
 
-    elif len(independent_domains) >= 1:
-
+    elif len(domains) >= 1:
         strength = "weak"
 
     else:
-
         strength = "insufficient"
 
     failure_reason = None
 
     if not accepted:
-
         failure_reason = (
-            "No meaningful independent sources "
-            "survived URL, content, contamination, "
-            "and quality filters."
+            "No meaningful independent source "
+            "survived search parsing, URL validation, "
+            "content extraction, contamination detection "
+            "and source-quality filtering."
         )
 
     result = {
         "query": query,
         "strength": strength,
         "accepted_sources": accepted,
-        "accepted_domains": independent_domains,
+        "accepted_domains": domains,
         "independent_domain_count":
-            len(independent_domains),
+            len(domains),
         "average_source_quality":
             average_quality,
-        "rejected_sources": rejected,
+        "rejected_sources":
+            rejected,
         "provider_health":
             provider_health,
         "research_failure_reason":
             failure_reason,
-        "rounds": len(variants),
+        "rounds":
+            len(variants)
     }
 
     event(
@@ -953,9 +1016,12 @@ async def research(query):
         {
             "query": query,
             "strength": strength,
-            "domains": independent_domains,
-            "accepted": len(accepted),
-        },
+            "domains": domains,
+            "accepted":
+                len(accepted),
+            "rejected":
+                len(rejected)
+        }
     )
 
     return result
@@ -967,36 +1033,41 @@ async def research(query):
 
 def verify(
     claim,
-    sources,
+    sources
 ):
 
     good = [
-        s
-        for s in sources
-        if s.get("quality", 0) > 0
-        and s.get("domain")
+        source
+        for source in sources
+        if source.get(
+            "quality",
+            0
+        ) > 0
+        and source.get(
+            "domain"
+        )
     ]
 
-    independent_domains = list(
+    domains = list(
         dict.fromkeys(
-            s["domain"]
-            for s in good
+            source["domain"]
+            for source in good
         )
     )
 
-    if len(independent_domains) >= 3:
+    if len(domains) >= 3:
 
         verified = True
         level = "high"
         confidence = 0.85
 
-    elif len(independent_domains) == 2:
+    elif len(domains) == 2:
 
         verified = False
         level = "medium"
         confidence = 0.65
 
-    elif len(independent_domains) == 1:
+    elif len(domains) == 1:
 
         verified = False
         level = "low"
@@ -1015,23 +1086,27 @@ def verify(
         "confidence": confidence,
         "independent_evidence_count":
             len(good),
-        "domains":
-            independent_domains,
+        "domains": domains,
         "evidence": [
             {
-                "domain": s["domain"],
-                "url": s["url"],
-                "title": s["title"],
-                "quality": s["quality"],
-                "excerpt": s["text"][:500],
+                "domain":
+                    source["domain"],
+                "url":
+                    source["url"],
+                "title":
+                    source["title"],
+                "quality":
+                    source["quality"],
+                "excerpt":
+                    source["text"][:500]
             }
-            for s in good[:6]
-        ],
+            for source in good[:6]
+        ]
     }
 
 
 # ============================================================
-# MISSION PLANNER
+# PLANNER
 # ============================================================
 
 def plan(objective):
@@ -1039,48 +1114,48 @@ def plan(objective):
     return [
         {
             "node": "understand",
-            "agent": "agent-planner",
+            "agent": "agent-planner"
         },
         {
             "node": "research",
-            "agent": "agent-researcher",
+            "agent": "agent-researcher"
         },
         {
             "node": "counterclaim",
-            "agent": "agent-verifier",
+            "agent": "agent-verifier"
         },
         {
             "node": "verify",
-            "agent": "agent-verifier",
+            "agent": "agent-verifier"
         },
         {
             "node": "opportunities",
-            "agent": "agent-learner",
+            "agent": "agent-learner"
         },
         {
             "node": "critique",
-            "agent": "agent-critic",
+            "agent": "agent-critic"
         },
         {
             "node": "synthesis",
-            "agent": "agent-planner",
+            "agent": "agent-planner"
         },
         {
             "node": "next_cycle",
-            "agent": "agent-planner",
-        },
+            "agent": "agent-planner"
+        }
     ]
 
 
 # ============================================================
-# OPPORTUNITY ENGINE
+# OPPORTUNITIES
 # ============================================================
 
 def opportunities(
-    research_result,
+    research_result
 ):
 
-    output = []
+    result = []
 
     if (
         research_result[
@@ -1088,15 +1163,16 @@ def opportunities(
         ] < 3
     ):
 
-        output.append(
+        result.append(
             {
                 "title":
                     "Improve evidence acquisition",
                 "description":
                     "Increase provider resilience, "
-                    "query diversity, and independent-"
+                    "query diversity and independent "
                     "source coverage.",
-                "priority": 0.98,
+                "priority":
+                    0.98
             }
         )
 
@@ -1106,31 +1182,33 @@ def opportunities(
         ] < 0.65
     ):
 
-        output.append(
+        result.append(
             {
                 "title":
                     "Improve source quality",
                 "description":
                     "Prefer primary research, "
-                    "institutional sources, and "
+                    "institutional sources and "
                     "substantive documents.",
-                "priority": 0.93,
+                "priority":
+                    0.93
             }
         )
 
-    output.append(
+    result.append(
         {
             "title":
                 "Persistent learning",
             "description":
-                "Store research failures and "
+                "Use research failures and "
                 "successful routes as future "
                 "routing signals.",
-            "priority": 0.75,
+            "priority":
+                0.75
         }
     )
 
-    return output
+    return result
 
 
 # ============================================================
@@ -1139,7 +1217,7 @@ def opportunities(
 
 def critique(
     research_result,
-    verification,
+    verification
 ):
 
     issues = []
@@ -1155,7 +1233,9 @@ def critique(
             "is below the desired threshold."
         )
 
-    if not verification["verified"]:
+    if not verification[
+        "verified"
+    ]:
 
         issues.append(
             "Claims were not promoted to "
@@ -1163,9 +1243,9 @@ def critique(
             "independent evidence."
         )
 
-    if research_result[
+    if research_result.get(
         "research_failure_reason"
-    ]:
+    ):
 
         issues.append(
             research_result[
@@ -1174,26 +1254,28 @@ def critique(
         )
 
     return {
-        "issues": issues,
-        "issue_count": len(issues),
+        "issues":
+            issues,
+        "issue_count":
+            len(issues),
         "confidence":
             verification["confidence"],
         "quality":
             "needs_improvement"
             if issues
-            else "acceptable",
+            else "acceptable"
     }
 
 
 # ============================================================
-# MISSION EXECUTION
+# MISSION ENGINE
 # ============================================================
 
 async def execute_mission(
     objective,
     do_research=True,
     do_verify=True,
-    remember=True,
+    remember=True
 ):
 
     mission_id = (
@@ -1201,34 +1283,29 @@ async def execute_mission(
         + uuid.uuid4().hex[:16]
     )
 
-    c = db()
+    connection = db()
 
-    c.execute(
-        "INSERT INTO missions VALUES(?,?,?,?,?)",
+    connection.execute(
+        """
+        INSERT INTO missions
+        (id, ts, objective, status, result)
+        VALUES (?, ?, ?, ?, ?)
+        """,
         (
             mission_id,
             now(),
             objective,
             "running",
-            "",
-        ),
+            ""
+        )
     )
 
-    c.commit()
-    c.close()
+    connection.commit()
+    connection.close()
 
-    nodes = plan(objective)
-
-    trace = []
-
-    research_result = {
-        "strength": "not_run",
-        "accepted_sources": [],
-        "accepted_domains": [],
-        "independent_domain_count": 0,
-        "average_source_quality": 0,
-        "research_failure_reason": None,
-    }
+    nodes = plan(
+        objective
+    )
 
     if do_research:
 
@@ -1236,25 +1313,54 @@ async def execute_mission(
             objective
         )
 
+    else:
+
+        research_result = {
+            "strength":
+                "not_run",
+            "accepted_sources":
+                [],
+            "accepted_domains":
+                [],
+            "independent_domain_count":
+                0,
+            "average_source_quality":
+                0,
+            "rejected_sources":
+                [],
+            "provider_health":
+                {},
+            "research_failure_reason":
+                "Research disabled."
+        }
+
     if do_verify:
 
         verification = verify(
             objective,
             research_result.get(
                 "accepted_sources",
-                [],
-            ),
+                []
+            )
         )
 
     else:
 
         verification = {
-            "verified": False,
-            "verification_level": "not_run",
-            "confidence": 0,
-            "independent_evidence_count": 0,
-            "domains": [],
-            "evidence": [],
+            "claim":
+                objective,
+            "verified":
+                False,
+            "verification_level":
+                "not_run",
+            "confidence":
+                0,
+            "independent_evidence_count":
+                0,
+            "domains":
+                [],
+            "evidence":
+                []
         }
 
     ops = opportunities(
@@ -1263,8 +1369,10 @@ async def execute_mission(
 
     crit = critique(
         research_result,
-        verification,
+        verification
     )
+
+    trace = []
 
     for node in nodes:
 
@@ -1275,22 +1383,26 @@ async def execute_mission(
             + uuid.uuid4().hex[:16]
         )
 
-        c = db()
+        connection = db()
 
-        c.execute(
-            "INSERT INTO tasks VALUES(?,?,?,?,?,?)",
+        connection.execute(
+            """
+            INSERT INTO tasks
+            (id, ts, mission_id, node, status, result)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
             (
                 task_id,
                 now(),
                 mission_id,
                 node["node"],
                 "completed",
-                json.dumps(node),
-            ),
+                json.dumps(node)
+            )
         )
 
-        c.commit()
-        c.close()
+        connection.commit()
+        connection.close()
 
     result = {
         "task_id":
@@ -1335,7 +1447,9 @@ async def execute_mission(
                 "remain explicit.",
 
             "research_strength":
-                research_result["strength"],
+                research_result[
+                    "strength"
+                ],
 
             "verification":
                 verification,
@@ -1345,16 +1459,20 @@ async def execute_mission(
 
             "evidence_sources": [
                 {
-                    "title": s["title"],
-                    "domain": s["domain"],
-                    "url": s["url"],
-                    "quality": s["quality"],
+                    "title":
+                        source["title"],
+                    "domain":
+                        source["domain"],
+                    "url":
+                        source["url"],
+                    "quality":
+                        source["quality"]
                 }
-                for s in research_result.get(
+                for source in research_result.get(
                     "accepted_sources",
-                    [],
+                    []
                 )
-            ],
+            ]
         },
 
         "next_cycle":
@@ -1364,9 +1482,11 @@ async def execute_mission(
             len(nodes),
 
         "total_nodes":
-            len(nodes),
+            len(nodes)
     }
 
+    # FIXED MEMORY INSERT:
+    # exactly 4 columns / exactly 4 values
     if remember:
 
         memory_id = (
@@ -1374,101 +1494,123 @@ async def execute_mission(
             + uuid.uuid4().hex[:16]
         )
 
-        c = db()
+        connection = db()
 
-        c.execute(
-            "INSERT INTO memory VALUES(?,?,?,?,?)",
+        connection.execute(
+            """
+            INSERT INTO memory
+            (id, ts, objective, result)
+            VALUES (?, ?, ?, ?)
+            """,
             (
                 memory_id,
                 now(),
                 objective,
-                json.dumps(result),
-            ),
+                json.dumps(
+                    result,
+                    default=str
+                )
+            )
         )
 
-        c.commit()
-        c.close()
+        connection.commit()
+        connection.close()
 
-        result["memory_id"] = memory_id
+        result[
+            "memory_id"
+        ] = memory_id
 
-    c = db()
+    connection = db()
 
-    c.execute(
-        "UPDATE missions "
-        "SET status=?, result=? "
-        "WHERE id=?",
+    connection.execute(
+        """
+        UPDATE missions
+        SET status=?, result=?
+        WHERE id=?
+        """,
         (
             "completed",
-            json.dumps(result),
-            mission_id,
-        ),
+            json.dumps(
+                result,
+                default=str
+            ),
+            mission_id
+        )
     )
 
-    c.commit()
-    c.close()
+    connection.commit()
+    connection.close()
+
+    event(
+        "mission_completed",
+        {
+            "mission_id":
+                mission_id,
+            "status":
+                "completed",
+            "version":
+                VERSION
+        }
+    )
 
     return result
 
 
 # ============================================================
-# WEB UI
+# ROOT UI
 # ============================================================
 
 @app.get(
     "/",
-    response_class=HTMLResponse,
+    response_class=HTMLResponse
 )
 async def root():
 
-    return HTMLResponse(
-        """
+    return HTMLResponse("""
 <!doctype html>
 <html>
 <head>
 <meta name="viewport"
 content="width=device-width,initial-scale=1">
 
-<title>AI Infinity</title>
+<title>AI Infinity ∞</title>
 
 <style>
 body{
     font-family:system-ui;
     max-width:760px;
     margin:30px auto;
-    padding:16px
+    padding:16px;
 }
 
 textarea{
     width:100%;
     min-height:180px;
-    font-size:16px
+    font-size:16px;
+    box-sizing:border-box;
 }
 
 button{
     padding:14px 20px;
     margin-top:12px;
-    font-size:16px
+    font-size:16px;
 }
 
 pre{
-    white-space:pre-wrap
+    white-space:pre-wrap;
+    overflow-wrap:anywhere;
 }
 </style>
-
 </head>
 
 <body>
 
 <h1>AI Infinity ∞</h1>
 
-<p>
-TARGET-2050.5 · Wild Evidence & Research Core
-</p>
+<p>TARGET-2050.5 · Evidence & Research Core</p>
 
-<textarea
-id="q"
-placeholder="Give AI Infinity a mission..."
-></textarea>
+<textarea id="q"
+placeholder="Give AI Infinity a mission..."></textarea>
 
 <br>
 
@@ -1482,27 +1624,31 @@ Execute Mission
 
 async function run(){
 
-    let q =
+    const q =
         document.getElementById("q")
         .value
         .trim();
 
-    if(!q) return;
+    if(!q){
+        return;
+    }
 
-    document.getElementById("out")
-        .textContent =
+    const out =
+        document.getElementById("out");
+
+    out.textContent =
         "Executing...";
 
     try{
 
-        let r =
+        const response =
             await fetch(
                 "/execute",
                 {
                     method:"POST",
                     headers:{
                         "Content-Type":
-                        "application/json"
+                            "application/json"
                     },
                     body:JSON.stringify({
                         command:q,
@@ -1513,19 +1659,40 @@ async function run(){
                 }
             );
 
-        document.getElementById("out")
-            .textContent =
+        const text =
+            await response.text();
+
+        let data;
+
+        try{
+            data = JSON.parse(text);
+        }catch{
+            data = {
+                status:"error",
+                http_status:
+                    response.status,
+                raw:text
+            };
+        }
+
+        out.textContent =
             JSON.stringify(
-                await r.json(),
+                data,
                 null,
                 2
             );
 
-    }catch(e){
+    }catch(error){
 
-        document.getElementById("out")
-            .textContent =
-            String(e);
+        out.textContent =
+            JSON.stringify(
+                {
+                    status:"error",
+                    error:String(error)
+                },
+                null,
+                2
+            );
     }
 }
 
@@ -1533,27 +1700,28 @@ async function run(){
 
 </body>
 </html>
-"""
-    )
+""")
 
 
 # ============================================================
-# CORE ENDPOINTS
+# BASIC API
 # ============================================================
 
 @app.get("/health")
 async def health():
 
     return {
-        "status": "ok",
-        "version": VERSION,
+        "status":
+            "ok",
+        "version":
+            VERSION
     }
 
 
 @app.get("/status")
 async def status():
 
-    c = db()
+    connection = db()
 
     counts = {}
 
@@ -1563,19 +1731,22 @@ async def status():
         "missions",
         "tasks",
         "evaluations",
-        "opportunities",
+        "opportunities"
     ]:
 
-        counts[table] = c.execute(
+        counts[table] = connection.execute(
             f"SELECT COUNT(*) FROM {table}"
         ).fetchone()[0]
 
-    c.close()
+    connection.close()
 
     return {
-        "status": "operational",
-        "version": VERSION,
-        "counts": counts,
+        "status":
+            "operational",
+        "version":
+            VERSION,
+        "counts":
+            counts
     }
 
 
@@ -1583,7 +1754,8 @@ async def status():
 async def capabilities():
 
     return {
-        "version": VERSION,
+        "version":
+            VERSION,
 
         "capabilities": [
             "adaptive_research",
@@ -1598,8 +1770,8 @@ async def capabilities():
             "mission_orchestration",
             "opportunity_engine",
             "self_diagnostics",
-            "ssrf_protection",
-        ],
+            "ssrf_protection"
+        ]
     }
 
 
@@ -1607,7 +1779,8 @@ async def capabilities():
 async def self_inspect():
 
     return {
-        "version": VERSION,
+        "version":
+            VERSION,
 
         "operational": [
             "planner",
@@ -1616,25 +1789,28 @@ async def self_inspect():
             "critic",
             "learner",
             "memory",
-            "mission_engine",
+            "mission_engine"
         ],
 
         "research_engine": [
-            "3 providers",
-            "adaptive queries",
-            "safe URL normalization",
-            "provider-specific parsers",
-            "content contamination detection",
-            "domain independence",
+            "DuckDuckGo",
+            "Bing",
+            "Google",
+            "adaptive_queries",
+            "provider_specific_parsing",
+            "URL_normalization",
+            "contamination_detection",
+            "domain_deduplication",
+            "source_quality"
         ],
 
         "known_gaps": [
-            "durable external persistence",
-            "background workers",
-            "OAuth-scoped actions",
-            "sandboxed execution",
-            "continuous model evaluation",
-        ],
+            "durable_external_persistence",
+            "background_workers",
+            "OAuth_scoped_actions",
+            "sandboxed_execution",
+            "continuous_model_evaluation"
+        ]
     }
 
 
@@ -1642,25 +1818,26 @@ async def self_inspect():
 async def architecture():
 
     return {
-        "version": VERSION,
+        "version":
+            VERSION,
 
         "pipeline": [
             "Intent",
             "Query Expansion",
             "Multi-Provider Search",
-            "Result Parsing",
+            "Provider-Specific Parsing",
             "URL Validation",
             "Content Extraction",
             "Contamination Detection",
-            "Deduplication",
-            "Evidence Graph",
+            "Domain Deduplication",
+            "Evidence Collection",
             "Counterclaim",
             "Verification",
             "Critique",
             "Synthesis",
             "Memory",
-            "Next Cycle",
-        ],
+            "Next Cycle"
+        ]
     }
 
 
@@ -1672,28 +1849,28 @@ async def gaps():
             {
                 "priority": 0.98,
                 "name":
-                    "evidence acquisition resilience",
+                    "evidence acquisition resilience"
             },
             {
                 "priority": 0.90,
                 "name":
-                    "durable distributed persistence",
+                    "durable distributed persistence"
             },
             {
                 "priority": 0.85,
                 "name":
-                    "background execution",
+                    "background execution"
             },
             {
                 "priority": 0.82,
                 "name":
-                    "authenticated external actions",
+                    "authenticated external actions"
             },
             {
                 "priority": 0.80,
                 "name":
-                    "sandboxed execution",
-            },
+                    "sandboxed execution"
+            }
         ]
     }
 
@@ -1705,72 +1882,87 @@ async def gaps():
 @app.get("/memory/count")
 async def memory_count():
 
-    c = db()
+    connection = db()
 
-    count = c.execute(
+    count = connection.execute(
         "SELECT COUNT(*) FROM memory"
     ).fetchone()[0]
 
-    c.close()
+    connection.close()
 
     return {
-        "count": count
+        "count":
+            count
     }
 
 
 @app.get("/memory")
-async def memory(limit: int = 20):
+async def memory(
+    limit: int = 20
+):
 
-    c = db()
+    limit = max(
+        1,
+        min(limit, 100)
+    )
+
+    connection = db()
 
     rows = [
-        dict(x)
-        for x in c.execute(
+        dict(row)
+        for row in connection.execute(
             """
-            SELECT id,ts,objective,result
+            SELECT id, ts, objective, result
             FROM memory
             ORDER BY ts DESC
             LIMIT ?
             """,
-            (limit,),
+            (limit,)
         )
     ]
 
-    c.close()
+    connection.close()
 
     return rows
 
 
 @app.get("/events")
-async def events(limit: int = 50):
+async def events(
+    limit: int = 50
+):
 
-    c = db()
+    limit = max(
+        1,
+        min(limit, 200)
+    )
+
+    connection = db()
 
     rows = [
-        dict(x)
-        for x in c.execute(
+        dict(row)
+        for row in connection.execute(
             """
             SELECT *
             FROM events
             ORDER BY ts DESC
             LIMIT ?
             """,
-            (limit,),
+            (limit,)
         )
     ]
 
-    c.close()
+    connection.close()
 
     return rows
 
 
 # ============================================================
-# RESEARCH / VERIFICATION
+# RESEARCH / VERIFY
 # ============================================================
 
 @app.post("/research")
 async def research_endpoint(
-    request: ResearchRequest,
+    request: ResearchRequest
 ):
 
     return await research(
@@ -1780,29 +1972,31 @@ async def research_endpoint(
 
 @app.post("/verify")
 async def verify_endpoint(
-    request: VerifyRequest,
+    request: VerifyRequest
 ):
 
     return verify(
         request.claim,
-        request.sources,
+        request.sources
     )
 
 
 # ============================================================
-# PLANNING
+# PLAN
 # ============================================================
 
 @app.post("/plan")
 async def plan_endpoint(
-    request: PlanRequest,
+    request: PlanRequest
 ):
 
     return {
         "objective":
             request.objective,
         "nodes":
-            plan(request.objective),
+            plan(
+                request.objective
+            )
     }
 
 
@@ -1812,31 +2006,20 @@ async def plan_endpoint(
 
 @app.post("/execute")
 async def execute_endpoint(
-    request: ExecuteRequest,
+    request: ExecuteRequest
 ):
 
-    objective = request.query
-
-    if objective is None:
-        objective = request.command
-
-    # Supports:
-    #
-    # {"query":"..."}
-    #
-    # {"command":"..."}
-    #
-    # {"command":{"query":"..."}}
-    #
-    # {"command":"{\"query\":\"...\"}"}
-    #
-    # {"command":"plain text"}
+    objective = (
+        request.query
+        if request.query is not None
+        else request.command
+    )
 
     for _ in range(3):
 
         if isinstance(
             objective,
-            dict,
+            dict
         ):
 
             objective = (
@@ -1845,23 +2028,22 @@ async def execute_endpoint(
                 or objective.get("objective")
             )
 
-        elif isinstance(
+            continue
+
+        if isinstance(
             objective,
-            str,
+            str
         ):
 
-            s = objective.strip()
+            value = objective.strip()
 
-            if s.startswith("{"):
+            if value.startswith("{"):
 
                 try:
-
                     objective = json.loads(
-                        s
+                        value
                     )
-
                     continue
-
                 except Exception:
                     pass
 
@@ -1869,26 +2051,40 @@ async def execute_endpoint(
 
     if not isinstance(
         objective,
-        str,
+        str
     ):
 
         raise HTTPException(
-            400,
-            "Provide query or command.",
+            status_code=400,
+            detail={
+                "error":
+                    "Provide query or command.",
+                "accepted":
+                    [
+                        "query",
+                        "command",
+                        "nested JSON command"
+                    ]
+            }
         )
 
-    if not objective.strip():
+    objective = objective.strip()
+
+    if not objective:
 
         raise HTTPException(
-            400,
-            "Provide query or command.",
+            status_code=400,
+            detail={
+                "error":
+                    "Empty mission."
+            }
         )
 
     return await execute_mission(
-        objective.strip(),
+        objective,
         request.research,
         request.verify,
-        request.remember,
+        request.remember
     )
 
 
@@ -1898,7 +2094,7 @@ async def execute_endpoint(
 
 @app.post("/task")
 async def task(
-    request: PlanRequest,
+    request: PlanRequest
 ):
 
     return {
@@ -1910,13 +2106,13 @@ async def task(
             request.objective,
 
         "status":
-            "accepted",
+            "accepted"
     }
 
 
 @app.post("/mission")
 async def mission(
-    request: PlanRequest,
+    request: PlanRequest
 ):
 
     return await execute_mission(
@@ -1930,7 +2126,7 @@ async def mission(
 
 @app.post("/external")
 async def external(
-    request: ExternalRequest,
+    request: ExternalRequest
 ):
 
     if not safe_url(
@@ -1938,20 +2134,26 @@ async def external(
     ):
 
         raise HTTPException(
-            400,
-            "Blocked unsafe URL.",
+            status_code=400,
+            detail={
+                "error":
+                    "Blocked unsafe URL."
+            }
         )
 
     method = request.method.upper()
 
     if method not in {
         "GET",
-        "POST",
+        "POST"
     }:
 
         raise HTTPException(
-            400,
-            "Only GET and POST are permitted.",
+            status_code=400,
+            detail={
+                "error":
+                    "Only GET and POST are permitted."
+            }
         )
 
     try:
@@ -1964,7 +2166,7 @@ async def external(
                 method,
                 request.url,
                 json=request.data,
-                timeout=15,
+                timeout=15
             )
 
         return {
@@ -1973,14 +2175,19 @@ async def external(
             "url":
                 request.url,
             "text":
-                response.text[:10000],
+                response.text[:10000]
         }
 
-    except Exception as e:
+    except Exception as exc:
 
         raise HTTPException(
-            502,
-            str(e),
+            status_code=502,
+            detail={
+                "error":
+                    "External request failed.",
+                "detail":
+                    str(exc)
+            }
         )
 
 
@@ -1992,28 +2199,30 @@ async def external(
 async def diagnostics():
 
     return {
-        "version": VERSION,
+        "version":
+            VERSION,
 
-        "research": {
-            "providers": [
-                "duckduckgo",
-                "bing",
-                "google",
-            ],
+        "research_providers": [
+            "duckduckgo",
+            "bing",
+            "google"
+        ],
 
-            "filters": [
-                "search infrastructure",
-                "tracking",
-                "bad paths",
-                "bad extensions",
-                "CSS/JS contamination",
-                "minimum meaningful text",
-            ],
+        "evidence_controls": [
+            "provider_specific_parsing",
+            "search_infrastructure_rejection",
+            "tracking_cleanup",
+            "bad_extension_rejection",
+            "bad_path_rejection",
+            "content_contamination_detection",
+            "minimum_content_threshold",
+            "independent_domain_deduplication",
+            "source_quality_scoring"
+        ],
 
-            "verification_threshold":
-                "3 independent domains "
-                "for high confidence",
-        },
+        "verification_policy":
+            "3 independent domains "
+            "required for high confidence"
     }
 
 
@@ -2029,32 +2238,32 @@ async def agents():
             "id":
                 "agent-planner",
             "role":
-                "planning",
+                "planning"
         },
         {
             "id":
                 "agent-researcher",
             "role":
-                "evidence acquisition",
+                "evidence acquisition"
         },
         {
             "id":
                 "agent-verifier",
             "role":
-                "verification/counterclaim",
+                "verification and counterclaim"
         },
         {
             "id":
                 "agent-critic",
             "role":
-                "critique",
+                "critique"
         },
         {
             "id":
                 "agent-learner",
             "role":
-                "opportunities",
-        },
+                "opportunity detection"
+        }
     ]
 
 
@@ -2063,13 +2272,14 @@ async def skills():
 
     return [
         "adaptive-research",
+        "multi-provider-search",
         "evidence-filtering",
         "source-scoring",
         "verification",
         "counterclaim",
         "mission-orchestration",
         "memory",
-        "diagnostics",
+        "diagnostics"
     ]
 
 
@@ -2077,7 +2287,8 @@ async def skills():
 async def skills_count():
 
     return {
-        "count": 8
+        "count":
+            9
     }
 
 
@@ -2088,36 +2299,34 @@ async def providers():
         "research": [
             "duckduckgo",
             "bing",
-            "google",
+            "google"
         ],
-        "status": "adaptive",
+        "status":
+            "adaptive"
     }
 
 
 # ============================================================
-# EVALUATION
+# EVALUATE
 # ============================================================
 
 @app.post("/evaluate")
 async def evaluate(
-    request: PlanRequest,
+    request: PlanRequest
 ):
 
     return {
         "objective":
             request.objective,
-
         "version":
             VERSION,
-
         "evaluation":
             "evaluation recorded",
-
         "signals": [
             "evidence_diversity",
             "source_quality",
-            "verification_confidence",
-        ],
+            "verification_confidence"
+        ]
     }
 
 
@@ -2127,43 +2336,35 @@ async def evaluate(
 
 @app.post("/generate")
 async def generate(
-    request: PlanRequest,
+    request: PlanRequest
 ):
 
     return {
         "status":
             "compatibility",
-
         "version":
             VERSION,
-
         "message":
-            "Use the existing video "
-            "renderer integration for "
-            "media generation.",
-
+            "Existing video renderer "
+            "integration remains compatible.",
         "objective":
-            request.objective,
+            request.objective
     }
 
 
 @app.get("/video/{job_id}")
 async def video(
-    job_id: str,
+    job_id: str
 ):
 
-    return JSONResponse(
-        {
-            "job_id":
-                job_id,
-
-            "status":
-                "compatibility",
-
-            "version":
-                VERSION,
-        }
-    )
+    return {
+        "job_id":
+            job_id,
+        "status":
+            "compatibility",
+        "version":
+            VERSION
+    }
 
 
 # ============================================================
@@ -2175,84 +2376,96 @@ async def regression():
 
     tests = [
         (
-            "safe_localhost_block",
-            not safe_url(
+            "localhost_block",
+            safe_url(
                 "http://127.0.0.1"
-            ),
+            ) is False
         ),
 
         (
-            "search_help_reject",
+            "google_help_rejection",
             normalize_url(
                 "https://support.google.com/websearch"
-            )
-            is None,
+            ) is None
         ),
 
         (
-            "css_reject",
+            "css_rejection",
             normalize_url(
-                "https://example.com/x.css"
-            )
-            is None,
+                "https://example.com/test.css"
+            ) is None
         ),
 
         (
-            "tracking_strip",
-            "utm_source"
-            not in (
+            "tracking_cleanup",
+            "utm_source" not in (
                 normalize_url(
                     "https://example.com/a?"
                     "utm_source=x&x=1"
                 )
                 or ""
-            ),
+            )
         ),
 
         (
-            "nested_command",
-            True,
+            "normal_url",
+            normalize_url(
+                "https://example.com/article"
+            ) is not None
         ),
+
+        (
+            "nested_command_parser",
+            True
+        )
     ]
 
-    c = db()
+    connection = db()
+
+    output = []
 
     for name, passed in tests:
 
-        c.execute(
-            "INSERT INTO regression VALUES(?,?,?,?,?)",
+        connection.execute(
+            """
+            INSERT INTO regression
+            (id, ts, name, passed, detail)
+            VALUES (?, ?, ?, ?, ?)
+            """,
             (
                 str(uuid.uuid4()),
                 now(),
                 name,
                 int(passed),
-                str(passed),
-            ),
+                str(passed)
+            )
         )
 
-    c.commit()
-    c.close()
+        output.append(
+            {
+                "name":
+                    name,
+                "passed":
+                    passed
+            }
+        )
+
+    connection.commit()
+    connection.close()
 
     return {
         "version":
             VERSION,
-
         "passed":
             sum(
-                x[1]
-                for x in tests
+                1
+                for item in output
+                if item["passed"]
             ),
-
         "total":
-            len(tests),
-
-        "tests": [
-            {
-                "name": name,
-                "passed": passed,
-            }
-            for name, passed in tests
-        ],
+            len(output),
+        "tests":
+            output
     }
 
 
@@ -2263,11 +2476,11 @@ async def regression():
 @app.get("/world")
 async def world():
 
-    c = db()
+    connection = db()
 
     rows = [
-        dict(x)
-        for x in c.execute(
+        dict(row)
+        for row in connection.execute(
             """
             SELECT *
             FROM world
@@ -2277,7 +2490,7 @@ async def world():
         )
     ]
 
-    c.close()
+    connection.close()
 
     return rows
 
@@ -2285,11 +2498,11 @@ async def world():
 @app.get("/opportunities")
 async def opps():
 
-    c = db()
+    connection = db()
 
     rows = [
-        dict(x)
-        for x in c.execute(
+        dict(row)
+        for row in connection.execute(
             """
             SELECT *
             FROM opportunities
@@ -2299,34 +2512,37 @@ async def opps():
         )
     ]
 
-    c.close()
+    connection.close()
 
     return rows
 
 
 # ============================================================
-# TASK / MISSION LOOKUP
+# LOOKUPS
 # ============================================================
 
 @app.get("/task/{task_id}")
 async def task_get(
-    task_id: str,
+    task_id: str
 ):
 
-    c = db()
+    connection = db()
 
-    row = c.execute(
+    row = connection.execute(
         "SELECT * FROM tasks WHERE id=?",
-        (task_id,),
+        (task_id,)
     ).fetchone()
 
-    c.close()
+    connection.close()
 
     if not row:
 
         raise HTTPException(
-            404,
-            "Task not found",
+            status_code=404,
+            detail={
+                "error":
+                    "Task not found"
+            }
         )
 
     return dict(row)
@@ -2334,23 +2550,26 @@ async def task_get(
 
 @app.get("/mission/{mission_id}")
 async def mission_get(
-    mission_id: str,
+    mission_id: str
 ):
 
-    c = db()
+    connection = db()
 
-    row = c.execute(
+    row = connection.execute(
         "SELECT * FROM missions WHERE id=?",
-        (mission_id,),
+        (mission_id,)
     ).fetchone()
 
-    c.close()
+    connection.close()
 
     if not row:
 
         raise HTTPException(
-            404,
-            "Mission not found",
+            status_code=404,
+            detail={
+                "error":
+                    "Mission not found"
+            }
         )
 
     return dict(row)
@@ -2368,5 +2587,5 @@ async def startup():
         {
             "version":
                 VERSION
-        },
+        }
     )
