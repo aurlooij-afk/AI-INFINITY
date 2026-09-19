@@ -37,8 +37,8 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 
-VERSION = "TARGET-2050.35"
-BUILD = "FINAL-CLAIM-ATOMICITY-ENTAILMENT-PROVENANCE-CORE"
+VERSION = "TARGET-2050.35-FINAL"
+BUILD = "FINAL-EVIDENCE-INTEGRITY-RESEARCH-CORE"
 
 BASE = Path(os.getenv("AI_INFINITY_DATA", "/tmp/ai-infinity"))
 BASE.mkdir(parents=True, exist_ok=True)
@@ -110,6 +110,9 @@ def init_db():
                 relevance REAL DEFAULT 0,
                 work_key TEXT,
                 authors TEXT DEFAULT '',
+                publisher TEXT DEFAULT '',
+                source_kind TEXT DEFAULT '',
+                source_url TEXT DEFAULT '',
                 created REAL NOT NULL
             );
 
@@ -201,6 +204,12 @@ def init_db():
         existing_work = {row[1] for row in conn.execute("PRAGMA table_info(works)").fetchall()}
         if "authors" not in existing_work:
             conn.execute("ALTER TABLE works ADD COLUMN authors TEXT DEFAULT ''")
+        if "publisher" not in existing_work:
+            conn.execute("ALTER TABLE works ADD COLUMN publisher TEXT DEFAULT ''")
+        if "source_kind" not in existing_work:
+            conn.execute("ALTER TABLE works ADD COLUMN source_kind TEXT DEFAULT ''")
+        if "source_url" not in existing_work:
+            conn.execute("ALTER TABLE works ADD COLUMN source_url TEXT DEFAULT ''")
 
         conn.execute("CREATE INDEX IF NOT EXISTS ix_work_identity ON works(mission_id,work_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS ix_claim_identity ON claims(mission_id,claim)")
@@ -273,6 +282,10 @@ def domain_of(url: str) -> str:
 
 
 def source_family(domain: str) -> str:
+    """Map a publisher/source host to a conservative independence family."""
+    d = (domain or "").lower().strip()
+    if d in {"doi.org", "dx.doi.org", "doi.crossref.org", "api.crossref.org"}:
+        return "resolver_or_index"
     known = {
         "arxiv.org": "arxiv",
         "nature.com": "nature",
@@ -280,10 +293,28 @@ def source_family(domain: str) -> str:
         "acm.org": "acm",
         "ieee.org": "ieee",
         "openreview.net": "openreview",
-        "sciencedirect.com": "sciencedirect",
+        "sciencedirect.com": "elsevier",
+        "elsevier.com": "elsevier",
         "springer.com": "springer",
+        "link.springer.com": "springer",
+        "frontiersin.org": "frontiers",
+        "plos.org": "plos",
+        "nih.gov": "nih",
+        "ncbi.nlm.nih.gov": "nih",
+        "ssrn.com": "ssrn",
     }
-    return known.get(domain, domain or "unknown")
+    for host, family in known.items():
+        if d == host or d.endswith("." + host):
+            return family
+    parts = d.split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else (d or "unknown")
+
+
+def publisher_domain(url: str) -> str:
+    d = domain_of(url)
+    if d in {"doi.org", "dx.doi.org", "doi.crossref.org"}:
+        return ""
+    return d
 
 
 def safe_url(url: str) -> bool:
@@ -387,12 +418,12 @@ PREDICATES = {
 
 def claim_type(text: str) -> str:
     low = clean(text).lower()
-    if any(re.search(p, low) for p in META_CLAIM_PATTERNS):
-        return "synthesis"
+    if re.search(r"\b(recommend|should|ought|governance|policy|risk management)\b", low):
+        return "recommendation"
+    if re.search(r"\b(we find|we found|results show|results indicate|we identify|we observed|our results)\b", low):
+        return "source_finding"
     if re.search(r"\b(method|methodology|framework|approach|algorithm|benchmark|evaluation)\b", low):
         return "methodological"
-    if re.search(r"\b(recommend|should|ought|governance|policy|proportionate|risk management)\b", low):
-        return "recommendation"
     if re.search(r"\b(review|survey|literature)\b", low):
         return "review"
     return "empirical"
@@ -408,11 +439,18 @@ def claim_purity(text: str) -> float:
         return 0.0
     if any(re.search(pattern, low) for pattern in META_CLAIM_PATTERNS):
         return 0.0
+    if re.search(r"\b(our|this|the)\s+(analysis|paper|article|study|review|work)\b", low):
+        return 0.0
     if "@" in text or text.count("/") >= 3 or text.count(":") >= 4:
         return 0.0
     if re.search(r"\b(doi|isbn|issn|author|affiliation|keywords?)\b", low):
         return 0.0
     if sum(c.isdigit() for c in text) > max(12, len(text) // 8):
+        return 0.0
+    if len(words) >= 10 and (
+        re.search(r"\b(skip to (main )?content|menu|home|funders?|subscribe|current opportunities)\b", low)
+        or re.search(r"\b(privacy|cookie|terms of use)\b", low)
+    ):
         return 0.0
     score = 0.45
     if 9 <= len(words) <= 55:
@@ -428,14 +466,33 @@ def claim_purity(text: str) -> float:
     return min(1.0, score)
 
 
+def substantive_sentence(text: str) -> bool:
+    s = clean(text)
+    low = s.lower()
+    if len(s) < 45 or len(s) > 900:
+        return False
+    if any(re.search(p, low) for p in NOISE_PATTERNS):
+        return False
+    if re.search(r"\b(skip to|menu|home|funders?|subscribe|current opportunities|frontiers in social science features)\b", low):
+        return False
+    if re.match(r"^(references?|bibliography|keywords?|how to cite|contents?)\b", low):
+        return False
+    if re.search(r"\b(e-?issn|isbn|doi:|volume\s+\d+|issue\s+\d+|pages?\s+\d+)\b", low):
+        return False
+    if s.count("|") > 1 or s.count("»") > 1:
+        return False
+    if len(re.findall(r"\b(?:home|about|menu|login|search|contact|subscribe)\b", low)) >= 2:
+        return False
+    return True
+
+
 def atomicize(sentence: str):
-    """Prefer one proposition per claim; prevents compound metadata-like claims."""
     sentence = clean(sentence)
-    parts = re.split(r"\s*;\s*", sentence)
+    parts = re.split(r"\s*;\s*|\s+\b(?:while|whereas|although)\s+", sentence, flags=re.I)
     out = []
     for part in parts:
         part = clean(part)
-        if len(part) >= 55:
+        if len(part) >= 55 and substantive_sentence(part):
             out.append(part)
     return out[:3]
 
@@ -445,14 +502,16 @@ def extract_claims(text: str, objective: str):
     seen = set()
     for raw in re.split(r"(?<=[.!?])\s+", text or ""):
         sentence = clean(re.sub(r"^\s*[-*0-9.)]+\s*", "", raw))
+        if not substantive_sentence(sentence):
+            continue
         for candidate in atomicize(sentence):
             purity = claim_purity(candidate)
-            if purity < 0.60:
+            if purity < 0.68:
                 continue
             key = re.sub(r"\W+", " ", candidate.lower()).strip()
             if key in seen:
                 continue
-            if similarity(candidate, objective) < 0.015 and not re.search(
+            if similarity(candidate, objective) < 0.02 and not re.search(
                 r"\b(ai|agent|autonom|llm|robot|execution|tool|task|safety|reliab|research)\w*",
                 candidate.lower(),
             ):
@@ -469,29 +528,38 @@ def content_tokens(text: str) -> set:
 
 
 def evidence_entailment(claim: str, excerpt: str):
-    """Deterministic evidence entailment heuristic; conservative by design."""
+    """Conservative directional entailment heuristic; similarity alone can never entail."""
+    if not substantive_sentence(excerpt):
+        return 0.0, "NO_ENTAILMENT"
     c = content_tokens(claim)
     e = content_tokens(excerpt)
     if not c or not e:
         return 0.0, "NO_ENTAILMENT"
-    coverage = len(c & e) / max(1, len(c))
-    precision = len(c & e) / max(1, len(e))
-    base = (0.72 * coverage) + (0.28 * min(1.0, precision * 2.0))
+    overlap = c & e
+    coverage = len(overlap) / max(1, len(c))
+    precision = len(overlap) / max(1, len(e))
     nums_c = set(re.findall(r"\b\d+(?:\.\d+)?%?\b", claim))
     nums_e = set(re.findall(r"\b\d+(?:\.\d+)?%?\b", excerpt))
     if nums_c and not nums_c.issubset(nums_e):
-        base *= 0.55
+        return round(min(0.34, coverage * 0.34), 4), "PARTIAL"
     neg_c = bool(re.search(r"\b(not|no|cannot|fails|unable|rarely|never)\b", claim.lower()))
     neg_e = bool(re.search(r"\b(not|no|cannot|fails|unable|rarely|never)\b", excerpt.lower()))
     if neg_c != neg_e:
-        base *= 0.35
-    if coverage >= 0.82 and precision >= 0.20:
-        verdict = "ENTAILS"
-    elif coverage >= 0.58:
-        verdict = "PARTIAL"
-    else:
-        verdict = "NO_ENTAILMENT"
-    return round(min(1.0, base), 4), verdict
+        return round(min(0.24, coverage * 0.24), 4), "NO_ENTAILMENT"
+    causal = re.search(r"\b(causes?|caused|leads?|leading|results? in|inflates?|reduces?|increases?|improves?|degrades?|outperforms?|systematically)\b", claim.lower())
+    causal_e = re.search(r"\b(causes?|caused|leads?|leading|results? in|inflates?|reduces?|increases?|improves?|degrades?|outperforms?|systematically|due to|because)\b", excerpt.lower())
+    if causal and not causal_e:
+        return round(min(0.42, 0.55 * coverage + 0.15 * precision), 4), "PARTIAL"
+    predicate_words = {w for w in re.findall(r"[a-z]{4,}", claim.lower()) if w in PREDICATES}
+    predicate_overlap = len(predicate_words & set(re.findall(r"[a-z]{4,}", excerpt.lower())))
+    if predicate_words and predicate_overlap == 0:
+        return round(min(0.38, 0.55 * coverage), 4), "PARTIAL"
+    base = (0.62 * coverage) + (0.23 * min(1.0, precision * 2.5)) + (0.15 * (1.0 if predicate_overlap else 0.0))
+    if coverage >= 0.88 and precision >= 0.28 and (not predicate_words or predicate_overlap):
+        return round(min(0.93, base), 4), "ENTAILS"
+    if coverage >= 0.62:
+        return round(min(0.70, base), 4), "PARTIAL"
+    return round(min(0.45, base), 4), "NO_ENTAILMENT"
 
 
 # ============================================================
@@ -600,6 +668,43 @@ def discover_semantic_scholar(objective: str):
         return []
 
 
+def resolve_work_metadata(item: dict) -> dict:
+    """Resolve DOI resolver URLs to the underlying publisher/source when possible."""
+    item = dict(item)
+    url = item.get("url") or ""
+    doi = (item.get("doi") or "").strip()
+    dom = domain_of(url)
+    if doi and dom in {"doi.org", "dx.doi.org", "doi.crossref.org"}:
+        try:
+            r = requests.get(
+                f"https://api.crossref.org/works/{requests.utils.quote(doi, safe='')}",
+                timeout=min(TIMEOUT, 8),
+                headers={"User-Agent": "AI-Infinity/2050.35-final"},
+            )
+            if r.ok:
+                m = r.json().get("message", {})
+                landing = m.get("URL") or ""
+                links = m.get("link") or []
+                fulltext = next((x.get("URL") for x in links if x.get("URL")), "")
+                item["source_url"] = fulltext or landing or url
+                item["url"] = fulltext or landing or url
+                item["publisher"] = clean(m.get("publisher", ""))
+                item["container_title"] = clean(" ".join(m.get("container-title", []) or []))
+                item["authors"] = "; ".join(
+                    clean((a.get("given", "") + " " + a.get("family", "")).strip())
+                    for a in (m.get("author") or [])
+                    if (a.get("given") or a.get("family"))
+                )
+                item["source_kind"] = clean(m.get("type", ""))
+        except Exception:
+            pass
+    if not item.get("source_url"):
+        item["source_url"] = item.get("url", "")
+    item["domain"] = publisher_domain(item.get("source_url") or item.get("url") or "")
+    item["family"] = source_family(item["domain"])
+    return item
+
+
 def discover_sources(objective: str):
     raw = (
         discover_crossref(objective)
@@ -611,8 +716,9 @@ def discover_sources(objective: str):
     seen = set()
 
     for item in raw:
+        item = resolve_work_metadata(item)
         url = item.get("url") or ""
-        dom = domain_of(url)
+        dom = item.get("domain") or publisher_domain(url)
 
         work_key = (
             (item.get("doi") or "").lower()
@@ -654,6 +760,10 @@ def discover_sources(objective: str):
                     3,
                 ),
                 "work_key": work_key,
+                "publisher": item.get("publisher", ""),
+                "source_kind": item.get("source_kind", ""),
+                "source_url": item.get("source_url", item.get("url", "")),
+                "authors": item.get("authors", ""),
             }
         )
 
@@ -753,12 +863,14 @@ def discovery_pass(mission_id, objective, attempt):
             cur = conn.execute(
                 """
                 INSERT OR IGNORE INTO works
-                (mission_id,title,url,doi,provider,domain,family,text,quality,relevance,work_key,authors,created)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                (mission_id,title,url,doi,provider,domain,family,text,quality,relevance,work_key,authors,publisher,source_kind,source_url,created)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (mission_id,item["title"],item["url"],item.get("doi", ""),item["provider"],
                  item["domain"],item["family"],item.get("abstract", ""),item["quality"],
-                 item["relevance"],item["work_key"],item.get("authors", ""),now()),
+                 item["relevance"],item["work_key"],item.get("authors", ""),
+                 item.get("publisher", ""),item.get("source_kind", ""),
+                 item.get("source_url", item.get("url", "")),now()),
             )
             inserted += cur.rowcount
 
@@ -866,12 +978,12 @@ def build_claims(mission_id, objective):
 def evidence_contract(claim, excerpt):
     lexical = similarity(claim, excerpt)
     entailment, verdict = evidence_entailment(claim, excerpt)
-    score = round((0.35 * lexical) + (0.65 * entailment), 4)
-    if verdict == "ENTAILS" and score >= 0.58:
+    score = round((0.20 * lexical) + (0.80 * entailment), 4)
+    if verdict == "ENTAILS" and entailment >= 0.72 and score >= 0.70:
         relation, quality = "DIRECT_SUPPORT", "DIRECT"
-    elif verdict in {"ENTAILS", "PARTIAL"} and score >= 0.42:
+    elif verdict == "ENTAILS" and entailment >= 0.58 and score >= 0.56:
         relation, quality = "SUPPORT", "STRONG"
-    elif verdict == "PARTIAL" and score >= 0.28:
+    elif verdict == "PARTIAL" and entailment >= 0.35 and score >= 0.34:
         relation, quality = "WEAK_MATCH", "MODERATE"
     else:
         relation, quality = "NO_SUPPORT", "WEAK"
@@ -890,12 +1002,24 @@ def build_graph(mission_id):
         works = conn.execute("SELECT id,text,domain,family,work_key FROM works WHERE mission_id=? AND text!=''", (mission_id,)).fetchall()
         for claim in claims:
             for work in works:
-                sentences = [clean(x) for x in re.split(r"(?<=[.!?])\s+", work["text"] or "") if len(clean(x)) >= 40]
-                if not sentences: continue
-                ranked = sorted(sentences, key=lambda x: similarity(claim["claim"], x), reverse=True)[:4]
-                excerpt = ranked[0]
-                score, relation, quality, lexical, entailment, verdict = evidence_contract(claim["claim"], excerpt)
-                if relation not in {"DIRECT_SUPPORT", "SUPPORT"}: continue
+                sentences = [
+                    clean(x) for x in re.split(r"(?<=[.!?])\s+", work["text"] or "")
+                    if substantive_sentence(x)
+                ]
+                if not sentences:
+                    continue
+                ranked = sorted(
+                    sentences,
+                    key=lambda x: (evidence_entailment(claim["claim"], x)[0], similarity(claim["claim"], x)),
+                    reverse=True,
+                )[:6]
+                excerpt, contract = max(
+                    ((x, evidence_contract(claim["claim"], x)) for x in ranked),
+                    key=lambda item: item[1][0],
+                )
+                score, relation, quality, lexical, entailment, verdict = contract
+                if relation not in {"DIRECT_SUPPORT", "SUPPORT"}:
+                    continue
                 already = conn.execute("SELECT id FROM evidence WHERE mission_id=? AND work_id=? AND claim_id=? AND excerpt=? LIMIT 1", (mission_id, work["id"], claim["id"], excerpt[:1200])).fetchone()
                 if already:
                     continue
@@ -952,12 +1076,15 @@ def verify_claims(mission_id):
             domains = {x["domain"] for x in by_work.values() if x["domain"]}
             families = {x["family"] for x in by_work.values() if x["family"]}
             contradiction_count = conn.execute(
-                "SELECT COUNT(*) FROM edges WHERE mission_id=? AND relation='POTENTIAL_CONTRADICTION' AND source_type='claim' AND source_id=?",
-                (mission_id,claim["id"])).fetchone()[0]
+                """SELECT COUNT(*) FROM edges
+                   WHERE mission_id=? AND relation='POTENTIAL_CONTRADICTION'
+                     AND source_type='claim'
+                     AND (source_id=? OR target_id=?)""",
+                (mission_id, claim["id"], claim["id"])).fetchone()[0]
             entailment = max([float(x["score"]) for x in evidence] + [0.0])
             # Verification is intentionally difficult: two genuinely distinct works,
             # two domains and two publisher/source families, with two strong supports.
-            strong_count = sum(1 for x in evidence if float(x["score"]) >= 0.58)
+            strong_count = sum(1 for x in evidence if float(x["score"]) >= 0.70)
             if len(work_ids) >= 2 and len(domains) >= 2 and len(families) >= 2 and strong_count >= 2 and contradiction_count == 0:
                 status = "VERIFIED"
             elif contradiction_count > 0 and not evidence:
@@ -966,7 +1093,7 @@ def verify_claims(mission_id):
                 status = "SUPPORTED"
             else:
                 status = "INSUFFICIENT"
-            confidence = round(min(0.99, 0.35*entailment + 0.15*min(1,len(work_ids)/2) + 0.15*min(1,len(domains)/2) + 0.15*min(1,len(families)/2) + 0.10*min(1,strong_count/2) + 0.10*claim["purity"]), 3)
+            confidence = round(min(0.93, 0.50*entailment + 0.12*min(1,len(work_ids)/2) + 0.10*min(1,len(domains)/2) + 0.10*min(1,len(families)/2) + 0.10*min(1,strong_count/2) + 0.08*claim["purity"]), 3)
             conn.execute(
                 """UPDATE claims SET status=?,confidence=?,entailment=?,evidence_count=?,independent_works=?,independent_domains=?,independent_families=?,contradiction_count=? WHERE id=?""",
                 (status,confidence,entailment,len(evidence),len(work_ids),len(domains),len(families),contradiction_count,claim["id"]))
@@ -982,48 +1109,36 @@ def verify_claims(mission_id):
 # CLOSED-LOOP RECOVERY
 # ============================================================
 
+def recovery_strategy(mission_id):
+    """Choose recovery from the measured verification bottleneck."""
+    with db_lock:
+        conn = db()
+        usable = conn.execute("SELECT COUNT(*) FROM works WHERE mission_id=? AND text!=''", (mission_id,)).fetchone()[0]
+        domains = conn.execute("SELECT COUNT(DISTINCT domain) FROM works WHERE mission_id=? AND domain!='' AND domain NOT IN ('doi.org','dx.doi.org')", (mission_id,)).fetchone()[0]
+        families = conn.execute("SELECT COUNT(DISTINCT family) FROM works WHERE mission_id=? AND family!='' AND family!='resolver_or_index'", (mission_id,)).fetchone()[0]
+        strong = conn.execute("SELECT COUNT(*) FROM evidence WHERE mission_id=? AND relation IN ('DIRECT_SUPPORT','SUPPORT') AND score>=0.70", (mission_id,)).fetchone()[0]
+        conn.close()
+    if usable < 2:
+        return "open access full text empirical benchmark systematic review primary study"
+    if domains < 2:
+        return "independent publisher university laboratory benchmark replication empirical study"
+    if families < 2:
+        return "independent research group replication real world deployment evaluation"
+    if strong < 2:
+        return "primary empirical results limitations failure cases measured outcomes"
+    return "contradictory evidence replication critique independent evaluation"
+
+
 def recovery_pass(mission_id, objective, round_number):
-    variants = [
-        (
-            objective
-            + " systematic review benchmark empirical evaluation "
-              "limitations failure cases"
-        ),
-        (
-            objective
-            + " independent replication evidence real-world deployment "
-              "study safety reliability"
-        ),
-    ]
-
-    query = variants[(round_number - 1) % len(variants)]
-
-    action(
-        mission_id,
-        "research_recovery",
-        query,
-        "RUNNING",
-        "verification gate not yet satisfied",
-        round_number,
-    )
-
-    discovery_pass(
-        mission_id,
-        query,
-        round_number + 1,
-    )
+    query = objective + " " + recovery_strategy(mission_id)
+    action(mission_id, "research_recovery", query, "RUNNING",
+           "targeted recovery selected from measured verification bottleneck", round_number)
+    discovery_pass(mission_id, query, round_number + 1)
     ingest_evidence(mission_id)
     build_claims(mission_id, objective)
     build_graph(mission_id)
-
-    action(
-        mission_id,
-        "research_recovery",
-        query,
-        "COMPLETED",
-        "additional evidence pass completed",
-        round_number,
-    )
+    action(mission_id, "research_recovery", query, "COMPLETED",
+           "targeted evidence pass completed without lowering verification standards", round_number)
 
 
 # ============================================================
@@ -1145,6 +1260,10 @@ def build_audit(mission_id):
             "supported_claims": supported,
             "contradicted_claims": contradicted,
             "high_purity_claims": high_purity,
+            "claim_quality_rate": round(high_purity / claims, 3) if claims else 0,
+            "verification_rate": round(verified / claims, 3) if claims else 0,
+            "support_rate": round(supported / claims, 3) if claims else 0,
+            "evidence_per_claim": round(evidence / claims, 3) if claims else 0,
         },
         "reality": {
             "autonomous_research": (
