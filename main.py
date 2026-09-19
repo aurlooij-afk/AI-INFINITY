@@ -144,6 +144,24 @@ def verify(mid,cid):
     c.execute("UPDATE claims SET status=?,confidence=?,blockers=?,next_action=? WHERE id=?",(status,conf,json.dumps(blockers),nxt,cid))
     c.commit();c.close();return status,blockers
 
+@app.get("/")
+def home():
+    return {
+        "name": "AI Infinity",
+        "version": VERSION,
+        "build": BUILD,
+        "status": "online",
+        "message": "AI Infinity research core is running.",
+        "endpoints": {
+            "health": "/health",
+            "status": "/status",
+            "capabilities": "/capabilities",
+            "docs": "/docs",
+            "run": "POST /run",
+            "mission": "GET /mission/{mission_id}"
+        }
+    }
+
 @app.get("/health")
 def health():return {"status":"ok","version":VERSION,"build":BUILD}
 @app.get("/status")
