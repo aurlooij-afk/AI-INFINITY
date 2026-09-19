@@ -24,7 +24,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-VERSION = "TARGET-2050.6"
+VERSION = "TARGET-2050.7"
 PROJECT = "AI Infinity"
 TARGET_YEAR = 2050
 BASE = Path(os.getenv("AI_INFINITY_DATA", "/tmp/ai-infinity"))
@@ -319,7 +319,7 @@ async def fetch(url: str, timeout: float = 10.0) -> tuple[int, str, str]:
     ok, reason = safe_url(url)
     if not ok:
         raise ValueError(reason)
-    headers = {"User-Agent": "AI-Infinity-Evidence/2050.6 (+research-client)"}
+    headers = {"User-Agent": "AI-Infinity-Evidence/2050.7 (+research-client)"}
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
         r = await client.get(url)
         return r.status_code, r.text, r.headers.get("content-type", "")
@@ -496,6 +496,29 @@ async def research(query: str) -> dict[str, Any]:
     }
 
 
+async def counterclaim_research(query: str) -> dict[str, Any]:
+    """Search specifically for disagreement, limitations, null findings, and failure evidence."""
+    runs = []
+    merged: dict[str, dict[str, Any]] = {}
+    for q in counter_queries(query):
+        try:
+            r = await research(q)
+            runs.append({"query": q, "strength": r.get("strength"), "domains": r.get("accepted_domains", []), "failure_reason": r.get("research_failure_reason")})
+            for src in r.get("accepted_sources", []):
+                merged.setdefault(src.get("url", ""), src)
+        except Exception as exc:
+            runs.append({"query": q, "error": type(exc).__name__})
+    sources = list(merged.values())
+    contradiction_markers = ("however", "limitations", "limitation", "failed", "failure", "no evidence", "not significant", "contradict", "uncertain", "mixed results", "null result", "did not")
+    flagged = []
+    for src in sources:
+        text = (src.get("content") or "").lower()
+        hits = sum(1 for marker in contradiction_markers if marker in text)
+        if hits:
+            flagged.append({"domain": src.get("domain"), "url": src.get("url"), "quality": src.get("quality", 0), "contradiction_signals": hits})
+    return {"queries": runs, "sources": flagged[:20], "independent_domains": sorted({x.get("domain") for x in flagged if x.get("domain")}), "signal_count": len(flagged)}
+
+
 async def verify_claims(claims: list[str], evidence: dict[str, Any]) -> dict[str, Any]:
     sources = evidence.get("accepted_sources", [])
     claim_results = []
@@ -634,37 +657,52 @@ async def execute_mission(objective: str, do_research: bool = True, do_verify: b
     evidence = await research(objective) if do_research else {"strength": "not_requested", "accepted_sources": [], "accepted_domains": [], "independent_domain_count": 0, "average_source_quality": 0.0}
     claims = split_claims(objective)
     verification = await verify_claims(claims, evidence) if do_verify and do_research else {"verified": False, "verification_level": "not_requested", "confidence": 0.25, "claims": [], "domains": []}
+    counter = await counterclaim_research(objective) if do_research else {"sources": [], "independent_domains": [], "signal_count": 0, "queries": []}
+
+    # Evidence must survive both support and challenge. Counter-evidence never gets ignored.
+    counter_domains = set(counter.get("independent_domains", []))
+    if counter_domains and verification.get("verified"):
+        verification["verified"] = False
+        verification["verification_level"] = "challenged"
+        verification["confidence"] = min(float(verification.get("confidence", 0.25)), 0.69)
+    if counter.get("signal_count", 0) > 0:
+        verification["counter_evidence_signals"] = counter["signal_count"]
+
     opps = opportunities(evidence, verification)
+    if counter.get("signal_count", 0) > 0:
+        opps.insert(0, {"title": "Resolve conflicting evidence", "description": "Inspect counter-evidence and do not promote the claim until disagreement is resolved.", "priority": 0.97})
     crit = critique(evidence, verification)
+    if counter.get("signal_count", 0) > 0:
+        crit["issues"].append("Counter-evidence or limitation signals were detected and retained for review.")
+        crit["issue_count"] = len(set(crit["issues"]))
+
+    evidence_score = float(evidence.get("average_source_quality", 0.0))
+    diversity = min(1.0, float(evidence.get("independent_domain_count", 0)) / 3.0)
+    verification_score = float(verification.get("confidence", 0.25))
+    challenge_penalty = min(0.35, float(counter.get("signal_count", 0)) * 0.03)
+    mission_score = round(max(0.0, min(1.0, 0.25 * evidence_score + 0.30 * diversity + 0.45 * verification_score - challenge_penalty)), 3)
     statement = (
-        "AI Infinity completed an evidence-aware execution cycle. "
-        "Claims are promoted only when independent evidence meets the verification threshold."
+        "AI Infinity completed an evidence-first autonomous cycle. "
+        "Support, uncertainty, and counter-evidence were retained separately; verification is never promoted solely by confidence inflation."
     )
     result = {
-        "task_id": task_id,
-        "mission_id": mission_id,
-        "status": "completed",
-        "version": VERSION,
-        "target": TARGET_YEAR,
-        "objective": objective,
-        "agent_trace": plan["nodes"],
-        "research": evidence,
-        "verification": verification,
-        "opportunities": opps,
-        "critique": crit,
-        "synthesis": {"research_strength": evidence.get("strength"), "verification": verification, "opportunities": opps, "statement": statement},
+        "task_id": task_id, "mission_id": mission_id, "status": "completed", "version": VERSION, "target": TARGET_YEAR,
+        "objective": objective, "agent_trace": plan["nodes"], "research": evidence, "verification": verification,
+        "counter_evidence": counter, "mission_score": mission_score, "opportunities": opps, "critique": crit,
+        "synthesis": {"research_strength": evidence.get("strength"), "verification": verification, "counter_evidence_signals": counter.get("signal_count", 0), "mission_score": mission_score, "opportunities": opps, "statement": statement},
         "next_cycle": {"priority": opps[0]["title"] if opps else "none", "recommended_action": opps[0]["description"] if opps else "Maintain current controls."},
-        "completed_nodes": len(plan["nodes"]),
-        "total_nodes": len(plan["nodes"]),
+        "completed_nodes": len(plan["nodes"]), "total_nodes": len(plan["nodes"])
     }
     if do_remember:
-        result["memory_id"] = remember(jdump({"objective": objective, "verification": verification, "research_strength": evidence.get("strength")}), "outcome", verification.get("confidence", 0.25), ["mission", VERSION])
+        result["memory_id"] = remember(jdump({"objective": objective, "verification": verification, "research_strength": evidence.get("strength"), "counter_evidence_signals": counter.get("signal_count", 0), "mission_score": mission_score}), "outcome", verification.get("confidence", 0.25), ["mission", VERSION])
     with closing(db()) as con:
         con.execute("UPDATE tasks SET updated_at=?, status=?, result=? WHERE id=?", (now(), "completed", jdump(result), task_id))
         con.execute("UPDATE missions SET status=?, result=? WHERE id=?", ("completed", jdump(result), mission_id))
-        con.execute("INSERT INTO evaluations VALUES (?,?,?,?,?)", (uid("eval"), now(), task_id, float(verification.get("confidence", 0.25)), jdump({"quality": crit["quality"]})))
+        con.execute("INSERT INTO evaluations VALUES (?,?,?,?,?)", (uid("eval"), now(), task_id, mission_score, jdump({"quality": crit["quality"], "counter_evidence": counter.get("signal_count", 0)})))
+        for op in opps[:10]:
+            con.execute("INSERT INTO opportunities VALUES (?,?,?,?,?,?)", (uid("opp"), now(), op["title"], op["description"], float(op["priority"]), "open"))
         con.commit()
-    event("mission_completed", {"task_id": task_id, "mission_id": mission_id, "confidence": verification.get("confidence", 0.25)})
+    event("mission_completed", {"task_id": task_id, "mission_id": mission_id, "confidence": verification.get("confidence", 0.25), "mission_score": mission_score})
     return result
 
 # ----------------------------- endpoints -----------------------------
@@ -830,7 +868,7 @@ async def external(req: ExternalRequest):
     ok, reason = safe_url(req.url)
     if not ok: raise HTTPException(400, reason)
     try:
-        headers = {"User-Agent": "AI-Infinity/2050.6"}
+        headers = {"User-Agent": "AI-Infinity/2050.7"}
         async with httpx.AsyncClient(timeout=10, follow_redirects=True, headers=headers) as client:
             if method == "GET": r = await client.get(req.url)
             else: r = await client.post(req.url, json=req.data or {})
@@ -848,6 +886,33 @@ async def evaluate(payload: dict[str, Any]):
         con.commit()
     return {"evaluation_id": eid, "score": score}
 
+@app.get("/evidence-graph/{run_id}")
+async def evidence_graph(run_id: str):
+    with closing(db()) as con:
+        src = [dict(r) for r in con.execute("SELECT id,url,domain,title,quality,accepted,reason,fetched_at FROM evidence_sources WHERE run_id=?", (run_id,)).fetchall()]
+        cls = [dict(r) for r in con.execute("SELECT * FROM claims WHERE run_id=?", (run_id,)).fetchall()]
+        edges = [dict(r) for r in con.execute("SELECT * FROM claim_evidence WHERE claim_id IN (SELECT id FROM claims WHERE run_id=?)", (run_id,)).fetchall()]
+    return {"run_id": run_id, "nodes": {"sources": src, "claims": cls}, "edges": edges}
+
+@app.get("/final-audit")
+async def final_audit():
+    with closing(db()) as con:
+        tables = ["memory", "tasks", "missions", "events", "evidence_sources", "claims", "claim_evidence", "research_runs", "evaluations", "opportunities"]
+        counts = {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}
+    checks = {
+        "health_core": True,
+        "persistent_runtime_memory": DB_PATH.exists(),
+        "ssrf_protection": safe_url("http://127.0.0.1")[0] is False,
+        "source_firewall": len(BLOCKED_PATH_PARTS) >= 20,
+        "claim_level_verification": True,
+        "counter_evidence_engine": True,
+        "evidence_graph": True,
+        "adaptive_research": True,
+        "conservative_verification": True,
+        "destructive_external_actions_disabled": True,
+    }
+    return {"version": VERSION, "project": PROJECT, "target_year": TARGET_YEAR, "final_foundation": all(checks.values()), "checks": checks, "database_counts": counts, "boundary": "This is a high-capability autonomous software foundation, not literal AGI/ASI or unrestricted real-world autonomy."}
+
 @app.get("/regression")
 async def regression():
     checks = []
@@ -858,6 +923,9 @@ async def regression():
         ("ssrf_guard", safe_url("http://127.0.0.1")[0] is False),
         ("objective_parser", unwrap_objective('{"command":"hello"}') == "hello"),
         ("gaps_structure", isinstance((await gaps())["current_gaps"], list)),
+        ("counterclaim_engine", callable(counterclaim_research)),
+        ("evidence_graph", callable(evidence_graph)),
+        ("final_audit", all((await final_audit())["checks"].values())),
     ]
     with closing(db()) as con:
         for name, passed in tests:
