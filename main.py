@@ -24,7 +24,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-VERSION = "TARGET-2050.7"
+VERSION = "TARGET-2050.8"
 PROJECT = "AI Infinity"
 TARGET_YEAR = 2050
 BASE = Path(os.getenv("AI_INFINITY_DATA", "/tmp/ai-infinity"))
@@ -578,6 +578,13 @@ class ExternalRequest(BaseModel):
     method: str = "GET"
     data: Optional[dict[str, Any]] = None
 
+class AutonomyRequest(BaseModel):
+    objective: str = Field(min_length=1, max_length=10000)
+    cycles: int = Field(default=2, ge=1, le=3)
+    research: bool = True
+    verify: bool = True
+    remember: bool = True
+
 
 def unwrap_objective(value: Any) -> str:
     if isinstance(value, str):
@@ -782,6 +789,44 @@ async def execute_endpoint(req: ExecuteRequest):
     objective = objective_from_request(req)
     return await execute_mission(objective, req.research, req.verify, req.remember)
 
+@app.post("/autonomy-cycle")
+async def autonomy_cycle(req: AutonomyRequest):
+    """Run a bounded adaptive mission loop with explicit cycle limits."""
+    objective = unwrap_objective(req.objective)
+    cycles: list[dict[str, Any]] = []
+    current_objective = objective
+    for index in range(req.cycles):
+        result = await execute_mission(current_objective, req.research, req.verify, req.remember)
+        cycles.append({
+            "cycle": index + 1,
+            "task_id": result.get("task_id"),
+            "mission_id": result.get("mission_id"),
+            "mission_score": result.get("mission_score", 0.0),
+            "verification": result.get("verification", {}),
+            "research": result.get("research", {}),
+            "next_cycle": result.get("next_cycle", {}),
+        })
+        recommendation = str((result.get("next_cycle") or {}).get("recommended_action") or "").strip()
+        if index + 1 < req.cycles and recommendation:
+            current_objective = (
+                f"Continue the autonomous investigation of: {objective}. "
+                f"Previous-cycle improvement target: {recommendation}. "
+                "Use new evidence and do not assume previous conclusions are correct."
+            )
+    scores = [float(c.get("mission_score", 0.0)) for c in cycles]
+    return {
+        "version": VERSION,
+        "status": "completed",
+        "objective": objective,
+        "cycles_requested": req.cycles,
+        "cycles_completed": len(cycles),
+        "best_mission_score": round(max(scores), 3) if scores else 0.0,
+        "final_cycle": cycles[-1] if cycles else {},
+        "cycles": cycles,
+        "bounded_autonomy": True,
+        "statement": "AI Infinity completed a bounded autonomous improvement loop with evidence and verification preserved across cycles.",
+    }
+
 @app.post("/task")
 async def task_endpoint(req: PlanRequest):
     return await execute_mission(req.objective)
@@ -933,6 +978,19 @@ async def regression():
             checks.append({"name": name, "passed": passed})
         con.commit()
     return {"version": VERSION, "passed": all(x["passed"] for x in checks), "checks": checks}
+
+@app.get("/autonomy")
+async def autonomy_info():
+    return {
+        "version": VERSION,
+        "enabled": True,
+        "mode": "bounded_adaptive_missions",
+        "max_cycles_per_request": 3,
+        "requires_explicit_objective": True,
+        "evidence_first": True,
+        "verification_required_for_promotion": True,
+        "external_actions": "safe-read by default",
+    }
 
 @app.get("/diagnostics")
 async def diagnostics():
