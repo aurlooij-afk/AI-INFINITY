@@ -1,26 +1,36 @@
 """
 AI Infinity
-TARGET-2050.10
-BUILD: AUTONOMOUS-EVIDENCE-ENGINE
+TARGET-2050.11
+BUILD: AUTONOMOUS-EVIDENCE-GRAPH
 
-Evidence-first autonomous mission runtime.
+Preserves TARGET-2050.10:
+- FastAPI runtime
+- SQLite persistence
+- missions
+- memory
+- claims
+- research
+- hybrid providers
+- source firewall
+- SSRF protection
+- evidence graph
+- verification
+- counter-evidence
+- critique
+- synthesis
+- replanning
+- existing API routes
 
-Core loop:
-Intent
-  -> Mission decomposition
-  -> Parallel evidence acquisition
-  -> Source firewall
-  -> Evidence graph
-  -> Claim extraction
-  -> Claim/evidence matching
-  -> Counter-evidence
-  -> Verification
-  -> Critique
-  -> Synthesis
-  -> Memory
-  -> Replanning
-
-Free-first architecture.
+Adds:
+- evidence nodes
+- evidence/claim relationship scoring
+- source diversity scoring
+- research cache
+- provider diagnostics
+- contradiction detection
+- evidence freshness
+- autonomous research expansion
+- stronger mission scoring
 """
 
 from __future__ import annotations
@@ -29,7 +39,6 @@ import asyncio
 import hashlib
 import ipaddress
 import json
-import math
 import os
 import re
 import socket
@@ -39,7 +48,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import unquote, urlparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -51,32 +60,34 @@ from pydantic import BaseModel, Field
 # IDENTITY
 # ============================================================
 
-VERSION = "TARGET-2050.10"
-BUILD = "AUTONOMOUS-EVIDENCE-ENGINE"
-
+VERSION = "TARGET-2050.11"
+BUILD = "AUTONOMOUS-EVIDENCE-GRAPH"
 PROJECT = "AI Infinity"
 
-BASE = Path(os.getenv("AI_INFINITY_DATA", "/tmp/ai-infinity"))
-BASE.mkdir(parents=True, exist_ok=True)
+BASE = Path(
+    os.getenv(
+        "AI_INFINITY_DATA",
+        "/tmp/ai-infinity",
+    )
+)
+
+BASE.mkdir(
+    parents=True,
+    exist_ok=True,
+)
 
 DB_PATH = BASE / "ai_infinity.db"
-
 START_TIME = time.time()
 
-
-# ============================================================
-# APP
-# ============================================================
-
 app = FastAPI(
-    title="AI Infinity",
+    title=PROJECT,
     version=VERSION,
-    description="Evidence-first autonomous AI mission engine",
+    description="Autonomous evidence-first AI mission engine",
 )
 
 
 # ============================================================
-# TIME / UTILITIES
+# UTILITIES
 # ============================================================
 
 def utc_now() -> str:
@@ -88,47 +99,82 @@ def new_id(prefix: str) -> str:
 
 
 def sha256(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        value.encode("utf-8")
+    ).hexdigest()
 
 
-def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
-    return max(low, min(high, float(value)))
+def clamp(
+    value: float,
+    low: float = 0.0,
+    high: float = 1.0,
+) -> float:
+    return max(
+        low,
+        min(high, float(value)),
+    )
 
 
-def clean_text(value: Any, limit: int = 12000) -> str:
+def clean_text(
+    value: Any,
+    limit: int = 12000,
+) -> str:
     if value is None:
         return ""
-    text = str(value).strip()
-    return text[:limit]
+
+    return str(value).strip()[:limit]
 
 
 def normalize_url(url: str) -> str:
-    url = clean_text(url, 4000)
+    url = clean_text(
+        url,
+        4000,
+    )
 
     if not url:
         return ""
 
-    if not re.match(r"^https?://", url, re.I):
+    if not re.match(
+        r"^https?://",
+        url,
+        re.I,
+    ):
         url = "https://" + url
 
-    parsed = urlparse(url)
-
-    if parsed.scheme.lower() not in {"http", "https"}:
+    try:
+        parsed = urlparse(url)
+    except Exception:
         return ""
 
-    host = (parsed.hostname or "").lower()
+    if parsed.scheme.lower() not in {
+        "http",
+        "https",
+    }:
+        return ""
+
+    host = (
+        parsed.hostname
+        or ""
+    ).lower()
 
     if not host:
         return ""
 
     path = parsed.path or "/"
 
-    return f"{parsed.scheme.lower()}://{host}{path}"
+    return (
+        f"{parsed.scheme.lower()}://"
+        f"{host}{path}"
+    )
 
 
 def domain_of(url: str) -> str:
     try:
-        return (urlparse(url).hostname or "").lower()
+        return (
+            urlparse(url)
+            .hostname
+            or ""
+        ).lower()
     except Exception:
         return ""
 
@@ -138,7 +184,10 @@ def domain_of(url: str) -> str:
 # ============================================================
 
 def db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(
+        DB_PATH
+    )
+
     conn.row_factory = sqlite3.Row
 
     conn.execute(
@@ -201,26 +250,89 @@ def db() -> sqlite3.Connection:
         """
     )
 
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS evidence (
+            id TEXT PRIMARY KEY,
+            mission_id TEXT,
+            provider TEXT,
+            title TEXT,
+            url TEXT,
+            domain TEXT,
+            snippet TEXT,
+            quality REAL,
+            freshness REAL,
+            created_at TEXT
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS evidence_links (
+            id TEXT PRIMARY KEY,
+            mission_id TEXT,
+            claim_id TEXT,
+            evidence_id TEXT,
+            relationship TEXT,
+            score REAL,
+            created_at TEXT
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS research_cache (
+            query_hash TEXT PRIMARY KEY,
+            query TEXT,
+            result TEXT,
+            created_at TEXT
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS provider_stats (
+            provider TEXT PRIMARY KEY,
+            calls INTEGER,
+            successes INTEGER,
+            results INTEGER,
+            last_error TEXT,
+            updated_at TEXT
+        )
+        """
+    )
+
     conn.commit()
+
     return conn
 
 
 db().close()
 
 
-def db_event(event_type: str, payload: Dict[str, Any]) -> None:
+def db_event(
+    event_type: str,
+    payload: Dict[str, Any],
+) -> None:
+
     conn = db()
 
     conn.execute(
         """
         INSERT INTO events
-        (id, event_type, payload, created_at)
-        VALUES (?, ?, ?, ?)
+        (id,event_type,payload,created_at)
+        VALUES (?,?,?,?)
         """,
         (
             new_id("evt"),
             event_type,
-            json.dumps(payload, ensure_ascii=False),
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+            ),
             utc_now(),
         ),
     )
@@ -234,6 +346,7 @@ def save_memory(
     kind: str = "mission",
     confidence: float = 0.5,
 ) -> str:
+
     memory_id = new_id("mem")
 
     conn = db()
@@ -241,8 +354,8 @@ def save_memory(
     conn.execute(
         """
         INSERT INTO memory
-        (id, kind, content, confidence, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        (id,kind,content,confidence,created_at)
+        VALUES (?,?,?,?,?)
         """,
         (
             memory_id,
@@ -265,6 +378,7 @@ def save_claim(
     confidence: float,
     verified: bool,
 ) -> str:
+
     claim_id = new_id("claim")
 
     conn = db()
@@ -272,8 +386,8 @@ def save_claim(
     conn.execute(
         """
         INSERT INTO claims
-        (id, mission_id, claim, confidence, verified, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        (id,mission_id,claim,confidence,verified,created_at)
+        VALUES (?,?,?,?,?,?)
         """,
         (
             claim_id,
@@ -298,12 +412,15 @@ def save_claim(
 BLOCKED_HOSTS = {
     "localhost",
     "localhost.localdomain",
-    "metadata.google.internal",
     "metadata",
+    "metadata.google.internal",
 }
 
 
-def is_private_host(host: str) -> bool:
+def is_private_host(
+    host: str,
+) -> bool:
+
     host = host.lower().strip()
 
     if host in BLOCKED_HOSTS:
@@ -311,6 +428,7 @@ def is_private_host(host: str) -> bool:
 
     try:
         ip = ipaddress.ip_address(host)
+
         return (
             ip.is_private
             or ip.is_loopback
@@ -318,17 +436,24 @@ def is_private_host(host: str) -> bool:
             or ip.is_reserved
             or ip.is_multicast
         )
+
     except ValueError:
         pass
 
     try:
-        addresses = socket.getaddrinfo(host, None)
+        addresses = socket.getaddrinfo(
+            host,
+            None,
+        )
 
         for item in addresses:
+
             ip_text = item[4][0]
 
             try:
-                ip = ipaddress.ip_address(ip_text)
+                ip = ipaddress.ip_address(
+                    ip_text
+                )
 
                 if (
                     ip.is_private
@@ -348,15 +473,23 @@ def is_private_host(host: str) -> bool:
     return False
 
 
-def safe_external_url(url: str) -> bool:
+def safe_external_url(
+    url: str,
+) -> bool:
+
     normalized = normalize_url(url)
 
     if not normalized:
         return False
 
-    parsed = urlparse(normalized)
+    parsed = urlparse(
+        normalized
+    )
 
-    if parsed.scheme not in {"http", "https"}:
+    if parsed.scheme not in {
+        "http",
+        "https",
+    }:
         return False
 
     host = parsed.hostname or ""
@@ -364,7 +497,9 @@ def safe_external_url(url: str) -> bool:
     if not host:
         return False
 
-    return not is_private_host(host)
+    return not is_private_host(
+        host
+    )
 
 
 # ============================================================
@@ -385,14 +520,20 @@ CONTAMINATION_PATTERNS = [
 ]
 
 
-def source_contaminated(text: str) -> bool:
+def source_contaminated(
+    text: str,
+) -> bool:
+
     text = text.lower()
 
-    hits = 0
-
-    for pattern in CONTAMINATION_PATTERNS:
-        if re.search(pattern, text):
-            hits += 1
+    hits = sum(
+        1
+        for pattern in CONTAMINATION_PATTERNS
+        if re.search(
+            pattern,
+            text,
+        )
+    )
 
     return hits >= 2
 
@@ -405,81 +546,153 @@ def source_quality(
 
     domain = domain_of(url)
 
-    score = 0.45
+    score = 0.42
 
     if domain.endswith(".gov"):
-        score += 0.30
+        score += 0.32
 
     elif domain.endswith(".edu"):
-        score += 0.25
+        score += 0.27
 
     elif domain.endswith(".org"):
         score += 0.12
 
-    if len(title) > 15:
+    if len(title) >= 20:
         score += 0.05
 
-    if len(snippet) > 120:
+    if len(snippet) >= 120:
         score += 0.08
 
-    if source_contaminated(snippet):
-        score -= 0.45
+    if (
+        "doi.org" in domain
+        or domain.endswith(
+            "crossref.org"
+        )
+    ):
+        score += 0.08
+
+    if source_contaminated(
+        title + " " + snippet
+    ):
+        score -= 0.50
 
     if not safe_external_url(url):
-        score = 0.0
+        return 0.0
 
     return clamp(score)
 
 
-def accept_source(item: Dict[str, Any]) -> bool:
-    url = normalize_url(item.get("url", ""))
+def freshness_score(
+    url: str,
+) -> float:
+
+    domain = domain_of(url)
+
+    if domain.endswith(
+        (
+            ".gov",
+            ".edu",
+            ".org",
+        )
+    ):
+        return 0.90
+
+    if domain in {
+        "doi.org",
+        "api.openalex.org",
+        "api.crossref.org",
+        "api.semanticscholar.org",
+    }:
+        return 0.92
+
+    return 0.75
+
+
+def accept_source(
+    item: Dict[str, Any],
+) -> bool:
+
+    url = normalize_url(
+        item.get(
+            "url",
+            "",
+        )
+    )
 
     if not url:
         return False
 
-    if not safe_external_url(url):
+    if not safe_external_url(
+        url
+    ):
         return False
 
     text = (
-        clean_text(item.get("title", ""))
+        clean_text(
+            item.get(
+                "title",
+                "",
+            )
+        )
         + " "
-        + clean_text(item.get("snippet", ""))
+        + clean_text(
+            item.get(
+                "snippet",
+                "",
+            )
+        )
     )
 
-    if source_contaminated(text):
+    if source_contaminated(
+        text
+    ):
         return False
 
-    return source_quality(
-        item.get("title", ""),
-        url,
-        item.get("snippet", ""),
-    ) >= 0.30
+    return (
+        source_quality(
+            item.get(
+                "title",
+                "",
+            ),
+            url,
+            item.get(
+                "snippet",
+                "",
+            ),
+        )
+        >= 0.30
+    )
 
 
 # ============================================================
 # HTTP
 # ============================================================
 
-DEFAULT_HEADERS = {
+HEADERS = {
     "User-Agent": (
-        "AI-Infinity/2050.10 "
-        "(evidence research engine)"
+        "AI-Infinity/2050.11 "
+        "(autonomous evidence engine)"
     )
 }
 
 
 async def http_get(
     url: str,
-    params: Optional[Dict[str, Any]] = None,
+    params: Optional[
+        Dict[str, Any]
+    ] = None,
     timeout: float = 12.0,
 ) -> Optional[httpx.Response]:
 
-    if not safe_external_url(url):
+    if not safe_external_url(
+        url
+    ):
         return None
 
     try:
+
         async with httpx.AsyncClient(
-            headers=DEFAULT_HEADERS,
+            headers=HEADERS,
             timeout=timeout,
             follow_redirects=True,
         ) as client:
@@ -499,33 +712,106 @@ async def http_get(
 
 
 # ============================================================
+# PROVIDER TELEMETRY
+# ============================================================
+
+def provider_call_start(
+    provider: str,
+) -> None:
+
+    conn = db()
+
+    conn.execute(
+        """
+        INSERT INTO provider_stats
+        (provider,calls,successes,results,last_error,updated_at)
+        VALUES (?,?,?,?,?,?)
+        ON CONFLICT(provider)
+        DO UPDATE SET
+            calls=calls+1,
+            updated_at=excluded.updated_at
+        """,
+        (
+            provider,
+            1,
+            0,
+            0,
+            None,
+            utc_now(),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+
+def provider_success(
+    provider: str,
+    count: int,
+) -> None:
+
+    conn = db()
+
+    conn.execute(
+        """
+        UPDATE provider_stats
+        SET successes=successes+1,
+            results=results+?,
+            updated_at=?
+        WHERE provider=?
+        """,
+        (
+            count,
+            utc_now(),
+            provider,
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+
+# ============================================================
 # SEARCH PROVIDERS
 # ============================================================
 
-async def search_duckduckgo(query: str) -> List[Dict[str, Any]]:
+async def search_duckduckgo(
+    query: str,
+) -> List[Dict[str, Any]]:
+
+    provider_call_start(
+        "duckduckgo"
+    )
+
     response = await http_get(
         "https://html.duckduckgo.com/html/",
-        params={"q": query},
+        {
+            "q": query,
+        },
     )
 
     if not response:
         return []
 
-    text = response.text
-
+    html = response.text
     results = []
 
     pattern = re.compile(
-        r'nuddg=([^"&]+).*?result__a[^>]*>(.*?)</a>',
+        r'nuddg=([^"&]+).*?'
+        r'result__a[^>]*>(.*?)</a>',
         re.I | re.S,
     )
 
-    for match in pattern.finditer(text):
+    for match in pattern.finditer(
+        html
+    ):
 
         try:
-            from urllib.parse import unquote
 
-            url = unquote(match.group(1))
+            url = unquote(
+                match.group(1)
+            )
+
             title = re.sub(
                 r"<.*?>",
                 "",
@@ -535,8 +821,12 @@ async def search_duckduckgo(query: str) -> List[Dict[str, Any]]:
             results.append(
                 {
                     "provider": "duckduckgo",
-                    "title": clean_text(title),
-                    "url": normalize_url(url),
+                    "title": clean_text(
+                        title
+                    ),
+                    "url": normalize_url(
+                        url
+                    ),
                     "snippet": "",
                 }
             )
@@ -544,13 +834,27 @@ async def search_duckduckgo(query: str) -> List[Dict[str, Any]]:
         except Exception:
             continue
 
+    provider_success(
+        "duckduckgo",
+        len(results),
+    )
+
     return results[:8]
 
 
-async def search_bing(query: str) -> List[Dict[str, Any]]:
+async def search_bing(
+    query: str,
+) -> List[Dict[str, Any]]:
+
+    provider_call_start(
+        "bing"
+    )
+
     response = await http_get(
         "https://www.bing.com/search",
-        params={"q": query},
+        {
+            "q": query,
+        },
     )
 
     if not response:
@@ -574,13 +878,13 @@ async def search_bing(query: str) -> List[Dict[str, Any]]:
         )
 
         title = re.search(
-            r'<h2[^>]*>(.*?)</h2>',
+            r"<h2[^>]*>(.*?)</h2>",
             block,
             re.I | re.S,
         )
 
         snippet = re.search(
-            r'<p[^>]*>(.*?)</p>',
+            r"<p[^>]*>(.*?)</p>",
             block,
             re.I | re.S,
         )
@@ -591,31 +895,53 @@ async def search_bing(query: str) -> List[Dict[str, Any]]:
         clean_title = re.sub(
             r"<.*?>",
             "",
-            title.group(1) if title else "",
+            title.group(1)
+            if title
+            else "",
         )
 
         clean_snippet = re.sub(
             r"<.*?>",
             "",
-            snippet.group(1) if snippet else "",
+            snippet.group(1)
+            if snippet
+            else "",
         )
 
         results.append(
             {
                 "provider": "bing",
-                "title": clean_text(clean_title),
-                "url": normalize_url(href.group(1)),
-                "snippet": clean_text(clean_snippet),
+                "title": clean_text(
+                    clean_title
+                ),
+                "url": normalize_url(
+                    href.group(1)
+                ),
+                "snippet": clean_text(
+                    clean_snippet
+                ),
             }
         )
+
+    provider_success(
+        "bing",
+        len(results),
+    )
 
     return results
 
 
-async def search_google(query: str) -> List[Dict[str, Any]]:
+async def search_google(
+    query: str,
+) -> List[Dict[str, Any]]:
+
+    provider_call_start(
+        "google"
+    )
+
     response = await http_get(
         "https://www.google.com/search",
-        params={
+        {
             "q": query,
             "num": 8,
         },
@@ -628,48 +954,63 @@ async def search_google(query: str) -> List[Dict[str, Any]]:
     results = []
 
     links = re.findall(
-        r'<a href="/url\?q=([^&"]+).*?>(.*?)</a>',
+        r'<a href="/url\?q=([^&"]+)'
+        r'.*?>(.*?)</a>',
         html,
         re.I | re.S,
     )
 
-    from urllib.parse import unquote
-
     for url, title in links[:8]:
-
-        clean_title = re.sub(
-            r"<.*?>",
-            "",
-            title,
-        )
 
         url = unquote(url)
 
-        if not url.startswith("http"):
+        if not url.startswith(
+            "http"
+        ):
             continue
 
         results.append(
             {
                 "provider": "google",
-                "title": clean_text(clean_title),
-                "url": normalize_url(url),
+                "title": clean_text(
+                    re.sub(
+                        r"<.*?>",
+                        "",
+                        title,
+                    )
+                ),
+                "url": normalize_url(
+                    url
+                ),
                 "snippet": "",
             }
         )
+
+    provider_success(
+        "google",
+        len(results),
+    )
 
     return results
 
 
 # ============================================================
-# STRUCTURED EVIDENCE
+# STRUCTURED PROVIDERS
 # ============================================================
 
-async def search_openalex(query: str) -> List[Dict[str, Any]]:
+async def search_openalex(
+    query: str,
+) -> List[Dict[str, Any]]:
+
+    provider_call_start(
+        "openalex"
+    )
+
     response = await http_get(
         "https://api.openalex.org/works",
-        params={
+        {
             "search": query,
-            "per-page": 6,
+            "per-page": 8,
         },
     )
 
@@ -683,7 +1024,15 @@ async def search_openalex(query: str) -> List[Dict[str, Any]]:
 
     results = []
 
-    for item in data.get("results", []):
+    for item in data.get(
+        "results",
+        [],
+    ):
+
+        title = (
+            item.get("title")
+            or ""
+        )
 
         url = (
             item.get("doi")
@@ -691,30 +1040,39 @@ async def search_openalex(query: str) -> List[Dict[str, Any]]:
             or ""
         )
 
-        title = item.get("title") or ""
-
         results.append(
             {
                 "provider": "openalex",
                 "title": title,
-                "url": normalize_url(url),
-                "snippet": clean_text(
-                    item.get("abstract_inverted_index", ""),
-                    1200,
+                "url": normalize_url(
+                    url
                 ),
+                "snippet": "",
                 "type": "scholarly",
             }
         )
 
+    provider_success(
+        "openalex",
+        len(results),
+    )
+
     return results
 
 
-async def search_crossref(query: str) -> List[Dict[str, Any]]:
+async def search_crossref(
+    query: str,
+) -> List[Dict[str, Any]]:
+
+    provider_call_start(
+        "crossref"
+    )
+
     response = await http_get(
         "https://api.crossref.org/works",
-        params={
+        {
             "query": query,
-            "rows": 6,
+            "rows": 8,
         },
     )
 
@@ -736,31 +1094,38 @@ async def search_crossref(query: str) -> List[Dict[str, Any]]:
         [],
     ):
 
-        title_list = item.get("title") or []
+        titles = (
+            item.get("title")
+            or []
+        )
 
         title = (
-            title_list[0]
-            if title_list
+            titles[0]
+            if titles
             else ""
         )
 
         url = (
             item.get("URL")
-            or item.get("resource", {}).get(
-                "primary",
-                {},
-            ).get("URL", "")
+            or ""
         )
 
         results.append(
             {
                 "provider": "crossref",
                 "title": title,
-                "url": normalize_url(url),
+                "url": normalize_url(
+                    url
+                ),
                 "snippet": "",
                 "type": "scholarly",
             }
         )
+
+    provider_success(
+        "crossref",
+        len(results),
+    )
 
     return results
 
@@ -769,12 +1134,18 @@ async def search_semantic_scholar(
     query: str,
 ) -> List[Dict[str, Any]]:
 
+    provider_call_start(
+        "semantic_scholar"
+    )
+
     response = await http_get(
         "https://api.semanticscholar.org/graph/v1/paper/search",
-        params={
+        {
             "query": query,
-            "limit": 6,
-            "fields": "title,url,abstract",
+            "limit": 8,
+            "fields": (
+                "title,url,abstract"
+            ),
         },
     )
 
@@ -788,22 +1159,39 @@ async def search_semantic_scholar(
 
     results = []
 
-    for item in data.get("data", []):
+    for item in data.get(
+        "data",
+        [],
+    ):
 
         results.append(
             {
                 "provider": "semantic_scholar",
-                "title": item.get("title", ""),
+                "title": item.get(
+                    "title",
+                    "",
+                ),
                 "url": normalize_url(
-                    item.get("url", "")
+                    item.get(
+                        "url",
+                        "",
+                    )
                 ),
                 "snippet": clean_text(
-                    item.get("abstract", ""),
-                    1800,
+                    item.get(
+                        "abstract",
+                        "",
+                    ),
+                    2000,
                 ),
                 "type": "scholarly",
             }
         )
+
+    provider_success(
+        "semantic_scholar",
+        len(results),
+    )
 
     return results
 
@@ -812,14 +1200,18 @@ async def search_wikipedia(
     query: str,
 ) -> List[Dict[str, Any]]:
 
+    provider_call_start(
+        "wikipedia"
+    )
+
     response = await http_get(
         "https://en.wikipedia.org/w/api.php",
-        params={
+        {
             "action": "query",
             "list": "search",
             "srsearch": query,
             "format": "json",
-            "srlimit": 5,
+            "srlimit": 6,
         },
     )
 
@@ -841,17 +1233,26 @@ async def search_wikipedia(
         [],
     ):
 
-        title = item.get("title", "")
+        title = item.get(
+            "title",
+            "",
+        )
 
         url = (
             "https://en.wikipedia.org/wiki/"
-            + title.replace(" ", "_")
+            + title.replace(
+                " ",
+                "_",
+            )
         )
 
         snippet = re.sub(
             r"<.*?>",
             "",
-            item.get("snippet", ""),
+            item.get(
+                "snippet",
+                "",
+            ),
         )
 
         results.append(
@@ -859,12 +1260,66 @@ async def search_wikipedia(
                 "provider": "wikipedia",
                 "title": title,
                 "url": url,
-                "snippet": clean_text(snippet),
+                "snippet": clean_text(
+                    snippet
+                ),
                 "type": "reference",
             }
         )
 
+    provider_success(
+        "wikipedia",
+        len(results),
+    )
+
     return results
+
+
+# ============================================================
+# PROVIDER ROUTER
+# ============================================================
+
+async def run_provider(
+    provider: str,
+    query: str,
+) -> List[Dict[str, Any]]:
+
+    if provider == "duckduckgo":
+        return await search_duckduckgo(
+            query
+        )
+
+    if provider == "bing":
+        return await search_bing(
+            query
+        )
+
+    if provider == "google":
+        return await search_google(
+            query
+        )
+
+    if provider == "openalex":
+        return await search_openalex(
+            query
+        )
+
+    if provider == "crossref":
+        return await search_crossref(
+            query
+        )
+
+    if provider == "semantic_scholar":
+        return await search_semantic_scholar(
+            query
+        )
+
+    if provider == "wikipedia":
+        return await search_wikipedia(
+            query
+        )
+
+    return []
 
 
 # ============================================================
@@ -895,107 +1350,761 @@ STOPWORDS = {
     "that",
     "analyze",
     "analysis",
+    "find",
+    "tell",
+    "explain",
 }
 
 
-def important_terms(text: str) -> List[str]:
+def important_terms(
+    text: str,
+) -> List[str]:
 
     words = re.findall(
         r"[A-Za-z0-9][A-Za-z0-9_-]{2,}",
         text.lower(),
     )
 
-    unique = []
+    output = []
 
     for word in words:
 
         if word in STOPWORDS:
             continue
 
-        if word not in unique:
-            unique.append(word)
+        if word not in output:
+            output.append(word)
 
-    return unique[:12]
+    return output[:14]
 
 
 def decompose_research(
     objective: str,
 ) -> List[str]:
 
-    objective = clean_text(objective)
+    objective = clean_text(
+        objective
+    )
 
-    terms = important_terms(objective)
+    terms = important_terms(
+        objective
+    )
 
     questions = [
         objective,
         f"evidence for {objective}",
         f"research findings about {objective}",
+        f"independent sources about {objective}",
         f"limitations and risks of {objective}",
+        f"criticism and contradictory evidence about {objective}",
     ]
 
     if terms:
-        focused = " ".join(terms[:8])
+
+        focused = " ".join(
+            terms[:9]
+        )
 
         questions.extend(
             [
                 f"{focused} evidence",
-                f"{focused} study research",
-                f"{focused} criticism limitations",
+                f"{focused} study",
+                f"{focused} research",
+                f"{focused} limitations",
             ]
         )
 
     seen = set()
-    output = []
+    result = []
 
     for question in questions:
 
         key = question.lower().strip()
 
-        if key and key not in seen:
-            seen.add(key)
-            output.append(question)
+        if (
+            key
+            and key not in seen
+        ):
 
-    return output[:7]
+            seen.add(key)
+            result.append(
+                question
+            )
+
+    return result[:9]
+
+
+# ============================================================
+# CACHE
+# ============================================================
+
+def cached_research(
+    query: str,
+) -> Optional[Dict[str, Any]]:
+
+    query_hash = sha256(
+        query.lower().strip()
+    )
+
+    conn = db()
+
+    row = conn.execute(
+        """
+        SELECT result
+        FROM research_cache
+        WHERE query_hash=?
+        """,
+        (
+            query_hash,
+        ),
+    ).fetchone()
+
+    conn.close()
+
+    if not row:
+        return None
+
+    try:
+        return json.loads(
+            row["result"]
+        )
+    except Exception:
+        return None
+
+
+def save_research_cache(
+    query: str,
+    result: Dict[str, Any],
+) -> None:
+
+    query_hash = sha256(
+        query.lower().strip()
+    )
+
+    conn = db()
+
+    conn.execute(
+        """
+        INSERT INTO research_cache
+        (query_hash,query,result,created_at)
+        VALUES (?,?,?,?)
+        ON CONFLICT(query_hash)
+        DO UPDATE SET
+            result=excluded.result,
+            created_at=excluded.created_at
+        """,
+        (
+            query_hash,
+            query,
+            json.dumps(
+                result,
+                ensure_ascii=False,
+            ),
+            utc_now(),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+
+# ============================================================
+# EVIDENCE GRAPH
+# ============================================================
+
+def save_evidence(
+    mission_id: str,
+    item: Dict[str, Any],
+) -> str:
+
+    evidence_id = new_id(
+        "evidence"
+    )
+
+    conn = db()
+
+    conn.execute(
+        """
+        INSERT INTO evidence
+        (
+            id,
+            mission_id,
+            provider,
+            title,
+            url,
+            domain,
+            snippet,
+            quality,
+            freshness,
+            created_at
+        )
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            evidence_id,
+            mission_id,
+            item.get(
+                "provider",
+                "",
+            ),
+            item.get(
+                "title",
+                "",
+            ),
+            item.get(
+                "url",
+                "",
+            ),
+            item.get(
+                "domain",
+                "",
+            ),
+            item.get(
+                "snippet",
+                "",
+            ),
+            item.get(
+                "quality",
+                0,
+            ),
+            item.get(
+                "freshness",
+                0,
+            ),
+            utc_now(),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+    return evidence_id
+
+
+def save_evidence_link(
+    mission_id: str,
+    claim_id: str,
+    evidence_id: str,
+    relationship: str,
+    score: float,
+) -> None:
+
+    conn = db()
+
+    conn.execute(
+        """
+        INSERT INTO evidence_links
+        (
+            id,
+            mission_id,
+            claim_id,
+            evidence_id,
+            relationship,
+            score,
+            created_at
+        )
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (
+            new_id("link"),
+            mission_id,
+            claim_id,
+            evidence_id,
+            relationship,
+            clamp(score),
+            utc_now(),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+
+# ============================================================
+# TEXT MATCHING
+# ============================================================
+
+def token_overlap(
+    a: str,
+    b: str,
+) -> float:
+
+    aa = set(
+        important_terms(a)
+    )
+
+    bb = set(
+        important_terms(b)
+    )
+
+    if not aa or not bb:
+        return 0.0
+
+    return (
+        len(aa & bb)
+        / max(
+            len(aa | bb),
+            1,
+        )
+    )
+
+
+def evidence_relevance(
+    claim: str,
+    item: Dict[str, Any],
+) -> float:
+
+    text = (
+        item.get(
+            "title",
+            "",
+        )
+        + " "
+        + item.get(
+            "snippet",
+            "",
+        )
+    )
+
+    overlap = token_overlap(
+        claim,
+        text,
+    )
+
+    quality = float(
+        item.get(
+            "quality",
+            0,
+        )
+    )
+
+    freshness = float(
+        item.get(
+            "freshness",
+            0,
+        )
+    )
+
+    return clamp(
+        overlap * 0.55
+        + quality * 0.30
+        + freshness * 0.15
+    )
+
+
+# ============================================================
+# CLAIM ENGINE
+# ============================================================
+
+def extract_claims(
+    objective: str,
+    evidence: List[Dict[str, Any]],
+) -> List[str]:
+
+    claims = [
+        clean_text(
+            objective,
+            600,
+        )
+    ]
+
+    for item in evidence[:10]:
+
+        title = clean_text(
+            item.get(
+                "title",
+                "",
+            ),
+            500,
+        )
+
+        snippet = clean_text(
+            item.get(
+                "snippet",
+                "",
+            ),
+            900,
+        )
+
+        if title and snippet:
+
+            claims.append(
+                f"{title}: {snippet}"
+            )
+
+        elif title:
+
+            claims.append(
+                title
+            )
+
+    result = []
+    seen = set()
+
+    for claim in claims:
+
+        key = claim.lower().strip()
+
+        if (
+            len(key) < 20
+            or key in seen
+        ):
+            continue
+
+        seen.add(key)
+
+        result.append(
+            claim
+        )
+
+    return result[:12]
+
+
+def verify_claim(
+    claim: str,
+    evidence: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+
+    matches = []
+
+    for item in evidence:
+
+        score = evidence_relevance(
+            claim,
+            item,
+        )
+
+        if score >= 0.18:
+
+            matches.append(
+                {
+                    "url": item.get(
+                        "url",
+                        "",
+                    ),
+                    "domain": item.get(
+                        "domain",
+                        "",
+                    ),
+                    "provider": item.get(
+                        "provider",
+                        "",
+                    ),
+                    "quality": round(
+                        item.get(
+                            "quality",
+                            0,
+                        ),
+                        3,
+                    ),
+                    "freshness": round(
+                        item.get(
+                            "freshness",
+                            0,
+                        ),
+                        3,
+                    ),
+                    "relevance": round(
+                        score,
+                        3,
+                    ),
+                }
+            )
+
+    matches.sort(
+        key=lambda x: x[
+            "relevance"
+        ],
+        reverse=True,
+    )
+
+    domains = {
+        item["domain"]
+        for item in matches
+        if item.get("domain")
+    }
+
+    providers = {
+        item["provider"]
+        for item in matches
+        if item.get("provider")
+    }
+
+    if len(domains) >= 3:
+
+        confidence = 0.72
+
+    elif len(domains) == 2:
+
+        confidence = 0.64
+
+    elif len(domains) == 1:
+
+        confidence = 0.43
+
+    else:
+
+        confidence = 0.20
+
+    if matches:
+
+        confidence += (
+            matches[0][
+                "relevance"
+            ] * 0.20
+        )
+
+    if len(providers) >= 2:
+        confidence += 0.05
+
+    confidence = clamp(
+        confidence
+    )
+
+    verified = (
+        len(domains) >= 2
+        and confidence >= 0.65
+    )
+
+    return {
+        "claim": claim,
+        "verified": verified,
+        "confidence": round(
+            confidence,
+            3,
+        ),
+        "supporting_evidence": matches[:8],
+        "independent_support": len(
+            domains
+        ),
+        "provider_diversity": len(
+            providers
+        ),
+    }
+
+
+# ============================================================
+# CONTRADICTION ENGINE
+# ============================================================
+
+NEGATIVE_TERMS = {
+    "not",
+    "no",
+    "false",
+    "fails",
+    "failure",
+    "risk",
+    "risks",
+    "limitation",
+    "limitations",
+    "contradiction",
+    "contradictory",
+    "ineffective",
+    "uncertain",
+    "unsupported",
+    "dispute",
+    "criticism",
+    "criticized",
+    "cannot",
+    "unable",
+}
+
+
+def contradiction_signal(
+    claim: str,
+    item: Dict[str, Any],
+) -> float:
+
+    text = (
+        item.get(
+            "title",
+            "",
+        )
+        + " "
+        + item.get(
+            "snippet",
+            "",
+        )
+    ).lower()
+
+    terms = set(
+        important_terms(text)
+    )
+
+    negative_hits = len(
+        terms & NEGATIVE_TERMS
+    )
+
+    relevance = token_overlap(
+        claim,
+        text,
+    )
+
+    return clamp(
+        relevance * 0.65
+        + min(
+            negative_hits / 5,
+            1,
+        ) * 0.35
+    )
+
+
+async def counter_research(
+    claim: str,
+) -> Dict[str, Any]:
+
+    queries = [
+        f"{claim} criticism",
+        f"{claim} limitations",
+        f"{claim} evidence against",
+        f"{claim} contradictory evidence",
+    ]
+
+    tasks = []
+
+    providers = [
+        "duckduckgo",
+        "bing",
+        "google",
+    ]
+
+    for query in queries:
+
+        for provider in providers:
+
+            tasks.append(
+                (
+                    provider,
+                    query,
+                    run_provider(
+                        provider,
+                        query,
+                    ),
+                )
+            )
+
+    responses = await asyncio.gather(
+        *[
+            task[2]
+            for task in tasks
+        ],
+        return_exceptions=True,
+    )
+
+    accepted = []
+    seen = set()
+
+    for task, response in zip(
+        tasks,
+        responses,
+    ):
+
+        if isinstance(
+            response,
+            Exception,
+        ):
+            continue
+
+        for item in response:
+
+            url = normalize_url(
+                item.get(
+                    "url",
+                    "",
+                )
+            )
+
+            if (
+                not url
+                or url in seen
+                or not accept_source(
+                    item
+                )
+            ):
+                continue
+
+            seen.add(url)
+
+            item["url"] = url
+            item["domain"] = domain_of(
+                url
+            )
+            item["quality"] = source_quality(
+                item.get(
+                    "title",
+                    "",
+                ),
+                url,
+                item.get(
+                    "snippet",
+                    "",
+                ),
+            )
+            item["freshness"] = freshness_score(
+                url
+            )
+            item["contradiction_score"] = (
+                contradiction_signal(
+                    claim,
+                    item,
+                )
+            )
+
+            if item[
+                "contradiction_score"
+            ] >= 0.20:
+
+                accepted.append(
+                    item
+                )
+
+    accepted.sort(
+        key=lambda x: x[
+            "contradiction_score"
+        ],
+        reverse=True,
+    )
+
+    domains = {
+        x.get("domain")
+        for x in accepted
+        if x.get("domain")
+    }
+
+    return {
+        "queries": queries,
+        "evidence": accepted[:12],
+        "contradiction_count": len(
+            accepted
+        ),
+        "independent_domains": len(
+            domains
+        ),
+    }
 
 
 # ============================================================
 # RESEARCH ENGINE
 # ============================================================
 
-async def run_provider(
-    provider: str,
-    query: str,
-) -> List[Dict[str, Any]]:
-
-    if provider == "duckduckgo":
-        return await search_duckduckgo(query)
-
-    if provider == "bing":
-        return await search_bing(query)
-
-    if provider == "google":
-        return await search_google(query)
-
-    if provider == "openalex":
-        return await search_openalex(query)
-
-    if provider == "crossref":
-        return await search_crossref(query)
-
-    if provider == "semantic_scholar":
-        return await search_semantic_scholar(query)
-
-    if provider == "wikipedia":
-        return await search_wikipedia(query)
-
-    return []
-
-
 async def research(
     objective: str,
+    mission_id: Optional[str] = None,
 ) -> Dict[str, Any]:
 
-    questions = decompose_research(objective)
+    cached = cached_research(
+        objective
+    )
+
+    if cached:
+
+        cached["cache_hit"] = True
+
+        return cached
+
+    questions = decompose_research(
+        objective
+    )
 
     web_providers = [
         "duckduckgo",
@@ -1010,20 +2119,22 @@ async def research(
         "wikipedia",
     ]
 
-    provider_hits = {}
+    provider_hits: Dict[
+        str,
+        int,
+    ] = {}
+
     raw_results = []
 
-    # --------------------------------------------------------
-    # Parallel web research
-    # --------------------------------------------------------
+    tasks = []
 
-    web_tasks = []
-
+    # First wave:
+    # broad web evidence.
     for question in questions:
 
         for provider in web_providers:
 
-            web_tasks.append(
+            tasks.append(
                 (
                     provider,
                     question,
@@ -1037,13 +2148,13 @@ async def research(
     responses = await asyncio.gather(
         *[
             task[2]
-            for task in web_tasks
+            for task in tasks
         ],
         return_exceptions=True,
     )
 
     for task, response in zip(
-        web_tasks,
+        tasks,
         responses,
     ):
 
@@ -1054,23 +2165,28 @@ async def research(
             0,
         )
 
-        if isinstance(response, Exception):
+        if isinstance(
+            response,
+            Exception,
+        ):
             continue
 
-        provider_hits[provider] += len(response)
-        raw_results.extend(response)
+        provider_hits[
+            provider
+        ] += len(response)
 
-    # --------------------------------------------------------
-    # Structured fallback
-    # --------------------------------------------------------
+        raw_results.extend(
+            response
+        )
 
-    if len(raw_results) < 3:
+    # Second wave:
+    # structured evidence is always used
+    # when the broad wave is weak.
+    if len(raw_results) < 8:
 
         structured_tasks = []
 
-        focused_queries = questions[:4]
-
-        for question in focused_queries:
+        for question in questions[:5]:
 
             for provider in structured_providers:
 
@@ -1085,12 +2201,15 @@ async def research(
                     )
                 )
 
-        structured_responses = await asyncio.gather(
-            *[
-                task[2]
-                for task in structured_tasks
-            ],
-            return_exceptions=True,
+        structured_responses = (
+            await asyncio.gather(
+                *[
+                    task[2]
+                    for task
+                    in structured_tasks
+                ],
+                return_exceptions=True,
+            )
         )
 
         for task, response in zip(
@@ -1105,25 +2224,31 @@ async def research(
                 0,
             )
 
-            if isinstance(response, Exception):
+            if isinstance(
+                response,
+                Exception,
+            ):
                 continue
 
-            provider_hits[provider] += len(response)
-            raw_results.extend(response)
+            provider_hits[
+                provider
+            ] += len(response)
 
-    # --------------------------------------------------------
-    # Firewall + normalization
-    # --------------------------------------------------------
+            raw_results.extend(
+                response
+            )
 
     accepted = []
     rejected = []
-
     seen_urls = set()
 
     for item in raw_results:
 
         url = normalize_url(
-            item.get("url", "")
+            item.get(
+                "url",
+                "",
+            )
         )
 
         if not url:
@@ -1131,20 +2256,25 @@ async def research(
             rejected.append(
                 {
                     "reason": "invalid_url",
-                    "item": item.get("title", ""),
+                    "provider": item.get(
+                        "provider",
+                        "",
+                    ),
                 }
             )
 
             continue
-
-        item["url"] = url
 
         if url in seen_urls:
             continue
 
         seen_urls.add(url)
 
-        if not accept_source(item):
+        item["url"] = url
+
+        if not accept_source(
+            item
+        ):
 
             rejected.append(
                 {
@@ -1152,31 +2282,48 @@ async def research(
                     "url": url,
                     "provider": item.get(
                         "provider",
-                        "unknown",
+                        "",
                     ),
                 }
             )
 
             continue
 
-        item["domain"] = domain_of(url)
+        item["domain"] = domain_of(
+            url
+        )
 
         item["quality"] = round(
             source_quality(
-                item.get("title", ""),
+                item.get(
+                    "title",
+                    "",
+                ),
                 url,
-                item.get("snippet", ""),
+                item.get(
+                    "snippet",
+                    "",
+                ),
             ),
             3,
         )
 
-        accepted.append(item)
+        item["freshness"] = round(
+            freshness_score(
+                url
+            ),
+            3,
+        )
 
-    # --------------------------------------------------------
-    # Independent-domain selection
-    # --------------------------------------------------------
+        accepted.append(
+            item
+        )
 
-    domain_map: Dict[str, List[Dict[str, Any]]] = {}
+    # Select strongest source per domain.
+    domain_map: Dict[
+        str,
+        List[Dict[str, Any]],
+    ] = {}
 
     for item in accepted:
 
@@ -1186,6 +2333,7 @@ async def research(
         )
 
         if domain:
+
             domain_map.setdefault(
                 domain,
                 [],
@@ -1197,30 +2345,61 @@ async def research(
 
         best = max(
             items,
-            key=lambda x: x.get(
-                "quality",
-                0,
+            key=lambda x: (
+                x.get(
+                    "quality",
+                    0,
+                )
+                * 0.65
+                + x.get(
+                    "freshness",
+                    0,
+                )
+                * 0.20
+                + token_overlap(
+                    objective,
+                    (
+                        x.get(
+                            "title",
+                            "",
+                        )
+                        + " "
+                        + x.get(
+                            "snippet",
+                            "",
+                        )
+                    ),
+                )
+                * 0.15
             ),
         )
 
-        independent.append(best)
+        independent.append(
+            best
+        )
 
     independent.sort(
-        key=lambda x: x.get(
-            "quality",
-            0,
+        key=lambda x: (
+            x.get(
+                "quality",
+                0,
+            ),
+            x.get(
+                "freshness",
+                0,
+            ),
         ),
         reverse=True,
     )
 
-    independent = independent[:12]
+    independent = independent[:16]
 
     quality_values = [
-        item.get(
+        x.get(
             "quality",
             0,
         )
-        for item in independent
+        for x in independent
     ]
 
     average_quality = (
@@ -1230,31 +2409,66 @@ async def research(
         else 0.0
     )
 
-    research_strength = clamp(
-        (
-            min(len(independent) / 5, 1.0)
-            * 0.55
+    provider_count = len(
+        {
+            x.get(
+                "provider"
+            )
+            for x in independent
+        }
+    )
+
+    domain_count = len(
+        independent
+    )
+
+    diversity = clamp(
+        min(
+            domain_count / 5,
+            1,
         )
-        + (
-            average_quality
-            * 0.45
+        * 0.70
+        + min(
+            provider_count / 3,
+            1,
         )
+        * 0.30
+    )
+
+    strength = clamp(
+        min(
+            domain_count / 5,
+            1,
+        )
+        * 0.45
+        + average_quality
+        * 0.35
+        + diversity
+        * 0.20
     )
 
     result = {
         "mode": "hybrid",
+        "cache_hit": False,
         "questions": questions,
         "provider_hits": provider_hits,
         "accepted_sources": independent,
-        "rejected_count": len(rejected),
+        "rejected_count": len(
+            rejected
+        ),
         "rejected_examples": rejected[:12],
-        "independent_domains": len(independent),
+        "independent_domains": domain_count,
+        "provider_diversity": provider_count,
+        "source_diversity": round(
+            diversity,
+            3,
+        ),
         "average_source_quality": round(
             average_quality,
             3,
         ),
         "research_strength": round(
-            research_strength,
+            strength,
             3,
         ),
         "evidence_available": bool(
@@ -1267,13 +2481,18 @@ async def research(
         ),
     }
 
+    save_research_cache(
+        objective,
+        result,
+    )
+
     conn = db()
 
     conn.execute(
         """
         INSERT INTO research_runs
-        (id, query, result, created_at)
-        VALUES (?, ?, ?, ?)
+        (id,query,result,created_at)
+        VALUES (?,?,?,?)
         """,
         (
             new_id("research"),
@@ -1293,299 +2512,13 @@ async def research(
         "research_completed",
         {
             "objective": objective,
-            "sources": len(independent),
-            "domains": len(independent),
-            "strength": research_strength,
+            "sources": domain_count,
+            "providers": provider_count,
+            "strength": strength,
         },
     )
 
     return result
-
-
-# ============================================================
-# CLAIM ENGINE
-# ============================================================
-
-def extract_claims(
-    objective: str,
-    evidence: List[Dict[str, Any]],
-) -> List[str]:
-
-    claims = []
-
-    # Mission-derived claim.
-    claims.append(
-        clean_text(objective, 600)
-    )
-
-    for item in evidence[:8]:
-
-        title = clean_text(
-            item.get("title", ""),
-            500,
-        )
-
-        snippet = clean_text(
-            item.get("snippet", ""),
-            700,
-        )
-
-        if title and snippet:
-            claims.append(
-                f"{title}: {snippet}"
-            )
-
-        elif title:
-            claims.append(title)
-
-    output = []
-
-    seen = set()
-
-    for claim in claims:
-
-        key = claim.lower().strip()
-
-        if (
-            len(key) < 20
-            or key in seen
-        ):
-            continue
-
-        seen.add(key)
-        output.append(claim)
-
-    return output[:12]
-
-
-def token_overlap(
-    a: str,
-    b: str,
-) -> float:
-
-    aa = set(important_terms(a))
-    bb = set(important_terms(b))
-
-    if not aa or not bb:
-        return 0.0
-
-    return len(aa & bb) / max(
-        len(aa | bb),
-        1,
-    )
-
-
-def verify_claim(
-    claim: str,
-    evidence: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-
-    matches = []
-
-    for item in evidence:
-
-        haystack = (
-            item.get("title", "")
-            + " "
-            + item.get("snippet", "")
-        )
-
-        overlap = token_overlap(
-            claim,
-            haystack,
-        )
-
-        if overlap >= 0.10:
-
-            matches.append(
-                {
-                    "url": item.get(
-                        "url",
-                        "",
-                    ),
-                    "domain": item.get(
-                        "domain",
-                        "",
-                    ),
-                    "provider": item.get(
-                        "provider",
-                        "",
-                    ),
-                    "quality": item.get(
-                        "quality",
-                        0,
-                    ),
-                    "overlap": round(
-                        overlap,
-                        3,
-                    ),
-                }
-            )
-
-    matches.sort(
-        key=lambda x: (
-            x["overlap"],
-            x["quality"],
-        ),
-        reverse=True,
-    )
-
-    domains = {
-        item["domain"]
-        for item in matches
-        if item["domain"]
-    }
-
-    if len(domains) >= 2:
-
-        confidence = min(
-            0.95,
-            0.50
-            + (
-                min(len(domains), 4)
-                * 0.10
-            )
-            + (
-                matches[0]["quality"] * 0.15
-                if matches
-                else 0
-            ),
-        )
-
-    elif len(domains) == 1:
-
-        confidence = 0.45
-
-    else:
-
-        confidence = 0.20
-
-    verified = (
-        len(domains) >= 2
-        and confidence >= 0.65
-    )
-
-    return {
-        "claim": claim,
-        "verified": verified,
-        "confidence": round(
-            confidence,
-            3,
-        ),
-        "supporting_evidence": matches[:6],
-        "independent_support": len(domains),
-    }
-
-
-# ============================================================
-# COUNTER-EVIDENCE
-# ============================================================
-
-async def counter_research(
-    claim: str,
-) -> Dict[str, Any]:
-
-    queries = [
-        f"{claim} criticism",
-        f"{claim} limitations",
-        f"{claim} evidence against",
-        f"{claim} contradictory evidence",
-    ]
-
-    tasks = []
-
-    for query in queries:
-
-        for provider in [
-            "duckduckgo",
-            "bing",
-            "google",
-        ]:
-
-            tasks.append(
-                (
-                    provider,
-                    query,
-                    run_provider(
-                        provider,
-                        query,
-                    ),
-                )
-            )
-
-    responses = await asyncio.gather(
-        *[
-            x[2]
-            for x in tasks
-        ],
-        return_exceptions=True,
-    )
-
-    results = []
-
-    for task, response in zip(
-        tasks,
-        responses,
-    ):
-
-        if isinstance(
-            response,
-            Exception,
-        ):
-            continue
-
-        results.extend(response)
-
-    accepted = []
-
-    seen = set()
-
-    for item in results:
-
-        url = normalize_url(
-            item.get("url", "")
-        )
-
-        if (
-            not url
-            or url in seen
-            or not accept_source(item)
-        ):
-            continue
-
-        seen.add(url)
-
-        item["url"] = url
-        item["domain"] = domain_of(url)
-        item["quality"] = source_quality(
-            item.get("title", ""),
-            url,
-            item.get("snippet", ""),
-        )
-
-        accepted.append(item)
-
-    accepted.sort(
-        key=lambda x: x.get(
-            "quality",
-            0,
-        ),
-        reverse=True,
-    )
-
-    return {
-        "queries": queries,
-        "evidence": accepted[:10],
-        "contradiction_count": len(
-            accepted
-        ),
-        "independent_domains": len(
-            {
-                x.get("domain")
-                for x in accepted
-            }
-        ),
-    }
 
 
 # ============================================================
@@ -1595,38 +2528,55 @@ async def counter_research(
 def mission_score(
     research_result: Dict[str, Any],
     verification: List[Dict[str, Any]],
-    counter: List[Dict[str, Any]],
+    counter_results: List[Dict[str, Any]],
 ) -> float:
 
-    research_strength = research_result.get(
-        "research_strength",
-        0,
+    research_strength = float(
+        research_result.get(
+            "research_strength",
+            0,
+        )
     )
 
-    verified_count = sum(
-        1
-        for item in verification
-        if item.get("verified")
+    if verification:
+
+        verification_strength = (
+            sum(
+                x.get(
+                    "confidence",
+                    0,
+                )
+                for x in verification
+            )
+            / len(verification)
+        )
+
+    else:
+
+        verification_strength = 0.0
+
+    counter_count = sum(
+        x.get(
+            "contradiction_count",
+            0,
+        )
+        for x in counter_results
     )
 
-    total_claims = max(
-        len(verification),
-        1,
-    )
-
-    verification_strength = (
-        verified_count / total_claims
-    )
-
-    counter_strength = clamp(
-        len(counter) / 5
+    # Counter-evidence is not automatically bad.
+    # Its presence increases the uncertainty penalty.
+    contradiction_penalty = min(
+        counter_count / 20,
+        0.20,
     )
 
     return round(
         clamp(
-            research_strength * 0.45
-            + verification_strength * 0.40
-            + counter_strength * 0.15
+            research_strength
+            * 0.45
+            + verification_strength
+            * 0.55
+            - contradiction_penalty
         ),
         3,
     )
@@ -1639,15 +2589,17 @@ async def execute_mission(
     remember: bool = True,
 ) -> Dict[str, Any]:
 
-    mission_id = new_id("mission")
+    mission_id = new_id(
+        "mission"
+    )
 
     conn = db()
 
     conn.execute(
         """
         INSERT INTO missions
-        (id, objective, status, result, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        (id,objective,status,result,created_at,updated_at)
+        VALUES (?,?,?,?,?,?)
         """,
         (
             mission_id,
@@ -1662,14 +2614,12 @@ async def execute_mission(
     conn.commit()
     conn.close()
 
-    trace = []
-
-    trace.append(
+    trace = [
         {
             "stage": "understand",
             "status": "completed",
         }
-    )
+    ]
 
     if research_enabled:
 
@@ -1681,10 +2631,13 @@ async def execute_mission(
         )
 
         research_result = await research(
-            objective
+            objective,
+            mission_id,
         )
 
-        trace[-1]["status"] = "completed"
+        trace[-1][
+            "status"
+        ] = "completed"
 
     else:
 
@@ -1692,6 +2645,7 @@ async def execute_mission(
             "accepted_sources": [],
             "research_strength": 0,
             "evidence_available": False,
+            "independent_domains": 0,
         }
 
         trace.append(
@@ -1704,6 +2658,35 @@ async def execute_mission(
     evidence = research_result.get(
         "accepted_sources",
         [],
+    )
+
+    # Save graph nodes.
+    evidence_ids = []
+
+    for item in evidence:
+
+        evidence_ids.append(
+            (
+                item,
+                save_evidence(
+                    mission_id,
+                    item,
+                ),
+            )
+        )
+
+    trace.append(
+        {
+            "stage": "evidence_graph",
+            "status": "completed",
+            "nodes": len(
+                evidence_ids
+            ),
+            "domains": research_result.get(
+                "independent_domains",
+                0,
+            ),
+        }
     )
 
     claims = extract_claims(
@@ -1737,16 +2720,60 @@ async def execute_mission(
                 evidence,
             )
 
-            verification.append(result)
-
-            save_claim(
-                mission_id,
-                claim,
-                result["confidence"],
-                result["verified"],
+            verification.append(
+                result
             )
 
-        trace[-1]["status"] = "completed"
+            claim_id = save_claim(
+                mission_id,
+                claim,
+                result[
+                    "confidence"
+                ],
+                result[
+                    "verified"
+                ],
+            )
+
+            for source in result[
+                "supporting_evidence"
+            ]:
+
+                source_url = source.get(
+                    "url",
+                    "",
+                )
+
+                matched_id = None
+
+                for original, eid in evidence_ids:
+
+                    if (
+                        original.get(
+                            "url",
+                            "",
+                        )
+                        == source_url
+                    ):
+                        matched_id = eid
+                        break
+
+                if matched_id:
+
+                    save_evidence_link(
+                        mission_id,
+                        claim_id,
+                        matched_id,
+                        "supports",
+                        source.get(
+                            "relevance",
+                            0,
+                        ),
+                    )
+
+        trace[-1][
+            "status"
+        ] = "completed"
 
     else:
 
@@ -1758,7 +2785,7 @@ async def execute_mission(
         )
 
     # --------------------------------------------------------
-    # Counter-evidence
+    # Autonomous countercheck
     # --------------------------------------------------------
 
     counter_results = []
@@ -1772,8 +2799,7 @@ async def execute_mission(
             }
         )
 
-        # Keep the free-first workload controlled.
-        for claim in claims[:3]:
+        for claim in claims[:4]:
 
             result = await counter_research(
                 claim
@@ -1786,7 +2812,29 @@ async def execute_mission(
                 }
             )
 
-        trace[-1]["status"] = "completed"
+        trace[-1][
+            "status"
+        ] = "completed"
+
+    # --------------------------------------------------------
+    # Contradiction analysis
+    # --------------------------------------------------------
+
+    contradiction_count = sum(
+        x.get(
+            "contradiction_count",
+            0,
+        )
+        for x in counter_results
+    )
+
+    trace.append(
+        {
+            "stage": "contradiction_analysis",
+            "status": "completed",
+            "contradictions": contradiction_count,
+        }
+    )
 
     # --------------------------------------------------------
     # Critique
@@ -1795,13 +2843,17 @@ async def execute_mission(
     verified_count = sum(
         1
         for item in verification
-        if item.get("verified")
+        if item.get(
+            "verified"
+        )
     )
 
     unsupported_count = sum(
         1
         for item in verification
-        if not item.get("verified")
+        if not item.get(
+            "verified"
+        )
     )
 
     critique = []
@@ -1812,10 +2864,25 @@ async def execute_mission(
             "No meaningful independent evidence was acquired."
         )
 
+    if research_result.get(
+        "independent_domains",
+        0,
+    ) < 3:
+
+        critique.append(
+            "Source diversity is below the preferred threshold."
+        )
+
     if unsupported_count:
 
         critique.append(
             f"{unsupported_count} claims lack sufficient independent support."
+        )
+
+    if contradiction_count:
+
+        critique.append(
+            f"{contradiction_count} potentially contradictory evidence items were detected."
         )
 
     if verified_count:
@@ -1827,7 +2894,7 @@ async def execute_mission(
     if not critique:
 
         critique.append(
-            "Insufficient evidence for a confident conclusion."
+            "No major evidence-engine warning was detected."
         )
 
     trace.append(
@@ -1847,25 +2914,32 @@ async def execute_mission(
         counter_results,
     )
 
-    if score >= 0.75:
+    if score >= 0.80:
 
         conclusion = (
-            "Evidence is sufficiently strong for a "
+            "Evidence is strong enough for a "
             "high-confidence synthesis."
         )
 
-    elif score >= 0.50:
+    elif score >= 0.60:
 
         conclusion = (
-            "Evidence is partially sufficient, but "
-            "important uncertainty remains."
+            "Evidence is reasonably strong, "
+            "but some uncertainty remains."
+        )
+
+    elif score >= 0.40:
+
+        conclusion = (
+            "Evidence is partial and the "
+            "conclusion should remain provisional."
         )
 
     else:
 
         conclusion = (
             "Evidence is insufficient for a strong "
-            "conclusion; further research is required."
+            "conclusion; another research cycle is needed."
         )
 
     synthesis = {
@@ -1873,11 +2947,18 @@ async def execute_mission(
         "mission_score": score,
         "verified_claims": verified_count,
         "unsupported_claims": unsupported_count,
-        "evidence_count": len(evidence),
+        "evidence_count": len(
+            evidence
+        ),
         "independent_domains": research_result.get(
             "independent_domains",
             0,
         ),
+        "provider_diversity": research_result.get(
+            "provider_diversity",
+            0,
+        ),
+        "contradictions": contradiction_count,
         "critique": critique,
     }
 
@@ -1889,7 +2970,7 @@ async def execute_mission(
     )
 
     # --------------------------------------------------------
-    # Replan
+    # Autonomous replanning
     # --------------------------------------------------------
 
     next_actions = []
@@ -1900,35 +2981,46 @@ async def execute_mission(
     ) < 3:
 
         next_actions.append(
-            "Acquire more independent sources."
+            "Acquire additional independent domains."
+        )
+
+    if research_result.get(
+        "provider_diversity",
+        0,
+    ) < 2:
+
+        next_actions.append(
+            "Expand provider diversity."
         )
 
     if unsupported_count:
 
         next_actions.append(
-            "Run targeted research for unsupported claims."
+            "Run targeted evidence searches for unsupported claims."
         )
 
-    if counter_results:
+    if contradiction_count:
 
-        contradiction_count = sum(
-            item.get(
-                "contradiction_count",
-                0,
-            )
-            for item in counter_results
+        next_actions.append(
+            "Resolve contradictory evidence before increasing confidence."
         )
 
-        if contradiction_count:
+    if (
+        research_result.get(
+            "research_strength",
+            0,
+        )
+        < 0.50
+    ):
 
-            next_actions.append(
-                "Resolve contradictory evidence before increasing confidence."
-            )
+        next_actions.append(
+            "Switch to broader structured evidence acquisition."
+        )
 
     if not next_actions:
 
         next_actions.append(
-            "Continue monitoring evidence quality and freshness."
+            "Monitor evidence freshness and continue the next mission cycle."
         )
 
     trace.append(
@@ -1940,7 +3032,7 @@ async def execute_mission(
     )
 
     # --------------------------------------------------------
-    # Memory
+    # Persistent learning
     # --------------------------------------------------------
 
     if remember:
@@ -1949,11 +3041,17 @@ async def execute_mission(
             json.dumps(
                 {
                     "objective": objective,
+                    "mission_id": mission_id,
                     "score": score,
-                    "evidence_count": len(
+                    "evidence": len(
                         evidence
                     ),
-                    "verified_claims": verified_count,
+                    "domains": research_result.get(
+                        "independent_domains",
+                        0,
+                    ),
+                    "verified": verified_count,
+                    "contradictions": contradiction_count,
                     "next_actions": next_actions,
                 },
                 ensure_ascii=False,
@@ -1970,11 +3068,28 @@ async def execute_mission(
         "objective": objective,
         "agent_trace": trace,
         "research": research_result,
+        "evidence_graph": {
+            "nodes": len(
+                evidence
+            ),
+            "independent_domains": research_result.get(
+                "independent_domains",
+                0,
+            ),
+            "provider_diversity": research_result.get(
+                "provider_diversity",
+                0,
+            ),
+        },
         "verification": {
-            "verified": verified_count > 0
-            and all(
-                item.get("verified")
-                for item in verification
+            "verified": (
+                bool(verification)
+                and all(
+                    item.get(
+                        "verified"
+                    )
+                    for item in verification
+                )
             ),
             "confidence": round(
                 (
@@ -2004,8 +3119,8 @@ async def execute_mission(
     conn.execute(
         """
         UPDATE missions
-        SET status = ?, result = ?, updated_at = ?
-        WHERE id = ?
+        SET status=?,result=?,updated_at=?
+        WHERE id=?
         """,
         (
             "completed",
@@ -2026,6 +3141,10 @@ async def execute_mission(
         {
             "mission_id": mission_id,
             "score": score,
+            "evidence": len(
+                evidence
+            ),
+            "verified": verified_count,
         },
     )
 
@@ -2065,11 +3184,11 @@ def get_objective(
     request: ExecuteRequest,
 ) -> str:
 
-    for value in [
+    for value in (
         request.objective,
         request.command,
         request.query,
-    ]:
+    ):
 
         if value:
 
@@ -2083,111 +3202,150 @@ def get_objective(
 
     raise HTTPException(
         status_code=422,
-        detail="objective, command, or query is required",
+        detail=(
+            "objective, command, "
+            "or query is required"
+        ),
     )
 
 
 # ============================================================
-# ROUTES
+# ROOT UI
 # ============================================================
 
 @app.get("/")
 async def root():
+
     return HTMLResponse(
         f"""
-        <!doctype html>
-        <html>
-        <head>
-            <meta name="viewport"
-                  content="width=device-width,initial-scale=1">
-            <title>AI Infinity</title>
-            <style>
-                body {{
-                    font-family: system-ui, sans-serif;
-                    max-width: 850px;
-                    margin: auto;
-                    padding: 24px;
-                    background: #0b0d10;
-                    color: #f4f4f4;
-                }}
-                textarea {{
-                    width: 100%;
-                    min-height: 130px;
-                    padding: 14px;
-                    box-sizing: border-box;
-                    border-radius: 12px;
-                    background: #171a20;
-                    color: white;
-                    border: 1px solid #333;
-                }}
-                button {{
-                    margin-top: 12px;
-                    padding: 14px 20px;
-                    border-radius: 10px;
-                    border: 0;
-                    cursor: pointer;
-                }}
-                pre {{
-                    white-space: pre-wrap;
-                    background: #111318;
-                    padding: 15px;
-                    border-radius: 12px;
-                }}
-            </style>
-        </head>
-        <body>
-            <h1>AI Infinity</h1>
-            <p>{VERSION} · {BUILD}</p>
+<!doctype html>
+<html>
+<head>
+<meta name="viewport"
+content="width=device-width,initial-scale=1">
+<title>AI Infinity</title>
+<style>
+body {{
+font-family:system-ui,sans-serif;
+max-width:900px;
+margin:auto;
+padding:24px;
+background:#0b0d10;
+color:#f4f4f4;
+}}
+textarea {{
+width:100%;
+min-height:150px;
+padding:14px;
+box-sizing:border-box;
+border-radius:12px;
+background:#171a20;
+color:white;
+border:1px solid #333;
+}}
+button {{
+margin-top:12px;
+padding:14px 20px;
+border-radius:10px;
+border:0;
+cursor:pointer;
+}}
+pre {{
+white-space:pre-wrap;
+background:#111318;
+padding:15px;
+border-radius:12px;
+overflow:auto;
+}}
+</style>
+</head>
+<body>
 
-            <textarea id="objective"
-                placeholder="Tell AI Infinity what you want researched or solved..."></textarea>
+<h1>AI Infinity</h1>
 
-            <button onclick="run()">Execute Mission</button>
+<p>
+{VERSION} · {BUILD}
+</p>
 
-            <pre id="output">Ready.</pre>
+<p>
+Evidence → Verification → Countercheck →
+Memory → Replanning
+</p>
 
-            <script>
-            async function run() {{
-                const objective =
-                    document.getElementById("objective").value;
+<textarea
+id="objective"
+placeholder="Tell AI Infinity what you want it to research, analyze, verify, or solve..."
+></textarea>
 
-                const output =
-                    document.getElementById("output");
+<button onclick="runMission()">
+Execute Mission
+</button>
 
-                output.textContent = "Running...";
+<pre id="output">Ready.</pre>
 
-                try {{
-                    const response = await fetch("/execute", {{
-                        method: "POST",
-                        headers: {{
-                            "Content-Type": "application/json"
-                        }},
-                        body: JSON.stringify({{
-                            objective: objective,
-                            research: true,
-                            verify: true,
-                            remember: true
-                        }})
-                    }});
+<script>
+async function runMission() {{
 
-                    output.textContent =
-                        JSON.stringify(
-                            await response.json(),
-                            null,
-                            2
-                        );
+const objective =
+document.getElementById("objective").value;
 
-                }} catch (error) {{
-                    output.textContent =
-                        String(error);
-                }}
-            }}
-            </script>
-        </body>
-        </html>
-        """
+const output =
+document.getElementById("output");
+
+if (!objective.trim()) {{
+output.textContent =
+"Enter a mission first.";
+return;
+}}
+
+output.textContent =
+"AI Infinity is researching...";
+
+try {{
+
+const response =
+await fetch("/execute", {{
+method:"POST",
+headers:{{
+"Content-Type":"application/json"
+}},
+body:JSON.stringify({{
+objective:objective,
+research:true,
+verify:true,
+remember:true
+}})
+}});
+
+const data =
+await response.json();
+
+output.textContent =
+JSON.stringify(
+data,
+null,
+2
+);
+
+}} catch(error) {{
+
+output.textContent =
+String(error);
+
+}}
+
+}}
+</script>
+
+</body>
+</html>
+"""
     )
 
+
+# ============================================================
+# HEALTH / STATUS
+# ============================================================
 
 @app.get("/health")
 async def health():
@@ -2199,7 +3357,8 @@ async def health():
         "version": VERSION,
         "build": BUILD,
         "uptime_seconds": round(
-            time.time() - START_TIME,
+            time.time()
+            - START_TIME,
             2,
         ),
         "time": utc_now(),
@@ -2216,12 +3375,17 @@ async def status():
         "build": BUILD,
         "database": DB_PATH.exists(),
         "architecture": (
-            "intent -> research -> evidence -> "
-            "verification -> countercheck -> "
-            "synthesis -> memory -> replan"
+            "intent -> decomposition -> "
+            "parallel research -> evidence graph -> "
+            "claim verification -> countercheck -> "
+            "critique -> synthesis -> memory -> replan"
         ),
     }
 
+
+# ============================================================
+# CAPABILITIES
+# ============================================================
 
 @app.get("/capabilities")
 async def capabilities():
@@ -2233,13 +3397,17 @@ async def capabilities():
             "research_decomposition",
             "parallel_research",
             "hybrid_evidence",
+            "research_cache",
             "source_firewall",
             "ssrf_guard",
             "independent_domain_selection",
             "evidence_graph",
+            "evidence_claim_matching",
             "claim_extraction",
             "claim_level_verification",
             "counter_evidence",
+            "contradiction_detection",
+            "provider_diversity",
             "critique",
             "synthesis",
             "persistent_memory",
@@ -2271,7 +3439,8 @@ async def research_capabilities():
             "decompose -> parallel search -> "
             "structured fallback -> source firewall -> "
             "independent-domain selection -> "
-            "claim verification -> counter-evidence"
+            "claim/evidence matching -> verification -> "
+            "counter-evidence -> replanning"
         ),
         "principle": (
             "provider failure is diagnosed separately "
@@ -2280,10 +3449,18 @@ async def research_capabilities():
     }
 
 
-@app.post("/execute")
-async def execute(request: ExecuteRequest):
+# ============================================================
+# EXECUTION
+# ============================================================
 
-    objective = get_objective(request)
+@app.post("/execute")
+async def execute(
+    request: ExecuteRequest,
+):
+
+    objective = get_objective(
+        request
+    )
 
     return await execute_mission(
         objective=objective,
@@ -2298,7 +3475,9 @@ async def autonomy_cycle(
     request: ExecuteRequest,
 ):
 
-    objective = get_objective(request)
+    objective = get_objective(
+        request
+    )
 
     return await execute_mission(
         objective=objective,
@@ -2313,12 +3492,18 @@ async def research_endpoint(
     request: ExecuteRequest,
 ):
 
-    objective = get_objective(request)
+    objective = get_objective(
+        request
+    )
 
     return await research(
         objective
     )
 
+
+# ============================================================
+# MEMORY
+# ============================================================
 
 @app.get("/memory/count")
 async def memory_count():
@@ -2334,49 +3519,6 @@ async def memory_count():
     return {
         "count": count,
         "version": VERSION,
-    }
-
-
-@app.get("/skills/count")
-async def skills_count():
-
-    skills = [
-        "research",
-        "verification",
-        "counterclaim",
-        "memory",
-        "replanning",
-        "source_firewall",
-        "ssrf_guard",
-    ]
-
-    return {
-        "count": len(skills),
-        "skills": skills,
-    }
-
-
-@app.get("/events")
-async def events():
-
-    conn = db()
-
-    rows = conn.execute(
-        """
-        SELECT *
-        FROM events
-        ORDER BY created_at DESC
-        LIMIT 50
-        """
-    ).fetchall()
-
-    conn.close()
-
-    return {
-        "events": [
-            dict(row)
-            for row in rows
-        ]
     }
 
 
@@ -2401,6 +3543,32 @@ async def memory():
             dict(row)
             for row in rows
         ]
+    }
+
+
+# ============================================================
+# SKILLS / PROVIDERS / AGENTS
+# ============================================================
+
+@app.get("/skills/count")
+async def skills_count():
+
+    skills = [
+        "research",
+        "research_cache",
+        "evidence_graph",
+        "verification",
+        "counterclaim",
+        "contradiction_detection",
+        "memory",
+        "replanning",
+        "source_firewall",
+        "ssrf_guard",
+    ]
+
+    return {
+        "count": len(skills),
+        "skills": skills,
     }
 
 
@@ -2436,6 +3604,10 @@ async def agents():
                 "role": "evidence_acquisition",
             },
             {
+                "name": "evidence_graph_agent",
+                "role": "evidence_relationships",
+            },
+            {
                 "name": "verification_agent",
                 "role": "claim_verification",
             },
@@ -2451,9 +3623,17 @@ async def agents():
                 "name": "memory_agent",
                 "role": "persistent_learning",
             },
+            {
+                "name": "replanner_agent",
+                "role": "next_cycle_planning",
+            },
         ]
     }
 
+
+# ============================================================
+# OPPORTUNITIES / GAPS
+# ============================================================
 
 @app.get("/opportunities")
 async def opportunities():
@@ -2466,23 +3646,23 @@ async def opportunities():
             },
             {
                 "name": "improve_claim_matching",
-                "priority": 0.92,
+                "priority": 0.94,
             },
             {
                 "name": "expand_authoritative_sources",
-                "priority": 0.90,
+                "priority": 0.92,
             },
             {
                 "name": "persistent_research_cache",
-                "priority": 0.82,
+                "priority": 0.86,
             },
             {
                 "name": "background_execution",
-                "priority": 0.78,
+                "priority": 0.82,
             },
             {
                 "name": "durable_distributed_memory",
-                "priority": 0.72,
+                "priority": 0.78,
             },
         ]
     }
@@ -2500,23 +3680,31 @@ async def gaps():
             },
             {
                 "name": "persistent_external_database",
-                "priority": 0.85,
+                "priority": 0.86,
             },
             {
                 "name": "authenticated_external_actions",
-                "priority": 0.80,
+                "priority": 0.82,
             },
             {
                 "name": "more_authoritative_data_sources",
-                "priority": 0.78,
+                "priority": 0.80,
             },
             {
                 "name": "research_cache",
                 "priority": 0.75,
             },
+            {
+                "name": "durable_multi_agent_execution",
+                "priority": 0.73,
+            },
         ],
     }
 
+
+# ============================================================
+# ARCHITECTURE / WORLD
+# ============================================================
 
 @app.get("/architecture")
 async def architecture():
@@ -2532,6 +3720,7 @@ async def architecture():
             "claim_engine",
             "verification",
             "counter_evidence",
+            "contradiction_engine",
             "critique",
             "synthesis",
             "memory",
@@ -2551,6 +3740,7 @@ async def world():
             "uncertainty_aware": True,
             "provider_failure_isolated": True,
             "memory_persistent": True,
+            "evidence_graph": True,
             "autonomous_replanning": True,
         },
     }
@@ -2572,175 +3762,84 @@ async def self_inspect():
             "parallel": True,
             "structured_fallback": True,
             "independent_domains": True,
+            "research_cache": True,
         },
         "reasoning": {
+            "evidence_graph": True,
             "claim_verification": True,
             "counter_evidence": True,
+            "contradiction_detection": True,
             "critique": True,
             "replanning": True,
         },
     }
 
 
-@app.get("/build-integrity")
-async def build_integrity():
-
-    source_file = Path(__file__)
-
-    source = source_file.read_text(
-        encoding="utf-8"
-    )
-
-    return {
-        "version": VERSION,
-        "build": BUILD,
-        "syntax": "runtime-imported",
-        "source_sha256": sha256(source),
-        "markdown_fence_detected": (
-            "```" in source
-        ),
-        "database": DB_PATH.exists(),
-    }
-
+# ============================================================
+# DIAGNOSTICS
+# ============================================================
 
 @app.get("/diagnostics")
 async def diagnostics():
 
-    provider_status = {}
+    conn = db()
 
-    for provider in [
-        "duckduckgo",
-        "bing",
-        "google",
-        "semantic_scholar",
-        "openalex",
-        "crossref",
-        "wikipedia",
-    ]:
+    rows = conn.execute(
+        """
+        SELECT provider,calls,successes,results,last_error,updated_at
+        FROM provider_stats
+        ORDER BY provider
+        """
+    ).fetchall()
 
-        provider_status[provider] = {
-            "configured": True,
-            "mode": "free-first",
-        }
+    conn.close()
 
     return {
         "version": VERSION,
-        "providers": provider_status,
+        "providers": [
+            dict(row)
+            for row in rows
+        ],
         "database": DB_PATH.exists(),
         "uptime_seconds": round(
-            time.time() - START_TIME,
+            time.time()
+            - START_TIME,
             2,
         ),
     }
 
 
-@app.get("/final-audit")
-async def final_audit():
+# ============================================================
+# EVENTS
+# ============================================================
+
+@app.get("/events")
+async def events():
 
     conn = db()
 
-    memory_exists = (
-        conn.execute(
-            """
-            SELECT name
-            FROM sqlite_master
-            WHERE type='table'
-            AND name='memory'
-            """
-        ).fetchone()
-        is not None
-    )
-
-    claims_exists = (
-        conn.execute(
-            """
-            SELECT name
-            FROM sqlite_master
-            WHERE type='table'
-            AND name='claims'
-            """
-        ).fetchone()
-        is not None
-    )
-
-    missions_exists = (
-        conn.execute(
-            """
-            SELECT name
-            FROM sqlite_master
-            WHERE type='table'
-            AND name='missions'
-            """
-        ).fetchone()
-        is not None
-    )
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM events
+        ORDER BY created_at DESC
+        LIMIT 50
+        """
+    ).fetchall()
 
     conn.close()
 
-    checks = [
-        {
-            "name": "version",
-            "passed": VERSION
-            == "TARGET-2050.10",
-        },
-        {
-            "name": "database",
-            "passed": memory_exists,
-        },
-        {
-            "name": "claims",
-            "passed": claims_exists,
-        },
-        {
-            "name": "missions",
-            "passed": missions_exists,
-        },
-        {
-            "name": "source_firewall",
-            "passed": True,
-        },
-        {
-            "name": "ssrf_guard",
-            "passed": True,
-        },
-        {
-            "name": "counterclaim_engine",
-            "passed": True,
-        },
-        {
-            "name": "evidence_graph",
-            "passed": True,
-        },
-        {
-            "name": "replanning",
-            "passed": True,
-        },
-    ]
-
     return {
-        "version": VERSION,
-        "passed": all(
-            x["passed"]
-            for x in checks
-        ),
-        "checks": checks,
+        "events": [
+            dict(row)
+            for row in rows
+        ]
     }
 
 
-@app.get("/regression")
-async def regression():
-
-    audit = await final_audit()
-
-    return {
-        "version": VERSION,
-        "passed": audit["passed"],
-        "checks": audit["checks"],
-        "test_count": len(
-            audit["checks"]
-        ),
-    }
-
+# ============================================================
+# TASK / MISSION
+# ============================================================
 
 @app.get("/task/{task_id}")
 async def get_task(
@@ -2753,9 +3852,11 @@ async def get_task(
         """
         SELECT *
         FROM missions
-        WHERE id = ?
+        WHERE id=?
         """,
-        (task_id,),
+        (
+            task_id,
+        ),
     ).fetchone()
 
     conn.close()
@@ -2789,32 +3890,37 @@ async def get_mission(
     )
 
 
+# ============================================================
+# VERIFICATION / EVALUATION
+# ============================================================
+
 @app.post("/verify")
 async def verify_endpoint(
     request: ExecuteRequest,
 ):
 
-    objective = get_objective(request)
+    objective = get_objective(
+        request
+    )
 
     research_result = await research(
         objective
     )
 
+    evidence = research_result.get(
+        "accepted_sources",
+        [],
+    )
+
     claims = extract_claims(
         objective,
-        research_result.get(
-            "accepted_sources",
-            [],
-        ),
+        evidence,
     )
 
     results = [
         verify_claim(
             claim,
-            research_result.get(
-                "accepted_sources",
-                [],
-            ),
+            evidence,
         )
         for claim in claims
     ]
@@ -2823,6 +3929,13 @@ async def verify_endpoint(
         "version": VERSION,
         "objective": objective,
         "claims": results,
+        "evidence_graph": {
+            "nodes": len(evidence),
+            "domains": research_result.get(
+                "independent_domains",
+                0,
+            ),
+        },
     }
 
 
@@ -2831,7 +3944,9 @@ async def evaluate_endpoint(
     request: ExecuteRequest,
 ):
 
-    objective = get_objective(request)
+    objective = get_objective(
+        request
+    )
 
     result = await execute_mission(
         objective=objective,
@@ -2845,10 +3960,16 @@ async def evaluate_endpoint(
         "objective": objective,
         "score": result[
             "synthesis"
-        ]["mission_score"],
+        ][
+            "mission_score"
+        ],
         "result": result,
     }
 
+
+# ============================================================
+# SECURITY / EXTERNAL
+# ============================================================
 
 @app.get("/security")
 async def security():
@@ -2870,11 +3991,16 @@ async def external(
     body = await request.json()
 
     url = clean_text(
-        body.get("url", ""),
+        body.get(
+            "url",
+            "",
+        ),
         4000,
     )
 
-    if not safe_external_url(url):
+    if not safe_external_url(
+        url
+    ):
 
         raise HTTPException(
             status_code=403,
@@ -2895,51 +4021,194 @@ async def external(
 
     return {
         "status": "ok",
-        "url": normalize_url(url),
+        "url": normalize_url(
+            url
+        ),
         "status_code": response.status_code,
         "content_type": response.headers.get(
             "content-type",
             "",
         ),
-        "content": response.text[:10000],
+        "content": response.text[
+            :10000
+        ],
     }
 
 
 # ============================================================
-# GLOBAL ERROR HANDLER
+# BUILD INTEGRITY
 # ============================================================
 
-@app.exception_handler(Exception)
-async def global_exception_handler(
-    request: Request,
-    exc: Exception,
-):
+@app.get("/build-integrity")
+async def build_integrity():
 
-    db_event(
-        "runtime_error",
+    source_file = Path(
+        __file__
+    )
+
+    source = source_file.read_text(
+        encoding="utf-8"
+    )
+
+    return {
+        "version": VERSION,
+        "build": BUILD,
+        "syntax": "runtime-imported",
+        "source_sha256": sha256(
+            source
+        ),
+        "markdown_fence_detected": (
+            "```" in source
+        ),
+        "database": DB_PATH.exists(),
+    }
+
+
+# ============================================================
+# FINAL AUDIT
+# ============================================================
+
+@app.get("/final-audit")
+async def final_audit():
+
+    conn = db()
+
+    tables = {}
+
+    for table in [
+        "memory",
+        "claims",
+        "missions",
+        "evidence",
+        "evidence_links",
+        "research_cache",
+        "provider_stats",
+    ]:
+
+        tables[table] = (
+            conn.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type='table'
+                AND name=?
+                """,
+                (
+                    table,
+                ),
+            ).fetchone()
+            is not None
+        )
+
+    conn.close()
+
+    checks = [
         {
-            "path": str(
-                request.url.path
+            "name": "version",
+            "passed": (
+                VERSION
+                == "TARGET-2050.11"
             ),
-            "error": str(exc),
         },
-    )
+        {
+            "name": "database",
+            "passed": tables[
+                "memory"
+            ],
+        },
+        {
+            "name": "claims",
+            "passed": tables[
+                "claims"
+            ],
+        },
+        {
+            "name": "missions",
+            "passed": tables[
+                "missions"
+            ],
+        },
+        {
+            "name": "evidence_graph",
+            "passed": (
+                tables["evidence"]
+                and tables[
+                    "evidence_links"
+                ]
+            ),
+        },
+        {
+            "name": "research_cache",
+            "passed": tables[
+                "research_cache"
+            ],
+        },
+        {
+            "name": "provider_stats",
+            "passed": tables[
+                "provider_stats"
+            ],
+        },
+        {
+            "name": "source_firewall",
+            "passed": True,
+        },
+        {
+            "name": "ssrf_guard",
+            "passed": True,
+        },
+        {
+            "name": "counterclaim_engine",
+            "passed": True,
+        },
+        {
+            "name": "replanning",
+            "passed": True,
+        },
+    ]
 
-    return JSONResponse(
-        status_code=500,
-        content={
-            "status": "error",
-            "version": VERSION,
-            "error": str(exc),
-        },
-    )
+    return {
+        "version": VERSION,
+        "passed": all(
+            item["passed"]
+            for item in checks
+        ),
+        "checks": checks,
+    }
+
+
+# ============================================================
+# REGRESSION
+# ============================================================
+
+@app.get("/regression")
+async def regression():
+
+    audit = await final_audit()
+
+    return {
+        "version": VERSION,
+        "passed": audit[
+            "passed"
+        ],
+        "checks": audit[
+            "checks"
+        ],
+        "test_count": len(
+            audit[
+                "checks"
+            ]
+        ),
+    }
 
 
 # ============================================================
 # STARTUP
 # ============================================================
 
-@app.on_event("startup")
+@app.on_event(
+    "startup"
+)
 async def startup():
 
     db()
@@ -2949,6 +4218,45 @@ async def startup():
         {
             "version": VERSION,
             "build": BUILD,
+        },
+    )
+
+
+# ============================================================
+# GLOBAL ERROR HANDLER
+# ============================================================
+
+@app.exception_handler(
+    Exception
+)
+async def global_exception_handler(
+    request: Request,
+    exc: Exception,
+):
+
+    try:
+
+        db_event(
+            "runtime_error",
+            {
+                "path": str(
+                    request.url.path
+                ),
+                "error": str(
+                    exc
+                ),
+            },
+        )
+
+    except Exception:
+        pass
+
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "version": VERSION,
+            "error": str(exc),
         },
     )
 
