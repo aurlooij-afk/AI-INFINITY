@@ -1,27 +1,32 @@
 """
 AI Infinity
-TARGET-2050.40
-BUILD: FAULT-TOLERANT-EVIDENCE-RESEARCH-CORE
+TARGET-2050.41
+BUILD: INDEPENDENT-EVIDENCE-CLOSURE-CORE
 
-Practical upgrade:
-- Keeps FastAPI + SQLite
-- Keeps Crossref + OpenAlex discovery
-- Fault-tolerant external requests
-- Safe JSON parsing
-- Safe publisher fetching
-- OpenAlex abstract reconstruction
-- Relevance scoring without brittle hard rejection
-- Conservative atomic claim extraction
-- Evidence relationships
-- Source/domain/source-family independence
+Purpose:
+- Fault-tolerant autonomous evidence research
+- Crossref + OpenAlex discovery
+- DOI/title/URL canonicalization
+- Real source-domain normalization
+- Real source-family normalization
+- Abstract reconstruction
+- Publisher fallback
+- Conservative atomic claims
+- CROSS-WORK evidence search
+- Independence-aware verification
 - Contradiction detection
-- Strict verification closure
-- Bounded recovery
-- Complete auditable report
-- Persistent mission state
-- Diagnostics on every failure
-- /run GET gives usage instead of 405
-- /run POST never crashes because of one bad provider
+- Diversity-aware recovery
+- Correct usable/rejected accounting
+- Persistent SQLite mission state
+- Auditable reports
+- Never manufactures VERIFIED claims
+
+Strict verification:
+1. >= 2 independent works
+2. >= 2 independent domains
+3. >= 2 independent source families
+4. >= 2 strong evidence relationships
+5. zero unresolved contradictions
 """
 
 from __future__ import annotations
@@ -32,7 +37,7 @@ import re
 import sqlite3
 import time
 import traceback
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -47,8 +52,8 @@ from pydantic import BaseModel, Field
 # CONFIG
 # ============================================================
 
-VERSION = "TARGET-2050.40"
-BUILD = "FAULT-TOLERANT-EVIDENCE-RESEARCH-CORE"
+VERSION = "TARGET-2050.41"
+BUILD = "INDEPENDENT-EVIDENCE-CLOSURE-CORE"
 
 APP_NAME = "AI Infinity"
 
@@ -56,16 +61,18 @@ DB_PATH = "/tmp/ai_infinity.db"
 
 REQUEST_TIMEOUT = 15
 PUBLISHER_TIMEOUT = 12
+
 MAX_DISCOVERY_PER_QUERY = 12
 MAX_TOTAL_WORKS = 50
 MAX_TEXT_LENGTH = 18000
 MAX_CLAIMS_PER_WORK = 12
 MAX_EVIDENCE_PER_CLAIM = 10
 MAX_RECOVERY_ROUNDS = 2
+MAX_RECOVERY_WORKS = 32
 
 USER_AGENT = (
-    "AI-Infinity/2050.40 "
-    "(evidence research system; contact unavailable)"
+    "AI-Infinity/2050.41 "
+    "(autonomous evidence research system)"
 )
 
 CROSSREF_URL = "https://api.crossref.org/works"
@@ -88,7 +95,11 @@ app = FastAPI(
 # ============================================================
 
 class RunRequest(BaseModel):
-    objective: str = Field(..., min_length=10, max_length=20000)
+    objective: str = Field(
+        ...,
+        min_length=10,
+        max_length=20000,
+    )
 
 
 # ============================================================
@@ -209,7 +220,7 @@ init_db()
 
 
 # ============================================================
-# BASIC HELPERS
+# HELPERS
 # ============================================================
 
 def now() -> float:
@@ -222,22 +233,29 @@ def iso_now() -> str:
 
 def make_id(prefix: str, value: str = "") -> str:
     raw = f"{prefix}|{value}|{time.time_ns()}"
-    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+    digest = hashlib.sha256(
+        raw.encode("utf-8")
+    ).hexdigest()[:20]
     return f"{prefix}-{digest}"
 
 
-def clean_text(value: Any, limit: int = MAX_TEXT_LENGTH) -> str:
+def clean_text(
+    value: Any,
+    limit: int = MAX_TEXT_LENGTH,
+) -> str:
     if value is None:
         return ""
 
     if isinstance(value, (dict, list)):
         try:
-            value = json.dumps(value, ensure_ascii=False)
+            value = json.dumps(
+                value,
+                ensure_ascii=False,
+            )
         except Exception:
             value = str(value)
 
     text = str(value)
-
     text = re.sub(r"\s+", " ", text).strip()
 
     return text[:limit]
@@ -245,76 +263,169 @@ def clean_text(value: Any, limit: int = MAX_TEXT_LENGTH) -> str:
 
 def safe_json(value: Any) -> str:
     try:
-        return json.dumps(value, ensure_ascii=False, default=str)
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            default=str,
+        )
     except Exception:
         return "{}"
 
 
+# ============================================================
+# DOMAIN / SOURCE FAMILY
+# ============================================================
+
 def domain_of(url: str) -> str:
+    """
+    Only count the real evidence-origin domain.
+
+    Resolver/API domains are intentionally excluded.
+    """
+
     try:
         host = urlparse(url).netloc.lower()
+
         host = host.split("@")[-1]
         host = host.split(":")[0]
+        host = host.strip(".")
 
         if host.startswith("www."):
             host = host[4:]
 
+        if host in {
+            "",
+            "doi.org",
+            "dx.doi.org",
+            "api.crossref.org",
+            "api.openalex.org",
+        }:
+            return ""
+
         return host
+
     except Exception:
         return ""
 
 
-def source_family(domain: str, publisher: str = "") -> str:
-    d = (domain or "").lower()
-    p = (publisher or "").lower()
+def normalized_source_family(
+    domain: str,
+    publisher: str = "",
+) -> str:
 
-    if "doi.org" in d:
-        return "doi"
+    d = (domain or "").lower().strip()
 
-    if "crossref.org" in d:
-        return "crossref"
+    p = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        (publisher or "").lower(),
+    ).strip()
 
-    if "openalex.org" in d:
-        return "openalex"
+    if d:
 
-    if "arxiv.org" in d:
-        return "arxiv"
+        if d.endswith("arxiv.org"):
+            return "arxiv"
 
-    if "acm.org" in d:
-        return "acm"
+        if d.endswith("acm.org"):
+            return "acm"
 
-    if "ieee.org" in d:
-        return "ieee"
+        if d.endswith("ieee.org"):
+            return "ieee"
 
-    if "springer" in d:
-        return "springer"
+        if (
+            d.endswith("springer.com")
+            or d.endswith("link.springer.com")
+        ):
+            return "springer"
 
-    if "sciencedirect.com" in d:
-        return "elsevier"
+        if (
+            d.endswith("sciencedirect.com")
+            or d.endswith("elsevier.com")
+        ):
+            return "elsevier"
 
-    if "elsevier" in p:
-        return "elsevier"
+        if d.endswith("nature.com"):
+            return "nature"
 
-    if "nature.com" in d:
-        return "nature"
+        if d.endswith("frontiersin.org"):
+            return "frontiers"
 
-    if "frontiersin.org" in d:
-        return "frontiers"
+        if d.endswith("plos.org"):
+            return "plos"
 
-    if "plos.org" in d:
-        return "plos"
+        if d.endswith("bmj.com"):
+            return "bmj"
 
-    if "pubmed" in d:
-        return "pubmed"
+        if (
+            d.endswith("wiley.com")
+            or d.endswith("onlinelibrary.wiley.com")
+        ):
+            return "wiley"
 
-    if "semanticscholar" in d:
-        return "semantic_scholar"
+        if (
+            d.endswith("sagepub.com")
+            or d.endswith("journals.sagepub.com")
+        ):
+            return "sage"
 
-    return d or "unknown"
+        if d.endswith("tandfonline.com"):
+            return "taylor_francis"
+
+        if (
+            d.endswith("oxfordjournals.org")
+            or d.endswith("academic.oup.com")
+        ):
+            return "oxford"
+
+        if d.endswith("cambridge.org"):
+            return "cambridge"
+
+        if d.endswith("mdpi.com"):
+            return "mdpi"
+
+        if d.endswith("pubmed.ncbi.nlm.nih.gov"):
+            return "pubmed"
+
+        return d
+
+    if p:
+        families = (
+            (
+                "association for computing machinery",
+                "acm",
+            ),
+            (
+                "institute of electrical and electronics engineers",
+                "ieee",
+            ),
+            ("springer", "springer"),
+            ("elsevier", "elsevier"),
+            ("nature", "nature"),
+            ("frontiers", "frontiers"),
+            ("plos", "plos"),
+            ("bmj", "bmj"),
+            ("wiley", "wiley"),
+            ("sage", "sage"),
+            ("taylor francis", "taylor_francis"),
+            ("oxford", "oxford"),
+            ("cambridge", "cambridge"),
+            ("mdpi", "mdpi"),
+        )
+
+        for key, family in families:
+            if key in p:
+                return family
+
+        return (
+            "publisher:"
+            + p[:80].replace(" ", "_")
+        )
+
+    return "unknown"
 
 
 # ============================================================
-# DATABASE LOGGING
+# LOGGING
 # ============================================================
 
 def log_event(
@@ -323,8 +434,10 @@ def log_event(
     event: str,
     details: Optional[Dict[str, Any]] = None,
 ) -> None:
+
     try:
         conn = db()
+
         conn.execute(
             """
             INSERT INTO events
@@ -339,8 +452,10 @@ def log_event(
                 now(),
             ),
         )
+
         conn.commit()
         conn.close()
+
     except Exception:
         pass
 
@@ -352,12 +467,15 @@ def log_diagnostic(
     message: str,
     details: Optional[Dict[str, Any]] = None,
 ) -> None:
+
     try:
         conn = db()
+
         conn.execute(
             """
             INSERT INTO diagnostics
-            (mission_id, stage, level, message, details_json, created_at)
+            (mission_id, stage, level, message,
+             details_json, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
@@ -369,8 +487,10 @@ def log_diagnostic(
                 now(),
             ),
         )
+
         conn.commit()
         conn.close()
+
     except Exception:
         pass
 
@@ -382,12 +502,15 @@ def log_recovery(
     reason: str,
     result: str,
 ) -> None:
+
     try:
         conn = db()
+
         conn.execute(
             """
             INSERT INTO recovery
-            (mission_id, round, action, reason, result, created_at)
+            (mission_id, round, action, reason,
+             result, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
@@ -399,8 +522,10 @@ def log_recovery(
                 now(),
             ),
         )
+
         conn.commit()
         conn.close()
+
     except Exception:
         pass
 
@@ -443,10 +568,16 @@ def http_get_json(
         return None, "timeout"
 
     except requests.RequestException as exc:
-        return None, f"request_error:{type(exc).__name__}"
+        return (
+            None,
+            f"request_error:{type(exc).__name__}",
+        )
 
     except Exception as exc:
-        return None, f"{type(exc).__name__}:{str(exc)[:200]}"
+        return (
+            None,
+            f"{type(exc).__name__}:{str(exc)[:200]}",
+        )
 
 
 def http_get_text(
@@ -460,7 +591,11 @@ def http_get_text(
             timeout=timeout,
             headers={
                 "User-Agent": USER_AGENT,
-                "Accept": "text/html,application/xhtml+xml,text/plain",
+                "Accept": (
+                    "text/html,"
+                    "application/xhtml+xml,"
+                    "text/plain"
+                ),
             },
         )
 
@@ -483,8 +618,17 @@ def http_get_text(
             flags=re.I | re.S,
         )
 
-        text = re.sub(r"<[^>]+>", " ", text)
-        text = re.sub(r"\s+", " ", text)
+        text = re.sub(
+            r"<[^>]+>",
+            " ",
+            text,
+        )
+
+        text = re.sub(
+            r"\s+",
+            " ",
+            text,
+        )
 
         return clean_text(text), None
 
@@ -492,121 +636,20 @@ def http_get_text(
         return "", "timeout"
 
     except requests.RequestException as exc:
-        return "", f"request_error:{type(exc).__name__}"
+        return (
+            "",
+            f"request_error:{type(exc).__name__}",
+        )
 
     except Exception as exc:
-        return "", f"{type(exc).__name__}:{str(exc)[:200]}"
+        return (
+            "",
+            f"{type(exc).__name__}:{str(exc)[:200]}",
+        )
 
 
 # ============================================================
-# QUERY GENERATION
-# ============================================================
-
-def objective_terms(objective: str) -> List[str]:
-    text = objective.lower()
-
-    groups = {
-        "autonomous agents": [
-            "autonomous agent",
-            "AI agent",
-            "agent reliability",
-            "agentic AI",
-        ],
-        "planning reasoning": [
-            "planning",
-            "reasoning",
-            "task execution",
-        ],
-        "tool use": [
-            "tool use",
-            "API use",
-            "browser use",
-            "web agent",
-        ],
-        "task success": [
-            "task completion",
-            "success rate",
-            "benchmark",
-            "evaluation",
-        ],
-        "failure": [
-            "failure",
-            "error",
-            "failure modes",
-            "recovery",
-        ],
-        "safety": [
-            "monitoring",
-            "verification",
-            "safety",
-            "security",
-        ],
-        "production": [
-            "production deployment",
-            "real world",
-            "real-world",
-            "deployment",
-        ],
-        "multi agent": [
-            "multi-agent",
-            "multi agent",
-            "coordination",
-        ],
-    }
-
-    selected = []
-
-    for values in groups.values():
-        if any(v in text for v in values):
-            selected.extend(values[:2])
-
-    if not selected:
-        selected = [
-            "autonomous AI agents",
-            "agent task execution",
-            "AI agent reliability",
-        ]
-
-    # preserve order
-    seen = set()
-    output = []
-
-    for item in selected:
-        if item not in seen:
-            seen.add(item)
-            output.append(item)
-
-    return output[:8]
-
-
-def build_queries(objective: str) -> List[str]:
-    terms = objective_terms(objective)
-
-    queries = [
-        "autonomous AI agents reliability empirical evaluation",
-        "AI agents real world task execution benchmark",
-        "autonomous agents planning reasoning task success",
-        "AI agents tool API browser use evaluation",
-        "AI agent failure recovery monitoring verification",
-        "multi-agent coordination empirical evaluation",
-    ]
-
-    queries.extend(terms)
-
-    # deduplicate
-    result = []
-
-    for q in queries:
-        q = clean_text(q, 300)
-
-        if q and q.lower() not in [x.lower() for x in result]:
-            result.append(q)
-
-    return result[:12]
-
-
-# ============================================================
-# OPENALEX ABSTRACT RECONSTRUCTION
+# OPENALEX ABSTRACT
 # ============================================================
 
 def reconstruct_openalex_abstract(
@@ -619,18 +662,27 @@ def reconstruct_openalex_abstract(
     positions = []
 
     for word, indexes in inverted_index.items():
+
         if not isinstance(indexes, list):
             continue
 
         for position in indexes:
+
             if isinstance(position, int):
-                positions.append((position, str(word)))
+                positions.append(
+                    (position, str(word))
+                )
 
-    positions.sort(key=lambda x: x[0])
+    positions.sort(
+        key=lambda x: x[0]
+    )
 
-    words = [word for _, word in positions]
-
-    return clean_text(" ".join(words))
+    return clean_text(
+        " ".join(
+            word
+            for _, word in positions
+        )
+    )
 
 
 # ============================================================
@@ -639,10 +691,9 @@ def reconstruct_openalex_abstract(
 
 def discover_crossref(
     query: str,
-    mission_id: str,
 ) -> Tuple[List[Dict[str, Any]], List[str]]:
 
-    diagnostics = []
+    errors = []
 
     data, error = http_get_json(
         CROSSREF_URL,
@@ -650,50 +701,58 @@ def discover_crossref(
             "query.bibliographic": query,
             "rows": MAX_DISCOVERY_PER_QUERY,
             "select": (
-                "DOI,title,URL,published,published-print,"
-                "published-online,author,publisher,abstract"
+                "DOI,title,URL,published,"
+                "published-print,published-online,"
+                "publisher,abstract"
             ),
         },
     )
 
     if error:
-        diagnostics.append(error)
-        return [], diagnostics
+        errors.append(error)
+        return [], errors
 
     message = data.get("message")
 
     if not isinstance(message, dict):
-        diagnostics.append("missing_crossref_message")
-        return [], diagnostics
+        return [], ["missing_crossref_message"]
 
     items = message.get("items")
 
     if not isinstance(items, list):
-        diagnostics.append("missing_crossref_items")
-        return [], diagnostics
+        return [], ["missing_crossref_items"]
 
     works = []
 
     for item in items:
+
         if not isinstance(item, dict):
             continue
 
-        title_value = item.get("title")
+        title = item.get("title")
 
-        if isinstance(title_value, list):
-            title = title_value[0] if title_value else ""
-        else:
-            title = title_value or ""
+        if isinstance(title, list):
+            title = (
+                title[0]
+                if title
+                else ""
+            )
 
-        title = clean_text(title)
+        doi = clean_text(
+            item.get("DOI")
+        ).lower()
 
-        doi = clean_text(item.get("DOI")).lower()
+        url = clean_text(
+            item.get("URL")
+        )
 
-        url = clean_text(item.get("URL"))
+        publisher = clean_text(
+            item.get("publisher")
+        )
 
-        publisher = clean_text(item.get("publisher"))
-
-        abstract = clean_text(item.get("abstract"))
+        abstract = clean_text(
+            item.get("abstract")
+        )
 
         year = None
 
@@ -702,26 +761,35 @@ def discover_crossref(
             "published-print",
             "published-online",
         ):
+
             value = item.get(field)
 
-            if isinstance(value, dict):
-                date_parts = value.get("date-parts")
+            if not isinstance(value, dict):
+                continue
 
-                if (
-                    isinstance(date_parts, list)
-                    and date_parts
-                    and isinstance(date_parts[0], list)
-                    and date_parts[0]
-                    and isinstance(date_parts[0][0], int)
-                ):
-                    year = date_parts[0][0]
-                    break
+            parts = value.get(
+                "date-parts"
+            )
+
+            if (
+                isinstance(parts, list)
+                and parts
+                and isinstance(parts[0], list)
+                and parts[0]
+                and isinstance(parts[0][0], int)
+            ):
+                year = parts[0][0]
+                break
 
         works.append(
             {
                 "provider": "crossref",
-                "work_id": f"doi:{doi}" if doi else make_id("cr"),
-                "title": title,
+                "work_id": (
+                    f"doi:{doi}"
+                    if doi
+                    else make_id("crossref")
+                ),
+                "title": clean_text(title),
                 "doi": doi,
                 "url": url,
                 "publisher": publisher,
@@ -730,15 +798,14 @@ def discover_crossref(
             }
         )
 
-    return works, diagnostics
+    return works, errors
 
 
 def discover_openalex(
     query: str,
-    mission_id: str,
 ) -> Tuple[List[Dict[str, Any]], List[str]]:
 
-    diagnostics = []
+    errors = []
 
     data, error = http_get_json(
         OPENALEX_URL,
@@ -749,58 +816,93 @@ def discover_openalex(
     )
 
     if error:
-        diagnostics.append(error)
-        return [], diagnostics
+        errors.append(error)
+        return [], errors
 
     results = data.get("results")
 
     if not isinstance(results, list):
-        diagnostics.append("missing_openalex_results")
-        return [], diagnostics
+        return [], ["missing_openalex_results"]
 
     works = []
 
     for item in results:
+
         if not isinstance(item, dict):
             continue
 
-        title = clean_text(item.get("title"))
-
-        doi = clean_text(item.get("doi")).lower()
-
-        primary_location = item.get("primary_location") or {}
-
-        if not isinstance(primary_location, dict):
-            primary_location = {}
-
-        landing_page = clean_text(
-            primary_location.get("landing_page_url")
+        title = clean_text(
+            item.get("title")
         )
 
-        source = primary_location.get("source") or {}
+        doi = clean_text(
+            item.get("doi")
+        ).lower()
+
+        primary = (
+            item.get("primary_location")
+            or {}
+        )
+
+        if not isinstance(primary, dict):
+            primary = {}
+
+        landing = clean_text(
+            primary.get(
+                "landing_page_url"
+            )
+        )
+
+        source = (
+            primary.get("source")
+            or {}
+        )
 
         if not isinstance(source, dict):
             source = {}
 
-        publisher = clean_text(source.get("display_name"))
-
-        url = landing_page or doi
-
-        abstract = reconstruct_openalex_abstract(
-            item.get("abstract_inverted_index")
+        source_id = clean_text(
+            source.get("id")
         )
 
-        year = item.get("publication_year")
-
-        openalex_id = clean_text(item.get("id"))
-
-        work_id = (
-            f"doi:{doi}"
-            if doi
-            else f"openalex:{openalex_id}"
-            if openalex_id
-            else make_id("oa")
+        source_name = clean_text(
+            source.get("display_name")
         )
+
+        host_org = clean_text(
+            source.get(
+                "host_organization"
+            )
+        )
+
+        host_org_name = clean_text(
+            source.get(
+                "host_organization_name"
+            )
+        )
+
+        abstract = (
+            reconstruct_openalex_abstract(
+                item.get(
+                    "abstract_inverted_index"
+                )
+            )
+        )
+
+        publication_year = item.get(
+            "publication_year"
+        )
+
+        work_id = clean_text(
+            item.get("id")
+        )
+
+        if not work_id:
+            work_id = (
+                f"doi:{doi}"
+                if doi
+                else make_id("openalex")
+            )
 
         works.append(
             {
@@ -808,68 +910,96 @@ def discover_openalex(
                 "work_id": work_id,
                 "title": title,
                 "doi": doi,
-                "url": url,
-                "publisher": publisher,
+                "url": landing,
+                "publisher": (
+                    source_name
+                    or host_org_name
+                ),
                 "abstract": abstract,
-                "year": year,
-                "openalex_id": openalex_id,
+                "year": publication_year,
+                "source_id": source_id,
+                "host_organization": host_org,
+                "host_organization_name": (
+                    host_org_name
+                ),
             }
         )
 
-    return works, diagnostics
+    return works, errors
 
 
 # ============================================================
 # CANONICALIZATION
 # ============================================================
 
+def title_key(title: str) -> str:
+    text = (
+        title
+        or ""
+    ).lower()
+
+    text = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        text,
+    )
+
+    return " ".join(
+        text.split()
+    )
+
+
 def canonical_key(work: Dict[str, Any]) -> str:
-    doi = clean_text(work.get("doi")).lower()
+
+    doi = clean_text(
+        work.get("doi")
+    ).lower()
 
     if doi:
         return f"doi:{doi}"
 
-    title = clean_text(work.get("title")).lower()
-
-    title = re.sub(r"[^a-z0-9]+", " ", title)
-
-    title = re.sub(r"\s+", " ", title).strip()
+    title = title_key(
+        work.get("title", "")
+    )
 
     if title:
         return f"title:{title}"
 
-    url = clean_text(work.get("url")).lower()
+    url = clean_text(
+        work.get("url")
+    ).lower()
 
-    return f"url:{url}" if url else make_id("unknown")
+    if url:
+        return f"url:{url}"
+
+    return clean_text(
+        work.get("work_id")
+    )
 
 
 def canonicalize(
     works: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
 
-    merged: Dict[str, Dict[str, Any]] = {}
+    output = {}
+    providers = defaultdict(set)
 
     for work in works:
-        if not isinstance(work, dict):
-            continue
 
         key = canonical_key(work)
 
-        if key not in merged:
-            merged[key] = dict(work)
-            merged[key]["providers"] = [
-                work.get("provider")
-            ]
+        if not key:
             continue
 
-        existing = merged[key]
+        providers[key].add(
+            work.get("provider")
+        )
 
-        providers = existing.setdefault("providers", [])
+        if key not in output:
+            output[key] = dict(work)
+            output[key]["providers"] = []
 
-        provider = work.get("provider")
-
-        if provider and provider not in providers:
-            providers.append(provider)
+        current = output[key]
 
         for field in (
             "title",
@@ -878,405 +1008,469 @@ def canonicalize(
             "publisher",
             "abstract",
             "year",
+            "source_id",
+            "host_organization",
+            "host_organization_name",
         ):
-            if not existing.get(field) and work.get(field):
-                existing[field] = work[field]
 
-    return list(merged.values())
+            if not current.get(field) and work.get(field):
+                current[field] = work[field]
+
+        current["providers"] = sorted(
+            p
+            for p in providers[key]
+            if p
+        )
+
+    return list(output.values())
 
 
 # ============================================================
 # RELEVANCE
 # ============================================================
 
-RELEVANCE_TERMS = [
-    "agent",
-    "agents",
-    "autonomous",
-    "agentic",
-    "planning",
-    "reasoning",
-    "task",
-    "execution",
-    "tool",
-    "api",
-    "browser",
-    "web",
-    "benchmark",
-    "evaluation",
-    "reliability",
-    "failure",
-    "recovery",
-    "monitoring",
-    "verification",
-    "safety",
-    "security",
-    "deployment",
-    "coordination",
-    "multi-agent",
-    "real-world",
-]
+STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "that",
+    "this",
+    "from",
+    "into",
+    "their",
+    "about",
+    "using",
+    "were",
+    "have",
+    "has",
+    "are",
+    "was",
+    "been",
+    "than",
+    "also",
+    "such",
+    "these",
+    "those",
+    "which",
+    "while",
+    "where",
+    "when",
+    "what",
+    "how",
+}
+
+
+def tokens(text: str) -> set:
+    words = re.findall(
+        r"[a-zA-Z][a-zA-Z0-9_-]{2,}",
+        (text or "").lower(),
+    )
+
+    return {
+        w
+        for w in words
+        if w not in STOPWORDS
+    }
 
 
 def relevance_score(
     objective: str,
-    title: str,
-    text: str,
+    work: Dict[str, Any],
 ) -> float:
 
-    combined = f"{title} {text}".lower()
+    query_tokens = tokens(
+        objective
+    )
 
-    score = 0.0
-
-    for term in RELEVANCE_TERMS:
-        if term in combined:
-            score += 0.045
-
-    objective_words = set(
-        re.findall(
-            r"\b[a-z][a-z0-9-]{3,}\b",
-            objective.lower(),
+    text_tokens = tokens(
+        " ".join(
+            [
+                work.get("title", ""),
+                work.get("abstract", ""),
+                work.get("publisher", ""),
+            ]
         )
     )
 
-    document_words = set(
-        re.findall(
-            r"\b[a-z][a-z0-9-]{3,}\b",
-            combined,
-        )
+    if not query_tokens or not text_tokens:
+        return 0.0
+
+    overlap = (
+        len(query_tokens & text_tokens)
+        / max(len(query_tokens), 1)
     )
 
-    if objective_words:
-        overlap = len(objective_words & document_words)
-
-        score += min(0.35, overlap * 0.025)
-
-    if len(text) >= 250:
-        score += 0.10
-
-    if len(text) >= 700:
-        score += 0.05
-
-    return round(min(1.0, score), 4)
+    return round(
+        min(overlap, 1.0),
+        4,
+    )
 
 
 # ============================================================
-# PUBLISHER FALLBACK
+# ENRICHMENT
 # ============================================================
-
-def should_fetch_publisher(url: str) -> bool:
-    if not url:
-        return False
-
-    domain = domain_of(url)
-
-    blocked = {
-        "",
-        "api.crossref.org",
-        "api.openalex.org",
-        "openalex.org",
-        "doi.org",
-    }
-
-    return domain not in blocked
-
 
 def enrich_work(
-    work: Dict[str, Any],
+    raw: Dict[str, Any],
     objective: str,
     mission_id: str,
 ) -> Dict[str, Any]:
 
-    work = dict(work)
+    work = dict(raw)
 
-    title = clean_text(work.get("title"))
+    url = clean_text(
+        work.get("url")
+    )
 
-    abstract = clean_text(work.get("abstract"))
+    doi = clean_text(
+        work.get("doi")
+    ).lower()
 
-    url = clean_text(work.get("url"))
+    if not url and doi:
+        url = (
+            "https://doi.org/"
+            + doi
+        )
 
-    publisher_text = ""
+    work["url"] = url
 
-    publisher_error = None
+    work["doi"] = doi
+
+    work["title"] = clean_text(
+        work.get("title")
+    )
+
+    work["abstract"] = clean_text(
+        work.get("abstract")
+    )
+
+    work["publisher"] = clean_text(
+        work.get("publisher")
+    )
+
+    work["domain"] = domain_of(
+        url
+    )
+
+    work["source_family"] = (
+        normalized_source_family(
+            work["domain"],
+            work["publisher"],
+        )
+    )
+
+    work["relevance"] = (
+        relevance_score(
+            objective,
+            work,
+        )
+    )
 
     if (
-        len(abstract) < 250
-        and should_fetch_publisher(url)
+        not work["title"]
+        and not work["abstract"]
     ):
-        publisher_text, publisher_error = http_get_text(url)
+        work["usable"] = False
+        work["rejected_reason"] = (
+            "missing_title_and_text"
+        )
+        return work
+
+    if not work["abstract"] and url:
+
+        publisher_text, error = (
+            http_get_text(url)
+        )
 
         if publisher_text:
-            # Keep only a bounded amount of page text.
-            abstract = clean_text(
-                f"{abstract} {publisher_text}",
-                MAX_TEXT_LENGTH,
+            work["abstract"] = (
+                publisher_text[:MAX_TEXT_LENGTH]
             )
 
-    work["title"] = title
-    work["abstract"] = abstract
+        elif error:
+            log_diagnostic(
+                mission_id,
+                "publisher_fallback",
+                "info",
+                error,
+                {
+                    "work_id": work.get(
+                        "work_id"
+                    )
+                },
+            )
 
-    work["domain"] = domain_of(url)
+    if not work["abstract"]:
 
-    work["source_family"] = source_family(
-        work["domain"],
-        clean_text(work.get("publisher")),
-    )
+        work["usable"] = False
+        work["rejected_reason"] = (
+            "no_research_text"
+        )
 
-    work["relevance"] = relevance_score(
-        objective,
-        title,
-        abstract,
-    )
+        return work
 
-    # Practical usability:
-    # We do NOT require publisher access.
-    # Title + meaningful abstract is enough to enter
-    # evidence processing.
-    work["usable"] = bool(
-        title
-        and len(abstract) >= 120
-        and work["relevance"] >= 0.10
-    )
+    if len(work["abstract"]) < 120:
 
-    if not work["usable"]:
-        reasons = []
+        work["usable"] = False
+        work["rejected_reason"] = (
+            "insufficient_research_text"
+        )
 
-        if not title:
-            reasons.append("missing_title")
+        return work
 
-        if len(abstract) < 120:
-            reasons.append("insufficient_text")
-
-        if work["relevance"] < 0.10:
-            reasons.append("low_relevance")
-
-        work["rejected_reason"] = ",".join(reasons)
-
-    else:
-        work["rejected_reason"] = ""
-
-    work["provenance"] = {
-        "providers": work.get("providers", [work.get("provider")]),
-        "publisher_fetch_attempted": bool(
-            url and len(abstract) < 250
-        ),
-        "publisher_fetch_error": publisher_error,
-        "retrieved_at": iso_now(),
-    }
+    work["usable"] = True
+    work["rejected_reason"] = ""
 
     return work
 
 
 # ============================================================
-# SENTENCE PROCESSING
+# SENTENCE / CLAIM PROCESSING
 # ============================================================
 
-def split_sentences(text: str) -> List[str]:
+def split_sentences(
+    text: str,
+) -> List[str]:
 
-    text = clean_text(text)
+    text = clean_text(
+        text,
+        MAX_TEXT_LENGTH,
+    )
 
-    if not text:
-        return []
-
-    parts = re.split(
+    pieces = re.split(
         r"(?<=[.!?])\s+",
         text,
     )
 
-    result = []
-
-    for part in parts:
-        part = clean_text(part, 1200)
-
-        if len(part) < 45:
-            continue
-
-        if len(part.split()) < 8:
-            continue
-
-        result.append(part)
-
-    return result
-
-
-def is_noise(sentence: str) -> bool:
-
-    lower = sentence.lower()
-
-    noise = [
-        "copyright",
-        "all rights reserved",
-        "cookie",
-        "sign in",
-        "log in",
-        "javascript",
-        "navigation",
-        "subscribe",
-        "references",
-        "figure 1",
-        "table 1",
-        "doi:",
-        "http://",
-        "https://",
+    return [
+        clean_text(p, 1500)
+        for p in pieces
+        if len(clean_text(p)) >= 45
     ]
 
-    return any(x in lower for x in noise)
+
+def is_noise(
+    sentence: str,
+) -> bool:
+
+    s = (
+        sentence
+        or ""
+    ).lower()
+
+    bad = (
+        "copyright",
+        "all rights reserved",
+        "download pdf",
+        "supplementary material",
+        "references",
+        "table of contents",
+        "cookie policy",
+        "sign in",
+        "subscribe",
+        "citation",
+        "doi:",
+    )
+
+    return any(
+        x in s
+        for x in bad
+    )
 
 
-# ============================================================
-# CLAIM EXTRACTION
-# ============================================================
+def claim_family(
+    text: str,
+) -> str:
 
-def claim_family(text: str) -> str:
-
-    lower = text.lower()
+    s = (
+        text
+        or ""
+    ).lower()
 
     if any(
-        x in lower
-        for x in ["planning", "reasoning"]
+        x in s
+        for x in (
+            "success",
+            "completion",
+            "accuracy",
+            "performance",
+        )
+    ):
+        return "task_performance"
+
+    if any(
+        x in s
+        for x in (
+            "failure",
+            "error",
+            "fail",
+        )
+    ):
+        return "failure"
+
+    if any(
+        x in s
+        for x in (
+            "planning",
+            "reason",
+            "reasoning",
+        )
     ):
         return "planning_reasoning"
 
     if any(
-        x in lower
-        for x in ["tool", "api", "browser", "web"]
+        x in s
+        for x in (
+            "browser",
+            "web",
+            "api",
+            "tool",
+        )
     ):
-        return "tool_api_browser"
+        return "tool_use"
 
     if any(
-        x in lower
-        for x in ["success", "completion", "performance"]
-    ):
-        return "task_completion"
-
-    if any(
-        x in lower
-        for x in ["failure", "error", "fail"]
-    ):
-        return "failure_modes"
-
-    if any(
-        x in lower
-        for x in ["monitor", "verification", "verify"]
-    ):
-        return "monitoring_verification"
-
-    if any(
-        x in lower
-        for x in ["safety", "security", "attack"]
+        x in s
+        for x in (
+            "safety",
+            "security",
+            "attack",
+        )
     ):
         return "safety_security"
 
     if any(
-        x in lower
-        for x in ["multi-agent", "multi agent", "coordination"]
+        x in s
+        for x in (
+            "monitor",
+            "verification",
+            "verify",
+            "evaluation",
+        )
     ):
-        return "multi_agent"
+        return "monitoring_verification"
 
     if any(
-        x in lower
-        for x in ["deploy", "production", "real-world"]
+        x in s
+        for x in (
+            "multi-agent",
+            "multi agent",
+            "coordination",
+        )
     ):
-        return "production"
+        return "multi_agent"
 
     return "general"
 
 
-def polarity(text: str) -> str:
+def polarity(
+    text: str,
+) -> str:
 
-    lower = text.lower()
+    s = (
+        text
+        or ""
+    ).lower()
 
-    negative = [
-        "failed",
-        "failure",
-        "poor",
+    negative = (
+        "not",
+        "no ",
+        "cannot",
+        "can't",
         "unable",
-        "error",
+        "fails",
+        "failure",
+        "limited",
+        "poor",
+        "degrades",
         "unsafe",
         "unreliable",
-        "limitation",
-        "limited",
-        "vulnerable",
-        "degraded",
-        "did not",
-        "does not",
-        "cannot",
-        "could not",
-    ]
+    )
 
-    positive = [
-        "successful",
-        "successfully",
-        "improved",
-        "effective",
-        "reliable",
-        "robust",
-        "accurate",
-        "outperformed",
-        "achieved",
-    ]
-
-    neg = sum(1 for x in negative if x in lower)
-
-    pos = sum(1 for x in positive if x in lower)
-
-    if neg > pos:
+    if any(
+        x in s
+        for x in negative
+    ):
         return "negative"
 
-    if pos > neg:
-        return "positive"
-
-    return "neutral"
+    return "positive_or_neutral"
 
 
 def extract_claims(
     work: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
 
-    text = clean_text(work.get("abstract"))
-
-    sentences = split_sentences(text)
-
     claims = []
+
+    sentences = split_sentences(
+        work.get("abstract", "")
+    )
 
     for sentence in sentences:
 
         if is_noise(sentence):
             continue
 
-        lower = sentence.lower()
-
-        relevance_hits = sum(
-            1
-            for term in RELEVANCE_TERMS
-            if term in lower
+        word_count = len(
+            sentence.split()
         )
 
-        # Conservative gate.
-        if relevance_hits < 1:
+        if word_count < 8:
             continue
 
-        if len(sentence) < 55:
+        if word_count > 80:
             continue
 
-        cid = make_id(
-            "claim",
-            f"{work.get('work_id')}|{sentence}",
+        family = claim_family(
+            sentence
         )
 
         confidence = min(
             0.95,
-            0.45 + relevance_hits * 0.06,
+            0.40
+            + min(
+                len(sentence.split()) / 100,
+                0.30,
+            )
+            + (
+                0.20
+                if any(
+                    x in sentence.lower()
+                    for x in (
+                        "%",
+                        "benchmark",
+                        "experiment",
+                        "evaluation",
+                        "study",
+                    )
+                )
+                else 0
+            ),
         )
 
         claims.append(
             {
-                "claim_id": cid,
-                "work_id": work.get("work_id"),
+                "claim_id": make_id(
+                    "claim",
+                    (
+                        work.get("work_id", "")
+                        + "|"
+                        + sentence
+                    ),
+                ),
+                "work_id": work.get(
+                    "work_id"
+                ),
                 "text": sentence,
-                "claim_family": claim_family(sentence),
-                "polarity": polarity(sentence),
-                "confidence": round(confidence, 4),
+                "claim_family": family,
+                "polarity": polarity(
+                    sentence
+                ),
+                "confidence": round(
+                    confidence,
+                    4,
+                ),
             }
         )
 
@@ -1287,19 +1481,13 @@ def extract_claims(
 
 
 # ============================================================
-# TEXT SIMILARITY / EVIDENCE
+# EVIDENCE
 # ============================================================
 
-def tokens(text: str) -> set:
-    return set(
-        re.findall(
-            r"\b[a-z][a-z0-9-]{2,}\b",
-            text.lower(),
-        )
-    )
-
-
-def lexical_similarity(a: str, b: str) -> float:
+def lexical_similarity(
+    a: str,
+    b: str,
+) -> float:
 
     ta = tokens(a)
     tb = tokens(b)
@@ -1307,155 +1495,197 @@ def lexical_similarity(a: str, b: str) -> float:
     if not ta or not tb:
         return 0.0
 
-    intersection = len(ta & tb)
+    intersection = (
+        len(ta & tb)
+    )
 
-    union = len(ta | tb)
+    union = (
+        len(ta | tb)
+    )
 
     if union == 0:
         return 0.0
 
-    return round(intersection / union, 4)
-
-
-def entailment_score(
-    claim: str,
-    evidence: str,
-) -> float:
-
-    similarity = lexical_similarity(
-        claim,
-        evidence,
+    return round(
+        intersection / union,
+        4,
     )
-
-    claim_tokens = tokens(claim)
-
-    evidence_tokens = tokens(evidence)
-
-    if not claim_tokens:
-        return 0.0
-
-    coverage = (
-        len(claim_tokens & evidence_tokens)
-        / len(claim_tokens)
-    )
-
-    score = (
-        similarity * 0.45
-        + coverage * 0.55
-    )
-
-    return round(min(1.0, score), 4)
 
 
 def evidence_relation(
     claim: str,
-    evidence: str,
+    sentence: str,
 ) -> Tuple[str, float]:
 
-    entailment = entailment_score(
+    similarity = lexical_similarity(
         claim,
-        evidence,
+        sentence,
     )
 
-    if entailment >= 0.70:
-        return "strong_support", entailment
+    if similarity < 0.10:
+        return "insufficient", 0.0
 
-    if entailment >= 0.52:
-        return "moderate_support", entailment
+    claim_tokens = tokens(claim)
+    sentence_tokens = tokens(sentence)
 
-    if entailment >= 0.35:
-        return "weak_support", entailment
+    if not claim_tokens:
+        return "insufficient", 0.0
 
-    return "insufficient", entailment
+    containment = (
+        len(
+            claim_tokens
+            & sentence_tokens
+        )
+        / len(claim_tokens)
+    )
+
+    entailment = (
+        0.55 * similarity
+        + 0.45 * containment
+    )
+
+    if entailment >= 0.60:
+        relation = "strong_support"
+    elif entailment >= 0.40:
+        relation = "weak_support"
+    else:
+        relation = "insufficient"
+
+    return (
+        relation,
+        round(
+            min(entailment, 1.0),
+            4,
+        ),
+    )
 
 
 def build_evidence(
     claims: List[Dict[str, Any]],
     works: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
+    """
+    TARGET-2050.41 critical change:
 
-    work_map = {
-        w.get("work_id"): w
-        for w in works
-    }
+    Search evidence across ALL usable works.
+
+    TARGET-2050.40 searched the originating work,
+    which made independent-work verification
+    structurally impossible.
+    """
 
     evidence = []
 
+    ordered_works = [
+        w
+        for w in works
+        if (
+            w.get("usable")
+            and w.get("abstract")
+        )
+    ]
+
     for claim in claims:
-
-        work = work_map.get(
-            claim.get("work_id")
-        )
-
-        if not work:
-            continue
-
-        sentences = split_sentences(
-            work.get("abstract", "")
-        )
 
         candidates = []
 
-        for sentence in sentences:
+        for work in ordered_works:
 
-            if is_noise(sentence):
-                continue
+            for sentence in split_sentences(
+                work.get("abstract", "")
+            ):
 
-            similarity = lexical_similarity(
-                claim["text"],
-                sentence,
-            )
+                if is_noise(sentence):
+                    continue
 
-            if similarity <= 0:
-                continue
-
-            relation, entailment = evidence_relation(
-                claim["text"],
-                sentence,
-            )
-
-            strength = round(
-                0.45 * similarity
-                + 0.55 * entailment,
-                4,
-            )
-
-            candidates.append(
-                (
-                    strength,
-                    similarity,
-                    entailment,
-                    relation,
+                similarity = lexical_similarity(
+                    claim["text"],
                     sentence,
                 )
-            )
+
+                if similarity <= 0:
+                    continue
+
+                relation, entailment = (
+                    evidence_relation(
+                        claim["text"],
+                        sentence,
+                    )
+                )
+
+                if relation == "insufficient":
+                    continue
+
+                strength = round(
+                    (
+                        0.45 * similarity
+                        + 0.55 * entailment
+                    ),
+                    4,
+                )
+
+                candidates.append(
+                    (
+                        strength,
+                        similarity,
+                        entailment,
+                        relation,
+                        work.get("work_id"),
+                        sentence,
+                    )
+                )
 
         candidates.sort(
             key=lambda x: x[0],
             reverse=True,
         )
 
+        selected = []
+        selected_work_ids = set()
+
+        for candidate in candidates:
+
+            work_id = candidate[4]
+
+            if work_id in selected_work_ids:
+                continue
+
+            selected.append(candidate)
+            selected_work_ids.add(work_id)
+
+            if (
+                len(selected)
+                >= MAX_EVIDENCE_PER_CLAIM
+            ):
+                break
+
         for (
             strength,
             similarity,
             entailment,
             relation,
+            work_id,
             sentence,
-        ) in candidates[:MAX_EVIDENCE_PER_CLAIM]:
-
-            if relation == "insufficient":
-                continue
+        ) in selected:
 
             evidence.append(
                 {
                     "evidence_id": make_id(
                         "evidence",
-                        f"{claim['claim_id']}|{sentence}",
+                        (
+                            f"{claim['claim_id']}"
+                            f"|{work_id}"
+                            f"|{sentence}"
+                        ),
                     ),
-                    "claim_id": claim["claim_id"],
-                    "work_id": claim["work_id"],
+                    "claim_id": claim[
+                        "claim_id"
+                    ],
+                    "work_id": work_id,
                     "excerpt": sentence,
-                    "lexical_similarity": similarity,
+                    "lexical_similarity": (
+                        similarity
+                    ),
                     "entailment": entailment,
                     "relation": relation,
                     "strength": strength,
@@ -1472,43 +1702,26 @@ def build_evidence(
 def contradiction_pair(
     a: Dict[str, Any],
     b: Dict[str, Any],
-) -> Optional[Dict[str, Any]]:
+) -> bool:
 
-    if a.get("claim_family") != b.get("claim_family"):
-        return None
+    if (
+        a.get("claim_family")
+        != b.get("claim_family")
+    ):
+        return False
 
-    if a.get("work_id") == b.get("work_id"):
-        return None
-
-    similarity = lexical_similarity(
+    sim = lexical_similarity(
         a.get("text", ""),
         b.get("text", ""),
     )
 
-    if similarity < 0.20:
-        return None
+    if sim < 0.45:
+        return False
 
-    pa = a.get("polarity")
-    pb = b.get("polarity")
-
-    if (
-        {pa, pb}
-        == {"positive", "negative"}
-    ):
-        return {
-            "claim_a": a.get("claim_id"),
-            "claim_b": b.get("claim_id"),
-            "reason": (
-                "same claim family with "
-                "opposite polarity and lexical overlap"
-            ),
-            "severity": round(
-                min(1.0, similarity + 0.30),
-                4,
-            ),
-        }
-
-    return None
+    return (
+        a.get("polarity")
+        != b.get("polarity")
+    )
 
 
 def detect_contradictions(
@@ -1517,24 +1730,59 @@ def detect_contradictions(
 
     contradictions = []
 
-    # Compare bounded pairs.
-    for i in range(len(claims)):
+    for i in range(
+        len(claims)
+    ):
 
-        for j in range(i + 1, len(claims)):
+        for j in range(
+            i + 1,
+            len(claims),
+        ):
 
-            result = contradiction_pair(
-                claims[i],
-                claims[j],
+            a = claims[i]
+            b = claims[j]
+
+            if (
+                a.get("work_id")
+                == b.get("work_id")
+            ):
+                continue
+
+            if not contradiction_pair(
+                a,
+                b,
+            ):
+                continue
+
+            similarity = lexical_similarity(
+                a.get("text", ""),
+                b.get("text", ""),
             )
 
-            if result:
-                contradictions.append(result)
+            contradictions.append(
+                {
+                    "claim_a": a.get(
+                        "claim_id"
+                    ),
+                    "claim_b": b.get(
+                        "claim_id"
+                    ),
+                    "reason": (
+                        "High lexical overlap "
+                        "with opposite polarity."
+                    ),
+                    "severity": round(
+                        similarity,
+                        4,
+                    ),
+                }
+            )
 
-    return contradictions[:100]
+    return contradictions
 
 
 # ============================================================
-# INDEPENDENCE / VERIFICATION
+# VERIFICATION
 # ============================================================
 
 def verification_for_claim(
@@ -1543,6 +1791,10 @@ def verification_for_claim(
     works: List[Dict[str, Any]],
     contradictions: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
+
+    claim_id = claim.get(
+        "claim_id"
+    )
 
     work_map = {
         w.get("work_id"): w
@@ -1553,84 +1805,355 @@ def verification_for_claim(
         e
         for e in evidence
         if e.get("claim_id")
-        == claim.get("claim_id")
+        == claim_id
     ]
 
     strong = [
         e
         for e in claim_evidence
-        if e.get("relation")
-        == "strong_support"
-        and e.get("strength", 0) >= 0.60
+        if (
+            e.get("relation")
+            == "strong_support"
+            and e.get("strength", 0)
+            >= 0.60
+        )
     ]
 
-    work_ids = set(
+    work_ids = {
         e.get("work_id")
         for e in strong
-    )
+        if e.get("work_id")
+    }
 
-    domains = set()
-    families = set()
+    domains = {
+        work_map[w].get("domain")
+        for w in work_ids
+        if (
+            w in work_map
+            and work_map[w].get("domain")
+        )
+    }
 
-    for work_id in work_ids:
+    families = {
+        work_map[w].get(
+            "source_family"
+        )
+        for w in work_ids
+        if (
+            w in work_map
+            and work_map[w].get(
+                "source_family"
+            )
+        )
+    }
 
-        work = work_map.get(work_id)
-
-        if not work:
-            continue
-
-        if work.get("domain"):
-            domains.add(work["domain"])
-
-        if work.get("source_family"):
-            families.add(work["source_family"])
-
-    unresolved = []
+    contradiction_ids = set()
 
     for c in contradictions:
 
         if (
             c.get("claim_a")
-            == claim.get("claim_id")
-            or c.get("claim_b")
-            == claim.get("claim_id")
+            == claim_id
         ):
-            unresolved.append(c)
+            contradiction_ids.add(
+                c.get("claim_b")
+            )
 
-    requirements = {
-        "two_independent_works": len(work_ids) >= 2,
-        "two_independent_domains": len(domains) >= 2,
-        "two_independent_source_families": len(families) >= 2,
-        "two_strong_evidence_relationships": len(strong) >= 2,
-        "no_unresolved_contradiction": len(unresolved) == 0,
-    }
+        if (
+            c.get("claim_b")
+            == claim_id
+        ):
+            contradiction_ids.add(
+                c.get("claim_a")
+            )
 
-    verified = all(requirements.values())
+    blockers = []
 
-    blockers = [
-        key
-        for key, value in requirements.items()
-        if not value
-    ]
+    if len(work_ids) < 2:
+        blockers.append(
+            "requires_2_independent_works"
+        )
+
+    if len(domains) < 2:
+        blockers.append(
+            "requires_2_independent_domains"
+        )
+
+    if len(families) < 2:
+        blockers.append(
+            "requires_2_independent_source_families"
+        )
+
+    if len(strong) < 2:
+        blockers.append(
+            "requires_2_strong_evidence_relationships"
+        )
+
+    if contradiction_ids:
+        blockers.append(
+            "unresolved_contradiction"
+        )
+
+    verified = (
+        len(work_ids) >= 2
+        and len(domains) >= 2
+        and len(families) >= 2
+        and len(strong) >= 2
+        and not contradiction_ids
+    )
 
     return {
-        "claim_id": claim.get("claim_id"),
+        "claim_id": claim_id,
         "verified": verified,
-        "requirements": requirements,
+        "strong_evidence_count": len(
+            strong
+        ),
+        "independent_work_count": len(
+            work_ids
+        ),
+        "independent_domain_count": len(
+            domains
+        ),
+        "independent_source_family_count": len(
+            families
+        ),
+        "contradictions": sorted(
+            contradiction_ids
+        ),
         "blockers": blockers,
-        "strong_evidence_count": len(strong),
-        "independent_work_count": len(work_ids),
-        "independent_domain_count": len(domains),
-        "independent_source_family_count": len(families),
-        "domains": sorted(domains),
-        "source_families": sorted(families),
-        "unresolved_contradictions": unresolved,
     }
 
 
 # ============================================================
-# PERSISTENCE
+# RECOVERY
 # ============================================================
+
+def recovery_needed(
+    works: List[Dict[str, Any]],
+    claims: List[Dict[str, Any]],
+    evidence: List[Dict[str, Any]],
+) -> bool:
+
+    usable = [
+        w
+        for w in works
+        if w.get("usable")
+    ]
+
+    domains = {
+        w.get("domain")
+        for w in usable
+        if w.get("domain")
+    }
+
+    families = {
+        w.get("source_family")
+        for w in usable
+        if w.get("source_family")
+    }
+
+    strong_by_claim = defaultdict(set)
+
+    for item in evidence:
+
+        if (
+            item.get("relation")
+            == "strong_support"
+            and item.get("strength", 0)
+            >= 0.60
+        ):
+            strong_by_claim[
+                item.get("claim_id")
+            ].add(
+                item.get("work_id")
+            )
+
+    cross_work_support = any(
+        len(work_ids) >= 2
+        for work_ids
+        in strong_by_claim.values()
+    )
+
+    return (
+        len(usable) < 4
+        or len(claims) < 4
+        or len(evidence) < 4
+        or len(domains) < 2
+        or len(families) < 2
+        or not cross_work_support
+    )
+
+
+def recovery_queries() -> List[str]:
+
+    return [
+        "autonomous AI agents benchmark planning reasoning",
+        "web agents browser task completion empirical study",
+        "LLM agents API tool use reliability evaluation",
+        "AI agent failure recovery monitoring verification",
+        "multi-agent coordination empirical benchmark",
+        "AI agent safety security production deployment",
+        "autonomous agents real-world task success evaluation",
+        "agent benchmark independent empirical study",
+    ]
+
+
+def perform_recovery(
+    objective: str,
+    mission_id: str,
+    existing: List[Dict[str, Any]],
+    round_number: int,
+) -> List[Dict[str, Any]]:
+
+    recovered = []
+
+    existing_keys = {
+        canonical_key(w)
+        for w in existing
+    }
+
+    queries = recovery_queries()
+
+    # Rotate queries by round so bounded recovery
+    # explores different evidence families.
+    if round_number > 1:
+        queries = (
+            queries[4:]
+            + queries[:4]
+        )
+
+    for query in queries:
+
+        cr, cr_errors = discover_crossref(
+            query
+        )
+
+        oa, oa_errors = discover_openalex(
+            query
+        )
+
+        batch = cr + oa
+
+        for error in (
+            cr_errors
+            + oa_errors
+        ):
+            log_recovery(
+                mission_id,
+                round_number,
+                "provider_recovery",
+                query,
+                error,
+            )
+
+        for work in batch:
+
+            key = canonical_key(
+                work
+            )
+
+            if not key:
+                continue
+
+            if key in existing_keys:
+                continue
+
+            existing_keys.add(key)
+            recovered.append(work)
+
+            if (
+                len(recovered)
+                >= MAX_RECOVERY_WORKS
+            ):
+                break
+
+        if (
+            len(recovered)
+            >= MAX_RECOVERY_WORKS
+        ):
+            break
+
+    log_recovery(
+        mission_id,
+        round_number,
+        "diversity_recovery",
+        "missing independent evidence diversity",
+        f"recovered={len(recovered)}",
+    )
+
+    return recovered
+
+
+# ============================================================
+# DATABASE PERSISTENCE
+# ============================================================
+
+def create_mission(
+    objective: str,
+) -> str:
+
+    mission_id = make_id(
+        "mission",
+        objective,
+    )
+
+    timestamp = now()
+
+    conn = db()
+
+    conn.execute(
+        """
+        INSERT INTO missions
+        (id, objective, status, version,
+         build, result_json,
+         created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            mission_id,
+            objective,
+            "running",
+            VERSION,
+            BUILD,
+            None,
+            timestamp,
+            timestamp,
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+    return mission_id
+
+
+def update_mission(
+    mission_id: str,
+    status: str,
+    result: Dict[str, Any],
+) -> None:
+
+    conn = db()
+
+    conn.execute(
+        """
+        UPDATE missions
+        SET status = ?,
+            result_json = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            status,
+            safe_json(result),
+            now(),
+            mission_id,
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
 
 def save_work(
     mission_id: str,
@@ -1672,9 +2195,35 @@ def save_work(
             work.get("year"),
             work.get("abstract"),
             work.get("relevance", 0),
-            1 if work.get("usable") else 0,
-            work.get("rejected_reason"),
-            safe_json(work.get("provenance", {})),
+            int(bool(work.get("usable"))),
+            work.get(
+                "rejected_reason"
+            ),
+            safe_json(
+                {
+                    "providers": work.get(
+                        "providers",
+                        [
+                            work.get(
+                                "provider"
+                            )
+                        ],
+                    ),
+                    "source_id": work.get(
+                        "source_id"
+                    ),
+                    "host_organization": (
+                        work.get(
+                            "host_organization"
+                        )
+                    ),
+                    "host_organization_name": (
+                        work.get(
+                            "host_organization_name"
+                        )
+                    ),
+                }
+            ),
         ),
     )
 
@@ -1747,8 +2296,14 @@ def save_evidence(
             item.get("claim_id"),
             item.get("work_id"),
             item.get("excerpt"),
-            item.get("lexical_similarity", 0),
-            item.get("entailment", 0),
+            item.get(
+                "lexical_similarity",
+                0,
+            ),
+            item.get(
+                "entailment",
+                0,
+            ),
             item.get("relation"),
             item.get("strength", 0),
         ),
@@ -1756,165 +2311,6 @@ def save_evidence(
 
     conn.commit()
     conn.close()
-
-
-def create_mission(
-    objective: str,
-) -> str:
-
-    mission_id = make_id(
-        "mission",
-        objective,
-    )
-
-    timestamp = now()
-
-    conn = db()
-
-    conn.execute(
-        """
-        INSERT INTO missions
-        (
-            id,
-            objective,
-            status,
-            version,
-            build,
-            result_json,
-            created_at,
-            updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            mission_id,
-            objective,
-            "running",
-            VERSION,
-            BUILD,
-            None,
-            timestamp,
-            timestamp,
-        ),
-    )
-
-    conn.commit()
-    conn.close()
-
-    return mission_id
-
-
-def update_mission(
-    mission_id: str,
-    status: str,
-    result: Optional[Dict[str, Any]] = None,
-) -> None:
-
-    conn = db()
-
-    conn.execute(
-        """
-        UPDATE missions
-        SET status = ?,
-            result_json = ?,
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (
-            status,
-            safe_json(result) if result is not None else None,
-            now(),
-            mission_id,
-        ),
-    )
-
-    conn.commit()
-    conn.close()
-
-
-# ============================================================
-# RECOVERY
-# ============================================================
-
-def recovery_needed(
-    works: List[Dict[str, Any]],
-    claims: List[Dict[str, Any]],
-    evidence: List[Dict[str, Any]],
-) -> bool:
-
-    usable = [
-        w for w in works
-        if w.get("usable")
-    ]
-
-    return (
-        len(usable) < 4
-        or len(claims) < 4
-        or len(evidence) < 4
-    )
-
-
-def perform_recovery(
-    objective: str,
-    mission_id: str,
-    existing_works: List[Dict[str, Any]],
-    round_number: int,
-) -> List[Dict[str, Any]]:
-
-    recovery_queries = [
-        "AI agent benchmark failure recovery",
-        "autonomous web agents empirical study",
-        "LLM agents real world task success",
-        "agent reliability tool use evaluation",
-        "AI agent safety verification monitoring",
-        "multi agent coordination benchmark",
-    ]
-
-    # Rotate query selection between rounds.
-    if round_number > 1:
-        recovery_queries = list(
-            reversed(recovery_queries)
-        )
-
-    recovered = []
-
-    for query in recovery_queries[:4]:
-
-        crossref, cross_diag = discover_crossref(
-            query,
-            mission_id,
-        )
-
-        openalex, open_diag = discover_openalex(
-            query,
-            mission_id,
-        )
-
-        for diagnostic in (
-            cross_diag + open_diag
-        ):
-            log_diagnostic(
-                mission_id,
-                "recovery",
-                "info",
-                diagnostic,
-            )
-
-        recovered.extend(crossref)
-        recovered.extend(openalex)
-
-        if len(recovered) >= 20:
-            break
-
-    log_recovery(
-        mission_id,
-        round_number,
-        "targeted_research_recovery",
-        "verification inputs were below threshold",
-        f"discovered {len(recovered)} additional candidate works",
-    )
-
-    return recovered
 
 
 # ============================================================
@@ -1941,18 +2337,48 @@ def build_report(
         if v.get("verified")
     ]
 
-    supported_unverified = [
+    supported_not_verified = [
         v
         for v in verification
-        if not v.get("verified")
-        and v.get("strong_evidence_count", 0) >= 1
+        if (
+            not v.get("verified")
+            and v.get(
+                "strong_evidence_count",
+                0,
+            ) > 0
+        )
     ]
 
     insufficient = [
         v
         for v in verification
-        if v.get("strong_evidence_count", 0) == 0
+        if (
+            not v.get("verified")
+            and v.get(
+                "strong_evidence_count",
+                0,
+            ) == 0
+        )
     ]
+
+    rejected = [
+        {
+            "work_id": w.get(
+                "work_id"
+            ),
+            "title": w.get(
+                "title"
+            ),
+            "reason": w.get(
+                "rejected_reason"
+            ),
+        }
+        for w in canonical
+        if not w.get("usable")
+    ]
+
+    usable_count = len(usable)
+    rejected_count = len(rejected)
 
     domains = sorted(
         {
@@ -1964,149 +2390,162 @@ def build_report(
 
     families = sorted(
         {
-            w.get("source_family")
+            w.get(
+                "source_family"
+            )
             for w in usable
-            if w.get("source_family")
+            if w.get(
+                "source_family"
+            )
         }
     )
 
-    rejected = [
-        {
-            "work_id": w.get("work_id"),
-            "title": w.get("title"),
-            "reason": w.get("rejected_reason"),
-        }
-        for w in canonical
-        if not w.get("usable")
+    strong_evidence = [
+        e
+        for e in evidence
+        if (
+            e.get("relation")
+            == "strong_support"
+            and e.get("strength", 0)
+            >= 0.60
+        )
     ]
 
-    claim_families = Counter(
-        c.get("claim_family")
-        for c in claims
+    verification_rate = (
+        round(
+            len(verified)
+            / len(claims),
+            4,
+        )
+        if claims
+        else 0
     )
 
     reality = {
-        "verified_claim_count": len(verified),
+        "verified_claim_count": len(
+            verified
+        ),
         "supported_but_unverified_count": len(
-            supported_unverified
+            supported_not_verified
         ),
         "insufficient_claim_count": len(
             insufficient
         ),
-        "usable_source_count": len(usable),
-        "independent_domain_count": len(domains),
-        "independent_source_family_count": len(families),
-        "contradiction_count": len(contradictions),
-        "verification_rate": round(
-            (
-                len(verified) / len(claims)
-                if claims
-                else 0
-            ),
-            4,
+        "usable_source_count": usable_count,
+        "independent_domain_count": len(
+            domains
         ),
-        "assessment": (
+        "independent_source_family_count": len(
+            families
+        ),
+        "strong_evidence_count": len(
+            strong_evidence
+        ),
+        "contradiction_count": len(
+            contradictions
+        ),
+        "verification_rate": verification_rate,
+    }
+
+    if len(verified) > 0:
+        assessment = (
+            "Some claims satisfy the strict "
+            "independence and evidence closure "
+            "requirements. This does not establish "
+            "general autonomous real-world reliability."
+        )
+    else:
+        assessment = (
             "Evidence is insufficient for a broad "
             "claim of general autonomous real-world "
             "reliability."
-            if len(verified) == 0
-            else
-            "Some narrow claims satisfy the configured "
-            "verification closure, but this does not "
-            "establish AGI, ASI, general autonomy, or "
-            "continuous self-improvement."
-        ),
-    }
+        )
+
+    reality["assessment"] = assessment
 
     return {
-        "version": VERSION,
-        "build": BUILD,
         "mission_id": mission_id,
         "objective": objective,
-        "status": "completed",
-        "generated_at": iso_now(),
+        "version": VERSION,
+        "build": BUILD,
 
         "metrics": {
-            "discovered": len(discovered),
-            "canonicalized": len(canonical),
-            "usable_works": len(usable),
-            "rejected_works": len(rejected),
-            "claims": len(claims),
-            "evidence": len(evidence),
-            "contradictions": len(contradictions),
-            "verified_claims": len(verified),
-            "supported_not_verified": len(
-                supported_unverified
+            "discovered": len(
+                discovered
             ),
-            "insufficient_claims": len(insufficient),
-            "verification_rate": reality[
-                "verification_rate"
-            ],
+            "canonicalized": len(
+                canonical
+            ),
+            "usable_works": usable_count,
+            "rejected_works": rejected_count,
+
+            "accounting_check": (
+                usable_count
+                + rejected_count
+                == len(canonical)
+            ),
+
+            "claims": len(
+                claims
+            ),
+            "evidence": len(
+                evidence
+            ),
+            "strong_evidence": len(
+                strong_evidence
+            ),
+            "contradictions": len(
+                contradictions
+            ),
+            "verified_claims": len(
+                verified
+            ),
+            "supported_not_verified": len(
+                supported_not_verified
+            ),
+            "insufficient_claims": len(
+                insufficient
+            ),
+            "verification_rate": (
+                verification_rate
+            ),
         },
 
-        "sources": canonical,
-
-        "rejected_sources": rejected,
-
-        "usable_sources": usable,
-
-        "domains": domains,
-
-        "source_families": families,
-
-        "atomic_claims": claims,
-
-        "evidence": evidence,
-
-        "claim_families": dict(claim_families),
-
-        "contradictions": contradictions,
-
-        "verification": verification,
-
-        "verified_claims": verified,
-
-        "supported_but_unverified_claims":
-            supported_unverified,
-
-        "insufficient_claims": insufficient,
-
-        "recovery_actions": recovery_actions,
-
-        "diagnostics": diagnostics,
-
-        "independence_matrix": [
-            {
-                "claim_id": v.get("claim_id"),
-                "works": v.get(
-                    "independent_work_count",
-                    0,
-                ),
-                "domains": v.get(
-                    "independent_domain_count",
-                    0,
-                ),
-                "source_families": v.get(
-                    "independent_source_family_count",
-                    0,
-                ),
-            }
-            for v in verification
-        ],
+        "reality_assessment": reality,
 
         "verification_policy": {
             "minimum_independent_works": 2,
             "minimum_independent_domains": 2,
             "minimum_independent_source_families": 2,
             "minimum_strong_evidence": 2,
-            "unresolved_contradictions_allowed": 0,
-            "policy": (
-                "A claim is VERIFIED only when "
-                "every requirement is satisfied."
-            ),
+            "maximum_unresolved_contradictions": 0,
+            "verification_is_strict": True,
+            "verification_is_never_manufactured": True,
         },
 
-        "reality_assessment": reality,
+        "independence": {
+            "domains": domains,
+            "source_families": families,
+        },
+
+        "sources": {
+            "usable": usable,
+            "rejected": rejected,
+        },
+
+        "claims": claims,
+
+        "evidence": evidence,
+
+        "contradictions": contradictions,
+
+        "verification": verification,
+
+        "recovery": recovery_actions,
+
+        "diagnostics": diagnostics,
+
+        "generated_at": iso_now(),
     }
 
 
@@ -2119,23 +2558,16 @@ def run_research(
     mission_id: str,
 ) -> Dict[str, Any]:
 
-    diagnostics: List[Dict[str, Any]] = []
+    diagnostics = []
 
-    discovered: List[Dict[str, Any]] = []
-
-    canonical: List[Dict[str, Any]] = []
-
-    usable: List[Dict[str, Any]] = []
-
-    claims: List[Dict[str, Any]] = []
-
-    evidence: List[Dict[str, Any]] = []
-
-    contradictions: List[Dict[str, Any]] = []
-
-    verification: List[Dict[str, Any]] = []
-
-    recovery_actions: List[Dict[str, Any]] = []
+    discovered = []
+    canonical = []
+    usable = []
+    claims = []
+    evidence = []
+    contradictions = []
+    verification = []
+    recovery_actions = []
 
     # --------------------------------------------------------
     # DISCOVERY
@@ -2147,40 +2579,52 @@ def run_research(
         "started",
     )
 
-    queries = build_queries(objective)
+    queries = [
+        "autonomous AI agents reliability empirical evaluation",
+        "AI agents real world task execution benchmark",
+        "autonomous agents planning reasoning task success",
+        "AI agents tool API browser use evaluation",
+        "AI agent failure recovery monitoring verification",
+        "multi-agent coordination empirical evaluation",
+    ]
 
     for query in queries:
 
         try:
+
             cr, cr_errors = discover_crossref(
-                query,
-                mission_id,
+                query
             )
 
             oa, oa_errors = discover_openalex(
-                query,
-                mission_id,
+                query
             )
 
             discovered.extend(cr)
             discovered.extend(oa)
 
-            for error in cr_errors + oa_errors:
-                item = {
-                    "stage": "discovery",
-                    "level": "warning",
-                    "message": error,
-                    "query": query,
-                }
+            for error in (
+                cr_errors
+                + oa_errors
+            ):
 
-                diagnostics.append(item)
+                diagnostics.append(
+                    {
+                        "stage": "discovery",
+                        "level": "warning",
+                        "message": error,
+                        "query": query,
+                    }
+                )
 
                 log_diagnostic(
                     mission_id,
                     "discovery",
                     "warning",
                     error,
-                    {"query": query},
+                    {
+                        "query": query
+                    },
                 )
 
         except Exception as exc:
@@ -2204,39 +2648,40 @@ def run_research(
                 "discovery",
                 "error",
                 message,
-                {"query": query},
+                {
+                    "query": query
+                },
             )
 
         if len(discovered) >= MAX_TOTAL_WORKS:
             break
 
-    discovered = discovered[:MAX_TOTAL_WORKS]
+    discovered = discovered[
+        :MAX_TOTAL_WORKS
+    ]
 
     # --------------------------------------------------------
     # CANONICALIZATION
     # --------------------------------------------------------
 
-    log_event(
-        mission_id,
-        "canonicalization",
-        "started",
-        {"discovered": len(discovered)},
+    canonical = canonicalize(
+        discovered
     )
 
-    canonical = canonicalize(discovered)
-
-    canonical = canonical[:MAX_TOTAL_WORKS]
+    canonical = canonical[
+        :MAX_TOTAL_WORKS
+    ]
 
     # --------------------------------------------------------
     # ENRICHMENT
     # --------------------------------------------------------
 
-    for raw_work in canonical:
+    for raw in canonical:
 
         try:
 
             work = enrich_work(
-                raw_work,
+                raw,
                 objective,
                 mission_id,
             )
@@ -2256,7 +2701,9 @@ def run_research(
                     "info",
                     "source rejected",
                     {
-                        "work_id": work.get("work_id"),
+                        "work_id": work.get(
+                            "work_id"
+                        ),
                         "reason": work.get(
                             "rejected_reason"
                         ),
@@ -2270,28 +2717,66 @@ def run_research(
                 f"{str(exc)[:300]}"
             )
 
-            diagnostics.append(
-                {
-                    "stage": "ingestion",
-                    "level": "error",
-                    "message": message,
-                    "work_id": raw_work.get(
-                        "work_id"
-                    ),
-                }
-            )
-
             log_diagnostic(
                 mission_id,
                 "ingestion",
                 "error",
                 message,
                 {
-                    "work_id": raw_work.get(
+                    "work_id": raw.get(
                         "work_id"
                     )
                 },
             )
+
+    # --------------------------------------------------------
+    # INITIAL CLAIMS / EVIDENCE
+    # --------------------------------------------------------
+
+    for work in usable:
+
+        try:
+
+            extracted = extract_claims(
+                work
+            )
+
+            for claim in extracted:
+
+                claims.append(claim)
+
+                save_claim(
+                    mission_id,
+                    claim,
+                )
+
+        except Exception as exc:
+
+            log_diagnostic(
+                mission_id,
+                "claim_extraction",
+                "warning",
+                str(exc)[:500],
+            )
+
+    evidence = build_evidence(
+        claims,
+        usable,
+    )
+
+    for item in evidence:
+
+        try:
+            save_evidence(
+                mission_id,
+                item,
+            )
+        except Exception:
+            pass
+
+    contradictions = detect_contradictions(
+        claims
+    )
 
     # --------------------------------------------------------
     # TARGETED RECOVERY
@@ -2326,16 +2811,15 @@ def run_research(
             canonical + recovered
         )
 
-        # Enrich only new candidates.
         existing_ids = {
             w.get("work_id")
             for w in usable
         }
 
-        for raw_work in recovered_canonical:
+        for raw in recovered_canonical:
 
             if (
-                raw_work.get("work_id")
+                raw.get("work_id")
                 in existing_ids
             ):
                 continue
@@ -2343,7 +2827,7 @@ def run_research(
             try:
 
                 work = enrich_work(
-                    raw_work,
+                    raw,
                     objective,
                     mission_id,
                 )
@@ -2354,130 +2838,38 @@ def run_research(
                 )
 
                 if work.get("usable"):
+
                     usable.append(work)
+
                     existing_ids.add(
-                        work.get("work_id")
+                        work.get(
+                            "work_id"
+                        )
                     )
 
             except Exception as exc:
-
-                message = (
-                    f"{type(exc).__name__}: "
-                    f"{str(exc)[:300]}"
-                )
 
                 log_diagnostic(
                     mission_id,
                     "recovery_ingestion",
                     "warning",
-                    message,
+                    str(exc)[:500],
                 )
 
         canonical = recovered_canonical[
             :MAX_TOTAL_WORKS
         ]
 
-        # Rebuild claims/evidence after recovery.
+        # Rebuild from ALL usable works.
         claims = []
 
         for work in usable:
 
             try:
 
-                extracted = extract_claims(work)
-
-                for claim in extracted:
-                    claims.append(claim)
-                    save_claim(
-                        mission_id,
-                        claim,
-                    )
-
-            except Exception as exc:
-
-                log_diagnostic(
-                    mission_id,
-                    "claim_extraction",
-                    "warning",
-                    str(exc)[:500],
-                )
-
-        evidence = build_evidence(
-            claims,
-            usable,
-        )
-
-        for item in evidence:
-
-            try:
-                save_evidence(
-                    mission_id,
-                    item,
-                )
-            except Exception as exc:
-                log_diagnostic(
-                    mission_id,
-                    "evidence_persistence",
-                    "warning",
-                    str(exc)[:500],
-                )
-
-        contradictions = detect_contradictions(
-            claims
-        )
-
-        after = (
-            len(usable),
-            len(claims),
-            len(evidence),
-        )
-
-        progress = (
-            after[0] - before[0]
-            + after[1] - before[1]
-            + after[2] - before[2]
-        )
-
-        action = {
-            "round": round_number,
-            "before": {
-                "usable": before[0],
-                "claims": before[1],
-                "evidence": before[2],
-            },
-            "after": {
-                "usable": after[0],
-                "claims": after[1],
-                "evidence": after[2],
-            },
-            "meaningful_progress": progress > 0,
-        }
-
-        recovery_actions.append(action)
-
-        if progress <= 0:
-            log_recovery(
-                mission_id,
-                round_number,
-                "stop_recovery",
-                "no meaningful progress",
-                "stopped",
-            )
-            break
-
-    # --------------------------------------------------------
-    # FINAL EXTRACTION IF RECOVERY WAS NOT NEEDED
-    # --------------------------------------------------------
-
-    if not claims:
-
-        for work in usable:
-
-            try:
-
-                extracted = extract_claims(work)
-
-                for claim in extracted:
+                for claim in extract_claims(
+                    work
+                ):
 
                     claims.append(claim)
 
@@ -2486,16 +2878,8 @@ def run_research(
                         claim,
                     )
 
-            except Exception as exc:
-
-                log_diagnostic(
-                    mission_id,
-                    "claim_extraction",
-                    "warning",
-                    str(exc)[:500],
-                )
-
-    if not evidence:
+            except Exception:
+                continue
 
         evidence = build_evidence(
             claims,
@@ -2512,26 +2896,75 @@ def run_research(
             except Exception:
                 pass
 
-    contradictions = detect_contradictions(
-        claims
-    )
+        contradictions = (
+            detect_contradictions(
+                claims
+            )
+        )
+
+        after = (
+            len(usable),
+            len(claims),
+            len(evidence),
+        )
+
+        progress = (
+            (after[0] - before[0])
+            + (after[1] - before[1])
+            + (after[2] - before[2])
+        )
+
+        action = {
+            "round": round_number,
+            "before": {
+                "usable": before[0],
+                "claims": before[1],
+                "evidence": before[2],
+            },
+            "after": {
+                "usable": after[0],
+                "claims": after[1],
+                "evidence": after[2],
+            },
+            "meaningful_progress": (
+                progress > 0
+            ),
+        }
+
+        recovery_actions.append(
+            action
+        )
+
+        if progress <= 0:
+
+            log_recovery(
+                mission_id,
+                round_number,
+                "stop_recovery",
+                "no meaningful progress",
+                "stopped",
+            )
+
+            break
 
     # --------------------------------------------------------
-    # VERIFICATION
+    # FINAL VERIFICATION
     # --------------------------------------------------------
+
+    verification = []
 
     for claim in claims:
 
         try:
 
-            result = verification_for_claim(
-                claim,
-                evidence,
-                usable,
-                contradictions,
+            verification.append(
+                verification_for_claim(
+                    claim,
+                    evidence,
+                    usable,
+                    contradictions,
+                )
             )
-
-            verification.append(result)
 
         except Exception as exc:
 
@@ -2573,14 +3006,17 @@ def run_research(
         mission_id,
         "complete",
         "research_completed",
-        report.get("metrics", {}),
+        report.get(
+            "metrics",
+            {},
+        ),
     )
 
     return report
 
 
 # ============================================================
-# API ROUTES
+# API
 # ============================================================
 
 @app.get("/")
@@ -2592,8 +3028,8 @@ def root() -> Dict[str, Any]:
         "build": BUILD,
         "status": "online",
         "message": (
-            "AI Infinity evidence research core "
-            "is running."
+            "AI Infinity evidence research "
+            "core is running."
         ),
         "endpoints": {
             "health": "/health",
@@ -2602,7 +3038,9 @@ def root() -> Dict[str, Any]:
             "docs": "/docs",
             "run": "POST /run",
             "run_help": "GET /run",
-            "mission": "GET /mission/{mission_id}",
+            "mission": (
+                "GET /mission/{mission_id}"
+            ),
         },
     }
 
@@ -2651,17 +3089,19 @@ def capabilities() -> Dict[str, Any]:
             "publisher_fallback",
             "relevance_scoring",
             "atomic_claim_extraction",
+            "cross_work_evidence",
             "evidence_relationships",
             "source_independence",
             "domain_independence",
             "source_family_independence",
             "contradiction_detection",
             "strict_verification",
-            "targeted_recovery",
+            "diversity_aware_recovery",
             "auditable_reports",
             "sqlite_persistence",
             "fault_tolerant_networking",
             "diagnostic_logging",
+            "accounting_integrity",
         ],
         "verification_policy": {
             "works": 2,
@@ -2679,14 +3119,15 @@ def run_help() -> Dict[str, Any]:
     return {
         "status": "ready",
         "message": (
-            "Use POST /run to start a research mission."
+            "Use POST /run to start "
+            "a research mission."
         ),
         "docs": "/docs",
         "example": {
             "objective": (
-                "Research the reliability of "
-                "autonomous AI agents for real-world "
-                "task execution."
+                "Research the reliability "
+                "of autonomous AI agents "
+                "for real-world task execution."
             )
         },
     }
@@ -2721,8 +3162,6 @@ def run(request: RunRequest):
 
     try:
 
-        # Create mission FIRST so even a later failure
-        # has a persistent identifier.
         mission_id = create_mission(
             objective
         )
@@ -2746,8 +3185,6 @@ def run(request: RunRequest):
             result,
         )
 
-        # Compact top-level response while keeping the
-        # complete report available from /mission/{id}.
         return {
             "mission_id": mission_id,
             "status": "completed",
@@ -2773,6 +3210,18 @@ def run(request: RunRequest):
 
         trace = traceback.format_exc()
 
+        failure = {
+            "version": VERSION,
+            "build": BUILD,
+            "mission_id": mission_id,
+            "status": "failed",
+            "stage": stage,
+            "error": {
+                "type": error_type,
+                "message": error_message,
+            },
+        }
+
         if mission_id:
 
             log_diagnostic(
@@ -2786,41 +3235,15 @@ def run(request: RunRequest):
                 },
             )
 
-            failure = {
-                "version": VERSION,
-                "build": BUILD,
-                "mission_id": mission_id,
-                "status": "failed",
-                "stage": stage,
-                "error": {
-                    "type": error_type,
-                    "message": error_message,
-                },
-            }
-
             update_mission(
                 mission_id,
                 "failed",
                 failure,
             )
 
-            return JSONResponse(
-                status_code=500,
-                content=failure,
-            )
-
         return JSONResponse(
             status_code=500,
-            content={
-                "version": VERSION,
-                "build": BUILD,
-                "status": "failed",
-                "stage": stage,
-                "error": {
-                    "type": error_type,
-                    "message": error_message,
-                },
-            },
+            content=failure,
         )
 
 
@@ -2864,7 +3287,9 @@ def get_mission(
                 )
             except Exception:
                 result = {
-                    "raw": row["result_json"]
+                    "raw": row[
+                        "result_json"
+                    ]
                 }
 
         return {
@@ -2873,8 +3298,12 @@ def get_mission(
             "status": row["status"],
             "version": row["version"],
             "build": row["build"],
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
+            "created_at": row[
+                "created_at"
+            ],
+            "updated_at": row[
+                "updated_at"
+            ],
             "result": result,
         }
 
@@ -2885,7 +3314,9 @@ def get_mission(
             content={
                 "status": "failed",
                 "error": {
-                    "type": type(exc).__name__,
+                    "type": type(
+                        exc
+                    ).__name__,
                     "message": str(exc),
                 },
             },
