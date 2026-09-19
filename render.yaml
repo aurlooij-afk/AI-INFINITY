@@ -5,4 +5,12 @@ services:
     plan: free
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
-    autoDeploy: true
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: AI_INFINITY_DATA
+        value: "/tmp/ai-infinity"
+      - key: AI_INFINITY_WORKERS
+        value: "6"
+      - key: AI_INFINITY_HTTP_TIMEOUT
+        value: "20"
