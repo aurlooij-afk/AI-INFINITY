@@ -1,10 +1,11 @@
 """
 AI Infinity
-TARGET-2050.31
-BUILD: AUTONOMOUS-EVIDENCE-PROOF-CORE
+TARGET-2050.32
+BUILD: AUTONOMOUS-EVIDENCE-DASHBOARD-CORE
 
-Evidence-first autonomous research engine.
+Evidence-first autonomous research engine with mobile dashboard.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -33,19 +34,43 @@ except Exception:
     PdfReader = None
 
 
-VERSION = "TARGET-2050.31"
-BUILD = "AUTONOMOUS-EVIDENCE-PROOF-CORE"
+# ============================================================
+# CORE
+# ============================================================
 
-BASE = Path(os.getenv("AI_INFINITY_DATA", "/tmp/ai-infinity"))
-BASE.mkdir(parents=True, exist_ok=True)
+VERSION = "TARGET-2050.32"
+BUILD = "AUTONOMOUS-EVIDENCE-DASHBOARD-CORE"
+
+BASE = Path(
+    os.getenv(
+        "AI_INFINITY_DATA",
+        "/tmp/ai-infinity",
+    )
+)
+
+BASE.mkdir(
+    parents=True,
+    exist_ok=True,
+)
 
 DB_PATH = BASE / "ai_infinity.db"
 
 MAX_BYTES = 7 * 1024 * 1024
 MAX_TEXT = 120_000
 
-WORKERS = int(os.getenv("AI_INFINITY_WORKERS", "6"))
-TIMEOUT = int(os.getenv("AI_INFINITY_HTTP_TIMEOUT", "20"))
+WORKERS = int(
+    os.getenv(
+        "AI_INFINITY_WORKERS",
+        "6",
+    )
+)
+
+TIMEOUT = int(
+    os.getenv(
+        "AI_INFINITY_HTTP_TIMEOUT",
+        "20",
+    )
+)
 
 app = FastAPI(
     title="AI Infinity",
@@ -58,6 +83,10 @@ EXECUTOR = ThreadPoolExecutor(
 
 DB_LOCK = threading.RLock()
 
+
+# ============================================================
+# RESEARCH CONSTANTS
+# ============================================================
 
 RESEARCH_TERMS = {
     "agent",
@@ -72,7 +101,6 @@ RESEARCH_TERMS = {
     "reliability",
     "failure",
     "recovery",
-    "monitoring",
     "safety",
     "benchmark",
     "task",
@@ -99,13 +127,11 @@ RESEARCH_TERMS = {
 NOISE_PHRASES = {
     "skip to main content",
     "similar content being viewed",
-    "many suspensions, many problems",
     "download for free",
     "share cite",
     "cite cite",
     "home >",
     "article open access",
-    "chapter ©",
     "explore related subjects",
     "published:",
     "written by",
@@ -190,6 +216,10 @@ LIMITATION = {
 }
 
 
+# ============================================================
+# DATABASE
+# ============================================================
+
 def now() -> float:
     return time.time()
 
@@ -213,86 +243,86 @@ def init_db():
             PRAGMA journal_mode=WAL;
 
             CREATE TABLE IF NOT EXISTS missions(
-              id TEXT PRIMARY KEY,
-              objective TEXT,
-              status TEXT,
-              result TEXT,
-              created_at REAL,
-              updated_at REAL
+                id TEXT PRIMARY KEY,
+                objective TEXT,
+                status TEXT,
+                result TEXT,
+                created_at REAL,
+                updated_at REAL
             );
 
             CREATE TABLE IF NOT EXISTS events(
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              mission_id TEXT,
-              stage TEXT,
-              status TEXT,
-              detail TEXT,
-              created_at REAL
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mission_id TEXT,
+                stage TEXT,
+                status TEXT,
+                detail TEXT,
+                created_at REAL
             );
 
             CREATE TABLE IF NOT EXISTS works(
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              mission_id TEXT,
-              work_key TEXT,
-              title TEXT,
-              abstract TEXT,
-              url TEXT,
-              doi TEXT,
-              provider TEXT,
-              source_family TEXT,
-              domain TEXT,
-              quality REAL,
-              relevance REAL,
-              full_text INTEGER DEFAULT 0,
-              created_at REAL,
-              UNIQUE(mission_id, work_key)
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mission_id TEXT,
+                work_key TEXT,
+                title TEXT,
+                abstract TEXT,
+                url TEXT,
+                doi TEXT,
+                provider TEXT,
+                source_family TEXT,
+                domain TEXT,
+                quality REAL,
+                relevance REAL,
+                full_text INTEGER DEFAULT 0,
+                created_at REAL,
+                UNIQUE(mission_id, work_key)
             );
 
             CREATE TABLE IF NOT EXISTS evidence(
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              mission_id TEXT,
-              work_key TEXT,
-              source_id INTEGER,
-              excerpt TEXT,
-              evidence_type TEXT,
-              locator TEXT,
-              quality REAL,
-              relevance REAL,
-              source_family TEXT,
-              domain TEXT,
-              created_at REAL
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mission_id TEXT,
+                work_key TEXT,
+                source_id INTEGER,
+                excerpt TEXT,
+                evidence_type TEXT,
+                locator TEXT,
+                quality REAL,
+                relevance REAL,
+                source_family TEXT,
+                domain TEXT,
+                created_at REAL
             );
 
             CREATE TABLE IF NOT EXISTS claims(
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              mission_id TEXT,
-              claim TEXT,
-              fingerprint TEXT,
-              status TEXT,
-              confidence REAL,
-              created_at REAL,
-              UNIQUE(mission_id, fingerprint)
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mission_id TEXT,
+                claim TEXT,
+                fingerprint TEXT,
+                status TEXT,
+                confidence REAL,
+                created_at REAL,
+                UNIQUE(mission_id, fingerprint)
             );
 
             CREATE TABLE IF NOT EXISTS edges(
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              mission_id TEXT,
-              from_type TEXT,
-              from_id TEXT,
-              to_type TEXT,
-              to_id TEXT,
-              relation TEXT,
-              score REAL,
-              reason TEXT,
-              created_at REAL
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mission_id TEXT,
+                from_type TEXT,
+                from_id TEXT,
+                to_type TEXT,
+                to_id TEXT,
+                relation TEXT,
+                score REAL,
+                reason TEXT,
+                created_at REAL
             );
 
             CREATE TABLE IF NOT EXISTS memory(
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              mission_id TEXT,
-              key TEXT,
-              value TEXT,
-              created_at REAL
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mission_id TEXT,
+                key TEXT,
+                value TEXT,
+                created_at REAL
             );
             """
         )
@@ -303,6 +333,10 @@ def init_db():
 
 init_db()
 
+
+# ============================================================
+# DATABASE HELPERS
+# ============================================================
 
 def event(
     mid: str,
@@ -316,11 +350,11 @@ def event(
         c.execute(
             """
             INSERT INTO events(
-              mission_id,
-              stage,
-              status,
-              detail,
-              created_at
+                mission_id,
+                stage,
+                status,
+                detail,
+                created_at
             )
             VALUES(?,?,?,?,?)
             """,
@@ -382,6 +416,18 @@ def set_mission(
         c.close()
 
 
+# ============================================================
+# TEXT / RELEVANCE
+# ============================================================
+
+def clean(text: str) -> str:
+    return re.sub(
+        r"\s+",
+        " ",
+        text or "",
+    ).strip()
+
+
 def tokens(s: str) -> set[str]:
     stop = {
         "the",
@@ -426,6 +472,7 @@ def tokens(s: str) -> set[str]:
 def research_terms(
     objective: str,
 ) -> set[str]:
+
     t = tokens(objective)
 
     selected = {
@@ -453,13 +500,16 @@ def research_terms(
         )
     }
 
-    return selected or set(list(t)[:12])
+    return selected or set(
+        list(t)[:12]
+    )
 
 
 def similarity(
     a: str,
     b: str,
 ) -> float:
+
     A = tokens(a)
     B = tokens(b)
 
@@ -472,14 +522,71 @@ def similarity(
     )
 
 
+def useful_sentence(
+    sentence: str,
+    objective: str,
+) -> bool:
+
+    s = clean(sentence)
+
+    if len(s) < 100:
+        return False
+
+    low = s.lower()
+
+    for phrase in NOISE_PHRASES:
+        if phrase in low:
+            return False
+
+    words = tokens(s)
+
+    if len(words) < 12:
+        return False
+
+    if not (
+        words & research_terms(objective)
+    ):
+        return False
+
+    predicate = any(
+        p in words
+        for p in PREDICATES
+    )
+
+    return predicate
+
+
+def fingerprint(
+    text: str,
+) -> str:
+
+    normalized = re.sub(
+        r"[^a-z0-9 ]+",
+        " ",
+        text.lower(),
+    )
+
+    normalized = clean(normalized)
+
+    return hashlib.sha256(
+        normalized.encode()
+    ).hexdigest()[:32]
+
+
+# ============================================================
+# NETWORK SAFETY
+# ============================================================
+
 def safe_url(
     url: str,
 ) -> bool:
+
     try:
         p = urlparse(url)
 
         if (
-            p.scheme not in ("http", "https")
+            p.scheme not in
+            ("http", "https")
             or not p.hostname
         ):
             return False
@@ -496,13 +603,20 @@ def safe_url(
 
         ip = socket.gethostbyname(host)
 
-        octets = ip.split(".")
+        parts = ip.split(".")
 
-        if len(octets) == 4:
-            a = int(octets[0])
-            b = int(octets[1])
+        if len(parts) == 4:
 
-            if a in {10, 127, 169}:
+            a = int(parts[0])
+            b = int(parts[1])
+
+            if a in {
+                10,
+                127,
+            }:
+                return False
+
+            if a == 169 and b == 254:
                 return False
 
             if a == 192 and b == 168:
@@ -517,24 +631,22 @@ def safe_url(
         return False
 
 
-def clean(
-    text: str,
-) -> str:
-    return re.sub(
-        r"\s+",
-        " ",
-        text or "",
-    ).strip()
-
-
 def domain(
     url: str,
 ) -> str:
+
     try:
-        return urlparse(url).hostname or ""
+        return (
+            urlparse(url).hostname
+            or ""
+        )
     except Exception:
         return ""
 
+
+# ============================================================
+# HTTP FETCH
+# ============================================================
 
 def fetch(
     url: str,
@@ -549,7 +661,7 @@ def fetch(
             timeout=TIMEOUT,
             headers={
                 "User-Agent":
-                    "AI-Infinity/2050.31"
+                    "AI-Infinity/2050.32"
             },
             stream=True,
             allow_redirects=True,
@@ -557,42 +669,50 @@ def fetch(
 
         r.raise_for_status()
 
-        ct = (
-            r.headers.get("content-type")
-            or ""
-        ).lower()
+        content_type = (
+            r.headers.get(
+                "content-type",
+                "",
+            )
+            .lower()
+        )
 
         data = bytearray()
 
         for chunk in r.iter_content(
             65536
         ):
+
+            if not chunk:
+                continue
+
             data.extend(chunk)
 
             if len(data) > MAX_BYTES:
                 break
 
+        raw = bytes(data)
+
         if (
-            "pdf" in ct
+            "pdf" in content_type
             or url.lower().endswith(".pdf")
         ):
+
             if PdfReader is None:
                 return "", "pdf"
 
             import io
 
             reader = PdfReader(
-                io.BytesIO(
-                    bytes(data)
-                )
+                io.BytesIO(raw)
             )
 
             text = "\n".join(
                 (
-                    p.extract_text()
+                    page.extract_text()
                     or ""
                 )
-                for p in reader.pages
+                for page in reader.pages
             )
 
             return (
@@ -600,7 +720,7 @@ def fetch(
                 "pdf",
             )
 
-        text = bytes(data).decode(
+        text = raw.decode(
             r.encoding or "utf-8",
             "ignore",
         )
@@ -631,6 +751,373 @@ def fetch(
     except Exception:
         return "", ""
 
+
+# ============================================================
+# PROVIDERS
+# ============================================================
+
+def api_json(
+    url: str,
+    params: Optional[dict] = None,
+) -> dict:
+
+    try:
+        r = requests.get(
+            url,
+            params=params,
+            timeout=TIMEOUT,
+            headers={
+                "User-Agent":
+                    "AI-Infinity/2050.32"
+            },
+        )
+
+        r.raise_for_status()
+
+        return r.json()
+
+    except Exception:
+        return {}
+
+
+def crossref(
+    query: str,
+) -> list[dict]:
+
+    data = api_json(
+        "https://api.crossref.org/works",
+        {
+            "query.bibliographic": query,
+            "rows": 10,
+        },
+    )
+
+    output = []
+
+    for item in (
+        data
+        .get("message", {})
+        .get("items", [])
+    ):
+
+        title = (
+            item.get("title")
+            or [""]
+        )[0]
+
+        doi = item.get(
+            "DOI",
+            "",
+        )
+
+        output.append(
+            {
+                "title": title,
+                "abstract": clean(
+                    item.get(
+                        "abstract",
+                        "",
+                    )
+                ),
+                "url": (
+                    "https://doi.org/"
+                    + doi
+                    if doi
+                    else ""
+                ),
+                "doi": doi,
+                "provider": "crossref",
+            }
+        )
+
+    return output
+
+
+def openalex(
+    query: str,
+) -> list[dict]:
+
+    data = api_json(
+        "https://api.openalex.org/works",
+        {
+            "search": query,
+            "per-page": 10,
+        },
+    )
+
+    output = []
+
+    for item in data.get(
+        "results",
+        [],
+    ):
+
+        location = (
+            item.get(
+                "primary_location"
+            )
+            or {}
+        )
+
+        output.append(
+            {
+                "title": item.get(
+                    "title",
+                    "",
+                ),
+                "abstract": "",
+                "url": (
+                    location.get(
+                        "landing_page_url"
+                    )
+                    or item.get(
+                        "id",
+                        "",
+                    )
+                ),
+                "doi": (
+                    item.get(
+                        "doi"
+                    )
+                    or ""
+                ).replace(
+                    "https://doi.org/",
+                    "",
+                ),
+                "provider": "openalex",
+                "open_pdf": location.get(
+                    "pdf_url",
+                    "",
+                ),
+            }
+        )
+
+    return output
+
+
+def semantic_scholar(
+    query: str,
+) -> list[dict]:
+
+    data = api_json(
+        "https://api.semanticscholar.org/"
+        "graph/v1/paper/search",
+        {
+            "query": query,
+            "limit": 10,
+            "fields": (
+                "title,abstract,url,"
+                "openAccessPdf,externalIds"
+            ),
+        },
+    )
+
+    output = []
+
+    for item in data.get(
+        "data",
+        [],
+    ):
+
+        external = (
+            item.get(
+                "externalIds"
+            )
+            or {}
+        )
+
+        pdf = (
+            item.get(
+                "openAccessPdf"
+            )
+            or {}
+        ).get(
+            "url",
+            "",
+        )
+
+        output.append(
+            {
+                "title": item.get(
+                    "title",
+                    "",
+                ),
+                "abstract": clean(
+                    item.get(
+                        "abstract",
+                        "",
+                    )
+                ),
+                "url": (
+                    pdf
+                    or item.get(
+                        "url",
+                        "",
+                    )
+                ),
+                "doi": external.get(
+                    "DOI",
+                    "",
+                ),
+                "provider":
+                    "semantic_scholar",
+                "open_pdf": pdf,
+            }
+        )
+
+    return output
+
+
+def duckduckgo(
+    query: str,
+) -> list[dict]:
+
+    data = api_json(
+        "https://api.duckduckgo.com/",
+        {
+            "q": query,
+            "format": "json",
+            "no_html": 1,
+        },
+    )
+
+    output = []
+
+    def walk(items):
+
+        for item in items or []:
+
+            if item.get(
+                "FirstURL"
+            ):
+
+                output.append(
+                    {
+                        "title": item.get(
+                            "Text",
+                            "",
+                        ),
+                        "abstract": item.get(
+                            "Text",
+                            "",
+                        ),
+                        "url": item[
+                            "FirstURL"
+                        ],
+                        "doi": "",
+                        "provider":
+                            "duckduckgo",
+                    }
+                )
+
+            walk(
+                item.get(
+                    "Topics"
+                )
+            )
+
+    walk(
+        data.get(
+            "RelatedTopics"
+        )
+    )
+
+    return output[:10]
+
+
+def discover(
+    objective: str,
+) -> list[dict]:
+
+    q = clean(
+        objective
+    )[:450]
+
+    queries = [
+        q,
+        (
+            "autonomous AI agents "
+            "reliability real world "
+            "task execution evidence"
+        ),
+        (
+            "AI agents planning tool use "
+            "verification failure recovery"
+        ),
+    ]
+
+    results = []
+
+    with ThreadPoolExecutor(
+        max_workers=4
+    ) as executor:
+
+        futures = []
+
+        for query in queries:
+
+            futures.extend(
+                [
+                    executor.submit(
+                        crossref,
+                        query,
+                    ),
+                    executor.submit(
+                        openalex,
+                        query,
+                    ),
+                    executor.submit(
+                        semantic_scholar,
+                        query,
+                    ),
+                    executor.submit(
+                        duckduckgo,
+                        query,
+                    ),
+                ]
+            )
+
+        for future in as_completed(
+            futures
+        ):
+
+            try:
+                results.extend(
+                    future.result()
+                )
+            except Exception:
+                pass
+
+    seen = set()
+    unique = []
+
+    for item in results:
+
+        key = work_key(
+            item.get(
+                "title",
+                "",
+            ),
+            item.get(
+                "doi",
+                "",
+            ),
+        )
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        if item.get("title"):
+            unique.append(item)
+
+    return unique[:80]
+
+
+# ============================================================
+# SOURCE QUALITY
+# ============================================================
 
 def source_quality(
     provider: str,
@@ -691,381 +1178,100 @@ def work_key(
     )
 
 
-def api_json(
-    url: str,
-    params=None,
-) -> dict:
-
-    try:
-        r = requests.get(
-            url,
-            params=params,
-            timeout=TIMEOUT,
-            headers={
-                "User-Agent":
-                    "AI-Infinity/2050.31"
-            },
-        )
-
-        r.raise_for_status()
-
-        return r.json()
-
-    except Exception:
-        return {}
-
-
-def crossref(
-    q: str,
-) -> list[dict]:
-
-    data = api_json(
-        "https://api.crossref.org/works",
-        {
-            "query.bibliographic": q,
-            "rows": 10,
-        },
-    )
-
-    out = []
-
-    for x in (
-        data
-        .get("message", {})
-        .get("items", [])
-    ):
-
-        title = (
-            x.get("title")
-            or [""]
-        )[0]
-
-        doi = x.get(
-            "DOI",
-            "",
-        )
-
-        out.append(
-            {
-                "title": title,
-                "abstract": clean(
-                    x.get(
-                        "abstract",
-                        "",
-                    )
-                ),
-                "url": (
-                    "https://doi.org/"
-                    + doi
-                    if doi
-                    else ""
-                ),
-                "doi": doi,
-                "provider": "crossref",
-            }
-        )
-
-    return out
-
-
-def openalex(
-    q: str,
-) -> list[dict]:
-
-    data = api_json(
-        "https://api.openalex.org/works",
-        {
-            "search": q,
-            "per-page": 10,
-        },
-    )
-
-    out = []
-
-    for x in data.get(
-        "results",
-        [],
-    ):
-
-        loc = (
-            x.get(
-                "primary_location"
-            )
-            or {}
-        )
-
-        out.append(
-            {
-                "title": x.get(
-                    "title",
-                    "",
-                ),
-                "abstract": "",
-                "url": (
-                    loc.get(
-                        "landing_page_url"
-                    )
-                    or x.get(
-                        "id",
-                        "",
-                    )
-                ),
-                "doi": (
-                    x.get(
-                        "doi"
-                    )
-                    or ""
-                ).replace(
-                    "https://doi.org/",
-                    "",
-                ),
-                "provider": "openalex",
-                "open_pdf": loc.get(
-                    "pdf_url",
-                    "",
-                ),
-            }
-        )
-
-    return out
-
-
-def semantic(
-    q: str,
-) -> list[dict]:
-
-    data = api_json(
-        "https://api.semanticscholar.org/graph/v1/paper/search",
-        {
-            "query": q,
-            "limit": 10,
-            "fields": (
-                "title,abstract,url,"
-                "openAccessPdf,externalIds"
-            ),
-        },
-    )
-
-    out = []
-
-    for x in data.get(
-        "data",
-        [],
-    ):
-
-        ext = (
-            x.get(
-                "externalIds"
-            )
-            or {}
-        )
-
-        pdf = (
-            x.get(
-                "openAccessPdf"
-            )
-            or {}
-        ).get(
-            "url",
-            "",
-        )
-
-        out.append(
-            {
-                "title": x.get(
-                    "title",
-                    "",
-                ),
-                "abstract": clean(
-                    x.get(
-                        "abstract",
-                        "",
-                    )
-                ),
-                "url": (
-                    pdf
-                    or x.get(
-                        "url",
-                        "",
-                    )
-                ),
-                "doi": ext.get(
-                    "DOI",
-                    "",
-                ),
-                "provider":
-                    "semantic_scholar",
-                "open_pdf": pdf,
-            }
-        )
-
-    return out
-
-
-def duck(
-    q: str,
-) -> list[dict]:
-
-    data = api_json(
-        "https://api.duckduckgo.com/",
-        {
-            "q": q,
-            "format": "json",
-            "no_html": 1,
-        },
-    )
-
-    out = []
-
-    def walk(items):
-
-        for x in items or []:
-
-            if x.get("FirstURL"):
-
-                out.append(
-                    {
-                        "title":
-                            x.get(
-                                "Text",
-                                "",
-                            ),
-                        "abstract":
-                            x.get(
-                                "Text",
-                                "",
-                            ),
-                        "url":
-                            x["FirstURL"],
-                        "doi": "",
-                        "provider":
-                            "duckduckgo",
-                    }
-                )
-
-            walk(
-                x.get(
-                    "Topics"
-                )
-            )
-
-    walk(
-        data.get(
-            "RelatedTopics"
-        )
-    )
-
-    return out[:10]
-
-
-def discover(
-    objective: str,
-) -> list[dict]:
-
-    q = clean(
-        objective
-    )[:450]
-
-    queries = [
-        q,
-        (
-            "autonomous AI agents "
-            "reliability real world "
-            "task execution evidence"
-        ),
-        (
-            "AI agents planning tool use "
-            "verification failure recovery"
-        ),
-    ]
-
-    results = []
-
-    with ThreadPoolExecutor(
-        max_workers=4
-    ) as ex:
-
-        futures = [
-            ex.submit(
-                provider,
-                query,
-            )
-            for query in queries[:2]
-            for provider in (
-                crossref,
-                openalex,
-                semantic,
-                duck,
-            )
-        ]
-
-        for f in as_completed(
-            futures
-        ):
-            try:
-                results.extend(
-                    f.result()
-                )
-            except Exception:
-                pass
-
-    seen = set()
-    out = []
-
-    for x in results:
-
-        key = work_key(
-            x.get(
-                "title",
-                "",
-            ),
-            x.get(
-                "doi",
-                "",
-            ),
-        )
-
-        if key in seen:
-            continue
-
-        seen.add(key)
-        out.append(x)
-
-    return out[:40]
-
-
 def relevant(
     objective: str,
     item: dict,
 ) -> bool:
 
-    title = item.get(
-        "title",
-        "",
+    text = " ".join(
+        [
+            item.get(
+                "title",
+                "",
+            ),
+            item.get(
+                "abstract",
+                "",
+            ),
+        ]
     )
 
-    abstract = item.get(
-        "abstract",
-        "",
+    score = similarity(
+        objective,
+        text,
     )
 
-    return max(
-        similarity(
+    terms = (
+        tokens(text)
+        & research_terms(
+            objective
+        )
+    )
+
+    return (
+        score >= 0.015
+        and len(terms) >= 2
+    )
+
+
+# ============================================================
+# INGESTION
+# ============================================================
+
+def extract_excerpt(
+    text: str,
+    objective: str,
+) -> str:
+
+    if not text:
+        return ""
+
+    sentences = re.split(
+        r"(?<=[.!?])\s+",
+        text,
+    )
+
+    candidates = []
+
+    for sentence in sentences:
+
+        sentence = clean(
+            sentence
+        )
+
+        if useful_sentence(
+            sentence,
             objective,
-            title,
-        ),
-        similarity(
+        ):
+
+            candidates.append(
+                sentence
+            )
+
+    if not candidates:
+        return clean(text)[:5000]
+
+    selected = sorted(
+        candidates,
+        key=lambda x: similarity(
             objective,
-            abstract,
+            x,
         ),
-    ) >= 0.025
+        reverse=True,
+    )
+
+    return clean(
+        " ".join(
+            selected[:8]
+        )
+    )[:5000]
 
 
 def ingest(
     mid: str,
     objective: str,
     item: dict,
-):
+) -> bool:
 
     title = clean(
         item.get(
@@ -1081,89 +1287,71 @@ def ingest(
         )
     )
 
-    url = (
-        item.get(
-            "open_pdf"
-        )
-        or item.get(
-            "url",
-            "",
-        )
+    url = item.get(
+        "url",
+        "",
     )
 
-    text = ""
-    kind = ""
+    if not title:
+        return False
 
-    if url:
-        text, kind = fetch(
-            url
+    pdf_url = item.get(
+        "open_pdf",
+        "",
+    )
+
+    fetch_url = (
+        pdf_url
+        or url
+    )
+
+    full_text = ""
+    evidence_type = "metadata"
+
+    if fetch_url:
+        full_text, evidence_type = fetch(
+            fetch_url
         )
 
-    if (
-        len(text) < 500
-        and abstract
-    ):
-        text = abstract
+    if not full_text:
+        full_text = abstract
 
-    if (
-        len(text) < 250
-        and item.get("url")
-        and item["url"] != url
-    ):
-
-        recovered, recovered_kind = fetch(
-            item["url"]
-        )
-
-        if len(recovered) > len(text):
-            text = recovered
-            kind = recovered_kind
-
-    full = (
-        (
-            len(text) >= 500
-            and kind != "html"
-        )
-        or len(text) >= 1200
-    )
-
-    if (
-        not title
-        or len(text) < 180
-    ):
-        return None
-
-    provider = item.get(
-        "provider",
-        "unknown",
-    )
-
-    dom = domain(url)
-
-    quality = source_quality(
-        provider,
-        url,
-        text if full else "",
-        abstract,
-    )
-
-    relevance_score = max(
-        similarity(
-            objective,
-            title,
-        ),
-        similarity(
-            objective,
-            text[:10000],
-        ),
-    )
-
-    wk = work_key(
+    key = work_key(
         title,
         item.get(
             "doi",
             "",
         ),
+    )
+
+    relevance_score = similarity(
+        objective,
+        " ".join(
+            [
+                title,
+                abstract,
+                full_text[:8000],
+            ]
+        ),
+    )
+
+    quality = source_quality(
+        item.get(
+            "provider",
+            "",
+        ),
+        url,
+        full_text,
+        abstract,
+    )
+
+    source_domain = domain(
+        url
+    )
+
+    provider = item.get(
+        "provider",
+        "unknown",
     )
 
     with DB_LOCK:
@@ -1173,25 +1361,25 @@ def ingest(
         c.execute(
             """
             INSERT OR IGNORE INTO works(
-              mission_id,
-              work_key,
-              title,
-              abstract,
-              url,
-              doi,
-              provider,
-              source_family,
-              domain,
-              quality,
-              relevance,
-              full_text,
-              created_at
+                mission_id,
+                work_key,
+                title,
+                abstract,
+                url,
+                doi,
+                provider,
+                source_family,
+                domain,
+                quality,
+                relevance,
+                full_text,
+                created_at
             )
             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 mid,
-                wk,
+                key,
                 title,
                 abstract,
                 url,
@@ -1201,61 +1389,68 @@ def ingest(
                 ),
                 provider,
                 provider,
-                dom,
+                source_domain,
                 quality,
                 relevance_score,
-                int(full),
+                1 if full_text else 0,
                 now(),
             ),
         )
 
         row = c.execute(
             """
-            SELECT id
+            SELECT *
             FROM works
             WHERE mission_id=?
               AND work_key=?
             """,
             (
                 mid,
-                wk,
+                key,
             ),
         ).fetchone()
 
-        source_id = row["id"]
+        if not row:
+            c.close()
+            return False
+
+        excerpt = extract_excerpt(
+            full_text,
+            objective,
+        )
+
+        if len(excerpt) < 80:
+            c.close()
+            return True
 
         c.execute(
             """
             INSERT INTO evidence(
-              mission_id,
-              work_key,
-              source_id,
-              excerpt,
-              evidence_type,
-              locator,
-              quality,
-              relevance,
-              source_family,
-              domain,
-              created_at
+                mission_id,
+                work_key,
+                source_id,
+                excerpt,
+                evidence_type,
+                locator,
+                quality,
+                relevance,
+                source_family,
+                domain,
+                created_at
             )
             VALUES(?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 mid,
-                wk,
-                source_id,
-                text[:5000],
-                (
-                    "full_text"
-                    if full
-                    else "abstract"
-                ),
-                "",
+                key,
+                row["id"],
+                excerpt,
+                evidence_type,
+                "document-excerpt",
                 quality,
                 relevance_score,
                 provider,
-                dom,
+                source_domain,
                 now(),
             ),
         )
@@ -1263,107 +1458,17 @@ def ingest(
         c.commit()
         c.close()
 
-    return wk
-
-
-def split_sentences(
-    text: str,
-) -> list[str]:
-
-    return [
-        clean(x)
-        for x in re.split(
-            r"(?<=[.!?])\s+",
-            text or "",
-        )
-        if 40 <= len(
-            clean(x)
-        ) <= 700
-    ]
-
-
-def claim_ok(
-    sentence: str,
-    terms: set[str],
-) -> bool:
-
-    lo = sentence.lower()
-
-    if not 70 <= len(
-        sentence
-    ) <= 520:
-        return False
-
-    if any(
-        p in lo
-        for p in NOISE_PHRASES
-    ):
-        return False
-
-    if (
-        "http://" in lo
-        or "https://" in lo
-        or "&gt;" in lo
-        or "&amp;" in lo
-    ):
-        return False
-
-    if sentence.count("|") > 2:
-        return False
-
-    if lo.count("doi") > 2:
-        return False
-
-    if len(
-        re.findall(
-            r"[A-Za-z]",
-            sentence,
-        )
-    ) < 45:
-        return False
-
-    if len(
-        sentence.split()
-    ) < 10:
-        return False
-
-    if not any(
-        t in lo
-        for t in terms
-        if len(t) > 3
-    ):
-        return False
-
-    if not any(
-        re.search(
-            r"\b"
-            + re.escape(p)
-            + r"\b",
-            lo,
-        )
-        for p in PREDICATES
-    ):
-        return False
-
-    if re.match(
-        r"^(title|authors?|abstract|"
-        r"introduction|keywords?|references?)"
-        r"\s*[:\-]",
-        lo,
-    ):
-        return False
-
     return True
 
+
+# ============================================================
+# CLAIM EXTRACTION
+# ============================================================
 
 def extract_claims(
     mid: str,
     objective: str,
 ) -> int:
-
-    terms = research_terms(
-        objective
-    )
 
     with DB_LOCK:
 
@@ -1374,165 +1479,136 @@ def extract_claims(
             SELECT *
             FROM evidence
             WHERE mission_id=?
-            ORDER BY relevance DESC,
-                     quality DESC
             """,
             (mid,),
         ).fetchall()
 
-        seen = set()
-        extracted = []
+        count = 0
 
         for evidence in evidence_rows:
 
-            for sentence in split_sentences(
-                evidence["excerpt"]
-            ):
+            sentences = re.split(
+                r"(?<=[.!?])\s+",
+                evidence["excerpt"],
+            )
 
-                if not claim_ok(
+            for sentence in sentences:
+
+                sentence = clean(
+                    sentence
+                )
+
+                if not useful_sentence(
                     sentence,
-                    terms,
+                    objective,
                 ):
                     continue
 
-                fingerprint = hashlib.sha256(
-                    re.sub(
-                        r"\W+",
-                        " ",
-                        sentence.lower(),
-                    ).encode()
-                ).hexdigest()
+                words = tokens(
+                    sentence
+                )
 
-                if fingerprint in seen:
+                if not (
+                    words
+                    & PREDICATES
+                ):
                     continue
 
-                seen.add(
-                    fingerprint
+                if len(sentence) > 700:
+                    sentence = sentence[:700]
+
+                fp = fingerprint(
+                    sentence
                 )
 
-                extracted.append(
-                    (
-                        sentence,
+                c.execute(
+                    """
+                    INSERT OR IGNORE INTO claims(
+                        mission_id,
+                        claim,
                         fingerprint,
+                        status,
+                        confidence,
+                        created_at
                     )
+                    VALUES(?,?,?,?,?,?)
+                    """,
+                    (
+                        mid,
+                        sentence,
+                        fp,
+                        "UNVERIFIED",
+                        0.20,
+                        now(),
+                    ),
                 )
 
-                if len(
-                    extracted
-                ) >= 30:
-                    break
+                claim = c.execute(
+                    """
+                    SELECT id
+                    FROM claims
+                    WHERE mission_id=?
+                      AND fingerprint=?
+                    """,
+                    (
+                        mid,
+                        fp,
+                    ),
+                ).fetchone()
 
-            if len(
-                extracted
-            ) >= 30:
-                break
+                if claim:
 
-        for sentence, fingerprint in extracted:
+                    c.execute(
+                        """
+                        INSERT INTO edges(
+                            mission_id,
+                            from_type,
+                            from_id,
+                            to_type,
+                            to_id,
+                            relation,
+                            score,
+                            reason,
+                            created_at
+                        )
+                        VALUES(?,?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            mid,
+                            "claim",
+                            str(
+                                claim["id"]
+                            ),
+                            "evidence",
+                            str(
+                                evidence["id"]
+                            ),
+                            "SUPPORTED_BY",
+                            round(
+                                similarity(
+                                    sentence,
+                                    evidence[
+                                        "excerpt"
+                                    ],
+                                ),
+                                4,
+                            ),
+                            "claim provenance",
+                            now(),
+                        ),
+                    )
 
-            c.execute(
-                """
-                INSERT OR IGNORE INTO claims(
-                  mission_id,
-                  claim,
-                  fingerprint,
-                  status,
-                  confidence,
-                  created_at
-                )
-                VALUES(?,?,?,?,?,?)
-                """,
-                (
-                    mid,
-                    sentence,
-                    fingerprint,
-                    "UNASSESSED",
-                    0.0,
-                    now(),
-                ),
-            )
+                count += 1
 
         c.commit()
         c.close()
 
-    return len(extracted)
+    return count
 
 
-def relation(
-    a: str,
-    b: str,
-    objective: str,
-):
-
-    sim = similarity(
-        a,
-        b,
-    )
-
-    shared = (
-        tokens(a)
-        & tokens(b)
-        & research_terms(objective)
-    )
-
-    if (
-        sim < 0.20
-        or len(shared) < 2
-    ):
-        return (
-            None,
-            sim,
-            "insufficient semantic overlap",
-        )
-
-    neg_a = bool(
-        tokens(a)
-        & NEGATION
-    )
-
-    neg_b = bool(
-        tokens(b)
-        & NEGATION
-    )
-
-    if (
-        neg_a != neg_b
-        and sim >= 0.24
-    ):
-        return (
-            "contradicts",
-            sim,
-            (
-                "opposing negation with "
-                "shared research terms"
-            ),
-        )
-
-    if (
-        tokens(a)
-        & LIMITATION
-        or tokens(b)
-        & LIMITATION
-    ):
-
-        if sim >= 0.28:
-            return (
-                "limits",
-                sim,
-                (
-                    "limitation language with "
-                    "shared research terms"
-                ),
-            )
-
-    return (
-        "supports",
-        sim,
-        (
-            "shared research terms and "
-            "semantic overlap"
-        ),
-    )
-
+# ============================================================
+# GRAPH
+# ============================================================
 
 def build_graph(
     mid: str,
@@ -1552,7 +1628,7 @@ def build_graph(
             (mid,),
         ).fetchall()
 
-        evidence_rows = c.execute(
+        evidence = c.execute(
             """
             SELECT *
             FROM evidence
@@ -1561,116 +1637,135 @@ def build_graph(
             (mid,),
         ).fetchall()
 
-        for evidence in evidence_rows:
+        for claim_a in claims:
 
-            for claim in claims:
-
-                sim = similarity(
-                    claim["claim"],
-                    evidence["excerpt"],
-                )
-
-                shared = (
-                    tokens(
-                        claim["claim"]
-                    )
-                    & tokens(
-                        evidence["excerpt"]
-                    )
-                    & research_terms(
-                        objective
-                    )
-                )
+            for claim_b in claims:
 
                 if (
-                    sim >= 0.18
-                    and len(shared) >= 2
+                    claim_a["id"]
+                    >= claim_b["id"]
                 ):
+                    continue
 
-                    c.execute(
-                        """
-                        INSERT INTO edges(
-                          mission_id,
-                          from_type,
-                          from_id,
-                          to_type,
-                          to_id,
-                          relation,
-                          score,
-                          reason,
-                          created_at
-                        )
-                        VALUES(?,?,?,?,?,?,?,?,?)
-                        """,
-                        (
-                            mid,
-                            "claim",
-                            str(
-                                claim["id"]
-                            ),
-                            "evidence",
-                            str(
-                                evidence["id"]
-                            ),
-                            "supported_by",
-                            sim,
-                            (
-                                "claim-to-evidence "
-                                "semantic/lexical overlap"
-                            ),
-                            now(),
-                        ),
-                    )
-
-        for i, a in enumerate(
-            claims
-        ):
-
-            for b in claims[i + 1:]:
-
-                rel, score, reason = relation(
-                    a["claim"],
-                    b["claim"],
-                    objective,
+                score = similarity(
+                    claim_a["claim"],
+                    claim_b["claim"],
                 )
 
-                if rel:
+                if score < 0.30:
+                    continue
 
-                    c.execute(
-                        """
-                        INSERT INTO edges(
-                          mission_id,
-                          from_type,
-                          from_id,
-                          to_type,
-                          to_id,
-                          relation,
-                          score,
-                          reason,
-                          created_at
-                        )
-                        VALUES(?,?,?,?,?,?,?,?,?)
-                        """,
-                        (
-                            mid,
-                            "claim",
-                            str(
-                                a["id"]
-                            ),
-                            "claim",
-                            str(
-                                b["id"]
-                            ),
-                            rel,
-                            score,
-                            reason,
-                            now(),
-                        ),
+                words_a = tokens(
+                    claim_a["claim"]
+                )
+
+                words_b = tokens(
+                    claim_b["claim"]
+                )
+
+                neg_a = bool(
+                    words_a & NEGATION
+                )
+
+                neg_b = bool(
+                    words_b & NEGATION
+                )
+
+                relation = (
+                    "CONTRADICTS"
+                    if neg_a != neg_b
+                    else "RELATED"
+                )
+
+                c.execute(
+                    """
+                    INSERT INTO edges(
+                        mission_id,
+                        from_type,
+                        from_id,
+                        to_type,
+                        to_id,
+                        relation,
+                        score,
+                        reason,
+                        created_at
                     )
+                    VALUES(?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        mid,
+                        "claim",
+                        str(
+                            claim_a["id"]
+                        ),
+                        "claim",
+                        str(
+                            claim_b["id"]
+                        ),
+                        relation,
+                        round(
+                            score,
+                            4,
+                        ),
+                        "claim similarity analysis",
+                        now(),
+                    ),
+                )
+
+        for claim in claims:
+
+            for ev in evidence:
+
+                score = similarity(
+                    claim["claim"],
+                    ev["excerpt"],
+                )
+
+                if score < 0.24:
+                    continue
+
+                c.execute(
+                    """
+                    INSERT INTO edges(
+                        mission_id,
+                        from_type,
+                        from_id,
+                        to_type,
+                        to_id,
+                        relation,
+                        score,
+                        reason,
+                        created_at
+                    )
+                    VALUES(?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        mid,
+                        "claim",
+                        str(
+                            claim["id"]
+                        ),
+                        "evidence",
+                        str(
+                            ev["id"]
+                        ),
+                        "EVIDENCE_MATCH",
+                        round(
+                            score,
+                            4,
+                        ),
+                        "semantic token overlap",
+                        now(),
+                    ),
+                )
 
         c.commit()
         c.close()
 
+
+# ============================================================
+# VERIFICATION
+# ============================================================
 
 def verify(
     mid: str,
@@ -1706,13 +1801,13 @@ def verify(
             support = []
             contradictions = []
 
+            work_ids = set()
             domains = set()
             families = set()
-            work_ids = set()
 
             for evidence in evidence_rows:
 
-                sim = similarity(
+                score = similarity(
                     claim["claim"],
                     evidence["excerpt"],
                 )
@@ -1730,7 +1825,7 @@ def verify(
                 )
 
                 if (
-                    sim >= 0.20
+                    score >= 0.24
                     and len(shared) >= 2
                 ):
 
@@ -1738,58 +1833,46 @@ def verify(
                         evidence
                     )
 
-                    domains.add(
-                        evidence["domain"]
-                    )
-
-                    families.add(
-                        evidence["source_family"]
-                    )
-
                     work_ids.add(
                         evidence["work_key"]
                     )
 
-            for evidence in evidence_rows:
+                    if evidence["domain"]:
+                        domains.add(
+                            evidence["domain"]
+                        )
 
-                shared = (
+                    if evidence[
+                        "source_family"
+                    ]:
+                        families.add(
+                            evidence[
+                                "source_family"
+                            ]
+                        )
+
+                neg1 = bool(
                     tokens(
                         claim["claim"]
                     )
-                    & tokens(
+                    & NEGATION
+                )
+
+                neg2 = bool(
+                    tokens(
                         evidence["excerpt"]
                     )
-                    & research_terms(
-                        objective
-                    )
+                    & NEGATION
                 )
 
                 if (
-                    similarity(
-                        claim["claim"],
-                        evidence["excerpt"],
-                    ) >= 0.24
+                    score >= 0.24
                     and len(shared) >= 2
+                    and neg1 != neg2
                 ):
-
-                    neg1 = bool(
-                        tokens(
-                            claim["claim"]
-                        )
-                        & NEGATION
+                    contradictions.append(
+                        evidence
                     )
-
-                    neg2 = bool(
-                        tokens(
-                            evidence["excerpt"]
-                        )
-                        & NEGATION
-                    )
-
-                    if neg1 != neg2:
-                        contradictions.append(
-                            evidence
-                        )
 
             independent = (
                 len(work_ids) >= 2
@@ -1856,15 +1939,12 @@ def verify(
 
             output.append(
                 {
-                    "id":
-                        claim["id"],
-                    "status":
-                        status,
-                    "confidence":
-                        round(
-                            confidence,
-                            3,
-                        ),
+                    "id": claim["id"],
+                    "status": status,
+                    "confidence": round(
+                        confidence,
+                        3,
+                    ),
                     "support_count":
                         len(support),
                     "independent_works":
@@ -1874,7 +1954,9 @@ def verify(
                     "source_families":
                         len(families),
                     "contradictions":
-                        len(contradictions),
+                        len(
+                            contradictions
+                        ),
                 }
             )
 
@@ -1883,6 +1965,10 @@ def verify(
 
     return output
 
+
+# ============================================================
+# AUDIT
+# ============================================================
 
 def audit_result(
     mid: str,
@@ -1957,6 +2043,11 @@ def audit_result(
         for x in claims
     )
 
+    contradicted = sum(
+        x["status"] == "CONTRADICTED"
+        for x in claims
+    )
+
     domains = len(
         {
             x["domain"]
@@ -1992,44 +2083,48 @@ def audit_result(
     }
 
     gate = bool(
-        verified
-        and usable
+        verified > 0
+        and usable > 0
         and domains >= 2
         and families >= 2
         and len(edges) > 0
     )
 
+    pipeline_stages = [
+        "discovery",
+        "evidence_ingestion",
+        "claims",
+        "evidence_graph",
+    ]
+
+    end_stages = [
+        "discovery",
+        "evidence_ingestion",
+        "claims",
+        "verification",
+        "counter_evidence",
+        "mission",
+    ]
+
     actually_working = round(
         100
         * sum(
-            stages.get(s)
+            stages.get(stage)
             == "completed"
-            for s in [
-                "discovery",
-                "evidence_ingestion",
-                "claims",
-                "evidence_graph",
-            ]
+            for stage in pipeline_stages
         )
-        / 4,
+        / len(pipeline_stages),
         1,
     )
 
     end_to_end = round(
         100
         * sum(
-            stages.get(s)
+            stages.get(stage)
             == "completed"
-            for s in [
-                "discovery",
-                "evidence_ingestion",
-                "claims",
-                "verification",
-                "counter_evidence",
-                "mission",
-            ]
+            for stage in end_stages
         )
-        / 6,
+        / len(end_stages),
         1,
     )
 
@@ -2044,56 +2139,42 @@ def audit_result(
         else 0.0
     )
 
+    if gate:
+        reality_status = (
+            "evidence_gate_passed"
+        )
+    elif verified:
+        reality_status = (
+            "research_pipeline_operational"
+            "_with_partial_verification"
+        )
+    else:
+        reality_status = (
+            "research_pipeline_operational"
+            "_verification_incomplete"
+        )
+
     return {
-        "version":
-            VERSION,
-
-        "build":
-            BUILD,
-
-        "mission_id":
-            mid,
-
-        "objective":
-            objective,
+        "version": VERSION,
+        "build": BUILD,
+        "mission_id": mid,
+        "objective": objective,
 
         "current_reality": {
-            "status":
-                (
-                    "research_pipeline_operational_"
-                    "but_verification_incomplete"
-                ),
-
-            "works":
-                independent_works,
-
-            "usable_evidence":
-                usable,
-
-            "claims":
-                total,
-
-            "verified_claims":
-                verified,
-
-            "supported_claims":
-                supported,
-
-            "domains":
-                domains,
-
-            "source_families":
-                families,
-
-            "graph_edges":
-                len(edges),
-
-            "evidence_gate":
-                gate,
+            "status": reality_status,
+            "works": independent_works,
+            "usable_evidence": usable,
+            "claims": total,
+            "verified_claims": verified,
+            "supported_claims": supported,
+            "contradicted_claims": contradicted,
+            "domains": domains,
+            "source_families": families,
+            "graph_edges": len(edges),
+            "evidence_gate": gate,
         },
 
         "objective_measurements": {
-
             "capability_coverage_percent":
                 "NOT MEASURABLE YET",
 
@@ -2123,109 +2204,83 @@ def audit_result(
         },
 
         "measurement_definitions": {
-
             "actually_working_percent": {
                 "numerator":
-                    (
-                        "completed discovery, "
-                        "evidence ingestion, claims, "
-                        "and graph stages"
-                    ),
-                "denominator":
-                    4,
+                    "completed discovery, "
+                    "evidence ingestion, claims "
+                    "and evidence graph stages",
+                "denominator": 4,
                 "definition":
-                    (
-                        "pipeline stages completed "
-                        "successfully"
-                    ),
+                    "research pipeline stage completion",
             },
 
             "independently_verified_percent": {
-                "numerator":
-                    verified,
-                "denominator":
-                    total,
+                "numerator": verified,
+                "denominator": total,
                 "definition":
-                    (
-                        "claims reaching VERIFIED "
-                        "under independent-work/"
-                        "domain/family rules"
-                    ),
+                    "claims reaching VERIFIED under "
+                    "independent work/domain/source "
+                    "family requirements",
             },
 
             "end_to_end_demonstrated_percent": {
                 "numerator":
-                    (
-                        "completed required "
-                        "audit pipeline stages"
-                    ),
-                "denominator":
-                    6,
+                    "completed required audit stages",
+                "denominator": 6,
                 "definition":
-                    (
-                        "completed discovery, ingestion, "
-                        "claims, verification, "
-                        "counter-evidence, and mission stages"
-                    ),
+                    "pipeline completion from discovery "
+                    "through mission completion",
             },
 
             "evidence_integrity_percent": {
-                "numerator":
-                    verified,
-                "denominator":
-                    total,
+                "numerator": verified,
+                "denominator": total,
                 "definition":
-                    (
-                        "verified claims divided by "
-                        "extracted claims; this is a "
-                        "narrow integrity metric, not "
-                        "overall intelligence"
-                    ),
+                    "verified claims divided by "
+                    "extracted claims; narrow metric "
+                    "only",
             },
         },
 
         "gate_definition": {
             "requires":
-                (
-                    "at least 1 verified claim supported "
-                    "by >=2 independent works across >=2 "
-                    "domains and >=2 source families, "
-                    "plus usable evidence and provenance edges"
-                ),
+                "at least one VERIFIED claim with "
+                "at least two independent works, "
+                "two domains and two source families, "
+                "plus usable evidence and graph edges",
 
-            "passed":
-                gate,
+            "passed": gate,
         },
 
         "verified_capabilities": [
-            "mission creation and persistence",
-            "multi-provider source discovery",
+            "mission creation",
+            "multi-provider discovery",
             "safe URL retrieval",
             "evidence ingestion",
-            "candidate claim extraction",
+            "claim extraction",
             "claim-to-evidence provenance",
-            "independent-work/domain/family verification",
+            "independent corroboration checks",
             "contradiction detection",
-            "persistent mission events",
+            "mission events",
             "evidence gate",
-            "reality audit metrics",
+            "audit metrics",
+            "browser dashboard",
         ],
 
         "not_yet_demonstrated": [
-            "reliable independent corroboration across repeated unseen tasks",
-            "high-precision autonomous verification",
-            "autonomous self-correction",
-            "reliable real-world tool execution",
-            "production-grade autonomy",
-            "continuous learning/self-improvement",
+            "reliable autonomous execution of arbitrary real-world actions",
+            "autonomous self-correction across repeated failures",
+            "production-grade autonomous operation",
+            "continuous self-improvement",
+            "general autonomous tool execution",
+            "persistent durable memory across infrastructure restarts",
         ],
 
         "next_test":
-            (
-                "Run a fresh unseen objective and require "
-                "at least one independently corroborated "
-                "claim to reach VERIFIED without manual intervention."
-            ),
+            "Run a fresh unseen objective and require "
+            "at least one independently corroborated "
+            "claim to reach VERIFIED without manual "
+            "intervention.",
 
         "events": [
             dict(x)
@@ -2233,6 +2288,10 @@ def audit_result(
         ],
     }
 
+
+# ============================================================
+# MISSION EXECUTION
+# ============================================================
 
 def run_mission(
     mid: str,
@@ -2245,12 +2304,14 @@ def run_mission(
             mid,
             "mission",
             "running",
+            "Mission started",
         )
 
         event(
             mid,
             "discovery",
             "running",
+            "Querying research providers",
         )
 
         found = discover(
@@ -2294,6 +2355,7 @@ def run_mission(
             mid,
             "claims",
             "running",
+            "Extracting substantive claims",
         )
 
         claim_count = extract_claims(
@@ -2305,13 +2367,17 @@ def run_mission(
             mid,
             "claims",
             "completed",
-            f"{claim_count} substantive claims",
+            (
+                f"{claim_count} "
+                "candidate claims"
+            ),
         )
 
         event(
             mid,
             "evidence_graph",
             "running",
+            "Building provenance graph",
         )
 
         build_graph(
@@ -2339,8 +2405,7 @@ def run_mission(
             "evidence_graph",
             "completed",
             (
-                f"{edge_count} "
-                "provenance/relationship edges"
+                f"{edge_count} graph edges"
             ),
         )
 
@@ -2348,6 +2413,7 @@ def run_mission(
             mid,
             "verification",
             "running",
+            "Testing independent corroboration",
         )
 
         verification = verify(
@@ -2379,10 +2445,7 @@ def run_mission(
             mid,
             "counter_evidence",
             "completed",
-            (
-                "counter-evidence represented "
-                "through contradiction analysis"
-            ),
+            "Contradiction analysis completed",
         )
 
         result = audit_result(
@@ -2395,8 +2458,12 @@ def run_mission(
             "mission",
             "completed",
             (
-                f"gate="
-                f"{result['gate_definition']['passed']}"
+                "Evidence gate="
+                + str(
+                    result[
+                        "gate_definition"
+                    ]["passed"]
+                )
             ),
         )
 
@@ -2419,21 +2486,18 @@ def run_mission(
             mid,
             "failed",
             {
-                "error":
-                    repr(exc),
-
-                "version":
-                    VERSION,
-
-                "build":
-                    BUILD,
+                "error": repr(exc),
+                "version": VERSION,
+                "build": BUILD,
             },
         )
 
 
-class MissionIn(
-    BaseModel
-):
+# ============================================================
+# MODELS
+# ============================================================
+
+class MissionIn(BaseModel):
 
     objective: str = Field(
         min_length=10,
@@ -2441,16 +2505,919 @@ class MissionIn(
     )
 
 
+# ============================================================
+# DASHBOARD
+# ============================================================
+
+DASHBOARD_HTML = """
+<!doctype html>
+<html lang="en">
+<head>
+
+<meta charset="utf-8">
+
+<meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+>
+
+<meta
+    name="theme-color"
+    content="#08111f"
+>
+
+<title>AI Infinity</title>
+
+<style>
+
+:root {
+    color-scheme: dark;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    background: #08111f;
+    color: #e8eef7;
+    font-family:
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+}
+
+main {
+    width: 100%;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 14px;
+}
+
+.card {
+    background: #0e1a2b;
+    border: 1px solid #21334b;
+    border-radius: 16px;
+    padding: 15px;
+    margin: 10px 0;
+    box-shadow:
+        0 8px 30px rgba(0,0,0,.18);
+}
+
+.header {
+    padding: 20px;
+}
+
+h1 {
+    margin: 0 0 4px;
+    font-size: 29px;
+}
+
+h2,
+h3 {
+    margin-top: 0;
+}
+
+.sub {
+    color: #91a4bc;
+}
+
+textarea {
+    width: 100%;
+    min-height: 150px;
+    resize: vertical;
+    background: #07101c;
+    color: #ffffff;
+    border: 1px solid #2b405c;
+    border-radius: 12px;
+    padding: 13px;
+    font-size: 15px;
+    line-height: 1.45;
+    outline: none;
+}
+
+textarea:focus {
+    border-color: #4f8cff;
+}
+
+button {
+    width: 100%;
+    border: 0;
+    border-radius: 12px;
+    padding: 15px;
+    margin-top: 10px;
+    background: #4f8cff;
+    color: white;
+    font-weight: 800;
+    font-size: 16px;
+    cursor: pointer;
+}
+
+button:disabled {
+    opacity: .45;
+    cursor: wait;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns:
+        repeat(4, minmax(0, 1fr));
+    gap: 9px;
+}
+
+.metric {
+    background: #0a1524;
+    border-radius: 12px;
+    padding: 12px;
+    min-width: 0;
+}
+
+.num {
+    font-size: 25px;
+    font-weight: 850;
+}
+
+.lab {
+    color: #91a4bc;
+    font-size: 11px;
+    margin-top: 2px;
+}
+
+.progress {
+    height: 9px;
+    background: #17263a;
+    border-radius: 9px;
+    overflow: hidden;
+    margin-top: 12px;
+}
+
+.fill {
+    height: 100%;
+    width: 0%;
+    background: #62a0ff;
+    transition: width .3s ease;
+}
+
+.item {
+    padding: 10px 0;
+    border-bottom:
+        1px solid #1d2b3e;
+}
+
+.item:last-child {
+    border-bottom: 0;
+}
+
+.ok {
+    color: #63d391;
+}
+
+.warn {
+    color: #ffc857;
+}
+
+.bad {
+    color: #ff7272;
+}
+
+.neutral {
+    color: #8db7ff;
+}
+
+pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: #07101c;
+    color: #d9e4f2;
+    border-radius: 10px;
+    padding: 12px;
+    max-height: 450px;
+    overflow: auto;
+    font-size: 12px;
+}
+
+.small {
+    font-size: 12px;
+}
+
+.pill {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 99px;
+    background: #17263a;
+    font-size: 11px;
+}
+
+@media (max-width: 700px) {
+
+    main {
+        padding: 9px;
+    }
+
+    .grid {
+        grid-template-columns:
+            repeat(2, minmax(0, 1fr));
+    }
+
+    .header {
+        padding: 15px;
+    }
+
+    h1 {
+        font-size: 25px;
+    }
+}
+
+</style>
+
+</head>
+
+<body>
+
+<main>
+
+<div class="card header">
+
+    <h1>AI Infinity</h1>
+
+    <div class="sub">
+        TARGET-2050.32
+        ·
+        AUTONOMOUS-EVIDENCE-DASHBOARD-CORE
+    </div>
+
+    <br>
+
+    <textarea id="objective">Research the reliability of autonomous AI agents for real-world task execution. Find independent evidence, verify important claims, identify contradictory evidence, and give the next actions.</textarea>
+
+    <button
+        id="run"
+        onclick="runMission()"
+    >
+        RUN MISSION
+    </button>
+
+    <div
+        id="status"
+        class="sub"
+        style="margin-top:10px"
+    >
+        Ready.
+    </div>
+
+    <div class="progress">
+        <div
+            id="fill"
+            class="fill"
+        ></div>
+    </div>
+
+</div>
+
+
+<div class="grid">
+
+<div class="metric">
+    <div
+        id="sources"
+        class="num"
+    >0</div>
+    <div class="lab">
+        SOURCES
+    </div>
+</div>
+
+<div class="metric">
+    <div
+        id="evidence"
+        class="num"
+    >0</div>
+    <div class="lab">
+        EVIDENCE
+    </div>
+</div>
+
+<div class="metric">
+    <div
+        id="claims"
+        class="num"
+    >0</div>
+    <div class="lab">
+        CLAIMS
+    </div>
+</div>
+
+<div class="metric">
+    <div
+        id="verified"
+        class="num"
+    >0</div>
+    <div class="lab">
+        VERIFIED
+    </div>
+</div>
+
+</div>
+
+
+<div class="card">
+
+    <h3>MISSION</h3>
+
+    <div id="mission">
+        No mission running.
+    </div>
+
+</div>
+
+
+<div class="card">
+
+    <h3>EVENTS</h3>
+
+    <div id="events">
+        Waiting...
+    </div>
+
+</div>
+
+
+<div class="card">
+
+    <h3>CLAIMS</h3>
+
+    <div id="claimsList">
+        Waiting...
+    </div>
+
+</div>
+
+
+<div class="card">
+
+    <h3>EVIDENCE GRAPH</h3>
+
+    <div id="graph">
+        Waiting...
+    </div>
+
+</div>
+
+
+<div class="card">
+
+    <h3>AUDIT</h3>
+
+    <pre id="audit">Run a mission to generate the audit.</pre>
+
+</div>
+
+
+<div class="card">
+
+    <h3>MISSION HISTORY</h3>
+
+    <div id="history">
+        Loading...
+    </div>
+
+</div>
+
+</main>
+
+
+<script>
+
+let activeMission = null;
+let pollTimer = null;
+
+const $ = id =>
+    document.getElementById(id);
+
+
+function escapeHtml(value) {
+
+    return String(
+        value ?? ""
+    ).replace(
+        /[&<>"']/g,
+        function(char) {
+
+            return {
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;"
+            }[char];
+
+        }
+    );
+
+}
+
+
+async function api(
+    url,
+    options
+) {
+
+    const response =
+        await fetch(
+            url,
+            options
+        );
+
+    if (!response.ok) {
+
+        throw new Error(
+            await response.text()
+        );
+
+    }
+
+    return response.json();
+
+}
+
+
+async function runMission() {
+
+    const objective =
+        $("objective")
+        .value
+        .trim();
+
+    if (
+        objective.length < 10
+    ) {
+
+        $("status")
+            .textContent =
+            "Objective must be at least 10 characters.";
+
+        return;
+
+    }
+
+    $("run").disabled = true;
+
+    $("status")
+        .textContent =
+        "Starting mission...";
+
+    $("fill")
+        .style
+        .width = "3%";
+
+    try {
+
+        const result =
+            await api(
+                "/run",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
+                    body:
+                        JSON.stringify({
+                            objective:
+                                objective
+                        })
+                }
+            );
+
+        activeMission =
+            result.mission_id;
+
+        $("status")
+            .textContent =
+            "Mission queued: "
+            + activeMission;
+
+        pollMission();
+
+    } catch (error) {
+
+        $("status")
+            .textContent =
+            "Start failed: "
+            + error.message;
+
+        $("run").disabled = false;
+
+    }
+
+}
+
+
+async function pollMission() {
+
+    if (!activeMission) {
+        return;
+    }
+
+    try {
+
+        const results =
+            await Promise.all([
+                api(
+                    "/mission/"
+                    + activeMission
+                ),
+
+                api(
+                    "/mission/"
+                    + activeMission
+                    + "/events"
+                ),
+
+                api(
+                    "/mission/"
+                    + activeMission
+                    + "/sources"
+                ),
+
+                api(
+                    "/mission/"
+                    + activeMission
+                    + "/evidence"
+                ),
+
+                api(
+                    "/mission/"
+                    + activeMission
+                    + "/claims"
+                ),
+
+                api(
+                    "/mission/"
+                    + activeMission
+                    + "/graph"
+                )
+            ]);
+
+        const mission =
+            results[0];
+
+        const events =
+            results[1];
+
+        const sources =
+            results[2];
+
+        const evidence =
+            results[3];
+
+        const claims =
+            results[4];
+
+        const graph =
+            results[5];
+
+        renderMission(
+            mission,
+            events,
+            sources,
+            evidence,
+            claims,
+            graph
+        );
+
+        if (
+            mission.status ===
+                "completed"
+            ||
+            mission.status ===
+                "failed"
+        ) {
+
+            try {
+
+                const audit =
+                    await api(
+                        "/mission/"
+                        + activeMission
+                        + "/audit"
+                    );
+
+                $("audit")
+                    .textContent =
+                    JSON.stringify(
+                        audit,
+                        null,
+                        2
+                    );
+
+            } catch (error) {
+
+                $("audit")
+                    .textContent =
+                    error.message;
+
+            }
+
+            $("run").disabled = false;
+
+            activeMission = null;
+
+            loadHistory();
+
+            return;
+
+        }
+
+    } catch (error) {
+
+        $("status")
+            .textContent =
+            "Polling error: "
+            + error.message;
+
+    }
+
+    pollTimer =
+        setTimeout(
+            pollMission,
+            2500
+        );
+
+}
+
+
+function renderMission(
+    mission,
+    events,
+    sources,
+    evidence,
+    claims,
+    graph
+) {
+
+    $("status")
+        .textContent =
+        "Mission "
+        + mission.status
+        + " · "
+        + mission.id;
+
+    $("mission")
+        .innerHTML =
+        "<b>"
+        + escapeHtml(
+            mission.id
+        )
+        + "</b><br>"
+        + escapeHtml(
+            mission.objective
+        );
+
+    $("sources")
+        .textContent =
+        sources.length;
+
+    $("evidence")
+        .textContent =
+        evidence.length;
+
+    $("claims")
+        .textContent =
+        claims.length;
+
+    $("verified")
+        .textContent =
+        claims.filter(
+            x =>
+                x.status ===
+                "VERIFIED"
+        ).length;
+
+    const completed =
+        events.filter(
+            x =>
+                x.status ===
+                "completed"
+        ).length;
+
+    const progress =
+        Math.min(
+            100,
+            completed / 6 * 100
+        );
+
+    $("fill")
+        .style
+        .width =
+        progress + "%";
+
+
+    $("events")
+        .innerHTML =
+        events.length
+        ? events.map(
+            item =>
+                "<div class='item'>"
+                + "<b>"
+                + escapeHtml(
+                    item.stage
+                )
+                + "</b>"
+                + " · "
+                + escapeHtml(
+                    item.status
+                )
+                + "<br>"
+                + "<span class='small'>"
+                + escapeHtml(
+                    item.detail
+                )
+                + "</span>"
+                + "</div>"
+        ).join("")
+        : "No events yet.";
+
+
+    $("claimsList")
+        .innerHTML =
+        claims.length
+        ? claims
+            .slice(0, 40)
+            .map(
+                claim => {
+
+                    let cls =
+                        "warn";
+
+                    if (
+                        claim.status ===
+                        "VERIFIED"
+                    ) {
+                        cls = "ok";
+                    }
+
+                    if (
+                        claim.status ===
+                        "CONTRADICTED"
+                    ) {
+                        cls = "bad";
+                    }
+
+                    return (
+                        "<div class='item'>"
+                        + "<b class='"
+                        + cls
+                        + "'>"
+                        + escapeHtml(
+                            claim.status
+                        )
+                        + "</b>"
+                        + " · "
+                        + escapeHtml(
+                            claim.claim
+                        )
+                        + "</div>"
+                    );
+
+                }
+            )
+            .join("")
+        : "No claims yet.";
+
+
+    $("graph")
+        .innerHTML =
+        "<div class='sub'>"
+        + graph.length
+        + " graph edges"
+        + "</div>"
+        +
+        (
+            graph.length
+            ? graph
+                .slice(0, 50)
+                .map(
+                    edge =>
+                        "<div class='item'>"
+                        + "<span class='pill'>"
+                        + escapeHtml(
+                            edge.from_type
+                        )
+                        + "</span> "
+                        + escapeHtml(
+                            edge.relation
+                        )
+                        + " "
+                        + "<span class='pill'>"
+                        + escapeHtml(
+                            edge.to_type
+                        )
+                        + "</span>"
+                        + " · score "
+                        + Number(
+                            edge.score || 0
+                        ).toFixed(3)
+                        + "</div>"
+                )
+                .join("")
+            : "No graph edges yet."
+        );
+
+}
+
+
+async function loadHistory() {
+
+    try {
+
+        const rows =
+            await api(
+                "/missions"
+            );
+
+        $("history")
+            .innerHTML =
+            rows.length
+            ? rows.map(
+                item =>
+                    "<div class='item'>"
+                    + "<b>"
+                    + escapeHtml(
+                        item.status
+                    )
+                    + "</b>"
+                    + " · "
+                    + escapeHtml(
+                        item.id
+                    )
+                    + "<br>"
+                    + "<span class='small'>"
+                    + escapeHtml(
+                        item.objective
+                    )
+                    + "</span>"
+                    + "</div>"
+            ).join("")
+            : "No missions yet.";
+
+    } catch (error) {
+
+        $("history")
+            .textContent =
+            error.message;
+
+    }
+
+}
+
+
+loadHistory();
+
+</script>
+
+</body>
+</html>
+"""
+
+
+# ============================================================
+# API
+# ============================================================
+
 @app.get(
     "/",
     response_class=HTMLResponse,
 )
 def root():
 
-    return (
-        f"<h1>AI Infinity</h1>"
-        f"<p>{VERSION} — {BUILD}</p>"
-        f"<p>Evidence-first autonomous research.</p>"
+    return HTMLResponse(
+        DASHBOARD_HTML
+    )
+
+
+@app.get(
+    "/dashboard",
+    response_class=HTMLResponse,
+)
+def dashboard():
+
+    return HTMLResponse(
+        DASHBOARD_HTML
+    )
+
+
+@app.get(
+    "/run",
+    response_class=HTMLResponse,
+)
+def run_page():
+
+    return HTMLResponse(
+        DASHBOARD_HTML
     )
 
 
@@ -2458,14 +3425,9 @@ def root():
 def health():
 
     return {
-        "status":
-            "ok",
-
-        "version":
-            VERSION,
-
-        "build":
-            BUILD,
+        "status": "ok",
+        "version": VERSION,
+        "build": BUILD,
     }
 
 
@@ -2486,17 +3448,10 @@ def status():
         c.close()
 
     return {
-        "status":
-            "online",
-
-        "missions":
-            count,
-
-        "version":
-            VERSION,
-
-        "build":
-            BUILD,
+        "status": "online",
+        "missions": count,
+        "version": VERSION,
+        "build": BUILD,
     }
 
 
@@ -2504,21 +3459,19 @@ def status():
 def capabilities():
 
     return {
-        "version":
-            VERSION,
-
-        "build":
-            BUILD,
-
+        "version": VERSION,
+        "build": BUILD,
         "capabilities": [
+            "mobile dashboard",
             "multi-provider discovery",
             "safe URL retrieval",
             "evidence excerpts",
             "claim extraction",
             "claim-to-evidence provenance",
-            "independent work/domain/family verification",
+            "independent verification",
             "contradiction detection",
-            "persistent missions/events",
+            "persistent mission events",
+            "evidence graph",
             "evidence gate",
             "reality audit",
         ],
@@ -2544,12 +3497,12 @@ def create_mission(
         c.execute(
             """
             INSERT INTO missions(
-              id,
-              objective,
-              status,
-              result,
-              created_at,
-              updated_at
+                id,
+                objective,
+                status,
+                result,
+                created_at,
+                updated_at
             )
             VALUES(?,?,?,?,?,?)
             """,
@@ -2570,6 +3523,7 @@ def create_mission(
         mid,
         "mission",
         "queued",
+        "Mission accepted",
     )
 
     EXECUTOR.submit(
@@ -2579,20 +3533,11 @@ def create_mission(
     )
 
     return {
-        "task_id":
-            mid,
-
-        "mission_id":
-            mid,
-
-        "status":
-            "queued",
-
-        "version":
-            VERSION,
-
-        "build":
-            BUILD,
+        "task_id": mid,
+        "mission_id": mid,
+        "status": "queued",
+        "version": VERSION,
+        "build": BUILD,
     }
 
 
@@ -2606,7 +3551,9 @@ def command(
     )
 
 
-@app.get("/mission/{mid}")
+@app.get(
+    "/mission/{mid}"
+)
 def get_mission(
     mid: str,
 ):
@@ -2633,17 +3580,17 @@ def get_mission(
             detail="mission not found",
         )
 
-    out = dict(row)
+    output = dict(row)
 
-    out["result"] = (
+    output["result"] = (
         json.loads(
-            out["result"]
+            output["result"]
         )
-        if out["result"]
+        if output["result"]
         else None
     )
 
-    return out
+    return output
 
 
 @app.get("/missions")
@@ -2654,8 +3601,8 @@ def missions():
         c = db()
 
         rows = [
-            dict(x)
-            for x in c.execute(
+            dict(row)
+            for row in c.execute(
                 """
                 SELECT *
                 FROM missions
@@ -2680,7 +3627,9 @@ def missions():
     return rows
 
 
-@app.get("/mission/{mid}/events")
+@app.get(
+    "/mission/{mid}/events"
+)
 def mission_events(
     mid: str,
 ):
@@ -2690,8 +3639,8 @@ def mission_events(
         c = db()
 
         rows = [
-            dict(x)
-            for x in c.execute(
+            dict(row)
+            for row in c.execute(
                 """
                 SELECT *
                 FROM events
@@ -2707,7 +3656,9 @@ def mission_events(
     return rows
 
 
-@app.get("/mission/{mid}/sources")
+@app.get(
+    "/mission/{mid}/sources"
+)
 def mission_sources(
     mid: str,
 ):
@@ -2717,8 +3668,8 @@ def mission_sources(
         c = db()
 
         rows = [
-            dict(x)
-            for x in c.execute(
+            dict(row)
+            for row in c.execute(
                 """
                 SELECT *
                 FROM works
@@ -2735,7 +3686,9 @@ def mission_sources(
     return rows
 
 
-@app.get("/mission/{mid}/claims")
+@app.get(
+    "/mission/{mid}/claims"
+)
 def mission_claims(
     mid: str,
 ):
@@ -2745,8 +3698,8 @@ def mission_claims(
         c = db()
 
         rows = [
-            dict(x)
-            for x in c.execute(
+            dict(row)
+            for row in c.execute(
                 """
                 SELECT *
                 FROM claims
@@ -2762,7 +3715,9 @@ def mission_claims(
     return rows
 
 
-@app.get("/mission/{mid}/evidence")
+@app.get(
+    "/mission/{mid}/evidence"
+)
 def mission_evidence(
     mid: str,
 ):
@@ -2772,8 +3727,8 @@ def mission_evidence(
         c = db()
 
         rows = [
-            dict(x)
-            for x in c.execute(
+            dict(row)
+            for row in c.execute(
                 """
                 SELECT *
                 FROM evidence
@@ -2790,7 +3745,9 @@ def mission_evidence(
     return rows
 
 
-@app.get("/mission/{mid}/graph")
+@app.get(
+    "/mission/{mid}/graph"
+)
 def mission_graph(
     mid: str,
 ):
@@ -2800,8 +3757,8 @@ def mission_graph(
         c = db()
 
         rows = [
-            dict(x)
-            for x in c.execute(
+            dict(row)
+            for row in c.execute(
                 """
                 SELECT *
                 FROM edges
@@ -2817,7 +3774,9 @@ def mission_graph(
     return rows
 
 
-@app.get("/mission/{mid}/audit")
+@app.get(
+    "/mission/{mid}/audit"
+)
 def mission_audit(
     mid: str,
 ):
@@ -2831,9 +3790,7 @@ def mission_audit(
         return {
             "status":
                 mission["status"],
-
-            "result":
-                None,
+            "result": None,
         }
 
     return mission["result"]
@@ -2845,13 +3802,14 @@ def validate_source(
 ):
 
     return {
-        "url":
-            url,
-
-        "safe":
-            safe_url(url),
+        "url": url,
+        "safe": safe_url(url),
     }
 
+
+# ============================================================
+# SHUTDOWN
+# ============================================================
 
 @app.on_event("shutdown")
 def shutdown():
