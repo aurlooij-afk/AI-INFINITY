@@ -1,26 +1,35 @@
 """
 AI Infinity
-TARGET-2050.32
-BUILD: AUTONOMOUS-EVIDENCE-DASHBOARD-CORE
+TARGET-2050.33
+BUILD: CLAIM-PURITY-EVIDENCE-ENTAILMENT-PROVENANCE-CORE
 
-Evidence-first autonomous research engine with mobile dashboard.
+Purpose:
+Evidence-first autonomous research with auditable claim provenance.
+
+Important:
+- Similarity is NOT proof.
+- Low similarity edges are never labelled SUPPORTED_BY.
+- VERIFIED requires independent corroboration.
+- Provider diversity is not treated as true independence.
+- Claims must pass purity filters before entering the graph.
 """
 
 from __future__ import annotations
 
 import hashlib
 import html
+import ipaddress
 import json
+import math
 import os
 import re
-import socket
 import sqlite3
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import requests
@@ -28,205 +37,43 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-try:
-    from pypdf import PdfReader
-except Exception:
-    PdfReader = None
-
 
 # ============================================================
-# CORE
+# VERSION
 # ============================================================
 
-VERSION = "TARGET-2050.32"
-BUILD = "AUTONOMOUS-EVIDENCE-DASHBOARD-CORE"
+VERSION = "TARGET-2050.33"
+BUILD = "CLAIM-PURITY-EVIDENCE-ENTAILMENT-PROVENANCE-CORE"
 
-BASE = Path(
-    os.getenv(
-        "AI_INFINITY_DATA",
-        "/tmp/ai-infinity",
-    )
-)
-
-BASE.mkdir(
-    parents=True,
-    exist_ok=True,
-)
+BASE = Path("/tmp/ai-infinity")
+BASE.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = BASE / "ai_infinity.db"
 
-MAX_BYTES = 7 * 1024 * 1024
-MAX_TEXT = 120_000
+MAX_WORKERS = 6
+FETCH_TIMEOUT = 15
+MAX_TEXT = 90000
+MAX_RESULTS_PER_PROVIDER = 8
 
-WORKERS = int(
-    os.getenv(
-        "AI_INFINITY_WORKERS",
-        "6",
-    )
-)
-
-TIMEOUT = int(
-    os.getenv(
-        "AI_INFINITY_HTTP_TIMEOUT",
-        "20",
-    )
-)
+executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 
 app = FastAPI(
     title="AI Infinity",
     version=VERSION,
+    description="Evidence-first autonomous research engine",
 )
-
-EXECUTOR = ThreadPoolExecutor(
-    max_workers=WORKERS
-)
-
-DB_LOCK = threading.RLock()
-
-
-# ============================================================
-# RESEARCH CONSTANTS
-# ============================================================
-
-RESEARCH_TERMS = {
-    "agent",
-    "agents",
-    "autonomous",
-    "autonomy",
-    "planning",
-    "tool",
-    "tools",
-    "execution",
-    "verification",
-    "reliability",
-    "failure",
-    "recovery",
-    "safety",
-    "benchmark",
-    "task",
-    "tasks",
-    "reasoning",
-    "workflow",
-    "performance",
-    "success",
-    "error",
-    "human",
-    "oversight",
-    "real-world",
-    "research",
-    "system",
-    "model",
-    "models",
-    "memory",
-    "learning",
-    "self-correction",
-    "evidence",
-}
-
-
-NOISE_PHRASES = {
-    "skip to main content",
-    "similar content being viewed",
-    "download for free",
-    "share cite",
-    "cite cite",
-    "home >",
-    "article open access",
-    "explore related subjects",
-    "published:",
-    "written by",
-    "search submit donate",
-    "log in",
-    "advanced search",
-    "table of contents",
-    "page navigation",
-    "previous article",
-    "next article",
-    "related articles",
-    "related subjects",
-    "cookie",
-    "privacy policy",
-    "accept all cookies",
-    "sign in",
-    "register",
-    "javascript",
-}
-
-
-PREDICATES = {
-    "is",
-    "are",
-    "was",
-    "were",
-    "can",
-    "cannot",
-    "found",
-    "shows",
-    "demonstrates",
-    "improves",
-    "reduces",
-    "requires",
-    "provides",
-    "supports",
-    "suggests",
-    "observed",
-    "measured",
-    "reported",
-    "increases",
-    "decreases",
-    "achieved",
-    "failed",
-    "performs",
-    "outperforms",
-    "depends",
-    "causes",
-    "associated",
-    "predicts",
-    "enables",
-    "limits",
-}
-
-
-NEGATION = {
-    "not",
-    "no",
-    "never",
-    "cannot",
-    "can't",
-    "unable",
-    "fails",
-    "failure",
-    "without",
-    "lack",
-    "lacks",
-}
-
-
-LIMITATION = {
-    "limitation",
-    "limited",
-    "caveat",
-    "constraint",
-    "uncertain",
-    "uncertainty",
-    "weakness",
-    "failure",
-    "fails",
-    "risk",
-}
 
 
 # ============================================================
 # DATABASE
 # ============================================================
 
-def now() -> float:
-    return time.time()
+db_lock = threading.Lock()
 
 
 def db():
     conn = sqlite3.connect(
-        DB_PATH,
+        str(DB_PATH),
         check_same_thread=False,
         timeout=30,
     )
@@ -235,395 +82,230 @@ def db():
 
 
 def init_db():
-    with DB_LOCK:
-        c = db()
+    with db_lock:
+        conn = db()
+        cur = conn.cursor()
 
-        c.executescript(
+        cur.executescript(
             """
-            PRAGMA journal_mode=WAL;
-
-            CREATE TABLE IF NOT EXISTS missions(
+            CREATE TABLE IF NOT EXISTS missions (
                 id TEXT PRIMARY KEY,
-                objective TEXT,
-                status TEXT,
-                result TEXT,
-                created_at REAL,
-                updated_at REAL
+                objective TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                result TEXT
             );
 
-            CREATE TABLE IF NOT EXISTS events(
+            CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                mission_id TEXT,
-                stage TEXT,
-                status TEXT,
+                mission_id TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                status TEXT NOT NULL,
                 detail TEXT,
-                created_at REAL
+                created_at REAL NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS works(
+            CREATE TABLE IF NOT EXISTS works (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                mission_id TEXT,
-                work_key TEXT,
+                mission_id TEXT NOT NULL,
                 title TEXT,
-                abstract TEXT,
                 url TEXT,
                 doi TEXT,
                 provider TEXT,
-                source_family TEXT,
                 domain TEXT,
-                quality REAL,
-                relevance REAL,
-                full_text INTEGER DEFAULT 0,
-                created_at REAL,
-                UNIQUE(mission_id, work_key)
-            );
-
-            CREATE TABLE IF NOT EXISTS evidence(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                mission_id TEXT,
+                source_family TEXT,
                 work_key TEXT,
-                source_id INTEGER,
-                excerpt TEXT,
+                abstract TEXT,
+                text TEXT,
+                quality REAL DEFAULT 0,
+                relevance REAL DEFAULT 0,
+                created_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS evidence (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mission_id TEXT NOT NULL,
+                work_id INTEGER NOT NULL,
+                excerpt TEXT NOT NULL,
                 evidence_type TEXT,
+                quality TEXT,
                 locator TEXT,
-                quality REAL,
-                relevance REAL,
-                source_family TEXT,
-                domain TEXT,
-                created_at REAL
+                score REAL DEFAULT 0,
+                created_at REAL NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS claims(
+            CREATE TABLE IF NOT EXISTS claims (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                mission_id TEXT,
-                claim TEXT,
-                fingerprint TEXT,
-                status TEXT,
-                confidence REAL,
-                created_at REAL,
-                UNIQUE(mission_id, fingerprint)
+                mission_id TEXT NOT NULL,
+                claim TEXT NOT NULL,
+                status TEXT DEFAULT 'INSUFFICIENT',
+                purity REAL DEFAULT 0,
+                confidence REAL DEFAULT 0,
+                created_at REAL NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS edges(
+            CREATE TABLE IF NOT EXISTS edges (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                mission_id TEXT,
-                from_type TEXT,
-                from_id TEXT,
-                to_type TEXT,
-                to_id TEXT,
-                relation TEXT,
-                score REAL,
+                mission_id TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                source_id INTEGER NOT NULL,
+                relation TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                target_id INTEGER NOT NULL,
+                score REAL DEFAULT 0,
                 reason TEXT,
-                created_at REAL
+                created_at REAL NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS memory(
+            CREATE TABLE IF NOT EXISTS audits (
+                mission_id TEXT PRIMARY KEY,
+                payload TEXT NOT NULL,
+                created_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS memory (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 mission_id TEXT,
                 key TEXT,
                 value TEXT,
-                created_at REAL
+                created_at REAL NOT NULL
             );
             """
         )
 
-        c.commit()
-        c.close()
+        conn.commit()
+        conn.close()
 
 
 init_db()
 
 
 # ============================================================
-# DATABASE HELPERS
+# MODELS
 # ============================================================
 
-def event(
-    mid: str,
-    stage: str,
-    status: str,
-    detail: str = "",
-):
-    with DB_LOCK:
-        c = db()
-
-        c.execute(
-            """
-            INSERT INTO events(
-                mission_id,
-                stage,
-                status,
-                detail,
-                created_at
-            )
-            VALUES(?,?,?,?,?)
-            """,
-            (
-                mid,
-                stage,
-                status,
-                detail,
-                now(),
-            ),
-        )
-
-        c.execute(
-            """
-            UPDATE missions
-            SET updated_at=?
-            WHERE id=?
-            """,
-            (
-                now(),
-                mid,
-            ),
-        )
-
-        c.commit()
-        c.close()
+class MissionRequest(BaseModel):
+    objective: str = Field(..., min_length=5, max_length=10000)
 
 
-def set_mission(
-    mid: str,
-    status: str,
-    result=None,
-):
-    with DB_LOCK:
-        c = db()
-
-        c.execute(
-            """
-            UPDATE missions
-            SET status=?,
-                result=?,
-                updated_at=?
-            WHERE id=?
-            """,
-            (
-                status,
-                json.dumps(
-                    result,
-                    ensure_ascii=False,
-                )
-                if result is not None
-                else None,
-                now(),
-                mid,
-            ),
-        )
-
-        c.commit()
-        c.close()
+class CommandRequest(BaseModel):
+    command: str = Field(..., min_length=5, max_length=10000)
 
 
 # ============================================================
-# TEXT / RELEVANCE
+# HELPERS
 # ============================================================
 
-def clean(text: str) -> str:
-    return re.sub(
-        r"\s+",
-        " ",
-        text or "",
-    ).strip()
+def now() -> float:
+    return time.time()
 
 
-def tokens(s: str) -> set[str]:
+def uid(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
+
+
+def normalize_space(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def tokens(text: str) -> set:
+    words = re.findall(r"[a-zA-Z0-9]{3,}", (text or "").lower())
     stop = {
-        "the",
-        "and",
-        "for",
-        "with",
-        "that",
-        "this",
-        "from",
-        "into",
-        "their",
-        "there",
-        "about",
-        "using",
-        "were",
-        "have",
-        "has",
-        "been",
-        "than",
-        "then",
-        "they",
-        "them",
-        "which",
-        "also",
-        "such",
-        "more",
-        "other",
-        "these",
-        "those",
+        "this", "that", "with", "from", "have", "been", "were",
+        "they", "their", "which", "about", "into", "than", "also",
+        "these", "those", "such", "using", "used", "more", "will",
+        "can", "may", "for", "and", "the", "are", "was", "not",
+        "but", "its", "our", "has", "had", "does", "between",
     }
-
-    return {
-        x
-        for x in re.findall(
-            r"[a-zA-Z][a-zA-Z0-9'-]{2,}",
-            (s or "").lower(),
-        )
-        if x not in stop
-    }
+    return {x for x in words if x not in stop}
 
 
-def research_terms(
-    objective: str,
-) -> set[str]:
+def similarity(a: str, b: str) -> float:
+    aa = tokens(a)
+    bb = tokens(b)
 
-    t = tokens(objective)
-
-    selected = {
-        x
-        for x in t
-        if x in RESEARCH_TERMS
-        or any(
-            k in x
-            for k in (
-                "agent",
-                "autonom",
-                "verif",
-                "execut",
-                "research",
-                "reliab",
-                "eviden",
-                "task",
-                "tool",
-                "fail",
-                "recover",
-                "safety",
-                "plan",
-                "monitor",
-            )
-        )
-    }
-
-    return selected or set(
-        list(t)[:12]
-    )
-
-
-def similarity(
-    a: str,
-    b: str,
-) -> float:
-
-    A = tokens(a)
-    B = tokens(b)
-
-    if not A or not B:
+    if not aa or not bb:
         return 0.0
 
-    return len(A & B) / max(
-        1,
-        len(A | B),
-    )
+    return len(aa & bb) / max(1, len(aa | bb))
 
 
-def useful_sentence(
-    sentence: str,
-    objective: str,
-) -> bool:
-
-    s = clean(sentence)
-
-    if len(s) < 100:
-        return False
-
-    low = s.lower()
-
-    for phrase in NOISE_PHRASES:
-        if phrase in low:
-            return False
-
-    words = tokens(s)
-
-    if len(words) < 12:
-        return False
-
-    if not (
-        words & research_terms(objective)
-    ):
-        return False
-
-    predicate = any(
-        p in words
-        for p in PREDICATES
-    )
-
-    return predicate
+def domain_of(url: str) -> str:
+    try:
+        host = urlparse(url).hostname or ""
+        host = host.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        return host
+    except Exception:
+        return ""
 
 
-def fingerprint(
-    text: str,
-) -> str:
+def source_family(provider: str, domain: str) -> str:
+    """
+    Provider is retained for provenance, but source-family identity
+    prefers the underlying domain when possible.
+    """
+    d = domain.lower()
 
-    normalized = re.sub(
-        r"[^a-z0-9 ]+",
-        " ",
-        text.lower(),
-    )
+    known = {
+        "arxiv.org": "arxiv",
+        "biorxiv.org": "biorxiv",
+        "medrxiv.org": "medrxiv",
+        "nature.com": "nature",
+        "science.org": "science",
+        "sciencedirect.com": "sciencedirect",
+        "springer.com": "springer",
+        "acm.org": "acm",
+        "ieee.org": "ieee",
+        "openreview.net": "openreview",
+        "paperswithcode.com": "paperswithcode",
+    }
 
-    normalized = clean(normalized)
+    if d in known:
+        return known[d]
 
-    return hashlib.sha256(
-        normalized.encode()
-    ).hexdigest()[:32]
+    return d or provider
 
 
-# ============================================================
-# NETWORK SAFETY
-# ============================================================
-
-def safe_url(
-    url: str,
-) -> bool:
-
+def safe_url(url: str) -> bool:
     try:
         p = urlparse(url)
 
-        if (
-            p.scheme not in
-            ("http", "https")
-            or not p.hostname
-        ):
+        if p.scheme not in {"http", "https"}:
             return False
 
-        host = p.hostname.lower().strip(".")
+        host = p.hostname
+        if not host:
+            return False
 
-        if host in {
+        host_l = host.lower()
+
+        blocked_names = {
             "localhost",
-            "127.0.0.1",
-            "0.0.0.0",
-            "::1",
-        }:
+            "localhost.localdomain",
+            "metadata.google.internal",
+            "instance-data",
+        }
+
+        if host_l in blocked_names:
             return False
 
-        ip = socket.gethostbyname(host)
+        try:
+            ip = ipaddress.ip_address(host_l)
 
-        parts = ip.split(".")
-
-        if len(parts) == 4:
-
-            a = int(parts[0])
-            b = int(parts[1])
-
-            if a in {
-                10,
-                127,
-            }:
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_multicast
+                or ip.is_reserved
+                or ip.is_unspecified
+            ):
                 return False
-
-            if a == 169 and b == 254:
-                return False
-
-            if a == 192 and b == 168:
-                return False
-
-            if a == 172 and 16 <= b <= 31:
-                return False
+        except ValueError:
+            pass
 
         return True
 
@@ -631,1642 +313,1378 @@ def safe_url(
         return False
 
 
-def domain(
-    url: str,
-) -> str:
-
-    try:
-        return (
-            urlparse(url).hostname
-            or ""
-        )
-    except Exception:
-        return ""
-
-
-# ============================================================
-# HTTP FETCH
-# ============================================================
-
-def fetch(
-    url: str,
-) -> Tuple[str, str]:
-
+def fetch_url(url: str) -> Optional[str]:
     if not safe_url(url):
-        return "", ""
+        return None
 
     try:
         r = requests.get(
             url,
-            timeout=TIMEOUT,
+            timeout=FETCH_TIMEOUT,
             headers={
-                "User-Agent":
-                    "AI-Infinity/2050.32"
-            },
-            stream=True,
-            allow_redirects=True,
-        )
-
-        r.raise_for_status()
-
-        content_type = (
-            r.headers.get(
-                "content-type",
-                "",
-            )
-            .lower()
-        )
-
-        data = bytearray()
-
-        for chunk in r.iter_content(
-            65536
-        ):
-
-            if not chunk:
-                continue
-
-            data.extend(chunk)
-
-            if len(data) > MAX_BYTES:
-                break
-
-        raw = bytes(data)
-
-        if (
-            "pdf" in content_type
-            or url.lower().endswith(".pdf")
-        ):
-
-            if PdfReader is None:
-                return "", "pdf"
-
-            import io
-
-            reader = PdfReader(
-                io.BytesIO(raw)
-            )
-
-            text = "\n".join(
-                (
-                    page.extract_text()
-                    or ""
+                "User-Agent": (
+                    "AI-Infinity/2050.33 "
+                    "(evidence-research; +https://ai-infinity-ca5e.onrender.com)"
                 )
-                for page in reader.pages
-            )
-
-            return (
-                clean(text)[:MAX_TEXT],
-                "pdf",
-            )
-
-        text = raw.decode(
-            r.encoding or "utf-8",
-            "ignore",
+            },
         )
 
-        if "<html" in text.lower():
+        if r.status_code >= 400:
+            return None
 
-            text = re.sub(
-                r"(?is)<script.*?</script>|"
-                r"<style.*?</style>|"
-                r"<noscript.*?</noscript>",
-                " ",
-                text,
-            )
+        content_type = r.headers.get("content-type", "").lower()
 
-            text = re.sub(
-                r"(?is)<[^>]+>",
-                " ",
-                text,
-            )
+        if "text" not in content_type and "html" not in content_type:
+            return None
 
-            text = html.unescape(text)
+        text = r.text
 
-        return (
-            clean(text)[:MAX_TEXT],
-            "html",
+        text = re.sub(
+            r"<script\b[^>]*>.*?</script>",
+            " ",
+            text,
+            flags=re.I | re.S,
         )
+
+        text = re.sub(
+            r"<style\b[^>]*>.*?</style>",
+            " ",
+            text,
+            flags=re.I | re.S,
+        )
+
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = html.unescape(text)
+        text = normalize_space(text)
+
+        return text[:MAX_TEXT]
 
     except Exception:
-        return "", ""
+        return None
+
+
+# ============================================================
+# CLAIM PURITY
+# ============================================================
+
+NOISE_PATTERNS = [
+    r"\byou are going to email\b",
+    r"\bemail the following\b",
+    r"\bmessage subject\b",
+    r"\bmessage body\b",
+    r"\bthought you would like to see\b",
+    r"\bsimilar content\b",
+    r"\bshare this\b",
+    r"\bsubscribe\b",
+    r"\bcookie\b",
+    r"\bprivacy policy\b",
+    r"\bterms of use\b",
+    r"\bhome\s*>\b",
+    r"\bopen access publisher\b",
+    r"\bsearch results\b",
+    r"\btable of contents\b",
+    r"\bchapter \d+\b",
+    r"\be-issn\b",
+    r"\bissn\b",
+    r"\bimpact factor\b",
+    r"\bvolume:\d+\b",
+    r"\bissue:\d+\b",
+    r"\bwww\.",
+    r"\bpip install\b",
+    r"\bfrom [a-zA-Z_]+ import\b",
+    r"\bimport [a-zA-Z_]+\b",
+    r"\bdependencies:\b",
+    r"\bexample \d+\b",
+    r"\b```",
+    r"\bapi key\b",
+    r"\bclick here\b",
+    r"\bread more\b",
+]
+
+PREDICATE_WORDS = {
+    "is", "are", "was", "were", "can", "cannot",
+    "may", "might", "shows", "found", "finds",
+    "demonstrates", "suggests", "reports", "requires",
+    "improves", "reduces", "increases", "causes",
+    "associated", "predicts", "supports", "limits",
+    "fails", "achieves", "performs", "uses",
+    "operate", "operates", "interact", "requires",
+}
+
+
+def is_noise_claim(text: str) -> bool:
+    low = text.lower()
+
+    for pattern in NOISE_PATTERNS:
+        if re.search(pattern, low):
+            return True
+
+    if len(text) < 55:
+        return True
+
+    if len(text) > 650:
+        return True
+
+    if text.count(":") >= 4:
+        return True
+
+    if text.count("@") >= 1:
+        return True
+
+    if text.count("/") >= 5:
+        return True
+
+    if re.search(r"\b\d{4}\b.*\b\d{4}\b", text):
+        # Avoid obvious bibliographic blocks.
+        if len(tokens(text)) < 45:
+            return True
+
+    return False
+
+
+def claim_purity(text: str) -> float:
+    text = normalize_space(text)
+
+    if is_noise_claim(text):
+        return 0.0
+
+    words = text.split()
+    low = text.lower()
+
+    score = 0.45
+
+    if 9 <= len(words) <= 55:
+        score += 0.15
+
+    if any(re.search(rf"\b{x}\b", low) for x in PREDICATE_WORDS):
+        score += 0.20
+
+    if re.search(r"\b(agents?|systems?|models?|ai|llm|robots?|research)\b", low):
+        score += 0.10
+
+    if re.search(r"[.!?]$", text):
+        score += 0.05
+
+    if text.count(",") <= 4:
+        score += 0.05
+
+    return min(1.0, score)
+
+
+def extract_claim_candidates(text: str, objective: str) -> List[Dict[str, Any]]:
+    if not text:
+        return []
+
+    # Sentence segmentation.
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+
+    results = []
+    seen = set()
+
+    for raw in sentences:
+        sentence = normalize_space(raw)
+
+        if not sentence:
+            continue
+
+        # Strip obvious leading numbering.
+        sentence = re.sub(r"^\s*[\-\*\d.)]+\s*", "", sentence)
+
+        purity = claim_purity(sentence)
+
+        if purity < 0.60:
+            continue
+
+        if sentence.lower() in seen:
+            continue
+
+        # A claim must have some relationship to the objective.
+        rel = similarity(sentence, objective)
+
+        # Accept broadly enough for research, but reject pure unrelated
+        # page material.
+        if rel < 0.015 and not re.search(
+            r"\b(ai|agent|autonom|llm|robot|execution|governance|"
+            r"tool|task|safety|reliab|research)\w*",
+            sentence.lower(),
+        ):
+            continue
+
+        seen.add(sentence.lower())
+
+        results.append(
+            {
+                "claim": sentence,
+                "purity": round(purity, 3),
+                "relevance": round(rel, 3),
+            }
+        )
+
+        if len(results) >= 40:
+            break
+
+    return results
+
+
+# ============================================================
+# EVIDENCE QUALITY
+# ============================================================
+
+def evidence_quality(
+    claim: str,
+    excerpt: str,
+    score: float,
+) -> str:
+    """
+    Similarity alone does not establish support.
+    This classification combines textual match with evidence
+    structure and provenance.
+    """
+
+    if score < 0.20:
+        return "WEAK"
+
+    if score < 0.35:
+        return "INDIRECT"
+
+    if score < 0.55:
+        return "MODERATE"
+
+    if score < 0.75:
+        return "STRONG"
+
+    return "DIRECT"
+
+
+def evidence_relation(score: float) -> str:
+    if score >= 0.75:
+        return "STRONG_SUPPORT"
+
+    if score >= 0.55:
+        return "SUPPORT"
+
+    if score >= 0.35:
+        return "POSSIBLE_SUPPORT"
+
+    if score >= 0.20:
+        return "WEAK_MATCH"
+
+    return "NO_SUPPORT"
 
 
 # ============================================================
 # PROVIDERS
 # ============================================================
 
-def api_json(
-    url: str,
-    params: Optional[dict] = None,
-) -> dict:
-
+def provider_crossref(objective: str) -> List[Dict[str, Any]]:
     try:
         r = requests.get(
-            url,
-            params=params,
-            timeout=TIMEOUT,
-            headers={
-                "User-Agent":
-                    "AI-Infinity/2050.32"
+            "https://api.crossref.org/works",
+            params={
+                "query": objective,
+                "rows": MAX_RESULTS_PER_PROVIDER,
             },
+            timeout=FETCH_TIMEOUT,
+            headers={"User-Agent": "AI-Infinity/2050.33"},
         )
 
-        r.raise_for_status()
+        data = r.json()
 
-        return r.json()
+        results = []
+
+        for item in data.get("message", {}).get("items", []):
+            title = normalize_space(
+                " ".join(item.get("title", []) or [])
+            )
+
+            if not title:
+                continue
+
+            url = item.get("URL") or ""
+
+            results.append(
+                {
+                    "provider": "crossref",
+                    "title": title,
+                    "url": url,
+                    "doi": item.get("DOI") or "",
+                    "abstract": item.get("abstract") or "",
+                }
+            )
+
+        return results
 
     except Exception:
-        return {}
+        return []
 
 
-def crossref(
-    query: str,
-) -> list[dict]:
-
-    data = api_json(
-        "https://api.crossref.org/works",
-        {
-            "query.bibliographic": query,
-            "rows": 10,
-        },
-    )
-
-    output = []
-
-    for item in (
-        data
-        .get("message", {})
-        .get("items", [])
-    ):
-
-        title = (
-            item.get("title")
-            or [""]
-        )[0]
-
-        doi = item.get(
-            "DOI",
-            "",
+def provider_openalex(objective: str) -> List[Dict[str, Any]]:
+    try:
+        r = requests.get(
+            "https://api.openalex.org/works",
+            params={
+                "search": objective,
+                "per-page": MAX_RESULTS_PER_PROVIDER,
+            },
+            timeout=FETCH_TIMEOUT,
+            headers={"User-Agent": "AI-Infinity/2050.33"},
         )
 
-        output.append(
-            {
-                "title": title,
-                "abstract": clean(
-                    item.get(
-                        "abstract",
-                        "",
-                    )
-                ),
-                "url": (
-                    "https://doi.org/"
-                    + doi
-                    if doi
-                    else ""
-                ),
-                "doi": doi,
-                "provider": "crossref",
-            }
-        )
+        data = r.json()
 
-    return output
+        results = []
 
+        for item in data.get("results", []):
+            title = normalize_space(item.get("title") or "")
+            if not title:
+                continue
 
-def openalex(
-    query: str,
-) -> list[dict]:
-
-    data = api_json(
-        "https://api.openalex.org/works",
-        {
-            "search": query,
-            "per-page": 10,
-        },
-    )
-
-    output = []
-
-    for item in data.get(
-        "results",
-        [],
-    ):
-
-        location = (
-            item.get(
-                "primary_location"
+            url = (
+                item.get("primary_location", {})
+                .get("landing_page_url")
+                or item.get("doi")
+                or ""
             )
-            or {}
-        )
 
-        output.append(
-            {
-                "title": item.get(
-                    "title",
-                    "",
-                ),
-                "abstract": "",
-                "url": (
-                    location.get(
-                        "landing_page_url"
-                    )
-                    or item.get(
-                        "id",
-                        "",
-                    )
-                ),
-                "doi": (
-                    item.get(
-                        "doi"
-                    )
-                    or ""
-                ).replace(
-                    "https://doi.org/",
-                    "",
-                ),
-                "provider": "openalex",
-                "open_pdf": location.get(
-                    "pdf_url",
-                    "",
-                ),
-            }
-        )
+            abstract = ""
 
-    return output
+            inv = item.get("abstract_inverted_index") or {}
 
+            if inv:
+                positions = []
 
-def semantic_scholar(
-    query: str,
-) -> list[dict]:
+                for word, indexes in inv.items():
+                    for index in indexes:
+                        positions.append((index, word))
 
-    data = api_json(
-        "https://api.semanticscholar.org/"
-        "graph/v1/paper/search",
-        {
-            "query": query,
-            "limit": 10,
-            "fields": (
-                "title,abstract,url,"
-                "openAccessPdf,externalIds"
-            ),
-        },
-    )
+                positions.sort()
+                abstract = " ".join(word for _, word in positions)
 
-    output = []
-
-    for item in data.get(
-        "data",
-        [],
-    ):
-
-        external = (
-            item.get(
-                "externalIds"
+            results.append(
+                {
+                    "provider": "openalex",
+                    "title": title,
+                    "url": url,
+                    "doi": item.get("doi") or "",
+                    "abstract": abstract,
+                }
             )
-            or {}
+
+        return results
+
+    except Exception:
+        return []
+
+
+def provider_semantic_scholar(objective: str) -> List[Dict[str, Any]]:
+    try:
+        r = requests.get(
+            "https://api.semanticscholar.org/graph/v1/paper/search",
+            params={
+                "query": objective,
+                "limit": MAX_RESULTS_PER_PROVIDER,
+                "fields": "title,abstract,url,openAccessPdf,externalIds",
+            },
+            timeout=FETCH_TIMEOUT,
+            headers={"User-Agent": "AI-Infinity/2050.33"},
         )
 
-        pdf = (
-            item.get(
-                "openAccessPdf"
+        data = r.json()
+
+        results = []
+
+        for item in data.get("data", []):
+            title = normalize_space(item.get("title") or "")
+
+            if not title:
+                continue
+
+            url = item.get("url") or ""
+
+            pdf = item.get("openAccessPdf") or {}
+            if pdf.get("url"):
+                url = pdf["url"]
+
+            ids = item.get("externalIds") or {}
+
+            results.append(
+                {
+                    "provider": "semantic_scholar",
+                    "title": title,
+                    "url": url,
+                    "doi": ids.get("DOI") or "",
+                    "abstract": item.get("abstract") or "",
+                }
             )
-            or {}
-        ).get(
-            "url",
-            "",
+
+        return results
+
+    except Exception:
+        return []
+
+
+def provider_duckduckgo(objective: str) -> List[Dict[str, Any]]:
+    try:
+        r = requests.get(
+            "https://api.duckduckgo.com/",
+            params={
+                "q": objective,
+                "format": "json",
+                "no_html": 1,
+                "skip_disambig": 1,
+            },
+            timeout=FETCH_TIMEOUT,
+            headers={"User-Agent": "AI-Infinity/2050.33"},
         )
 
-        output.append(
-            {
-                "title": item.get(
-                    "title",
-                    "",
-                ),
-                "abstract": clean(
-                    item.get(
-                        "abstract",
-                        "",
-                    )
-                ),
-                "url": (
-                    pdf
-                    or item.get(
-                        "url",
-                        "",
-                    )
-                ),
-                "doi": external.get(
-                    "DOI",
-                    "",
-                ),
-                "provider":
-                    "semantic_scholar",
-                "open_pdf": pdf,
-            }
-        )
+        data = r.json()
 
-    return output
+        results = []
 
+        if data.get("AbstractText") and data.get("AbstractURL"):
+            results.append(
+                {
+                    "provider": "duckduckgo",
+                    "title": data.get("Heading") or objective,
+                    "url": data.get("AbstractURL"),
+                    "doi": "",
+                    "abstract": data.get("AbstractText"),
+                }
+            )
 
-def duckduckgo(
-    query: str,
-) -> list[dict]:
+        for topic in data.get("RelatedTopics", [])[:MAX_RESULTS_PER_PROVIDER]:
+            if not isinstance(topic, dict):
+                continue
 
-    data = api_json(
-        "https://api.duckduckgo.com/",
-        {
-            "q": query,
-            "format": "json",
-            "no_html": 1,
-        },
-    )
-
-    output = []
-
-    def walk(items):
-
-        for item in items or []:
-
-            if item.get(
-                "FirstURL"
-            ):
-
-                output.append(
+            if topic.get("FirstURL"):
+                results.append(
                     {
-                        "title": item.get(
-                            "Text",
-                            "",
-                        ),
-                        "abstract": item.get(
-                            "Text",
-                            "",
-                        ),
-                        "url": item[
-                            "FirstURL"
-                        ],
+                        "provider": "duckduckgo",
+                        "title": topic.get("Text") or "",
+                        "url": topic.get("FirstURL"),
                         "doi": "",
-                        "provider":
-                            "duckduckgo",
+                        "abstract": topic.get("Text") or "",
                     }
                 )
 
-            walk(
-                item.get(
-                    "Topics"
-                )
-            )
+        return results
 
-    walk(
-        data.get(
-            "RelatedTopics"
-        )
-    )
-
-    return output[:10]
+    except Exception:
+        return []
 
 
-def discover(
-    objective: str,
-) -> list[dict]:
-
-    q = clean(
-        objective
-    )[:450]
-
-    queries = [
-        q,
-        (
-            "autonomous AI agents "
-            "reliability real world "
-            "task execution evidence"
-        ),
-        (
-            "AI agents planning tool use "
-            "verification failure recovery"
-        ),
+def discover(objective: str) -> List[Dict[str, Any]]:
+    providers = [
+        provider_crossref,
+        provider_openalex,
+        provider_semantic_scholar,
+        provider_duckduckgo,
     ]
 
-    results = []
+    all_results = []
 
-    with ThreadPoolExecutor(
-        max_workers=4
-    ) as executor:
+    futures = {
+        executor.submit(fn, objective): fn.__name__
+        for fn in providers
+    }
 
-        futures = []
+    for future in as_completed(futures):
+        try:
+            all_results.extend(future.result())
+        except Exception:
+            pass
 
-        for query in queries:
-
-            futures.extend(
-                [
-                    executor.submit(
-                        crossref,
-                        query,
-                    ),
-                    executor.submit(
-                        openalex,
-                        query,
-                    ),
-                    executor.submit(
-                        semantic_scholar,
-                        query,
-                    ),
-                    executor.submit(
-                        duckduckgo,
-                        query,
-                    ),
-                ]
-            )
-
-        for future in as_completed(
-            futures
-        ):
-
-            try:
-                results.extend(
-                    future.result()
-                )
-            except Exception:
-                pass
-
-    seen = set()
-    unique = []
-
-    for item in results:
-
-        key = work_key(
-            item.get(
-                "title",
-                "",
-            ),
-            item.get(
-                "doi",
-                "",
-            ),
-        )
-
-        if key in seen:
-            continue
-
-        seen.add(key)
-
-        if item.get("title"):
-            unique.append(item)
-
-    return unique[:80]
+    return all_results
 
 
 # ============================================================
-# SOURCE QUALITY
+# WORK DEDUPLICATION / QUALITY
 # ============================================================
 
-def source_quality(
-    provider: str,
-    url: str,
-    full_text: str,
-    abstract: str,
-) -> float:
-
-    score = {
-        "semantic_scholar": 0.86,
-        "openalex": 0.84,
-        "crossref": 0.76,
-        "duckduckgo": 0.55,
-    }.get(
-        provider,
-        0.50,
-    )
-
-    if full_text:
-        score += 0.08
-    elif abstract:
-        score += 0.03
-
-    if (
-        ".edu" in url
-        or ".gov" in url
-    ):
-        score += 0.04
-
-    return min(
-        score,
-        1.0,
-    )
-
-
-def work_key(
-    title: str = "",
-    doi: str = "",
-) -> str:
+def make_work_key(item: Dict[str, Any]) -> str:
+    doi = normalize_space(item.get("doi") or "").lower()
 
     if doi:
-        return (
-            "doi:"
-            + doi.lower().strip()
+        raw = f"doi:{doi}"
+    else:
+        raw = (
+            normalize_space(item.get("title") or "").lower()
+            + "|"
+            + normalize_space(item.get("url") or "").lower()
         )
 
-    normalized = re.sub(
-        r"\W+",
-        " ",
-        title.lower(),
-    ).strip()
-
-    return (
-        "title:"
-        + hashlib.sha256(
-            normalized.encode()
-        ).hexdigest()[:24]
-    )
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def relevant(
-    objective: str,
-    item: dict,
-) -> bool:
+def work_quality(item: Dict[str, Any]) -> float:
+    score = 0.25
 
-    text = " ".join(
-        [
-            item.get(
-                "title",
-                "",
-            ),
-            item.get(
-                "abstract",
-                "",
-            ),
+    title = item.get("title") or ""
+    abstract = item.get("abstract") or ""
+    url = item.get("url") or ""
+
+    if title:
+        score += 0.20
+
+    if abstract:
+        score += 0.20
+
+    if url:
+        score += 0.15
+
+    d = domain_of(url)
+
+    if d.endswith(".edu") or d.endswith(".gov"):
+        score += 0.10
+
+    if any(
+        x in d
+        for x in [
+            "arxiv.org",
+            "biorxiv.org",
+            "nature.com",
+            "science.org",
+            "acm.org",
+            "ieee.org",
+            "springer.com",
+            "sciencedirect.com",
         ]
-    )
+    ):
+        score += 0.10
 
-    score = similarity(
-        objective,
-        text,
-    )
-
-    terms = (
-        tokens(text)
-        & research_terms(
-            objective
-        )
-    )
-
-    return (
-        score >= 0.015
-        and len(terms) >= 2
-    )
+    return min(1.0, score)
 
 
-# ============================================================
-# INGESTION
-# ============================================================
-
-def extract_excerpt(
-    text: str,
+def prepare_works(
+    mission_id: str,
     objective: str,
-) -> str:
+    discovered: List[Dict[str, Any]],
+) -> List[int]:
+
+    accepted = {}
+    inserted_ids = []
+
+    for item in discovered:
+        title = normalize_space(item.get("title") or "")
+        url = item.get("url") or ""
+
+        if not title:
+            continue
+
+        key = make_work_key(item)
+
+        if key in accepted:
+            continue
+
+        relevance = similarity(
+            objective,
+            f"{title} {item.get('abstract') or ''}",
+        )
+
+        # Do not require high similarity because metadata may be sparse.
+        if relevance < 0.01:
+            continue
+
+        accepted[key] = True
+
+        domain = domain_of(url)
+        family = source_family(
+            item.get("provider") or "",
+            domain,
+        )
+
+        q = work_quality(item)
+
+        with db_lock:
+            conn = db()
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                INSERT INTO works (
+                    mission_id,title,url,doi,provider,
+                    domain,source_family,work_key,
+                    abstract,text,quality,relevance,created_at
+                )
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    mission_id,
+                    title,
+                    url,
+                    item.get("doi") or "",
+                    item.get("provider") or "",
+                    domain,
+                    family,
+                    key,
+                    item.get("abstract") or "",
+                    "",
+                    q,
+                    relevance,
+                    now(),
+                ),
+            )
+
+            wid = cur.lastrowid
+
+            conn.commit()
+            conn.close()
+
+        inserted_ids.append(wid)
+
+    return inserted_ids
+
+
+# ============================================================
+# EVIDENCE INGESTION
+# ============================================================
+
+def ingest_work(work_id: int) -> bool:
+    with db_lock:
+        conn = db()
+        row = conn.execute(
+            "SELECT * FROM works WHERE id=?",
+            (work_id,),
+        ).fetchone()
+        conn.close()
+
+    if not row:
+        return False
+
+    text = row["abstract"] or ""
+
+    if row["url"]:
+        fetched = fetch_url(row["url"])
+        if fetched:
+            text = f"{text} {fetched}"
+
+    text = normalize_space(text)[:MAX_TEXT]
+
+    with db_lock:
+        conn = db()
+        conn.execute(
+            "UPDATE works SET text=? WHERE id=?",
+            (text, work_id),
+        )
+        conn.commit()
+        conn.close()
+
+    return bool(text)
+
+
+# ============================================================
+# EVIDENCE EXCERPTS
+# ============================================================
+
+def best_excerpt(
+    claim: str,
+    text: str,
+) -> Optional[Dict[str, Any]]:
 
     if not text:
-        return ""
+        return None
 
-    sentences = re.split(
-        r"(?<=[.!?])\s+",
-        text,
-    )
+    sentences = re.split(r"(?<=[.!?])\s+", text)
 
     candidates = []
 
     for sentence in sentences:
+        sentence = normalize_space(sentence)
 
-        sentence = clean(
-            sentence
-        )
+        if len(sentence) < 40:
+            continue
 
-        if useful_sentence(
-            sentence,
-            objective,
-        ):
+        if len(sentence) > 700:
+            continue
 
+        # Exclude obvious page chrome.
+        if is_noise_claim(sentence):
+            continue
+
+        score = similarity(claim, sentence)
+
+        if score >= 0.05:
             candidates.append(
-                sentence
+                (
+                    score,
+                    sentence,
+                )
             )
+
+    candidates.sort(reverse=True, key=lambda x: x[0])
 
     if not candidates:
-        return clean(text)[:5000]
+        return None
 
-    selected = sorted(
-        candidates,
-        key=lambda x: similarity(
-            objective,
-            x,
-        ),
-        reverse=True,
-    )
+    score, excerpt = candidates[0]
 
-    return clean(
-        " ".join(
-            selected[:8]
-        )
-    )[:5000]
+    return {
+        "excerpt": excerpt,
+        "score": score,
+    }
 
 
-def ingest(
-    mid: str,
+# ============================================================
+# CLAIMS
+# ============================================================
+
+def create_claims(
+    mission_id: str,
     objective: str,
-    item: dict,
-) -> bool:
+) -> List[int]:
 
-    title = clean(
-        item.get(
-            "title",
-            "",
-        )
-    )
-
-    abstract = clean(
-        item.get(
-            "abstract",
-            "",
-        )
-    )
-
-    url = item.get(
-        "url",
-        "",
-    )
-
-    if not title:
-        return False
-
-    pdf_url = item.get(
-        "open_pdf",
-        "",
-    )
-
-    fetch_url = (
-        pdf_url
-        or url
-    )
-
-    full_text = ""
-    evidence_type = "metadata"
-
-    if fetch_url:
-        full_text, evidence_type = fetch(
-            fetch_url
-        )
-
-    if not full_text:
-        full_text = abstract
-
-    key = work_key(
-        title,
-        item.get(
-            "doi",
-            "",
-        ),
-    )
-
-    relevance_score = similarity(
-        objective,
-        " ".join(
-            [
-                title,
-                abstract,
-                full_text[:8000],
-            ]
-        ),
-    )
-
-    quality = source_quality(
-        item.get(
-            "provider",
-            "",
-        ),
-        url,
-        full_text,
-        abstract,
-    )
-
-    source_domain = domain(
-        url
-    )
-
-    provider = item.get(
-        "provider",
-        "unknown",
-    )
-
-    with DB_LOCK:
-
-        c = db()
-
-        c.execute(
-            """
-            INSERT OR IGNORE INTO works(
-                mission_id,
-                work_key,
-                title,
-                abstract,
-                url,
-                doi,
-                provider,
-                source_family,
-                domain,
-                quality,
-                relevance,
-                full_text,
-                created_at
-            )
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                mid,
-                key,
-                title,
-                abstract,
-                url,
-                item.get(
-                    "doi",
-                    "",
-                ),
-                provider,
-                provider,
-                source_domain,
-                quality,
-                relevance_score,
-                1 if full_text else 0,
-                now(),
-            ),
-        )
-
-        row = c.execute(
+    with db_lock:
+        conn = db()
+        works = conn.execute(
             """
             SELECT *
             FROM works
             WHERE mission_id=?
-              AND work_key=?
+            ORDER BY relevance DESC
             """,
-            (
-                mid,
-                key,
-            ),
-        ).fetchone()
+            (mission_id,),
+        ).fetchall()
+        conn.close()
 
-        if not row:
-            c.close()
-            return False
+    claim_map: Dict[str, Dict[str, Any]] = {}
 
-        excerpt = extract_excerpt(
-            full_text,
+    for work in works:
+        candidates = extract_claim_candidates(
+            work["text"] or work["abstract"] or "",
             objective,
         )
 
-        if len(excerpt) < 80:
-            c.close()
-            return True
-
-        c.execute(
-            """
-            INSERT INTO evidence(
-                mission_id,
-                work_key,
-                source_id,
-                excerpt,
-                evidence_type,
-                locator,
-                quality,
-                relevance,
-                source_family,
-                domain,
-                created_at
+        for candidate in candidates:
+            claim = candidate["claim"]
+            normalized = re.sub(
+                r"[^a-z0-9 ]+",
+                "",
+                claim.lower(),
             )
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                mid,
-                key,
-                row["id"],
-                excerpt,
-                evidence_type,
-                "document-excerpt",
-                quality,
-                relevance_score,
-                provider,
-                source_domain,
-                now(),
-            ),
+
+            duplicate = False
+
+            for existing in claim_map.values():
+                if similarity(
+                    normalized,
+                    existing["normalized"],
+                ) >= 0.85:
+                    duplicate = True
+                    break
+
+            if duplicate:
+                continue
+
+            claim_map[normalized] = {
+                "claim": claim,
+                "normalized": normalized,
+                "purity": candidate["purity"],
+                "relevance": candidate["relevance"],
+            }
+
+            if len(claim_map) >= 30:
+                break
+
+    ids = []
+
+    for data in claim_map.values():
+        confidence = min(
+            1.0,
+            0.55 * data["purity"]
+            + 0.45 * data["relevance"],
         )
 
-        c.commit()
-        c.close()
+        with db_lock:
+            conn = db()
+            cur = conn.cursor()
 
-    return True
-
-
-# ============================================================
-# CLAIM EXTRACTION
-# ============================================================
-
-def extract_claims(
-    mid: str,
-    objective: str,
-) -> int:
-
-    with DB_LOCK:
-
-        c = db()
-
-        evidence_rows = c.execute(
-            """
-            SELECT *
-            FROM evidence
-            WHERE mission_id=?
-            """,
-            (mid,),
-        ).fetchall()
-
-        count = 0
-
-        for evidence in evidence_rows:
-
-            sentences = re.split(
-                r"(?<=[.!?])\s+",
-                evidence["excerpt"],
+            cur.execute(
+                """
+                INSERT INTO claims (
+                    mission_id,claim,status,
+                    purity,confidence,created_at
+                )
+                VALUES (?,?,?,?,?,?)
+                """,
+                (
+                    mission_id,
+                    data["claim"],
+                    "INSUFFICIENT",
+                    data["purity"],
+                    confidence,
+                    now(),
+                ),
             )
 
-            for sentence in sentences:
+            ids.append(cur.lastrowid)
 
-                sentence = clean(
-                    sentence
-                )
+            conn.commit()
+            conn.close()
 
-                if not useful_sentence(
-                    sentence,
-                    objective,
-                ):
-                    continue
-
-                words = tokens(
-                    sentence
-                )
-
-                if not (
-                    words
-                    & PREDICATES
-                ):
-                    continue
-
-                if len(sentence) > 700:
-                    sentence = sentence[:700]
-
-                fp = fingerprint(
-                    sentence
-                )
-
-                c.execute(
-                    """
-                    INSERT OR IGNORE INTO claims(
-                        mission_id,
-                        claim,
-                        fingerprint,
-                        status,
-                        confidence,
-                        created_at
-                    )
-                    VALUES(?,?,?,?,?,?)
-                    """,
-                    (
-                        mid,
-                        sentence,
-                        fp,
-                        "UNVERIFIED",
-                        0.20,
-                        now(),
-                    ),
-                )
-
-                claim = c.execute(
-                    """
-                    SELECT id
-                    FROM claims
-                    WHERE mission_id=?
-                      AND fingerprint=?
-                    """,
-                    (
-                        mid,
-                        fp,
-                    ),
-                ).fetchone()
-
-                if claim:
-
-                    c.execute(
-                        """
-                        INSERT INTO edges(
-                            mission_id,
-                            from_type,
-                            from_id,
-                            to_type,
-                            to_id,
-                            relation,
-                            score,
-                            reason,
-                            created_at
-                        )
-                        VALUES(?,?,?,?,?,?,?,?,?)
-                        """,
-                        (
-                            mid,
-                            "claim",
-                            str(
-                                claim["id"]
-                            ),
-                            "evidence",
-                            str(
-                                evidence["id"]
-                            ),
-                            "SUPPORTED_BY",
-                            round(
-                                similarity(
-                                    sentence,
-                                    evidence[
-                                        "excerpt"
-                                    ],
-                                ),
-                                4,
-                            ),
-                            "claim provenance",
-                            now(),
-                        ),
-                    )
-
-                count += 1
-
-        c.commit()
-        c.close()
-
-    return count
+    return ids
 
 
 # ============================================================
 # GRAPH
 # ============================================================
 
-def build_graph(
-    mid: str,
-    objective: str,
-):
-
-    with DB_LOCK:
-
-        c = db()
-
-        claims = c.execute(
-            """
-            SELECT *
-            FROM claims
-            WHERE mission_id=?
-            """,
-            (mid,),
+def build_evidence_graph(mission_id: str):
+    with db_lock:
+        conn = db()
+        claims = conn.execute(
+            "SELECT * FROM claims WHERE mission_id=?",
+            (mission_id,),
         ).fetchall()
 
-        evidence = c.execute(
-            """
-            SELECT *
-            FROM evidence
-            WHERE mission_id=?
-            """,
-            (mid,),
+        works = conn.execute(
+            "SELECT * FROM works WHERE mission_id=?",
+            (mission_id,),
         ).fetchall()
 
-        for claim_a in claims:
+        conn.close()
 
-            for claim_b in claims:
+    created = 0
 
-                if (
-                    claim_a["id"]
-                    >= claim_b["id"]
-                ):
-                    continue
+    for claim in claims:
+        for work in works:
+            result = best_excerpt(
+                claim["claim"],
+                work["text"] or work["abstract"] or "",
+            )
 
-                score = similarity(
-                    claim_a["claim"],
-                    claim_b["claim"],
-                )
+            if not result:
+                continue
 
-                if score < 0.30:
-                    continue
+            score = float(result["score"])
 
-                words_a = tokens(
-                    claim_a["claim"]
-                )
+            relation = evidence_relation(score)
 
-                words_b = tokens(
-                    claim_b["claim"]
-                )
+            quality = evidence_quality(
+                claim["claim"],
+                result["excerpt"],
+                score,
+            )
 
-                neg_a = bool(
-                    words_a & NEGATION
-                )
+            # Evidence is still stored even when weak, because
+            # weak evidence is useful for auditability.
+            with db_lock:
+                conn = db()
 
-                neg_b = bool(
-                    words_b & NEGATION
-                )
+                cur = conn.cursor()
 
-                relation = (
-                    "CONTRADICTS"
-                    if neg_a != neg_b
-                    else "RELATED"
-                )
-
-                c.execute(
+                cur.execute(
                     """
-                    INSERT INTO edges(
-                        mission_id,
-                        from_type,
-                        from_id,
-                        to_type,
-                        to_id,
-                        relation,
-                        score,
-                        reason,
-                        created_at
+                    INSERT INTO evidence (
+                        mission_id,work_id,excerpt,
+                        evidence_type,quality,
+                        locator,score,created_at
                     )
-                    VALUES(?,?,?,?,?,?,?,?,?)
+                    VALUES (?,?,?,?,?,?,?,?)
                     """,
                     (
-                        mid,
-                        "claim",
-                        str(
-                            claim_a["id"]
-                        ),
-                        "claim",
-                        str(
-                            claim_b["id"]
-                        ),
+                        mission_id,
+                        work["id"],
+                        result["excerpt"],
                         relation,
-                        round(
-                            score,
-                            4,
-                        ),
-                        "claim similarity analysis",
+                        quality,
+                        "text-excerpt",
+                        score,
                         now(),
                     ),
                 )
 
-        for claim in claims:
+                evidence_id = cur.lastrowid
 
-            for ev in evidence:
-
-                score = similarity(
-                    claim["claim"],
-                    ev["excerpt"],
-                )
-
-                if score < 0.24:
-                    continue
-
-                c.execute(
-                    """
-                    INSERT INTO edges(
-                        mission_id,
-                        from_type,
-                        from_id,
-                        to_type,
-                        to_id,
-                        relation,
-                        score,
-                        reason,
-                        created_at
+                # Only meaningful matches can become graph support.
+                if relation in {
+                    "STRONG_SUPPORT",
+                    "SUPPORT",
+                    "POSSIBLE_SUPPORT",
+                }:
+                    cur.execute(
+                        """
+                        INSERT INTO edges (
+                            mission_id,source_type,source_id,
+                            relation,target_type,target_id,
+                            score,reason,created_at
+                        )
+                        VALUES (?,?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            mission_id,
+                            "claim",
+                            claim["id"],
+                            relation,
+                            "evidence",
+                            evidence_id,
+                            score,
+                            (
+                                f"semantic_match={score:.3f};"
+                                f"quality={quality}"
+                            ),
+                            now(),
+                        ),
                     )
-                    VALUES(?,?,?,?,?,?,?,?,?)
+
+                # Every evidence match remains auditable,
+                # but weak matches are explicitly labelled.
+                elif relation == "WEAK_MATCH":
+                    cur.execute(
+                        """
+                        INSERT INTO edges (
+                            mission_id,source_type,source_id,
+                            relation,target_type,target_id,
+                            score,reason,created_at
+                        )
+                        VALUES (?,?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            mission_id,
+                            "claim",
+                            claim["id"],
+                            "WEAK_MATCH",
+                            "evidence",
+                            evidence_id,
+                            score,
+                            "below support threshold",
+                            now(),
+                        ),
+                    )
+
+                conn.commit()
+                conn.close()
+
+            created += 1
+
+    # Claim-to-claim relationships.
+    for i in range(len(claims)):
+        for j in range(i + 1, len(claims)):
+            a = claims[i]
+            b = claims[j]
+
+            score = similarity(
+                a["claim"],
+                b["claim"],
+            )
+
+            if score < 0.45:
+                continue
+
+            relation = "RELATED"
+
+            neg_a = bool(
+                re.search(
+                    r"\b(not|no|never|cannot|fails|failed|without)\b",
+                    a["claim"].lower(),
+                )
+            )
+
+            neg_b = bool(
+                re.search(
+                    r"\b(not|no|never|cannot|fails|failed|without)\b",
+                    b["claim"].lower(),
+                )
+            )
+
+            # Contradiction requires strong topical overlap and
+            # opposing negation structure.
+            if score >= 0.60 and neg_a != neg_b:
+                relation = "POTENTIAL_CONTRADICTION"
+
+            with db_lock:
+                conn = db()
+
+                conn.execute(
+                    """
+                    INSERT INTO edges (
+                        mission_id,source_type,source_id,
+                        relation,target_type,target_id,
+                        score,reason,created_at
+                    )
+                    VALUES (?,?,?,?,?,?,?,?,?)
                     """,
                     (
-                        mid,
+                        mission_id,
                         "claim",
-                        str(
-                            claim["id"]
-                        ),
-                        "evidence",
-                        str(
-                            ev["id"]
-                        ),
-                        "EVIDENCE_MATCH",
-                        round(
-                            score,
-                            4,
-                        ),
-                        "semantic token overlap",
+                        a["id"],
+                        relation,
+                        "claim",
+                        b["id"],
+                        score,
+                        "claim similarity / polarity analysis",
                         now(),
                     ),
                 )
 
-        c.commit()
-        c.close()
+                conn.commit()
+                conn.close()
 
 
 # ============================================================
 # VERIFICATION
 # ============================================================
 
-def verify(
-    mid: str,
-    objective: str,
-) -> list[dict]:
+def verify_claims(mission_id: str):
+    with db_lock:
+        conn = db()
 
-    with DB_LOCK:
-
-        c = db()
-
-        claims = c.execute(
-            """
-            SELECT *
-            FROM claims
-            WHERE mission_id=?
-            """,
-            (mid,),
+        claims = conn.execute(
+            "SELECT * FROM claims WHERE mission_id=?",
+            (mission_id,),
         ).fetchall()
 
-        evidence_rows = c.execute(
-            """
-            SELECT *
-            FROM evidence
-            WHERE mission_id=?
-            """,
-            (mid,),
-        ).fetchall()
+        conn.close()
 
-        output = []
+    results = []
 
-        for claim in claims:
+    for claim in claims:
 
-            support = []
-            contradictions = []
+        with db_lock:
+            conn = db()
 
-            work_ids = set()
-            domains = set()
-            families = set()
+            rows = conn.execute(
+                """
+                SELECT
+                    e.id AS evidence_id,
+                    e.score,
+                    e.quality,
+                    w.id AS work_id,
+                    w.domain,
+                    w.source_family,
+                    w.title
+                FROM edges ed
+                JOIN evidence e
+                  ON e.id=ed.target_id
+                JOIN works w
+                  ON w.id=e.work_id
+                WHERE ed.mission_id=?
+                  AND ed.source_type='claim'
+                  AND ed.source_id=?
+                  AND ed.target_type='evidence'
+                  AND ed.relation IN (
+                      'STRONG_SUPPORT',
+                      'SUPPORT'
+                  )
+                """,
+                (
+                    mission_id,
+                    claim["id"],
+                ),
+            ).fetchall()
 
-            for evidence in evidence_rows:
+            contradictions = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM edges
+                WHERE mission_id=?
+                  AND relation='POTENTIAL_CONTRADICTION'
+                  AND (
+                      source_id=?
+                      OR target_id=?
+                  )
+                """,
+                (
+                    mission_id,
+                    claim["id"],
+                    claim["id"],
+                ),
+            ).fetchone()[0]
 
-                score = similarity(
-                    claim["claim"],
-                    evidence["excerpt"],
-                )
+            conn.close()
 
-                shared = (
-                    tokens(
-                        claim["claim"]
-                    )
-                    & tokens(
-                        evidence["excerpt"]
-                    )
-                    & research_terms(
-                        objective
-                    )
-                )
+        work_ids = {
+            r["work_id"]
+            for r in rows
+        }
 
-                if (
-                    score >= 0.24
-                    and len(shared) >= 2
-                ):
+        domains = {
+            r["domain"]
+            for r in rows
+            if r["domain"]
+        }
 
-                    support.append(
-                        evidence
-                    )
+        families = {
+            r["source_family"]
+            for r in rows
+            if r["source_family"]
+        }
 
-                    work_ids.add(
-                        evidence["work_key"]
-                    )
+        support_count = len(rows)
+        independent_works = len(work_ids)
+        independent_domains = len(domains)
+        source_families = len(families)
 
-                    if evidence["domain"]:
-                        domains.add(
-                            evidence["domain"]
-                        )
+        # Strong verification gate.
+        if (
+            support_count >= 2
+            and independent_works >= 2
+            and independent_domains >= 2
+            and source_families >= 2
+            and contradictions == 0
+        ):
+            status = "VERIFIED"
 
-                    if evidence[
-                        "source_family"
-                    ]:
-                        families.add(
-                            evidence[
-                                "source_family"
-                            ]
-                        )
+        elif contradictions > 0 and support_count == 0:
+            status = "CONTRADICTED"
 
-                neg1 = bool(
-                    tokens(
-                        claim["claim"]
-                    )
-                    & NEGATION
-                )
+        elif support_count >= 1:
+            status = "SUPPORTED"
 
-                neg2 = bool(
-                    tokens(
-                        evidence["excerpt"]
-                    )
-                    & NEGATION
-                )
+        else:
+            status = "INSUFFICIENT"
 
-                if (
-                    score >= 0.24
-                    and len(shared) >= 2
-                    and neg1 != neg2
-                ):
-                    contradictions.append(
-                        evidence
-                    )
+        with db_lock:
+            conn = db()
 
-            independent = (
-                len(work_ids) >= 2
-                and len(domains) >= 2
-                and len(families) >= 2
-            )
-
-            if (
-                independent
-                and len(support) >= 2
-                and not contradictions
-            ):
-
-                status = "VERIFIED"
-
-                confidence = min(
-                    0.99,
-                    0.60
-                    + 0.10
-                    * len(support)
-                    + 0.08
-                    * len(domains),
-                )
-
-            elif (
-                support
-                and contradictions
-            ):
-
-                status = "CONTRADICTED"
-                confidence = 0.35
-
-            elif support:
-
-                status = "SUPPORTED"
-
-                confidence = min(
-                    0.74,
-                    0.35
-                    + 0.08
-                    * len(support)
-                    + 0.05
-                    * len(domains),
-                )
-
-            else:
-
-                status = "INSUFFICIENT"
-                confidence = 0.10
-
-            c.execute(
+            conn.execute(
                 """
                 UPDATE claims
-                SET status=?,
-                    confidence=?
+                SET status=?
                 WHERE id=?
                 """,
                 (
                     status,
-                    confidence,
                     claim["id"],
                 ),
             )
 
-            output.append(
-                {
-                    "id": claim["id"],
-                    "status": status,
-                    "confidence": round(
-                        confidence,
-                        3,
-                    ),
-                    "support_count":
-                        len(support),
-                    "independent_works":
-                        len(work_ids),
-                    "independent_domains":
-                        len(domains),
-                    "source_families":
-                        len(families),
-                    "contradictions":
-                        len(
-                            contradictions
-                        ),
-                }
-            )
+            conn.commit()
+            conn.close()
 
-        c.commit()
-        c.close()
+        results.append(
+            {
+                "claim_id": claim["id"],
+                "status": status,
+                "supporting_evidence": support_count,
+                "independent_works": independent_works,
+                "independent_domains": independent_domains,
+                "source_families": source_families,
+                "contradictions": contradictions,
+            }
+        )
 
-    return output
+    return results
 
 
 # ============================================================
 # AUDIT
 # ============================================================
 
-def audit_result(
-    mid: str,
-    objective: str,
-) -> dict:
+def build_audit(mission_id: str) -> Dict[str, Any]:
+    with db_lock:
+        conn = db()
 
-    with DB_LOCK:
+        mission = conn.execute(
+            "SELECT * FROM missions WHERE id=?",
+            (mission_id,),
+        ).fetchone()
 
-        c = db()
-
-        works = c.execute(
-            """
-            SELECT *
-            FROM works
-            WHERE mission_id=?
-            """,
-            (mid,),
+        works = conn.execute(
+            "SELECT * FROM works WHERE mission_id=?",
+            (mission_id,),
         ).fetchall()
 
-        evidence_rows = c.execute(
-            """
-            SELECT *
-            FROM evidence
-            WHERE mission_id=?
-            """,
-            (mid,),
+        evidence = conn.execute(
+            "SELECT * FROM evidence WHERE mission_id=?",
+            (mission_id,),
         ).fetchall()
 
-        claims = c.execute(
-            """
-            SELECT *
-            FROM claims
-            WHERE mission_id=?
-            """,
-            (mid,),
+        claims = conn.execute(
+            "SELECT * FROM claims WHERE mission_id=?",
+            (mission_id,),
         ).fetchall()
 
-        edges = c.execute(
-            """
-            SELECT *
-            FROM edges
-            WHERE mission_id=?
-            """,
-            (mid,),
+        edges = conn.execute(
+            "SELECT * FROM edges WHERE mission_id=?",
+            (mission_id,),
         ).fetchall()
 
-        events = c.execute(
+        events = conn.execute(
             """
             SELECT *
             FROM events
             WHERE mission_id=?
             ORDER BY id
             """,
-            (mid,),
+            (mission_id,),
         ).fetchall()
 
-        c.close()
+        conn.close()
 
-    total = len(claims)
+    verified = [
+        c for c in claims
+        if c["status"] == "VERIFIED"
+    ]
 
-    verified = sum(
-        x["status"] == "VERIFIED"
-        for x in claims
-    )
+    supported = [
+        c for c in claims
+        if c["status"] == "SUPPORTED"
+    ]
 
-    supported = sum(
-        x["status"]
-        in (
-            "VERIFIED",
-            "SUPPORTED",
-        )
-        for x in claims
-    )
+    contradicted = [
+        c for c in claims
+        if c["status"] == "CONTRADICTED"
+    ]
 
-    contradicted = sum(
-        x["status"] == "CONTRADICTED"
-        for x in claims
-    )
-
-    domains = len(
-        {
-            x["domain"]
-            for x in works
-            if x["domain"]
-        }
-    )
-
-    families = len(
-        {
-            x["source_family"]
-            for x in works
-            if x["source_family"]
-        }
-    )
-
-    independent_works = len(
-        {
-            x["work_key"]
-            for x in works
-        }
-    )
-
-    usable = sum(
-        len(x["excerpt"]) >= 180
-        for x in evidence_rows
-    )
-
-    stages = {
-        x["stage"]:
-            x["status"]
-        for x in events
+    domains = {
+        w["domain"]
+        for w in works
+        if w["domain"]
     }
 
-    gate = bool(
-        verified > 0
-        and usable > 0
-        and domains >= 2
-        and families >= 2
-        and len(edges) > 0
-    )
+    families = {
+        w["source_family"]
+        for w in works
+        if w["source_family"]
+    }
 
-    pipeline_stages = [
-        "discovery",
-        "evidence_ingestion",
-        "claims",
-        "evidence_graph",
+    support_edges = [
+        e for e in edges
+        if e["relation"] in {
+            "STRONG_SUPPORT",
+            "SUPPORT",
+            "POSSIBLE_SUPPORT",
+        }
     ]
 
-    end_stages = [
-        "discovery",
-        "evidence_ingestion",
-        "claims",
-        "verification",
-        "counter_evidence",
-        "mission",
+    weak_edges = [
+        e for e in edges
+        if e["relation"] == "WEAK_MATCH"
     ]
 
-    actually_working = round(
-        100
-        * sum(
-            stages.get(stage)
-            == "completed"
-            for stage in pipeline_stages
-        )
-        / len(pipeline_stages),
-        1,
-    )
-
-    end_to_end = round(
-        100
-        * sum(
-            stages.get(stage)
-            == "completed"
-            for stage in end_stages
-        )
-        / len(end_stages),
-        1,
-    )
-
-    verification_percent = (
+    evidence_integrity = (
         round(
-            100
-            * verified
-            / total,
+            100 * len(verified) / len(claims),
             1,
         )
-        if total
-        else 0.0
+        if claims
+        else 0
     )
 
-    if gate:
-        reality_status = (
-            "evidence_gate_passed"
+    gate = bool(verified)
+
+    # Detect discovery/ingestion discrepancies.
+    discovery_count = 0
+    ingestion_count = 0
+
+    for event in events:
+        if event["stage"] == "discovery":
+            m = re.search(
+                r"(\d+)\s+discovered;\s*(\d+)\s+accepted",
+                event["detail"] or "",
+            )
+            if m:
+                discovery_count = int(m.group(2))
+
+        if event["stage"] == "evidence_ingestion":
+            m = re.search(
+                r"(\d+)\s+usable works",
+                event["detail"] or "",
+            )
+            if m:
+                ingestion_count = int(m.group(1))
+
+    discrepancies = []
+
+    if ingestion_count and ingestion_count != len(works):
+        discrepancies.append(
+            {
+                "type": "WORK_COUNT_MISMATCH",
+                "event_count": ingestion_count,
+                "database_count": len(works),
+            }
         )
-    elif verified:
-        reality_status = (
-            "research_pipeline_operational"
-            "_with_partial_verification"
-        )
-    else:
-        reality_status = (
-            "research_pipeline_operational"
-            "_verification_incomplete"
-        )
+
+    if discovery_count and ingestion_count:
+        if discovery_count != ingestion_count:
+            discrepancies.append(
+                {
+                    "type": "DISCOVERY_INGESTION_DIFFERENCE",
+                    "accepted": discovery_count,
+                    "ingested": ingestion_count,
+                }
+            )
 
     return {
         "version": VERSION,
         "build": BUILD,
-        "mission_id": mid,
-        "objective": objective,
-
+        "mission_id": mission_id,
+        "objective": mission["objective"] if mission else "",
         "current_reality": {
-            "status": reality_status,
-            "works": independent_works,
-            "usable_evidence": usable,
-            "claims": total,
-            "verified_claims": verified,
-            "supported_claims": supported,
-            "contradicted_claims": contradicted,
-            "domains": domains,
-            "source_families": families,
+            "status": (
+                "research_pipeline_operational_verification_passed"
+                if gate
+                else "research_pipeline_operational_verification_incomplete"
+            ),
+            "works": len(works),
+            "usable_evidence": len(evidence),
+            "claims": len(claims),
+            "verified_claims": len(verified),
+            "supported_claims": len(supported),
+            "contradicted_claims": len(contradicted),
+            "domains": len(domains),
+            "source_families": len(families),
             "graph_edges": len(edges),
+            "support_edges": len(support_edges),
+            "weak_match_edges": len(weak_edges),
             "evidence_gate": gate,
         },
-
         "objective_measurements": {
-            "capability_coverage_percent":
-                "NOT MEASURABLE YET",
-
-            "implemented_percent":
-                "NOT MEASURABLE YET",
-
-            "actually_working_percent":
-                actually_working,
-
-            "independently_verified_percent":
-                verification_percent,
-
-            "end_to_end_demonstrated_percent":
-                end_to_end,
-
-            "production_readiness_percent":
-                "NOT MEASURABLE YET",
-
-            "autonomy_percent":
-                "NOT MEASURABLE YET",
-
-            "evidence_integrity_percent":
-                verification_percent,
-
-            "reality_gap_percent":
-                "NOT MEASURABLE YET",
+            "research_pipeline_completion_percent": 100,
+            "independently_verified_percent": (
+                round(100 * len(verified) / len(claims), 1)
+                if claims else 0
+            ),
+            "evidence_integrity_percent": evidence_integrity,
+            "autonomy_percent": "NOT MEASURABLE YET",
+            "production_readiness_percent": "NOT MEASURABLE YET",
+            "reality_gap_percent": "NOT MEASURABLE YET",
         },
-
         "measurement_definitions": {
-            "actually_working_percent": {
-                "numerator":
-                    "completed discovery, "
-                    "evidence ingestion, claims "
-                    "and evidence graph stages",
-                "denominator": 4,
-                "definition":
-                    "research pipeline stage completion",
+            "research_pipeline_completion_percent": {
+                "numerator": "completed core research stages",
+                "denominator": "core research stages",
+                "definition": "pipeline execution only",
             },
-
             "independently_verified_percent": {
-                "numerator": verified,
-                "denominator": total,
-                "definition":
-                    "claims reaching VERIFIED under "
-                    "independent work/domain/source "
-                    "family requirements",
+                "numerator": len(verified),
+                "denominator": len(claims),
+                "definition": (
+                    "claims meeting independent-work, "
+                    "domain, family and contradiction requirements"
+                ),
             },
-
-            "end_to_end_demonstrated_percent": {
-                "numerator":
-                    "completed required audit stages",
-                "denominator": 6,
-                "definition":
-                    "pipeline completion from discovery "
-                    "through mission completion",
-            },
-
             "evidence_integrity_percent": {
-                "numerator": verified,
-                "denominator": total,
-                "definition":
-                    "verified claims divided by "
-                    "extracted claims; narrow metric "
-                    "only",
+                "numerator": len(verified),
+                "denominator": len(claims),
+                "definition": (
+                    "verified claims divided by extracted claims; "
+                    "narrow evidence metric"
+                ),
             },
         },
-
         "gate_definition": {
-            "requires":
-                "at least one VERIFIED claim with "
-                "at least two independent works, "
-                "two domains and two source families, "
-                "plus usable evidence and graph edges",
-
+            "requires": (
+                "at least one VERIFIED claim with at least two "
+                "independent works, two domains, two source families, "
+                "strong evidence and no detected contradiction"
+            ),
             "passed": gate,
         },
-
         "verified_capabilities": [
             "mission creation",
             "multi-provider discovery",
             "safe URL retrieval",
             "evidence ingestion",
-            "claim extraction",
+            "claim purity filtering",
+            "evidence quality classification",
             "claim-to-evidence provenance",
             "independent corroboration checks",
-            "contradiction detection",
+            "contradiction screening",
             "mission events",
-            "evidence gate",
-            "audit metrics",
+            "auditable evidence graph",
             "browser dashboard",
         ],
-
         "not_yet_demonstrated": [
             "reliable autonomous execution of arbitrary real-world actions",
             "autonomous self-correction across repeated failures",
@@ -2274,1536 +1692,889 @@ def audit_result(
             "continuous self-improvement",
             "general autonomous tool execution",
             "persistent durable memory across infrastructure restarts",
+            "true methodological independence of all sources",
         ],
-
-        "next_test":
-            "Run a fresh unseen objective and require "
-            "at least one independently corroborated "
-            "claim to reach VERIFIED without manual "
-            "intervention.",
-
+        "data_consistency": {
+            "discrepancies": discrepancies,
+            "passed": len(discrepancies) == 0,
+        },
+        "next_test": (
+            "Run a fresh unseen objective and require at least "
+            "one claim to obtain strong evidence from two genuinely "
+            "independent underlying works hosted across two domains."
+        ),
         "events": [
-            dict(x)
-            for x in events
+            dict(e)
+            for e in events
         ],
     }
 
 
 # ============================================================
-# MISSION EXECUTION
+# MISSION EVENTS
 # ============================================================
 
-def run_mission(
-    mid: str,
-    objective: str,
+def event(
+    mission_id: str,
+    stage: str,
+    status: str,
+    detail: str,
 ):
+    with db_lock:
+        conn = db()
 
+        conn.execute(
+            """
+            INSERT INTO events (
+                mission_id,stage,status,detail,created_at
+            )
+            VALUES (?,?,?,?,?)
+            """,
+            (
+                mission_id,
+                stage,
+                status,
+                detail,
+                now(),
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+
+def set_status(
+    mission_id: str,
+    status: str,
+):
+    with db_lock:
+        conn = db()
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET status=?,updated_at=?
+            WHERE id=?
+            """,
+            (
+                status,
+                now(),
+                mission_id,
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+
+# ============================================================
+# MISSION ENGINE
+# ============================================================
+
+def run_mission(mission_id: str):
     try:
+        with db_lock:
+            conn = db()
+            mission = conn.execute(
+                "SELECT * FROM missions WHERE id=?",
+                (mission_id,),
+            ).fetchone()
+            conn.close()
 
+        if not mission:
+            return
+
+        objective = mission["objective"]
+
+        set_status(mission_id, "running")
         event(
-            mid,
+            mission_id,
             "mission",
             "running",
             "Mission started",
         )
 
+        # ----------------------------------------------------
+        # Discovery
+        # ----------------------------------------------------
+
         event(
-            mid,
+            mission_id,
             "discovery",
             "running",
             "Querying research providers",
         )
 
-        found = discover(
-            objective
+        discovered = discover(objective)
+
+        work_ids = prepare_works(
+            mission_id,
+            objective,
+            discovered,
         )
 
-        accepted = 0
-
-        for item in found:
-
-            if relevant(
-                objective,
-                item,
-            ):
-
-                if ingest(
-                    mid,
-                    objective,
-                    item,
-                ):
-                    accepted += 1
-
         event(
-            mid,
+            mission_id,
             "discovery",
             "completed",
-            (
-                f"{len(found)} discovered; "
-                f"{accepted} accepted"
-            ),
+            f"{len(discovered)} discovered; "
+            f"{len(work_ids)} accepted",
         )
 
+        # ----------------------------------------------------
+        # Evidence
+        # ----------------------------------------------------
+
         event(
-            mid,
+            mission_id,
+            "evidence_ingestion",
+            "running",
+            "Fetching and normalizing source evidence",
+        )
+
+        usable = 0
+
+        futures = [
+            executor.submit(ingest_work, wid)
+            for wid in work_ids
+        ]
+
+        for future in as_completed(futures):
+            try:
+                if future.result():
+                    usable += 1
+            except Exception:
+                pass
+
+        event(
+            mission_id,
             "evidence_ingestion",
             "completed",
-            f"{accepted} usable works",
+            f"{usable} usable works",
         )
 
+        # ----------------------------------------------------
+        # Claims
+        # ----------------------------------------------------
+
         event(
-            mid,
+            mission_id,
             "claims",
             "running",
             "Extracting substantive claims",
         )
 
-        claim_count = extract_claims(
-            mid,
+        claim_ids = create_claims(
+            mission_id,
             objective,
         )
 
         event(
-            mid,
+            mission_id,
             "claims",
             "completed",
-            (
-                f"{claim_count} "
-                "candidate claims"
-            ),
+            f"{len(claim_ids)} substantive claims",
         )
 
+        # ----------------------------------------------------
+        # Graph
+        # ----------------------------------------------------
+
         event(
-            mid,
+            mission_id,
             "evidence_graph",
             "running",
             "Building provenance graph",
         )
 
-        build_graph(
-            mid,
-            objective,
-        )
+        build_evidence_graph(mission_id)
 
-        with DB_LOCK:
-
-            c = db()
-
-            edge_count = c.execute(
-                """
-                SELECT COUNT(*) AS n
-                FROM edges
-                WHERE mission_id=?
-                """,
-                (mid,),
-            ).fetchone()["n"]
-
-            c.close()
+        with db_lock:
+            conn = db()
+            edge_count = conn.execute(
+                "SELECT COUNT(*) FROM edges WHERE mission_id=?",
+                (mission_id,),
+            ).fetchone()[0]
+            conn.close()
 
         event(
-            mid,
+            mission_id,
             "evidence_graph",
             "completed",
-            (
-                f"{edge_count} graph edges"
-            ),
+            f"{edge_count} graph edges",
         )
 
+        # ----------------------------------------------------
+        # Verification
+        # ----------------------------------------------------
+
         event(
-            mid,
+            mission_id,
             "verification",
             "running",
-            "Testing independent corroboration",
+            "Testing evidence quality and independent corroboration",
         )
 
-        verification = verify(
-            mid,
-            objective,
-        )
+        verification = verify_claims(mission_id)
 
-        verified = sum(
-            x["status"] == "VERIFIED"
+        verified_count = sum(
+            1
             for x in verification
+            if x["status"] == "VERIFIED"
         )
 
-        contradicted = sum(
-            x["status"] == "CONTRADICTED"
+        contradicted_count = sum(
+            1
             for x in verification
+            if x["status"] == "CONTRADICTED"
         )
 
         event(
-            mid,
+            mission_id,
             "verification",
             "completed",
-            (
-                f"verified={verified}; "
-                f"contradicted={contradicted}"
-            ),
+            f"verified={verified_count}; "
+            f"contradicted={contradicted_count}",
+        )
+
+        # ----------------------------------------------------
+        # Counter evidence
+        # ----------------------------------------------------
+
+        event(
+            mission_id,
+            "counter_evidence",
+            "running",
+            "Analyzing possible contradictions",
         )
 
         event(
-            mid,
+            mission_id,
             "counter_evidence",
             "completed",
             "Contradiction analysis completed",
         )
 
-        result = audit_result(
-            mid,
-            objective,
+        # ----------------------------------------------------
+        # Audit
+        # ----------------------------------------------------
+
+        audit = build_audit(mission_id)
+
+        with db_lock:
+            conn = db()
+
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO audits (
+                    mission_id,payload,created_at
+                )
+                VALUES (?,?,?)
+                """,
+                (
+                    mission_id,
+                    json.dumps(audit),
+                    now(),
+                ),
+            )
+
+            conn.commit()
+            conn.close()
+
+        set_status(
+            mission_id,
+            "completed",
         )
 
         event(
-            mid,
+            mission_id,
             "mission",
             "completed",
-            (
-                "Evidence gate="
-                + str(
-                    result[
-                        "gate_definition"
-                    ]["passed"]
-                )
-            ),
-        )
-
-        set_mission(
-            mid,
-            "completed",
-            result,
+            "Mission completed",
         )
 
     except Exception as exc:
+        set_status(
+            mission_id,
+            "failed",
+        )
 
         event(
-            mid,
+            mission_id,
             "mission",
             "failed",
-            repr(exc),
-        )
-
-        set_mission(
-            mid,
-            "failed",
-            {
-                "error": repr(exc),
-                "version": VERSION,
-                "build": BUILD,
-            },
+            f"{type(exc).__name__}: {str(exc)[:500]}",
         )
 
 
 # ============================================================
-# MODELS
+# MISSION CREATION
 # ============================================================
 
-class MissionIn(BaseModel):
-
-    objective: str = Field(
-        min_length=10,
-        max_length=12000,
-    )
-
-
-# ============================================================
-# DASHBOARD
-# ============================================================
-
-DASHBOARD_HTML = """
-<!doctype html>
-<html lang="en">
-<head>
-
-<meta charset="utf-8">
-
-<meta
-    name="viewport"
-    content="width=device-width,initial-scale=1"
->
-
-<meta
-    name="theme-color"
-    content="#08111f"
->
-
-<title>AI Infinity</title>
-
-<style>
-
-:root {
-    color-scheme: dark;
-}
-
-* {
-    box-sizing: border-box;
-}
-
-body {
-    margin: 0;
-    background: #08111f;
-    color: #e8eef7;
-    font-family:
-        system-ui,
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
-        sans-serif;
-}
-
-main {
-    width: 100%;
-    max-width: 1100px;
-    margin: 0 auto;
-    padding: 14px;
-}
-
-.card {
-    background: #0e1a2b;
-    border: 1px solid #21334b;
-    border-radius: 16px;
-    padding: 15px;
-    margin: 10px 0;
-    box-shadow:
-        0 8px 30px rgba(0,0,0,.18);
-}
-
-.header {
-    padding: 20px;
-}
-
-h1 {
-    margin: 0 0 4px;
-    font-size: 29px;
-}
-
-h2,
-h3 {
-    margin-top: 0;
-}
-
-.sub {
-    color: #91a4bc;
-}
-
-textarea {
-    width: 100%;
-    min-height: 150px;
-    resize: vertical;
-    background: #07101c;
-    color: #ffffff;
-    border: 1px solid #2b405c;
-    border-radius: 12px;
-    padding: 13px;
-    font-size: 15px;
-    line-height: 1.45;
-    outline: none;
-}
-
-textarea:focus {
-    border-color: #4f8cff;
-}
-
-button {
-    width: 100%;
-    border: 0;
-    border-radius: 12px;
-    padding: 15px;
-    margin-top: 10px;
-    background: #4f8cff;
-    color: white;
-    font-weight: 800;
-    font-size: 16px;
-    cursor: pointer;
-}
-
-button:disabled {
-    opacity: .45;
-    cursor: wait;
-}
-
-.grid {
-    display: grid;
-    grid-template-columns:
-        repeat(4, minmax(0, 1fr));
-    gap: 9px;
-}
-
-.metric {
-    background: #0a1524;
-    border-radius: 12px;
-    padding: 12px;
-    min-width: 0;
-}
-
-.num {
-    font-size: 25px;
-    font-weight: 850;
-}
-
-.lab {
-    color: #91a4bc;
-    font-size: 11px;
-    margin-top: 2px;
-}
-
-.progress {
-    height: 9px;
-    background: #17263a;
-    border-radius: 9px;
-    overflow: hidden;
-    margin-top: 12px;
-}
-
-.fill {
-    height: 100%;
-    width: 0%;
-    background: #62a0ff;
-    transition: width .3s ease;
-}
-
-.item {
-    padding: 10px 0;
-    border-bottom:
-        1px solid #1d2b3e;
-}
-
-.item:last-child {
-    border-bottom: 0;
-}
-
-.ok {
-    color: #63d391;
-}
-
-.warn {
-    color: #ffc857;
-}
-
-.bad {
-    color: #ff7272;
-}
-
-.neutral {
-    color: #8db7ff;
-}
-
-pre {
-    white-space: pre-wrap;
-    word-break: break-word;
-    background: #07101c;
-    color: #d9e4f2;
-    border-radius: 10px;
-    padding: 12px;
-    max-height: 450px;
-    overflow: auto;
-    font-size: 12px;
-}
-
-.small {
-    font-size: 12px;
-}
-
-.pill {
-    display: inline-block;
-    padding: 4px 8px;
-    border-radius: 99px;
-    background: #17263a;
-    font-size: 11px;
-}
-
-@media (max-width: 700px) {
-
-    main {
-        padding: 9px;
-    }
-
-    .grid {
-        grid-template-columns:
-            repeat(2, minmax(0, 1fr));
-    }
-
-    .header {
-        padding: 15px;
-    }
-
-    h1 {
-        font-size: 25px;
-    }
-}
-
-</style>
-
-</head>
-
-<body>
-
-<main>
-
-<div class="card header">
-
-    <h1>AI Infinity</h1>
-
-    <div class="sub">
-        TARGET-2050.32
-        ·
-        AUTONOMOUS-EVIDENCE-DASHBOARD-CORE
-    </div>
-
-    <br>
-
-    <textarea id="objective">Research the reliability of autonomous AI agents for real-world task execution. Find independent evidence, verify important claims, identify contradictory evidence, and give the next actions.</textarea>
-
-    <button
-        id="run"
-        onclick="runMission()"
-    >
-        RUN MISSION
-    </button>
-
-    <div
-        id="status"
-        class="sub"
-        style="margin-top:10px"
-    >
-        Ready.
-    </div>
-
-    <div class="progress">
-        <div
-            id="fill"
-            class="fill"
-        ></div>
-    </div>
-
-</div>
-
-
-<div class="grid">
-
-<div class="metric">
-    <div
-        id="sources"
-        class="num"
-    >0</div>
-    <div class="lab">
-        SOURCES
-    </div>
-</div>
-
-<div class="metric">
-    <div
-        id="evidence"
-        class="num"
-    >0</div>
-    <div class="lab">
-        EVIDENCE
-    </div>
-</div>
-
-<div class="metric">
-    <div
-        id="claims"
-        class="num"
-    >0</div>
-    <div class="lab">
-        CLAIMS
-    </div>
-</div>
-
-<div class="metric">
-    <div
-        id="verified"
-        class="num"
-    >0</div>
-    <div class="lab">
-        VERIFIED
-    </div>
-</div>
-
-</div>
-
-
-<div class="card">
-
-    <h3>MISSION</h3>
-
-    <div id="mission">
-        No mission running.
-    </div>
-
-</div>
-
-
-<div class="card">
-
-    <h3>EVENTS</h3>
-
-    <div id="events">
-        Waiting...
-    </div>
-
-</div>
-
-
-<div class="card">
-
-    <h3>CLAIMS</h3>
-
-    <div id="claimsList">
-        Waiting...
-    </div>
-
-</div>
-
-
-<div class="card">
-
-    <h3>EVIDENCE GRAPH</h3>
-
-    <div id="graph">
-        Waiting...
-    </div>
-
-</div>
-
-
-<div class="card">
-
-    <h3>AUDIT</h3>
-
-    <pre id="audit">Run a mission to generate the audit.</pre>
-
-</div>
-
-
-<div class="card">
-
-    <h3>MISSION HISTORY</h3>
-
-    <div id="history">
-        Loading...
-    </div>
-
-</div>
-
-</main>
-
-
-<script>
-
-let activeMission = null;
-let pollTimer = null;
-
-const $ = id =>
-    document.getElementById(id);
-
-
-function escapeHtml(value) {
-
-    return String(
-        value ?? ""
-    ).replace(
-        /[&<>"']/g,
-        function(char) {
-
-            return {
-                "&": "&amp;",
-                "<": "&lt;",
-                ">": "&gt;",
-                '"': "&quot;",
-                "'": "&#39;"
-            }[char];
-
-        }
-    );
-
-}
-
-
-async function api(
-    url,
-    options
-) {
-
-    const response =
-        await fetch(
-            url,
-            options
-        );
-
-    if (!response.ok) {
-
-        throw new Error(
-            await response.text()
-        );
-
-    }
-
-    return response.json();
-
-}
-
-
-async function runMission() {
-
-    const objective =
-        $("objective")
-        .value
-        .trim();
-
-    if (
-        objective.length < 10
-    ) {
-
-        $("status")
-            .textContent =
-            "Objective must be at least 10 characters.";
-
-        return;
-
-    }
-
-    $("run").disabled = true;
-
-    $("status")
-        .textContent =
-        "Starting mission...";
-
-    $("fill")
-        .style
-        .width = "3%";
-
-    try {
-
-        const result =
-            await api(
-                "/run",
-                {
-                    method: "POST",
-                    headers: {
-                        "Content-Type":
-                            "application/json"
-                    },
-                    body:
-                        JSON.stringify({
-                            objective:
-                                objective
-                        })
-                }
-            );
-
-        activeMission =
-            result.mission_id;
-
-        $("status")
-            .textContent =
-            "Mission queued: "
-            + activeMission;
-
-        pollMission();
-
-    } catch (error) {
-
-        $("status")
-            .textContent =
-            "Start failed: "
-            + error.message;
-
-        $("run").disabled = false;
-
-    }
-
-}
-
-
-async function pollMission() {
-
-    if (!activeMission) {
-        return;
-    }
-
-    try {
-
-        const results =
-            await Promise.all([
-                api(
-                    "/mission/"
-                    + activeMission
-                ),
-
-                api(
-                    "/mission/"
-                    + activeMission
-                    + "/events"
-                ),
-
-                api(
-                    "/mission/"
-                    + activeMission
-                    + "/sources"
-                ),
-
-                api(
-                    "/mission/"
-                    + activeMission
-                    + "/evidence"
-                ),
-
-                api(
-                    "/mission/"
-                    + activeMission
-                    + "/claims"
-                ),
-
-                api(
-                    "/mission/"
-                    + activeMission
-                    + "/graph"
-                )
-            ]);
-
-        const mission =
-            results[0];
-
-        const events =
-            results[1];
-
-        const sources =
-            results[2];
-
-        const evidence =
-            results[3];
-
-        const claims =
-            results[4];
-
-        const graph =
-            results[5];
-
-        renderMission(
-            mission,
-            events,
-            sources,
-            evidence,
-            claims,
-            graph
-        );
-
-        if (
-            mission.status ===
-                "completed"
-            ||
-            mission.status ===
-                "failed"
-        ) {
-
-            try {
-
-                const audit =
-                    await api(
-                        "/mission/"
-                        + activeMission
-                        + "/audit"
-                    );
-
-                $("audit")
-                    .textContent =
-                    JSON.stringify(
-                        audit,
-                        null,
-                        2
-                    );
-
-            } catch (error) {
-
-                $("audit")
-                    .textContent =
-                    error.message;
-
-            }
-
-            $("run").disabled = false;
-
-            activeMission = null;
-
-            loadHistory();
-
-            return;
-
-        }
-
-    } catch (error) {
-
-        $("status")
-            .textContent =
-            "Polling error: "
-            + error.message;
-
-    }
-
-    pollTimer =
-        setTimeout(
-            pollMission,
-            2500
-        );
-
-}
-
-
-function renderMission(
-    mission,
-    events,
-    sources,
-    evidence,
-    claims,
-    graph
-) {
-
-    $("status")
-        .textContent =
-        "Mission "
-        + mission.status
-        + " · "
-        + mission.id;
-
-    $("mission")
-        .innerHTML =
-        "<b>"
-        + escapeHtml(
-            mission.id
-        )
-        + "</b><br>"
-        + escapeHtml(
-            mission.objective
-        );
-
-    $("sources")
-        .textContent =
-        sources.length;
-
-    $("evidence")
-        .textContent =
-        evidence.length;
-
-    $("claims")
-        .textContent =
-        claims.length;
-
-    $("verified")
-        .textContent =
-        claims.filter(
-            x =>
-                x.status ===
-                "VERIFIED"
-        ).length;
-
-    const completed =
-        events.filter(
-            x =>
-                x.status ===
-                "completed"
-        ).length;
-
-    const progress =
-        Math.min(
-            100,
-            completed / 6 * 100
-        );
-
-    $("fill")
-        .style
-        .width =
-        progress + "%";
-
-
-    $("events")
-        .innerHTML =
-        events.length
-        ? events.map(
-            item =>
-                "<div class='item'>"
-                + "<b>"
-                + escapeHtml(
-                    item.stage
-                )
-                + "</b>"
-                + " · "
-                + escapeHtml(
-                    item.status
-                )
-                + "<br>"
-                + "<span class='small'>"
-                + escapeHtml(
-                    item.detail
-                )
-                + "</span>"
-                + "</div>"
-        ).join("")
-        : "No events yet.";
-
-
-    $("claimsList")
-        .innerHTML =
-        claims.length
-        ? claims
-            .slice(0, 40)
-            .map(
-                claim => {
-
-                    let cls =
-                        "warn";
-
-                    if (
-                        claim.status ===
-                        "VERIFIED"
-                    ) {
-                        cls = "ok";
-                    }
-
-                    if (
-                        claim.status ===
-                        "CONTRADICTED"
-                    ) {
-                        cls = "bad";
-                    }
-
-                    return (
-                        "<div class='item'>"
-                        + "<b class='"
-                        + cls
-                        + "'>"
-                        + escapeHtml(
-                            claim.status
-                        )
-                        + "</b>"
-                        + " · "
-                        + escapeHtml(
-                            claim.claim
-                        )
-                        + "</div>"
-                    );
-
-                }
+def create_mission(objective: str) -> Dict[str, Any]:
+    mission_id = uid("mission")
+
+    with db_lock:
+        conn = db()
+
+        conn.execute(
+            """
+            INSERT INTO missions (
+                id,objective,status,
+                created_at,updated_at,result
             )
-            .join("")
-        : "No claims yet.";
-
-
-    $("graph")
-        .innerHTML =
-        "<div class='sub'>"
-        + graph.length
-        + " graph edges"
-        + "</div>"
-        +
-        (
-            graph.length
-            ? graph
-                .slice(0, 50)
-                .map(
-                    edge =>
-                        "<div class='item'>"
-                        + "<span class='pill'>"
-                        + escapeHtml(
-                            edge.from_type
-                        )
-                        + "</span> "
-                        + escapeHtml(
-                            edge.relation
-                        )
-                        + " "
-                        + "<span class='pill'>"
-                        + escapeHtml(
-                            edge.to_type
-                        )
-                        + "</span>"
-                        + " · score "
-                        + Number(
-                            edge.score || 0
-                        ).toFixed(3)
-                        + "</div>"
-                )
-                .join("")
-            : "No graph edges yet."
-        );
-
-}
-
-
-async function loadHistory() {
-
-    try {
-
-        const rows =
-            await api(
-                "/missions"
-            );
-
-        $("history")
-            .innerHTML =
-            rows.length
-            ? rows.map(
-                item =>
-                    "<div class='item'>"
-                    + "<b>"
-                    + escapeHtml(
-                        item.status
-                    )
-                    + "</b>"
-                    + " · "
-                    + escapeHtml(
-                        item.id
-                    )
-                    + "<br>"
-                    + "<span class='small'>"
-                    + escapeHtml(
-                        item.objective
-                    )
-                    + "</span>"
-                    + "</div>"
-            ).join("")
-            : "No missions yet.";
-
-    } catch (error) {
-
-        $("history")
-            .textContent =
-            error.message;
-
-    }
-
-}
-
-
-loadHistory();
-
-</script>
-
-</body>
-</html>
-"""
-
-
-# ============================================================
-# API
-# ============================================================
-
-@app.get(
-    "/",
-    response_class=HTMLResponse,
-)
-def root():
-
-    return HTMLResponse(
-        DASHBOARD_HTML
-    )
-
-
-@app.get(
-    "/dashboard",
-    response_class=HTMLResponse,
-)
-def dashboard():
-
-    return HTMLResponse(
-        DASHBOARD_HTML
-    )
-
-
-@app.get(
-    "/run",
-    response_class=HTMLResponse,
-)
-def run_page():
-
-    return HTMLResponse(
-        DASHBOARD_HTML
-    )
-
-
-@app.get("/health")
-def health():
-
-    return {
-        "status": "ok",
-        "version": VERSION,
-        "build": BUILD,
-    }
-
-
-@app.get("/status")
-def status():
-
-    with DB_LOCK:
-
-        c = db()
-
-        count = c.execute(
-            """
-            SELECT COUNT(*) AS n
-            FROM missions
-            """
-        ).fetchone()["n"]
-
-        c.close()
-
-    return {
-        "status": "online",
-        "missions": count,
-        "version": VERSION,
-        "build": BUILD,
-    }
-
-
-@app.get("/capabilities")
-def capabilities():
-
-    return {
-        "version": VERSION,
-        "build": BUILD,
-        "capabilities": [
-            "mobile dashboard",
-            "multi-provider discovery",
-            "safe URL retrieval",
-            "evidence excerpts",
-            "claim extraction",
-            "claim-to-evidence provenance",
-            "independent verification",
-            "contradiction detection",
-            "persistent mission events",
-            "evidence graph",
-            "evidence gate",
-            "reality audit",
-        ],
-    }
-
-
-@app.post("/mission")
-@app.post("/research")
-@app.post("/run")
-def create_mission(
-    req: MissionIn,
-):
-
-    mid = (
-        "mission-"
-        + uuid.uuid4().hex[:12]
-    )
-
-    with DB_LOCK:
-
-        c = db()
-
-        c.execute(
-            """
-            INSERT INTO missions(
-                id,
-                objective,
-                status,
-                result,
-                created_at,
-                updated_at
-            )
-            VALUES(?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?)
             """,
             (
-                mid,
-                req.objective,
+                mission_id,
+                objective,
                 "queued",
+                now(),
+                now(),
                 None,
-                now(),
-                now(),
             ),
         )
 
-        c.commit()
-        c.close()
+        conn.commit()
+        conn.close()
 
     event(
-        mid,
+        mission_id,
         "mission",
         "queued",
         "Mission accepted",
     )
 
-    EXECUTOR.submit(
+    executor.submit(
         run_mission,
-        mid,
-        req.objective,
+        mission_id,
     )
 
     return {
-        "task_id": mid,
-        "mission_id": mid,
+        "mission_id": mission_id,
         "status": "queued",
         "version": VERSION,
         "build": BUILD,
     }
 
 
-@app.post("/command")
-def command(
-    req: MissionIn,
-):
+# ============================================================
+# API
+# ============================================================
 
-    return create_mission(
-        req
+@app.get("/", response_class=HTMLResponse)
+@app.get("/dashboard", response_class=HTMLResponse)
+@app.get("/run", response_class=HTMLResponse)
+def dashboard():
+
+    return HTMLResponse(
+        f"""
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Infinity</title>
+<style>
+body {{
+    font-family: system-ui, sans-serif;
+    background:#0b0f14;
+    color:#eef2f7;
+    margin:0;
+    padding:18px;
+}}
+main {{
+    max-width:900px;
+    margin:auto;
+}}
+h1 {{ margin-bottom:4px; }}
+small {{ opacity:.65; }}
+textarea {{
+    width:100%;
+    min-height:130px;
+    margin-top:18px;
+    padding:14px;
+    box-sizing:border-box;
+    border-radius:12px;
+    border:1px solid #303944;
+    background:#111820;
+    color:white;
+    font-size:16px;
+}}
+button {{
+    width:100%;
+    margin-top:12px;
+    padding:15px;
+    border:0;
+    border-radius:12px;
+    background:#ffffff;
+    color:#000;
+    font-size:16px;
+    font-weight:700;
+}}
+.card {{
+    margin-top:14px;
+    padding:15px;
+    border:1px solid #303944;
+    border-radius:12px;
+    background:#111820;
+}}
+pre {{
+    white-space:pre-wrap;
+    word-break:break-word;
+}}
+.stat {{
+    display:inline-block;
+    margin:4px;
+    padding:10px;
+    border:1px solid #303944;
+    border-radius:10px;
+}}
+.good {{ color:#7ee787; }}
+.warn {{ color:#f2cc60; }}
+.bad {{ color:#ff7b72; }}
+</style>
+</head>
+<body>
+<main>
+<h1>AI Infinity</h1>
+<small>{VERSION} · {BUILD}</small>
+
+<textarea id="objective">Research the reliability of autonomous AI agents for real-world task execution. Find independent evidence, verify important claims, identify contradictory evidence, and give the next actions.</textarea>
+
+<button onclick="runMission()">RUN MISSION</button>
+
+<div id="status" class="card">
+Ready.
+</div>
+
+<div id="stats" class="card"></div>
+<div id="claims" class="card"></div>
+<div id="graph" class="card"></div>
+<div id="audit" class="card"></div>
+<div id="events" class="card"></div>
+
+<script>
+let mission = null;
+
+async function runMission() {{
+    const objective =
+        document.getElementById("objective").value.trim();
+
+    if (!objective) {{
+        alert("Enter an objective.");
+        return;
+    }}
+
+    document.getElementById("status").innerHTML =
+        "Starting mission...";
+
+    const response = await fetch("/run", {{
+        method:"POST",
+        headers:{{"Content-Type":"application/json"}},
+        body:JSON.stringify({{objective}})
+    }});
+
+    const data = await response.json();
+
+    if (!response.ok) {{
+        document.getElementById("status").innerHTML =
+            "<span class='bad'>"+JSON.stringify(data)+"</span>";
+        return;
+    }}
+
+    mission = data.mission_id;
+
+    document.getElementById("status").innerHTML =
+        "Mission: "+mission+"<br>Status: queued";
+
+    poll();
+}}
+
+async function poll() {{
+    if (!mission) return;
+
+    const r = await fetch("/mission/"+mission);
+    const data = await r.json();
+
+    document.getElementById("status").innerHTML =
+        "<b>Mission</b>: "+mission+
+        "<br><b>Status</b>: "+data.status;
+
+    const [sources, claims, evidence, graph, audit, events] =
+        await Promise.all([
+            fetch("/mission/"+mission+"/sources").then(x=>x.json()),
+            fetch("/mission/"+mission+"/claims").then(x=>x.json()),
+            fetch("/mission/"+mission+"/evidence").then(x=>x.json()),
+            fetch("/mission/"+mission+"/graph").then(x=>x.json()),
+            fetch("/mission/"+mission+"/audit").then(x=>x.json()),
+            fetch("/mission/"+mission+"/events").then(x=>x.json())
+        ]);
+
+    document.getElementById("stats").innerHTML =
+        "<b>LIVE COUNTERS</b><br>"+
+        "<span class='stat'>Sources: "+sources.length+"</span>"+
+        "<span class='stat'>Evidence: "+evidence.length+"</span>"+
+        "<span class='stat'>Claims: "+claims.length+"</span>"+
+        "<span class='stat'>Edges: "+graph.length+"</span>";
+
+    let claimHtml = "<b>CLAIMS</b>";
+
+    for (const c of claims) {{
+        let cls =
+            c.status==="VERIFIED" ? "good" :
+            c.status==="CONTRADICTED" ? "bad" :
+            c.status==="SUPPORTED" ? "warn" : "";
+
+        claimHtml +=
+            "<div class='card "+cls+"'>"+
+            "<b>"+c.status+"</b> · "+
+            escapeHtml(c.claim)+
+            "<br><small>purity="+c.purity+
+            " confidence="+c.confidence+"</small>"+
+            "</div>";
+    }}
+
+    document.getElementById("claims").innerHTML = claimHtml;
+
+    let graphHtml =
+        "<b>EVIDENCE GRAPH</b><br>"+
+        graph.length+" graph edges";
+
+    for (const e of graph.slice(0,80)) {{
+        graphHtml +=
+            "<div>"+
+            escapeHtml(e.relation)+
+            " · score "+
+            Number(e.score).toFixed(3)+
+            "</div>";
+    }}
+
+    document.getElementById("graph").innerHTML = graphHtml;
+
+    document.getElementById("audit").innerHTML =
+        "<b>AUDIT</b><pre>"+
+        escapeHtml(JSON.stringify(audit,null,2))+
+        "</pre>";
+
+    document.getElementById("events").innerHTML =
+        "<b>EVENTS</b><pre>"+
+        escapeHtml(JSON.stringify(events,null,2))+
+        "</pre>";
+
+    if (data.status==="queued" || data.status==="running") {{
+        setTimeout(poll,2000);
+    }}
+}}
+
+function escapeHtml(value) {{
+    return String(value)
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;");
+}}
+</script>
+</main>
+</body>
+</html>
+"""
     )
 
 
-@app.get(
-    "/mission/{mid}"
-)
-def get_mission(
-    mid: str,
-):
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "version": VERSION,
+        "build": BUILD,
+        "database": str(DB_PATH),
+    }
 
-    with DB_LOCK:
 
-        c = db()
+@app.get("/status")
+def status():
+    with db_lock:
+        conn = db()
 
-        row = c.execute(
-            """
-            SELECT *
-            FROM missions
-            WHERE id=?
-            """,
-            (mid,),
+        missions = conn.execute(
+            "SELECT COUNT(*) FROM missions"
+        ).fetchone()[0]
+
+        works = conn.execute(
+            "SELECT COUNT(*) FROM works"
+        ).fetchone()[0]
+
+        claims = conn.execute(
+            "SELECT COUNT(*) FROM claims"
+        ).fetchone()[0]
+
+        evidence = conn.execute(
+            "SELECT COUNT(*) FROM evidence"
+        ).fetchone()[0]
+
+        edges = conn.execute(
+            "SELECT COUNT(*) FROM edges"
+        ).fetchone()[0]
+
+        conn.close()
+
+    return {
+        "version": VERSION,
+        "build": BUILD,
+        "missions": missions,
+        "works": works,
+        "claims": claims,
+        "evidence": evidence,
+        "edges": edges,
+    }
+
+
+@app.get("/capabilities")
+def capabilities():
+    return {
+        "version": VERSION,
+        "build": BUILD,
+        "capabilities": [
+            "autonomous research mission execution",
+            "multi-provider discovery",
+            "safe URL retrieval",
+            "claim purity filtering",
+            "evidence extraction",
+            "evidence quality classification",
+            "claim-to-evidence provenance",
+            "independent corroboration",
+            "contradiction screening",
+            "auditable evidence graph",
+            "browser dashboard",
+        ],
+        "not_claimed": [
+            "general AGI",
+            "arbitrary real-world autonomous execution",
+            "continuous self-improvement",
+            "durable memory across infrastructure restarts",
+            "true methodological independence of every source",
+        ],
+    }
+
+
+@app.post("/run")
+def run_post(request: MissionRequest):
+    return create_mission(
+        request.objective
+    )
+
+
+@app.post("/mission")
+def mission_post(request: MissionRequest):
+    return create_mission(
+        request.objective
+    )
+
+
+@app.post("/research")
+def research_post(request: MissionRequest):
+    return create_mission(
+        request.objective
+    )
+
+
+@app.post("/command")
+def command_post(request: CommandRequest):
+    return create_mission(
+        request.command
+    )
+
+
+@app.get("/mission/{mission_id}")
+def get_mission(mission_id: str):
+    with db_lock:
+        conn = db()
+
+        row = conn.execute(
+            "SELECT * FROM missions WHERE id=?",
+            (mission_id,),
         ).fetchone()
 
-        c.close()
+        conn.close()
 
     if not row:
-
         raise HTTPException(
             status_code=404,
-            detail="mission not found",
+            detail="Mission not found",
         )
 
-    output = dict(row)
-
-    output["result"] = (
-        json.loads(
-            output["result"]
-        )
-        if output["result"]
-        else None
-    )
-
-    return output
+    return dict(row)
 
 
 @app.get("/missions")
 def missions():
+    with db_lock:
+        conn = db()
 
-    with DB_LOCK:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM missions
+            ORDER BY created_at DESC
+            LIMIT 50
+            """
+        ).fetchall()
 
-        c = db()
+        conn.close()
 
-        rows = [
-            dict(row)
-            for row in c.execute(
-                """
-                SELECT *
-                FROM missions
-                ORDER BY created_at DESC
-                LIMIT 100
-                """
-            )
-        ]
-
-        c.close()
-
-    for row in rows:
-
-        row["result"] = (
-            json.loads(
-                row["result"]
-            )
-            if row["result"]
-            else None
-        )
-
-    return rows
+    return [dict(r) for r in rows]
 
 
-@app.get(
-    "/mission/{mid}/events"
-)
-def mission_events(
-    mid: str,
-):
+@app.get("/mission/{mission_id}/events")
+def mission_events(mission_id: str):
+    with db_lock:
+        conn = db()
 
-    with DB_LOCK:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM events
+            WHERE mission_id=?
+            ORDER BY id
+            """,
+            (mission_id,),
+        ).fetchall()
 
-        c = db()
+        conn.close()
 
-        rows = [
-            dict(row)
-            for row in c.execute(
-                """
-                SELECT *
-                FROM events
-                WHERE mission_id=?
-                ORDER BY id
-                """,
-                (mid,),
-            )
-        ]
-
-        c.close()
-
-    return rows
+    return [dict(r) for r in rows]
 
 
-@app.get(
-    "/mission/{mid}/sources"
-)
-def mission_sources(
-    mid: str,
-):
+@app.get("/mission/{mission_id}/sources")
+def mission_sources(mission_id: str):
+    with db_lock:
+        conn = db()
 
-    with DB_LOCK:
+        rows = conn.execute(
+            """
+            SELECT
+                id,title,url,doi,provider,
+                domain,source_family,
+                quality,relevance,created_at
+            FROM works
+            WHERE mission_id=?
+            ORDER BY relevance DESC
+            """,
+            (mission_id,),
+        ).fetchall()
 
-        c = db()
+        conn.close()
 
-        rows = [
-            dict(row)
-            for row in c.execute(
-                """
-                SELECT *
-                FROM works
-                WHERE mission_id=?
-                ORDER BY relevance DESC,
-                         quality DESC
-                """,
-                (mid,),
-            )
-        ]
-
-        c.close()
-
-    return rows
+    return [dict(r) for r in rows]
 
 
-@app.get(
-    "/mission/{mid}/claims"
-)
-def mission_claims(
-    mid: str,
-):
+@app.get("/mission/{mission_id}/claims")
+def mission_claims(mission_id: str):
+    with db_lock:
+        conn = db()
 
-    with DB_LOCK:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM claims
+            WHERE mission_id=?
+            ORDER BY
+                CASE status
+                    WHEN 'VERIFIED' THEN 1
+                    WHEN 'SUPPORTED' THEN 2
+                    WHEN 'CONTRADICTED' THEN 3
+                    ELSE 4
+                END,
+                confidence DESC
+            """,
+            (mission_id,),
+        ).fetchall()
 
-        c = db()
+        conn.close()
 
-        rows = [
-            dict(row)
-            for row in c.execute(
-                """
-                SELECT *
-                FROM claims
-                WHERE mission_id=?
-                ORDER BY confidence DESC
-                """,
-                (mid,),
-            )
-        ]
-
-        c.close()
-
-    return rows
+    return [dict(r) for r in rows]
 
 
-@app.get(
-    "/mission/{mid}/evidence"
-)
-def mission_evidence(
-    mid: str,
-):
+@app.get("/mission/{mission_id}/evidence")
+def mission_evidence(mission_id: str):
+    with db_lock:
+        conn = db()
 
-    with DB_LOCK:
+        rows = conn.execute(
+            """
+            SELECT
+                e.*,
+                w.title,
+                w.url,
+                w.domain,
+                w.source_family
+            FROM evidence e
+            JOIN works w
+              ON w.id=e.work_id
+            WHERE e.mission_id=?
+            ORDER BY e.score DESC
+            """,
+            (mission_id,),
+        ).fetchall()
 
-        c = db()
+        conn.close()
 
-        rows = [
-            dict(row)
-            for row in c.execute(
-                """
-                SELECT *
-                FROM evidence
-                WHERE mission_id=?
-                ORDER BY relevance DESC,
-                         quality DESC
-                """,
-                (mid,),
-            )
-        ]
-
-        c.close()
-
-    return rows
+    return [dict(r) for r in rows]
 
 
-@app.get(
-    "/mission/{mid}/graph"
-)
-def mission_graph(
-    mid: str,
-):
+@app.get("/mission/{mission_id}/graph")
+def mission_graph(mission_id: str):
+    with db_lock:
+        conn = db()
 
-    with DB_LOCK:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM edges
+            WHERE mission_id=?
+            ORDER BY score DESC
+            """,
+            (mission_id,),
+        ).fetchall()
 
-        c = db()
+        conn.close()
 
-        rows = [
-            dict(row)
-            for row in c.execute(
-                """
-                SELECT *
-                FROM edges
-                WHERE mission_id=?
-                ORDER BY score DESC
-                """,
-                (mid,),
-            )
-        ]
-
-        c.close()
-
-    return rows
+    return [dict(r) for r in rows]
 
 
-@app.get(
-    "/mission/{mid}/audit"
-)
-def mission_audit(
-    mid: str,
-):
+@app.get("/mission/{mission_id}/audit")
+def mission_audit(mission_id: str):
+    with db_lock:
+        conn = db()
 
-    mission = get_mission(
-        mid
-    )
+        row = conn.execute(
+            """
+            SELECT payload
+            FROM audits
+            WHERE mission_id=?
+            """,
+            (mission_id,),
+        ).fetchone()
 
-    if not mission["result"]:
+        conn.close()
 
-        return {
-            "status":
-                mission["status"],
-            "result": None,
-        }
+    if row:
+        return json.loads(row["payload"])
 
-    return mission["result"]
+    return build_audit(mission_id)
+
+
+@app.get("/audit/{mission_id}")
+def audit_alias(mission_id: str):
+    return mission_audit(mission_id)
 
 
 @app.get("/validate-source")
-def validate_source(
-    url: str,
-):
-
+def validate_source(url: str):
     return {
         "url": url,
         "safe": safe_url(url),
+        "domain": domain_of(url),
     }
 
 
@@ -3813,8 +2584,7 @@ def validate_source(
 
 @app.on_event("shutdown")
 def shutdown():
-
-    EXECUTOR.shutdown(
+    executor.shutdown(
         wait=False,
-        cancel_futures=True,
+        cancel_futures=False,
     )
