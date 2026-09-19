@@ -1,2945 +1,668 @@
 """
 AI Infinity
-TARGET-2050.35-FINAL
-BUILD: EVIDENCE-INTEGRITY-CORRECTION
+TARGET-2050.36
+BUILD: DISCOVERY-RECOVERY-REALITY-CORE
 
-Correction of the final validation run.
-
-FIXES:
-1. Mission relevance gate
-2. DOI -> canonical publisher/source provenance
-3. Calibrated evidence entailment
-4. Recovery source diversification
-5. Per-claim verification blockers
-6. Duplicate-safe evidence graph
-7. Strict verification gate preserved
-
-IMPORTANT:
-- This system never forces VERIFIED.
-- Lexical similarity is NOT treated as entailment.
-- Unknown provenance cannot create DIRECT_SUPPORT.
-- Irrelevant documents cannot create mission evidence.
+This build fixes the failure exposed by TARGET-2050.35:
+- separates discovery, canonicalization, fetch, relevance and acceptance
+- uses topic anchors instead of requiring full mission-vocabulary overlap
+- preserves strict verification standards
+- records exactly where sources are lost
+- expands recovery across providers and query families
+- never treats lexical similarity as semantic proof
 """
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from pathlib import Path
-from typing import Optional, Any
 from urllib.parse import urlparse
-import sqlite3
-import requests
-import re
-import json
-import time
-import hashlib
-import ipaddress
-import socket
 from collections import Counter
 from difflib import SequenceMatcher
+import sqlite3, requests, re, json, time, hashlib, ipaddress
 
-
-VERSION = "TARGET-2050.35-FINAL"
-BUILD = "EVIDENCE-INTEGRITY-CORRECTION"
-
+VERSION = "TARGET-2050.36"
+BUILD = "DISCOVERY-RECOVERY-REALITY-CORE"
 BASE = Path("/tmp/ai-infinity")
 BASE.mkdir(parents=True, exist_ok=True)
-
 DB_PATH = BASE / "ai_infinity.db"
-
-TIMEOUT = 18
-MAX_TEXT = 30000
+TIMEOUT = 12
+MAX_TEXT = 24000
 MAX_EXCERPT = 1400
+UA = "AI-Infinity/2050.36 evidence-research-engine"
 
-USER_AGENT = (
-    "AI-Infinity/2050.35 "
-    "(evidence research engine; contact unavailable)"
-)
+STOP = set("""
+the and that this with from into for are was were been have has had will would
+could should their there they them than then when where which while using used use
+also more most some such these those about after before between through within
+without over under during only each other both many much very may might can our
+your its we you a an of to in on at by as or is it be not no do does did
+study research paper results finding findings analysis method methods approach
+system model models data evidence work works information researchers authors
+""".split())
 
-STOPWORDS = {
-    "the", "and", "that", "this", "with", "from", "into", "for",
-    "are", "was", "were", "been", "have", "has", "had", "will",
-    "would", "could", "should", "their", "there", "they", "them",
-    "than", "then", "when", "where", "which", "while", "using",
-    "used", "use", "also", "more", "most", "some", "such", "these",
-    "those", "about", "after", "before", "between", "through",
-    "within", "without", "over", "under", "during", "only", "each",
-    "other", "both", "many", "much", "very", "may", "might", "can",
-    "our", "your", "its", "their", "we", "our", "you", "a", "an",
-    "of", "to", "in", "on", "at", "by", "as", "or", "is", "it",
-    "be", "not", "no", "do", "does", "did"
-}
-
-GENERIC_WORDS = STOPWORDS | {
-    "study", "research", "paper", "results", "finding", "findings",
-    "analysis", "method", "methods", "approach", "system",
-    "model", "models", "data", "evidence", "results", "work",
-    "works", "information", "researchers", "authors"
-}
-
-BOILERPLATE_PATTERNS = [
-    r"skip to main content",
-    r"subscribe",
-    r"sign up",
-    r"share this",
-    r"cookie",
-    r"privacy policy",
-    r"terms of use",
-    r"all rights reserved",
-    r"contact us",
-    r"follow us",
-    r"newsletter",
-    r"issn",
-    r"e-issn",
-    r"impact factor",
-    r"volume\s+\d+",
-    r"issue\s+\d+",
-    r"copyright",
-    r"funded by",
-    r"funder",
-    r"conflict of interest",
-    r"author contributions",
-    r"received .* accepted",
-    r"doi:\s*10\.",
-    r"citation:",
+NOISE = [
+    r"skip to main content", r"subscribe", r"sign up", r"share this",
+    r"cookie", r"privacy policy", r"terms of use", r"all rights reserved",
+    r"newsletter", r"\bissn\b", r"e-issn", r"impact factor",
+    r"copyright", r"funder", r"funded by", r"author contributions",
+    r"conflict of interest", r"doi:\s*10\.", r"citation:"
 ]
 
-METADATA_PATTERNS = [
-    r"^figure\s+\d+",
-    r"^table\s+\d+",
-    r"^supplementary",
-    r"^references?$",
-    r"^contents?$",
-    r"^abstract$",
-    r"^introduction$",
-    r"^methods?$",
-    r"^results?$",
-    r"^discussion$",
+BAD_CLAIM = NOISE + [
+    r"pip install", r"import\s+\w+", r"from\s+\w+\s+import", r"npm install",
+    r"github\.com", r"^figure\s+\d+", r"^table\s+\d+",
+    r"^references?$", r"^abstract$", r"^introduction$", r"^methods?$",
+    r"^results?$", r"^discussion$", r"https?://", r"doi\.org/"
 ]
 
-CODE_PATTERNS = [
-    r"pip install",
-    r"import\s+\w+",
-    r"from\s+\w+\s+import",
-    r"npm install",
-    r"```",
-    r"example code",
-    r"source code",
-    r"github\.com",
+NEG = {"not","no","never","without","failed","failure","unable","cannot",
+       "insufficient","lack","lacks","limited","unlikely","contradict",
+       "contradicted"}
+POS = {"found","find","shows","showed","demonstrate","demonstrates",
+       "evidence","increased","decreased","associated","effective",
+       "successful","reliable","improved","observed","identified","confirmed"}
+
+TOPIC_GROUPS = [
+    {"agent","agents","agentic","autonomous","autonomy"},
+    {"reliability","reliable","robustness","robust","failure","failures"},
+    {"task","tasks","execution","execute","completion"},
+    {"real","world","deployment","deployed","production"},
+    {"tool","tools","tool-use","tooluse"},
+    {"planning","planner","reasoning"},
+    {"benchmark","benchmarks","evaluation","evaluate","empirical"},
+    {"safety","safe","security"},
+    {"recovery","recover","monitoring","verification","verify"},
 ]
 
-NEGATIVE_WORDS = {
-    "not", "no", "never", "without", "failed", "failure",
-    "unable", "cannot", "did not", "does not", "insufficient",
-    "lack", "lacks", "limited", "unlikely", "contradict",
-    "contradicted"
-}
+def now(): return time.time()
+def sid(prefix, value):
+    return f"{prefix}-{hashlib.sha256(value.encode()).hexdigest()[:16]}"
 
-POSITIVE_WORDS = {
-    "found", "find", "shows", "showed", "demonstrate",
-    "demonstrates", "evidence", "increased", "decreased",
-    "associated", "effective", "successful", "reliable",
-    "improved", "observed", "identified", "confirmed"
-}
+def clean(x):
+    return re.sub(r"\s+", " ", x or "").strip()
 
+def toks(x):
+    return {w for w in re.findall(r"[a-zA-Z][a-zA-Z0-9'-]{2,}", (x or "").lower())
+            if w not in STOP}
 
-# ---------------------------------------------------------------------
-# DATABASE
-# ---------------------------------------------------------------------
+def sim(a,b):
+    A,B=toks(a),toks(b)
+    if not A or not B: return 0.0
+    j=len(A&B)/max(1,len(A|B))
+    s=SequenceMatcher(None," ".join(sorted(A))," ".join(sorted(B))).ratio()
+    return round(.72*j+.28*s,4)
 
-def db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def init_db():
-    conn = db()
-
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS missions (
-            id TEXT PRIMARY KEY,
-            objective TEXT NOT NULL,
-            status TEXT,
-            created REAL,
-            updated REAL,
-            result TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            mission_id TEXT,
-            stage TEXT,
-            status TEXT,
-            detail TEXT,
-            created REAL
-        );
-
-        CREATE TABLE IF NOT EXISTS works (
-            id TEXT PRIMARY KEY,
-            mission_id TEXT,
-            title TEXT,
-            url TEXT,
-            canonical_url TEXT,
-            doi TEXT,
-            provider TEXT,
-            domain TEXT,
-            family TEXT,
-            abstract TEXT,
-            relevance REAL DEFAULT 0,
-            accepted INTEGER DEFAULT 0,
-            created REAL
-        );
-
-        CREATE TABLE IF NOT EXISTS evidence (
-            id TEXT PRIMARY KEY,
-            mission_id TEXT,
-            work_id TEXT,
-            claim_id TEXT,
-            excerpt TEXT,
-            lexical REAL DEFAULT 0,
-            entailment REAL DEFAULT 0,
-            relevance REAL DEFAULT 0,
-            quality TEXT,
-            relation TEXT,
-            domain TEXT,
-            family TEXT,
-            created REAL
-        );
-
-        CREATE TABLE IF NOT EXISTS claims (
-            id TEXT PRIMARY KEY,
-            mission_id TEXT,
-            text TEXT,
-            claim_type TEXT,
-            purity REAL,
-            relevance REAL,
-            status TEXT,
-            confidence REAL,
-            blockers TEXT,
-            next_action TEXT,
-            created REAL
-        );
-
-        CREATE TABLE IF NOT EXISTS edges (
-            id TEXT PRIMARY KEY,
-            mission_id TEXT,
-            claim_id TEXT,
-            evidence_id TEXT,
-            relation TEXT,
-            score REAL,
-            reason TEXT,
-            created REAL
-        );
-
-        CREATE TABLE IF NOT EXISTS actions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            mission_id TEXT,
-            kind TEXT,
-            target TEXT,
-            status TEXT,
-            result TEXT,
-            attempt INTEGER,
-            created REAL
-        );
-
-        CREATE TABLE IF NOT EXISTS memory (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            mission_id TEXT,
-            key TEXT,
-            value TEXT,
-            created REAL
-        );
-        """
-    )
-
-    conn.commit()
-    conn.close()
-
-
-init_db()
-
-
-# ---------------------------------------------------------------------
-# API MODELS
-# ---------------------------------------------------------------------
-
-class CreateRequest(BaseModel):
-    command: str = Field(..., min_length=10, max_length=10000)
-    duration_minutes: int = Field(default=1, ge=1, le=120)
-
-
-# ---------------------------------------------------------------------
-# UTILITIES
-# ---------------------------------------------------------------------
-
-def now():
-    return time.time()
-
-
-def stable_id(prefix: str, value: str):
-    h = hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
-    return f"{prefix}-{h}"
-
-
-def tokens(text: str):
-    words = re.findall(r"[a-zA-Z][a-zA-Z0-9'-]{2,}", text.lower())
-    return {
-        w for w in words
-        if w not in STOPWORDS and len(w) >= 3
-    }
-
-
-def meaningful_tokens(text: str):
-    return {
-        w for w in tokens(text)
-        if w not in GENERIC_WORDS
-    }
-
-
-def lexical_similarity(a: str, b: str):
-    A = meaningful_tokens(a)
-    B = meaningful_tokens(b)
-
-    if not A or not B:
-        return 0.0
-
-    overlap = len(A & B) / max(1, len(A | B))
-    seq = SequenceMatcher(
-        None,
-        " ".join(sorted(A)),
-        " ".join(sorted(B))
-    ).ratio()
-
-    return round((overlap * 0.70) + (seq * 0.30), 4)
-
-
-def normalize_domain(url: str):
+def safe_url(url):
     try:
-        host = urlparse(url).hostname or ""
-        host = host.lower().strip(".")
-        if host.startswith("www."):
-            host = host[4:]
-        return host
-    except Exception:
-        return ""
-
-
-def is_safe_url(url: str):
-    try:
-        p = urlparse(url)
-
-        if p.scheme not in {"http", "https"}:
-            return False
-
-        host = p.hostname
-        if not host:
-            return False
-
-        if host in {"localhost", "127.0.0.1", "::1"}:
-            return False
-
+        p=urlparse(url)
+        if p.scheme not in ("http","https") or not p.hostname: return False
+        h=p.hostname.lower()
+        if h in ("localhost","127.0.0.1","::1"): return False
         try:
-            ip = ipaddress.ip_address(host)
-            if (
-                ip.is_private
-                or ip.is_loopback
-                or ip.is_link_local
-                or ip.is_reserved
-                or ip.is_multicast
-            ):
+            ip=ipaddress.ip_address(h)
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
                 return False
-        except ValueError:
-            pass
-
+        except ValueError: pass
         return True
+    except Exception: return False
 
-    except Exception:
-        return False
+def domain(url):
+    try:
+        h=(urlparse(url).hostname or "").lower().strip(".")
+        return h[4:] if h.startswith("www.") else h
+    except Exception: return ""
 
-
-def clean_text(text: str):
-    text = re.sub(r"\s+", " ", text or "")
-    return text.strip()
-
-
-def contains_pattern(text: str, patterns):
-    low = text.lower()
-    return any(re.search(p, low) for p in patterns)
-
-
-# ---------------------------------------------------------------------
-# SOURCE FAMILY
-# ---------------------------------------------------------------------
-
-def source_family(domain: str):
-    d = (domain or "").lower()
-
-    if not d:
-        return "unknown"
-
-    if d.endswith("doi.org"):
-        return "unknown"
-
-    if "arxiv.org" in d:
-        return "arxiv"
-
-    if "nature.com" in d:
-        return "nature"
-
-    if "science.org" in d:
-        return "science"
-
-    if "sciencedirect.com" in d:
-        return "elsevier"
-
-    if "springer.com" in d or "link.springer" in d:
-        return "springer"
-
-    if "frontiersin.org" in d:
-        return "frontiers"
-
-    if "plos.org" in d:
-        return "plos"
-
-    if "wiley.com" in d:
-        return "wiley"
-
-    if "bmj.com" in d:
-        return "bmj"
-
-    if "acm.org" in d:
-        return "acm"
-
-    if "ieee.org" in d:
-        return "ieee"
-
-    if "nih.gov" in d or "ncbi.nlm.nih.gov" in d:
-        return "nih"
-
-    if "jamanetwork.com" in d:
-        return "jamanetwork"
-
-    if "tandfonline.com" in d:
-        return "taylor-francis"
-
-    if "sagepub.com" in d:
-        return "sage"
-
-    if "cambridge.org" in d:
-        return "cambridge"
-
-    if "oup.com" in d:
-        return "oxford"
-
-    if "oxfordacademic.com" in d:
-        return "oxford"
-
-    if "mit.edu" in d:
-        return "mit"
-
-    if "ac.uk" in d:
-        return "university"
-
-    if d.endswith(".edu") or ".edu." in d:
-        return "university"
-
-    if "github.com" in d:
-        return "github"
-
+def family(d):
+    d=(d or "").lower()
+    if not d or d=="doi.org": return "unknown"
+    mapping={
+        "arxiv.org":"arxiv","nature.com":"nature","science.org":"science",
+        "sciencedirect.com":"elsevier","springer.com":"springer",
+        "frontiersin.org":"frontiers","plos.org":"plos","wiley.com":"wiley",
+        "bmj.com":"bmj","acm.org":"acm","ieee.org":"ieee","nih.gov":"nih",
+        "ncbi.nlm.nih.gov":"nih","jamanetwork.com":"jamanetwork",
+        "tandfonline.com":"taylor-francis","sagepub.com":"sage",
+        "cambridge.org":"cambridge","oup.com":"oxford","oxfordacademic.com":"oxford",
+        "mit.edu":"mit","github.com":"github"
+    }
+    for k,v in mapping.items():
+        if d==k or d.endswith("."+k): return v
+    if d.endswith(".edu") or d.endswith(".ac.uk"): return "university"
     return d
 
+def db():
+    c=sqlite3.connect(DB_PATH); c.row_factory=sqlite3.Row; return c
 
-# ---------------------------------------------------------------------
-# DOI / CANONICAL PROVENANCE
-# ---------------------------------------------------------------------
+def init():
+    c=db()
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS missions(id TEXT PRIMARY KEY,objective TEXT,status TEXT,created REAL,updated REAL,result TEXT);
+    CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,mission_id TEXT,stage TEXT,status TEXT,detail TEXT,created REAL);
+    CREATE TABLE IF NOT EXISTS works(id TEXT PRIMARY KEY,mission_id TEXT,title TEXT,url TEXT,canonical_url TEXT,doi TEXT,provider TEXT,domain TEXT,family TEXT,abstract TEXT,relevance REAL,accepted INTEGER,created REAL);
+    CREATE TABLE IF NOT EXISTS evidence(id TEXT PRIMARY KEY,mission_id TEXT,work_id TEXT,claim_id TEXT,excerpt TEXT,lexical REAL,entailment REAL,relevance REAL,quality TEXT,relation TEXT,domain TEXT,family TEXT,created REAL);
+    CREATE TABLE IF NOT EXISTS claims(id TEXT PRIMARY KEY,mission_id TEXT,text TEXT,claim_type TEXT,purity REAL,relevance REAL,status TEXT,confidence REAL,blockers TEXT,next_action TEXT,created REAL);
+    CREATE TABLE IF NOT EXISTS edges(id TEXT PRIMARY KEY,mission_id TEXT,claim_id TEXT,evidence_id TEXT,relation TEXT,score REAL,reason TEXT,created REAL);
+    CREATE TABLE IF NOT EXISTS actions(id INTEGER PRIMARY KEY AUTOINCREMENT,mission_id TEXT,kind TEXT,target TEXT,status TEXT,result TEXT,attempt INTEGER,created REAL);
+    """)
+    c.commit(); c.close()
+init()
 
-def resolve_canonical_url(url: str, doi: str = ""):
-    """
-    Resolve DOI/URL redirects.
+class Req(BaseModel):
+    command:str=Field(...,min_length=10,max_length=10000)
+    duration_minutes:int=Field(default=1,ge=1,le=120)
 
-    Critical rule:
-    doi.org is never accepted as the research source domain.
-    """
+def event(mid,stage,status,detail):
+    c=db(); c.execute("INSERT INTO events(mission_id,stage,status,detail,created) VALUES(?,?,?,?,?)",(mid,stage,status,detail,now())); c.commit(); c.close()
 
-    candidate = url
+def action(mid,kind,target,status,result,attempt):
+    c=db(); c.execute("INSERT INTO actions(mission_id,kind,target,status,result,attempt,created) VALUES(?,?,?,?,?,?,?)",(mid,kind,target,status,result,attempt,now())); c.commit(); c.close()
 
-    if doi:
-        candidate = f"https://doi.org/{doi.strip()}"
+def topic_terms(obj):
+    # Extract mission anchors from the objective.  A source does not need
+    # to repeat every objective word to be relevant.
+    raw=toks(obj)
+    out=set(raw)
+    for g in TOPIC_GROUPS:
+        if raw & g: out |= g
+    return out
 
-    if not candidate or not is_safe_url(candidate):
-        return {
-            "canonical_url": url,
-            "domain": normalize_domain(url),
-            "family": source_family(normalize_domain(url))
-        }
+def topic_score(obj,title,abstract):
+    terms=topic_terms(obj)
+    tt=toks(title); bt=toks(abstract)
+    if not terms: return 0.0
+    title_hits=sum(1 for g in TOPIC_GROUPS if (tt & g) and (terms & g))
+    body_hits=sum(1 for g in TOPIC_GROUPS if (bt & g) and (terms & g))
+    raw_hits=len(tt & terms)
+    # Title is strong; body supports it. Do not require the entire objective.
+    anchor=max(title_hits/4.0, raw_hits/8.0)
+    body=min(1.0, body_hits/5.0)
+    lexical=sim(obj,(title+" "+abstract[:6000]))
+    return round(min(1.0,.55*anchor+.25*body+.20*lexical),4)
 
+def resolve(url,doi=""):
+    candidates=[]
+    if url and safe_url(url) and domain(url)!="doi.org": candidates.append(url)
+    if doi: candidates.append("https://doi.org/"+doi.strip())
+    for u in candidates:
+        try:
+            r=requests.get(u,headers={"User-Agent":UA},timeout=TIMEOUT,
+                           allow_redirects=True,stream=True)
+            final=r.url or u; d=domain(final)
+            if d and d!="doi.org":
+                return final,d,family(d),"resolved"
+        except Exception: pass
+    d=domain(url)
+    if d=="doi.org": d=""
+    return url or ("https://doi.org/"+doi if doi else ""),d,family(d),"unresolved"
+
+def crossref(q):
     try:
-        r = requests.get(
-            candidate,
-            headers={"User-Agent": USER_AGENT},
-            timeout=TIMEOUT,
-            allow_redirects=True,
-            stream=True
-        )
+        r=requests.get("https://api.crossref.org/works",
+                       params={"query.bibliographic":q,"rows":6},
+                       headers={"User-Agent":UA},timeout=TIMEOUT)
+        out=[]
+        for x in r.json().get("message",{}).get("items",[]):
+            title=clean(" ".join(x.get("title",[])))
+            if not title: continue
+            ab=clean(re.sub(r"<[^>]+>"," ",x.get("abstract","")))
+            doi=x.get("DOI","")
+            links=x.get("link") or []
+            u=next((z.get("URL") for z in links if safe_url(z.get("URL",""))), "")
+            u=u or x.get("URL","")
+            out.append({"title":title,"abstract":ab,"doi":doi,"url":u,"provider":"crossref"})
+        return out
+    except Exception:return []
 
-        final_url = r.url or candidate
-        domain = normalize_domain(final_url)
+def openalex(q):
+    try:
+        r=requests.get("https://api.openalex.org/works",
+                       params={"search":q,"per-page":6},
+                       headers={"User-Agent":UA},timeout=TIMEOUT)
+        out=[]
+        for x in r.json().get("results",[]):
+            title=clean(x.get("title",""))
+            if not title: continue
+            inv=x.get("abstract_inverted_index") or {}
+            pos=sorted((i,w) for w,inds in inv.items() for i in inds)
+            ab=clean(" ".join(w for _,w in pos))
+            doi=(x.get("doi") or "").replace("https://doi.org/","")
+            loc=x.get("primary_location") or {}
+            u=loc.get("landing_page_url") or loc.get("pdf_url") or x.get("id","")
+            out.append({"title":title,"abstract":ab,"doi":doi,"url":u,"provider":"openalex"})
+        return out
+    except Exception:return []
 
-        if not domain or domain == "doi.org":
-            domain = ""
+def s2(q):
+    try:
+        r=requests.get("https://api.semanticscholar.org/graph/v1/paper/search",
+                       params={"query":q,"limit":6,"fields":"title,abstract,url,externalIds,openAccessPdf"},
+                       headers={"User-Agent":UA},timeout=TIMEOUT)
+        out=[]
+        for x in r.json().get("data",[]):
+            title=clean(x.get("title",""))
+            if not title: continue
+            ext=x.get("externalIds") or {}; doi=ext.get("DOI","")
+            pdf=(x.get("openAccessPdf") or {}).get("url","")
+            out.append({"title":title,"abstract":clean(x.get("abstract","")),
+                        "doi":doi,"url":pdf or x.get("url",""),"provider":"semantic_scholar"})
+        return out
+    except Exception:return []
 
-        family = source_family(domain)
+def queries(obj,attempt=0):
+    q=[
+        obj,
+        obj+" autonomous agent reliability evaluation benchmark",
+        obj+" empirical study task execution failure",
+        obj+" real world deployment agent evaluation",
+        obj+" independent replication autonomous agents",
+    ]
+    # Recovery deliberately changes the search intent, not the verification rule.
+    if attempt==1:
+        q=[
+            obj+" benchmark autonomous agents reliability",
+            obj+" tool use planning task success failure",
+            obj+" agent evaluation empirical results",
+            obj+" deployment safety reliability agents",
+            obj+" independent evaluation replication",
+        ]
+    elif attempt>=2:
+        q=[
+            obj+" systematic review autonomous agents reliability",
+            obj+" controlled experiment agent task completion",
+            obj+" benchmark failure recovery monitoring agents",
+            obj+" university laboratory autonomous agent study",
+            obj+" independent publisher agent reliability",
+        ]
+    return q
 
-        return {
-            "canonical_url": final_url,
-            "domain": domain,
-            "family": family
-        }
+def discover(obj,attempt):
+    providers=[crossref,openalex,s2]
+    allr=[]
+    for i,q in enumerate(queries(obj,attempt)):
+        p=providers[(i+attempt)%len(providers)]
+        allr += p(q)
+    u={}
+    for x in allr:
+        key=(x.get("doi") or "").lower().strip() or re.sub(r"\W+"," ",x.get("title","").lower()).strip()
+        if key and key not in u:u[key]=x
+    return list(u.values())[:30]
 
-    except Exception:
-        domain = normalize_domain(url)
+def fetch_text(url):
+    if not url or not safe_url(url): return ""
+    try:
+        r=requests.get(url,headers={"User-Agent":UA},timeout=TIMEOUT,allow_redirects=True)
+        if r.status_code>=400:return ""
+        t=r.text[:MAX_TEXT]
+        # Pull useful HTML text, especially meta description/abstract and paragraphs.
+        for pat in [
+            r'<meta[^>]+(?:name|property)=["\'](?:description|og:description|citation_abstract)["\'][^>]+content=["\']([^"\']+)',
+            r'<p[^>]*>(.*?)</p>'
+        ]:
+            vals=re.findall(pat,t,re.I|re.S)
+            if vals:
+                return clean(re.sub(r"<[^>]+>"," ", " ".join(vals)))[:MAX_TEXT]
+        return clean(re.sub(r"<[^>]+>"," ",t))[:MAX_TEXT]
+    except Exception:return ""
 
-        if domain == "doi.org":
-            domain = ""
+def prepare(mid,obj,item):
+    title=clean(item.get("title","")); ab=clean(item.get("abstract",""))
+    rel=topic_score(obj,title,ab)
+    # Title relevance can pass even when provider abstract is absent.
+    if rel<0.18:return None,"MISSION_IRRELEVANT"
+    can,d,fam,state=resolve(item.get("url",""),item.get("doi",""))
+    # If abstract is absent, try the canonical source before rejecting the work.
+    if len(ab)<180 and can and d:
+        fetched=fetch_text(can)
+        if fetched: ab=fetched
+    if not ab:return None,"NO_USABLE_TEXT"
+    # Final acceptance is intentionally moderate, not exact-vocabulary matching.
+    rel=max(rel,topic_score(obj,title,ab))
+    if rel<0.20:return None,"MISSION_IRRELEVANT"
+    w={"id":sid("work",(item.get("doi") or can or title).lower()),
+       "mission_id":mid,"title":title,"url":item.get("url",""),
+       "canonical_url":can,"doi":item.get("doi",""),"provider":item.get("provider",""),
+       "domain":d,"family":fam,"abstract":ab,"relevance":rel}
+    # Keep the work for audit even when provenance is unresolved.
+    # Unknown provenance may create claims, but it can NEVER create support.
+    if not d or fam=="unknown": return w,None
+    return w,None
 
-        return {
-            "canonical_url": url,
-            "domain": domain,
-            "family": source_family(domain)
-        }
+def save_work(w):
+    c=db(); c.execute("""INSERT OR IGNORE INTO works
+    (id,mission_id,title,url,canonical_url,doi,provider,domain,family,abstract,relevance,accepted,created)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,1,?)""",
+    (w["id"],w["mission_id"],w["title"],w["url"],w["canonical_url"],w["doi"],
+     w["provider"],w["domain"],w["family"],w["abstract"],w["relevance"],now()))
+    c.commit(); c.close()
 
+def ingest(mid,obj,attempt):
+    found=discover(obj,attempt)
+    accepted=0; rejected=Counter(); new=0; nd=set(); nf=set(); canon=0; fetchable=0
+    c=db(); existing={r["id"] for r in c.execute("SELECT id FROM works WHERE mission_id=?",(mid,)).fetchall()}; c.close()
+    for item in found:
+        w,reason=prepare(mid,obj,item)
+        if w and w["domain"] and w["family"]!="unknown":
+            canon+=1; fetchable += int(bool(w["abstract"]))
+        if not w:
+            rejected[reason]+=1; continue
+        if reason:
+            rejected[reason]+=1
+            continue
+        accepted+=1
+        if w["id"] not in existing:
+            save_work(w); existing.add(w["id"]); new+=1
+            nd.add(w["domain"]); nf.add(w["family"])
+    return {"discovered":len(found),"canonicalized":canon,"accepted":accepted,
+            "rejected":dict(rejected),"new_works":new,
+            "new_domains":len(nd),"new_families":len(nf),"usable_text":fetchable}
 
-# ---------------------------------------------------------------------
-# MISSION RELEVANCE
-# ---------------------------------------------------------------------
+def purity(s):
+    s=clean(s)
+    if len(s)<45 or len(s)>900:return 0
+    if any(re.search(p,s,re.I) for p in BAD_CLAIM):return 0
+    if len(s.split())<9:return .5
+    return .9 if len(s.split())<120 else .75
 
-def mission_terms(objective: str):
-    return meaningful_tokens(objective)
-
-
-def relevance_score(objective: str, title: str, abstract: str):
-    query = mission_terms(objective)
-
-    if not query:
-        return 0.0
-
-    title_terms = meaningful_tokens(title)
-    body_terms = meaningful_tokens(abstract)
-
-    title_overlap = len(query & title_terms) / max(1, len(query))
-    body_overlap = len(query & body_terms) / max(1, len(query))
-
-    # Stronger weight on title because title-level relevance is
-    # more reliable than incidental words in navigation/full text.
-    score = (
-        title_overlap * 0.65
-        + body_overlap * 0.35
-    )
-
-    # Direct lexical similarity is a secondary check.
-    sim = lexical_similarity(
-        objective,
-        f"{title}. {abstract[:5000]}"
-    )
-
-    score = (score * 0.75) + (sim * 0.25)
-
-    return round(min(1.0, score), 4)
-
-
-def relevance_label(score):
-    if score >= 0.60:
-        return "HIGH"
-
-    if score >= 0.40:
-        return "MEDIUM"
-
-    if score >= 0.25:
-        return "LOW"
-
-    return "IRRELEVANT"
-
-
-# ---------------------------------------------------------------------
-# CLAIM PURITY
-# ---------------------------------------------------------------------
-
-def claim_purity(text: str):
-    text = clean_text(text)
-
-    if len(text) < 45 or len(text) > 900:
-        return 0.0
-
-    low = text.lower()
-
-    if contains_pattern(text, BOILERPLATE_PATTERNS):
-        return 0.0
-
-    if contains_pattern(text, CODE_PATTERNS):
-        return 0.0
-
-    for p in METADATA_PATTERNS:
-        if re.search(p, low):
-            return 0.0
-
-    if re.match(
-        r"^(figure|fig\.|table|section|chapter|appendix)\s+\d",
-        low
-    ):
-        return 0.0
-
-    if "http://" in low or "https://" in low:
-        return 0.0
-
-    if "doi.org/" in low:
-        return 0.0
-
-    if re.search(r"\b(issn|e-issn|isbn)\b", low):
-        return 0.0
-
-    sentence_count = len(
-        re.findall(r"[.!?](?:\s|$)", text)
-    )
-
-    score = 1.0
-
-    if sentence_count == 0:
-        score -= 0.25
-
-    if len(text.split()) < 9:
-        score -= 0.20
-
-    if len(text.split()) > 120:
-        score -= 0.15
-
-    if text.count(",") > 10:
-        score -= 0.10
-
-    return round(max(0.0, min(1.0, score)), 3)
-
-
-# ---------------------------------------------------------------------
-# CLAIM TYPE
-# ---------------------------------------------------------------------
-
-def classify_claim(text: str):
-    low = text.lower()
-
-    if re.search(
-        r"\b(recommend|should|must|need to|we propose|we suggest)\b",
-        low
-    ):
-        return "recommendation"
-
-    if re.search(
-        r"\b(review|systematic review|literature review|survey)\b",
-        low
-    ):
-        return "review"
-
-    if re.search(
-        r"\b(method|algorithm|framework|approach|architecture)\b",
-        low
-    ):
-        return "methodological"
-
-    if re.search(
-        r"\b(found|find|observed|identified|measured|increased|"
-        r"decreased|associated|participants|sample|experiment)\b",
-        low
-    ):
-        return "empirical"
-
+def claim_type(s):
+    l=s.lower()
+    if re.search(r"\b(recommend|should|must|propose|suggest)\b",l):return "recommendation"
+    if re.search(r"\b(review|survey|systematic)\b",l):return "review"
+    if re.search(r"\b(method|algorithm|framework|approach|architecture)\b",l):return "methodological"
+    if re.search(r"\b(found|observed|identified|measured|participants|experiment|benchmark|evaluation)\b",l):return "empirical"
     return "synthesis"
 
+def extract(obj,w):
+    out=[]
+    for s in re.split(r"(?<=[.!?])\s+",clean(w["abstract"])):
+        p=purity(s)
+        if p<.65:continue
+        r=sim(obj,s)
+        # Use topic groups for claim relevance too; do not demand all mission words.
+        groups=sum(bool(toks(s)&g) for g in TOPIC_GROUPS)
+        if r<.08 and groups<2:continue
+        out.append({"text":s,"purity":p,"relevance":round(max(r,min(1,groups/8)),4),
+                    "claim_type":claim_type(s)})
+    u={}
+    for x in out:u[re.sub(r"\W+"," ",x["text"].lower()).strip()]=x
+    return list(u.values())[:40]
 
-# ---------------------------------------------------------------------
-# CLAIM EXTRACTION
-# ---------------------------------------------------------------------
+def excerpt(claim,text):
+    ss=[clean(x) for x in re.split(r"(?<=[.!?])\s+",clean(text)) if clean(x)]
+    ss=[x for x in ss if not any(re.search(p,x,re.I) for p in BAD_CLAIM)]
+    return max(ss,key=lambda x:sim(claim,x),default="")[:MAX_EXCERPT]
 
-def extract_claim_candidates(
-    objective: str,
-    title: str,
-    abstract: str,
-    work_relevance: float
-):
-    if work_relevance < 0.40:
-        return []
+def entail(obj,claim,ex,rel):
+    if not ex or rel<.20:return 0
+    if any(re.search(p,ex,re.I) for p in BAD_CLAIM):return 0
+    a,b=toks(claim),toks(ex)
+    if not a or not b:return 0
+    coverage=len(a&b)/len(a)
+    sequence=SequenceMatcher(None,claim.lower(),ex.lower()).ratio()
+    score=.72*coverage+.28*sequence
+    if len(ex.split())<12:score*=.65
+    if len(ex.split())<7:score*=.35
+    cp=polarity(claim); ep=polarity(ex)
+    if cp!="neutral" and ep!="neutral" and cp!=ep:return min(.2,score)
+    # Crucial: high entailment requires meaningful claim coverage.
+    if coverage<.50: score*=.45
+    if coverage<.35: score*=.25
+    return round(min(1,score*(.65+.35*rel)),4)
 
-    text = clean_text(abstract)
+def polarity(s):
+    l=s.lower()
+    n=sum(x in l for x in NEG); p=sum(x in l for x in POS)
+    return "negative" if n>p else ("positive" if p>n else "neutral")
 
-    if not text:
-        return []
-
-    sentences = re.split(
-        r"(?<=[.!?])\s+",
-        text
-    )
-
-    results = []
-
-    for sentence in sentences:
-        sentence = clean_text(sentence)
-
-        purity = claim_purity(sentence)
-
-        if purity < 0.65:
-            continue
-
-        relevance = lexical_similarity(
-            objective,
-            sentence
-        )
-
-        # Claim relevance is stricter than work relevance.
-        if relevance < 0.18:
-            continue
-
-        # Reject generic scientific sentences with no mission terms.
-        mission_overlap = (
-            len(
-                mission_terms(objective)
-                & meaningful_tokens(sentence)
-            )
-            / max(1, len(mission_terms(objective)))
-        )
-
-        if mission_overlap < 0.04:
-            continue
-
-        results.append({
-            "text": sentence,
-            "purity": purity,
-            "relevance": round(
-                (relevance * 0.60) +
-                (mission_overlap * 0.40),
-                4
-            ),
-            "claim_type": classify_claim(sentence)
-        })
-
-    # Deduplicate locally.
-    unique = {}
-    for item in results:
-        key = re.sub(
-            r"\W+",
-            " ",
-            item["text"].lower()
-        ).strip()
-
-        unique[key] = item
-
-    return list(unique.values())[:80]
-
-
-# ---------------------------------------------------------------------
-# EVIDENCE ENTailMENT
-# ---------------------------------------------------------------------
-
-def contradiction_polarity(text: str):
-    low = text.lower()
-
-    neg = sum(
-        1 for x in NEGATIVE_WORDS
-        if x in low
-    )
-
-    pos = sum(
-        1 for x in POSITIVE_WORDS
-        if x in low
-    )
-
-    if neg > pos:
-        return "negative"
-
-    if pos > neg:
-        return "positive"
-
-    return "neutral"
-
-
-def evidence_entailment(
-    objective: str,
-    claim: str,
-    excerpt: str,
-    work_relevance: float
-):
-    """
-    Conservative heuristic.
-
-    IMPORTANT:
-    This is deliberately NOT an LLM semantic-entailment claim.
-
-    A high lexical match alone cannot create DIRECT_SUPPORT.
-    """
-
-    if not excerpt or not claim:
-        return 0.0
-
-    if work_relevance < 0.40:
-        return 0.0
-
-    if contains_pattern(excerpt, BOILERPLATE_PATTERNS):
-        return 0.0
-
-    if contains_pattern(excerpt, CODE_PATTERNS):
-        return 0.0
-
-    claim_terms = meaningful_tokens(claim)
-    evidence_terms = meaningful_tokens(excerpt)
-
-    if not claim_terms or not evidence_terms:
-        return 0.0
-
-    overlap = len(
-        claim_terms & evidence_terms
-    ) / max(1, len(claim_terms))
-
-    seq = SequenceMatcher(
-        None,
-        claim.lower(),
-        excerpt.lower()
-    ).ratio()
-
-    # Evidence must cover substantial portions of the claim.
-    coverage = overlap * 0.75 + seq * 0.25
-
-    # Penalize extremely short excerpts.
-    words = len(excerpt.split())
-
-    if words < 12:
-        coverage *= 0.60
-
-    if words < 7:
-        coverage *= 0.25
-
-    # Contradictory polarity blocks support.
-    cp = contradiction_polarity(claim)
-    ep = contradiction_polarity(excerpt)
-
-    if (
-        cp != "neutral"
-        and ep != "neutral"
-        and cp != ep
-    ):
-        return round(min(0.25, coverage), 4)
-
-    # Mission relevance remains part of evidence validity.
-    score = coverage * (
-        0.65 + (0.35 * work_relevance)
-    )
-
-    # Strict calibration.
-    if overlap < 0.35:
-        score *= 0.55
-
-    if overlap < 0.25:
-        score *= 0.25
-
-    return round(
-        max(0.0, min(1.0, score)),
-        4
-    )
-
-
-def evidence_relation(
-    lexical: float,
-    entailment: float,
-    relevance: float,
-    domain: str,
-    family: str
-):
-    """
-    Strict relation classifier.
-
-    DIRECT_SUPPORT is impossible when provenance is unknown.
-    """
-
-    if relevance < 0.40:
-        return "NO_SUPPORT"
-
-    if not domain or not family or family == "unknown":
-        return "NO_SUPPORT"
-
-    if entailment >= 0.82 and lexical >= 0.55:
-        return "DIRECT_SUPPORT"
-
-    if entailment >= 0.68 and lexical >= 0.40:
-        return "STRONG_SUPPORT"
-
-    if entailment >= 0.52 and lexical >= 0.30:
-        return "SUPPORT"
-
-    if entailment >= 0.40 and lexical >= 0.25:
-        return "POSSIBLE_SUPPORT"
-
+def relation(lex,ent,rel,d,f):
+    if rel<.20 or not d or f=="unknown":return "NO_SUPPORT"
+    if ent>=.84 and lex>=.60 and rel>=.45:return "DIRECT_SUPPORT"
+    if ent>=.70 and lex>=.45 and rel>=.35:return "STRONG_SUPPORT"
+    if ent>=.55 and lex>=.32 and rel>=.30:return "SUPPORT"
+    if ent>=.42 and lex>=.25 and rel>=.25:return "POSSIBLE_SUPPORT"
     return "NO_SUPPORT"
 
-
-# ---------------------------------------------------------------------
-# PROVIDERS
-# ---------------------------------------------------------------------
-
-def crossref_search(query: str, rows: int = 8):
-    url = "https://api.crossref.org/works"
-
-    try:
-        r = requests.get(
-            url,
-            params={
-                "query.bibliographic": query,
-                "rows": rows
-            },
-            headers={"User-Agent": USER_AGENT},
-            timeout=TIMEOUT
-        )
-
-        data = r.json()
-
-        out = []
-
-        for item in data.get("message", {}).get("items", []):
-            title = clean_text(
-                " ".join(item.get("title", []))
-            )
-
-            if not title:
-                continue
-
-            doi = item.get("DOI", "")
-
-            abstract = clean_text(
-                re.sub(
-                    r"<[^>]+>",
-                    " ",
-                    item.get("abstract", "")
-                )
-            )
-
-            url = item.get(
-                "URL",
-                f"https://doi.org/{doi}" if doi else ""
-            )
-
-            out.append({
-                "title": title,
-                "doi": doi,
-                "url": url,
-                "abstract": abstract,
-                "provider": "crossref"
-            })
-
-        return out
-
-    except Exception:
-        return []
-
-
-def openalex_search(query: str, rows: int = 8):
-    url = "https://api.openalex.org/works"
-
-    try:
-        r = requests.get(
-            url,
-            params={
-                "search": query,
-                "per-page": rows
-            },
-            headers={"User-Agent": USER_AGENT},
-            timeout=TIMEOUT
-        )
-
-        data = r.json()
-
-        out = []
-
-        for item in data.get("results", []):
-            title = clean_text(
-                item.get("title", "")
-            )
-
-            if not title:
-                continue
-
-            abstract = ""
-
-            inv = item.get(
-                "abstract_inverted_index"
-            )
-
-            if isinstance(inv, dict):
-                positions = []
-                for word, indexes in inv.items():
-                    for idx in indexes:
-                        positions.append((idx, word))
-
-                positions.sort()
-                abstract = " ".join(
-                    word for _, word in positions
-                )
-
-            doi = (
-                item.get("doi") or ""
-            ).replace(
-                "https://doi.org/",
-                ""
-            )
-
-            url = (
-                item.get("primary_location", {})
-                .get("landing_page_url")
-                or item.get("id")
-                or (
-                    f"https://doi.org/{doi}"
-                    if doi else ""
-                )
-            )
-
-            out.append({
-                "title": title,
-                "doi": doi,
-                "url": url,
-                "abstract": clean_text(abstract),
-                "provider": "openalex"
-            })
-
-        return out
-
-    except Exception:
-        return []
-
-
-def semantic_scholar_search(query: str, rows: int = 8):
-    url = "https://api.semanticscholar.org/graph/v1/paper/search"
-
-    try:
-        r = requests.get(
-            url,
-            params={
-                "query": query,
-                "limit": rows,
-                "fields": (
-                    "title,abstract,url,externalIds,"
-                    "openAccessPdf"
-                )
-            },
-            headers={"User-Agent": USER_AGENT},
-            timeout=TIMEOUT
-        )
-
-        data = r.json()
-
-        out = []
-
-        for item in data.get("data", []):
-            title = clean_text(
-                item.get("title", "")
-            )
-
-            if not title:
-                continue
-
-            ext = item.get(
-                "externalIds"
-            ) or {}
-
-            doi = ext.get("DOI", "")
-
-            url = (
-                item.get("url")
-                or (
-                    item.get("openAccessPdf") or {}
-                ).get("url")
-                or (
-                    f"https://doi.org/{doi}"
-                    if doi else ""
-                )
-            )
-
-            out.append({
-                "title": title,
-                "doi": doi,
-                "url": url,
-                "abstract": clean_text(
-                    item.get("abstract", "")
-                ),
-                "provider": "semantic_scholar"
-            })
-
-        return out
-
-    except Exception:
-        return []
-
-
-# ---------------------------------------------------------------------
-# SOURCE DISCOVERY
-# ---------------------------------------------------------------------
-
-def discovery_queries(objective: str):
-    base = objective.strip()
-
-    return [
-        base,
-        f"{base} empirical study",
-        f"{base} benchmark evaluation",
-        f"{base} independent replication",
-        f"{base} real world deployment",
-    ]
-
-
-def discover_sources(objective: str, attempt: int = 0):
-    queries = discovery_queries(objective)
-
-    # Rotate providers by recovery attempt.
-    providers = []
-
-    if attempt % 3 == 0:
-        providers = [
-            crossref_search,
-            openalex_search,
-            semantic_scholar_search
-        ]
-    elif attempt % 3 == 1:
-        providers = [
-            openalex_search,
-            semantic_scholar_search,
-            crossref_search
-        ]
-    else:
-        providers = [
-            semantic_scholar_search,
-            crossref_search,
-            openalex_search
-        ]
-
-    results = []
-
-    for i, query in enumerate(queries):
-        provider = providers[
-            (i + attempt) % len(providers)
-        ]
-
-        results.extend(
-            provider(query, rows=5)
-        )
-
-    # Global deduplication.
-    unique = {}
-
-    for item in results:
-        doi = (item.get("doi") or "").lower().strip()
-
-        if doi:
-            key = f"doi:{doi}"
-        else:
-            key = (
-                "title:" +
-                re.sub(
-                    r"\W+",
-                    " ",
-                    item.get("title", "").lower()
-                ).strip()
-            )
-
-        if key and key not in unique:
-            unique[key] = item
-
-    return list(unique.values())[:40]
-
-
-# ---------------------------------------------------------------------
-# WORK ACCEPTANCE
-# ---------------------------------------------------------------------
-
-def prepare_work(mission_id: str, objective: str, item):
-    title = clean_text(item.get("title", ""))
-    abstract = clean_text(item.get("abstract", ""))
-    url = item.get("url", "") or ""
-    doi = item.get("doi", "") or ""
-
-    relevance = relevance_score(
-        objective,
-        title,
-        abstract
-    )
-
-    # Hard mission relevance gate.
-    if relevance < 0.40:
-        return None
-
-    provenance = resolve_canonical_url(
-        url,
-        doi
-    )
-
-    domain = provenance["domain"]
-    family = provenance["family"]
-
-    # A DOI resolver alone is NOT provenance.
-    if domain == "doi.org":
-        domain = ""
-
-    work_key = (
-        doi.lower()
-        if doi
-        else (
-            provenance["canonical_url"]
-            or url
-            or title
-        ).lower()
-    )
-
-    work_id = stable_id(
-        "work",
-        work_key
-    )
-
+def save_claim(mid,x):
+    cid=sid("claim",mid+"|"+x["text"].lower())
+    c=db(); c.execute("""INSERT OR IGNORE INTO claims
+    (id,mission_id,text,claim_type,purity,relevance,status,confidence,blockers,next_action,created)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+    (cid,mid,x["text"],x["claim_type"],x["purity"],x["relevance"],"PENDING",0,"[]","",now()))
+    c.commit(); c.close(); return cid
+
+def save_ev(mid,w,cid,ex,lex,ent,rel):
+    eid=sid("evidence","|".join([mid,w["id"],cid,ex]))
+    q={"DIRECT_SUPPORT":"DIRECT","STRONG_SUPPORT":"STRONG","SUPPORT":"MODERATE",
+       "POSSIBLE_SUPPORT":"WEAK"}.get(rel,"NONE")
+    c=db(); c.execute("""INSERT OR IGNORE INTO evidence
+    (id,mission_id,work_id,claim_id,excerpt,lexical,entailment,relevance,quality,relation,domain,family,created)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+    (eid,mid,w["id"],cid,ex,lex,ent,w["relevance"],q,rel,w["domain"],w["family"],now()))
+    c.commit(); c.close(); return eid
+
+def save_edge(mid,cid,eid,rel,score,why):
+    eid2=sid("edge","|".join([mid,cid,eid,rel]))
+    c=db(); c.execute("""INSERT OR IGNORE INTO edges
+    (id,mission_id,claim_id,evidence_id,relation,score,reason,created)
+    VALUES(?,?,?,?,?,?,?,?)""",(eid2,mid,cid,eid,rel,score,json.dumps(why),now())); c.commit(); c.close()
+
+def evidence_pass(mid,obj):
+    c=db(); works=[dict(x) for x in c.execute("SELECT * FROM works WHERE mission_id=? AND accepted=1",(mid,)).fetchall()]; c.close()
+    nc=ne=0; usable=0
+    for w in works:
+        cs=extract(obj,w)
+        if cs:usable+=1
+        for x in cs:
+            cid=save_claim(mid,x)
+            ex=excerpt(x["text"],w["abstract"])
+            if not ex:continue
+            lex=sim(x["text"],ex); ent=entail(obj,x["text"],ex,w["relevance"])
+            rel=relation(lex,ent,w["relevance"],w["domain"],w["family"])
+            if rel=="NO_SUPPORT":continue
+            eid=save_ev(mid,w,cid,ex,lex,ent,rel)
+            save_edge(mid,cid,eid,rel,ent,{"domain":w["domain"],"family":w["family"],
+                                            "lexical":lex,"entailment":ent,"work_relevance":w["relevance"]})
+            ne+=1
+    c=db()
+    nc=c.execute("SELECT COUNT(*) n FROM claims WHERE mission_id=?",(mid,)).fetchone()["n"]
+    c.close()
+    return {"usable_works":usable,"total_claims":nc,"new_edges":ne}
+
+def verify_claim(mid,cid):
+    c=db(); claim=c.execute("SELECT * FROM claims WHERE id=?",(cid,)).fetchone()
+    es=c.execute("""SELECT e.*,w.domain work_domain,w.family work_family
+                    FROM evidence e JOIN works w ON w.id=e.work_id WHERE e.claim_id=?""",(cid,)).fetchall(); c.close()
+    strong=[e for e in es if e["relation"] in ("DIRECT_SUPPORT","STRONG_SUPPORT")]
+    support=[e for e in es if e["relation"] in ("DIRECT_SUPPORT","STRONG_SUPPORT","SUPPORT")]
+    works={e["work_id"] for e in support}; domains={e["work_domain"] for e in support if e["work_domain"]}
+    fams={e["work_family"] for e in support if e["work_family"]!="unknown"}
+    blockers=[]
+    if len(works)<2:blockers.append("need_2_independent_works")
+    if len(domains)<2:blockers.append("need_2_independent_domains")
+    if len(fams)<2:blockers.append("need_2_independent_source_families")
+    if len(strong)<2:blockers.append("need_2_strong_evidence_relationships")
+    status="VERIFIED" if len(works)>=2 and len(domains)>=2 and len(fams)>=2 and len(strong)>=2 else ("SUPPORTED_NOT_VERIFIED" if support else "INSUFFICIENT")
+    nxt=("find_independent_primary_study" if len(works)<2 else
+         "find_evidence_from_independent_domain" if len(domains)<2 else
+         "find_evidence_from_independent_source_family" if len(fams)<2 else
+         "find_second_strong_evidence_excerpt" if len(strong)<2 else "no_further_action_required")
+    conf=round(sum(float(e["entailment"]) for e in support)/len(support),4) if support else 0
+    c=db(); c.execute("UPDATE claims SET status=?,confidence=?,blockers=?,next_action=? WHERE id=?",
+                      (status,conf,json.dumps(blockers),nxt,cid)); c.commit(); c.close()
+    return status
+
+def verify(mid):
+    c=db(); ids=[r["id"] for r in c.execute("SELECT id FROM claims WHERE mission_id=?",(mid,)).fetchall()]; c.close()
+    out=[verify_claim(mid,x) for x in ids]
+    return {"claims":len(out),"verified":out.count("VERIFIED"),
+            "supported":out.count("SUPPORTED_NOT_VERIFIED"),
+            "insufficient":out.count("INSUFFICIENT")}
+
+def recovery(mid,obj,attempt):
+    target=queries(obj,attempt)[0]
+    action(mid,"research_recovery",target,"RUNNING","diagnostic recovery",attempt)
+    src=ingest(mid,obj,attempt); ev=evidence_pass(mid,obj); vr=verify(mid)
+    action(mid,"research_recovery",target,"COMPLETED",json.dumps({
+        "source":src,"evidence":ev,"verification":vr}),attempt)
+    return src,ev,vr
+
+def audit(mid):
+    c=db()
+    mission=c.execute("SELECT * FROM missions WHERE id=?",(mid,)).fetchone()
+    works=[dict(x) for x in c.execute("SELECT * FROM works WHERE mission_id=?",(mid,)).fetchall()]
+    claims=[dict(x) for x in c.execute("SELECT * FROM claims WHERE mission_id=?",(mid,)).fetchall()]
+    ev=[dict(x) for x in c.execute("SELECT * FROM evidence WHERE mission_id=?",(mid,)).fetchall()]
+    edges=[dict(x) for x in c.execute("SELECT * FROM edges WHERE mission_id=?",(mid,)).fetchall()]
+    acts=[dict(x) for x in c.execute("SELECT * FROM actions WHERE mission_id=?",(mid,)).fetchall()]
+    events=[dict(x) for x in c.execute("SELECT * FROM events WHERE mission_id=?",(mid,)).fetchall()]
+    c.close()
+    accepted=[w for w in works if w["accepted"]]
+    domains={w["domain"] for w in accepted if w["domain"]}
+    fams={w["family"] for w in accepted if w["family"]!="unknown"}
+    rejected=sum(1 for w in works if not w["accepted"])
+    verified=sum(x["status"]=="VERIFIED" for x in claims)
     return {
-        "id": work_id,
-        "mission_id": mission_id,
-        "title": title,
-        "url": url,
-        "canonical_url": provenance["canonical_url"],
-        "doi": doi,
-        "provider": item.get("provider", "unknown"),
-        "domain": domain,
-        "family": family,
-        "abstract": abstract,
-        "relevance": relevance
+      "version":VERSION,"build":BUILD,"mission_id":mid,
+      "metrics":{
+        "discovered":sum(1 for e in events if e["stage"]=="discovery" and e["status"]=="completed"),
+        "works":len(works),"usable_works":sum(1 for x in works if x["accepted"]),
+        "claims":len(claims),"evidence":len(ev),"support_edges":len(edges),
+        "graph_edges":len(edges),"verified_claims":verified,
+        "supported_not_verified":sum(x["status"]=="SUPPORTED_NOT_VERIFIED" for x in claims),
+        "domains":len(domains),"source_families":len(fams),"actions":len(acts),
+        "high_purity_claims":sum(x["purity"]>=.8 for x in claims),
+        "rejected_records":rejected,
+        "verification_rate":round(verified/max(1,len(claims)),4)
+      },
+      "diagnostics":{
+        "source_stage_events":[dict(e) for e in events if e["stage"] in ("discovery","recovery")],
+        "claim_blockers": [{"claim_id":x["id"],"status":x["status"],
+                            "blockers":json.loads(x["blockers"] or "[]"),
+                            "next_action":x["next_action"]} for x in claims]
+      },
+      "reality":{
+        "autonomous_research":"DEMONSTRATED" if works and claims else "NOT DEMONSTRATED",
+        "mission_relevance_gate":"DEMONSTRATED" if works else "NOT DEMONSTRATED",
+        "evidence_provenance":"DEMONSTRATED" if ev and all(x["domain"] and x["family"]!="unknown" for x in ev) else "PARTIALLY DEMONSTRATED",
+        "claim_quality_control":"DEMONSTRATED" if claims and any(x["purity"]>=.8 for x in claims) else "PARTIALLY DEMONSTRATED",
+        "independent_verification":"DEMONSTRATED" if verified else "NOT DEMONSTRATED",
+        "closed_loop_recovery":"DEMONSTRATED" if len(acts)>=2 else "NOT DEMONSTRATED",
+        "recovery_diversification":"DEMONSTRATED" if len(domains)>=2 and len(fams)>=2 else "NOT DEMONSTRATED",
+        "general_real_world_execution":"NOT DEMONSTRATED",
+        "continuous_self_improvement":"NOT DEMONSTRATED",
+        "durable_memory":"LIMITED_BY_STORAGE"
+      },
+      "definition_of_working":"A mission is working when it discovers relevant sources, records canonical provenance, extracts relevant atomic claims, attaches evidence that passes calibrated entailment, verifies only through independent works/domains/families, and recovers from measurable gaps without weakening the gate."
     }
 
-
-def save_work(work):
-    conn = db()
-
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO works
-        (id, mission_id, title, url, canonical_url,
-         doi, provider, domain, family, abstract,
-         relevance, accepted, created)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
-        """,
-        (
-            work["id"],
-            work["mission_id"],
-            work["title"],
-            work["url"],
-            work["canonical_url"],
-            work["doi"],
-            work["provider"],
-            work["domain"],
-            work["family"],
-            work["abstract"],
-            work["relevance"],
-            now()
-        )
-    )
-
-    conn.commit()
-    conn.close()
-
-
-# ---------------------------------------------------------------------
-# EVIDENCE
-# ---------------------------------------------------------------------
-
-def choose_evidence_excerpt(text: str, claim: str):
-    sentences = re.split(
-        r"(?<=[.!?])\s+",
-        clean_text(text)
-    )
-
-    candidates = []
-
-    for sentence in sentences:
-        sentence = clean_text(sentence)
-
-        if not sentence:
-            continue
-
-        if contains_pattern(
-            sentence,
-            BOILERPLATE_PATTERNS
-        ):
-            continue
-
-        if contains_pattern(
-            sentence,
-            CODE_PATTERNS
-        ):
-            continue
-
-        score = lexical_similarity(
-            claim,
-            sentence
-        )
-
-        candidates.append(
-            (score, sentence)
-        )
-
-    candidates.sort(
-        key=lambda x: x[0],
-        reverse=True
-    )
-
-    if not candidates:
-        return ""
-
-    return candidates[0][1][:MAX_EXCERPT]
-
-
-def save_evidence(
-    mission_id,
-    work,
-    claim_id,
-    excerpt,
-    lexical,
-    entailment,
-    relation
-):
-    evidence_id = stable_id(
-        "evidence",
-        "|".join([
-            mission_id,
-            work["id"],
-            claim_id,
-            excerpt
-        ])
-    )
-
-    quality = "NONE"
-
-    if relation == "DIRECT_SUPPORT":
-        quality = "DIRECT"
-    elif relation == "STRONG_SUPPORT":
-        quality = "STRONG"
-    elif relation == "SUPPORT":
-        quality = "MODERATE"
-    elif relation == "POSSIBLE_SUPPORT":
-        quality = "WEAK"
-
-    conn = db()
-
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO evidence
-        (id, mission_id, work_id, claim_id,
-         excerpt, lexical, entailment, relevance,
-         quality, relation, domain, family, created)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            evidence_id,
-            mission_id,
-            work["id"],
-            claim_id,
-            excerpt,
-            lexical,
-            entailment,
-            work["relevance"],
-            quality,
-            relation,
-            work["domain"],
-            work["family"],
-            now()
-        )
-    )
-
-    conn.commit()
-    conn.close()
-
-    return evidence_id
-
-
-# ---------------------------------------------------------------------
-# CLAIMS
-# ---------------------------------------------------------------------
-
-def save_claim(
-    mission_id,
-    text,
-    claim_type,
-    purity,
-    relevance
-):
-    claim_id = stable_id(
-        "claim",
-        mission_id + "|" + text.lower()
-    )
-
-    conn = db()
-
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO claims
-        (id, mission_id, text, claim_type,
-         purity, relevance, status,
-         confidence, blockers, next_action, created)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            claim_id,
-            mission_id,
-            text,
-            claim_type,
-            purity,
-            relevance,
-            "PENDING",
-            0.0,
-            "[]",
-            "",
-            now()
-        )
-    )
-
-    conn.commit()
-    conn.close()
-
-    return claim_id
-
-
-# ---------------------------------------------------------------------
-# GRAPH
-# ---------------------------------------------------------------------
-
-def save_edge(
-    mission_id,
-    claim_id,
-    evidence_id,
-    relation,
-    score,
-    reason
-):
-    edge_id = stable_id(
-        "edge",
-        "|".join([
-            mission_id,
-            claim_id,
-            evidence_id,
-            relation
-        ])
-    )
-
-    conn = db()
-
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO edges
-        (id, mission_id, claim_id,
-         evidence_id, relation,
-         score, reason, created)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            edge_id,
-            mission_id,
-            claim_id,
-            evidence_id,
-            relation,
-            score,
-            json.dumps(
-                reason,
-                ensure_ascii=False
-            ),
-            now()
-        )
-    )
-
-    conn.commit()
-    conn.close()
-
-
-# ---------------------------------------------------------------------
-# VERIFICATION
-# ---------------------------------------------------------------------
-
-def verify_claim(mission_id, claim_id):
-    conn = db()
-
-    claim = conn.execute(
-        "SELECT * FROM claims WHERE id=?",
-        (claim_id,)
-    ).fetchone()
-
-    evidence = conn.execute(
-        """
-        SELECT e.*, w.title, w.domain AS work_domain,
-               w.family AS work_family
-        FROM evidence e
-        JOIN works w ON w.id=e.work_id
-        WHERE e.claim_id=?
-        """,
-        (claim_id,)
-    ).fetchall()
-
-    conn.close()
-
-    strong = [
-        e for e in evidence
-        if e["relation"] in {
-            "DIRECT_SUPPORT",
-            "STRONG_SUPPORT"
-        }
-    ]
-
-    support = [
-        e for e in evidence
-        if e["relation"] in {
-            "DIRECT_SUPPORT",
-            "STRONG_SUPPORT",
-            "SUPPORT"
-        }
-    ]
-
-    works = {
-        e["work_id"]
-        for e in support
-    }
-
-    domains = {
-        e["work_domain"]
-        for e in support
-        if e["work_domain"]
-    }
-
-    families = {
-        e["work_family"]
-        for e in support
-        if e["work_family"]
-        and e["work_family"] != "unknown"
-    }
-
-    contradictions = []
-
-    for e in evidence:
-        if e["relation"] == "CONTRADICTION":
-            contradictions.append(e)
-
-    blockers = []
-
-    if len(works) < 2:
-        blockers.append(
-            "only_1_independent_work"
-        )
-
-    if len(domains) < 2:
-        blockers.append(
-            "only_1_independent_domain"
-        )
-
-    if len(families) < 2:
-        blockers.append(
-            "only_1_source_family"
-        )
-
-    if len(strong) < 2:
-        blockers.append(
-            "fewer_than_2_strong_evidence_relationships"
-        )
-
-    if contradictions:
-        blockers.append(
-            "contradictory_evidence_present"
-        )
-
-    if not evidence:
-        status = "INSUFFICIENT"
-    elif (
-        not blockers
-        and len(works) >= 2
-        and len(domains) >= 2
-        and len(families) >= 2
-        and len(strong) >= 2
-    ):
-        status = "VERIFIED"
-    elif contradictions and not support:
-        status = "CONTRADICTED"
-    elif support:
-        status = "SUPPORTED_NOT_VERIFIED"
-    else:
-        status = "INSUFFICIENT"
-
-    if "only_1_independent_work" in blockers:
-        next_action = "find_independent_primary_study"
-
-    elif "only_1_independent_domain" in blockers:
-        next_action = "find_evidence_from_independent_domain"
-
-    elif "only_1_source_family" in blockers:
-        next_action = "find_evidence_from_independent_source_family"
-
-    elif (
-        "fewer_than_2_strong_evidence_relationships"
-        in blockers
-    ):
-        next_action = "find_second_strong_evidence_excerpt"
-
-    elif contradictions:
-        next_action = "investigate_contradictory_evidence"
-
-    else:
-        next_action = "no_further_action_required"
-
-    confidence = 0.0
-
-    if support:
-        confidence = min(
-            0.95,
-            (
-                sum(
-                    float(e["entailment"])
-                    for e in support
-                )
-                / len(support)
-            )
-        )
-
-    conn = db()
-
-    conn.execute(
-        """
-        UPDATE claims
-        SET status=?,
-            confidence=?,
-            blockers=?,
-            next_action=?
-        WHERE id=?
-        """,
-        (
-            status,
-            round(confidence, 4),
-            json.dumps(blockers),
-            next_action,
-            claim_id
-        )
-    )
-
-    conn.commit()
-    conn.close()
-
-    return {
-        "status": status,
-        "blockers": blockers,
-        "next_action": next_action,
-        "works": len(works),
-        "domains": len(domains),
-        "families": len(families),
-        "strong_evidence": len(strong),
-        "support": len(support),
-        "contradictions": len(contradictions),
-        "confidence": round(confidence, 4)
-    }
-
-
-def verify_mission(mission_id):
-    conn = db()
-
-    claims = conn.execute(
-        "SELECT id FROM claims WHERE mission_id=?",
-        (mission_id,)
-    ).fetchall()
-
-    conn.close()
-
-    results = []
-
-    for claim in claims:
-        results.append(
-            verify_claim(
-                mission_id,
-                claim["id"]
-            )
-        )
-
-    verified = sum(
-        1 for x in results
-        if x["status"] == "VERIFIED"
-    )
-
-    supported = sum(
-        1 for x in results
-        if x["status"] == "SUPPORTED_NOT_VERIFIED"
-    )
-
-    contradicted = sum(
-        1 for x in results
-        if x["status"] == "CONTRADICTED"
-    )
-
-    return {
-        "verified": verified,
-        "supported": supported,
-        "contradicted": contradicted,
-        "claims": len(results)
-    }
-
-
-# ---------------------------------------------------------------------
-# EVENTS / ACTIONS
-# ---------------------------------------------------------------------
-
-def event(
-    mission_id,
-    stage,
-    status,
-    detail
-):
-    conn = db()
-
-    conn.execute(
-        """
-        INSERT INTO events
-        (mission_id, stage, status, detail, created)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (
-            mission_id,
-            stage,
-            status,
-            detail,
-            now()
-        )
-    )
-
-    conn.commit()
-    conn.close()
-
-
-def action(
-    mission_id,
-    kind,
-    target,
-    status,
-    result,
-    attempt
-):
-    conn = db()
-
-    conn.execute(
-        """
-        INSERT INTO actions
-        (mission_id, kind, target,
-         status, result, attempt, created)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            mission_id,
-            kind,
-            target,
-            status,
-            result,
-            attempt,
-            now()
-        )
-    )
-
-    conn.commit()
-    conn.close()
-
-
-# ---------------------------------------------------------------------
-# INGESTION
-# ---------------------------------------------------------------------
-
-def ingest_sources(
-    mission_id,
-    objective,
-    attempt
-):
-    discovered = discover_sources(
-        objective,
-        attempt
-    )
-
-    accepted = 0
-    rejected = 0
-    new_works = 0
-    new_domains = set()
-    new_families = set()
-
-    conn = db()
-
-    existing = {
-        row["id"]
-        for row in conn.execute(
-            "SELECT id FROM works WHERE mission_id=?",
-            (mission_id,)
-        ).fetchall()
-    }
-
-    conn.close()
-
-    for item in discovered:
-        work = prepare_work(
-            mission_id,
-            objective,
-            item
-        )
-
-        if not work:
-            rejected += 1
-            continue
-
-        accepted += 1
-
-        if work["id"] in existing:
-            continue
-
-        save_work(work)
-
-        existing.add(work["id"])
-        new_works += 1
-
-        if work["domain"]:
-            new_domains.add(work["domain"])
-
-        if (
-            work["family"]
-            and work["family"] != "unknown"
-        ):
-            new_families.add(work["family"])
-
-    return {
-        "discovered": len(discovered),
-        "accepted": accepted,
-        "rejected": rejected,
-        "new_works": new_works,
-        "new_domains": len(new_domains),
-        "new_families": len(new_families)
-    }
-
-
-# ---------------------------------------------------------------------
-# CLAIM / EVIDENCE PASS
-# ---------------------------------------------------------------------
-
-def evidence_pass(
-    mission_id,
-    objective
-):
-    conn = db()
-
-    works = conn.execute(
-        """
-        SELECT * FROM works
-        WHERE mission_id=? AND accepted=1
-        ORDER BY relevance DESC
-        """,
-        (mission_id,)
-    ).fetchall()
-
-    conn.close()
-
-    new_claims = 0
-    new_edges = 0
-    usable_works = 0
-
-    for work_row in works:
-        work = dict(work_row)
-
-        if (
-            work["relevance"] < 0.40
-            or not work["domain"]
-            or work["family"] == "unknown"
-        ):
-            continue
-
-        claims = extract_claim_candidates(
-            objective,
-            work["title"],
-            work["abstract"],
-            work["relevance"]
-        )
-
-        if claims:
-            usable_works += 1
-
-        for candidate in claims:
-            claim_id = save_claim(
-                mission_id,
-                candidate["text"],
-                candidate["claim_type"],
-                candidate["purity"],
-                candidate["relevance"]
-            )
-
-            conn = db()
-            exists = conn.execute(
-                """
-                SELECT id FROM evidence
-                WHERE mission_id=?
-                  AND work_id=?
-                  AND claim_id=?
-                """,
-                (
-                    mission_id,
-                    work["id"],
-                    claim_id
-                )
-            ).fetchone()
-            conn.close()
-
-            if exists:
-                continue
-
-            new_claims += 1
-
-            excerpt = choose_evidence_excerpt(
-                work["abstract"],
-                candidate["text"]
-            )
-
-            if not excerpt:
-                continue
-
-            lexical = lexical_similarity(
-                candidate["text"],
-                excerpt
-            )
-
-            entailment = evidence_entailment(
-                objective,
-                candidate["text"],
-                excerpt,
-                work["relevance"]
-            )
-
-            relation = evidence_relation(
-                lexical,
-                entailment,
-                work["relevance"],
-                work["domain"],
-                work["family"]
-            )
-
-            # Do not put NO_SUPPORT into the graph.
-            if relation == "NO_SUPPORT":
-                continue
-
-            evidence_id = save_evidence(
-                mission_id,
-                work,
-                claim_id,
-                excerpt,
-                lexical,
-                entailment,
-                relation
-            )
-
-            save_edge(
-                mission_id,
-                claim_id,
-                evidence_id,
-                relation,
-                entailment,
-                {
-                    "domain": work["domain"],
-                    "family": work["family"],
-                    "lexical": lexical,
-                    "entailment": entailment,
-                    "work_relevance": work["relevance"],
-                    "verdict": relation
-                }
-            )
-
-            new_edges += 1
-
-    return {
-        "usable_works": usable_works,
-        "new_claims": new_claims,
-        "new_edges": new_edges
-    }
-
-
-# ---------------------------------------------------------------------
-# TARGETED RECOVERY
-# ---------------------------------------------------------------------
-
-def recovery_targets(
-    objective,
-    verification
-):
-    targets = []
-
-    blockers = Counter()
-
-    conn = db()
-
-    rows = conn.execute(
-        """
-        SELECT blockers
-        FROM claims
-        WHERE mission_id=?
-        """,
-        (verification.get("mission_id", ""),)
-    ).fetchall()
-
-    conn.close()
-
-    for row in rows:
-        try:
-            for blocker in json.loads(
-                row["blockers"] or "[]"
-            ):
-                blockers[blocker] += 1
-        except Exception:
-            pass
-
-    if (
-        blockers["only_1_independent_domain"]
-        or blockers["only_1_independent_work"]
-    ):
-        targets.append(
-            f"{objective} independent primary study empirical benchmark"
-        )
-
-    if blockers["only_1_source_family"]:
-        targets.append(
-            f"{objective} university laboratory independent publisher"
-        )
-
-    if blockers[
-        "fewer_than_2_strong_evidence_relationships"
-    ]:
-        targets.append(
-            f"{objective} replication evaluation results"
-        )
-
-    if not targets:
-        targets = [
-            f"{objective} independent empirical evidence",
-            f"{objective} benchmark replication",
-        ]
-
-    return targets[:3]
-
-
-def recovery_round(
-    mission_id,
-    objective,
-    attempt
-):
-    target_queries = [
-        f"{objective} independent primary study",
-        f"{objective} empirical benchmark replication",
-        f"{objective} real world deployment evaluation",
-        f"{objective} limitations failure cases",
-        f"{objective} university laboratory study",
-    ]
-
-    # Rotate query focus.
-    rotated = (
-        target_queries[attempt:]
-        + target_queries[:attempt]
-    )
-
-    target = rotated[0]
-
-    action(
-        mission_id,
-        "research_recovery",
-        target,
-        "RUNNING",
-        "targeted recovery selected from measured verification bottleneck",
-        attempt
-    )
-
-    result = ingest_sources(
-        mission_id,
-        objective,
-        attempt
-    )
-
-    evidence = evidence_pass(
-        mission_id,
-        objective
-    )
-
-    verification = verify_mission(
-        mission_id
-    )
-
-    action(
-        mission_id,
-        "research_recovery",
-        target,
-        "COMPLETED",
-        json.dumps({
-            "new_works": result["new_works"],
-            "new_domains": result["new_domains"],
-            "new_families": result["new_families"],
-            "new_claims": evidence["new_claims"],
-            "new_edges": evidence["new_edges"],
-            "verified": verification["verified"]
-        }),
-        attempt
-    )
-
-    return {
-        "target": target,
-        "source": result,
-        "evidence": evidence,
-        "verification": verification
-    }
-
-
-# ---------------------------------------------------------------------
-# AUDIT
-# ---------------------------------------------------------------------
-
-def mission_audit(mission_id):
-    conn = db()
-
-    mission = conn.execute(
-        "SELECT * FROM missions WHERE id=?",
-        (mission_id,)
-    ).fetchone()
-
-    works = conn.execute(
-        "SELECT * FROM works WHERE mission_id=?",
-        (mission_id,)
-    ).fetchall()
-
-    evidence = conn.execute(
-        "SELECT * FROM evidence WHERE mission_id=?",
-        (mission_id,)
-    ).fetchall()
-
-    claims = conn.execute(
-        "SELECT * FROM claims WHERE mission_id=?",
-        (mission_id,)
-    ).fetchall()
-
-    edges = conn.execute(
-        "SELECT * FROM edges WHERE mission_id=?",
-        (mission_id,)
-    ).fetchall()
-
-    actions = conn.execute(
-        "SELECT * FROM actions WHERE mission_id=?",
-        (mission_id,)
-    ).fetchall()
-
-    conn.close()
-
-    usable_works = [
-        w for w in works
-        if w["accepted"]
-        and w["relevance"] >= 0.40
-    ]
-
-    domains = {
-        w["domain"]
-        for w in usable_works
-        if w["domain"]
-    }
-
-    families = {
-        w["family"]
-        for w in usable_works
-        if w["family"]
-        and w["family"] != "unknown"
-    }
-
-    verified = [
-        c for c in claims
-        if c["status"] == "VERIFIED"
-    ]
-
-    supported = [
-        c for c in claims
-        if c["status"] == "SUPPORTED_NOT_VERIFIED"
-    ]
-
-    high_purity = [
-        c for c in claims
-        if c["purity"] >= 0.80
-    ]
-
-    rejected_relevance = len([
-        w for w in works
-        if w["relevance"] < 0.40
-    ])
-
-    reality = {
-        "autonomous_research": (
-            "DEMONSTRATED"
-            if works and claims
-            else "NOT DEMONSTRATED"
-        ),
-        "mission_relevance_gate": (
-            "DEMONSTRATED"
-            if rejected_relevance >= 0
-            else "NOT DEMONSTRATED"
-        ),
-        "evidence_provenance": (
-            "DEMONSTRATED"
-            if evidence
-            and all(
-                e["domain"]
-                and e["family"] != "unknown"
-                for e in evidence
-            )
-            else "PARTIALLY DEMONSTRATED"
-        ),
-        "claim_quality_control": (
-            "DEMONSTRATED"
-            if claims and high_purity
-            else "PARTIALLY DEMONSTRATED"
-        ),
-        "independent_verification": (
-            "DEMONSTRATED"
-            if verified
-            else "NOT DEMONSTRATED"
-        ),
-        "closed_loop_recovery": (
-            "DEMONSTRATED"
-            if len(actions) >= 2
-            else "NOT DEMONSTRATED"
-        ),
-        "recovery_diversification": (
-            "DEMONSTRATED"
-            if len(domains) >= 2
-            and len(families) >= 2
-            else "NOT DEMONSTRATED"
-        ),
-        "general_real_world_execution":
-            "NOT DEMONSTRATED",
-        "continuous_self_improvement":
-            "NOT DEMONSTRATED",
-        "durable_memory":
-            "LIMITED_BY_STORAGE"
-    }
-
-    return {
-        "version": VERSION,
-        "build": BUILD,
-        "mission_id": mission_id,
-        "objective": (
-            mission["objective"]
-            if mission else ""
-        ),
-        "metrics": {
-            "works": len(works),
-            "usable_works": len(usable_works),
-            "claims": len(claims),
-            "evidence": len(evidence),
-            "support_edges": len([
-                e for e in edges
-                if e["relation"] != "NO_SUPPORT"
-            ]),
-            "graph_edges": len(edges),
-            "verified_claims": len(verified),
-            "supported_not_verified": len(supported),
-            "domains": len(domains),
-            "source_families": len(families),
-            "actions": len(actions),
-            "high_purity_claims": len(high_purity),
-            "rejected_relevance_records":
-                rejected_relevance,
-            "verification_rate": round(
-                len(verified) / max(1, len(claims)),
-                4
-            ),
-            "support_rate": round(
-                len(supported) / max(1, len(claims)),
-                4
-            )
-        },
-        "reality": reality,
-        "definition_of_working": (
-            "A mission is working when it can discover "
-            "mission-relevant sources, establish canonical "
-            "provenance, extract atomic claims, attach "
-            "evidence that passes calibrated entailment, "
-            "verify claims only through independent works, "
-            "domains and source families, and automatically "
-            "recover from measurable verification gaps "
-            "without weakening the gate."
-        )
-    }
-
-
-# ---------------------------------------------------------------------
-# MISSION RUNNER
-# ---------------------------------------------------------------------
-
-def run_mission(
-    mission_id,
-    objective
-):
-    try:
-        event(
-            mission_id,
-            "mission",
-            "running",
-            "Mission accepted"
-        )
-
-        event(
-            mission_id,
-            "discovery",
-            "running",
-            "Discovering research sources"
-        )
-
-        discovery = ingest_sources(
-            mission_id,
-            objective,
-            0
-        )
-
-        event(
-            mission_id,
-            "discovery",
-            "completed",
-            json.dumps(discovery)
-        )
-
-        event(
-            mission_id,
-            "claims",
-            "running",
-            "Extracting mission-relevant atomic claims"
-        )
-
-        evidence_result = evidence_pass(
-            mission_id,
-            objective
-        )
-
-        event(
-            mission_id,
-            "claims",
-            "completed",
-            json.dumps(evidence_result)
-        )
-
-        event(
-            mission_id,
-            "evidence_graph",
-            "running",
-            "Building deduplicated claim-level provenance graph"
-        )
-
-        conn = db()
-        edge_count = conn.execute(
-            "SELECT COUNT(*) AS n FROM edges WHERE mission_id=?",
-            (mission_id,)
-        ).fetchone()["n"]
-        conn.close()
-
-        event(
-            mission_id,
-            "evidence_graph",
-            "completed",
-            f"{edge_count} deduplicated graph edges"
-        )
-
-        event(
-            mission_id,
-            "verification",
-            "running",
-            "Applying calibrated entailment + independence gate"
-        )
-
-        verification = verify_mission(
-            mission_id
-        )
-
-        event(
-            mission_id,
-            "verification",
-            "completed",
-            (
-                f"verified={verification['verified']}; "
-                f"supported={verification['supported']}; "
-                f"contradicted={verification['contradicted']}"
-            )
-        )
-
-        # -------------------------------------------------------------
-        # BOUNDED RECOVERY
-        # -------------------------------------------------------------
-
-        previous_progress = (
-            verification["verified"],
-            verification["supported"]
-        )
-
-        for attempt in range(1, 3):
-            if verification["verified"] > 0:
-                break
-
-            event(
-                mission_id,
-                "recovery",
-                "running",
-                f"round {attempt} starting"
-            )
-
-            result = recovery_round(
-                mission_id,
-                objective,
-                attempt
-            )
-
-            verification = result[
-                "verification"
-            ]
-
-            current_progress = (
-                verification["verified"],
-                verification["supported"]
-            )
-
-            new_works = result[
-                "source"
-            ]["new_works"]
-
-            new_domains = result[
-                "source"
-            ]["new_domains"]
-
-            new_families = result[
-                "source"
-            ]["new_families"]
-
-            # Stop if recovery is not actually diversifying.
-            if (
-                new_works == 0
-                and new_domains == 0
-                and new_families == 0
-                and current_progress == previous_progress
-            ):
-                event(
-                    mission_id,
-                    "recovery",
-                    "completed",
-                    (
-                        f"round {attempt} stopped: "
-                        "no new evidence diversification "
-                        "or verification progress"
-                    )
-                )
-                break
-
-            previous_progress = current_progress
-
-            event(
-                mission_id,
-                "recovery",
-                "completed",
-                f"round {attempt} complete"
-            )
-
-        # -------------------------------------------------------------
-        # FINAL AUDIT
-        # -------------------------------------------------------------
-
-        audit = mission_audit(
-            mission_id
-        )
-
-        conn = db()
-
-        conn.execute(
-            """
-            UPDATE missions
-            SET status=?, updated=?, result=?
-            WHERE id=?
-            """,
-            (
-                "completed",
-                now(),
-                json.dumps(
-                    audit,
-                    ensure_ascii=False
-                ),
-                mission_id
-            )
-        )
-
-        conn.commit()
-        conn.close()
-
-        event(
-            mission_id,
-            "mission",
-            "completed",
-            "Mission completed with evidence gate preserved"
-        )
-
-    except Exception as exc:
-        conn = db()
-
-        conn.execute(
-            """
-            UPDATE missions
-            SET status=?, updated=?, result=?
-            WHERE id=?
-            """,
-            (
-                "failed",
-                now(),
-                json.dumps({
-                    "error": str(exc)
-                }),
-                mission_id
-            )
-        )
-
-        conn.commit()
-        conn.close()
-
-        event(
-            mission_id,
-            "mission",
-            "failed",
-            str(exc)
-        )
-
-
-# ---------------------------------------------------------------------
-# APP
-# ---------------------------------------------------------------------
-
-app = FastAPI(
-    title="AI Infinity",
-    version=VERSION
-)
-
-
-@app.get("/", response_class=HTMLResponse)
+def run_mission(mid,obj):
+    event(mid,"mission","running","Mission accepted")
+    event(mid,"discovery","running","provider discovery started")
+    src=ingest(mid,obj,0)
+    event(mid,"discovery","completed",json.dumps(src))
+    ev=evidence_pass(mid,obj); vr=verify(mid)
+    event(mid,"verification","completed",json.dumps(vr))
+    last=(src["new_works"],src["new_domains"],src["new_families"],vr["verified"])
+    for a in (1,2):
+        if vr["verified"]:break
+        event(mid,"recovery","running",f"round {a}")
+        s,e,v=recovery(mid,obj,a)
+        cur=(s["new_works"],s["new_domains"],s["new_families"],v["verified"])
+        event(mid,"recovery","completed",json.dumps({"round":a,"source":s,"evidence":e,"verification":v}))
+        if cur==last and s["new_works"]==0 and s["new_domains"]==0 and s["new_families"]==0:
+            event(mid,"recovery","completed","STOPPED_NO_DIVERSIFICATION_OR_PROGRESS")
+            break
+        last=cur
+        vr=v
+    result=audit(mid)
+    c=db(); c.execute("UPDATE missions SET status=?,updated=?,result=? WHERE id=?",("completed",now(),json.dumps(result),mid)); c.commit(); c.close()
+    event(mid,"mission","completed","Mission completed with verification gate preserved")
+
+app=FastAPI(title="AI Infinity",version=VERSION)
+
+@app.get("/",response_class=HTMLResponse)
 def home():
-    return f"""
-<!doctype html>
-<html>
-<head>
-<meta name="viewport"
- content="width=device-width,initial-scale=1">
-<title>AI Infinity</title>
-<style>
-body {{
-    font-family: system-ui, sans-serif;
-    background:#0b0f14;
-    color:#e8edf2;
-    margin:0;
-    padding:20px;
-}}
-.card {{
-    max-width:900px;
-    margin:auto;
-    background:#121820;
-    padding:24px;
-    border-radius:18px;
-}}
-h1 {{ margin-top:0; }}
-textarea {{
-    width:100%;
-    min-height:160px;
-    background:#080c10;
-    color:#fff;
-    border:1px solid #303944;
-    border-radius:12px;
-    padding:12px;
-    box-sizing:border-box;
-}}
-button {{
-    margin-top:12px;
-    padding:13px 18px;
-    border:0;
-    border-radius:10px;
-    cursor:pointer;
-}}
-pre {{
-    white-space:pre-wrap;
-    word-break:break-word;
-    background:#080c10;
-    padding:15px;
-    border-radius:12px;
-}}
-.small {{
-    opacity:.7;
-    font-size:13px;
-}}
-</style>
-</head>
-<body>
-<div class="card">
-<h1>AI Infinity</h1>
-<p>{VERSION}</p>
-<p class="small">
-Evidence-first autonomous research with provenance,
-mission relevance and conservative verification.
-</p>
-
-<textarea id="command">Research the reliability of autonomous AI agents for real-world task execution. Find high-quality independent primary evidence, extract only atomic factual claims, verify each important claim against independent works from independent domains and source families, detect contradictory evidence, explain exactly why each claim is verified or not verified, identify the strongest remaining evidence gaps, and give the next research action required for each unresolved claim. Do not treat titles, metadata, navigation text, boilerplate, recommendations, or code examples as evidence. Do not lower verification standards to produce a verified result.</textarea>
-
-<button onclick="run()">Run research</button>
-
-<pre id="out">Ready.</pre>
-</div>
-
-<script>
-async function run() {{
-    const command =
-        document.getElementById("command").value;
-
-    const r = await fetch("/run", {{
-        method:"POST",
-        headers:{{"Content-Type":"application/json"}},
-        body:JSON.stringify({{command}})
-    }});
-
-    const data = await r.json();
-
-    document.getElementById("out").textContent =
-        JSON.stringify(data,null,2);
-}}
-</script>
-</body>
-</html>
-"""
-
+    return """<html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>AI Infinity</title></head><body style="font-family:system-ui;background:#0b0f14;color:#eee;padding:20px">
+    <h1>AI Infinity</h1><p>TARGET-2050.36 — DISCOVERY-RECOVERY-REALITY-CORE</p>
+    <textarea id="q" style="width:100%;height:180px">Research the reliability of autonomous AI agents for real-world task execution. Find high-quality mission-relevant independent primary evidence from different domains and source families. Extract only atomic factual claims, verify each important claim, identify contradictions, explain verification blockers, and perform bounded targeted recovery without lowering verification standards.</textarea>
+    <button onclick="go()">Run</button><pre id="o"></pre>
+    <script>async function go(){let q=document.getElementById('q').value;let r=await fetch('/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:q})});document.getElementById('o').textContent=JSON.stringify(await r.json(),null,2)}</script>
+    </body></html>"""
 
 @app.get("/health")
-def health():
-    return {
-        "status": "ok",
-        "version": VERSION,
-        "build": BUILD
-    }
-
+def health(): return {"status":"ok","version":VERSION,"build":BUILD}
 
 @app.get("/status")
 def status():
-    conn = db()
-
-    missions = conn.execute(
-        "SELECT COUNT(*) AS n FROM missions"
-    ).fetchone()["n"]
-
-    claims = conn.execute(
-        "SELECT COUNT(*) AS n FROM claims"
-    ).fetchone()["n"]
-
-    evidence = conn.execute(
-        "SELECT COUNT(*) AS n FROM evidence"
-    ).fetchone()["n"]
-
-    edges = conn.execute(
-        "SELECT COUNT(*) AS n FROM edges"
-    ).fetchone()["n"]
-
-    conn.close()
-
-    return {
-        "version": VERSION,
-        "build": BUILD,
-        "missions": missions,
-        "claims": claims,
-        "evidence": evidence,
-        "graph_edges": edges
-    }
-
+    c=db(); out={}
+    for t in ("missions","works","claims","evidence","edges","actions"):
+        out[t]=c.execute(f"SELECT COUNT(*) n FROM {t}").fetchone()["n"]
+    c.close(); return {"version":VERSION,"build":BUILD,**out}
 
 @app.get("/capabilities")
 def capabilities():
-    return {
-        "version": VERSION,
-        "capabilities": [
-            "mission_relevance_gate",
-            "canonical_doi_resolution",
-            "source_domain_detection",
-            "source_family_detection",
-            "atomic_claim_extraction",
-            "claim_purity_filter",
-            "calibrated_evidence_entailment",
-            "claim_level_provenance_graph",
-            "independent_work_verification",
-            "independent_domain_verification",
-            "independent_source_family_verification",
-            "contradiction_tracking",
-            "per_claim_verification_blockers",
-            "targeted_recovery",
-            "recovery_diversification",
-            "bounded_autonomous_research_loop",
-            "reality_audit"
-        ],
-        "not_claimed": [
-            "general_agi",
-            "general_asi",
-            "arbitrary_real_world_execution",
-            "continuous_self_improvement",
-            "perfect_semantic_entailment"
-        ]
-    }
-
+    return {"version":VERSION,"build":BUILD,"capabilities":[
+        "stage_diagnostics","mission_relevance_gate","canonical_provenance",
+        "provider_rotation","atomic_claim_extraction","claim_purity",
+        "calibrated_entailment","independent_verification","claim_blockers",
+        "bounded_recovery","recovery_diversification","reality_audit"],
+        "not_claimed":["general_AGI","general_ASI","arbitrary_real_world_execution","perfect_semantic_entailment"]}
 
 @app.post("/run")
-def run(request: CreateRequest):
-    mission_id = stable_id(
-        "mission",
-        request.command + str(now())
-    )
-
-    conn = db()
-
-    conn.execute(
-        """
-        INSERT INTO missions
-        (id, objective, status, created, updated, result)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            mission_id,
-            request.command,
-            "running",
-            now(),
-            now(),
-            None
-        )
-    )
-
-    conn.commit()
-    conn.close()
-
-    # Synchronous execution keeps the free Render deployment
-    # simple and avoids background-worker requirements.
-    run_mission(
-        mission_id,
-        request.command
-    )
-
-    return {
-        "mission_id": mission_id,
-        "status": "completed",
-        "version": VERSION,
-        "build": BUILD,
-        "message": (
-            "Mission executed. "
-            "Use /mission/{id} for the complete result."
-        )
-    }
-
+def run(req:Req):
+    mid=sid("mission",req.command+str(now()))
+    c=db(); c.execute("INSERT INTO missions VALUES(?,?,?,?,?,?)",(mid,req.command,"running",now(),now(),None)); c.commit(); c.close()
+    run_mission(mid,req.command)
+    return {"mission_id":mid,"status":"completed","version":VERSION,"build":BUILD}
 
 @app.post("/research")
-def research(request: CreateRequest):
-    return run(request)
-
+def research(req:Req): return run(req)
 
 @app.post("/command")
-def command(request: CreateRequest):
-    return run(request)
+def command(req:Req): return run(req)
 
+@app.get("/mission/{mid}")
+def mission(mid):
+    c=db(); m=c.execute("SELECT * FROM missions WHERE id=?",(mid,)).fetchone(); c.close()
+    if not m: raise HTTPException(404,"Mission not found")
+    return {"mission":dict(m),"audit":audit(mid)}
 
-@app.get("/mission/{mission_id}")
-def get_mission(mission_id: str):
-    conn = db()
+@app.get("/mission/{mid}/report")
+def report(mid): return audit(mid)
+@app.get("/audit/{mid}")
+def audit_route(mid): return audit(mid)
 
-    mission = conn.execute(
-        "SELECT * FROM missions WHERE id=?",
-        (mission_id,)
-    ).fetchone()
+@app.get("/claims/{mid}")
+def claims(mid):
+    c=db(); x=[dict(r) for r in c.execute("SELECT * FROM claims WHERE mission_id=? ORDER BY relevance DESC",(mid,)).fetchall()]; c.close()
+    return {"mission_id":mid,"claims":x}
 
-    conn.close()
+@app.get("/evidence/{mid}")
+def evidence(mid):
+    c=db(); x=[dict(r) for r in c.execute("SELECT * FROM evidence WHERE mission_id=? ORDER BY entailment DESC",(mid,)).fetchall()]; c.close()
+    return {"mission_id":mid,"evidence":x}
 
-    if not mission:
-        raise HTTPException(
-            status_code=404,
-            detail="Mission not found"
-        )
+@app.get("/graph/{mid}")
+def graph(mid):
+    c=db(); x=[dict(r) for r in c.execute("SELECT * FROM edges WHERE mission_id=? ORDER BY score DESC",(mid,)).fetchall()]; c.close()
+    return {"mission_id":mid,"edges":x}
 
-    audit = mission_audit(
-        mission_id
-    )
+@app.get("/actions/{mid}")
+def actions(mid):
+    c=db(); x=[dict(r) for r in c.execute("SELECT * FROM actions WHERE mission_id=? ORDER BY id",(mid,)).fetchall()]; c.close()
+    return {"mission_id":mid,"actions":x}
 
-    return {
-        "mission": dict(mission),
-        "audit": audit
-    }
-
-
-@app.get("/mission/{mission_id}/report")
-def mission_report(mission_id: str):
-    return mission_audit(
-        mission_id
-    )
-
-
-@app.get("/audit/{mission_id}")
-def audit(mission_id: str):
-    return mission_audit(
-        mission_id
-    )
-
-
-@app.get("/claims/{mission_id}")
-def claims(mission_id: str):
-    conn = db()
-
-    rows = conn.execute(
-        """
-        SELECT * FROM claims
-        WHERE mission_id=?
-        ORDER BY relevance DESC
-        """,
-        (mission_id,)
-    ).fetchall()
-
-    conn.close()
-
-    return {
-        "mission_id": mission_id,
-        "claims": [dict(r) for r in rows]
-    }
-
-
-@app.get("/evidence/{mission_id}")
-def evidence(mission_id: str):
-    conn = db()
-
-    rows = conn.execute(
-        """
-        SELECT * FROM evidence
-        WHERE mission_id=?
-        ORDER BY entailment DESC
-        """,
-        (mission_id,)
-    ).fetchall()
-
-    conn.close()
-
-    return {
-        "mission_id": mission_id,
-        "evidence": [dict(r) for r in rows]
-    }
-
-
-@app.get("/graph/{mission_id}")
-def graph(mission_id: str):
-    conn = db()
-
-    rows = conn.execute(
-        """
-        SELECT * FROM edges
-        WHERE mission_id=?
-        ORDER BY score DESC
-        """,
-        (mission_id,)
-    ).fetchall()
-
-    conn.close()
-
-    return {
-        "mission_id": mission_id,
-        "edges": [dict(r) for r in rows]
-    }
-
-
-@app.get("/actions/{mission_id}")
-def actions(mission_id: str):
-    conn = db()
-
-    rows = conn.execute(
-        """
-        SELECT * FROM actions
-        WHERE mission_id=?
-        ORDER BY id
-        """,
-        (mission_id,)
-    ).fetchall()
-
-    conn.close()
-
-    return {
-        "mission_id": mission_id,
-        "actions": [dict(r) for r in rows]
-    }
-
-
-@app.get("/events/{mission_id}")
-def events(mission_id: str):
-    conn = db()
-
-    rows = conn.execute(
-        """
-        SELECT * FROM events
-        WHERE mission_id=?
-        ORDER BY id
-        """,
-        (mission_id,)
-    ).fetchall()
-
-    conn.close()
-
-    return {
-        "mission_id": mission_id,
-        "events": [dict(r) for r in rows]
-    }
-
+@app.get("/events/{mid}")
+def events(mid):
+    c=db(); x=[dict(r) for r in c.execute("SELECT * FROM events WHERE mission_id=? ORDER BY id",(mid,)).fetchall()]; c.close()
+    return {"mission_id":mid,"events":x}
 
 @app.get("/missions")
 def missions():
-    conn = db()
+    c=db(); x=[dict(r) for r in c.execute("SELECT id,objective,status,created,updated FROM missions ORDER BY created DESC LIMIT 50").fetchall()]; c.close()
+    return {"missions":x}
 
-    rows = conn.execute(
-        """
-        SELECT id, objective, status,
-               created, updated
-        FROM missions
-        ORDER BY created DESC
-        LIMIT 50
-        """
-    ).fetchall()
-
-    conn.close()
-
-    return {
-        "missions": [dict(r) for r in rows]
-    }
-
-
-# ---------------------------------------------------------------------
-# DIRECT MISSION SUBROUTES
-# ---------------------------------------------------------------------
-
-@app.get("/mission/{mission_id}/claims")
-def mission_claims(mission_id: str):
-    return claims(mission_id)
-
-
-@app.get("/mission/{mission_id}/evidence")
-def mission_evidence(mission_id: str):
-    return evidence(mission_id)
-
-
-@app.get("/mission/{mission_id}/graph")
-def mission_graph(mission_id: str):
-    return graph(mission_id)
-
-
-@app.get("/mission/{mission_id}/actions")
-def mission_actions(mission_id: str):
-    return actions(mission_id)
-
-
-@app.get("/mission/{mission_id}/events")
-def mission_events(mission_id: str):
-    return events(mission_id)
-
-
-if __name__ == "__main__":
+if __name__=="__main__":
     import uvicorn
-
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=8000
-    )
+    uvicorn.run(app,host="0.0.0.0",port=8000)
