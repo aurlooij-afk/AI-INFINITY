@@ -1,60 +1,51 @@
 """
 AI Infinity
-TARGET-2050.24
-BUILD: EXTRAORDINARY-EVIDENCE-INTELLIGENCE-CORE
+TARGET-2050.25
+BUILD: EXTRAORDINARY-RESEARCH-RECOVERY-CORE
 
-Major upgrade from TARGET-2050.23:
+Major upgrade over TARGET-2050.24
 
-- Async mission execution
-- Research-question decomposition
-- Relevance-first source selection
-- Evidence passage extraction
-- Aggressive webpage boilerplate removal
-- Claim quality filtering
-- Claim/source relationship graph
-- Support / contradiction / limitation edges
-- Underlying-work deduplication
-- Claim-level verification
-- Claim-specific counter-evidence
-- Source independence analysis
-- Evidence quality scoring
-- Structured synthesis
-- SQLite persistence
-- Existing API compatibility
-- Mobile control center
-- Fail-closed verification
-- No paid APIs required
+Core:
+- FastAPI
+- SQLite
+- asynchronous missions
+- evidence recovery
+- HTML/PDF/abstract/metadata ingestion
+- OpenAlex
+- Crossref
+- Semantic Scholar
+- DuckDuckGo
+- Wikipedia
+- evidence tiers
+- claim extraction
+- claim/evidence linking
+- support/contradiction/limitation edges
+- independent-work detection
+- counter-evidence
+- synthesis
+- automatic next-cycle planning
+- mobile dashboard
 """
 
 from __future__ import annotations
 
-import concurrent.futures
-import hashlib
-import html
-import json
-import math
 import os
 import re
+import json
+import time
+import math
+import hashlib
 import sqlite3
 import threading
-import time
-import uuid
-from collections import Counter
-from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import (
-    parse_qsl,
-    urlencode,
-    urljoin,
-    urlparse,
-    urlunparse,
-)
+from urllib.parse import urlparse, urljoin
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional, Any
 
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 try:
     from pypdf import PdfReader
@@ -63,149 +54,115 @@ except Exception:
 
 
 # ============================================================
-# CONFIGURATION
+# CONFIG
 # ============================================================
 
-VERSION = "TARGET-2050.24"
-BUILD = "EXTRAORDINARY-EVIDENCE-INTELLIGENCE-CORE"
+VERSION = "TARGET-2050.25"
+BUILD = "EXTRAORDINARY-RESEARCH-RECOVERY-CORE"
 
-BASE = Path(os.getenv("AI_INFINITY_DATA", "/tmp/ai-infinity"))
+BASE = Path("/tmp/ai-infinity")
 BASE.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = BASE / "ai_infinity.db"
 
-REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "12"))
-MAX_BODY_BYTES = 6 * 1024 * 1024
-MAX_TEXT_CHARS = 60000
+REQUEST_TIMEOUT = 12
+MAX_BYTES = 7 * 1024 * 1024
+WORKERS = 6
 
-WORKERS = int(os.getenv("MISSION_WORKERS", "3"))
-
-USER_AGENT = (
-    "AI-Infinity/2050.24 "
-    "(evidence-research-engine; respectful automated retrieval)"
-)
-
-executor = concurrent.futures.ThreadPoolExecutor(
-    max_workers=WORKERS,
-    thread_name_prefix="ai-infinity"
-)
-
-db_lock = threading.Lock()
-
-
-# ============================================================
-# APP
-# ============================================================
+executor = ThreadPoolExecutor(max_workers=WORKERS)
 
 app = FastAPI(
     title="AI Infinity",
-    version=VERSION,
-    description="Autonomous evidence intelligence engine",
+    version=VERSION
 )
-
-
-# ============================================================
-# REQUEST MODELS
-# ============================================================
-
-class MissionRequest(BaseModel):
-    objective: str = Field(..., min_length=5, max_length=12000)
-    research: bool = True
-    verify: bool = True
-    remember: bool = True
-
-
-class ResearchRequest(BaseModel):
-    objective: str = Field(..., min_length=5, max_length=12000)
-
-
-class CommandRequest(BaseModel):
-    command: str = Field(..., min_length=1, max_length=12000)
-    duration_minutes: int = Field(default=1, ge=1, le=120)
 
 
 # ============================================================
 # DATABASE
 # ============================================================
 
+DB_LOCK = threading.Lock()
+
+
 def db():
     conn = sqlite3.connect(
-        str(DB_PATH),
-        timeout=30,
+        DB_PATH,
         check_same_thread=False,
+        timeout=30
     )
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db():
-    with db_lock:
+    with DB_LOCK:
         conn = db()
+        cur = conn.cursor()
 
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS missions (
-                id TEXT PRIMARY KEY,
-                objective TEXT NOT NULL,
-                status TEXT NOT NULL,
-                version TEXT NOT NULL,
-                build TEXT NOT NULL,
-                created_at REAL NOT NULL,
-                started_at REAL,
-                completed_at REAL,
-                result_json TEXT,
-                error TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS sources (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                mission_id TEXT NOT NULL,
-                source_key TEXT NOT NULL,
-                url TEXT,
-                title TEXT,
-                domain TEXT,
-                provider TEXT,
-                doi TEXT,
-                work_key TEXT,
-                relevance REAL DEFAULT 0,
-                quality REAL DEFAULT 0,
-                evidence_score REAL DEFAULT 0,
-                accepted INTEGER DEFAULT 0,
-                rejection_reason TEXT,
-                content_chars INTEGER DEFAULT 0,
-                created_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS claims (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                mission_id TEXT NOT NULL,
-                claim_key TEXT NOT NULL,
-                claim TEXT NOT NULL,
-                status TEXT,
-                confidence REAL DEFAULT 0,
-                support_count INTEGER DEFAULT 0,
-                contradiction_count INTEGER DEFAULT 0,
-                limitation_count INTEGER DEFAULT 0,
-                created_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                mission_id TEXT NOT NULL,
-                stage TEXT NOT NULL,
-                status TEXT NOT NULL,
-                payload_json TEXT,
-                created_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS memory (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                key TEXT NOT NULL,
-                value TEXT NOT NULL,
-                created_at REAL NOT NULL
-            );
-            """
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS missions (
+            id TEXT PRIMARY KEY,
+            objective TEXT,
+            status TEXT,
+            created_at REAL,
+            started_at REAL,
+            completed_at REAL,
+            result TEXT
         )
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mission_id TEXT,
+            source_key TEXT,
+            url TEXT,
+            title TEXT,
+            domain TEXT,
+            provider TEXT,
+            evidence_tier TEXT,
+            quality REAL,
+            relevance REAL,
+            independent_work TEXT,
+            content TEXT,
+            metadata TEXT,
+            accepted INTEGER,
+            created_at REAL
+        )
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS claims (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mission_id TEXT,
+            claim_key TEXT,
+            text TEXT,
+            status TEXT,
+            confidence REAL,
+            created_at REAL
+        )
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mission_id TEXT,
+            stage TEXT,
+            status TEXT,
+            detail TEXT,
+            created_at REAL
+        )
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS memory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mission_id TEXT,
+            key TEXT,
+            value TEXT,
+            created_at REAL
+        )
+        """)
 
         conn.commit()
         conn.close()
@@ -215,121 +172,1104 @@ init_db()
 
 
 # ============================================================
-# DATABASE HELPERS
+# MODELS
 # ============================================================
 
-def save_event(
-    mission_id: str,
-    stage: str,
-    status: str,
-    payload: Optional[Dict[str, Any]] = None,
+class MissionRequest(BaseModel):
+    objective: str
+    research: bool = True
+    verify: bool = True
+    remember: bool = True
+
+
+class CommandRequest(BaseModel):
+    command: str
+    duration_minutes: int = 1
+
+
+# ============================================================
+# HELPERS
+# ============================================================
+
+def now():
+    return time.time()
+
+
+def mission_id():
+    return "mission-" + hashlib.sha1(
+        f"{time.time_ns()}".encode()
+    ).hexdigest()[:12]
+
+
+def sha(value: str):
+    return hashlib.sha1(
+        value.encode("utf-8", errors="ignore")
+    ).hexdigest()
+
+
+def clean_text(text: str) -> str:
+    if not text:
+        return ""
+
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\[[0-9,\s]+\]", " ", text)
+    text = re.sub(r"\(https?://[^)]+\)", " ", text)
+
+    return text.strip()
+
+
+def words(text: str):
+    return set(
+        re.findall(
+            r"\b[a-zA-Z][a-zA-Z0-9\-]{2,}\b",
+            text.lower()
+        )
+    )
+
+
+def similarity(a: str, b: str):
+    wa = words(a)
+    wb = words(b)
+
+    if not wa or not wb:
+        return 0.0
+
+    return len(wa & wb) / max(1, len(wa | wb))
+
+
+def domain_of(url: str):
+    try:
+        return urlparse(url).netloc.lower().replace("www.", "")
+    except Exception:
+        return ""
+
+
+def canonical_url(url: str):
+    try:
+        p = urlparse(url)
+
+        host = p.netloc.lower().replace("www.", "")
+
+        path = re.sub(
+            r"/+$",
+            "",
+            p.path
+        )
+
+        return f"{p.scheme.lower()}://{host}{path}"
+    except Exception:
+        return url
+
+
+def safe_json(value):
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except Exception:
+        return "{}"
+
+
+# ============================================================
+# SSRF / URL FIREWALL
+# ============================================================
+
+BLOCKED_HOSTS = {
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "::1",
+    "metadata.google.internal",
+    "169.254.169.254"
+}
+
+
+def validate_url(url: str):
+    try:
+        p = urlparse(url)
+
+        if p.scheme not in {"http", "https"}:
+            return False
+
+        host = (p.hostname or "").lower()
+
+        if not host:
+            return False
+
+        if host in BLOCKED_HOSTS:
+            return False
+
+        if host.endswith(".local"):
+            return False
+
+        if host.startswith("127."):
+            return False
+
+        if host.startswith("10."):
+            return False
+
+        if host.startswith("192.168."):
+            return False
+
+        return True
+
+    except Exception:
+        return False
+
+
+# ============================================================
+# SOURCE QUALITY
+# ============================================================
+
+def source_quality(
+    provider: str,
+    tier: str,
+    domain: str
 ):
-    with db_lock:
+
+    score = 0.40
+
+    if provider == "crossref":
+        score += 0.12
+
+    elif provider == "openalex":
+        score += 0.12
+
+    elif provider == "semantic_scholar":
+        score += 0.13
+
+    elif provider == "direct":
+        score += 0.10
+
+    elif provider == "duckduckgo":
+        score += 0.05
+
+    if tier == "FULL_TEXT":
+        score += 0.25
+
+    elif tier == "ABSTRACT":
+        score += 0.18
+
+    elif tier == "STRUCTURED_METADATA":
+        score += 0.10
+
+    elif tier == "DISCOVERY_ONLY":
+        score += 0.00
+
+    if domain.endswith(".edu"):
+        score += 0.05
+
+    if domain.endswith(".gov"):
+        score += 0.06
+
+    return min(1.0, round(score, 3))
+
+
+# ============================================================
+# SOURCE PROBLEM DETECTION
+# ============================================================
+
+BAD_PATTERNS = [
+    "enable javascript",
+    "javascript is disabled",
+    "client challenge",
+    "just a moment",
+    "checking your browser",
+    "access denied",
+    "captcha",
+    "sign in to continue",
+    "log in to continue",
+    "verify you are human",
+    "something went wrong",
+    "page not found",
+]
+
+
+def looks_like_problem(text: str):
+    low = text.lower()
+
+    hits = sum(
+        1 for x in BAD_PATTERNS
+        if x in low
+    )
+
+    return hits >= 1
+
+
+def looks_binary(data: bytes):
+    if not data:
+        return True
+
+    sample = data[:2000]
+
+    if b"%PDF-" in sample:
+        return True
+
+    bad = sum(
+        1 for b in sample
+        if b == 0
+    )
+
+    return bad > 10
+
+
+# ============================================================
+# HTML TEXT EXTRACTION
+# ============================================================
+
+def html_to_text(html: str):
+    if not html:
+        return ""
+
+    text = html
+
+    text = re.sub(
+        r"<script\b[^>]*>.*?</script>",
+        " ",
+        text,
+        flags=re.I | re.S
+    )
+
+    text = re.sub(
+        r"<style\b[^>]*>.*?</style>",
+        " ",
+        text,
+        flags=re.I | re.S
+    )
+
+    text = re.sub(
+        r"<noscript\b[^>]*>.*?</noscript>",
+        " ",
+        text,
+        flags=re.I | re.S
+    )
+
+    text = re.sub(
+        r"<[^>]+>",
+        " ",
+        text
+    )
+
+    text = (
+        text.replace("&nbsp;", " ")
+            .replace("&amp;", "&")
+            .replace("&quot;", '"')
+            .replace("&#39;", "'")
+    )
+
+    return clean_text(text)
+
+
+# ============================================================
+# PDF
+# ============================================================
+
+def extract_pdf(data: bytes):
+    if PdfReader is None:
+        return ""
+
+    try:
+        import io
+
+        reader = PdfReader(
+            io.BytesIO(data)
+        )
+
+        chunks = []
+
+        for page in reader.pages[:30]:
+            try:
+                txt = page.extract_text() or ""
+                chunks.append(txt)
+            except Exception:
+                continue
+
+        return clean_text(
+            " ".join(chunks)
+        )
+
+    except Exception:
+        return ""
+
+
+# ============================================================
+# HTTP FETCH
+# ============================================================
+
+def fetch_url(url: str):
+    if not validate_url(url):
+        return None
+
+    try:
+        r = requests.get(
+            url,
+            timeout=REQUEST_TIMEOUT,
+            headers={
+                "User-Agent":
+                "AI-Infinity/2050 research engine"
+            },
+            allow_redirects=True,
+            stream=True
+        )
+
+        if r.status_code >= 400:
+            return None
+
+        final_url = r.url
+
+        if not validate_url(final_url):
+            return None
+
+        data = r.raw.read(MAX_BYTES)
+
+        content_type = (
+            r.headers.get(
+                "content-type",
+                ""
+            ).lower()
+        )
+
+        if (
+            "pdf" in content_type
+            or data[:5] == b"%PDF-"
+        ):
+            text = extract_pdf(data)
+
+            if len(text) >= 500:
+                return {
+                    "url": final_url,
+                    "text": text,
+                    "tier": "FULL_TEXT",
+                    "content_type": "pdf"
+                }
+
+            return None
+
+        if looks_binary(data):
+            return None
+
+        raw = data.decode(
+            "utf-8",
+            errors="ignore"
+        )
+
+        text = html_to_text(raw)
+
+        if len(text) < 300:
+            return None
+
+        if looks_like_problem(text[:10000]):
+            return None
+
+        return {
+            "url": final_url,
+            "text": text,
+            "tier": "FULL_TEXT",
+            "content_type": "html"
+        }
+
+    except Exception:
+        return None
+
+
+# ============================================================
+# ABSTRACT EXTRACTION
+# ============================================================
+
+def reconstruct_openalex_abstract(inv):
+    if not inv:
+        return ""
+
+    parts = []
+
+    try:
+        for word, positions in inv.items():
+
+            for pos in positions:
+
+                parts.append(
+                    (pos, word)
+                )
+
+        parts.sort()
+
+        return clean_text(
+            " ".join(
+                x[1]
+                for x in parts
+            )
+        )
+
+    except Exception:
+        return ""
+
+
+# ============================================================
+# PROVIDERS
+# ============================================================
+
+def crossref_search(query: str):
+    results = []
+
+    try:
+        r = requests.get(
+            "https://api.crossref.org/works",
+            params={
+                "query.bibliographic": query,
+                "rows": 10
+            },
+            timeout=REQUEST_TIMEOUT
+        )
+
+        data = r.json()
+
+        for item in data.get(
+            "message",
+            {}
+        ).get(
+            "items",
+            []
+        ):
+
+            title = (
+                item.get("title") or [""]
+            )[0]
+
+            doi = item.get("DOI")
+
+            url = (
+                item.get("URL")
+                or (
+                    f"https://doi.org/{doi}"
+                    if doi else ""
+                )
+            )
+
+            if not title or not url:
+                continue
+
+            results.append({
+                "title": title,
+                "url": url,
+                "doi": doi or "",
+                "abstract": clean_text(
+                    item.get("abstract", "")
+                ),
+                "provider": "crossref"
+            })
+
+    except Exception:
+        pass
+
+    return results
+
+
+def openalex_search(query: str):
+    results = []
+
+    try:
+        r = requests.get(
+            "https://api.openalex.org/works",
+            params={
+                "search": query,
+                "per-page": 10
+            },
+            timeout=REQUEST_TIMEOUT
+        )
+
+        data = r.json()
+
+        for item in data.get(
+            "results",
+            []
+        ):
+
+            title = item.get(
+                "title",
+                ""
+            )
+
+            url = (
+                item.get("primary_location", {})
+                .get("landing_page_url")
+                or item.get("doi")
+                or ""
+            )
+
+            abstract = reconstruct_openalex_abstract(
+                item.get(
+                    "abstract_inverted_index"
+                )
+            )
+
+            doi = item.get(
+                "doi",
+                ""
+            )
+
+            if doi.startswith(
+                "https://doi.org/"
+            ):
+                doi = doi.split(
+                    "https://doi.org/"
+                )[1]
+
+            if title:
+                results.append({
+                    "title": title,
+                    "url": url,
+                    "doi": doi,
+                    "abstract": abstract,
+                    "provider": "openalex"
+                })
+
+    except Exception:
+        pass
+
+    return results
+
+
+def semantic_scholar_search(query: str):
+    results = []
+
+    try:
+        r = requests.get(
+            "https://api.semanticscholar.org/graph/v1/paper/search",
+            params={
+                "query": query,
+                "limit": 10,
+                "fields":
+                "title,abstract,url,externalIds,openAccessPdf"
+            },
+            timeout=REQUEST_TIMEOUT
+        )
+
+        data = r.json()
+
+        for item in data.get(
+            "data",
+            []
+        ):
+
+            title = item.get(
+                "title",
+                ""
+            )
+
+            abstract = clean_text(
+                item.get(
+                    "abstract",
+                    ""
+                ) or ""
+            )
+
+            url = (
+                item.get("url")
+                or (
+                    item.get(
+                        "openAccessPdf"
+                    ) or {}
+                ).get("url")
+                or ""
+            )
+
+            ids = item.get(
+                "externalIds",
+                {}
+            ) or {}
+
+            doi = ids.get(
+                "DOI",
+                ""
+            )
+
+            if title:
+                results.append({
+                    "title": title,
+                    "url": url,
+                    "doi": doi,
+                    "abstract": abstract,
+                    "provider":
+                    "semantic_scholar"
+                })
+
+    except Exception:
+        pass
+
+    return results
+
+
+def duck_search(query: str):
+    results = []
+
+    try:
+        r = requests.get(
+            "https://html.duckduckgo.com/html/",
+            params={
+                "q": query
+            },
+            headers={
+                "User-Agent":
+                "Mozilla/5.0 AI-Infinity"
+            },
+            timeout=REQUEST_TIMEOUT
+        )
+
+        html = r.text
+
+        links = re.findall(
+            r'nofollow" class="result__a" href="([^"]+)"',
+            html
+        )
+
+        titles = re.findall(
+            r'class="result__a"[^>]*>(.*?)</a>',
+            html,
+            flags=re.S
+        )
+
+        for i, link in enumerate(
+            links[:10]
+        ):
+
+            title = (
+                re.sub(
+                    r"<[^>]+>",
+                    "",
+                    titles[i]
+                )
+                if i < len(titles)
+                else link
+            )
+
+            results.append({
+                "title": clean_text(title),
+                "url": link,
+                "doi": "",
+                "abstract": "",
+                "provider": "duckduckgo"
+            })
+
+    except Exception:
+        pass
+
+    return results
+
+
+# ============================================================
+# SOURCE IDENTITY
+# ============================================================
+
+def work_key(item):
+    doi = (
+        item.get("doi")
+        or ""
+    ).strip().lower()
+
+    if doi:
+        return "doi:" + doi
+
+    title = clean_text(
+        item.get("title", "")
+    ).lower()
+
+    if title:
+        return "title:" + sha(title)
+
+    return "url:" + sha(
+        canonical_url(
+            item.get("url", "")
+        )
+    )
+
+
+def deduplicate(results):
+    grouped = {}
+
+    for item in results:
+
+        key = work_key(item)
+
+        existing = grouped.get(key)
+
+        if not existing:
+            grouped[key] = item
+            continue
+
+        # Prefer richer evidence.
+        old_abs = len(
+            existing.get(
+                "abstract",
+                ""
+            )
+        )
+
+        new_abs = len(
+            item.get(
+                "abstract",
+                ""
+            )
+        )
+
+        if new_abs > old_abs:
+            grouped[key] = item
+
+    return list(grouped.values())
+
+
+# ============================================================
+# RELEVANCE
+# ============================================================
+
+def relevance(objective, title, abstract=""):
+    text = (
+        f"{title} {abstract}"
+    )
+
+    return round(
+        similarity(
+            objective,
+            text
+        ),
+        3
+    )
+
+
+# ============================================================
+# EVIDENCE INGESTION
+# ============================================================
+
+def ingest(item, objective):
+    title = clean_text(
+        item.get("title", "")
+    )
+
+    url = item.get(
+        "url",
+        ""
+    )
+
+    provider = item.get(
+        "provider",
+        "unknown"
+    )
+
+    abstract = clean_text(
+        item.get(
+            "abstract",
+            ""
+        )
+    )
+
+    rel = relevance(
+        objective,
+        title,
+        abstract
+    )
+
+    # First try direct article retrieval.
+    fetched = None
+
+    if url and validate_url(url):
+        fetched = fetch_url(url)
+
+    if fetched:
+        content = fetched["text"]
+        tier = fetched["tier"]
+        final_url = fetched["url"]
+
+    elif len(abstract) >= 300:
+        content = abstract
+        tier = "ABSTRACT"
+        final_url = url
+
+    elif title:
+        content = title
+        tier = "STRUCTURED_METADATA"
+        final_url = url
+
+    else:
+        return None
+
+    domain = domain_of(
+        final_url or url
+    )
+
+    quality = source_quality(
+        provider,
+        tier,
+        domain
+    )
+
+    return {
+        "source_key": work_key(item),
+        "url": final_url or url,
+        "title": title,
+        "domain": domain,
+        "provider": provider,
+        "tier": tier,
+        "quality": quality,
+        "relevance": rel,
+        "content": content,
+        "metadata": {
+            "doi": item.get("doi", ""),
+            "original_provider":
+                provider
+        }
+    }
+
+
+# ============================================================
+# TEXT CLEANING FOR CLAIM EXTRACTION
+# ============================================================
+
+NAV_PATTERNS = [
+    "related articles",
+    "similar content",
+    "download references",
+    "google scholar",
+    "article pdf download",
+    "explore related subjects",
+    "suggested using machine learning",
+    "acknowledgements",
+    "author information",
+    "research interests",
+    "about the authors",
+    "copyright",
+    "subscribe",
+    "sign in",
+]
+
+
+def useful_sentence(sentence: str):
+
+    s = clean_text(sentence)
+
+    if len(s) < 45:
+        return False
+
+    low = s.lower()
+
+    if any(
+        p in low
+        for p in NAV_PATTERNS
+    ):
+        return False
+
+    if low.count("©") > 0:
+        return False
+
+    if low.startswith(
+        ("article", "chapter", "author")
+    ):
+        return False
+
+    # biography-like sentences
+    if (
+        "is a researcher at" in low
+        or "research interests are" in low
+        or "is professor" in low
+    ):
+        return False
+
+    # Reference-like fragments
+    if (
+        low.startswith("doi:")
+        or low.startswith("http")
+    ):
+        return False
+
+    return True
+
+
+# ============================================================
+# CLAIM EXTRACTION
+# ============================================================
+
+CLAIM_SIGNAL = re.compile(
+    r"\b("
+    r"found|findings|found that|showed|shows|"
+    r"demonstrated|results|resulted|"
+    r"improved|reduced|increased|decreased|"
+    r"achieved|accuracy|success rate|failure rate|"
+    r"benchmark|evaluation|experiment|"
+    r"outperformed|underperformed|"
+    r"limitation|limitations|failure|failures|"
+    r"reliable|reliability|"
+    r"effective|ineffective|"
+    r"human intervention|"
+    r"task completion|"
+    r"task success|"
+    r"performance"
+    r")\b",
+    re.I
+)
+
+
+def extract_claims(source):
+    content = source.get(
+        "content",
+        ""
+    )
+
+    if len(content) < 100:
+        return []
+
+    # Metadata-only source does not generate factual claims.
+    if source.get(
+        "tier"
+    ) == "STRUCTURED_METADATA":
+        return []
+
+    sentences = re.split(
+        r"(?<=[.!?])\s+",
+        content
+    )
+
+    candidates = []
+
+    for sentence in sentences:
+
+        sentence = clean_text(
+            sentence
+        )
+
+        if not useful_sentence(
+            sentence
+        ):
+            continue
+
+        if not CLAIM_SIGNAL.search(
+            sentence
+        ):
+            continue
+
+        # avoid giant page fragments
+        if len(sentence) > 650:
+            continue
+
+        candidates.append(
+            sentence
+        )
+
+    # De-duplicate similar claims.
+    final = []
+
+    for claim in candidates:
+
+        if any(
+            similarity(
+                claim,
+                x
+            ) > 0.80
+            for x in final
+        ):
+            continue
+
+        final.append(claim)
+
+        if len(final) >= 8:
+            break
+
+    return final
+
+
+# ============================================================
+# CLAIM RELATION
+# ============================================================
+
+NEGATION_WORDS = {
+    "not",
+    "no",
+    "never",
+    "failed",
+    "failure",
+    "unable",
+    "worse",
+    "decreased",
+    "limited",
+    "limitation",
+    "unreliable",
+    "ineffective"
+}
+
+
+def relation(a, b):
+
+    sim = similarity(
+        a,
+        b
+    )
+
+    if sim < 0.18:
+        return None, sim
+
+    wa = words(a)
+    wb = words(b)
+
+    neg_a = bool(
+        wa & NEGATION_WORDS
+    )
+
+    neg_b = bool(
+        wb & NEGATION_WORDS
+    )
+
+    if neg_a != neg_b and sim >= 0.24:
+        return "contradiction", sim
+
+    limitation = (
+        bool(
+            wa & {
+                "limitation",
+                "limitations",
+                "failure",
+                "failures"
+            }
+        )
+    )
+
+    if limitation:
+        return "limitation", sim
+
+    return "support", sim
+
+
+# ============================================================
+# DATABASE EVENTS
+# ============================================================
+
+def event(
+    mid,
+    stage,
+    status,
+    detail=""
+):
+
+    with DB_LOCK:
         conn = db()
+
         conn.execute(
             """
             INSERT INTO events
-            (mission_id, stage, status, payload_json, created_at)
+            (mission_id, stage, status, detail, created_at)
             VALUES (?, ?, ?, ?, ?)
             """,
             (
-                mission_id,
+                mid,
                 stage,
                 status,
-                json.dumps(payload or {}, ensure_ascii=False),
-                time.time(),
-            ),
+                detail,
+                now()
+            )
         )
-        conn.commit()
-        conn.close()
-
-
-def create_mission_record(
-    mission_id: str,
-    objective: str,
-):
-    with db_lock:
-        conn = db()
-        conn.execute(
-            """
-            INSERT INTO missions
-            (id, objective, status, version, build, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                mission_id,
-                objective,
-                "queued",
-                VERSION,
-                BUILD,
-                time.time(),
-            ),
-        )
-        conn.commit()
-        conn.close()
-
-
-def update_mission(
-    mission_id: str,
-    status: str,
-    result: Optional[Dict[str, Any]] = None,
-    error: Optional[str] = None,
-):
-    with db_lock:
-        conn = db()
-
-        if status == "running":
-            conn.execute(
-                """
-                UPDATE missions
-                SET status=?, started_at=?
-                WHERE id=?
-                """,
-                (status, time.time(), mission_id),
-            )
-        elif status in {"completed", "failed"}:
-            conn.execute(
-                """
-                UPDATE missions
-                SET status=?, completed_at=?,
-                    result_json=?, error=?
-                WHERE id=?
-                """,
-                (
-                    status,
-                    time.time(),
-                    json.dumps(result or {}, ensure_ascii=False),
-                    error,
-                    mission_id,
-                ),
-            )
-        else:
-            conn.execute(
-                """
-                UPDATE missions
-                SET status=?
-                WHERE id=?
-                """,
-                (status, mission_id),
-            )
 
         conn.commit()
         conn.close()
 
 
-def get_mission_record(mission_id: str):
-    conn = db()
-    row = conn.execute(
-        "SELECT * FROM missions WHERE id=?",
-        (mission_id,),
-    ).fetchone()
-    conn.close()
-    return row
-
-
-def save_source(mission_id: str, source: Dict[str, Any]):
-    with db_lock:
+def save_source(mid, source):
+    with DB_LOCK:
         conn = db()
+
         conn.execute(
             """
             INSERT INTO sources
@@ -340,2846 +1280,892 @@ def save_source(mission_id: str, source: Dict[str, Any]):
                 title,
                 domain,
                 provider,
-                doi,
-                work_key,
-                relevance,
+                evidence_tier,
                 quality,
-                evidence_score,
+                relevance,
+                independent_work,
+                content,
+                metadata,
                 accepted,
-                rejection_reason,
-                content_chars,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                mission_id,
-                source.get("source_key", ""),
-                source.get("url", ""),
-                source.get("title", ""),
-                source.get("domain", ""),
-                source.get("provider", ""),
-                source.get("doi", ""),
-                source.get("work_key", ""),
-                source.get("relevance", 0),
-                source.get("quality", 0),
-                source.get("evidence_score", 0),
-                int(bool(source.get("accepted"))),
-                source.get("rejection_reason"),
-                len(source.get("text", "")),
-                time.time(),
-            ),
+                mid,
+                source["source_key"],
+                source["url"],
+                source["title"],
+                source["domain"],
+                source["provider"],
+                source["tier"],
+                source["quality"],
+                source["relevance"],
+                source["source_key"],
+                source["content"][:50000],
+                safe_json(
+                    source["metadata"]
+                ),
+                1,
+                now()
+            )
         )
+
         conn.commit()
         conn.close()
 
 
-def save_claim(mission_id: str, claim: Dict[str, Any]):
-    with db_lock:
+def save_claim(mid, claim, status, confidence):
+    with DB_LOCK:
         conn = db()
+
         conn.execute(
             """
             INSERT INTO claims
+            (mission_id, claim_key, text, status, confidence, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
             (
-                mission_id,
-                claim_key,
+                mid,
+                sha(claim),
                 claim,
                 status,
                 confidence,
-                support_count,
-                contradiction_count,
-                limitation_count,
-                created_at
+                now()
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                mission_id,
-                claim.get("claim_key", ""),
-                claim.get("claim", ""),
-                claim.get("status", ""),
-                claim.get("confidence", 0),
-                claim.get("supporting_sources", 0),
-                claim.get("contradicting_sources", 0),
-                claim.get("limitation_sources", 0),
-                time.time(),
-            ),
         )
+
         conn.commit()
         conn.close()
 
 
 # ============================================================
-# BASIC TEXT UTILITIES
+# QUERY PLANNER
 # ============================================================
 
-STOPWORDS = {
-    "the", "and", "or", "of", "to", "a", "an", "in", "on", "for",
-    "with", "by", "from", "is", "are", "was", "were", "be", "been",
-    "this", "that", "these", "those", "as", "at", "it", "its",
-    "their", "they", "them", "we", "our", "you", "your", "can",
-    "may", "might", "could", "should", "would", "into", "than",
-    "using", "use", "used", "research", "study", "paper", "results",
-}
+def build_queries(objective):
 
-
-def normalize_space(text: str) -> str:
-    text = html.unescape(text or "")
-    text = text.replace("\x00", " ")
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
-
-
-def words(text: str) -> List[str]:
-    tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]{2,}", text.lower())
-    return [
-        t for t in tokens
-        if t not in STOPWORDS
-        and not t.isdigit()
-    ]
-
-
-def token_set(text: str) -> set:
-    return set(words(text))
-
-
-def similarity(a: str, b: str) -> float:
-    aa = token_set(a)
-    bb = token_set(b)
-
-    if not aa or not bb:
-        return 0.0
-
-    inter = len(aa & bb)
-    union = len(aa | bb)
-
-    return inter / max(union, 1)
-
-
-def contains_number(text: str) -> bool:
-    return bool(
-        re.search(
-            r"\b\d+(?:\.\d+)?\s*(?:%|percent|times|x)?\b",
-            text,
-            re.I,
-        )
-    )
-
-
-# ============================================================
-# HTML CLEANING
-# ============================================================
-
-class CleanHTMLParser(HTMLParser):
-    """
-    Lightweight HTML-to-text parser.
-    No BeautifulSoup dependency required.
-    """
-
-    BLOCK_TAGS = {
-        "p", "div", "section", "article", "main", "header", "footer",
-        "li", "ul", "ol", "br", "tr", "td", "th", "h1", "h2", "h3",
-        "h4", "h5", "h6", "blockquote", "pre",
-    }
-
-    IGNORE_TAGS = {
-        "script", "style", "noscript", "svg", "nav", "form", "button",
-        "footer",
-    }
-
-    def __init__(self):
-        super().__init__()
-        self.parts = []
-        self.ignore_depth = 0
-
-    def handle_starttag(self, tag, attrs):
-        tag = tag.lower()
-
-        if tag in self.IGNORE_TAGS:
-            self.ignore_depth += 1
-
-        if tag in self.BLOCK_TAGS and self.ignore_depth == 0:
-            self.parts.append("\n")
-
-    def handle_endtag(self, tag):
-        tag = tag.lower()
-
-        if tag in self.IGNORE_TAGS and self.ignore_depth:
-            self.ignore_depth -= 1
-
-        if tag in self.BLOCK_TAGS and self.ignore_depth == 0:
-            self.parts.append("\n")
-
-    def handle_data(self, data):
-        if self.ignore_depth == 0:
-            self.parts.append(data)
-
-    def text(self):
-        return normalize_space("\n".join(self.parts))
-
-
-def html_to_text(raw: str) -> str:
-    parser = CleanHTMLParser()
-    try:
-        parser.feed(raw)
-        return parser.text()
-    except Exception:
-        return normalize_space(raw)
-
-
-# ============================================================
-# SSRF / URL SECURITY
-# ============================================================
-
-BLOCKED_HOSTS = {
-    "localhost",
-    "localhost.localdomain",
-    "metadata.google.internal",
-    "metadata",
-}
-
-
-def is_private_ip(host: str) -> bool:
-    try:
-        import ipaddress
-
-        ip = ipaddress.ip_address(host)
-
-        return (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_reserved
-            or ip.is_unspecified
-        )
-    except Exception:
-        return False
-
-
-def validate_public_url(url: str) -> Tuple[bool, str]:
-    try:
-        parsed = urlparse(url)
-
-        if parsed.scheme not in {"http", "https"}:
-            return False, "unsupported_scheme"
-
-        host = (parsed.hostname or "").lower().strip(".")
-
-        if not host:
-            return False, "missing_host"
-
-        if host in BLOCKED_HOSTS:
-            return False, "blocked_host"
-
-        if is_private_ip(host):
-            return False, "private_ip"
-
-        if host.endswith(".local"):
-            return False, "local_domain"
-
-        return True, ""
-    except Exception:
-        return False, "invalid_url"
-
-
-# ============================================================
-# URL / SOURCE NORMALIZATION
-# ============================================================
-
-TRACKING_PARAMS = {
-    "utm_source",
-    "utm_medium",
-    "utm_campaign",
-    "utm_term",
-    "utm_content",
-    "gclid",
-    "fbclid",
-    "ref",
-}
-
-
-def canonical_url(url: str) -> str:
-    try:
-        p = urlparse(url)
-
-        query = [
-            (k, v)
-            for k, v in parse_qsl(
-                p.query,
-                keep_blank_values=True,
-            )
-            if k.lower() not in TRACKING_PARAMS
-        ]
-
-        path = p.path.rstrip("/") or "/"
-
-        return urlunparse(
-            (
-                p.scheme.lower(),
-                (p.netloc or "").lower(),
-                path,
-                "",
-                urlencode(query),
-                "",
-            )
-        )
-    except Exception:
-        return url
-
-
-def domain_of(url: str) -> str:
-    try:
-        return (urlparse(url).hostname or "").lower()
-    except Exception:
-        return ""
-
-
-def extract_doi(text: str) -> str:
-    if not text:
-        return ""
-
-    match = re.search(
-        r"(10\.\d{4,9}/[-._;()/:A-Z0-9]+)",
-        text,
-        re.I,
-    )
-
-    if not match:
-        return ""
-
-    doi = match.group(1)
-    doi = re.sub(r"[)\].,;]+$", "", doi)
-
-    return doi.lower()
-
-
-def source_work_key(
-    title: str = "",
-    doi: str = "",
-    url: str = "",
-) -> str:
-
-    if doi:
-        return "doi:" + doi.lower().strip()
-
-    normalized_title = normalize_space(title).lower()
-
-    if normalized_title:
-        normalized_title = re.sub(
-            r"[^a-z0-9 ]+",
-            " ",
-            normalized_title,
-        )
-        normalized_title = re.sub(
-            r"\s+",
-            " ",
-            normalized_title,
-        ).strip()
-
-        if len(normalized_title) >= 20:
-            return "title:" + normalized_title[:300]
-
-    return "url:" + canonical_url(url)
-
-
-def source_key(source: Dict[str, Any]) -> str:
-    return source_work_key(
-        source.get("title", ""),
-        source.get("doi", ""),
-        source.get("url", ""),
-    )
-
-
-# ============================================================
-# PAGE QUALITY / BOILERPLATE DETECTION
-# ============================================================
-
-BAD_PAGE_MARKERS = [
-    "enable javascript",
-    "javascript is disabled",
-    "client challenge",
-    "just a moment",
-    "checking your browser",
-    "access denied",
-    "captcha",
-    "verify you are human",
-    "request unsuccessful",
-    "something went wrong",
-    "page not found",
-    "internal server error",
-    "sign in to continue",
-    "login to continue",
-]
-
-
-BOILERPLATE_PATTERNS = [
-    r"article\s+pdf\s+download",
-    r"download\s+references",
-    r"google\s+scholar",
-    r"similar\s+content\s+being\s+viewed",
-    r"explore\s+related\s+subjects",
-    r"discover\s+the\s+latest\s+articles",
-    r"suggested\s+using\s+machine\s+learning",
-    r"acknowledgements",
-    r"copyright\s+©",
-]
-
-
-def page_problem(text: str) -> Optional[str]:
-    low = text.lower()
-
-    for marker in BAD_PAGE_MARKERS:
-        if marker in low:
-            return "page_challenge_or_error"
-
-    return None
-
-
-def boilerplate_ratio(text: str) -> float:
-    if not text:
-        return 1.0
-
-    hits = 0
-
-    low = text.lower()
-
-    for pattern in BOILERPLATE_PATTERNS:
-        if re.search(pattern, low):
-            hits += 1
-
-    lines = [
-        normalize_space(x)
-        for x in text.splitlines()
-        if normalize_space(x)
-    ]
-
-    if not lines:
-        return 1.0
-
-    short_lines = sum(
-        1 for line in lines
-        if len(line) < 35
-    )
-
-    ratio = hits / max(len(BOILERPLATE_PATTERNS), 1)
-
-    if short_lines / len(lines) > 0.8:
-        ratio += 0.25
-
-    return min(ratio, 1.0)
-
-
-def remove_boilerplate(text: str) -> str:
-    """
-    Remove common publisher/interface contamination.
-    """
-
-    if not text:
-        return ""
-
-    lines = [
-        normalize_space(line)
-        for line in text.splitlines()
-    ]
-
-    output = []
-
-    for line in lines:
-        if not line:
-            continue
-
-        low = line.lower()
-
-        if any(
-            re.search(pattern, low)
-            for pattern in BOILERPLATE_PATTERNS
-        ):
-            continue
-
-        if low in {
-            "download",
-            "pdf",
-            "references",
-            "acknowledgements",
-            "google scholar",
-            "similar content",
-            "related subjects",
-            "login",
-            "sign in",
-        }:
-            continue
-
-        output.append(line)
-
-    text = "\n".join(output)
-
-    # Remove repeated interface blocks.
-    text = re.sub(
-        r"(similar content being viewed by others).*?"
-        r"(explore related subjects)",
-        " ",
-        text,
-        flags=re.I | re.S,
-    )
-
-    text = normalize_space(text)
-
-    return text[:MAX_TEXT_CHARS]
-
-
-# ============================================================
-# PDF
-# ============================================================
-
-def extract_pdf_text(data: bytes) -> str:
-    if PdfReader is None:
-        return ""
-
-    try:
-        import io
-
-        reader = PdfReader(io.BytesIO(data))
-
-        pages = []
-
-        for page in reader.pages[:30]:
-            try:
-                text = page.extract_text() or ""
-                if text:
-                    pages.append(text)
-            except Exception:
-                continue
-
-        return remove_boilerplate(
-            "\n".join(pages)
-        )[:MAX_TEXT_CHARS]
-
-    except Exception:
-        return ""
-
-
-# ============================================================
-# EVIDENCE VALIDATION
-# ============================================================
-
-def valid_evidence_text(text: str) -> Tuple[bool, str]:
-    text = normalize_space(text)
-
-    if len(text) < 300:
-        return False, "too_little_text"
-
-    if text.startswith("%PDF-"):
-        return False, "raw_pdf"
-
-    if page_problem(text):
-        return False, "challenge_or_error_page"
-
-    if boilerplate_ratio(text) > 0.7:
-        return False, "boilerplate_dominant"
-
-    letters = sum(c.isalpha() for c in text)
-
-    if letters < 200:
-        return False, "insufficient_readable_text"
-
-    unique_words = len(set(words(text)))
-
-    if unique_words < 50:
-        return False, "low_text_diversity"
-
-    return True, ""
-
-
-# ============================================================
-# FETCH
-# ============================================================
-
-def fetch_url(url: str) -> Dict[str, Any]:
-    ok, reason = validate_public_url(url)
-
-    if not ok:
-        return {
-            "ok": False,
-            "reason": reason,
-            "url": url,
-        }
-
-    try:
-        response = requests.get(
-            url,
-            headers={
-                "User-Agent": USER_AGENT,
-                "Accept": (
-                    "text/html,application/xhtml+xml,"
-                    "application/pdf;q=0.9,*/*;q=0.8"
-                ),
-            },
-            timeout=REQUEST_TIMEOUT,
-            allow_redirects=True,
-            stream=True,
-        )
-
-        final_url = response.url
-
-        ok, reason = validate_public_url(final_url)
-
-        if not ok:
-            response.close()
-
-            return {
-                "ok": False,
-                "reason": "unsafe_redirect",
-                "url": url,
-            }
-
-        chunks = []
-        total = 0
-
-        for chunk in response.iter_content(65536):
-            if not chunk:
-                continue
-
-            total += len(chunk)
-
-            if total > MAX_BODY_BYTES:
-                break
-
-            chunks.append(chunk)
-
-        data = b"".join(chunks)
-
-        content_type = (
-            response.headers.get(
-                "content-type",
-                "",
-            ).lower()
-        )
-
-        response.close()
-
-        if response.status_code >= 400:
-            return {
-                "ok": False,
-                "reason": f"http_{response.status_code}",
-                "url": final_url,
-            }
-
-        if (
-            "application/pdf" in content_type
-            or data[:5] == b"%PDF-"
-        ):
-            text = extract_pdf_text(data)
-
-            if not text:
-                return {
-                    "ok": False,
-                    "reason": "pdf_extraction_failed",
-                    "url": final_url,
-                }
-        else:
-            try:
-                raw = data.decode(
-                    response.encoding or "utf-8",
-                    errors="ignore",
-                )
-            except Exception:
-                raw = data.decode(
-                    "utf-8",
-                    errors="ignore",
-                )
-
-            text = html_to_text(raw)
-            text = remove_boilerplate(text)
-
-        valid, why = valid_evidence_text(text)
-
-        if not valid:
-            return {
-                "ok": False,
-                "reason": why,
-                "url": final_url,
-            }
-
-        return {
-            "ok": True,
-            "url": final_url,
-            "text": text[:MAX_TEXT_CHARS],
-            "content_type": content_type,
-        }
-
-    except Exception as exc:
-        return {
-            "ok": False,
-            "reason": str(exc)[:300],
-            "url": url,
-        }
-
-
-# ============================================================
-# PROVIDERS
-# ============================================================
-
-def provider_openalex(query: str) -> List[Dict[str, Any]]:
-    try:
-        response = requests.get(
-            "https://api.openalex.org/works",
-            params={
-                "search": query,
-                "per-page": 10,
-            },
-            headers={"User-Agent": USER_AGENT},
-            timeout=REQUEST_TIMEOUT,
-        )
-
-        if response.status_code != 200:
-            return []
-
-        data = response.json()
-
-        results = []
-
-        for item in data.get("results", []):
-            title = item.get("display_name") or ""
-
-            doi = extract_doi(
-                item.get("doi") or ""
-            )
-
-            primary = item.get(
-                "primary_location"
-            ) or {}
-
-            landing = (
-                primary.get("landing_page_url")
-                or ""
-            )
-
-            pdf = (
-                primary.get("pdf_url")
-                or ""
-            )
-
-            url = pdf or landing
-
-            if not url:
-                continue
-
-            results.append(
-                {
-                    "provider": "openalex",
-                    "title": title,
-                    "url": url,
-                    "doi": doi,
-                    "abstract": reconstruct_openalex_abstract(item),
-                }
-            )
-
-        return results
-
-    except Exception:
-        return []
-
-
-def reconstruct_openalex_abstract(item: Dict[str, Any]) -> str:
-    inverted = item.get(
-        "abstract_inverted_index"
-    )
-
-    if not inverted:
-        return ""
-
-    pairs = []
-
-    try:
-        for word, positions in inverted.items():
-            for pos in positions:
-                pairs.append((pos, word))
-
-        pairs.sort(key=lambda x: x[0])
-
-        return " ".join(
-            word for _, word in pairs
-        )
-    except Exception:
-        return ""
-
-
-def provider_crossref(query: str) -> List[Dict[str, Any]]:
-    try:
-        response = requests.get(
-            "https://api.crossref.org/works",
-            params={
-                "query.bibliographic": query,
-                "rows": 10,
-            },
-            headers={"User-Agent": USER_AGENT},
-            timeout=REQUEST_TIMEOUT,
-        )
-
-        if response.status_code != 200:
-            return []
-
-        data = response.json()
-
-        results = []
-
-        for item in (
-            data.get("message", {})
-            .get("items", [])
-        ):
-            title_list = item.get("title") or []
-
-            title = (
-                title_list[0]
-                if title_list
-                else ""
-            )
-
-            doi = (
-                item.get("DOI")
-                or ""
-            ).lower()
-
-            url = ""
-
-            links = item.get("link") or []
-
-            if links:
-                url = links[0].get(
-                    "URL",
-                    "",
-                )
-
-            if not url and doi:
-                url = (
-                    "https://doi.org/"
-                    + doi
-                )
-
-            if not url:
-                continue
-
-            results.append(
-                {
-                    "provider": "crossref",
-                    "title": title,
-                    "url": url,
-                    "doi": doi,
-                    "abstract": (
-                        item.get("abstract")
-                        or ""
-                    ),
-                }
-            )
-
-        return results
-
-    except Exception:
-        return []
-
-
-def provider_duckduckgo(query: str) -> List[Dict[str, Any]]:
-    try:
-        response = requests.get(
-            "https://html.duckduckgo.com/html/",
-            params={"q": query},
-            headers={
-                "User-Agent": USER_AGENT
-            },
-            timeout=REQUEST_TIMEOUT,
-        )
-
-        if response.status_code != 200:
-            return []
-
-        raw = response.text
-
-        results = []
-
-        # Lightweight extraction of result links/titles.
-        links = re.findall(
-            r'class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
-            raw,
-            flags=re.I | re.S,
-        )
-
-        for url, title_html in links[:10]:
-            title = html_to_text(
-                title_html
-            )
-
-            if url.startswith("//"):
-                url = "https:" + url
-
-            if not url.startswith("http"):
-                continue
-
-            results.append(
-                {
-                    "provider": "duckduckgo",
-                    "title": title,
-                    "url": url,
-                    "doi": extract_doi(url),
-                    "abstract": "",
-                }
-            )
-
-        return results
-
-    except Exception:
-        return []
-
-
-def provider_wikipedia(query: str) -> List[Dict[str, Any]]:
-    try:
-        response = requests.get(
-            "https://en.wikipedia.org/w/api.php",
-            params={
-                "action": "query",
-                "list": "search",
-                "srsearch": query,
-                "format": "json",
-                "srlimit": 5,
-            },
-            headers={"User-Agent": USER_AGENT},
-            timeout=REQUEST_TIMEOUT,
-        )
-
-        if response.status_code != 200:
-            return []
-
-        data = response.json()
-
-        results = []
-
-        for item in data.get(
-            "query", {}
-        ).get("search", []):
-
-            title = item.get(
-                "title",
-                "",
-            )
-
-            if not title:
-                continue
-
-            url = (
-                "https://en.wikipedia.org/wiki/"
-                + title.replace(" ", "_")
-            )
-
-            results.append(
-                {
-                    "provider": "wikipedia",
-                    "title": title,
-                    "url": url,
-                    "doi": "",
-                    "abstract": (
-                        item.get("snippet")
-                        or ""
-                    ),
-                }
-            )
-
-        return results
-
-    except Exception:
-        return []
-
-
-PROVIDERS = {
-    "openalex": provider_openalex,
-    "crossref": provider_crossref,
-    "duckduckgo": provider_duckduckgo,
-    "wikipedia": provider_wikipedia,
-}
-
-
-# ============================================================
-# MISSION DECOMPOSITION
-# ============================================================
-
-def build_research_questions(
-    objective: str,
-) -> List[str]:
-
-    base = normalize_space(objective)
-
-    questions = [
-        f"{base} empirical evidence benchmark evaluation",
-        f"{base} task success failure rate autonomous agents",
-        f"{base} real world deployment autonomous AI agents",
-        f"{base} reliability limitations failures autonomous agents",
-        f"{base} human intervention monitoring verification agents",
-        f"{base} independent study replication autonomous agents",
-    ]
-
-    # Domain-aware expansion.
-    low = base.lower()
-
-    if "reliab" in low or "agent" in low:
-        questions.extend(
-            [
-                "autonomous AI agents benchmark success failure tool use",
-                "LLM agents real world task completion reliability",
-                "AI agent failure modes empirical evaluation",
-                "autonomous agents human intervention empirical study",
-            ]
-        )
-
-    # Deduplicate.
-    seen = set()
-    output = []
-
-    for q in questions:
-        q = normalize_space(q)
-
-        if q.lower() not in seen:
-            seen.add(q.lower())
-            output.append(q)
-
-    return output[:10]
-
-
-# ============================================================
-# SOURCE RELEVANCE
-# ============================================================
-
-IMPORTANT_TERMS = {
-    "autonomous",
-    "agent",
-    "agents",
-    "reliability",
-    "failure",
-    "failures",
-    "task",
-    "tasks",
-    "real",
-    "world",
-    "evaluation",
-    "benchmark",
-    "performance",
-    "verification",
-    "tool",
-    "planning",
-    "execution",
-    "human",
-    "intervention",
-    "safety",
-    "limitation",
-}
-
-
-def relevance_score(
-    objective: str,
-    query: str,
-    source: Dict[str, Any],
-) -> float:
-
-    source_text = " ".join(
-        [
-            source.get("title", ""),
-            source.get("abstract", ""),
-            source.get("url", ""),
-        ]
-    )
-
-    source_tokens = token_set(source_text)
-    objective_tokens = token_set(
-        objective + " " + query
-    )
-
-    if not source_tokens:
-        return 0.0
-
-    overlap = len(
-        source_tokens & objective_tokens
-    ) / max(
-        len(objective_tokens),
-        1,
-    )
-
-    important = len(
-        source_tokens & IMPORTANT_TERMS
-    ) / max(
-        len(IMPORTANT_TERMS),
-        1,
-    )
-
-    title_score = similarity(
-        source.get("title", ""),
-        objective + " " + query,
-    )
-
-    score = (
-        0.45 * overlap
-        + 0.25 * important
-        + 0.30 * title_score
-    )
-
-    return min(
-        max(score * 2.0, 0.0),
-        1.0,
-    )
-
-
-# ============================================================
-# SOURCE QUALITY
-# ============================================================
-
-ACADEMIC_DOMAINS = {
-    "arxiv.org",
-    "doi.org",
-    "nature.com",
-    "sciencedirect.com",
-    "springer.com",
-    "link.springer.com",
-    "acm.org",
-    "ieee.org",
-    "dl.acm.org",
-    "journals.sagepub.com",
-    "oup.com",
-    "cambridge.org",
-    "wiley.com",
-    "plos.org",
-    "nih.gov",
-    "ncbi.nlm.nih.gov",
-    "openreview.net",
-}
-
-
-def source_quality(source: Dict[str, Any]) -> float:
-    domain = domain_of(
-        source.get("url", "")
-    )
-
-    provider = source.get(
-        "provider",
-        "",
-    )
-
-    score = 0.40
-
-    if domain in ACADEMIC_DOMAINS:
-        score += 0.25
-
-    if source.get("doi"):
-        score += 0.12
-
-    if provider in {
-        "openalex",
-        "crossref",
-    }:
-        score += 0.08
-
-    if len(
-        source.get("abstract", "")
-    ) > 300:
-        score += 0.05
-
-    if len(
-        source.get("text", "")
-    ) > 2000:
-        score += 0.05
-
-    if provider == "wikipedia":
-        score -= 0.10
-
-    return min(
-        max(score, 0.0),
-        1.0,
-    )
-
-
-# ============================================================
-# SOURCE DEDUPLICATION
-# ============================================================
-
-def deduplicate_sources(
-    sources: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-
-    grouped: Dict[str, Dict[str, Any]] = {}
-
-    for source in sources:
-        key = source_work_key(
-            source.get("title", ""),
-            source.get("doi", ""),
-            source.get("url", ""),
-        )
-
-        source["work_key"] = key
-
-        existing = grouped.get(key)
-
-        if existing is None:
-            grouped[key] = source
-            continue
-
-        # Preserve best representation.
-        existing_score = (
-            len(existing.get("abstract", ""))
-            + len(existing.get("text", ""))
-            + existing.get("quality", 0) * 1000
-        )
-
-        current_score = (
-            len(source.get("abstract", ""))
-            + len(source.get("text", ""))
-            + source.get("quality", 0) * 1000
-        )
-
-        if current_score > existing_score:
-            grouped[key] = source
-
-    return list(grouped.values())
-
-
-# ============================================================
-# EVIDENCE PASSAGES
-# ============================================================
-
-ASSERTION_PATTERNS = [
-    r"\bwe\s+(found|find|show|demonstrate|observe|report|evaluated)\b",
-    r"\bresults?\s+(show|indicate|suggest|demonstrate)\b",
-    r"\bour\s+(results|experiments|evaluation)\b",
-    r"\bthe\s+(study|experiment|evaluation|benchmark)\b",
-    r"\bperformance\b",
-    r"\baccuracy\b",
-    r"\bsuccess\s+rate\b",
-    r"\bfailure\s+rate\b",
-    r"\bfailed\b",
-    r"\bfails?\b",
-    r"\bimprov(?:e|ed|es|ement)\b",
-    r"\bdegrad(?:e|ed|es|ation)\b",
-    r"\boutperform(?:ed|s)?\b",
-    r"\bunderperform(?:ed|s)?\b",
-    r"\blimitations?\b",
-    r"\bhowever\b",
-    r"\bdespite\b",
-    r"\bcompared\s+with\b",
-    r"\bstatistically\b",
-]
-
-
-def sentence_split(text: str) -> List[str]:
-    text = normalize_space(text)
-
-    chunks = re.split(
-        r"(?<=[.!?])\s+(?=[A-Z0-9])",
-        text,
-    )
+    base = objective.strip()
 
     return [
-        normalize_space(x)
-        for x in chunks
-        if len(normalize_space(x)) >= 45
+        f"{base} empirical evidence benchmark",
+        f"{base} task success failure rate",
+        f"{base} real world deployment",
+        f"{base} reliability limitations failures",
+        f"{base} human intervention monitoring verification",
+        f"{base} independent study replication",
+        f"{base} systematic evaluation",
+        f"{base} failure modes",
+        f"{base} performance evaluation",
+        f"{base} field study",
     ]
 
 
-def extract_evidence_passages(
-    objective: str,
-    source: Dict[str, Any],
-) -> List[str]:
-
-    text = source.get("text", "")
-
-    if not text:
-        text = source.get(
-            "abstract",
-            "",
-        )
-
-    sentences = sentence_split(text)
-
-    if not sentences:
-        return []
-
-    objective_tokens = token_set(objective)
-
-    scored = []
-
-    for sentence in sentences:
-        low = sentence.lower()
-
-        assertion = any(
-            re.search(
-                pattern,
-                low,
-                re.I,
-            )
-            for pattern in ASSERTION_PATTERNS
-        )
-
-        relevance = len(
-            token_set(sentence)
-            & objective_tokens
-        ) / max(
-            len(objective_tokens),
-            1,
-        )
-
-        numeric = 0.15 if contains_number(
-            sentence
-        ) else 0.0
-
-        score = (
-            0.50 * relevance
-            + 0.35 * (1.0 if assertion else 0.0)
-            + numeric
-        )
-
-        # Reject obvious metadata.
-        if any(
-            re.search(
-                pattern,
-                low,
-                re.I,
-            )
-            for pattern in BOILERPLATE_PATTERNS
-        ):
-            continue
-
-        if len(sentence) > 1500:
-            sentence = sentence[:1500]
-
-        scored.append(
-            (
-                min(score, 1.0),
-                sentence,
-            )
-        )
-
-    scored.sort(
-        key=lambda x: x[0],
-        reverse=True,
-    )
-
-    passages = []
-
-    for score, sentence in scored[:12]:
-        if score >= 0.20:
-            passages.append(sentence)
-
-    return passages
-
-
 # ============================================================
-# CLAIM EXTRACTION
+# COUNTER QUERIES
 # ============================================================
 
-def looks_like_real_claim(
-    sentence: str,
-    objective: str,
-) -> bool:
-
-    s = normalize_space(sentence)
-
-    if len(s) < 60:
-        return False
-
-    if len(s) > 1200:
-        return False
-
-    low = s.lower()
-
-    # Explicit metadata rejection.
-    reject_phrases = [
-        "research interests",
-        "is a researcher",
-        "chapter ©",
-        "article pdf",
-        "google scholar",
-        "download references",
-        "similar content",
-        "explore related subjects",
-        "acknowledgements",
-        "national natural science foundation",
-    ]
-
-    if any(
-        phrase in low
-        for phrase in reject_phrases
-    ):
-        return False
-
-    assertion = any(
-        re.search(
-            pattern,
-            low,
-            re.I,
-        )
-        for pattern in ASSERTION_PATTERNS
-    )
-
-    relevance = similarity(
-        s,
-        objective,
-    )
-
-    if not assertion and relevance < 0.20:
-        return False
-
-    # Reject pure title/reference-like strings.
-    if (
-        s.endswith(".")
-        and len(words(s)) >= 8
-    ):
-        return True
-
-    return assertion and relevance >= 0.10
-
-
-def claim_key(claim: str) -> str:
-    normalized = normalize_space(
-        claim
-    ).lower()
-
-    return hashlib.sha256(
-        normalized.encode(
-            "utf-8"
-        )
-    ).hexdigest()[:16]
-
-
-def extract_claims_from_source(
-    objective: str,
-    source: Dict[str, Any],
-) -> List[Dict[str, Any]]:
-
-    passages = source.get(
-        "evidence_passages",
-        [],
-    )
-
-    claims = []
-
-    for passage in passages:
-        sentences = sentence_split(
-            passage
-        )
-
-        for sentence in sentences:
-            sentence = normalize_space(
-                sentence
-            )
-
-            if not looks_like_real_claim(
-                sentence,
-                objective,
-            ):
-                continue
-
-            # Strip leading citation-like artifacts.
-            sentence = re.sub(
-                r"^\[[0-9,\-\s]+\]\s*",
-                "",
-                sentence,
-            )
-
-            if len(sentence) < 60:
-                continue
-
-            claims.append(
-                {
-                    "claim": sentence,
-                    "claim_key": claim_key(
-                        sentence
-                    ),
-                    "source_key": source[
-                        "source_key"
-                    ],
-                    "work_key": source[
-                        "work_key"
-                    ],
-                    "domain": source.get(
-                        "domain",
-                        "",
-                    ),
-                }
-            )
-
-    return claims[:8]
-
-
-# ============================================================
-# CLAIM RELATIONSHIP
-# ============================================================
-
-NEGATION_WORDS = {
-    "not",
-    "no",
-    "never",
-    "failed",
-    "failure",
-    "fails",
-    "unable",
-    "without",
-    "worse",
-    "decreased",
-    "decrease",
-    "declined",
-    "limitation",
-    "limited",
-    "weak",
-    "unstable",
-    "unreliable",
-}
-
-
-def relation_between(
-    claim: str,
-    evidence: str,
-) -> Tuple[str, float]:
-
-    sim = similarity(
-        claim,
-        evidence,
-    )
-
-    if sim < 0.08:
-        return "unrelated", sim
-
-    claim_neg = bool(
-        token_set(claim)
-        & NEGATION_WORDS
-    )
-
-    evidence_neg = bool(
-        token_set(evidence)
-        & NEGATION_WORDS
-    )
-
-    if claim_neg != evidence_neg:
-        if sim >= 0.14:
-            return "contradicts", sim
-
-    limitation_words = {
-        "limitation",
-        "limited",
-        "however",
-        "despite",
-        "caveat",
-        "constraint",
-    }
-
-    if token_set(evidence) & limitation_words:
-        return "limits", sim
-
-    return "supports", sim
-
-
-# ============================================================
-# GRAPH
-# ============================================================
-
-def build_evidence_graph(
-    sources: List[Dict[str, Any]],
-    claims: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-
-    nodes = []
-    edges = []
-
-    for source in sources:
-        nodes.append(
-            {
-                "id": source[
-                    "source_key"
-                ],
-                "type": "source",
-                "domain": source.get(
-                    "domain",
-                    "",
-                ),
-                "provider": source.get(
-                    "provider",
-                    "",
-                ),
-                "quality": round(
-                    source.get(
-                        "quality",
-                        0,
-                    ),
-                    3,
-                ),
-                "relevance": round(
-                    source.get(
-                        "relevance",
-                        0,
-                    ),
-                    3,
-                ),
-            }
-        )
-
-    for claim in claims:
-        nodes.append(
-            {
-                "id": claim[
-                    "claim_key"
-                ],
-                "type": "claim",
-                "text": claim[
-                    "claim"
-                ],
-            }
-        )
-
-        for evidence in claim.get(
-            "evidence",
-            [],
-        ):
-            relation = evidence.get(
-                "relation",
-            )
-
-            if relation not in {
-                "supports",
-                "contradicts",
-                "limits",
-            }:
-                continue
-
-            edges.append(
-                {
-                    "from": evidence[
-                        "source_key"
-                    ],
-                    "to": claim[
-                        "claim_key"
-                    ],
-                    "relation": relation,
-                    "strength": round(
-                        evidence.get(
-                            "strength",
-                            0,
-                        ),
-                        3,
-                    ),
-                    "domain": evidence.get(
-                        "domain",
-                        "",
-                    ),
-                }
-            )
-
-    return {
-        "nodes": nodes,
-        "edges": edges,
-    }
-
-
-# ============================================================
-# INDEPENDENCE
-# ============================================================
-
-def independent_domains(
-    evidence: List[Dict[str, Any]],
-) -> List[str]:
-
-    domains = []
-
-    for item in evidence:
-        domain = item.get(
-            "domain",
-            "",
-        )
-
-        if domain and domain not in domains:
-            domains.append(domain)
-
-    return domains
-
-
-def independent_work_count(
-    evidence: List[Dict[str, Any]],
-) -> int:
-
-    return len(
-        {
-            item.get(
-                "work_key",
-                "",
-            )
-            for item in evidence
-            if item.get("work_key")
-        }
-    )
-
-
-# ============================================================
-# CLAIM VERIFICATION
-# ============================================================
-
-def verify_claim(
-    claim: Dict[str, Any],
-) -> Dict[str, Any]:
-
-    evidence = claim.get(
-        "evidence",
-        [],
-    )
-
-    supporting = [
-        e for e in evidence
-        if e.get("relation") == "supports"
-    ]
-
-    contradicting = [
-        e for e in evidence
-        if e.get("relation") == "contradicts"
-    ]
-
-    limitations = [
-        e for e in evidence
-        if e.get("relation") == "limits"
-    ]
-
-    support_domains = {
-        e.get("domain")
-        for e in supporting
-        if e.get("domain")
-    }
-
-    contradiction_domains = {
-        e.get("domain")
-        for e in contradicting
-        if e.get("domain")
-    }
-
-    support_works = {
-        e.get("work_key")
-        for e in supporting
-        if e.get("work_key")
-    }
-
-    confidence = 0.0
-
-    if supporting:
-        confidence += min(
-            len(supporting) * 0.18,
-            0.50,
-        )
-
-    confidence += min(
-        len(support_domains) * 0.10,
-        0.25,
-    )
-
-    confidence += min(
-        len(support_works) * 0.08,
-        0.20,
-    )
-
-    if contradicting:
-        confidence -= min(
-            len(contradicting) * 0.15,
-            0.45,
-        )
-
-    if limitations:
-        confidence -= min(
-            len(limitations) * 0.04,
-            0.15,
-        )
-
-    confidence = min(
-        max(confidence, 0.0),
-        0.99,
-    )
-
-    # Fail closed.
-    if (
-        len(support_domains) >= 2
-        and len(support_works) >= 2
-        and len(contradicting) == 0
-        and confidence >= 0.62
-    ):
-        status = "VERIFIED"
-
-    elif (
-        supporting
-        and confidence >= 0.30
-    ):
-        status = "UNCERTAIN"
-
-    elif (
-        contradicting
-        and not supporting
-    ):
-        status = "REJECTED"
-
-    else:
-        status = "INSUFFICIENT"
-
-    claim.update(
-        {
-            "status": status,
-            "confidence": round(
-                confidence,
-                3,
-            ),
-            "supporting_sources": len(
-                supporting
-            ),
-            "contradicting_sources": len(
-                contradicting
-            ),
-            "limitation_sources": len(
-                limitations
-            ),
-            "support_domains": sorted(
-                support_domains
-            ),
-            "contradiction_domains": sorted(
-                contradiction_domains
-            ),
-        }
-    )
-
-    return claim
-
-
-# ============================================================
-# COUNTER-EVIDENCE
-# ============================================================
-
-def counter_queries_for_claim(
-    claim: str,
-) -> List[str]:
+def counter_queries(claim):
 
     return [
-        f'"{claim}" limitation failure',
-        f'"{claim}" criticism negative result',
-        f'"{claim}" replication failure',
-        f'"{claim}" benchmark weakness',
+        f'"{claim}" criticism limitations',
+        f'"{claim}" failure evidence',
+        f'"{claim}" replication',
+        f'"{claim}" contradictory evidence',
+        f'"{claim}" negative results',
     ]
 
 
 # ============================================================
-# SYNTHESIS
+# SEARCH
 # ============================================================
 
-def synthesize(
-    objective: str,
-    claims: List[Dict[str, Any]],
-    sources: List[Dict[str, Any]],
-    graph: Dict[str, Any],
-    counter_sources: int,
-) -> Dict[str, Any]:
+def search_one(query):
 
-    verified = [
-        c for c in claims
-        if c.get("status") == "VERIFIED"
+    calls = [
+        crossref_search,
+        openalex_search,
+        semantic_scholar_search,
+        duck_search,
     ]
 
-    uncertain = [
-        c for c in claims
-        if c.get("status") == "UNCERTAIN"
-    ]
+    results = []
 
-    insufficient = [
-        c for c in claims
-        if c.get("status") == "INSUFFICIENT"
-    ]
-
-    rejected = [
-        c for c in claims
-        if c.get("status") == "REJECTED"
-    ]
-
-    domains = sorted(
-        {
-            s.get("domain")
-            for s in sources
-            if s.get("domain")
-        }
-    )
-
-    edges = graph.get(
-        "edges",
-        [],
-    )
-
-    contradictions = [
-        e for e in edges
-        if e.get("relation") == "contradicts"
-    ]
-
-    if verified:
-        conclusion = (
-            "The available evidence supports "
-            "specific claims, but conclusions "
-            "should remain limited to the "
-            "verified scope."
-        )
-    elif uncertain:
-        conclusion = (
-            "The research found relevant evidence, "
-            "but the available independent support "
-            "is not strong enough to verify the "
-            "main claims conclusively."
-        )
-    else:
-        conclusion = (
-            "The current evidence set does not "
-            "provide sufficient claim-level support "
-            "for a strong conclusion."
-        )
-
-    next_actions = []
-
-    if not verified:
-        next_actions.append(
-            "Collect additional independent primary studies."
-        )
-
-    if contradictions:
-        next_actions.append(
-            "Review contradictory evidence claim by claim."
-        )
-
-    if len(domains) < 3:
-        next_actions.append(
-            "Increase independent source diversity."
-        )
-
-    if counter_sources:
-        next_actions.append(
-            "Reconcile counter-evidence with the strongest "
-            "supporting evidence."
-        )
-
-    if not next_actions:
-        next_actions.append(
-            "Continue monitoring for new independent evidence."
-        )
-
-    return {
-        "conclusion": conclusion,
-        "verified_claims": len(verified),
-        "uncertain_claims": len(uncertain),
-        "insufficient_claims": len(
-            insufficient
-        ),
-        "rejected_claims": len(rejected),
-        "contradictions": len(
-            contradictions
-        ),
-        "independent_domains": len(
-            domains
-        ),
-        "counter_evidence_sources": counter_sources,
-        "next_actions": next_actions,
+    futures = {
+        executor.submit(
+            fn,
+            query
+        ): fn.__name__
+        for fn in calls
     }
 
+    for future in as_completed(
+        futures
+    ):
+        try:
+            results.extend(
+                future.result()
+            )
+        except Exception:
+            pass
+
+    return results
+
 
 # ============================================================
-# MAIN RESEARCH ENGINE
+# RESEARCH ENGINE
 # ============================================================
 
-def research_mission(
-    mission_id: str,
-    objective: str,
-    verify_enabled: bool = True,
-) -> Dict[str, Any]:
+def research(mid, objective):
 
-    started = time.time()
+    started = now()
 
-    update_mission(
-        mission_id,
-        "running",
-    )
-
-    save_event(
-        mission_id,
+    event(
+        mid,
         "planning",
-        "running",
+        "completed"
     )
 
-    questions = build_research_questions(
+    queries = build_queries(
         objective
     )
 
-    save_event(
-        mission_id,
-        "planning",
-        "completed",
-        {
-            "questions": questions,
-            "count": len(questions),
-        },
-    )
-
-    # --------------------------------------------------------
-    # DISCOVERY
-    # --------------------------------------------------------
-
-    save_event(
-        mission_id,
+    event(
+        mid,
         "discovery",
         "running",
+        f"{len(queries)} research questions"
     )
 
     discovered = []
 
-    # Search providers in parallel.
-    jobs = []
-
-    for question in questions:
-        for provider_name, provider_fn in PROVIDERS.items():
-            jobs.append(
-                (
-                    provider_name,
-                    question,
-                    provider_fn,
-                )
-            )
-
-    def run_provider(job):
-        provider_name, query, fn = job
-
-        try:
-            return provider_name, query, fn(query)
-        except Exception:
-            return provider_name, query, []
-
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=min(12, len(jobs))
-    ) as pool:
-
-        futures = [
-            pool.submit(
-                run_provider,
-                job,
-            )
-            for job in jobs
-        ]
-
-        for future in concurrent.futures.as_completed(
-            futures
-        ):
-            try:
-                provider_name, query, results = (
-                    future.result()
-                )
-
-                for result in results:
-                    result["query"] = query
-                    discovered.append(result)
-
-            except Exception:
-                continue
-
-    # --------------------------------------------------------
-    # DEDUPLICATE
-    # --------------------------------------------------------
-
-    for source in discovered:
-        source["url"] = canonical_url(
-            source.get("url", "")
+    for query in queries:
+        discovered.extend(
+            search_one(query)
         )
 
-        source["domain"] = domain_of(
-            source.get("url", "")
-        )
-
-        source["source_key"] = source_work_key(
-            source.get("title", ""),
-            source.get("doi", ""),
-            source.get("url", ""),
-        )
-
-        source["relevance"] = relevance_score(
-            objective,
-            source.get("query", ""),
-            source,
-        )
-
-        source["quality"] = source_quality(
-            source
-        )
-
-    discovered = deduplicate_sources(
+    discovered = deduplicate(
         discovered
     )
 
-    # Keep sources that have genuine mission relevance.
-    discovered.sort(
-        key=lambda x: (
-            x.get("relevance", 0)
-            * 0.65
-            + x.get("quality", 0)
-            * 0.35
-        ),
-        reverse=True,
-    )
-
-    discovered = discovered[:30]
-
-    save_event(
-        mission_id,
+    event(
+        mid,
         "discovery",
         "completed",
-        {
-            "sources_discovered": len(
-                discovered
-            )
-        },
+        f"{len(discovered)} unique works"
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # INGESTION
-    # --------------------------------------------------------
+    # ========================================================
 
-    save_event(
-        mission_id,
+    event(
+        mid,
         "evidence_ingestion",
-        "running",
+        "running"
     )
 
-    accepted_sources = []
+    accepted = []
 
-    def ingest(source):
-        result = fetch_url(
-            source.get("url", "")
+    futures = [
+        executor.submit(
+            ingest,
+            item,
+            objective
         )
+        for item in discovered[:40]
+    ]
 
-        source = dict(source)
+    for future in as_completed(
+        futures
+    ):
+        try:
+            result = future.result()
 
-        if not result.get("ok"):
-            source["accepted"] = False
-            source["rejection_reason"] = (
-                result.get(
-                    "reason",
-                    "fetch_failed",
+            if not result:
+                continue
+
+            # Relevance gate is intentionally soft.
+            if result["relevance"] >= 0.08:
+                accepted.append(
+                    result
                 )
-            )
-            return source
 
-        text = result.get(
-            "text",
-            "",
-        )
+        except Exception:
+            pass
 
-        source["text"] = text
+    # strongest representation per work
+    grouped = {}
 
-        # Recalculate quality with actual evidence.
-        source["quality"] = source_quality(
+    tier_rank = {
+        "FULL_TEXT": 4,
+        "ABSTRACT": 3,
+        "STRUCTURED_METADATA": 2,
+        "DISCOVERY_ONLY": 1
+    }
+
+    for source in accepted:
+
+        key = source[
+            "source_key"
+        ]
+
+        old = grouped.get(key)
+
+        if (
+            not old
+            or tier_rank[
+                source["tier"]
+            ] > tier_rank[
+                old["tier"]
+            ]
+        ):
+            grouped[key] = source
+
+    accepted = list(
+        grouped.values()
+    )
+
+    for source in accepted:
+        save_source(
+            mid,
             source
         )
 
-        source["evidence_passages"] = (
-            extract_evidence_passages(
-                objective,
-                source,
-            )
-        )
-
-        if not source[
-            "evidence_passages"
-        ]:
-            source["accepted"] = False
-            source["rejection_reason"] = (
-                "no_relevant_evidence_passages"
-            )
-            return source
-
-        source["evidence_score"] = min(
-            1.0,
-            0.50 * source["relevance"]
-            + 0.30 * source["quality"]
-            + 0.20 * min(
-                len(
-                    source[
-                        "evidence_passages"
-                    ]
-                ) / 5,
-                1.0,
-            ),
-        )
-
-        if source["evidence_score"] < 0.25:
-            source["accepted"] = False
-            source["rejection_reason"] = (
-                "low_evidence_score"
-            )
-            return source
-
-        source["accepted"] = True
-
-        return source
-
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=8
-    ) as pool:
-
-        futures = [
-            pool.submit(
-                ingest,
-                source,
-            )
-            for source in discovered
-        ]
-
-        for future in concurrent.futures.as_completed(
-            futures
-        ):
-            try:
-                source = future.result()
-
-                save_source(
-                    mission_id,
-                    source,
-                )
-
-                if source.get(
-                    "accepted"
-                ):
-                    accepted_sources.append(
-                        source
-                    )
-            except Exception:
-                continue
-
-    # Prefer genuine evidence diversity.
-    accepted_sources.sort(
-        key=lambda x: (
-            x.get("evidence_score", 0)
-        ),
-        reverse=True,
-    )
-
-    save_event(
-        mission_id,
+    event(
+        mid,
         "evidence_ingestion",
         "completed",
-        {
-            "accepted_sources": len(
-                accepted_sources
-            ),
-        },
+        f"{len(accepted)} usable evidence records"
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # CLAIM EXTRACTION
-    # --------------------------------------------------------
+    # ========================================================
 
-    save_event(
-        mission_id,
+    event(
+        mid,
         "claim_extraction",
-        "running",
+        "running"
     )
 
-    raw_claims = []
+    claims = []
 
-    for source in accepted_sources:
-        raw_claims.extend(
-            extract_claims_from_source(
-                objective,
-                source,
-            )
+    for source in accepted:
+
+        source_claims = extract_claims(
+            source
         )
 
-    # Global claim deduplication.
-    unique_claims = {}
+        for claim in source_claims:
 
-    for claim in raw_claims:
-        key = claim[
-            "claim_key"
-        ]
+            claims.append({
+                "text": claim,
+                "source": source
+            })
 
-        existing = unique_claims.get(
-            key
+    # unique claims
+    unique_claims = []
+
+    for item in claims:
+
+        if any(
+            similarity(
+                item["text"],
+                old["text"]
+            ) > 0.78
+            for old in unique_claims
+        ):
+            continue
+
+        unique_claims.append(
+            item
         )
 
-        if existing is None:
-            claim["evidence"] = []
-            unique_claims[key] = claim
-        else:
-            pass
-
-    claims = list(
-        unique_claims.values()
-    )
-
-    # Keep claims relevant to objective.
-    claims = [
-        claim for claim in claims
-        if similarity(
-            claim["claim"],
-            objective,
-        ) >= 0.10
-    ]
-
-    claims = claims[:40]
-
-    save_event(
-        mission_id,
+    event(
+        mid,
         "claim_extraction",
         "completed",
-        {
-            "claims": len(claims),
-        },
+        f"{len(unique_claims)} substantive claims"
     )
 
-    # --------------------------------------------------------
-    # CLAIM ↔ EVIDENCE LINKING
-    # --------------------------------------------------------
+    # ========================================================
+    # LINKING
+    # ========================================================
 
-    save_event(
-        mission_id,
+    event(
+        mid,
         "evidence_linking",
-        "running",
+        "running"
     )
 
-    for claim in claims:
+    claim_results = []
 
-        for source in accepted_sources:
+    support_edges = []
+    contradiction_edges = []
+    limitation_edges = []
 
-            passages = source.get(
-                "evidence_passages",
-                [],
+    for idx, item in enumerate(
+        unique_claims
+    ):
+
+        claim = item["text"]
+
+        support = []
+        contradict = []
+        limitations = []
+
+        for other in unique_claims:
+
+            if other is item:
+                continue
+
+            rel, score = relation(
+                claim,
+                other["text"]
             )
 
-            for passage in passages:
+            if not rel:
+                continue
 
-                relation, strength = (
-                    relation_between(
-                        claim["claim"],
-                        passage,
-                    )
+            if rel == "support":
+                support.append(
+                    other
                 )
 
-                if relation == "unrelated":
-                    continue
+                support_edges.append({
+                    "from": idx,
+                    "to": unique_claims.index(other),
+                    "score": round(score, 3)
+                })
 
-                if strength < 0.10:
-                    continue
-
-                claim["evidence"].append(
-                    {
-                        "source_key": source[
-                            "source_key"
-                        ],
-                        "work_key": source[
-                            "work_key"
-                        ],
-                        "domain": source[
-                            "domain"
-                        ],
-                        "provider": source[
-                            "provider"
-                        ],
-                        "relation": relation,
-                        "strength": strength,
-                        "passage": passage[
-                            :1200
-                        ],
-                    }
+            elif rel == "contradiction":
+                contradict.append(
+                    other
                 )
 
-        # Avoid duplicated same-source evidence.
-        best_by_source = {}
+                contradiction_edges.append({
+                    "from": idx,
+                    "to": unique_claims.index(other),
+                    "score": round(score, 3)
+                })
 
-        for evidence in claim[
-            "evidence"
-        ]:
-            key = evidence[
-                "source_key"
-            ]
-
-            old = best_by_source.get(
-                key
-            )
-
-            if old is None or (
-                evidence["strength"]
-                > old["strength"]
-            ):
-                best_by_source[key] = (
-                    evidence
+            elif rel == "limitation":
+                limitations.append(
+                    other
                 )
 
-        claim["evidence"] = list(
-            best_by_source.values()
-        )
+                limitation_edges.append({
+                    "from": idx,
+                    "to": unique_claims.index(other),
+                    "score": round(score, 3)
+                })
 
-    save_event(
-        mission_id,
+        claim_results.append({
+            "claim": claim,
+            "source": item["source"],
+            "support": support,
+            "contradictions": contradict,
+            "limitations": limitations
+        })
+
+    event(
+        mid,
         "evidence_linking",
         "completed",
-        {
-            "claims": len(claims),
-            "relationships": sum(
-                len(c.get("evidence", []))
-                for c in claims
-            ),
-        },
+        f"{len(support_edges) + len(contradiction_edges) + len(limitation_edges)} relationships"
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # VERIFICATION
-    # --------------------------------------------------------
+    # ========================================================
 
-    save_event(
-        mission_id,
+    event(
+        mid,
         "verification",
-        "running",
+        "running"
     )
 
-    if verify_enabled:
-        for claim in claims:
-            verify_claim(
-                claim
-            )
-    else:
-        for claim in claims:
-            claim["status"] = "UNVERIFIED"
-            claim["confidence"] = 0.0
+    final_claims = []
 
-    for claim in claims:
-        save_claim(
-            mission_id,
-            claim,
+    for item in claim_results:
+
+        source = item["source"]
+
+        support_sources = {
+            x["source"]["source_key"]
+            for x in item["support"]
+        }
+
+        contradiction_sources = {
+            x["source"]["source_key"]
+            for x in item["contradictions"]
+        }
+
+        # Include original evidence.
+        support_sources.add(
+            source["source_key"]
         )
 
-    save_event(
-        mission_id,
-        "verification",
-        "completed",
-        {
-            "verified": sum(
-                c.get("status")
-                == "VERIFIED"
-                for c in claims
+        independent_support = len(
+            support_sources
+        )
+
+        independent_contradiction = len(
+            contradiction_sources
+        )
+
+        tier_bonus = {
+            "FULL_TEXT": 0.25,
+            "ABSTRACT": 0.18,
+            "STRUCTURED_METADATA": 0.05
+        }.get(
+            source["tier"],
+            0
+        )
+
+        confidence = min(
+            1.0,
+            0.30
+            + min(
+                0.40,
+                independent_support * 0.15
+            )
+            + tier_bonus
+            + source["quality"] * 0.15
+        )
+
+        if independent_contradiction:
+            status = "UNCERTAIN"
+
+        elif independent_support >= 2:
+            status = "VERIFIED"
+
+        elif source["tier"] in {
+            "FULL_TEXT",
+            "ABSTRACT"
+        }:
+            status = "INSUFFICIENT"
+
+        else:
+            status = "REJECTED"
+
+        final_claims.append({
+            "claim": item["claim"],
+            "status": status,
+            "confidence": round(
+                confidence,
+                3
             ),
-            "uncertain": sum(
-                c.get("status")
-                == "UNCERTAIN"
-                for c in claims
-            ),
-        },
+            "supporting_sources":
+                independent_support,
+            "contradicting_sources":
+                independent_contradiction,
+            "support_domains": list({
+                x["source"]["domain"]
+                for x in item["support"]
+            }),
+            "contradiction_domains": list({
+                x["source"]["domain"]
+                for x in item["contradictions"]
+            }),
+            "source_keys": list(
+                support_sources
+            )
+        })
+
+        save_claim(
+            mid,
+            item["claim"],
+            status,
+            confidence
+        )
+
+    verified = sum(
+        1
+        for x in final_claims
+        if x["status"] == "VERIFIED"
     )
 
-    # --------------------------------------------------------
-    # COUNTER-EVIDENCE
-    # --------------------------------------------------------
+    uncertain = sum(
+        1
+        for x in final_claims
+        if x["status"] == "UNCERTAIN"
+    )
 
-    save_event(
-        mission_id,
+    unsupported = sum(
+        1
+        for x in final_claims
+        if x["status"] in {
+            "INSUFFICIENT",
+            "REJECTED"
+        }
+    )
+
+    # ========================================================
+    # COUNTER EVIDENCE
+    # ========================================================
+
+    event(
+        mid,
         "counter_evidence",
-        "running",
+        "running"
     )
 
     counter_sources = []
 
-    # Only attack claims that have enough relevance to matter.
-    target_claims = [
-        c for c in claims
-        if c.get("status")
-        in {
-            "VERIFIED",
-            "UNCERTAIN",
-        }
-    ]
+    important_claims = [
+        x["claim"]
+        for x in final_claims
+        if x["status"] != "REJECTED"
+    ][:6]
 
-    target_claims = sorted(
-        target_claims,
-        key=lambda c: c.get(
-            "confidence",
-            0,
-        ),
-        reverse=True,
-    )[:10]
+    for claim in important_claims:
 
-    counter_jobs = []
-
-    for claim in target_claims:
-        for query in counter_queries_for_claim(
-            claim["claim"]
+        for query in counter_queries(
+            claim
         ):
-            counter_jobs.append(
-                (
-                    claim,
-                    query,
-                )
+
+            results = search_one(
+                query
             )
 
-    def run_counter(job):
-        claim, query = job
-
-        local_results = []
-
-        # Use academic providers first.
-        for provider_name in [
-            "openalex",
-            "crossref",
-            "duckduckgo",
-        ]:
-            try:
-                results = PROVIDERS[
-                    provider_name
-                ](query)
-
-                for result in results[:4]:
-                    result["query"] = query
-                    result["target_claim"] = (
-                        claim["claim_key"]
-                    )
-                    result["provider"] = (
-                        provider_name
-                    )
-
-                    result["url"] = canonical_url(
-                        result.get(
-                            "url",
-                            "",
-                        )
-                    )
-
-                    result["domain"] = domain_of(
-                        result.get(
-                            "url",
-                            "",
-                        )
-                    )
-
-                    result["work_key"] = (
-                        source_work_key(
-                            result.get(
-                                "title",
-                                "",
-                            ),
-                            result.get(
-                                "doi",
-                                "",
-                            ),
-                            result.get(
-                                "url",
-                                "",
-                            ),
-                        )
-                    )
-
-                    result["relevance"] = (
-                        relevance_score(
-                            objective,
-                            query,
-                            result,
-                        )
-                    )
-
-                    local_results.append(
-                        result
-                    )
-
-            except Exception:
-                continue
-
-        return local_results
-
-    if counter_jobs:
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=8
-        ) as pool:
-
-            futures = [
-                pool.submit(
-                    run_counter,
-                    job,
-                )
-                for job in counter_jobs
-            ]
-
-            for future in concurrent.futures.as_completed(
-                futures
-            ):
-                try:
-                    counter_sources.extend(
-                        future.result()
-                    )
-                except Exception:
-                    continue
-
-    # Deduplicate counter sources.
-    counter_unique = {}
-
-    for source in counter_sources:
-        key = source.get(
-            "work_key"
-        ) or source.get(
-            "url"
-        )
-
-        if key and key not in counter_unique:
-            counter_unique[key] = source
-
-    counter_sources = list(
-        counter_unique.values()
-    )[:30]
-
-    # Fetch and connect counter evidence.
-    for source in counter_sources:
-
-        fetched = fetch_url(
-            source.get(
-                "url",
-                "",
-            )
-        )
-
-        if not fetched.get("ok"):
-            continue
-
-        source["text"] = fetched.get(
-            "text",
-            "",
-        )
-
-        source["evidence_passages"] = (
-            extract_evidence_passages(
-                objective,
-                source,
-            )
-        )
-
-        for claim in claims:
-            if claim[
-                "claim_key"
-            ] != source.get(
-                "target_claim"
-            ):
-                continue
-
-            for passage in source.get(
-                "evidence_passages",
-                [],
-            ):
-
-                relation, strength = (
-                    relation_between(
-                        claim["claim"],
-                        passage,
-                    )
-                )
-
-                if relation in {
-                    "contradicts",
-                    "limits",
-                } and strength >= 0.10:
-
-                    claim["evidence"].append(
-                        {
-                            "source_key": source.get(
-                                "work_key"
-                            ),
-                            "work_key": source.get(
-                                "work_key"
-                            ),
-                            "domain": source.get(
-                                "domain"
-                            ),
-                            "provider": source.get(
-                                "provider"
-                            ),
-                            "relation": relation,
-                            "strength": strength,
-                            "counter_evidence": True,
-                            "passage": passage[
-                                :1200
-                            ],
-                        }
-                    )
-
-            verify_claim(
-                claim
+            counter_sources.extend(
+                results
             )
 
-    save_event(
-        mission_id,
+    counter_sources = deduplicate(
+        counter_sources
+    )
+
+    counter_accepted = []
+
+    for item in counter_sources[:30]:
+
+        source = ingest(
+            item,
+            objective
+        )
+
+        if source:
+            counter_accepted.append(
+                source
+            )
+
+    counter_accepted = list({
+        x["source_key"]: x
+        for x in counter_accepted
+    }.values())
+
+    event(
+        mid,
         "counter_evidence",
         "completed",
-        {
-            "sources": len(
-                counter_sources
-            ),
-        },
+        f"{len(counter_accepted)} counter-evidence records"
     )
 
-    # --------------------------------------------------------
-    # FINAL GRAPH
-    # --------------------------------------------------------
+    # ========================================================
+    # GRAPH
+    # ========================================================
 
-    save_event(
-        mission_id,
-        "evidence_graph",
-        "running",
-    )
+    graph_nodes = []
+    graph_edges = []
 
-    graph = build_evidence_graph(
-        accepted_sources,
-        claims,
-    )
+    for source in accepted:
 
-    save_event(
-        mission_id,
-        "evidence_graph",
-        "completed",
-        {
-            "nodes": len(
-                graph["nodes"]
-            ),
-            "edges": len(
-                graph["edges"]
-            ),
-        },
-    )
-
-    # --------------------------------------------------------
-    # SYNTHESIS
-    # --------------------------------------------------------
-
-    save_event(
-        mission_id,
-        "synthesis",
-        "running",
-    )
-
-    synthesis = synthesize(
-        objective,
-        claims,
-        accepted_sources,
-        graph,
-        len(counter_sources),
-    )
-
-    save_event(
-        mission_id,
-        "synthesis",
-        "completed",
-    )
-
-    # --------------------------------------------------------
-    # METRICS
-    # --------------------------------------------------------
-
-    domains = independent_domains(
-        accepted_sources
-    )
-
-    providers_used = sorted(
-        {
-            source.get(
+        graph_nodes.append({
+            "id": source[
+                "source_key"
+            ],
+            "type": "source",
+            "domain": source[
+                "domain"
+            ],
+            "provider": source[
                 "provider"
-            )
-            for source in accepted_sources
-            if source.get("provider")
-        }
-    )
+            ],
+            "tier": source[
+                "tier"
+            ],
+            "quality": source[
+                "quality"
+            ],
+            "relevance": source[
+                "relevance"
+            ]
+        })
 
-    supporting_edges = sum(
-        1
-        for e in graph["edges"]
-        if e["relation"] == "supports"
-    )
+    for i, claim in enumerate(
+        final_claims,
+        start=1
+    ):
 
-    contradiction_edges = sum(
-        1
-        for e in graph["edges"]
-        if e["relation"] == "contradicts"
-    )
+        cid = f"claim-{i}"
 
-    limitation_edges = sum(
-        1
-        for e in graph["edges"]
-        if e["relation"] == "limits"
-    )
+        graph_nodes.append({
+            "id": cid,
+            "type": "claim",
+            "text": claim[
+                "claim"
+            ],
+            "status": claim[
+                "status"
+            ]
+        })
 
-    verified_count = sum(
-        c.get("status")
-        == "VERIFIED"
-        for c in claims
-    )
+        for source_key in claim[
+            "source_keys"
+        ]:
 
-    usable_claims = sum(
-        c.get("status")
-        in {
-            "VERIFIED",
-            "UNCERTAIN",
-        }
-        for c in claims
-    )
+            graph_edges.append({
+                "from": source_key,
+                "to": cid,
+                "type": "supports"
+            })
 
-    average_quality = (
+    for edge in contradiction_edges:
+
+        graph_edges.append({
+            "from":
+                f"claim-{edge['from'] + 1}",
+            "to":
+                f"claim-{edge['to'] + 1}",
+            "type": "contradicts",
+            "score":
+                edge["score"]
+        })
+
+    for edge in limitation_edges:
+
+        graph_edges.append({
+            "from":
+                f"claim-{edge['from'] + 1}",
+            "to":
+                f"claim-{edge['to'] + 1}",
+            "type": "limits",
+            "score":
+                edge["score"]
+        })
+
+    # ========================================================
+    # QUALITY METRICS
+    # ========================================================
+
+    domains = sorted({
+        x["domain"]
+        for x in accepted
+        if x["domain"]
+    })
+
+    works = sorted({
+        x["source_key"]
+        for x in accepted
+    })
+
+    providers = sorted({
+        x["provider"]
+        for x in accepted
+    })
+
+    tiers = {}
+
+    for x in accepted:
+        tiers[x["tier"]] = (
+            tiers.get(
+                x["tier"],
+                0
+            ) + 1
+        )
+
+    avg_quality = (
         sum(
-            s.get(
-                "quality",
-                0,
-            )
-            for s in accepted_sources
-        )
-        / max(
-            len(accepted_sources),
-            1,
-        )
+            x["quality"]
+            for x in accepted
+        ) / len(accepted)
+        if accepted else 0
     )
 
-    research_strength = min(
+    source_diversity = min(
         1.0,
-        0.25 * min(
-            len(accepted_sources) / 10,
-            1,
-        )
-        + 0.20 * min(
-            len(domains) / 4,
-            1,
-        )
-        + 0.20 * min(
-            len(graph["edges"]) / 15,
-            1,
-        )
-        + 0.20 * min(
-            usable_claims / 8,
-            1,
-        )
-        + 0.15 * average_quality,
+        len(domains) / 5
     )
 
-    # Confidence across meaningful claims.
-    meaningful_confidences = [
-        c.get(
-            "confidence",
-            0,
-        )
-        for c in claims
-        if c.get(
-            "status"
-        ) != "REJECTED"
-    ]
-
-    overall_confidence = (
-        sum(
-            meaningful_confidences
-        )
-        / max(
-            len(meaningful_confidences),
-            1,
-        )
+    provider_diversity = min(
+        1.0,
+        len(providers) / 4
     )
 
-    # --------------------------------------------------------
-    # FINAL RESULT
-    # --------------------------------------------------------
+    independence = min(
+        1.0,
+        len(works) / 6
+    )
 
-    duration = time.time() - started
+    evidence_coverage = min(
+        1.0,
+        len(final_claims) / 10
+    )
+
+    verification_rate = (
+        verified / len(final_claims)
+        if final_claims
+        else 0
+    )
+
+    research_strength = round(
+        (
+            avg_quality * 0.20
+            + source_diversity * 0.15
+            + provider_diversity * 0.10
+            + independence * 0.20
+            + evidence_coverage * 0.15
+            + verification_rate * 0.20
+        ),
+        3
+    )
+
+    confidence = round(
+        (
+            verification_rate * 0.50
+            + avg_quality * 0.20
+            + independence * 0.20
+            + source_diversity * 0.10
+        ),
+        3
+    )
+
+    # ========================================================
+    # DIAGNOSIS
+    # ========================================================
+
+    diagnosis = []
+
+    if len(accepted) < 5:
+        diagnosis.append(
+            "LOW_EVIDENCE_COUNT"
+        )
+
+    if len(final_claims) == 0:
+        diagnosis.append(
+            "NO_SUBSTANTIVE_CLAIMS"
+        )
+
+    if len(works) < 3:
+        diagnosis.append(
+            "LOW_INDEPENDENT_WORKS"
+        )
+
+    if len(domains) < 3:
+        diagnosis.append(
+            "LOW_SOURCE_DIVERSITY"
+        )
+
+    if len(providers) < 2:
+        diagnosis.append(
+            "LOW_PROVIDER_DIVERSITY"
+        )
+
+    if tiers.get(
+        "FULL_TEXT",
+        0
+    ) == 0:
+        diagnosis.append(
+            "NO_FULL_TEXT_EVIDENCE"
+        )
+
+    if uncertain:
+        diagnosis.append(
+            "CLAIM_UNCERTAINTY"
+        )
+
+    if contradiction_edges:
+        diagnosis.append(
+            "CONTRADICTORY_EVIDENCE"
+        )
+
+    if not diagnosis:
+        diagnosis.append(
+            "RESEARCH_PIPELINE_HEALTHY"
+        )
+
+    # ========================================================
+    # NEXT ACTIONS
+    # ========================================================
+
+    next_actions = []
+
+    if "NO_SUBSTANTIVE_CLAIMS" in diagnosis:
+        next_actions.append(
+            "Recover structured abstracts and empirical findings from additional scholarly providers."
+        )
+
+    if "NO_FULL_TEXT_EVIDENCE" in diagnosis:
+        next_actions.append(
+            "Search for open-access full text and institutional copies."
+        )
+
+    if "LOW_INDEPENDENT_WORKS" in diagnosis:
+        next_actions.append(
+            "Increase independent primary-study coverage."
+        )
+
+    if "LOW_SOURCE_DIVERSITY" in diagnosis:
+        next_actions.append(
+            "Expand evidence across independent domains and institutions."
+        )
+
+    if "LOW_PROVIDER_DIVERSITY" in diagnosis:
+        next_actions.append(
+            "Use additional research indexes and scholarly providers."
+        )
+
+    if contradiction_edges:
+        next_actions.append(
+            "Run targeted contradiction and replication searches."
+        )
+
+    if not next_actions:
+        next_actions.append(
+            "Continue monitoring and update the evidence graph with new studies."
+        )
+
+    # ========================================================
+    # SYNTHESIS
+    # ========================================================
+
+    if verified >= 2 and not contradiction_edges:
+
+        conclusion = (
+            "Multiple independent evidence records "
+            "support substantive claims, but the evidence "
+            "should remain tied to the specific populations, "
+            "tasks, and conditions studied."
+        )
+
+    elif final_claims:
+
+        conclusion = (
+            "The research produced substantive evidence, "
+            "but claim-level verification remains incomplete "
+            "or mixed."
+        )
+
+    else:
+
+        conclusion = (
+            "The current evidence set does not yet contain "
+            "enough recoverable substantive claims for a "
+            "strong conclusion."
+        )
+
+    # ========================================================
+    # RESULT
+    # ========================================================
+
+    completed = now()
 
     result = {
-        "task_id": mission_id,
-        "mission_id": mission_id,
+        "task_id": mid,
+        "mission_id": mid,
         "status": "completed",
         "version": VERSION,
         "build": BUILD,
@@ -3189,203 +2175,281 @@ def research_mission(
             {
                 "stage": "planning",
                 "status": "completed",
-                "research_questions": questions,
-                "count": len(questions),
+                "research_questions": queries,
+                "count": len(queries)
             },
             {
                 "stage": "discovery",
                 "status": "completed",
-                "sources_discovered": len(
-                    discovered
-                ),
+                "sources_discovered":
+                    len(discovered)
             },
             {
                 "stage": "evidence_ingestion",
                 "status": "completed",
-                "accepted_sources": len(
-                    accepted_sources
-                ),
+                "accepted_sources":
+                    len(accepted)
             },
             {
                 "stage": "claim_extraction",
                 "status": "completed",
-                "claims": len(claims),
+                "claims":
+                    len(final_claims)
             },
             {
                 "stage": "evidence_linking",
                 "status": "completed",
-                "relationships": len(
-                    graph["edges"]
-                ),
+                "relationships":
+                    len(graph_edges)
             },
             {
                 "stage": "verification",
                 "status": "completed",
-                "verified": verified_count,
+                "verified":
+                    verified
             },
             {
                 "stage": "counter_evidence",
                 "status": "completed",
-                "sources": len(
-                    counter_sources
-                ),
+                "sources":
+                    len(counter_accepted)
             },
             {
                 "stage": "synthesis",
-                "status": "completed",
-            },
+                "status": "completed"
+            }
         ],
 
         "providers": {
-            "used": providers_used,
-            "count": len(
-                providers_used
-            ),
+            "used": providers,
+            "count": len(providers)
         },
 
         "evidence": {
-            "count": len(
-                accepted_sources
-            ),
-            "graph_nodes": len(
-                graph["nodes"]
-            ),
-            "graph_edges": len(
-                graph["edges"]
-            ),
-            "support_edges": supporting_edges,
-            "contradiction_edges": contradiction_edges,
-            "limitation_edges": limitation_edges,
-            "independent_domains": len(
-                domains
-            ),
-            "domains": domains,
-            "independent_works": independent_work_count(
-                accepted_sources
-            ),
-            "average_source_quality": round(
-                average_quality,
-                3,
-            ),
-            "source_diversity": round(
-                min(
-                    len(domains) / 5,
-                    1,
-                ),
-                3,
-            ),
-            "provider_diversity": round(
-                min(
-                    len(providers_used) / 4,
-                    1,
-                ),
-                3,
-            ),
+            "count": len(accepted),
+            "graph_nodes":
+                len(graph_nodes),
+            "graph_edges":
+                len(graph_edges),
+            "support_edges":
+                len(support_edges),
+            "contradiction_edges":
+                len(contradiction_edges),
+            "limitation_edges":
+                len(limitation_edges),
+            "independent_domains":
+                len(domains),
+            "domains":
+                domains,
+            "independent_works":
+                len(works),
+            "average_source_quality":
+                round(avg_quality, 3),
+            "source_diversity":
+                round(source_diversity, 3),
+            "provider_diversity":
+                round(provider_diversity, 3),
+            "evidence_tiers":
+                tiers
         },
 
-        "claims": claims,
+        "claims":
+            final_claims,
 
         "verification": {
-            "enabled": verify_enabled,
-            "verified": verified_count,
-            "unsupported": sum(
-                c.get("status")
-                in {
-                    "INSUFFICIENT",
-                    "REJECTED",
-                }
-                for c in claims
-            ),
-            "uncertain": sum(
-                c.get("status")
-                == "UNCERTAIN"
-                for c in claims
-            ),
-            "confidence": round(
-                overall_confidence,
-                3,
-            ),
-            "research_strength": round(
+            "enabled": True,
+            "verified": verified,
+            "unsupported": unsupported,
+            "uncertain": uncertain,
+            "confidence": confidence,
+            "research_strength":
                 research_strength,
-                3,
-            ),
-            "contradictions": contradiction_edges,
+            "contradictions":
+                len(contradiction_edges)
         },
 
         "counter_evidence": {
-            "sources": len(
-                counter_sources
-            ),
-            "claims_tested": len(
-                target_claims
-            ),
+            "sources":
+                len(counter_accepted),
+            "claims_tested":
+                len(important_claims)
         },
 
-        "evidence_graph": graph,
+        "evidence_graph": {
+            "nodes":
+                graph_nodes,
+            "edges":
+                graph_edges
+        },
 
-        "synthesis": synthesis,
+        "diagnosis": diagnosis,
+
+        "synthesis": {
+            "conclusion":
+                conclusion,
+            "verified_claims":
+                verified,
+            "uncertain_claims":
+                uncertain,
+            "insufficient_claims":
+                sum(
+                    1
+                    for x in final_claims
+                    if x["status"] ==
+                    "INSUFFICIENT"
+                ),
+            "rejected_claims":
+                sum(
+                    1
+                    for x in final_claims
+                    if x["status"] ==
+                    "REJECTED"
+                ),
+            "contradictions":
+                len(contradiction_edges),
+            "independent_domains":
+                len(domains),
+            "counter_evidence_sources":
+                len(counter_accepted),
+            "next_actions":
+                next_actions
+        },
 
         "next_cycle": {
-            "recommended": synthesis[
-                "next_actions"
-            ],
+            "recommended":
+                next_actions,
+            "diagnosis":
+                diagnosis
         },
 
         "timing": {
-            "started_at": started,
-            "completed_at": time.time(),
-            "duration_seconds": round(
-                duration,
-                2,
-            ),
-        },
+            "started_at":
+                started,
+            "completed_at":
+                completed,
+            "duration_seconds":
+                round(
+                    completed - started,
+                    2
+                )
+        }
     }
 
-    update_mission(
-        mission_id,
+    with DB_LOCK:
+        conn = db()
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET status = ?,
+                completed_at = ?,
+                result = ?
+            WHERE id = ?
+            """,
+            (
+                "completed",
+                completed,
+                safe_json(result),
+                mid
+            )
+        )
+
+        conn.commit()
+        conn.close()
+
+    event(
+        mid,
+        "mission",
         "completed",
-        result=result,
+        f"strength={research_strength}"
     )
 
     return result
 
 
 # ============================================================
-# BACKGROUND MISSION
+# MISSION RUNNER
 # ============================================================
 
 def background_run(
-    mission_id: str,
-    objective: str,
-    verify: bool,
+    mid,
+    objective
 ):
+
+    with DB_LOCK:
+        conn = db()
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET status = ?,
+                started_at = ?
+            WHERE id = ?
+            """,
+            (
+                "running",
+                now(),
+                mid
+            )
+        )
+
+        conn.commit()
+        conn.close()
+
+    event(
+        mid,
+        "mission",
+        "running"
+    )
+
     try:
-        research_mission(
-            mission_id,
-            objective,
-            verify,
+        research(
+            mid,
+            objective
         )
 
     except Exception as exc:
 
-        error = (
-            f"{type(exc).__name__}: "
-            f"{str(exc)}"
-        )
+        result = {
+            "task_id": mid,
+            "mission_id": mid,
+            "status": "failed",
+            "version": VERSION,
+            "build": BUILD,
+            "error": str(exc),
+            "next_actions": [
+                "Retry the mission.",
+                "Inspect the failed research stage."
+            ]
+        }
 
-        save_event(
-            mission_id,
-            "runtime",
-            "failed",
-            {
-                "error": error
-            },
-        )
+        with DB_LOCK:
+            conn = db()
 
-        update_mission(
-            mission_id,
+            conn.execute(
+                """
+                UPDATE missions
+                SET status = ?,
+                    completed_at = ?,
+                    result = ?
+                WHERE id = ?
+                """,
+                (
+                    "failed",
+                    now(),
+                    safe_json(result),
+                    mid
+                )
+            )
+
+            conn.commit()
+            conn.close()
+
+        event(
+            mid,
+            "mission",
             "failed",
-            error=error,
+            str(exc)
         )
 
 
@@ -3393,372 +2457,631 @@ def background_run(
 # API
 # ============================================================
 
-@app.get("/")
-def root():
-    return HTMLResponse(
-        DASHBOARD_HTML
-    )
+@app.get(
+    "/",
+    response_class=HTMLResponse
+)
+def dashboard():
+
+    return HTMLResponse("""
+<!doctype html>
+<html>
+<head>
+<meta name="viewport"
+content="width=device-width,initial-scale=1">
+
+<title>AI Infinity</title>
+
+<style>
+body{
+margin:0;
+background:#070b12;
+color:#f4f7fb;
+font-family:system-ui,-apple-system,BlinkMacSystemFont,sans-serif;
+}
+
+.wrap{
+max-width:900px;
+margin:auto;
+padding:24px;
+}
+
+.hero{
+padding:25px 0;
+}
+
+h1{
+font-size:42px;
+margin:0 0 8px;
+}
+
+.sub{
+color:#9aa7b7;
+font-size:17px;
+}
+
+.status{
+display:inline-block;
+padding:7px 12px;
+border-radius:20px;
+background:#12351f;
+color:#72f5a1;
+font-size:13px;
+margin:15px 0;
+}
+
+textarea{
+width:100%;
+height:150px;
+box-sizing:border-box;
+background:#0d1420;
+border:1px solid #26364a;
+border-radius:14px;
+padding:16px;
+color:white;
+font-size:16px;
+outline:none;
+}
+
+button{
+width:100%;
+margin-top:12px;
+padding:16px;
+border:0;
+border-radius:14px;
+font-size:17px;
+font-weight:700;
+background:#ffffff;
+color:#05070a;
+}
+
+.grid{
+display:grid;
+grid-template-columns:repeat(4,1fr);
+gap:10px;
+margin:20px 0;
+}
+
+.card{
+background:#0d1420;
+border:1px solid #1d2a3a;
+padding:15px;
+border-radius:14px;
+}
+
+.label{
+color:#7f8da0;
+font-size:12px;
+}
+
+.value{
+font-size:16px;
+margin-top:5px;
+}
+
+pre{
+white-space:pre-wrap;
+word-break:break-word;
+background:#05080d;
+border:1px solid #1d2a3a;
+border-radius:14px;
+padding:15px;
+overflow:auto;
+}
+
+@media(max-width:700px){
+.grid{
+grid-template-columns:repeat(2,1fr);
+}
+h1{
+font-size:34px;
+}
+}
+</style>
+</head>
+
+<body>
+
+<div class="wrap">
+
+<div class="hero">
+
+<div class="status">
+● ONLINE
+</div>
+
+<h1>AI Infinity</h1>
+
+<div class="sub">
+Autonomous evidence intelligence
+</div>
+
+</div>
+
+<textarea id="objective"
+placeholder="Give AI Infinity a mission..."></textarea>
+
+<button onclick="runMission()">
+🚀 RUN MISSION
+</button>
+
+<div class="grid">
+
+<div class="card">
+<div class="label">VERSION</div>
+<div class="value">
+""" + VERSION + """
+</div>
+</div>
+
+<div class="card">
+<div class="label">ENGINE</div>
+<div class="value">
+EXTRAORDINARY
+</div>
+</div>
+
+<div class="card">
+<div class="label">EVIDENCE</div>
+<div class="value">
+RECOVERY
+</div>
+</div>
+
+<div class="card">
+<div class="label">VERIFY</div>
+<div class="value">
+ACTIVE
+</div>
+</div>
+
+</div>
+
+<pre id="output">
+Ready.
+</pre>
+
+</div>
+
+<script>
+
+async function safeJSON(response){
+
+    const text = await response.text();
+
+    try{
+        return JSON.parse(text);
+    }catch(e){
+        return {
+            status:"error",
+            http_status:response.status,
+            raw:text
+        };
+    }
+}
+
+async function runMission(){
+
+    const objective =
+        document.getElementById(
+            "objective"
+        ).value.trim();
+
+    const output =
+        document.getElementById(
+            "output"
+        );
+
+    if(!objective){
+        output.textContent =
+            "Enter a mission first.";
+        return;
+    }
+
+    output.textContent =
+        "🚀 Mission accepted...";
+
+    try{
+
+        const response =
+            await fetch(
+                "/mission",
+                {
+                    method:"POST",
+                    headers:{
+                        "Content-Type":
+                            "application/json"
+                    },
+                    body:JSON.stringify({
+                        objective:objective,
+                        research:true,
+                        verify:true,
+                        remember:true
+                    })
+                }
+            );
+
+        const data =
+            await safeJSON(response);
+
+        if(!data.mission_id){
+
+            output.textContent =
+                JSON.stringify(
+                    data,
+                    null,
+                    2
+                );
+
+            return;
+        }
+
+        const id =
+            data.mission_id;
+
+        output.textContent =
+            "🧠 Mission running...\\n" +
+            "ID: " + id;
+
+        const timer =
+            setInterval(
+                async function(){
+
+                    try{
+
+                        const r =
+                            await fetch(
+                                "/mission/" + id
+                            );
+
+                        const d =
+                            await safeJSON(r);
+
+                        output.textContent =
+                            JSON.stringify(
+                                d,
+                                null,
+                                2
+                            );
+
+                        if(
+                            d.status ===
+                                "completed"
+                            ||
+                            d.status ===
+                                "failed"
+                        ){
+
+                            clearInterval(
+                                timer
+                            );
+                        }
+
+                    }catch(e){
+
+                        output.textContent =
+                            "Polling error: " +
+                            e.message;
+                    }
+
+                },
+                3000
+            );
+
+    }catch(e){
+
+        output.textContent =
+            "Mission error: " +
+            e.message;
+    }
+}
+
+</script>
+
+</body>
+</html>
+""")
 
 
 @app.get("/health")
 def health():
+
     return {
         "status": "ok",
-        "online": True,
         "version": VERSION,
-        "build": BUILD,
-        "time": time.time(),
+        "build": BUILD
     }
 
 
 @app.get("/status")
 def status():
+
     return {
         "status": "online",
         "version": VERSION,
         "build": BUILD,
-        "engine": "ready",
-        "evidence": True,
-        "verification": True,
-        "async": True,
-        "research_intelligence": True,
-        "evidence_graph": True,
+        "engine": "extraordinary",
+        "evidence_recovery": True,
+        "claim_verification": True,
+        "counter_evidence": True,
+        "autonomous_research": True
     }
 
 
 @app.get("/capabilities")
 def capabilities():
+
     return {
         "version": VERSION,
         "build": BUILD,
         "capabilities": [
-            "autonomous_missions",
-            "research_question_decomposition",
-            "multi_provider_discovery",
-            "source_relevance_scoring",
-            "source_quality_scoring",
-            "boilerplate_rejection",
+            "autonomous_research",
+            "evidence_recovery",
+            "full_text_ingestion",
             "pdf_extraction",
-            "evidence_passage_extraction",
+            "abstract_recovery",
+            "metadata_recovery",
             "claim_extraction",
-            "claim_evidence_linking",
-            "support_detection",
+            "claim_verification",
+            "counter_evidence",
             "contradiction_detection",
             "limitation_detection",
-            "underlying_work_deduplication",
-            "independent_source_analysis",
-            "claim_level_verification",
-            "counter_evidence",
             "evidence_graph",
-            "structured_synthesis",
-            "persistent_missions",
-            "async_execution",
-            "ssrf_protection",
-            "mobile_control_center",
-        ],
-        "providers": [
-            "openalex",
-            "crossref",
-            "duckduckgo",
-            "wikipedia",
-        ],
+            "independent_work_detection",
+            "research_diagnostics",
+            "automatic_next_cycle"
+        ]
     }
 
 
 @app.post("/mission")
 def create_mission(req: MissionRequest):
 
-    mission_id = (
-        "mission-"
-        + uuid.uuid4().hex[:12]
-    )
+    if not req.objective.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Objective is required."
+        )
 
-    create_mission_record(
-        mission_id,
-        req.objective,
-    )
+    mid = mission_id()
 
-    save_event(
-        mission_id,
+    with DB_LOCK:
+        conn = db()
+
+        conn.execute(
+            """
+            INSERT INTO missions
+            (id, objective, status, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                mid,
+                req.objective.strip(),
+                "queued",
+                now()
+            )
+        )
+
+        conn.commit()
+        conn.close()
+
+    event(
+        mid,
         "mission",
-        "queued",
-        {
-            "objective": req.objective
-        },
+        "queued"
     )
 
     executor.submit(
         background_run,
-        mission_id,
-        req.objective,
-        req.verify,
+        mid,
+        req.objective.strip()
     )
 
     return JSONResponse(
         status_code=202,
         content={
-            "task_id": mission_id,
-            "mission_id": mission_id,
+            "task_id": mid,
+            "mission_id": mid,
             "status": "queued",
             "version": VERSION,
             "build": BUILD,
-            "message": (
-                "Mission accepted and "
-                "running asynchronously."
-            ),
-        },
+            "message":
+                "Mission accepted and running autonomously."
+        }
     )
 
 
 @app.post("/research")
-def research(req: ResearchRequest):
-
-    mission_id = (
-        "mission-"
-        + uuid.uuid4().hex[:12]
-    )
-
-    create_mission_record(
-        mission_id,
-        req.objective,
-    )
-
-    executor.submit(
-        background_run,
-        mission_id,
-        req.objective,
-        True,
-    )
-
-    return JSONResponse(
-        status_code=202,
-        content={
-            "task_id": mission_id,
-            "mission_id": mission_id,
-            "status": "queued",
-            "version": VERSION,
-        },
-    )
+def research_endpoint(
+    req: MissionRequest
+):
+    return create_mission(req)
 
 
 @app.post("/run")
-def run(req: CommandRequest):
-
-    mission_id = (
-        "mission-"
-        + uuid.uuid4().hex[:12]
-    )
-
-    create_mission_record(
-        mission_id,
-        req.command,
-    )
-
-    executor.submit(
-        background_run,
-        mission_id,
-        req.command,
-        True,
-    )
-
-    return JSONResponse(
-        status_code=202,
-        content={
-            "task_id": mission_id,
-            "mission_id": mission_id,
-            "status": "queued",
-            "version": VERSION,
-        },
-    )
+def run_endpoint(
+    req: MissionRequest
+):
+    return create_mission(req)
 
 
 @app.post("/command")
-def command(req: CommandRequest):
-    return run(req)
+def command_endpoint(
+    req: CommandRequest
+):
 
-
-@app.get("/mission/{mission_id}")
-def mission(mission_id: str):
-
-    row = get_mission_record(
-        mission_id
+    return create_mission(
+        MissionRequest(
+            objective=req.command
+        )
     )
 
-    if row is None:
+
+@app.get("/mission/{mid}")
+def get_mission(mid: str):
+
+    with DB_LOCK:
+        conn = db()
+
+        row = conn.execute(
+            """
+            SELECT *
+            FROM missions
+            WHERE id = ?
+            """,
+            (mid,)
+        ).fetchone()
+
+        conn.close()
+
+    if not row:
         raise HTTPException(
             status_code=404,
-            detail="Mission not found",
+            detail="Mission not found."
         )
 
-    result = None
-
-    if row["result_json"]:
-        try:
-            result = json.loads(
-                row["result_json"]
-            )
-        except Exception:
-            result = None
+    result = (
+        json.loads(row["result"])
+        if row["result"]
+        else None
+    )
 
     return {
-        "task_id": row["id"],
-        "mission_id": row["id"],
-        "objective": row["objective"],
+        "task_id": mid,
+        "mission_id": mid,
         "status": row["status"],
-        "version": row["version"],
-        "build": row["build"],
-        "created_at": row["created_at"],
-        "started_at": row["started_at"],
-        "completed_at": row["completed_at"],
-        "error": row["error"],
-        "result": result,
+        "objective": row["objective"],
+        "result": result
     }
 
 
 @app.get("/missions")
 def missions():
 
-    conn = db()
+    with DB_LOCK:
+        conn = db()
 
-    rows = conn.execute(
-        """
-        SELECT id, objective, status,
-               version, build,
-               created_at, started_at,
-               completed_at, error
-        FROM missions
-        ORDER BY created_at DESC
-        LIMIT 50
-        """
-    ).fetchall()
+        rows = conn.execute(
+            """
+            SELECT id, objective, status,
+                   created_at,
+                   started_at,
+                   completed_at
+            FROM missions
+            ORDER BY created_at DESC
+            LIMIT 50
+            """
+        ).fetchall()
 
-    conn.close()
+        conn.close()
 
-    return {
-        "missions": [
-            dict(row)
-            for row in rows
-        ]
-    }
-
-
-@app.get("/mission/{mission_id}/sources")
-def mission_sources(
-    mission_id: str,
-):
-
-    conn = db()
-
-    rows = conn.execute(
-        """
-        SELECT *
-        FROM sources
-        WHERE mission_id=?
-        ORDER BY evidence_score DESC
-        """,
-        (mission_id,),
-    ).fetchall()
-
-    conn.close()
-
-    return {
-        "mission_id": mission_id,
-        "sources": [
-            dict(row)
-            for row in rows
-        ],
-    }
+    return [
+        dict(x)
+        for x in rows
+    ]
 
 
-@app.get("/mission/{mission_id}/claims")
-def mission_claims(
-    mission_id: str,
-):
+@app.get(
+    "/mission/{mid}/sources"
+)
+def mission_sources(mid: str):
 
-    conn = db()
+    with DB_LOCK:
+        conn = db()
 
-    rows = conn.execute(
-        """
-        SELECT *
-        FROM claims
-        WHERE mission_id=?
-        ORDER BY confidence DESC
-        """,
-        (mission_id,),
-    ).fetchall()
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM sources
+            WHERE mission_id = ?
+            ORDER BY quality DESC
+            """,
+            (mid,)
+        ).fetchall()
 
-    conn.close()
+        conn.close()
 
-    return {
-        "mission_id": mission_id,
-        "claims": [
-            dict(row)
-            for row in rows
-        ],
-    }
+    return [
+        dict(x)
+        for x in rows
+    ]
 
 
-@app.get("/mission/{mission_id}/events")
-def mission_events(
-    mission_id: str,
-):
+@app.get(
+    "/mission/{mid}/claims"
+)
+def mission_claims(mid: str):
 
-    conn = db()
+    with DB_LOCK:
+        conn = db()
 
-    rows = conn.execute(
-        """
-        SELECT *
-        FROM events
-        WHERE mission_id=?
-        ORDER BY created_at ASC
-        """,
-        (mission_id,),
-    ).fetchall()
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM claims
+            WHERE mission_id = ?
+            ORDER BY confidence DESC
+            """,
+            (mid,)
+        ).fetchall()
 
-    conn.close()
+        conn.close()
 
-    events = []
+    return [
+        dict(x)
+        for x in rows
+    ]
 
-    for row in rows:
-        item = dict(row)
 
-        try:
-            item["payload"] = json.loads(
-                item.pop(
-                    "payload_json",
-                    "{}",
-                )
-            )
-        except Exception:
-            item["payload"] = {}
+@app.get(
+    "/mission/{mid}/events"
+)
+def mission_events(mid: str):
 
-        events.append(item)
+    with DB_LOCK:
+        conn = db()
 
-    return {
-        "mission_id": mission_id,
-        "events": events,
-    }
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM events
+            WHERE mission_id = ?
+            ORDER BY created_at ASC
+            """,
+            (mid,)
+        ).fetchall()
+
+        conn.close()
+
+    return [
+        dict(x)
+        for x in rows
+    ]
 
 
 @app.post("/validate-source")
 def validate_source(url: str):
 
+    if not validate_url(url):
+        return {
+            "valid": False
+        }
+
     result = fetch_url(url)
 
+    if not result:
+        return {
+            "valid": False,
+            "reason":
+                "Source could not be safely recovered."
+        }
+
     return {
-        "url": url,
-        "valid": bool(
-            result.get("ok")
-        ),
-        "reason": result.get(
-            "reason"
-        ),
-        "content_chars": len(
-            result.get(
-                "text",
-                "",
-            )
-        ),
+        "valid": True,
+        "url": result["url"],
+        "tier": result["tier"],
+        "characters":
+            len(result["text"])
     }
 
 
@@ -3766,653 +3089,20 @@ def validate_source(url: str):
 # GLOBAL JSON ERROR HANDLING
 # ============================================================
 
-@app.exception_handler(Exception)
+@app.exception_handler(
+    Exception
+)
 async def global_exception_handler(
     request,
-    exc,
+    exc
 ):
+
     return JSONResponse(
         status_code=500,
         content={
             "status": "error",
-            "error": type(exc).__name__,
-            "message": str(exc)[:1000],
             "version": VERSION,
-        },
+            "build": BUILD,
+            "error": str(exc)
+        }
     )
-
-
-# ============================================================
-# DASHBOARD
-# ============================================================
-
-DASHBOARD_HTML = r"""
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta
- name="viewport"
- content="width=device-width,initial-scale=1"
-/>
-<title>AI Infinity</title>
-
-<style>
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  background:
-    radial-gradient(
-      circle at top,
-      #172554 0,
-      #070b16 38%,
-      #03050a 100%
-    );
-  color: #eef2ff;
-  font-family:
-    Inter,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
-}
-
-.container {
-  width: min(1100px, 94%);
-  margin: auto;
-  padding: 28px 0 50px;
-}
-
-.top {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 15px;
-}
-
-.brand {
-  font-size: 25px;
-  font-weight: 900;
-  letter-spacing: -0.7px;
-}
-
-.infinity {
-  opacity: .65;
-}
-
-.badge {
-  padding: 7px 11px;
-  border-radius: 999px;
-  background: rgba(34,197,94,.13);
-  border: 1px solid rgba(34,197,94,.35);
-  color: #86efac;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.hero {
-  padding: 55px 0 30px;
-}
-
-.hero h1 {
-  max-width: 850px;
-  font-size: clamp(36px, 7vw, 68px);
-  line-height: .98;
-  margin: 0 0 18px;
-  letter-spacing: -3px;
-}
-
-.hero p {
-  max-width: 750px;
-  color: #aeb9d6;
-  font-size: 17px;
-  line-height: 1.65;
-}
-
-.panel {
-  background: rgba(9,14,28,.78);
-  border: 1px solid rgba(148,163,184,.16);
-  border-radius: 22px;
-  padding: 20px;
-  box-shadow: 0 25px 80px rgba(0,0,0,.35);
-  backdrop-filter: blur(15px);
-}
-
-textarea {
-  width: 100%;
-  min-height: 150px;
-  resize: vertical;
-  border: 1px solid rgba(148,163,184,.2);
-  border-radius: 15px;
-  padding: 16px;
-  color: white;
-  background: #050914;
-  outline: none;
-  font: inherit;
-  line-height: 1.55;
-}
-
-textarea:focus {
-  border-color: #60a5fa;
-}
-
-button {
-  margin-top: 14px;
-  width: 100%;
-  border: 0;
-  border-radius: 14px;
-  padding: 15px;
-  font-size: 16px;
-  font-weight: 900;
-  cursor: pointer;
-  color: white;
-  background:
-    linear-gradient(
-      135deg,
-      #2563eb,
-      #7c3aed
-    );
-}
-
-button:disabled {
-  opacity: .5;
-  cursor: wait;
-}
-
-.grid {
-  display: grid;
-  grid-template-columns:
-    repeat(4, 1fr);
-  gap: 12px;
-  margin: 18px 0;
-}
-
-.card {
-  background: rgba(10,15,30,.75);
-  border: 1px solid rgba(148,163,184,.13);
-  border-radius: 16px;
-  padding: 16px;
-}
-
-.label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: #8491af;
-}
-
-.value {
-  margin-top: 7px;
-  font-size: 17px;
-  font-weight: 850;
-}
-
-.progress {
-  height: 8px;
-  background: #111827;
-  border-radius: 999px;
-  overflow: hidden;
-  margin-top: 15px;
-}
-
-.bar {
-  height: 100%;
-  width: 0%;
-  background:
-    linear-gradient(
-      90deg,
-      #38bdf8,
-      #8b5cf6,
-      #22c55e
-    );
-  transition: width .4s;
-}
-
-pre {
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: #cbd5e1;
-  background: #030712;
-  border-radius: 15px;
-  padding: 15px;
-  max-height: 650px;
-  overflow: auto;
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.small {
-  color: #8190ad;
-  font-size: 12px;
-}
-
-@media(max-width:760px) {
-  .grid {
-    grid-template-columns:
-      repeat(2, 1fr);
-  }
-
-  .hero {
-    padding-top: 35px;
-  }
-
-  .hero h1 {
-    letter-spacing: -2px;
-  }
-}
-
-@media(max-width:480px) {
-  .grid {
-    grid-template-columns: 1fr 1fr;
-  }
-}
-</style>
-</head>
-
-<body>
-<div class="container">
-
-  <div class="top">
-    <div class="brand">
-      AI Infinity <span class="infinity">∞</span>
-    </div>
-    <div class="badge">
-      ● ONLINE
-    </div>
-  </div>
-
-  <section class="hero">
-    <h1>
-      Turn an objective into
-      verified intelligence.
-    </h1>
-
-    <p>
-      AI Infinity decomposes missions,
-      researches multiple sources,
-      filters evidence, extracts claims,
-      links evidence to claims, tests
-      counter-evidence, and builds a
-      traceable evidence graph.
-    </p>
-  </section>
-
-  <div class="panel">
-
-    <textarea id="objective"
-      placeholder="Give AI Infinity a mission..."></textarea>
-
-    <button id="run"
-      onclick="runMission()">
-      🚀 RUN MISSION
-    </button>
-
-    <div class="progress">
-      <div id="bar"
-        class="bar"></div>
-    </div>
-
-    <div id="progressText"
-      class="small"
-      style="margin-top:8px;">
-      Ready.
-    </div>
-
-  </div>
-
-  <div class="grid">
-
-    <div class="card">
-      <div class="label">Version</div>
-      <div id="version"
-        class="value">
-        TARGET-2050.24
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="label">Engine</div>
-      <div class="value">
-        EXTRAORDINARY
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="label">Evidence</div>
-      <div class="value">
-        INTELLIGENT
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="label">Verification</div>
-      <div class="value">
-        FAIL-CLOSED
-      </div>
-    </div>
-
-  </div>
-
-  <div class="panel">
-
-    <div class="label">
-      MISSION RESULT
-    </div>
-
-    <pre id="result">
-No mission executed yet.
-    </pre>
-
-  </div>
-
-</div>
-
-<script>
-let pollTimer = null;
-
-function setProgress(value, text) {
-  document.getElementById("bar")
-    .style.width = value + "%";
-
-  document.getElementById(
-    "progressText"
-  ).textContent = text;
-}
-
-async function safeJSON(response) {
-
-  const raw = await response.text();
-
-  try {
-    return JSON.parse(raw);
-  } catch (error) {
-    throw new Error(
-      "Server returned non-JSON response: "
-      + raw.slice(0, 500)
-    );
-  }
-}
-
-async function runMission() {
-
-  const objective =
-    document.getElementById(
-      "objective"
-    ).value.trim();
-
-  if (!objective) {
-    alert(
-      "Enter a mission objective first."
-    );
-    return;
-  }
-
-  const button =
-    document.getElementById("run");
-
-  button.disabled = true;
-
-  document.getElementById(
-    "result"
-  ).textContent =
-    "Submitting mission...";
-
-  setProgress(
-    5,
-    "Mission accepted..."
-  );
-
-  try {
-
-    const response = await fetch(
-      "/mission",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type":
-            "application/json"
-        },
-        body: JSON.stringify({
-          objective:
-            objective,
-          research: true,
-          verify: true,
-          remember: true
-        })
-      }
-    );
-
-    const data =
-      await safeJSON(response);
-
-    if (!response.ok) {
-      throw new Error(
-        data.message ||
-        data.detail ||
-        "Mission submission failed."
-      );
-    }
-
-    const missionId =
-      data.mission_id ||
-      data.task_id;
-
-    if (!missionId) {
-      throw new Error(
-        "Server did not return a mission ID."
-      );
-    }
-
-    setProgress(
-      12,
-      "Mission queued..."
-    );
-
-    pollMission(
-      missionId
-    );
-
-  } catch (error) {
-
-    document.getElementById(
-      "result"
-    ).textContent =
-      "Mission request failed:\n\n"
-      + error.message;
-
-    setProgress(
-      0,
-      "Mission failed."
-    );
-
-    button.disabled = false;
-  }
-}
-
-async function pollMission(
-  missionId
-) {
-
-  clearInterval(
-    pollTimer
-  );
-
-  let attempts = 0;
-
-  pollTimer = setInterval(
-    async () => {
-
-      attempts++;
-
-      try {
-
-        const response =
-          await fetch(
-            "/mission/"
-            + encodeURIComponent(
-              missionId
-            )
-          );
-
-        const data =
-          await safeJSON(
-            response
-          );
-
-        if (!response.ok) {
-          throw new Error(
-            data.message ||
-            data.detail ||
-            "Status request failed."
-          );
-        }
-
-        const status =
-          data.status;
-
-        if (status === "queued") {
-
-          setProgress(
-            15,
-            "Mission queued..."
-          );
-
-        } else if (
-          status === "running"
-        ) {
-
-          const estimated =
-            Math.min(
-              90,
-              20 + attempts * 4
-            );
-
-          setProgress(
-            estimated,
-            "AI Infinity is researching..."
-          );
-
-        } else if (
-          status === "completed"
-        ) {
-
-          clearInterval(
-            pollTimer
-          );
-
-          setProgress(
-            100,
-            "Mission completed."
-          );
-
-          document.getElementById(
-            "result"
-          ).textContent =
-            JSON.stringify(
-              data.result,
-              null,
-              2
-            );
-
-          document.getElementById(
-            "run"
-          ).disabled = false;
-
-        } else if (
-          status === "failed"
-        ) {
-
-          clearInterval(
-            pollTimer
-          );
-
-          setProgress(
-            0,
-            "Mission failed."
-          );
-
-          document.getElementById(
-            "result"
-          ).textContent =
-            JSON.stringify(
-              data,
-              null,
-              2
-            );
-
-          document.getElementById(
-            "run"
-          ).disabled = false;
-        }
-
-        if (attempts > 180) {
-
-          clearInterval(
-            pollTimer
-          );
-
-          setProgress(
-            0,
-            "Polling timeout. Mission may still be running."
-          );
-
-          document.getElementById(
-            "run"
-          ).disabled = false;
-        }
-
-      } catch (error) {
-
-        clearInterval(
-          pollTimer
-        );
-
-        document.getElementById(
-          "result"
-        ).textContent =
-          "Polling failed:\n\n"
-          + error.message;
-
-        setProgress(
-          0,
-          "Connection error."
-        );
-
-        document.getElementById(
-          "run"
-        ).disabled = false;
-      }
-
-    },
-    2500
-  );
-}
-</script>
-
-</body>
-</html>
-"""
-
-
-# ============================================================
-# STARTUP / SHUTDOWN
-# ============================================================
-
-@app.on_event("startup")
-def startup():
-    init_db()
-
-
-@app.on_event("shutdown")
-def shutdown():
-    try:
-        executor.shutdown(
-            wait=False,
-            cancel_futures=False,
-        )
-    except Exception:
-        pass
