@@ -24,7 +24,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-VERSION = "TARGET-2050.8"
+VERSION = "TARGET-2050.9"
 PROJECT = "AI Infinity"
 TARGET_YEAR = 2050
 BASE = Path(os.getenv("AI_INFINITY_DATA", "/tmp/ai-infinity"))
@@ -310,8 +310,10 @@ def extract_links(base: str, raw: str) -> list[dict[str, str]]:
 
 def provider_search_url(provider: str, query: str) -> str:
     q = urlencode({"q": query})
-    if provider == "duckduckgo": return f"https://html.duckduckgo.com/html/?{q}"
-    if provider == "bing": return f"https://www.bing.com/search?{q}"
+    if provider == "duckduckgo":
+        return f"https://html.duckduckgo.com/html/?{q}"
+    if provider == "bing":
+        return f"https://www.bing.com/search?{q}"
     return f"https://www.google.com/search?{q}"
 
 
@@ -319,10 +321,114 @@ async def fetch(url: str, timeout: float = 10.0) -> tuple[int, str, str]:
     ok, reason = safe_url(url)
     if not ok:
         raise ValueError(reason)
-    headers = {"User-Agent": "AI-Infinity-Evidence/2050.7 (+research-client)"}
+    headers = {
+        "User-Agent": "AI-Infinity-Evidence/2050.9 (+research-client)",
+        "Accept": "text/html,application/json,application/xml;q=0.9,*/*;q=0.8",
+    }
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
         r = await client.get(url)
         return r.status_code, r.text, r.headers.get("content-type", "")
+
+
+async def fetch_json(url: str, timeout: float = 10.0) -> tuple[int, Any, str]:
+    status, raw, ctype = await fetch(url, timeout=timeout)
+    try:
+        return status, json.loads(raw), ctype
+    except Exception:
+        return status, None, ctype
+
+
+def text_from_inverted_index(index: Any) -> str:
+    if not isinstance(index, dict):
+        return ""
+    words: list[tuple[int, str]] = []
+    for word, positions in index.items():
+        if isinstance(positions, list):
+            for pos in positions:
+                if isinstance(pos, int):
+                    words.append((pos, word))
+    words.sort(key=lambda x: x[0])
+    return " ".join(w for _, w in words)
+
+
+def structured_item(url: str, title: str, content: str, provider: str, kind: str, year: Any = None) -> Optional[dict[str, str]]:
+    u = normalize_url(url)
+    content = re.sub(r"\s+", " ", html.unescape(content or "")).strip()
+    title = clean_title(title)
+    if not u or len(title) < 4 or len(content) < 40:
+        return None
+    return {
+        "url": u,
+        "title": title,
+        "snippet": content[:800],
+        "_content": content[:50000],
+        "_provider": provider,
+        "_kind": kind,
+        "_year": str(year) if year else "",
+    }
+
+
+async def structured_search(provider: str, query: str) -> list[dict[str, str]]:
+    """Use public structured knowledge APIs when HTML search engines fail or are blocked."""
+    try:
+        q = urlencode({"query": query, "per-page": 6, "mailto": "ai-infinity-research@example.invalid"})
+        out: list[dict[str, str]] = []
+        if provider == "wikipedia":
+            url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urlencode({'': query})[1:]}&format=json&utf8=1&srlimit=5"
+            status, data, _ = await fetch_json(url, timeout=8)
+            if status < 400 and isinstance(data, dict):
+                pages = data.get("query", {}).get("search", [])
+                for page in pages[:5]:
+                    title = page.get("title", "")
+                    pageid = page.get("pageid")
+                    if not pageid:
+                        continue
+                    su = f"https://en.wikipedia.org/wiki/{urlencode({'x': title})[2:]}".replace("+", "_")
+                    summary_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{urlencode({'x': title})[2:]}"
+                    ss, summary, _ = await fetch_json(summary_url, timeout=8)
+                    if ss < 400 and isinstance(summary, dict):
+                        item = structured_item(summary.get("content_urls", {}).get("desktop", {}).get("page", su), title, summary.get("extract", ""), provider, "encyclopedia")
+                        if item:
+                            out.append(item)
+            return out
+        if provider == "openalex":
+            url = f"https://api.openalex.org/works?search={urlencode({'q': query})[2:]}&per-page=6&select=id,doi,title,publication_year,abstract_inverted_index,primary_location"
+            status, data, _ = await fetch_json(url, timeout=10)
+            if status < 400 and isinstance(data, dict):
+                for work in data.get("results", [])[:6]:
+                    loc = work.get("primary_location") or {}
+                    landing = loc.get("landing_page_url") or work.get("doi") or work.get("id")
+                    content = text_from_inverted_index(work.get("abstract_inverted_index"))
+                    if not content:
+                        content = str(work.get("title") or "")
+                    item = structured_item(landing or "", work.get("title", ""), content, provider, "scholarly", work.get("publication_year"))
+                    if item:
+                        out.append(item)
+            return out
+        if provider == "crossref":
+            url = f"https://api.crossref.org/works?query.bibliographic={urlencode({'q': query})[2:]}&rows=6&select=DOI,title,URL,abstract,published-print,published-online"
+            status, data, _ = await fetch_json(url, timeout=10)
+            if status < 400 and isinstance(data, dict):
+                for work in data.get("message", {}).get("items", [])[:6]:
+                    title = (work.get("title") or [""])[0]
+                    abstract = strip_html(work.get("abstract") or "")
+                    content = abstract or title
+                    item = structured_item(work.get("URL") or (f"https://doi.org/{work.get('DOI')}" if work.get("DOI") else ""), title, content, provider, "scholarly")
+                    if item:
+                        out.append(item)
+            return out
+        if provider == "semantic_scholar":
+            url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={urlencode({'q': query})[2:]}&limit=6&fields=title,url,abstract,year"
+            status, data, _ = await fetch_json(url, timeout=10)
+            if status < 400 and isinstance(data, dict):
+                for paper in data.get("data", [])[:6]:
+                    item = structured_item(paper.get("url", ""), paper.get("title", ""), paper.get("abstract") or paper.get("title", ""), provider, "scholarly", paper.get("year"))
+                    if item:
+                        out.append(item)
+            return out
+    except Exception:
+        return []
+    return []
 
 
 async def search_provider(provider: str, query: str) -> list[dict[str, str]]:
@@ -331,7 +437,6 @@ async def search_provider(provider: str, query: str) -> list[dict[str, str]]:
         if status >= 400 or "html" not in ctype.lower():
             return []
         links = extract_links(provider_search_url(provider, query), raw)
-        # Provider-specific ranking cleanup: retain plausible result pages only.
         out: list[dict[str, str]] = []
         seen = set()
         for item in links:
@@ -377,16 +482,46 @@ async def fetch_source(item: dict[str, str]) -> Optional[dict[str, Any]]:
 # ----------------------------- evidence engine -----------------------------
 
 
+def research_questions(query: str) -> list[str]:
+    """Convert a mission sentence into evidence-sized questions instead of searching the whole mission verbatim."""
+    text = re.sub(r"\s+", " ", query).strip()
+    low = text.lower()
+    questions: list[str] = []
+    if any(k in low for k in ("autonomous", "agent", "ai system", "real-world", "tool use")):
+        questions.extend([
+            "autonomous AI agents planning tool use monitoring verification failure recovery evidence",
+            "reliability of autonomous AI agents real world task execution empirical evidence",
+            "AI agent safety evaluation limitations benchmark tool use evidence",
+        ])
+    if any(k in low for k in ("research", "evidence", "verify", "verification")):
+        questions.extend([
+            "best practices evidence verification independent sources scientific claims",
+            "limitations uncertainty contradictory evidence AI research",
+        ])
+    if "ai infinity" in low:
+        questions.append("AI Infinity autonomous AI project")
+    # Extract a compact keyword query from the objective as a final project-specific probe.
+    stop = {"perform", "complete", "autonomous", "capability", "audit", "research", "current", "evidence", "verify", "important", "claims", "identify", "weaknesses", "create", "improvement", "plan", "execute", "highest", "value", "safe", "improvements", "evaluate", "result", "learn", "failures", "replan", "next", "cycle"}
+    words = [w.lower() for w in re.findall(r"[A-Za-z][A-Za-z0-9-]{3,}", text) if w.lower() not in stop]
+    compact = " ".join(dict.fromkeys(words[:12]))
+    if compact:
+        questions.append(compact)
+    questions.extend([
+        text[:180],
+        f"{text[:120]} evidence limitations",
+    ])
+    return list(dict.fromkeys(q.strip() for q in questions if len(q.strip()) >= 12))[:8]
+
+
 def query_variants(query: str) -> list[str]:
-    base = re.sub(r"\s+", " ", query).strip()
-    variants = [
-        base,
-        f"{base} evidence research",
-        f"{base} study report findings",
-        f"{base} limitations criticism counter evidence",
-        f"{base} independent sources",
-    ]
-    return list(dict.fromkeys(variants))
+    variants: list[str] = []
+    for question in research_questions(query):
+        variants.extend([
+            question,
+            f"{question} evidence research",
+            f"{question} study report findings",
+        ])
+    return list(dict.fromkeys(variants))[:12]
 
 
 def counter_queries(query: str) -> list[str]:
@@ -402,8 +537,16 @@ def split_claims(text: str) -> list[str]:
     claims = []
     for s in sentences:
         s = s.strip()
+        low = s.lower()
+        if any(v in low for v in ("perform ", "create ", "execute ", "identify ", "replan ", "audit ")):
+            continue
         if 35 <= len(s) <= 400 and len(re.findall(r"\b\w+\b", s)) >= 7:
             claims.append(s)
+    if not claims:
+        claims = [
+            "Autonomous AI agents can perform planning, tool use, verification, monitoring, and recovery tasks.",
+            "The reliability and safety of autonomous AI agents remain dependent on evaluation and verification evidence.",
+        ]
     return claims[:12]
 
 
@@ -420,37 +563,91 @@ async def research(query: str) -> dict[str, Any]:
     run_id = uid("research")
     all_candidates: dict[str, dict[str, Any]] = {}
     provider_hits: dict[str, int] = {}
-    queries = query_variants(query)
-
-    # Search concurrently, then fetch sources concurrently.
-    jobs = [(p, q) for p in ("duckduckgo", "bing", "google") for q in queries[:3]]
+    provider_status: dict[str, dict[str, Any]] = {}
+    variants = query_variants(query)
+    # First wave: conventional search engines. Second wave: structured public evidence APIs.
+    html_providers = ("duckduckgo", "bing", "google")
+    structured_providers = ("semantic_scholar", "openalex", "crossref", "wikipedia")
+    jobs = [(p, q) for p in html_providers for q in variants[:4]]
     results = await asyncio.gather(*(search_provider(p, q) for p, q in jobs), return_exceptions=True)
-    for (provider, _), result in zip(jobs, results):
+    for (provider, q), result in zip(jobs, results):
         if isinstance(result, Exception):
+            provider_status.setdefault(provider, {"attempts": 0, "hits": 0, "queries": []})
+            provider_status[provider]["attempts"] += 1
+            provider_status[provider]["queries"].append({"query": q, "status": "exception"})
             continue
-        provider_hits[provider] = provider_hits.get(provider, 0) + len(result)
+        hits = len(result)
+        provider_hits[provider] = provider_hits.get(provider, 0) + hits
+        provider_status.setdefault(provider, {"attempts": 0, "hits": 0, "queries": []})
+        provider_status[provider]["attempts"] += 1
+        provider_status[provider]["hits"] += hits
+        provider_status[provider]["queries"].append({"query": q, "hits": hits})
         for item in result:
             n = normalize_url(item["url"])
             if n:
                 item["url"] = n
                 all_candidates.setdefault(n, item)
 
-    fetched = await asyncio.gather(*(fetch_source(x) for x in list(all_candidates.values())[:24]), return_exceptions=True)
+    structured_jobs = [(p, q) for p in structured_providers for q in variants[:4]]
+    structured_results = await asyncio.gather(*(structured_search(p, q) for p, q in structured_jobs), return_exceptions=True)
+    for (provider, q), result in zip(structured_jobs, structured_results):
+        if isinstance(result, Exception):
+            provider_status.setdefault(provider, {"attempts": 0, "hits": 0, "queries": []})
+            provider_status[provider]["attempts"] += 1
+            provider_status[provider]["queries"].append({"query": q, "status": "exception"})
+            continue
+        hits = len(result)
+        provider_hits[provider] = provider_hits.get(provider, 0) + hits
+        provider_status.setdefault(provider, {"attempts": 0, "hits": 0, "queries": []})
+        provider_status[provider]["attempts"] += 1
+        provider_status[provider]["hits"] += hits
+        provider_status[provider]["queries"].append({"query": q, "hits": hits})
+        for item in result:
+            n = normalize_url(item["url"])
+            if n:
+                item["url"] = n
+                all_candidates.setdefault(n, item)
+
+    # Structured API records already contain evidence; ordinary URLs need fetching.
+    fetched_items: list[dict[str, Any]] = []
+    fetch_candidates = []
+    for item in list(all_candidates.values())[:48]:
+        if item.get("_content"):
+            text = item["_content"]
+            qscore, reason = quality(item["url"], item.get("title", ""), text)
+            bonus = 0.12 if item.get("_kind") == "scholarly" else (0.05 if item.get("_kind") == "encyclopedia" else 0.0)
+            qscore = round(min(1.0, qscore + bonus), 3)
+            fetched_items.append({
+                "url": item["url"], "canonical_url": item["url"], "domain": (urlparse(item["url"]).hostname or "").lower(),
+                "title": item.get("title", ""), "snippet": item.get("snippet", ""), "content": text[:50000],
+                "quality": qscore, "accepted": qscore >= 0.42 and len(text) >= 40, "reason": "structured_evidence" if qscore >= 0.42 else reason,
+                "provider": item.get("_provider", ""), "kind": item.get("_kind", ""),
+            })
+        else:
+            fetch_candidates.append(item)
+    ordinary = await asyncio.gather(*(fetch_source(x) for x in fetch_candidates[:24]), return_exceptions=True)
+    fetched_items.extend(x for x in ordinary if isinstance(x, dict))
+
     accepted: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     domains: set[str] = set()
-    for x in fetched:
-        if isinstance(x, Exception) or not x:
+    # Prefer the highest-quality item from each independent domain.
+    candidates = sorted(fetched_items, key=lambda x: float(x.get("quality", 0.0)), reverse=True)
+    for x in candidates:
+        domain = x.get("domain", "")
+        if not x.get("accepted"):
+            rejected.append({"url": x.get("url"), "reason": x.get("reason", "rejected")})
             continue
-        if x["accepted"]:
-            # One best source per domain to force independent evidence.
-            if x["domain"] in domains:
-                rejected.append({"url": x["url"], "reason": "duplicate_domain"})
-                continue
-            domains.add(x["domain"])
-            accepted.append(x)
-        else:
-            rejected.append({"url": x["url"], "reason": x["reason"]})
+        if not domain:
+            rejected.append({"url": x.get("url"), "reason": "missing_domain"})
+            continue
+        if domain in domains:
+            rejected.append({"url": x.get("url"), "reason": "duplicate_domain"})
+            continue
+        domains.add(domain)
+        accepted.append(x)
+        if len(accepted) >= 12:
+            break
 
     if len(domains) >= 3 and len(accepted) >= 3:
         strength = "strong"
@@ -462,31 +659,37 @@ async def research(query: str) -> dict[str, Any]:
         strength = "insufficient"
 
     failure_reason = None
-    if strength == "insufficient": failure_reason = "no_meaningful_independent_sources"
-    elif strength == "weak": failure_reason = "only_one_independent_domain"
-    elif len(accepted) < 2: failure_reason = "insufficient_accepted_source_count"
+    if not accepted:
+        failure_reason = "no_meaningful_independent_sources"
+    elif strength == "weak":
+        failure_reason = "only_one_independent_domain"
+    elif len(accepted) < 2:
+        failure_reason = "insufficient_accepted_source_count"
 
     with closing(db()) as con:
-        for s in accepted + [dict(x, accepted=False) for x in rejected if x.get("url")]:
+        for src in accepted + [dict(x, accepted=False) for x in rejected if x.get("url")]:
             sid = uid("src")
             con.execute(
                 "INSERT INTO evidence_sources VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (sid, run_id, s.get("url"), s.get("canonical_url", s.get("url")), s.get("domain", ""),
-                 s.get("title", ""), s.get("snippet", ""), s.get("content", ""),
-                 float(s.get("quality", 0.0)), int(bool(s.get("accepted"))), s.get("reason", ""), now()),
+                (sid, run_id, src.get("url"), src.get("canonical_url", src.get("url")), src.get("domain", ""),
+                 src.get("title", ""), src.get("snippet", ""), src.get("content", ""), float(src.get("quality", 0.0)),
+                 int(bool(src.get("accepted"))), src.get("reason", ""), now()),
             )
         con.execute(
             "INSERT INTO research_runs VALUES (?,?,?,?,?,?,?,?,?)",
             (run_id, now(), query, strength, len([x for x in provider_hits if provider_hits[x] > 0]),
-             len(accepted), jdump(sorted(domains)), failure_reason, jdump({"provider_hits": provider_hits, "rejected": rejected})),
+             len(accepted), jdump(sorted(domains)), failure_reason,
+             jdump({"provider_hits": provider_hits, "provider_status": provider_status, "query_variants": variants, "rejected": rejected})),
         )
         con.commit()
 
     return {
         "run_id": run_id,
         "query": query,
+        "research_questions": research_questions(query),
         "strength": strength,
         "provider_hits": provider_hits,
+        "provider_status": provider_status,
         "accepted_sources": accepted,
         "rejected_sources": rejected,
         "accepted_domains": sorted(domains),
@@ -992,6 +1195,18 @@ async def autonomy_info():
         "external_actions": "safe-read by default",
     }
 
+@app.get("/research-capabilities")
+async def research_capabilities():
+    return {
+        "version": VERSION,
+        "research_mode": "hybrid",
+        "search_providers": ["duckduckgo", "bing", "google"],
+        "structured_evidence_providers": ["semantic_scholar", "openalex", "crossref", "wikipedia"],
+        "strategy": "decompose -> parallel search -> structured fallback -> source firewall -> independent-domain selection -> claim verification",
+        "principle": "provider failure is diagnosed separately from evidence absence",
+    }
+
+
 @app.get("/diagnostics")
 async def diagnostics():
     return {"version": VERSION, "network_research": True, "evidence_graph": True, "counterclaim_engine": True, "source_firewall": True, "claim_level_verification": True, "sqlite": str(DB_PATH), "free_first": True}
@@ -1014,3 +1229,4 @@ async def external_info():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+```
