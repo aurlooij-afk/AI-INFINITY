@@ -5,24 +5,21 @@ import uuid
 import time
 import asyncio
 import hashlib
+import urllib.request
+import urllib.parse
+import urllib.error
+
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import requests
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 
-# ============================================================
-# AI INFINITY
-# TARGET 3.5.0
-# Clean single-file runtime
-# ============================================================
-
-VERSION = "TARGET-3.5.0"
+VERSION = "TARGET-3.5.1"
 NAME = "AI Infinity"
 
 BASE_DIR = Path("/tmp/ai-infinity")
@@ -40,18 +37,13 @@ for directory in (
 ):
     directory.mkdir(parents=True, exist_ok=True)
 
-
 START_TIME = time.time()
 
-
-# ============================================================
-# APP
-# ============================================================
 
 app = FastAPI(
     title=NAME,
     version=VERSION,
-    description="AI Infinity autonomous task and intelligence runtime.",
+    description="AI Infinity autonomous task runtime",
 )
 
 app.add_middleware(
@@ -62,10 +54,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# ============================================================
-# MODELS
-# ============================================================
 
 class RunRequest(BaseModel):
     objective: Optional[str] = None
@@ -91,9 +79,53 @@ class MemoryRequest(BaseModel):
     value: Any
 
 
-# ============================================================
-# UTILITY
-# ============================================================
+class URLRequest(BaseModel):
+    url: str
+
+
+BUILTIN_TOOLS = [
+    {
+        "name": "capabilities",
+        "category": "builtin",
+        "permission": "safe",
+    },
+    {
+        "name": "health",
+        "category": "builtin",
+        "permission": "safe",
+    },
+    {
+        "name": "status",
+        "category": "builtin",
+        "permission": "safe",
+    },
+    {
+        "name": "memory",
+        "category": "builtin",
+        "permission": "safe",
+    },
+    {
+        "name": "research",
+        "category": "external",
+        "permission": "network",
+    },
+    {
+        "name": "verify",
+        "category": "reasoning",
+        "permission": "safe",
+    },
+    {
+        "name": "external_fetch",
+        "category": "external",
+        "permission": "network",
+    },
+    {
+        "name": "task_engine",
+        "category": "core",
+        "permission": "safe",
+    },
+]
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -109,18 +141,15 @@ def clean_text(value: Any, maximum: int = 20000) -> str:
 
     text = str(value).strip()
 
-    if len(text) > maximum:
-        text = text[:maximum]
-
-    return text
+    return text[:maximum]
 
 
 def save_json(path: Path, data: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    temporary = path.with_suffix(".tmp")
+    temp = path.with_suffix(".tmp")
 
-    with temporary.open("w", encoding="utf-8") as handle:
+    with temp.open("w", encoding="utf-8") as handle:
         json.dump(
             data,
             handle,
@@ -129,7 +158,7 @@ def save_json(path: Path, data: Dict[str, Any]) -> None:
             default=str,
         )
 
-    temporary.replace(path)
+    temp.replace(path)
 
 
 def load_json(path: Path) -> Optional[Dict[str, Any]]:
@@ -178,58 +207,6 @@ def sha256_text(text: str) -> str:
     ).hexdigest()
 
 
-# ============================================================
-# CAPABILITIES
-# ============================================================
-
-BUILTIN_TOOLS = [
-    {
-        "name": "capabilities",
-        "category": "builtin",
-        "permission": "safe",
-    },
-    {
-        "name": "health",
-        "category": "builtin",
-        "permission": "safe",
-    },
-    {
-        "name": "status",
-        "category": "builtin",
-        "permission": "safe",
-    },
-    {
-        "name": "memory",
-        "category": "builtin",
-        "permission": "safe",
-    },
-    {
-        "name": "research",
-        "category": "external",
-        "permission": "network",
-    },
-    {
-        "name": "verify",
-        "category": "reasoning",
-        "permission": "safe",
-    },
-    {
-        "name": "external_fetch",
-        "category": "external",
-        "permission": "network",
-    },
-    {
-        "name": "task_engine",
-        "category": "core",
-        "permission": "safe",
-    },
-]
-
-
-# ============================================================
-# SIMPLE LOCAL MEMORY
-# ============================================================
-
 def memory_file() -> Path:
     return MEMORY_DIR / "memory.json"
 
@@ -260,50 +237,73 @@ def remember(key: str, value: Any) -> Dict[str, Any]:
     return data[key]
 
 
-# ============================================================
-# EXTERNAL ACCESS
-# ============================================================
+def fetch_url(
+    url: str,
+    timeout: int = 15,
+) -> Dict[str, Any]:
 
-def fetch_url(url: str, timeout: int = 15) -> Dict[str, Any]:
     url = clean_text(url, 2000)
 
-    if not re.match(r"^https?://", url, re.IGNORECASE):
+    if not re.match(
+        r"^https?://",
+        url,
+        re.IGNORECASE,
+    ):
         return {
             "success": False,
             "url": url,
-            "error": "Only http:// and https:// URLs are supported.",
+            "error": (
+                "Only HTTP and HTTPS URLs "
+                "are supported."
+            ),
         }
 
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 "
+                "(compatible; AI-Infinity/3.5.1)"
+            )
+        },
+    )
+
     try:
-        response = requests.get(
-            url,
+        with urllib.request.urlopen(
+            request,
             timeout=timeout,
-            headers={
-                "User-Agent": (
-                    "AI-Infinity/3.5 "
-                    "(autonomous research client)"
-                )
-            },
-            allow_redirects=True,
-        )
+        ) as response:
 
-        content_type = response.headers.get(
-            "content-type",
-            "",
-        )
+            raw = response.read()
 
-        text = response.text
+            content_type = response.headers.get(
+                "content-type",
+                "",
+            )
 
-        if len(text) > 30000:
-            text = text[:30000]
+            text = raw.decode(
+                "utf-8",
+                errors="replace",
+            )
 
+            if len(text) > 30000:
+                text = text[:30000]
+
+            return {
+                "success": True,
+                "status_code": response.status,
+                "url": response.geturl(),
+                "content_type": content_type,
+                "content_length": len(raw),
+                "text": text,
+            }
+
+    except urllib.error.HTTPError as exc:
         return {
-            "success": response.ok,
-            "status_code": response.status_code,
-            "url": response.url,
-            "content_type": content_type,
-            "content_length": len(response.content),
-            "text": text,
+            "success": False,
+            "url": url,
+            "status_code": exc.code,
+            "error": str(exc),
         }
 
     except Exception as exc:
@@ -314,28 +314,13 @@ def fetch_url(url: str, timeout: int = 15) -> Dict[str, Any]:
         }
 
 
-def extract_urls(text: str) -> List[str]:
-    pattern = r"https?://[^\s<>\"]+"
+def generate_search_links(
+    objective: str,
+) -> List[str]:
 
-    urls = re.findall(pattern, text or "")
-
-    result = []
-
-    for url in urls:
-        url = url.rstrip(".,;:!?)]}")
-
-        if url not in result:
-            result.append(url)
-
-    return result
-
-
-# ============================================================
-# RESEARCH ENGINE
-# ============================================================
-
-def generate_search_links(objective: str) -> List[str]:
-    query = requests.utils.quote(objective)
+    query = urllib.parse.quote_plus(
+        objective
+    )
 
     return [
         f"https://www.google.com/search?q={query}",
@@ -349,19 +334,37 @@ def research_objective(
     max_sources: int = 5,
 ) -> Dict[str, Any]:
 
+    search_links = generate_search_links(
+        objective
+    )
+
     sources = []
-    search_links = generate_search_links(objective)
 
     for url in search_links[:max_sources]:
-        result = fetch_url(url, timeout=10)
+        result = fetch_url(
+            url,
+            timeout=10,
+        )
 
         sources.append(
             {
-                "url": result.get("url", url),
-                "success": result.get("success", False),
-                "status_code": result.get("status_code"),
-                "content_type": result.get("content_type"),
-                "content_length": result.get("content_length"),
+                "url": result.get(
+                    "url",
+                    url,
+                ),
+                "success": result.get(
+                    "success",
+                    False,
+                ),
+                "status_code": result.get(
+                    "status_code"
+                ),
+                "content_type": result.get(
+                    "content_type"
+                ),
+                "content_length": result.get(
+                    "content_length"
+                ),
             }
         )
 
@@ -374,63 +377,37 @@ def research_objective(
     }
 
 
-# ============================================================
-# VERIFICATION
-# ============================================================
-
 def verify_result(
     objective: str,
     result: Dict[str, Any],
 ) -> Dict[str, Any]:
 
-    checks = []
-
-    if objective:
-        checks.append(
-            {
-                "check": "objective_present",
-                "passed": True,
-            }
-        )
-    else:
-        checks.append(
-            {
-                "check": "objective_present",
-                "passed": False,
-            }
-        )
-
-    if isinstance(result, dict):
-        checks.append(
-            {
-                "check": "result_is_structured",
-                "passed": True,
-            }
-        )
-    else:
-        checks.append(
-            {
-                "check": "result_is_structured",
-                "passed": False,
-            }
-        )
-
-    passed = all(
-        item["passed"]
-        for item in checks
-    )
+    checks = [
+        {
+            "check": "objective_present",
+            "passed": bool(objective),
+        },
+        {
+            "check": "result_structured",
+            "passed": isinstance(
+                result,
+                dict,
+            ),
+        },
+    ]
 
     return {
-        "verified": passed,
+        "verified": all(
+            item["passed"]
+            for item in checks
+        ),
         "checks": checks,
-        "verification_method": "runtime consistency checks",
+        "verification_method": (
+            "runtime consistency checks"
+        ),
         "verified_at": utc_now(),
     }
 
-
-# ============================================================
-# INTELLIGENCE PIPELINE
-# ============================================================
 
 def build_analysis(
     objective: str,
@@ -441,7 +418,7 @@ def build_analysis(
     max_sources: int,
 ) -> Dict[str, Any]:
 
-    result: Dict[str, Any] = {
+    result = {
         "objective": objective,
         "version": VERSION,
         "status": "completed",
@@ -461,38 +438,36 @@ def build_analysis(
         ],
         "reasoning": {
             "goal": objective,
-            "intent_hash": sha256_text(objective),
-            "constraints": [
-                "Use available runtime capabilities",
-                "Do not claim unavailable capabilities",
-                "Return structured machine-readable output",
-            ],
+            "intent_hash": sha256_text(
+                objective
+            ),
         },
     }
 
     if research_enabled and external_access:
         result["research"] = research_objective(
             objective,
-            max_sources=max_sources,
+            max_sources,
         )
     else:
         result["research"] = {
             "enabled": False,
             "reason": (
-                "Research was not requested or "
-                "external access was disabled."
+                "Research was not requested "
+                "or external access was disabled."
             ),
         }
 
     result["answer"] = {
         "objective": objective,
         "interpretation": (
-            "AI Infinity received the objective and "
-            "completed the available runtime pipeline."
+            "AI Infinity received the objective "
+            "and completed the available "
+            "runtime pipeline."
         ),
         "next_action": (
-            "Use the returned task data as the machine-readable "
-            "execution record."
+            "Use the returned task data as "
+            "the execution record."
         ),
     }
 
@@ -508,9 +483,12 @@ def build_analysis(
         }
 
     if remember_enabled:
-        key = f"objective:{sha256_text(objective)[:16]}"
+        key = (
+            "objective:"
+            + sha256_text(objective)[:16]
+        )
 
-        memory_record = remember(
+        record = remember(
             key,
             {
                 "objective": objective,
@@ -521,7 +499,7 @@ def build_analysis(
         result["memory"] = {
             "saved": True,
             "key": key,
-            "record": memory_record,
+            "record": record,
         }
     else:
         result["memory"] = {
@@ -530,10 +508,6 @@ def build_analysis(
 
     return result
 
-
-# ============================================================
-# BACKGROUND TASK ENGINE
-# ============================================================
 
 async def execute_task(
     task_id: str,
@@ -553,9 +527,8 @@ async def execute_task(
     try:
         task["status"] = "running"
         task["started_at"] = utc_now()
-        save_task(task)
 
-        await asyncio.sleep(0)
+        save_task(task)
 
         result = await asyncio.to_thread(
             build_analysis,
@@ -581,158 +554,210 @@ async def execute_task(
         save_task(task)
 
 
-# ============================================================
-# ROOT / UI
-# ============================================================
-
-@app.get("/", response_class=HTMLResponse)
+@app.get(
+    "/",
+    response_class=HTMLResponse,
+)
 async def root():
+
     return f"""
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport"
+content="width=device-width,initial-scale=1">
+
 <title>AI Infinity</title>
+
 <style>
 body {{
-    margin: 0;
-    background: #0b1020;
-    color: #ffffff;
-    font-family: Arial, sans-serif;
+    margin:0;
+    background:#0b1020;
+    color:#fff;
+    font-family:Arial,sans-serif;
 }}
+
 .container {{
-    max-width: 900px;
-    margin: auto;
-    padding: 28px;
+    max-width:900px;
+    margin:auto;
+    padding:28px;
 }}
+
 .card {{
-    background: #151c31;
-    border-radius: 18px;
-    padding: 24px;
-    margin-top: 20px;
+    background:#151c31;
+    border-radius:18px;
+    padding:24px;
+    margin-top:20px;
 }}
+
 textarea {{
-    width: 100%;
-    min-height: 150px;
-    box-sizing: border-box;
-    border-radius: 12px;
-    padding: 14px;
-    background: #0b1020;
-    color: white;
-    border: 1px solid #35405e;
+    width:100%;
+    min-height:150px;
+    box-sizing:border-box;
+    border-radius:12px;
+    padding:14px;
+    background:#0b1020;
+    color:#fff;
+    border:1px solid #35405e;
 }}
+
 button {{
-    margin-top: 12px;
-    padding: 13px 20px;
-    border: 0;
-    border-radius: 10px;
-    cursor: pointer;
+    margin-top:12px;
+    padding:13px 20px;
+    border:0;
+    border-radius:10px;
+    cursor:pointer;
 }}
+
 pre {{
-    white-space: pre-wrap;
-    word-break: break-word;
+    white-space:pre-wrap;
+    word-break:break-word;
 }}
+
 .status {{
-    color: #8ee6a5;
+    color:#8ee6a5;
 }}
 </style>
 </head>
+
 <body>
+
 <div class="container">
+
 <h1>AI Infinity</h1>
-<p class="status">● Runtime online</p>
-<p>Version: {VERSION}</p>
+
+<p class="status">
+● Runtime online
+</p>
+
+<p>
+Version: {VERSION}
+</p>
 
 <div class="card">
+
 <h2>Run Objective</h2>
-<textarea id="objective"
-placeholder="Enter an objective..."></textarea>
+
+<textarea
+id="objective"
+placeholder="Enter an objective..."
+></textarea>
+
 <br>
-<button onclick="runTask()">Run AI Infinity</button>
+
+<button onclick="runTask()">
+Run AI Infinity
+</button>
+
 </div>
 
 <div class="card">
+
 <h2>Result</h2>
-<pre id="result">Waiting...</pre>
+
+<pre id="result">
+Waiting...
+</pre>
+
 </div>
+
 </div>
 
 <script>
+
 async function runTask() {{
+
     const objective =
-        document.getElementById("objective").value;
+        document
+        .getElementById("objective")
+        .value;
 
     if (!objective.trim()) {{
         alert("Enter an objective first.");
         return;
     }}
 
-    document.getElementById("result").textContent =
-        "Starting...";
+    document
+    .getElementById("result")
+    .textContent = "Starting...";
 
     try {{
-        const response = await fetch("/run", {{
-            method: "POST",
-            headers: {{
-                "Content-Type": "application/json"
-            }},
-            body: JSON.stringify({{
-                objective: objective,
-                research: true,
-                verify: true,
-                remember: true,
-                external_access: true
-            }})
-        }});
 
-        const data = await response.json();
+        const response =
+            await fetch("/run", {{
+                method:"POST",
 
-        document.getElementById("result").textContent =
-            JSON.stringify(data, null, 2);
+                headers:{{
+                    "Content-Type":
+                        "application/json"
+                }},
 
-    }} catch (error) {{
-        document.getElementById("result").textContent =
+                body:JSON.stringify({{
+                    objective:objective,
+                    research:true,
+                    verify:true,
+                    remember:true,
+                    external_access:true
+                }})
+            }});
+
+        const data =
+            await response.json();
+
+        document
+        .getElementById("result")
+        .textContent =
+            JSON.stringify(
+                data,
+                null,
+                2
+            );
+
+    }} catch(error) {{
+
+        document
+        .getElementById("result")
+        .textContent =
             String(error);
+
     }}
 }}
+
 </script>
+
 </body>
 </html>
 """
 
 
-# ============================================================
-# HEALTH
-# ============================================================
-
 @app.get("/health")
 async def health():
-    uptime = round(time.time() - START_TIME, 2)
 
     return {
         "status": "ok",
         "online": True,
         "service": NAME,
         "version": VERSION,
-        "uptime_seconds": uptime,
+        "uptime_seconds": round(
+            time.time() - START_TIME,
+            2,
+        ),
         "timestamp": utc_now(),
     }
 
 
 @app.get("/healthz")
 async def healthz():
+
     return {
         "status": "ok",
     }
 
 
-# ============================================================
-# CAPABILITIES
-# ============================================================
-
 @app.get("/capabilities")
 async def capabilities():
+
     return {
         "name": NAME,
         "version": VERSION,
@@ -747,32 +772,22 @@ async def capabilities():
             "web_ui": True,
             "json_api": True,
         },
-        "limitations": {
-            "internet": (
-                "External HTTP requests depend on the "
-                "deployment network and target website."
-            ),
-            "autonomous_actions": (
-                "The runtime does not silently perform "
-                "irreversible actions."
-            ),
-        },
     }
 
 
-# ============================================================
-# STATUS
-# ============================================================
-
 @app.get("/status")
 async def status():
-    task_files = list(TASK_DIR.glob("*.json"))
+
+    task_files = list(
+        TASK_DIR.glob("*.json")
+    )
 
     completed = 0
     running = 0
     failed = 0
 
     for path in task_files:
+
         task = load_json(path)
 
         if not task:
@@ -782,8 +797,10 @@ async def status():
 
         if state == "completed":
             completed += 1
+
         elif state == "running":
             running += 1
+
         elif state == "failed":
             failed += 1
 
@@ -802,18 +819,17 @@ async def status():
             "failed": failed,
         },
         "memory": {
-            "records": len(load_memory()),
+            "records": len(
+                load_memory()
+            ),
         },
         "timestamp": utc_now(),
     }
 
 
-# ============================================================
-# MEMORY
-# ============================================================
-
 @app.get("/memory")
 async def get_memory():
+
     data = load_memory()
 
     return {
@@ -824,13 +840,19 @@ async def get_memory():
 
 @app.get("/memory/count")
 async def memory_count():
+
     return {
-        "count": len(load_memory()),
+        "count": len(
+            load_memory()
+        ),
     }
 
 
 @app.post("/memory")
-async def add_memory(request: MemoryRequest):
+async def add_memory(
+    request: MemoryRequest,
+):
+
     record = remember(
         request.key,
         request.value,
@@ -843,15 +865,16 @@ async def add_memory(request: MemoryRequest):
     }
 
 
-# ============================================================
-# RUN
-# ============================================================
-
 @app.post("/run")
-async def run(request: RunRequest):
+async def run(
+    request: RunRequest,
+):
+
     data = request.model_dump()
 
-    objective = normalize_objective(data)
+    objective = normalize_objective(
+        data
+    )
 
     task_id = new_id("task")
 
@@ -864,8 +887,10 @@ async def run(request: RunRequest):
             "research": request.research,
             "verify": request.verify,
             "remember": request.remember,
-            "external_access": request.external_access,
-            "max_sources": request.max_sources,
+            "external_access":
+                request.external_access,
+            "max_sources":
+                request.max_sources,
         },
     }
 
@@ -873,13 +898,13 @@ async def run(request: RunRequest):
 
     asyncio.create_task(
         execute_task(
-            task_id=task_id,
-            objective=objective,
-            research=request.research,
-            verify=request.verify,
-            remember_flag=request.remember,
-            external_access=request.external_access,
-            max_sources=request.max_sources,
+            task_id,
+            objective,
+            request.research,
+            request.verify,
+            request.remember,
+            request.external_access,
+            request.max_sources,
         )
     )
 
@@ -888,18 +913,17 @@ async def run(request: RunRequest):
         "status": "queued",
         "version": VERSION,
         "objective": objective,
-        "poll": f"/task/{task_id}",
+        "poll": (
+            f"/task/{task_id}"
+        ),
     }
 
-
-# ============================================================
-# TASK CREATION
-# ============================================================
 
 @app.post("/tasks")
 async def create_task(
     request: TaskRequest,
 ):
+
     objective = normalize_objective(
         request.model_dump()
     )
@@ -915,7 +939,8 @@ async def create_task(
             "research": request.research,
             "verify": request.verify,
             "remember": request.remember,
-            "external_access": request.external_access,
+            "external_access":
+                request.external_access,
         },
     }
 
@@ -923,28 +948,28 @@ async def create_task(
 
     asyncio.create_task(
         execute_task(
-            task_id=task_id,
-            objective=objective,
-            research=request.research,
-            verify=request.verify,
-            remember_flag=request.remember,
-            external_access=request.external_access,
-            max_sources=5,
+            task_id,
+            objective,
+            request.research,
+            request.verify,
+            request.remember,
+            request.external_access,
+            5,
         )
     )
 
     return task
 
 
-# ============================================================
-# TASK STATUS
-# ============================================================
-
 @app.get("/task/{task_id}")
-async def get_task(task_id: str):
+async def get_task(
+    task_id: str,
+):
+
     task = load_task(task_id)
 
     if not task:
+
         raise HTTPException(
             status_code=404,
             detail="Task not found.",
@@ -954,23 +979,29 @@ async def get_task(task_id: str):
 
 
 @app.get("/tasks/{task_id}")
-async def get_task_alias(task_id: str):
-    return await get_task(task_id)
+async def get_task_alias(
+    task_id: str,
+):
 
+    return await get_task(
+        task_id
+    )
 
-# ============================================================
-# TASK LIST
-# ============================================================
 
 @app.get("/tasks")
 async def list_tasks():
+
     tasks = []
 
-    for path in sorted(
+    paths = sorted(
         TASK_DIR.glob("*.json"),
-        key=lambda p: p.stat().st_mtime,
+        key=lambda p:
+            p.stat().st_mtime,
         reverse=True,
-    ):
+    )
+
+    for path in paths:
+
         task = load_json(path)
 
         if task:
@@ -982,12 +1013,11 @@ async def list_tasks():
     }
 
 
-# ============================================================
-# DIRECT RESEARCH
-# ============================================================
-
 @app.post("/research")
-async def research(request: RunRequest):
+async def research(
+    request: RunRequest,
+):
+
     objective = normalize_objective(
         request.model_dump()
     )
@@ -1005,35 +1035,32 @@ async def research(request: RunRequest):
     }
 
 
-# ============================================================
-# EXTERNAL URL
-# ============================================================
-
-class URLRequest(BaseModel):
-    url: str
-
-
 @app.post("/external/fetch")
-async def external_fetch(request: URLRequest):
-    result = await asyncio.to_thread(
+async def external_fetch(
+    request: URLRequest,
+):
+
+    return await asyncio.to_thread(
         fetch_url,
         request.url,
     )
 
-    return result
-
 
 @app.post("/fetch")
-async def fetch_alias(request: URLRequest):
-    return await external_fetch(request)
+async def fetch_alias(
+    request: URLRequest,
+):
 
+    return await external_fetch(
+        request
+    )
 
-# ============================================================
-# VERIFY
-# ============================================================
 
 @app.post("/verify")
-async def verify(request: RunRequest):
+async def verify(
+    request: RunRequest,
+):
+
     objective = normalize_objective(
         request.model_dump()
     )
@@ -1052,12 +1079,9 @@ async def verify(request: RunRequest):
     }
 
 
-# ============================================================
-# VERSION
-# ============================================================
-
 @app.get("/version")
 async def version():
+
     return {
         "name": NAME,
         "version": VERSION,
@@ -1065,12 +1089,11 @@ async def version():
     }
 
 
-# ============================================================
-# VIDEO COMPATIBILITY
-# ============================================================
-
 @app.get("/video/{video_id}")
-async def get_video(video_id: str):
+async def get_video(
+    video_id: str,
+):
+
     safe_id = re.sub(
         r"[^a-zA-Z0-9._-]",
         "",
@@ -1085,7 +1108,9 @@ async def get_video(video_id: str):
     ]
 
     for path in candidates:
+
         if path.exists() and path.is_file():
+
             return FileResponse(
                 path,
                 media_type="video/mp4",
@@ -1098,45 +1123,44 @@ async def get_video(video_id: str):
     )
 
 
-# ============================================================
-# GENERIC API ERROR HANDLER
-# ============================================================
-
 @app.exception_handler(Exception)
 async def global_exception_handler(
     request,
     exc: Exception,
 ):
+
     return JSONResponse(
         status_code=500,
         content={
             "status": "error",
             "error": str(exc),
-            "path": str(request.url.path),
+            "path": str(
+                request.url.path
+            ),
             "version": VERSION,
             "timestamp": utc_now(),
         },
     )
 
 
-# ============================================================
-# STARTUP
-# ============================================================
-
 @app.on_event("startup")
 async def startup_event():
-    BASE_DIR.mkdir(parents=True, exist_ok=True)
-    TASK_DIR.mkdir(parents=True, exist_ok=True)
-    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-    VIDEO_DIR.mkdir(parents=True, exist_ok=True)
-    ASSET_DIR.mkdir(parents=True, exist_ok=True)
 
+    for directory in (
+        BASE_DIR,
+        TASK_DIR,
+        MEMORY_DIR,
+        VIDEO_DIR,
+        ASSET_DIR,
+    ):
+        directory.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
 
-# ============================================================
-# LOCAL START
-# ============================================================
 
 if __name__ == "__main__":
+
     import uvicorn
 
     port = int(
