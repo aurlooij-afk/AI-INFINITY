@@ -1,64 +1,37 @@
 """
 AI Infinity
-TARGET-2050.21
-BUILD: EVIDENCE-INTEGRITY-SOURCE-QUALITY-CORE
+TARGET-2050.22
+BUILD: WEB-CONTROL-CENTER + EVIDENCE-INTEGRITY-CORE
 
 Purpose:
-    Build a practical autonomous research/verification core.
-
-Key improvements over TARGET-2050.20:
-    - Binary/PDF validation
-    - PDF extraction when pypdf is available
-    - HTML challenge/login/error detection
-    - Evidence-text validation
-    - Claim sanitization
-    - Metadata/evidence separation
-    - Underlying-source deduplication
-    - Independent-source counting
-    - Source-health scoring
-    - Claim-level verification
-    - Counter-evidence detection
-    - Contradiction analysis
-    - Explicit verification reasons
-    - SQLite persistence
-    - Free research providers
-    - SSRF/source firewall
-    - Safe request limits
-    - Backward-compatible practical API routes
-
-Environment:
-    PORT
-    DATABASE_PATH
-    MAX_RESEARCH_SOURCES
-    REQUEST_TIMEOUT
-    USER_AGENT
+- Give AI Infinity a real browser interface at /
+- Preserve the autonomous research backend
+- Preserve evidence validation
+- Preserve source-quality checks
+- Preserve claim verification
+- Preserve counter-evidence
+- Preserve SQLite persistence
+- Provide API + dashboard from one FastAPI application
 """
 
 from __future__ import annotations
 
 import hashlib
-import html
 import json
 import math
 import os
 import re
 import sqlite3
 import time
-import traceback
 import uuid
 from datetime import datetime, timezone
-from html.parser import HTMLParser
-from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import (
-    parse_qsl,
-    urlencode,
-    urljoin,
-    urlparse,
-    urlunparse,
-)
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse, urlunparse
 
 import requests
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 
@@ -66,198 +39,207 @@ from pydantic import BaseModel, Field
 # CONFIGURATION
 # ============================================================
 
-VERSION = "TARGET-2050.21"
-BUILD = "EVIDENCE-INTEGRITY-SOURCE-QUALITY-CORE"
+VERSION = "TARGET-2050.22"
+BUILD = "WEB-CONTROL-CENTER-EVIDENCE-INTEGRITY-CORE"
 
-PORT = int(os.getenv("PORT", "8000"))
-DATABASE_PATH = os.getenv("DATABASE_PATH", "/tmp/ai_infinity.db")
-MAX_RESEARCH_SOURCES = int(os.getenv("MAX_RESEARCH_SOURCES", "24"))
+APP_NAME = "AI Infinity"
+
+BASE_DIR = Path(os.getenv("AI_INFINITY_DATA", "/tmp/ai-infinity"))
+BASE_DIR.mkdir(parents=True, exist_ok=True)
+
+DB_PATH = BASE_DIR / "ai_infinity.db"
+
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "15"))
+MAX_FETCH_BYTES = 5 * 1024 * 1024
 
-USER_AGENT = os.getenv(
-    "USER_AGENT",
-    "AI-Infinity/2050.21 (+https://ai-infinity-ca5e.onrender.com)",
+USER_AGENT = (
+    "AI-Infinity/2050.22 "
+    "(research-and-evidence-validation; +https://ai-infinity-ca5e.onrender.com)"
 )
-
-APP_TITLE = "AI Infinity"
-APP_DESCRIPTION = (
-    "Practical autonomous research, evidence integrity, "
-    "verification and mission orchestration core."
-)
-
-MAX_URL_LENGTH = 2048
-MAX_TEXT_LENGTH = 50000
-MIN_EVIDENCE_TEXT = 180
-MAX_CLAIMS_PER_SOURCE = 8
-MAX_CLAIMS_PER_MISSION = 24
-
-BLOCKED_HOSTS = {
-    "localhost",
-    "127.0.0.1",
-    "0.0.0.0",
-    "::1",
-}
-
-BLOCKED_SUFFIXES = (
-    ".local",
-    ".internal",
-    ".localhost",
-)
-
-CHALLENGE_PATTERNS = [
-    r"client challenge",
-    r"javascript is disabled",
-    r"enable javascript",
-    r"checking your browser",
-    r"verify you are human",
-    r"verify you are a human",
-    r"cf-chl",
-    r"cloudflare",
-    r"attention required",
-    r"access denied",
-    r"bot detection",
-    r"bot detected",
-    r"captcha",
-    r"security verification",
-    r"ddos protection",
-    r"ray id",
-    r"please wait while we verify",
-]
-
-LOGIN_PATTERNS = [
-    r"sign in",
-    r"log in",
-    r"login",
-    r"create an account",
-]
-
-ERROR_PATTERNS = [
-    r"internal server error",
-    r"bad gateway",
-    r"service unavailable",
-    r"gateway timeout",
-    r"page not found",
-    r"404 not found",
-    r"403 forbidden",
-    r"request blocked",
-]
-
-LOW_VALUE_PATTERNS = [
-    r"cookie policy",
-    r"privacy policy",
-    r"terms of service",
-    r"accept cookies",
-    r"subscribe to our newsletter",
-]
 
 
 # ============================================================
-# APP
+# FASTAPI
 # ============================================================
 
 app = FastAPI(
-    title=APP_TITLE,
-    description=APP_DESCRIPTION,
+    title=APP_NAME,
     version=VERSION,
+    description="AI Infinity autonomous research and evidence engine",
 )
 
 
 # ============================================================
-# UTILITIES
+# DATABASE
 # ============================================================
 
-def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
-def new_id(prefix: str) -> str:
-    return f"{prefix}-{uuid.uuid4().hex[:12]}"
+def init_db():
+    conn = db()
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS missions (
+            id TEXT PRIMARY KEY,
+            objective TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            completed_at REAL,
+            result_json TEXT
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mission_id TEXT NOT NULL,
+            url TEXT,
+            title TEXT,
+            provider TEXT,
+            source_key TEXT,
+            source_type TEXT,
+            quality REAL DEFAULT 0,
+            valid INTEGER DEFAULT 0,
+            independent INTEGER DEFAULT 0,
+            content_preview TEXT,
+            rejection_reason TEXT,
+            created_at REAL NOT NULL
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS claims (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mission_id TEXT NOT NULL,
+            claim TEXT NOT NULL,
+            decision TEXT,
+            confidence REAL DEFAULT 0,
+            supporting_sources INTEGER DEFAULT 0,
+            contradicting_sources INTEGER DEFAULT 0,
+            created_at REAL NOT NULL
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mission_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            payload TEXT,
+            created_at REAL NOT NULL
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS memory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mission_id TEXT,
+            content TEXT NOT NULL,
+            created_at REAL NOT NULL
+        )
+        """
+    )
+
+    conn.commit()
+    conn.close()
 
 
-def sha256(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8", errors="ignore")).hexdigest()
+init_db()
 
 
-def clean_text(value: Any, limit: int = MAX_TEXT_LENGTH) -> str:
-    if value is None:
-        return ""
+# ============================================================
+# HELPERS
+# ============================================================
 
-    text = str(value)
-
-    text = text.replace("\x00", " ")
-    text = html.unescape(text)
-
-    text = re.sub(r"\r\n?", "\n", text)
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-
-    return text.strip()[:limit]
+def now() -> float:
+    return time.time()
 
 
-def normalize_title(title: str) -> str:
-    title = clean_text(title, 1000).lower()
+def iso(ts: Optional[float] = None) -> str:
+    if ts is None:
+        ts = now()
 
-    title = re.sub(r"https?://\S+", " ", title)
-    title = re.sub(r"[^a-z0-9\s]", " ", title)
-    title = re.sub(r"\s+", " ", title)
-
-    return title.strip()
-
-
-def title_fingerprint(title: str) -> str:
-    normalized = normalize_title(title)
-
-    if not normalized:
-        return ""
-
-    return sha256(normalized)[:24]
+    return datetime.fromtimestamp(
+        ts, timezone.utc
+    ).isoformat()
 
 
-def canonicalize_url(url: str) -> str:
+def safe_json(value: Any) -> Any:
     try:
-        parsed = urlparse(url)
+        json.dumps(value)
+        return value
+    except Exception:
+        return str(value)
 
-        scheme = parsed.scheme.lower()
-        host = (parsed.hostname or "").lower()
 
-        if not scheme or not host:
-            return url
+def log_event(
+    mission_id: str,
+    event_type: str,
+    payload: Any = None,
+):
+    conn = db()
 
-        path = parsed.path or "/"
+    conn.execute(
+        """
+        INSERT INTO events
+        (mission_id, event_type, payload, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            mission_id,
+            event_type,
+            json.dumps(safe_json(payload)),
+            now(),
+        ),
+    )
 
-        # Remove tracking parameters.
-        ignored = {
-            "utm_source",
-            "utm_medium",
-            "utm_campaign",
-            "utm_term",
-            "utm_content",
-            "fbclid",
-            "gclid",
-            "ref",
-        }
+    conn.commit()
+    conn.close()
 
-        query_items = [
-            (k, v)
-            for k, v in parse_qsl(parsed.query, keep_blank_values=True)
-            if k.lower() not in ignored
-        ]
 
-        query = urlencode(query_items)
+def normalize_url(url: str) -> str:
+    try:
+        p = urlparse(url.strip())
+
+        scheme = p.scheme.lower()
+        host = (p.hostname or "").lower()
+
+        port = p.port
+
+        if port and not (
+            (scheme == "http" and port == 80)
+            or (scheme == "https" and port == 443)
+        ):
+            host = f"{host}:{port}"
+
+        path = p.path or "/"
 
         return urlunparse(
             (
                 scheme,
                 host,
-                path.rstrip("/") or "/",
+                path,
                 "",
-                query,
+                p.query,
                 "",
             )
         )
 
     except Exception:
-        return url
+        return url.strip()
 
 
 def domain_of(url: str) -> str:
@@ -267,155 +249,111 @@ def domain_of(url: str) -> str:
         return ""
 
 
-def source_key(source: Dict[str, Any]) -> str:
-    """
-    Identifies the underlying evidence object rather than merely
-    the provider that returned it.
-
-    DOI is preferred because Crossref/OpenAlex may describe the
-    same paper.
-    """
-
-    doi = clean_text(source.get("doi", ""), 500).lower()
-
-    if doi:
-        return f"doi:{doi}"
-
-    title_fp = title_fingerprint(source.get("title", ""))
-
-    if title_fp:
-        return f"title:{title_fp}"
-
-    canonical = canonicalize_url(source.get("url", ""))
-
-    return f"url:{canonical}"
-
-
-def independent_key(source: Dict[str, Any]) -> str:
-    """
-    Same underlying work = same independent evidence source.
-
-    Provider diversity does NOT imply source independence.
-    """
-
-    return source_key(source)
+def sha(value: str) -> str:
+    return hashlib.sha256(
+        value.encode("utf-8", errors="ignore")
+    ).hexdigest()[:24]
 
 
 # ============================================================
-# SAFE URL / SSRF FIREWALL
+# SSRF / PUBLIC URL VALIDATION
 # ============================================================
 
-def validate_public_url(url: str) -> Tuple[bool, str]:
-    if not url:
-        return False, "empty_url"
+PRIVATE_HOST_PATTERNS = [
+    "localhost",
+    "127.",
+    "0.0.0.0",
+    "::1",
+    "169.254.",
+    "10.",
+    "192.168.",
+    "172.16.",
+    "172.17.",
+    "172.18.",
+    "172.19.",
+    "172.20.",
+    "172.21.",
+    "172.22.",
+    "172.23.",
+    "172.24.",
+    "172.25.",
+    "172.26.",
+    "172.27.",
+    "172.28.",
+    "172.29.",
+    "172.30.",
+    "172.31.",
+]
 
-    if len(url) > MAX_URL_LENGTH:
-        return False, "url_too_long"
 
+def validate_public_url(url: str) -> tuple[bool, str]:
     try:
-        parsed = urlparse(url)
+        p = urlparse(url)
+
+        if p.scheme not in {"http", "https"}:
+            return False, "unsupported_scheme"
+
+        host = (p.hostname or "").lower()
+
+        if not host:
+            return False, "missing_host"
+
+        if host in {
+            "localhost",
+            "localhost.localdomain",
+        }:
+            return False, "private_host"
+
+        for pattern in PRIVATE_HOST_PATTERNS:
+            if host.startswith(pattern):
+                return False, "private_host"
+
+        if host.endswith(".local"):
+            return False, "local_domain"
+
+        return True, "ok"
+
     except Exception:
         return False, "invalid_url"
-
-    if parsed.scheme not in {"http", "https"}:
-        return False, "unsupported_scheme"
-
-    host = (parsed.hostname or "").lower()
-
-    if not host:
-        return False, "missing_host"
-
-    if host in BLOCKED_HOSTS:
-        return False, "blocked_host"
-
-    if any(host.endswith(suffix) for suffix in BLOCKED_SUFFIXES):
-        return False, "blocked_private_suffix"
-
-    # Prevent obvious localhost forms.
-    if host.startswith("127."):
-        return False, "blocked_loopback"
-
-    if host.startswith("10."):
-        return False, "blocked_private_network"
-
-    if host.startswith("192.168."):
-        return False, "blocked_private_network"
-
-    if host.startswith("172."):
-        try:
-            second = int(host.split(".")[1])
-            if 16 <= second <= 31:
-                return False, "blocked_private_network"
-        except Exception:
-            pass
-
-    return True, "ok"
-
-
-# ============================================================
-# HTML PARSER
-# ============================================================
-
-class TextExtractor(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.parts: List[str] = []
-        self.skip_depth = 0
-        self.skip_tags = {
-            "script",
-            "style",
-            "noscript",
-            "svg",
-            "canvas",
-            "iframe",
-            "template",
-        }
-
-    def handle_starttag(self, tag, attrs):
-        if tag.lower() in self.skip_tags:
-            self.skip_depth += 1
-
-    def handle_endtag(self, tag):
-        if tag.lower() in self.skip_tags and self.skip_depth > 0:
-            self.skip_depth -= 1
-
-    def handle_data(self, data):
-        if self.skip_depth == 0:
-            text = clean_text(data, 5000)
-
-            if text:
-                self.parts.append(text)
-
-    def get_text(self) -> str:
-        text = "\n".join(self.parts)
-        return clean_text(text, MAX_TEXT_LENGTH)
-
-
-def html_to_text(content: bytes) -> str:
-    try:
-        decoded = content.decode("utf-8", errors="replace")
-    except Exception:
-        decoded = str(content)
-
-    parser = TextExtractor()
-
-    try:
-        parser.feed(decoded)
-        parser.close()
-        return parser.get_text()
-    except Exception:
-        return clean_text(decoded)
 
 
 # ============================================================
 # CONTENT VALIDATION
 # ============================================================
 
-def looks_like_pdf(content: bytes, content_type: str = "") -> bool:
-    if content[:5] == b"%PDF-":
-        return True
+CHALLENGE_PATTERNS = [
+    "client challenge",
+    "enable javascript",
+    "checking your browser",
+    "just a moment",
+    "cf-chl",
+    "cloudflare",
+    "captcha",
+    "access denied",
+    "verify you are human",
+    "attention required",
+]
 
-    return "application/pdf" in content_type.lower()
+LOGIN_PATTERNS = [
+    "sign in",
+    "log in",
+    "login required",
+    "create an account",
+]
+
+ERROR_PATTERNS = [
+    "internal server error",
+    "bad gateway",
+    "service unavailable",
+    "page not found",
+]
+
+
+def looks_like_pdf(content: bytes, content_type: str = "") -> bool:
+    return (
+        content[:5] == b"%PDF-"
+        or "application/pdf" in content_type.lower()
+    )
 
 
 def looks_binary(content: bytes) -> bool:
@@ -424,72 +362,72 @@ def looks_binary(content: bytes) -> bool:
 
     sample = content[:4096]
 
-    nulls = sample.count(b"\x00")
-
-    if nulls > 10:
+    if b"\x00" in sample:
         return True
 
-    # PDF, ZIP, image and executable signatures.
-    signatures = (
-        b"\x89PNG",
-        b"\xff\xd8\xff",
-        b"GIF8",
-        b"PK\x03\x04",
-        b"MZ",
-        b"\x7fELF",
-        b"%PDF-",
+    bad = sum(
+        1
+        for b in sample
+        if b < 9 or (13 < b < 32)
     )
 
-    return sample.startswith(signatures)
+    return bad > len(sample) * 0.12
 
 
 def detect_page_problem(text: str) -> Optional[str]:
-    if not text:
-        return "empty_content"
-
-    lower = text.lower()
+    lowered = text.lower()
 
     for pattern in CHALLENGE_PATTERNS:
-        if re.search(pattern, lower):
-            return "challenge_or_bot_protection"
+        if pattern in lowered:
+            return "challenge_or_block_page"
+
+    for pattern in LOGIN_PATTERNS:
+        if pattern in lowered and len(text) < 5000:
+            return "login_page"
 
     for pattern in ERROR_PATTERNS:
-        if re.search(pattern, lower):
-            return "server_or_http_error_page"
-
-    # Challenge pages are generally very short compared with real
-    # research documents.
-    if len(text) < 500:
-        login_hits = sum(
-            1 for pattern in LOGIN_PATTERNS if re.search(pattern, lower)
-        )
-
-        if login_hits >= 2:
-            return "login_or_authentication_page"
-
-    low_value_hits = sum(
-        1 for pattern in LOW_VALUE_PATTERNS if re.search(pattern, lower)
-    )
-
-    if len(text) < 1200 and low_value_hits >= 3:
-        return "low_value_boilerplate"
+        if pattern in lowered:
+            return "error_page"
 
     return None
 
 
-def extract_pdf_text(content: bytes) -> Tuple[str, str]:
-    """
-    Uses pypdf when installed.
+def validate_evidence_text(text: str) -> tuple[bool, str]:
+    if not text:
+        return False, "empty_content"
 
-    If unavailable, the PDF is not silently treated as text.
-    """
+    text = text.strip()
 
+    if len(text) < 250:
+        return False, "insufficient_text"
+
+    if text.startswith("%PDF-"):
+        return False, "raw_pdf_content"
+
+    if looks_binary(text.encode("utf-8", errors="ignore")):
+        return False, "binary_content"
+
+    problem = detect_page_problem(text)
+
+    if problem:
+        return False, problem
+
+    words = re.findall(r"\b[A-Za-z]{2,}\b", text)
+
+    if len(words) < 50:
+        return False, "too_few_readable_words"
+
+    return True, "valid"
+
+
+# ============================================================
+# PDF SUPPORT
+# ============================================================
+
+def extract_pdf_text(content: bytes) -> str:
     try:
         from pypdf import PdfReader
-    except Exception:
-        return "", "pdf_extractor_unavailable"
 
-    try:
         import io
 
         reader = PdfReader(io.BytesIO(content))
@@ -498,1134 +436,1075 @@ def extract_pdf_text(content: bytes) -> Tuple[str, str]:
 
         for page in reader.pages[:30]:
             try:
-                text = page.extract_text() or ""
+                pages.append(page.extract_text() or "")
             except Exception:
-                text = ""
+                continue
 
-            if text:
-                pages.append(text)
-
-        result = clean_text("\n".join(pages), MAX_TEXT_LENGTH)
-
-        if len(result) < MIN_EVIDENCE_TEXT:
-            return "", "pdf_text_insufficient"
-
-        return result, "ok"
+        return "\n".join(pages).strip()
 
     except Exception:
-        return "", "pdf_extraction_failed"
-
-
-def validate_evidence_text(
-    text: str,
-    content_type: str = "",
-    content: bytes = b"",
-) -> Dict[str, Any]:
-
-    result = {
-        "valid": False,
-        "reason": None,
-        "text": "",
-        "is_pdf": False,
-        "is_binary": False,
-        "length": 0,
-    }
-
-    if looks_like_pdf(content, content_type):
-        result["is_pdf"] = True
-
-        pdf_text, pdf_status = extract_pdf_text(content)
-
-        if pdf_status != "ok":
-            result["reason"] = pdf_status
-            return result
-
-        text = pdf_text
-
-    elif looks_binary(content):
-        result["is_binary"] = True
-        result["reason"] = "binary_content"
-        return result
-
-    text = clean_text(text, MAX_TEXT_LENGTH)
-
-    result["length"] = len(text)
-
-    if len(text) < MIN_EVIDENCE_TEXT:
-        result["reason"] = "insufficient_text"
-        return result
-
-    problem = detect_page_problem(text)
-
-    if problem:
-        result["reason"] = problem
-        return result
-
-    # Reject obvious raw PDF artifacts.
-    if text.startswith("%PDF-"):
-        result["reason"] = "raw_pdf_bytes"
-        return result
-
-    # Require actual alphabetic content.
-    alpha = len(re.findall(r"[A-Za-z]", text))
-
-    if alpha < 100:
-        result["reason"] = "insufficient_human_readable_text"
-        return result
-
-    result["valid"] = True
-    result["reason"] = "ok"
-    result["text"] = text
-
-    return result
+        return ""
 
 
 # ============================================================
-# DATABASE
+# SOURCE FETCH
 # ============================================================
-
-DB_LOCK = None
-
-
-def db_connection():
-    connection = sqlite3.connect(
-        DATABASE_PATH,
-        timeout=30,
-        check_same_thread=False,
-    )
-
-    connection.row_factory = sqlite3.Row
-
-    return connection
-
-
-def init_db():
-    db = db_connection()
-
-    try:
-        db.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS missions (
-                id TEXT PRIMARY KEY,
-                objective TEXT NOT NULL,
-                status TEXT NOT NULL,
-                version TEXT,
-                build TEXT,
-                result_json TEXT,
-                created_at TEXT,
-                updated_at TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS sources (
-                id TEXT PRIMARY KEY,
-                mission_id TEXT,
-                provider TEXT,
-                title TEXT,
-                url TEXT,
-                canonical_url TEXT,
-                domain TEXT,
-                doi TEXT,
-                source_key TEXT,
-                source_type TEXT,
-                content_type TEXT,
-                fetched_status INTEGER,
-                content_valid INTEGER,
-                rejection_reason TEXT,
-                evidence_text TEXT,
-                evidence_length INTEGER,
-                quality_score REAL,
-                health_score REAL,
-                independent INTEGER,
-                metadata_json TEXT,
-                created_at TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS claims (
-                id TEXT PRIMARY KEY,
-                mission_id TEXT,
-                source_id TEXT,
-                claim_text TEXT,
-                claim_hash TEXT,
-                status TEXT,
-                confidence REAL,
-                created_at TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS evidence_links (
-                id TEXT PRIMARY KEY,
-                mission_id TEXT,
-                claim_id TEXT,
-                source_id TEXT,
-                relation TEXT,
-                strength REAL,
-                explanation TEXT,
-                created_at TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS events (
-                id TEXT PRIMARY KEY,
-                mission_id TEXT,
-                event_type TEXT,
-                payload_json TEXT,
-                created_at TEXT
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_sources_mission
-                ON sources(mission_id);
-
-            CREATE INDEX IF NOT EXISTS idx_claims_mission
-                ON claims(mission_id);
-
-            CREATE INDEX IF NOT EXISTS idx_claim_hash
-                ON claims(claim_hash);
-            """
-        )
-
-        db.commit()
-
-    finally:
-        db.close()
-
-
-init_db()
-
-
-def db_execute(query: str, params=(), fetch=False, many=False):
-    db = db_connection()
-
-    try:
-        cur = db.cursor()
-
-        if many:
-            cur.executemany(query, params)
-        else:
-            cur.execute(query, params)
-
-        if fetch:
-            rows = cur.fetchall()
-            return [dict(row) for row in rows]
-
-        db.commit()
-        return cur.lastrowid
-
-    finally:
-        db.close()
-
-
-def save_event(
-    mission_id: str,
-    event_type: str,
-    payload: Dict[str, Any],
-):
-    db_execute(
-        """
-        INSERT INTO events
-        (id, mission_id, event_type, payload_json, created_at)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (
-            new_id("event"),
-            mission_id,
-            event_type,
-            json.dumps(payload, ensure_ascii=False),
-            utc_now(),
-        ),
-    )
-
-
-# ============================================================
-# HTTP FETCHER
-# ============================================================
-
-SESSION = requests.Session()
-
-SESSION.headers.update(
-    {
-        "User-Agent": USER_AGENT,
-        "Accept": (
-            "text/html,application/xhtml+xml,"
-            "application/xml;q=0.9,"
-            "application/pdf;q=0.8,*/*;q=0.5"
-        ),
-    }
-)
-
 
 def fetch_url(url: str) -> Dict[str, Any]:
+    valid, reason = validate_public_url(url)
 
-    allowed, reason = validate_public_url(url)
-
-    if not allowed:
+    if not valid:
         return {
-            "ok": False,
+            "valid": False,
             "url": url,
-            "status": None,
-            "content_type": "",
-            "content": b"",
-            "text": "",
             "reason": reason,
         }
 
     try:
-        response = SESSION.get(
+        response = requests.get(
             url,
             timeout=REQUEST_TIMEOUT,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": (
+                    "text/html,application/xhtml+xml,"
+                    "application/pdf,text/plain;q=0.9,*/*;q=0.5"
+                ),
+            },
             allow_redirects=True,
             stream=True,
         )
 
         final_url = response.url
 
-        allowed_final, final_reason = validate_public_url(final_url)
+        final_valid, final_reason = validate_public_url(
+            final_url
+        )
 
-        if not allowed_final:
+        if not final_valid:
             response.close()
 
             return {
-                "ok": False,
-                "url": url,
-                "final_url": final_url,
-                "status": response.status_code,
-                "content_type": "",
-                "content": b"",
-                "text": "",
-                "reason": final_reason,
+                "valid": False,
+                "url": final_url,
+                "reason": "unsafe_redirect:" + final_reason,
+                "status_code": response.status_code,
             }
 
-        content = response.content[:5_000_000]
+        chunks = []
+        total = 0
+
+        for chunk in response.iter_content(65536):
+            if not chunk:
+                continue
+
+            total += len(chunk)
+
+            if total > MAX_FETCH_BYTES:
+                break
+
+            chunks.append(chunk)
+
+        response.close()
+
+        content = b"".join(chunks)
 
         content_type = response.headers.get(
             "content-type",
             "",
-        ).lower()
-
-        status = response.status_code
-
-        response.close()
-
-        if status < 200 or status >= 400:
-            return {
-                "ok": False,
-                "url": url,
-                "final_url": final_url,
-                "status": status,
-                "content_type": content_type,
-                "content": content,
-                "text": "",
-                "reason": f"http_{status}",
-            }
-
-        if looks_like_pdf(content, content_type):
-            validation = validate_evidence_text(
-                "",
-                content_type,
-                content,
-            )
-
-            return {
-                "ok": validation["valid"],
-                "url": url,
-                "final_url": final_url,
-                "status": status,
-                "content_type": content_type,
-                "content": content,
-                "text": validation["text"],
-                "reason": validation["reason"],
-                "is_pdf": True,
-            }
-
-        if "text" not in content_type and "html" not in content_type:
-            if looks_binary(content):
-                return {
-                    "ok": False,
-                    "url": url,
-                    "final_url": final_url,
-                    "status": status,
-                    "content_type": content_type,
-                    "content": content,
-                    "text": "",
-                    "reason": "unsupported_binary_content",
-                }
-
-        text = html_to_text(content)
-
-        validation = validate_evidence_text(
-            text,
-            content_type,
-            content,
         )
 
-        return {
-            "ok": validation["valid"],
-            "url": url,
-            "final_url": final_url,
-            "status": status,
-            "content_type": content_type,
-            "content": content,
-            "text": validation["text"],
-            "reason": validation["reason"],
-            "is_pdf": validation["is_pdf"],
-        }
+        if looks_like_pdf(content, content_type):
+            text = extract_pdf_text(content)
 
-    except requests.Timeout:
+            if not text:
+                return {
+                    "valid": False,
+                    "url": final_url,
+                    "reason": "pdf_text_extraction_failed",
+                    "status_code": response.status_code,
+                    "content_type": content_type,
+                }
+
+        elif looks_binary(content):
+            return {
+                "valid": False,
+                "url": final_url,
+                "reason": "binary_content",
+                "status_code": response.status_code,
+                "content_type": content_type,
+            }
+
+        else:
+            text = content.decode(
+                "utf-8",
+                errors="replace",
+            )
+
+            # Remove obvious scripts/styles for evidence analysis.
+            text = re.sub(
+                r"<script\b[^>]*>.*?</script>",
+                " ",
+                text,
+                flags=re.I | re.S,
+            )
+
+            text = re.sub(
+                r"<style\b[^>]*>.*?</style>",
+                " ",
+                text,
+                flags=re.I | re.S,
+            )
+
+            text = re.sub(
+                r"<[^>]+>",
+                " ",
+                text,
+            )
+
+            text = re.sub(
+                r"\s+",
+                " ",
+                text,
+            ).strip()
+
+        ok, validation_reason = validate_evidence_text(text)
+
         return {
-            "ok": False,
-            "url": url,
-            "status": None,
-            "content_type": "",
-            "content": b"",
-            "text": "",
-            "reason": "timeout",
+            "valid": ok,
+            "url": final_url,
+            "status_code": response.status_code,
+            "content_type": content_type,
+            "text": text[:100000],
+            "reason": validation_reason,
         }
 
     except requests.RequestException as exc:
         return {
-            "ok": False,
+            "valid": False,
             "url": url,
-            "status": None,
-            "content_type": "",
-            "content": b"",
-            "text": "",
-            "reason": f"request_error:{type(exc).__name__}",
+            "reason": "request_error:" + str(exc)[:200],
         }
 
     except Exception as exc:
         return {
-            "ok": False,
+            "valid": False,
             "url": url,
-            "status": None,
-            "content_type": "",
-            "content": b"",
-            "text": "",
-            "reason": f"fetch_error:{type(exc).__name__}",
+            "reason": "fetch_error:" + str(exc)[:200],
         }
+
+
+# ============================================================
+# PROVIDERS
+# ============================================================
+
+def provider_openalex(query: str) -> List[Dict[str, Any]]:
+    try:
+        response = requests.get(
+            "https://api.openalex.org/works",
+            params={
+                "search": query,
+                "per-page": 8,
+            },
+            timeout=REQUEST_TIMEOUT,
+            headers={"User-Agent": USER_AGENT},
+        )
+
+        if response.status_code != 200:
+            return []
+
+        data = response.json()
+
+        results = []
+
+        for item in data.get("results", []):
+            url = (
+                item.get("primary_location", {})
+                .get("landing_page_url")
+                or item.get("doi")
+                or ""
+            )
+
+            if not url:
+                continue
+
+            results.append(
+                {
+                    "url": url,
+                    "title": item.get("title") or "",
+                    "provider": "openalex",
+                    "doi": item.get("doi") or "",
+                }
+            )
+
+        return results
+
+    except Exception:
+        return []
+
+
+def provider_crossref(query: str) -> List[Dict[str, Any]]:
+    try:
+        response = requests.get(
+            "https://api.crossref.org/works",
+            params={
+                "query.bibliographic": query,
+                "rows": 8,
+            },
+            timeout=REQUEST_TIMEOUT,
+            headers={"User-Agent": USER_AGENT},
+        )
+
+        if response.status_code != 200:
+            return []
+
+        data = response.json()
+
+        results = []
+
+        for item in (
+            data.get("message", {})
+            .get("items", [])
+        ):
+            doi = item.get("DOI")
+
+            if not doi:
+                continue
+
+            title_list = item.get("title") or []
+            title = title_list[0] if title_list else ""
+
+            results.append(
+                {
+                    "url": "https://doi.org/" + doi,
+                    "title": title,
+                    "provider": "crossref",
+                    "doi": doi,
+                }
+            )
+
+        return results
+
+    except Exception:
+        return []
+
+
+def provider_duckduckgo(query: str) -> List[Dict[str, Any]]:
+    try:
+        response = requests.get(
+            "https://html.duckduckgo.com/html/",
+            params={"q": query},
+            timeout=REQUEST_TIMEOUT,
+            headers={
+                "User-Agent": USER_AGENT,
+            },
+        )
+
+        if response.status_code != 200:
+            return []
+
+        html = response.text
+
+        matches = re.findall(
+            r'nofollow" class="result__a" href="([^"]+)"[^>]*>(.*?)</a>',
+            html,
+            flags=re.I | re.S,
+        )
+
+        results = []
+
+        for url, title in matches[:10]:
+            title = re.sub("<[^>]+>", "", title)
+
+            if url.startswith("//"):
+                url = "https:" + url
+
+            results.append(
+                {
+                    "url": url,
+                    "title": title.strip(),
+                    "provider": "duckduckgo",
+                }
+            )
+
+        return results
+
+    except Exception:
+        return []
+
+
+def provider_wikipedia(query: str) -> List[Dict[str, Any]]:
+    try:
+        response = requests.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={
+                "action": "query",
+                "list": "search",
+                "srsearch": query,
+                "format": "json",
+                "srlimit": 5,
+            },
+            timeout=REQUEST_TIMEOUT,
+            headers={"User-Agent": USER_AGENT},
+        )
+
+        if response.status_code != 200:
+            return []
+
+        data = response.json()
+
+        results = []
+
+        for item in data.get("query", {}).get("search", []):
+            title = item.get("title", "")
+
+            if not title:
+                continue
+
+            url = (
+                "https://en.wikipedia.org/wiki/"
+                + title.replace(" ", "_")
+            )
+
+            results.append(
+                {
+                    "url": url,
+                    "title": title,
+                    "provider": "wikipedia",
+                }
+            )
+
+        return results
+
+    except Exception:
+        return []
+
+
+# ============================================================
+# SOURCE IDENTITY / DEDUPLICATION
+# ============================================================
+
+def source_key(item: Dict[str, Any]) -> str:
+    doi = (
+        item.get("doi")
+        or ""
+    ).strip().lower()
+
+    if doi:
+        return "doi:" + doi
+
+    title = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        item.get("title", "").lower(),
+    ).strip()
+
+    if title:
+        return "title:" + sha(title)
+
+    return "url:" + normalize_url(
+        item.get("url", "")
+    )
+
+
+def deduplicate_sources(
+    sources: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+
+    grouped = {}
+
+    for source in sources:
+        key = source_key(source)
+
+        if key not in grouped:
+            grouped[key] = source
+
+        else:
+            existing = grouped[key]
+
+            # Preserve provider diversity as metadata,
+            # but do NOT count duplicate providers as
+            # independent evidence.
+            providers = set(
+                existing.get("providers", [])
+            )
+
+            providers.add(
+                source.get("provider", "")
+            )
+
+            existing["providers"] = sorted(
+                p for p in providers if p
+            )
+
+    return list(grouped.values())
 
 
 # ============================================================
 # SOURCE QUALITY
 # ============================================================
 
-def classify_source(
+def source_quality(
     source: Dict[str, Any],
-) -> str:
-
-    provider = source.get("provider", "").lower()
-    url = source.get("url", "").lower()
-    title = source.get("title", "").lower()
-
-    if "crossref" in provider or "openalex" in provider:
-        return "scholarly_metadata"
-
-    if ".edu" in url or ".gov" in url:
-        return "institutional"
-
-    if any(
-        x in title
-        for x in [
-            "systematic review",
-            "meta-analysis",
-            "randomized",
-            "benchmark",
-            "evaluation",
-            "study",
-        ]
-    ):
-        return "research"
-
-    if "wikipedia" in provider:
-        return "encyclopedic"
-
-    return "web"
-
-
-def source_quality_score(
-    source: Dict[str, Any],
+    evidence_text: str,
 ) -> float:
 
-    score = 0.0
+    provider = (
+        source.get("provider", "")
+        .lower()
+    )
 
-    if source.get("content_valid"):
-        score += 0.30
+    score = 0.40
 
-    if source.get("evidence_length", 0) >= 1000:
-        score += 0.15
-    elif source.get("evidence_length", 0) >= 300:
-        score += 0.08
+    if provider == "openalex":
+        score += 0.25
 
-    source_type = source.get("source_type", "")
+    elif provider == "crossref":
+        score += 0.25
 
-    if source_type == "research":
-        score += 0.20
-    elif source_type == "institutional":
-        score += 0.18
-    elif source_type == "scholarly_metadata":
+    elif provider == "wikipedia":
+        score += 0.12
+
+    elif provider == "duckduckgo":
+        score += 0.05
+
+    if len(evidence_text) >= 2000:
         score += 0.10
-    elif source_type == "encyclopedic":
-        score += 0.08
-    else:
-        score += 0.04
+
+    if len(evidence_text) >= 5000:
+        score += 0.05
 
     if source.get("doi"):
-        score += 0.10
-
-    if source.get("fetched_status") == 200:
-        score += 0.10
-
-    if source.get("independent"):
-        score += 0.05
+        score += 0.08
 
     return round(min(score, 1.0), 3)
-
-
-def source_health_score(
-    source: Dict[str, Any],
-) -> float:
-
-    score = 0.0
-
-    if source.get("url"):
-        score += 0.10
-
-    if source.get("fetched_status") == 200:
-        score += 0.20
-
-    if source.get("content_type"):
-        score += 0.05
-
-    if source.get("content_valid"):
-        score += 0.30
-
-    if source.get("evidence_length", 0) >= MIN_EVIDENCE_TEXT:
-        score += 0.15
-
-    if source.get("title"):
-        score += 0.05
-
-    if source.get("domain"):
-        score += 0.05
-
-    if not source.get("rejection_reason"):
-        score += 0.10
-
-    return round(min(score, 1.0), 3)
-
-
-# ============================================================
-# RESEARCH PROVIDERS
-# ============================================================
-
-def provider_openalex(query: str, limit: int = 8) -> List[Dict[str, Any]]:
-    url = (
-        "https://api.openalex.org/works?"
-        + urlencode(
-            {
-                "search": query,
-                "per-page": min(limit, 25),
-            }
-        )
-    )
-
-    result = fetch_url(url)
-
-    if not result["ok"]:
-        return []
-
-    try:
-        payload = json.loads(result["content"].decode("utf-8"))
-
-        items = []
-
-        for item in payload.get("results", []):
-            primary = item.get("primary_location") or {}
-
-            source_url = (
-                primary.get("landing_page_url")
-                or primary.get("pdf_url")
-                or item.get("doi")
-                or ""
-            )
-
-            items.append(
-                {
-                    "provider": "openalex",
-                    "title": item.get("title") or "",
-                    "url": source_url,
-                    "doi": item.get("doi") or "",
-                    "abstract": reconstruct_openalex_abstract(
-                        item.get("abstract_inverted_index")
-                    ),
-                    "year": item.get("publication_year"),
-                    "type": item.get("type"),
-                }
-            )
-
-        return items
-
-    except Exception:
-        return []
-
-
-def reconstruct_openalex_abstract(
-    inverted: Optional[Dict[str, List[int]]],
-) -> str:
-
-    if not inverted:
-        return ""
-
-    words = []
-
-    try:
-        positions = []
-
-        for word, indexes in inverted.items():
-            for index in indexes:
-                positions.append((index, word))
-
-        positions.sort()
-
-        words = [word for _, word in positions]
-
-    except Exception:
-        return ""
-
-    return clean_text(" ".join(words), 10000)
-
-
-def provider_crossref(query: str, limit: int = 8) -> List[Dict[str, Any]]:
-    url = (
-        "https://api.crossref.org/works?"
-        + urlencode(
-            {
-                "query.bibliographic": query,
-                "rows": min(limit, 20),
-                "select": (
-                    "DOI,title,URL,published,"
-                    "container-title,type,author"
-                ),
-            }
-        )
-    )
-
-    result = fetch_url(url)
-
-    if not result["ok"]:
-        return []
-
-    try:
-        payload = json.loads(result["content"].decode("utf-8"))
-
-        items = []
-
-        for item in payload.get("message", {}).get("items", []):
-            title_list = item.get("title") or []
-
-            title = title_list[0] if title_list else ""
-
-            items.append(
-                {
-                    "provider": "crossref",
-                    "title": title,
-                    "url": item.get("URL") or "",
-                    "doi": item.get("DOI") or "",
-                    "abstract": "",
-                    "year": (
-                        (
-                            item.get("published", {})
-                            .get("date-parts", [[None]])[0][0]
-                        )
-                    ),
-                    "type": item.get("type"),
-                }
-            )
-
-        return items
-
-    except Exception:
-        return []
-
-
-def provider_wikipedia(query: str, limit: int = 5) -> List[Dict[str, Any]]:
-    api = (
-        "https://en.wikipedia.org/w/api.php?"
-        + urlencode(
-            {
-                "action": "query",
-                "list": "search",
-                "srsearch": query,
-                "format": "json",
-                "utf8": 1,
-                "srlimit": min(limit, 10),
-            }
-        )
-    )
-
-    result = fetch_url(api)
-
-    if not result["ok"]:
-        return []
-
-    try:
-        payload = json.loads(result["content"].decode("utf-8"))
-
-        items = []
-
-        for item in payload.get("query", {}).get("search", []):
-            title = item.get("title") or ""
-
-            page_url = (
-                "https://en.wikipedia.org/wiki/"
-                + title.replace(" ", "_")
-            )
-
-            items.append(
-                {
-                    "provider": "wikipedia",
-                    "title": title,
-                    "url": page_url,
-                    "doi": "",
-                    "abstract": clean_text(
-                        item.get("snippet", ""),
-                        2000,
-                    ),
-                    "year": None,
-                    "type": "encyclopedia",
-                }
-            )
-
-        return items
-
-    except Exception:
-        return []
-
-
-def provider_duckduckgo(
-    query: str,
-    limit: int = 8,
-) -> List[Dict[str, Any]]:
-
-    url = (
-        "https://html.duckduckgo.com/html/?"
-        + urlencode({"q": query})
-    )
-
-    result = fetch_url(url)
-
-    if not result["ok"]:
-        return []
-
-    raw = result["content"].decode(
-        "utf-8",
-        errors="replace",
-    )
-
-    items = []
-
-    # Extract result links and titles without depending on
-    # BeautifulSoup.
-    pattern = re.compile(
-        r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
-        re.I | re.S,
-    )
-
-    for match in pattern.finditer(raw):
-        if len(items) >= limit:
-            break
-
-        link = html.unescape(match.group(1))
-
-        title = re.sub(
-            r"<[^>]+>",
-            " ",
-            match.group(2),
-        )
-
-        title = clean_text(title, 500)
-
-        if not link.startswith("http"):
-            continue
-
-        items.append(
-            {
-                "provider": "duckduckgo",
-                "title": title,
-                "url": link,
-                "doi": "",
-                "abstract": "",
-                "year": None,
-                "type": "web",
-            }
-        )
-
-    return items
-
-
-def research_providers(query: str) -> List[Dict[str, Any]]:
-    results: List[Dict[str, Any]] = []
-
-    providers = [
-        provider_openalex,
-        provider_crossref,
-        provider_duckduckgo,
-        provider_wikipedia,
-    ]
-
-    for provider in providers:
-        try:
-            results.extend(
-                provider(
-                    query,
-                    max(3, MAX_RESEARCH_SOURCES // len(providers)),
-                )
-            )
-        except Exception:
-            continue
-
-    return results
-
-
-# ============================================================
-# SOURCE INGESTION
-# ============================================================
-
-def hydrate_source(
-    candidate: Dict[str, Any],
-) -> Dict[str, Any]:
-
-    source = {
-        "provider": candidate.get("provider", "unknown"),
-        "title": clean_text(candidate.get("title", ""), 1000),
-        "url": candidate.get("url", ""),
-        "doi": clean_text(candidate.get("doi", ""), 500),
-        "abstract": clean_text(candidate.get("abstract", ""), 10000),
-        "year": candidate.get("year"),
-        "type": candidate.get("type"),
-    }
-
-    source["canonical_url"] = canonicalize_url(source["url"])
-    source["domain"] = domain_of(source["url"])
-    source["source_key"] = source_key(source)
-
-    fetched = fetch_url(source["url"])
-
-    source["fetched_status"] = fetched.get("status")
-    source["content_type"] = fetched.get("content_type", "")
-    source["final_url"] = fetched.get("final_url", source["url"])
-
-    if fetched.get("ok"):
-        source["evidence_text"] = fetched.get("text", "")
-        source["content_valid"] = True
-        source["rejection_reason"] = None
-    else:
-        # Metadata is retained, but metadata is NOT evidence.
-        source["evidence_text"] = ""
-        source["content_valid"] = False
-        source["rejection_reason"] = fetched.get(
-            "reason",
-            "unusable_source",
-        )
-
-    # If the provider gave an abstract, it is useful metadata/evidence
-    # only when it is genuine text. It cannot override a corrupted page.
-    if (
-        not source["evidence_text"]
-        and len(source["abstract"]) >= MIN_EVIDENCE_TEXT
-    ):
-        source["evidence_text"] = source["abstract"]
-        source["content_valid"] = True
-        source["rejection_reason"] = None
-        source["evidence_origin"] = "provider_abstract"
-    else:
-        source["evidence_origin"] = "fetched_document"
-
-    source["evidence_length"] = len(
-        source.get("evidence_text", "")
-    )
-
-    source["source_type"] = classify_source(source)
-
-    source["independent"] = True
-
-    source["health_score"] = source_health_score(source)
-
-    source["quality_score"] = source_quality_score(source)
-
-    return source
-
-
-def deduplicate_sources(
-    sources: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-
-    grouped: Dict[str, Dict[str, Any]] = {}
-
-    for source in sources:
-        key = independent_key(source)
-
-        if not key:
-            continue
-
-        existing = grouped.get(key)
-
-        if existing is None:
-            grouped[key] = source
-            continue
-
-        # Prefer the version with actual readable evidence.
-        existing_valid = existing.get("content_valid", False)
-        current_valid = source.get("content_valid", False)
-
-        if current_valid and not existing_valid:
-            grouped[key] = source
-            continue
-
-        # Otherwise prefer higher quality.
-        if (
-            source.get("quality_score", 0)
-            > existing.get("quality_score", 0)
-        ):
-            grouped[key] = source
-
-    result = list(grouped.values())
-
-    for source in result:
-        source["independent"] = True
-
-    return result
 
 
 # ============================================================
 # CLAIM EXTRACTION
 # ============================================================
 
-def sentence_split(text: str) -> List[str]:
+ASSERTION_WORDS = [
+    "shows",
+    "found",
+    "finds",
+    "demonstrates",
+    "suggests",
+    "improves",
+    "reduces",
+    "increases",
+    "achieved",
+    "reported",
+    "concluded",
+    "results",
+    "evidence",
+    "failed",
+    "failure",
+    "limitation",
+]
 
-    text = clean_text(text)
 
-    if not text:
-        return []
+def clean_sentence(sentence: str) -> str:
+    sentence = re.sub(
+        r"\s+",
+        " ",
+        sentence,
+    ).strip()
 
-    text = re.sub(
-        r"(?<=[.!?])\s+",
-        "\n",
-        text,
+    sentence = re.sub(
+        r"^[\-\*\d\.\)\s]+",
+        "",
+        sentence,
     )
 
-    return [
-        clean_text(x, 1500)
-        for x in text.split("\n")
-        if clean_text(x)
-    ]
-
-
-def valid_claim(sentence: str) -> bool:
-
-    sentence = clean_text(sentence)
-
-    if len(sentence) < 60:
-        return False
-
-    if len(sentence) > 1200:
-        return False
-
-    # Never allow document-format garbage into the claim graph.
-    bad_fragments = [
-        "%pdf-",
-        "client challenge",
-        "javascript is disabled",
-        "enable javascript",
-        "cloudflare",
-        "captcha",
-        "cookie policy",
-        "privacy policy",
-        "terms of service",
-        "sign in",
-        "log in",
-        "ray id",
-        "doctype html",
-        "<html",
-        "binary",
-    ]
-
-    lower = sentence.lower()
-
-    if any(fragment in lower for fragment in bad_fragments):
-        return False
-
-    alpha = len(re.findall(r"[A-Za-z]", sentence))
-
-    if alpha < 40:
-        return False
-
-    # Claims should contain at least one assertion-like signal.
-    assertion_terms = [
-        "found",
-        "showed",
-        "shows",
-        "suggest",
-        "suggests",
-        "demonstrate",
-        "demonstrates",
-        "reported",
-        "observed",
-        "increased",
-        "decreased",
-        "improved",
-        "failed",
-        "failure",
-        "effective",
-        "ineffective",
-        "accuracy",
-        "performance",
-        "reliability",
-        "limitation",
-        "limitations",
-        "risk",
-        "error",
-        "result",
-        "results",
-        "evidence",
-        "study",
-        "experiment",
-        "evaluation",
-        "benchmark",
-        "agents",
-        "autonomous",
-    ]
-
-    return any(term in lower for term in assertion_terms)
+    return sentence
 
 
 def extract_claims(
-    source: Dict[str, Any],
+    evidence_text: str,
+    limit: int = 8,
 ) -> List[str]:
 
-    if not source.get("content_valid"):
+    ok, _ = validate_evidence_text(
+        evidence_text
+    )
+
+    if not ok:
         return []
 
-    text = source.get("evidence_text", "")
-
-    if len(text) < MIN_EVIDENCE_TEXT:
-        return []
-
-    sentences = sentence_split(text)
+    sentences = re.split(
+        r"(?<=[.!?])\s+",
+        evidence_text,
+    )
 
     claims = []
 
     for sentence in sentences:
+        sentence = clean_sentence(sentence)
 
-        if not valid_claim(sentence):
+        if len(sentence) < 60:
             continue
 
-        normalized = re.sub(
-            r"\s+",
-            " ",
-            sentence,
-        ).strip()
+        if len(sentence) > 600:
+            continue
 
-        claim_hash = sha256(normalized.lower())
+        lowered = sentence.lower()
 
-        if any(
-            sha256(existing.lower()) == claim_hash
-            for existing in claims
+        if not any(
+            word in lowered
+            for word in ASSERTION_WORDS
         ):
             continue
 
-        claims.append(normalized)
+        # Avoid navigation and boilerplate.
+        if any(
+            x in lowered
+            for x in [
+                "cookie",
+                "javascript",
+                "subscribe",
+                "sign in",
+                "privacy policy",
+            ]
+        ):
+            continue
 
-        if len(claims) >= MAX_CLAIMS_PER_SOURCE:
+        claims.append(sentence)
+
+        if len(claims) >= limit:
             break
 
     return claims
 
 
 # ============================================================
-# CLAIM RELEVANCE
+# CLAIM RELATION
 # ============================================================
 
-def tokenize(text: str) -> set:
-    return set(
-        x
-        for x in re.findall(
-            r"[a-zA-Z][a-zA-Z0-9_-]{2,}",
-            text.lower(),
-        )
-    )
-
-
-def relevance_score(
-    objective: str,
-    claim: str,
-) -> float:
-
-    objective_tokens = tokenize(objective)
-    claim_tokens = tokenize(claim)
-
-    if not objective_tokens or not claim_tokens:
-        return 0.0
-
-    intersection = objective_tokens.intersection(
-        claim_tokens
-    )
-
-    score = len(intersection) / math.sqrt(
-        len(objective_tokens) * len(claim_tokens)
-    )
-
-    return round(min(score * 2.5, 1.0), 3)
-
-
-# ============================================================
-# CONTRADICTION / SUPPORT
-# ============================================================
-
-NEGATION_TERMS = {
+NEGATION_WORDS = [
     "not",
     "no",
-    "never",
     "failed",
     "failure",
     "unable",
     "cannot",
-    "insufficient",
-    "ineffective",
-    "unreliable",
-    "limitation",
-    "limitations",
+    "could not",
+    "did not",
+    "does not",
     "weak",
-    "poor",
-    "error",
-    "errors",
-    "risk",
-    "risks",
-}
+    "limited",
+    "limitation",
+    "lack",
+    "insufficient",
+    "contradict",
+]
 
 
 def claim_relation(
-    claim_a: str,
-    claim_b: str,
-) -> Tuple[str, float]:
+    claim: str,
+    evidence: str,
+) -> str:
 
-    a = tokenize(claim_a)
-    b = tokenize(claim_b)
+    c = claim.lower()
+    e = evidence.lower()
 
-    if not a or not b:
-        return "unrelated", 0.0
-
-    overlap = len(a.intersection(b)) / max(
-        1,
-        min(len(a), len(b)),
+    claim_words = set(
+        re.findall(r"\b[a-z]{4,}\b", c)
     )
 
-    if overlap < 0.20:
-        return "unrelated", round(overlap, 3)
+    evidence_words = set(
+        re.findall(r"\b[a-z]{4,}\b", e)
+    )
 
-    neg_a = len(a.intersection(NEGATION_TERMS))
-    neg_b = len(b.intersection(NEGATION_TERMS))
+    overlap = len(
+        claim_words & evidence_words
+    )
 
-    if abs(neg_a - neg_b) >= 1 and overlap >= 0.30:
-        return "contradicts", round(overlap, 3)
+    if overlap < 3:
+        return "neutral"
 
-    return "supports", round(overlap, 3)
+    negated = any(
+        word in e
+        for word in NEGATION_WORDS
+    )
+
+    if negated:
+        return "contradict"
+
+    return "support"
+
+
+# ============================================================
+# RESEARCH
+# ============================================================
+
+def build_queries(objective: str) -> List[str]:
+    return [
+        objective,
+        objective + " evidence",
+        objective + " limitations",
+        objective + " failures",
+        objective + " criticism",
+        objective + " replication",
+    ]
+
+
+def research_mission(
+    mission_id: str,
+    objective: str,
+) -> Dict[str, Any]:
+
+    log_event(
+        mission_id,
+        "research_started",
+        {"objective": objective},
+    )
+
+    all_candidates = []
+
+    queries = build_queries(objective)
+
+    provider_counts = {
+        "openalex": 0,
+        "crossref": 0,
+        "duckduckgo": 0,
+        "wikipedia": 0,
+    }
+
+    for query in queries:
+
+        providers = [
+            provider_openalex,
+            provider_crossref,
+            provider_duckduckgo,
+            provider_wikipedia,
+        ]
+
+        for provider in providers:
+
+            results = provider(query)
+
+            provider_name = (
+                results[0].get("provider")
+                if results
+                else None
+            )
+
+            if provider_name in provider_counts:
+                provider_counts[
+                    provider_name
+                ] += len(results)
+
+            all_candidates.extend(results)
+
+    unique_sources = deduplicate_sources(
+        all_candidates
+    )
+
+    accepted = []
+    rejected = []
+
+    for source in unique_sources[:60]:
+
+        fetched = fetch_url(
+            source.get("url", "")
+        )
+
+        source["final_url"] = fetched.get(
+            "url",
+            source.get("url", ""),
+        )
+
+        source["valid"] = bool(
+            fetched.get("valid")
+        )
+
+        source["reason"] = fetched.get(
+            "reason",
+            "",
+        )
+
+        source["text"] = fetched.get(
+            "text",
+            "",
+        )
+
+        source["quality"] = source_quality(
+            source,
+            source["text"],
+        )
+
+        if source["valid"]:
+
+            accepted.append(source)
+
+        else:
+
+            rejected.append(source)
+
+    # --------------------------------------------------------
+    # Independence
+    # --------------------------------------------------------
+
+    domains = set()
+
+    for source in accepted:
+        domain = domain_of(
+            source.get(
+                "final_url",
+                source.get("url", ""),
+            )
+        )
+
+        if domain:
+            domains.add(domain)
+
+    # --------------------------------------------------------
+    # Claims
+    # --------------------------------------------------------
+
+    claim_records = {}
+
+    for source in accepted:
+
+        claims = extract_claims(
+            source.get("text", "")
+        )
+
+        for claim in claims:
+
+            key = re.sub(
+                r"\s+",
+                " ",
+                claim.lower(),
+            ).strip()
+
+            if key not in claim_records:
+                claim_records[key] = {
+                    "claim": claim,
+                    "supporting": [],
+                    "contradicting": [],
+                }
+
+            record = claim_records[key]
+
+            for other in accepted:
+
+                if other is source:
+                    continue
+
+                relation = claim_relation(
+                    claim,
+                    other.get("text", ""),
+                )
+
+                if relation == "support":
+                    record["supporting"].append(
+                        other
+                    )
+
+                elif relation == "contradict":
+                    record["contradicting"].append(
+                        other
+                    )
+
+    final_claims = []
+
+    verified_count = 0
+    uncertain_count = 0
+    insufficient_count = 0
+
+    for record in list(
+        claim_records.values()
+    )[:20]:
+
+        supporting = record["supporting"]
+        contradicting = record[
+            "contradicting"
+        ]
+
+        support_domains = set(
+            domain_of(
+                s.get(
+                    "final_url",
+                    s.get("url", ""),
+                )
+            )
+            for s in supporting
+        )
+
+        contradiction_domains = set(
+            domain_of(
+                s.get(
+                    "final_url",
+                    s.get("url", ""),
+                )
+            )
+            for s in contradicting
+        )
+
+        support_domains.discard("")
+        contradiction_domains.discard("")
+
+        if (
+            len(support_domains) >= 2
+            and len(contradicting) == 0
+        ):
+            decision = "VERIFIED"
+            confidence = 0.85
+            verified_count += 1
+
+        elif (
+            len(support_domains) >= 1
+            and len(contradicting) == 0
+        ):
+            decision = "UNCERTAIN"
+            confidence = 0.60
+            uncertain_count += 1
+
+        elif len(contradicting) > 0:
+            decision = "INSUFFICIENT"
+            confidence = 0.35
+            insufficient_count += 1
+
+        else:
+            decision = "INSUFFICIENT"
+            confidence = 0.25
+            insufficient_count += 1
+
+        final_claims.append(
+            {
+                "claim": record["claim"],
+                "decision": decision,
+                "confidence": confidence,
+                "supporting_sources": len(
+                    supporting
+                ),
+                "contradicting_sources": len(
+                    contradicting
+                ),
+                "support_domains": sorted(
+                    support_domains
+                ),
+                "contradiction_domains": sorted(
+                    contradiction_domains
+                ),
+            }
+        )
+
+    # --------------------------------------------------------
+    # Persistence
+    # --------------------------------------------------------
+
+    conn = db()
+
+    for source in accepted:
+        conn.execute(
+            """
+            INSERT INTO sources
+            (
+                mission_id,
+                url,
+                title,
+                provider,
+                source_key,
+                source_type,
+                quality,
+                valid,
+                independent,
+                content_preview,
+                rejection_reason,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                mission_id,
+                source.get("final_url")
+                or source.get("url"),
+                source.get("title", ""),
+                source.get("provider", ""),
+                source_key(source),
+                "web",
+                source.get("quality", 0),
+                1,
+                1,
+                source.get("text", "")[:500],
+                "",
+                now(),
+            ),
+        )
+
+    for source in rejected:
+        conn.execute(
+            """
+            INSERT INTO sources
+            (
+                mission_id,
+                url,
+                title,
+                provider,
+                source_key,
+                source_type,
+                quality,
+                valid,
+                independent,
+                content_preview,
+                rejection_reason,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                source.get("final_url")
+                or source.get("url"),
+                source.get("title", ""),
+                source.get("provider", ""),
+                source_key(source),
+                "web",
+                source.get("quality", 0),
+                0,
+                0,
+                "",
+                source.get("reason", ""),
+                now(),
+            ),
+        )
+
+    for claim in final_claims:
+        conn.execute(
+            """
+            INSERT INTO claims
+            (
+                mission_id,
+                claim,
+                decision,
+                confidence,
+                supporting_sources,
+                contradicting_sources,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                mission_id,
+                claim["claim"],
+                claim["decision"],
+                claim["confidence"],
+                claim["supporting_sources"],
+                claim["contradicting_sources"],
+                now(),
+            ),
+        )
+
+    conn.commit()
+    conn.close()
+
+    # --------------------------------------------------------
+    # Evaluation
+    # --------------------------------------------------------
+
+    contradictions = sum(
+        x["contradicting_sources"]
+        for x in final_claims
+    )
+
+    avg_quality = (
+        sum(
+            x.get("quality", 0)
+            for x in accepted
+        )
+        / len(accepted)
+        if accepted
+        else 0
+    )
+
+    provider_diversity = len(
+        {
+            x.get("provider")
+            for x in accepted
+            if x.get("provider")
+        }
+    )
+
+    research_strength = round(
+        min(
+            1.0,
+            (
+                avg_quality * 0.35
+                + min(len(domains) / 5, 1)
+                * 0.25
+                + min(
+                    provider_diversity / 4,
+                    1,
+                )
+                * 0.15
+                + min(
+                    verified_count / 5,
+                    1,
+                )
+                * 0.25
+            ),
+        ),
+        3,
+    )
+
+    if (
+        verified_count > 0
+        and contradictions == 0
+        and len(domains) >= 2
+    ):
+        overall_decision = "SUPPORTED"
+
+    elif final_claims:
+        overall_decision = "INSUFFICIENT"
+
+    else:
+        overall_decision = "NO_VALID_EVIDENCE"
+
+    result = {
+        "task_id": mission_id,
+        "status": "completed",
+        "version": VERSION,
+        "build": BUILD,
+        "objective": objective,
+        "research": {
+            "queries": queries,
+            "provider_counts": provider_counts,
+            "candidates": len(all_candidates),
+            "unique_sources": len(unique_sources),
+            "accepted_sources": len(accepted),
+            "rejected_sources": len(rejected),
+        },
+        "evidence_graph": {
+            "nodes": len(accepted),
+            "independent_domains": len(domains),
+            "domains": sorted(domains),
+            "provider_diversity": provider_diversity,
+            "average_source_quality": round(
+                avg_quality,
+                3,
+            ),
+        },
+        "verification": {
+            "overall_decision": overall_decision,
+            "verified_claims": verified_count,
+            "uncertain_claims": uncertain_count,
+            "insufficient_claims": insufficient_count,
+            "contradictions": contradictions,
+            "research_strength": research_strength,
+            "claims": final_claims,
+        },
+        "next_actions": [
+            "Review claims marked INSUFFICIENT.",
+            "Inspect contradictory evidence.",
+            "Increase independent source diversity.",
+            "Re-run verification after evidence expansion.",
+        ],
+        "completed_at": iso(),
+    }
+
+    return result
 
 
 # ============================================================
@@ -1633,1350 +1512,148 @@ def claim_relation(
 # ============================================================
 
 class MissionRequest(BaseModel):
-    objective: str = Field(..., min_length=3, max_length=10000)
+    objective: str = Field(
+        ...,
+        min_length=3,
+        max_length=10000,
+    )
     research: bool = True
     verify: bool = True
     remember: bool = True
 
 
 class ResearchRequest(BaseModel):
-    objective: str = Field(..., min_length=3, max_length=10000)
-    verify: bool = True
+    objective: str = Field(
+        ...,
+        min_length=3,
+        max_length=10000,
+    )
 
 
 class CommandRequest(BaseModel):
-    command: str = Field(..., min_length=1, max_length=10000)
+    command: str = Field(
+        ...,
+        min_length=1,
+        max_length=10000,
+    )
+    objective: Optional[str] = None
+    research: bool = True
+    verify: bool = True
+    remember: bool = True
 
 
 # ============================================================
-# MISSION ENGINE
+# MISSION EXECUTION
 # ============================================================
 
-def create_mission(objective: str) -> str:
+def create_mission(
+    objective: str,
+    remember: bool = True,
+) -> Dict[str, Any]:
 
-    mission_id = new_id("mission")
+    mission_id = (
+        "mission-"
+        + uuid.uuid4().hex[:12]
+    )
 
-    now = utc_now()
+    started = now()
 
-    db_execute(
+    conn = db()
+
+    conn.execute(
         """
         INSERT INTO missions
-        (id, objective, status, version, build, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        (
+            id,
+            objective,
+            status,
+            created_at
+        )
+        VALUES (?, ?, ?, ?)
         """,
         (
             mission_id,
             objective,
             "running",
-            VERSION,
-            BUILD,
-            now,
-            now,
+            started,
         ),
     )
 
-    return mission_id
+    conn.commit()
+    conn.close()
 
-
-def update_mission(
-    mission_id: str,
-    status: str,
-    result: Optional[Dict[str, Any]] = None,
-):
-
-    db_execute(
-        """
-        UPDATE missions
-        SET status = ?,
-            result_json = ?,
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (
-            status,
-            json.dumps(result, ensure_ascii=False)
-            if result is not None
-            else None,
-            utc_now(),
-            mission_id,
-        ),
-    )
-
-
-def save_source(
-    mission_id: str,
-    source: Dict[str, Any],
-) -> str:
-
-    source_id = new_id("source")
-
-    db_execute(
-        """
-        INSERT INTO sources (
-            id,
-            mission_id,
-            provider,
-            title,
-            url,
-            canonical_url,
-            domain,
-            doi,
-            source_key,
-            source_type,
-            content_type,
-            fetched_status,
-            content_valid,
-            rejection_reason,
-            evidence_text,
-            evidence_length,
-            quality_score,
-            health_score,
-            independent,
-            metadata_json,
-            created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            source_id,
-            mission_id,
-            source.get("provider"),
-            source.get("title"),
-            source.get("url"),
-            source.get("canonical_url"),
-            source.get("domain"),
-            source.get("doi"),
-            source.get("source_key"),
-            source.get("source_type"),
-            source.get("content_type"),
-            source.get("fetched_status"),
-            int(bool(source.get("content_valid"))),
-            source.get("rejection_reason"),
-            source.get("evidence_text", "")[:MAX_TEXT_LENGTH],
-            source.get("evidence_length", 0),
-            source.get("quality_score", 0),
-            source.get("health_score", 0),
-            int(bool(source.get("independent"))),
-            json.dumps(
-                {
-                    "year": source.get("year"),
-                    "type": source.get("type"),
-                    "final_url": source.get("final_url"),
-                    "evidence_origin": source.get(
-                        "evidence_origin"
-                    ),
-                },
-                ensure_ascii=False,
-            ),
-            utc_now(),
-        ),
-    )
-
-    return source_id
-
-
-def save_claim(
-    mission_id: str,
-    source_id: str,
-    claim_text: str,
-) -> str:
-
-    claim_id = new_id("claim")
-
-    db_execute(
-        """
-        INSERT INTO claims (
-            id,
-            mission_id,
-            source_id,
-            claim_text,
-            claim_hash,
-            status,
-            confidence,
-            created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            claim_id,
-            mission_id,
-            source_id,
-            claim_text,
-            sha256(claim_text.lower()),
-            "unverified",
-            0.0,
-            utc_now(),
-        ),
-    )
-
-    return claim_id
-
-
-def save_evidence_link(
-    mission_id: str,
-    claim_id: str,
-    source_id: str,
-    relation: str,
-    strength: float,
-    explanation: str,
-):
-
-    db_execute(
-        """
-        INSERT INTO evidence_links (
-            id,
-            mission_id,
-            claim_id,
-            source_id,
-            relation,
-            strength,
-            explanation,
-            created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            new_id("link"),
-            mission_id,
-            claim_id,
-            source_id,
-            relation,
-            strength,
-            explanation,
-            utc_now(),
-        ),
-    )
-
-
-# ============================================================
-# RESEARCH QUERY GENERATION
-# ============================================================
-
-def build_queries(objective: str) -> List[str]:
-
-    objective = clean_text(objective, 3000)
-
-    queries = [
-        objective,
-        f"{objective} evidence study",
-        f"{objective} benchmark evaluation",
-        f"{objective} limitations failure",
-        f"{objective} reliability independent study",
-    ]
-
-    result = []
-
-    seen = set()
-
-    for query in queries:
-        normalized = query.lower().strip()
-
-        if normalized in seen:
-            continue
-
-        seen.add(normalized)
-        result.append(query)
-
-    return result
-
-
-def collect_candidates(
-    objective: str,
-) -> List[Dict[str, Any]]:
-
-    candidates = []
-
-    for query in build_queries(objective):
-
-        try:
-            batch = research_providers(query)
-
-            candidates.extend(batch)
-
-        except Exception:
-            continue
-
-        if len(candidates) >= MAX_RESEARCH_SOURCES * 2:
-            break
-
-    return candidates
-
-
-# ============================================================
-# EVIDENCE GRAPH
-# ============================================================
-
-def build_evidence_graph(
-    objective: str,
-    sources: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-
-    nodes = []
-
-    for source in sources:
-
-        if not source.get("content_valid"):
-            continue
-
-        claims = extract_claims(source)
-
-        for claim in claims:
-
-            relevance = relevance_score(
-                objective,
-                claim,
-            )
-
-            if relevance < 0.05:
-                continue
-
-            nodes.append(
-                {
-                    "source_key": source["source_key"],
-                    "domain": source["domain"],
-                    "provider": source["provider"],
-                    "claim": claim,
-                    "relevance": relevance,
-                    "quality": source["quality_score"],
-                }
-            )
-
-    edges = []
-
-    for i in range(len(nodes)):
-        for j in range(i + 1, len(nodes)):
-
-            relation, strength = claim_relation(
-                nodes[i]["claim"],
-                nodes[j]["claim"],
-            )
-
-            if relation == "unrelated":
-                continue
-
-            edges.append(
-                {
-                    "from": i,
-                    "to": j,
-                    "relation": relation,
-                    "strength": strength,
-                }
-            )
-
-    independent_sources = {
-        node["source_key"]
-        for node in nodes
-    }
-
-    domains = {
-        node["domain"]
-        for node in nodes
-        if node["domain"]
-    }
-
-    providers = {
-        node["provider"]
-        for node in nodes
-    }
-
-    support_edges = [
-        edge
-        for edge in edges
-        if edge["relation"] == "supports"
-    ]
-
-    contradiction_edges = [
-        edge
-        for edge in edges
-        if edge["relation"] == "contradicts"
-    ]
-
-    return {
-        "nodes": nodes,
-        "edges": edges,
-        "node_count": len(nodes),
-        "edge_count": len(edges),
-        "independent_sources": len(independent_sources),
-        "independent_domains": len(domains),
-        "provider_diversity": len(providers),
-        "support_edges": len(support_edges),
-        "contradiction_edges": len(contradiction_edges),
-    }
-
-
-# ============================================================
-# CLAIM VERIFICATION
-# ============================================================
-
-def verify_claims(
-    objective: str,
-    sources: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-
-    claim_records = []
-
-    all_claims = []
-
-    for source in sources:
-
-        if not source.get("content_valid"):
-            continue
-
-        claims = extract_claims(source)
-
-        for claim in claims:
-
-            relevance = relevance_score(
-                objective,
-                claim,
-            )
-
-            if relevance < 0.05:
-                continue
-
-            all_claims.append(
-                {
-                    "claim": claim,
-                    "source": source,
-                    "relevance": relevance,
-                }
-            )
-
-    # Deduplicate exact claims.
-    deduped = {}
-
-    for item in all_claims:
-        key = sha256(
-            re.sub(
-                r"\s+",
-                " ",
-                item["claim"].lower(),
-            )
-        )
-
-        current = deduped.get(key)
-
-        if current is None:
-            deduped[key] = item
-            continue
-
-        if (
-            item["source"]["quality_score"]
-            > current["source"]["quality_score"]
-        ):
-            deduped[key] = item
-
-    all_claims = list(deduped.values())
-
-    for item in all_claims[:MAX_CLAIMS_PER_MISSION]:
-
-        claim = item["claim"]
-        source = item["source"]
-
-        supporting = []
-        contradicting = []
-
-        for other in sources:
-
-            if other is source:
-                continue
-
-            if not other.get("content_valid"):
-                continue
-
-            other_claims = extract_claims(other)
-
-            for other_claim in other_claims:
-
-                relation, strength = claim_relation(
-                    claim,
-                    other_claim,
-                )
-
-                if strength < 0.30:
-                    continue
-
-                record = {
-                    "source_key": other["source_key"],
-                    "domain": other["domain"],
-                    "provider": other["provider"],
-                    "claim": other_claim,
-                    "strength": strength,
-                    "quality": other["quality_score"],
-                }
-
-                if relation == "supports":
-                    supporting.append(record)
-
-                elif relation == "contradicts":
-                    contradicting.append(record)
-
-        independent_support = {
-            x["source_key"]
-            for x in supporting
-            if x["source_key"] != source["source_key"]
-        }
-
-        independent_contradiction = {
-            x["source_key"]
-            for x in contradicting
-            if x["source_key"] != source["source_key"]
-        }
-
-        if (
-            len(independent_support) >= 2
-            and not independent_contradiction
-        ):
-            status = "verified"
-            confidence = min(
-                0.95,
-                0.55
-                + 0.12 * len(independent_support)
-                + 0.15 * source["quality_score"],
-            )
-
-        elif (
-            len(independent_support) >= 1
-            and not independent_contradiction
-        ):
-            status = "uncertain"
-            confidence = min(
-                0.75,
-                0.40
-                + 0.15 * len(independent_support)
-                + 0.10 * source["quality_score"],
-            )
-
-        elif independent_contradiction:
-            status = "insufficient"
-            confidence = 0.35
-
-        else:
-            status = "insufficient"
-            confidence = 0.25
-
-        claim_records.append(
-            {
-                "claim": claim,
-                "status": status,
-                "confidence": round(confidence, 3),
-                "primary_source": {
-                    "source_key": source["source_key"],
-                    "title": source["title"],
-                    "domain": source["domain"],
-                    "provider": source["provider"],
-                    "quality": source["quality_score"],
-                },
-                "supporting_sources": supporting[:6],
-                "contradicting_sources": contradicting[:6],
-                "independent_support": len(
-                    independent_support
-                ),
-                "independent_contradiction": len(
-                    independent_contradiction
-                ),
-            }
-        )
-
-    verified = [
-        x for x in claim_records
-        if x["status"] == "verified"
-    ]
-
-    uncertain = [
-        x for x in claim_records
-        if x["status"] == "uncertain"
-    ]
-
-    insufficient = [
-        x for x in claim_records
-        if x["status"] == "insufficient"
-    ]
-
-    return {
-        "claims": claim_records,
-        "total": len(claim_records),
-        "verified": len(verified),
-        "uncertain": len(uncertain),
-        "insufficient": len(insufficient),
-        "confidence": round(
-            (
-                sum(x["confidence"] for x in claim_records)
-                / len(claim_records)
-            )
-            if claim_records
-            else 0.0,
-            3,
-        ),
-    }
-
-
-# ============================================================
-# COUNTER-EVIDENCE
-# ============================================================
-
-def counter_queries(objective: str) -> List[str]:
-
-    return [
-        f"{objective} failure",
-        f"{objective} limitations",
-        f"{objective} criticism",
-        f"{objective} negative results",
-        f"{objective} benchmark weaknesses",
-        f"{objective} replication failure",
-        f"{objective} real world failures",
-    ]
-
-
-def run_countercheck(
-    objective: str,
-    existing_sources: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-
-    candidates = []
-
-    for query in counter_queries(objective):
-
-        try:
-            candidates.extend(
-                research_providers(query)
-            )
-        except Exception:
-            continue
-
-        if len(candidates) >= 20:
-            break
-
-    hydrated = []
-
-    for candidate in candidates:
-
-        try:
-            source = hydrate_source(candidate)
-
-            if source.get("content_valid"):
-                hydrated.append(source)
-
-        except Exception:
-            continue
-
-    merged = deduplicate_sources(
-        existing_sources + hydrated
-    )
-
-    counter_sources = [
-        source
-        for source in merged
-        if any(
-            word in (
-                source.get("evidence_text", "")
-                .lower()
-            )
-            for word in [
-                "failure",
-                "limitation",
-                "error",
-                "risk",
-                "unreliable",
-                "weakness",
-                "negative",
-                "cannot",
-                "unable",
-            ]
-        )
-    ]
-
-    return {
-        "completed": True,
-        "candidate_count": len(candidates),
-        "usable_counter_sources": len(counter_sources),
-        "sources": counter_sources,
-    }
-
-
-# ============================================================
-# SYNTHESIS
-# ============================================================
-
-def calculate_research_strength(
-    sources: List[Dict[str, Any]],
-    verification: Dict[str, Any],
-    graph: Dict[str, Any],
-) -> float:
-
-    usable = [
-        source
-        for source in sources
-        if source.get("content_valid")
-    ]
-
-    if not usable:
-        return 0.0
-
-    avg_quality = sum(
-        source.get("quality_score", 0)
-        for source in usable
-    ) / len(usable)
-
-    independent = graph["independent_sources"]
-
-    domain_factor = min(
-        independent / 4,
-        1.0,
-    )
-
-    verified_factor = (
-        verification["verified"]
-        / max(1, verification["total"])
-    )
-
-    contradiction_penalty = min(
-        graph["contradiction_edges"] * 0.03,
-        0.25,
-    )
-
-    strength = (
-        0.30 * avg_quality
-        + 0.25 * domain_factor
-        + 0.30 * verified_factor
-        + 0.15 * verification["confidence"]
-        - contradiction_penalty
-    )
-
-    return round(
-        max(0.0, min(1.0, strength)),
-        3,
-    )
-
-
-def verification_decision(
-    sources: List[Dict[str, Any]],
-    verification: Dict[str, Any],
-    graph: Dict[str, Any],
-) -> Tuple[str, str]:
-
-    usable = [
-        source
-        for source in sources
-        if source.get("content_valid")
-    ]
-
-    if not usable:
-        return (
-            "REJECTED",
-            "no_usable_evidence_sources",
-        )
-
-    if graph["independent_sources"] < 2:
-        return (
-            "INSUFFICIENT",
-            "insufficient_independent_evidence",
-        )
-
-    if verification["verified"] == 0:
-        if verification["uncertain"] > 0:
-            return (
-                "UNCERTAIN",
-                "claims_have_partial_support_but_do_not_meet_verification_threshold",
-            )
-
-        return (
-            "INSUFFICIENT",
-            "no_claim_reached_verification_threshold",
-        )
-
-    if graph["contradiction_edges"] > 5:
-        return (
-            "UNCERTAIN",
-            "substantial_contradictory_evidence",
-        )
-
-    return (
-        "VERIFIED",
-        "multiple_independent_sources_support_key_claims",
-    )
-
-
-# ============================================================
-# FULL MISSION
-# ============================================================
-
-def execute_mission(
-    objective: str,
-    verify: bool = True,
-) -> Dict[str, Any]:
-
-    mission_id = create_mission(objective)
-
-    started = time.time()
-
-    save_event(
+    log_event(
         mission_id,
-        "mission_started",
-        {
-            "objective": objective,
-            "version": VERSION,
-            "build": BUILD,
-        },
+        "mission_created",
+        {"objective": objective},
     )
 
     try:
 
-        # ----------------------------------------------------
-        # UNDERSTAND
-        # ----------------------------------------------------
-
-        save_event(
+        result = research_mission(
             mission_id,
-            "understand",
-            {
-                "objective": objective,
-            },
-        )
-
-        # ----------------------------------------------------
-        # RESEARCH
-        # ----------------------------------------------------
-
-        candidates = collect_candidates(objective)
-
-        save_event(
-            mission_id,
-            "research_candidates",
-            {
-                "count": len(candidates),
-            },
-        )
-
-        # ----------------------------------------------------
-        # SOURCE INGESTION
-        # ----------------------------------------------------
-
-        hydrated = []
-
-        rejected_sources = []
-
-        seen_candidate_keys = set()
-
-        for candidate in candidates:
-
-            # Build temporary identity before fetching.
-            temp = {
-                "title": candidate.get("title", ""),
-                "url": candidate.get("url", ""),
-                "doi": candidate.get("doi", ""),
-            }
-
-            key = source_key(temp)
-
-            if key in seen_candidate_keys:
-                continue
-
-            seen_candidate_keys.add(key)
-
-            source = hydrate_source(candidate)
-
-            if source.get("content_valid"):
-                hydrated.append(source)
-            else:
-                rejected_sources.append(
-                    {
-                        "provider": source.get("provider"),
-                        "title": source.get("title"),
-                        "url": source.get("url"),
-                        "reason": source.get(
-                            "rejection_reason"
-                        ),
-                    }
-                )
-
-            if len(hydrated) >= MAX_RESEARCH_SOURCES:
-                break
-
-        # ----------------------------------------------------
-        # DEDUPLICATION
-        # ----------------------------------------------------
-
-        sources = deduplicate_sources(hydrated)
-
-        # Recalculate independence.
-        source_keys = {
-            source["source_key"]
-            for source in sources
-        }
-
-        for source in sources:
-            source["independent"] = (
-                source["source_key"] in source_keys
-            )
-            source["quality_score"] = source_quality_score(
-                source
-            )
-            source["health_score"] = source_health_score(
-                source
-            )
-
-        # ----------------------------------------------------
-        # SAVE SOURCES
-        # ----------------------------------------------------
-
-        source_ids = {}
-
-        for source in sources:
-            source_ids[source["source_key"]] = save_source(
-                mission_id,
-                source,
-            )
-
-        # ----------------------------------------------------
-        # EVIDENCE GRAPH
-        # ----------------------------------------------------
-
-        graph = build_evidence_graph(
             objective,
-            sources,
         )
 
-        save_event(
-            mission_id,
-            "evidence_graph",
-            {
-                "node_count": graph["node_count"],
-                "edge_count": graph["edge_count"],
-                "independent_sources": graph[
-                    "independent_sources"
-                ],
-                "independent_domains": graph[
-                    "independent_domains"
-                ],
-                "provider_diversity": graph[
-                    "provider_diversity"
-                ],
-            },
-        )
+        if remember:
+            conn = db()
 
-        # ----------------------------------------------------
-        # CLAIMS
-        # ----------------------------------------------------
-
-        total_claim_count = 0
-
-        for source in sources:
-
-            source_id = source_ids.get(
-                source["source_key"]
-            )
-
-            if not source_id:
-                continue
-
-            claims = extract_claims(source)
-
-            for claim in claims[:MAX_CLAIMS_PER_SOURCE]:
-
-                if total_claim_count >= MAX_CLAIMS_PER_MISSION:
-                    break
-
-                save_claim(
+            conn.execute(
+                """
+                INSERT INTO memory
+                (
                     mission_id,
-                    source_id,
-                    claim,
+                    content,
+                    created_at
                 )
-
-                total_claim_count += 1
-
-        # ----------------------------------------------------
-        # VERIFICATION
-        # ----------------------------------------------------
-
-        if verify:
-            verification = verify_claims(
-                objective,
-                sources,
-            )
-        else:
-            verification = {
-                "claims": [],
-                "total": 0,
-                "verified": 0,
-                "uncertain": 0,
-                "insufficient": 0,
-                "confidence": 0,
-            }
-
-        # ----------------------------------------------------
-        # COUNTERCHECK
-        # ----------------------------------------------------
-
-        countercheck = run_countercheck(
-            objective,
-            sources,
-        )
-
-        # ----------------------------------------------------
-        # FINAL GRAPH AFTER COUNTERCHECK
-        # ----------------------------------------------------
-
-        combined_sources = deduplicate_sources(
-            sources + countercheck.get("sources", [])
-        )
-
-        final_graph = build_evidence_graph(
-            objective,
-            combined_sources,
-        )
-
-        # ----------------------------------------------------
-        # FINAL VERIFICATION
-        # ----------------------------------------------------
-
-        final_verification = verify_claims(
-            objective,
-            combined_sources,
-        )
-
-        # ----------------------------------------------------
-        # DECISION
-        # ----------------------------------------------------
-
-        decision, reason = verification_decision(
-            combined_sources,
-            final_verification,
-            final_graph,
-        )
-
-        research_strength = calculate_research_strength(
-            combined_sources,
-            final_verification,
-            final_graph,
-        )
-
-        usable_sources = [
-            source
-            for source in combined_sources
-            if source.get("content_valid")
-        ]
-
-        corrupted_sources = [
-            item
-            for item in rejected_sources
-            if item.get("reason")
-        ]
-
-        # ----------------------------------------------------
-        # CRITIQUE
-        # ----------------------------------------------------
-
-        critique = []
-
-        if final_graph["independent_sources"] < 2:
-            critique.append(
-                "Evidence comes from fewer than two independent underlying sources."
-            )
-
-        if final_graph["independent_domains"] < 2:
-            critique.append(
-                "Evidence diversity across independent domains is limited."
-            )
-
-        if final_verification["verified"] == 0:
-            critique.append(
-                "No claim reached the strict verification threshold."
-            )
-
-        if final_graph["contradiction_edges"] > 0:
-            critique.append(
-                "Contradictory or potentially conflicting evidence was detected."
-            )
-
-        if corrupted_sources:
-            critique.append(
-                f"{len(corrupted_sources)} discovered sources were rejected before claim extraction."
-            )
-
-        if not critique:
-            critique.append(
-                "No major evidence-integrity failure detected."
-            )
-
-        # ----------------------------------------------------
-        # NEXT ACTION
-        # ----------------------------------------------------
-
-        if decision == "VERIFIED":
-            next_action = (
-                "Proceed using only claims linked to verified independent evidence; "
-                "retain contradictory evidence in the audit trail."
-            )
-
-        elif reason == "insufficient_independent_evidence":
-            next_action = (
-                "Collect additional independent primary or high-quality secondary "
-                "sources before relying on the affected claims."
-            )
-
-        elif final_graph["contradiction_edges"] > 0:
-            next_action = (
-                "Investigate contradictory evidence and re-run claim-level verification."
-            )
-
-        else:
-            next_action = (
-                "Collect stronger primary evidence and repeat verification."
-            )
-
-        # ----------------------------------------------------
-        # SOURCE REPORT
-        # ----------------------------------------------------
-
-        source_report = []
-
-        for source in combined_sources[:MAX_RESEARCH_SOURCES]:
-
-            source_report.append(
-                {
-                    "provider": source.get("provider"),
-                    "title": source.get("title"),
-                    "url": source.get("url"),
-                    "domain": source.get("domain"),
-                    "doi": source.get("doi"),
-                    "source_key": source.get("source_key"),
-                    "source_type": source.get("source_type"),
-                    "content_valid": bool(
-                        source.get("content_valid")
+                VALUES (?, ?, ?)
+                """,
+                (
+                    mission_id,
+                    json.dumps(
+                        {
+                            "objective": objective,
+                            "decision": result.get(
+                                "verification",
+                                {},
+                            ).get(
+                                "overall_decision"
+                            ),
+                        }
                     ),
-                    "evidence_origin": source.get(
-                        "evidence_origin"
-                    ),
-                    "evidence_length": source.get(
-                        "evidence_length",
-                        0,
-                    ),
-                    "health_score": source.get(
-                        "health_score",
-                        0,
-                    ),
-                    "quality_score": source.get(
-                        "quality_score",
-                        0,
-                    ),
-                    "rejection_reason": source.get(
-                        "rejection_reason"
-                    ),
-                }
+                    now(),
+                ),
             )
 
-        duration = round(
-            time.time() - started,
-            3,
+            conn.commit()
+            conn.close()
+
+        conn = db()
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET status = ?,
+                completed_at = ?,
+                result_json = ?
+            WHERE id = ?
+            """,
+            (
+                "completed",
+                now(),
+                json.dumps(result),
+                mission_id,
+            ),
         )
 
-        result = {
-            "task_id": mission_id,
-            "status": "completed",
-            "version": VERSION,
-            "build": BUILD,
-            "objective": objective,
+        conn.commit()
+        conn.close()
 
-            "pipeline": [
-                "understand",
-                "research",
-                "source_validation",
-                "deduplication",
-                "evidence_graph",
-                "claim_extraction",
-                "verification",
-                "countercheck",
-                "contradiction_analysis",
-                "critique",
-                "synthesis",
-                "next_cycle",
-            ],
-
-            "research": {
-                "candidate_sources": len(candidates),
-                "usable_sources": len(usable_sources),
-                "rejected_sources": len(rejected_sources),
-                "corrupted_or_unusable_sources": len(
-                    corrupted_sources
-                ),
-                "provider_diversity": final_graph[
-                    "provider_diversity"
-                ],
-                "independent_underlying_sources": final_graph[
-                    "independent_sources"
-                ],
-                "independent_domains": final_graph[
-                    "independent_domains"
-                ],
-            },
-
-            "source_quality": {
-                "average_quality": round(
-                    (
-                        sum(
-                            x.get(
-                                "quality_score",
-                                0,
-                            )
-                            for x in usable_sources
-                        )
-                        / len(usable_sources)
-                    )
-                    if usable_sources
-                    else 0,
-                    3,
-                ),
-                "average_health": round(
-                    (
-                        sum(
-                            x.get(
-                                "health_score",
-                                0,
-                            )
-                            for x in usable_sources
-                        )
-                        / len(usable_sources)
-                    )
-                    if usable_sources
-                    else 0,
-                    3,
-                ),
-                "independence_rule": (
-                    "DOI/title underlying-work identity; "
-                    "provider diversity does not equal source independence"
-                ),
-            },
-
-            "evidence_graph": {
-                "nodes": final_graph["node_count"],
-                "edges": final_graph["edge_count"],
-                "support_edges": final_graph[
-                    "support_edges"
-                ],
-                "contradiction_edges": final_graph[
-                    "contradiction_edges"
-                ],
-            },
-
-            "claims": {
-                "extracted": final_verification["total"],
-                "verified": final_verification["verified"],
-                "uncertain": final_verification["uncertain"],
-                "insufficient": final_verification[
-                    "insufficient"
-                ],
-            },
-
-            "verification": {
-                "decision": decision,
-                "verified": (
-                    decision == "VERIFIED"
-                ),
-                "reason": reason,
-                "confidence": final_verification[
-                    "confidence"
-                ],
-                "threshold": {
-                    "minimum_independent_support": 2,
-                    "contradiction_awareness": True,
-                    "source_quality_required": True,
-                },
-            },
-
-            "countercheck": {
-                "completed": countercheck[
-                    "completed"
-                ],
-                "candidate_count": countercheck[
-                    "candidate_count"
-                ],
-                "usable_counter_sources": countercheck[
-                    "usable_counter_sources"
-                ],
-            },
-
-            "research_strength": research_strength,
-
-            "critique": critique,
-
-            "synthesis": {
-                "conclusion": (
-                    "Evidence supports the conclusion."
-                    if decision == "VERIFIED"
-                    else (
-                        "Evidence is not sufficient "
-                        "for a strong conclusion."
-                    )
-                ),
-                "mission_score": round(
-                    research_strength
-                    * final_verification["confidence"],
-                    3,
-                ),
-                "verified_claims": final_verification[
-                    "verified"
-                ],
-                "unsupported_claims": final_verification[
-                    "insufficient"
-                ],
-                "uncertain_claims": final_verification[
-                    "uncertain"
-                ],
-                "evidence_count": len(usable_sources),
-                "independent_sources": final_graph[
-                    "independent_sources"
-                ],
-                "independent_domains": final_graph[
-                    "independent_domains"
-                ],
-                "contradictions": final_graph[
-                    "contradiction_edges"
-                ],
-            },
-
-            "next_cycle": {
-                "action": next_action,
-                "automatic_research_allowed": True,
-                "requires_stronger_evidence": (
-                    decision != "VERIFIED"
-                ),
-            },
-
-            "sources": source_report,
-
-            "rejected_sources": rejected_sources[
-                :30
-            ],
-
-            "claims_detail": final_verification[
-                "claims"
-            ][
-                :MAX_CLAIMS_PER_MISSION
-            ],
-
-            "performance": {
-                "duration_seconds": duration,
-            },
-        }
-
-        # ----------------------------------------------------
-        # SAVE FINAL RESULT
-        # ----------------------------------------------------
-
-        update_mission(
-            mission_id,
-            "completed",
-            result,
-        )
-
-        save_event(
+        log_event(
             mission_id,
             "mission_completed",
             {
-                "decision": decision,
-                "research_strength": research_strength,
-                "duration_seconds": duration,
+                "status": "completed",
             },
         )
 
@@ -2984,40 +1661,637 @@ def execute_mission(
 
     except Exception as exc:
 
-        error = {
+        result = {
             "task_id": mission_id,
             "status": "failed",
             "version": VERSION,
             "build": BUILD,
             "error": str(exc),
-            "error_type": type(exc).__name__,
-            "traceback": traceback.format_exc()[-5000:],
         }
 
-        update_mission(
-            mission_id,
-            "failed",
-            error,
+        conn = db()
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET status = ?,
+                completed_at = ?,
+                result_json = ?
+            WHERE id = ?
+            """,
+            (
+                "failed",
+                now(),
+                json.dumps(result),
+                mission_id,
+            ),
         )
 
-        save_event(
+        conn.commit()
+        conn.close()
+
+        log_event(
             mission_id,
             "mission_failed",
-            error,
+            {"error": str(exc)},
         )
 
-        return error
+        return result
 
 
 # ============================================================
-# API ROUTES
+# WEB DASHBOARD
 # ============================================================
 
-@app.get("/")
-def root():
+HTML_PAGE = r"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport"
+      content="width=device-width,initial-scale=1.0">
 
+<title>AI Infinity</title>
+
+<style>
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    font-family:
+        Inter,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+
+    background:
+        radial-gradient(
+            circle at top left,
+            #172554 0,
+            #070b18 35%,
+            #03050b 100%
+        );
+
+    color: #f8fafc;
+}
+
+.container {
+    width: min(1100px, 94%);
+    margin: auto;
+    padding: 28px 0 50px;
+}
+
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 20px;
+    margin-bottom: 28px;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.logo {
+    width: 48px;
+    height: 48px;
+    border-radius: 16px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    font-size: 25px;
+    font-weight: 800;
+
+    background:
+        linear-gradient(
+            135deg,
+            #38bdf8,
+            #6366f1
+        );
+
+    box-shadow:
+        0 10px 40px rgba(56,189,248,.25);
+}
+
+h1 {
+    margin: 0;
+    font-size: 28px;
+}
+
+.subtitle {
+    margin-top: 3px;
+    color: #94a3b8;
+    font-size: 13px;
+}
+
+.online {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    padding: 9px 13px;
+    border-radius: 999px;
+
+    background: rgba(34,197,94,.10);
+    border: 1px solid rgba(34,197,94,.25);
+
+    color: #86efac;
+    font-size: 13px;
+}
+
+.dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #22c55e;
+    box-shadow: 0 0 12px #22c55e;
+}
+
+.hero {
+    padding: 30px;
+    border-radius: 24px;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(15,23,42,.92),
+            rgba(15,23,42,.60)
+        );
+
+    border: 1px solid rgba(148,163,184,.15);
+
+    box-shadow:
+        0 30px 100px rgba(0,0,0,.30);
+}
+
+.hero h2 {
+    margin: 0 0 8px;
+    font-size: clamp(25px, 5vw, 42px);
+}
+
+.hero p {
+    color: #94a3b8;
+    max-width: 750px;
+    line-height: 1.6;
+}
+
+textarea {
+    width: 100%;
+    min-height: 130px;
+
+    margin-top: 18px;
+    padding: 17px;
+
+    resize: vertical;
+
+    border-radius: 16px;
+    border: 1px solid #263248;
+
+    background: #070b14;
+    color: #f8fafc;
+
+    font-size: 15px;
+    outline: none;
+}
+
+textarea:focus {
+    border-color: #38bdf8;
+    box-shadow:
+        0 0 0 3px rgba(56,189,248,.10);
+}
+
+button {
+    margin-top: 14px;
+
+    padding: 13px 20px;
+
+    border: 0;
+    border-radius: 13px;
+
+    background:
+        linear-gradient(
+            135deg,
+            #38bdf8,
+            #6366f1
+        );
+
+    color: white;
+    font-weight: 700;
+    font-size: 14px;
+
+    cursor: pointer;
+
+    box-shadow:
+        0 10px 30px rgba(59,130,246,.20);
+}
+
+button:hover {
+    transform: translateY(-1px);
+}
+
+button:disabled {
+    opacity: .55;
+    cursor: wait;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns:
+        repeat(auto-fit,minmax(180px,1fr));
+
+    gap: 14px;
+    margin-top: 18px;
+}
+
+.card {
+    padding: 20px;
+    border-radius: 18px;
+
+    background: rgba(15,23,42,.70);
+    border: 1px solid rgba(148,163,184,.12);
+}
+
+.card .label {
+    color: #64748b;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+}
+
+.card .value {
+    margin-top: 7px;
+    font-size: 21px;
+    font-weight: 750;
+}
+
+.result {
+    margin-top: 18px;
+    display: none;
+
+    padding: 22px;
+
+    border-radius: 18px;
+
+    background: #050914;
+    border: 1px solid #1e293b;
+}
+
+.result pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+
+    color: #cbd5e1;
+    line-height: 1.55;
+    font-size: 13px;
+}
+
+.section {
+    margin-top: 24px;
+}
+
+.section h3 {
+    margin-bottom: 10px;
+}
+
+.api {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.api span {
+    padding: 8px 10px;
+    border-radius: 9px;
+
+    background: #0b1220;
+    border: 1px solid #1e293b;
+
+    color: #94a3b8;
+    font-size: 12px;
+}
+
+.footer {
+    margin-top: 30px;
+    text-align: center;
+
+    color: #475569;
+    font-size: 12px;
+}
+
+.status-ok {
+    color: #86efac;
+}
+
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <header class="header">
+
+        <div class="brand">
+
+            <div class="logo">∞</div>
+
+            <div>
+                <h1>AI Infinity</h1>
+                <div class="subtitle">
+                    Autonomous Research & Evidence Engine
+                </div>
+            </div>
+
+        </div>
+
+        <div class="online">
+            <span class="dot"></span>
+            ONLINE
+        </div>
+
+    </header>
+
+
+    <section class="hero">
+
+        <h2>
+            Turn an objective into verified intelligence.
+        </h2>
+
+        <p>
+            AI Infinity researches across public sources,
+            validates evidence, detects contradictions,
+            evaluates source independence and produces
+            a structured mission result.
+        </p>
+
+        <textarea
+            id="objective"
+            placeholder="Tell AI Infinity what you want it to investigate..."
+        ></textarea>
+
+        <button id="runBtn" onclick="runMission()">
+            🚀 Run Mission
+        </button>
+
+    </section>
+
+
+    <section class="grid">
+
+        <div class="card">
+            <div class="label">Version</div>
+            <div class="value" id="version">
+                TARGET-2050.22
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="label">Engine</div>
+            <div class="value status-ok">
+                READY
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="label">Evidence</div>
+            <div class="value status-ok">
+                ENABLED
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="label">Verification</div>
+            <div class="value status-ok">
+                ENABLED
+            </div>
+        </div>
+
+    </section>
+
+
+    <section class="result" id="result">
+
+        <h3>Mission Result</h3>
+
+        <pre id="resultText"></pre>
+
+    </section>
+
+
+    <section class="section">
+
+        <h3>Core capabilities</h3>
+
+        <div class="api">
+            <span>Research</span>
+            <span>Evidence Validation</span>
+            <span>Source Quality</span>
+            <span>Claim Verification</span>
+            <span>Counter-Evidence</span>
+            <span>Contradiction Detection</span>
+            <span>Source Independence</span>
+            <span>SQLite Memory</span>
+        </div>
+
+    </section>
+
+
+    <section class="section">
+
+        <h3>API</h3>
+
+        <div class="api">
+            <span>/health</span>
+            <span>/status</span>
+            <span>/capabilities</span>
+            <span>/mission</span>
+            <span>/missions</span>
+            <span>/research</span>
+            <span>/run</span>
+            <span>/command</span>
+        </div>
+
+    </section>
+
+
+    <div class="footer">
+        AI Infinity • TARGET-2050.22 •
+        Evidence-integrity architecture
+    </div>
+
+</div>
+
+
+<script>
+
+async function loadStatus() {
+
+    try {
+
+        const response =
+            await fetch("/status");
+
+        const data =
+            await response.json();
+
+        if (data.version) {
+            document.getElementById("version")
+                .textContent = data.version;
+        }
+
+    } catch (error) {
+
+        console.log(error);
+
+    }
+
+}
+
+
+async function runMission() {
+
+    const objective =
+        document.getElementById(
+            "objective"
+        ).value.trim();
+
+    if (!objective) {
+
+        alert(
+            "Enter an objective first."
+        );
+
+        return;
+    }
+
+    const button =
+        document.getElementById(
+            "runBtn"
+        );
+
+    const result =
+        document.getElementById(
+            "result"
+        );
+
+    const resultText =
+        document.getElementById(
+            "resultText"
+        );
+
+    button.disabled = true;
+    button.textContent =
+        "⏳ AI Infinity is working...";
+
+    result.style.display = "block";
+
+    resultText.textContent =
+        "Starting mission...\n\n" +
+        "Researching sources...\n" +
+        "Validating evidence...\n" +
+        "Checking independence...\n" +
+        "Verifying claims...\n" +
+        "Checking counter-evidence...";
+
+    try {
+
+        const response =
+            await fetch(
+                "/mission",
+                {
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
+
+                    body: JSON.stringify({
+                        objective:
+                            objective,
+
+                        research: true,
+
+                        verify: true,
+
+                        remember: true
+                    })
+                }
+            );
+
+        const data =
+            await response.json();
+
+        resultText.textContent =
+            JSON.stringify(
+                data,
+                null,
+                2
+            );
+
+    } catch (error) {
+
+        resultText.textContent =
+            "Mission request failed:\n\n"
+            + error;
+
+    } finally {
+
+        button.disabled = false;
+
+        button.textContent =
+            "🚀 Run Mission";
+    }
+}
+
+
+loadStatus();
+
+</script>
+
+</body>
+</html>
+"""
+
+
+# ============================================================
+# WEB ROUTES
+# ============================================================
+
+@app.get(
+    "/",
+    response_class=HTMLResponse,
+)
+def home():
+    return HTML_PAGE
+
+
+@app.get("/health")
+def health():
     return {
-        "name": APP_TITLE,
+        "status": "healthy",
+        "name": APP_NAME,
+        "version": VERSION,
+        "build": BUILD,
+        "timestamp": iso(),
+    }
+
+
+@app.get("/status")
+def status():
+    return {
+        "name": APP_NAME,
         "version": VERSION,
         "build": BUILD,
         "status": "online",
@@ -3027,87 +2301,7 @@ def root():
         "claim_verification": "enabled",
         "countercheck": "enabled",
         "database": "sqlite",
-    }
-
-
-@app.get("/health")
-def health():
-
-    try:
-        db = db_connection()
-
-        try:
-            db.execute("SELECT 1")
-        finally:
-            db.close()
-
-        database = "ok"
-
-    except Exception:
-        database = "error"
-
-    return {
-        "status": "healthy"
-        if database == "ok"
-        else "degraded",
-        "version": VERSION,
-        "build": BUILD,
-        "database": database,
-        "timestamp": utc_now(),
-    }
-
-
-@app.get("/status")
-def status():
-
-    try:
-        missions = db_execute(
-            "SELECT COUNT(*) AS count FROM missions",
-            fetch=True,
-        )[0]["count"]
-
-        sources = db_execute(
-            "SELECT COUNT(*) AS count FROM sources",
-            fetch=True,
-        )[0]["count"]
-
-        claims = db_execute(
-            "SELECT COUNT(*) AS count FROM claims",
-            fetch=True,
-        )[0]["count"]
-
-    except Exception:
-        missions = 0
-        sources = 0
-        claims = 0
-
-    return {
-        "status": "online",
-        "version": VERSION,
-        "build": BUILD,
-        "capabilities": [
-            "research",
-            "source_firewall",
-            "content_validation",
-            "pdf_detection",
-            "pdf_text_extraction",
-            "challenge_detection",
-            "metadata_evidence_separation",
-            "source_deduplication",
-            "independent_source_analysis",
-            "evidence_graph",
-            "claim_extraction",
-            "claim_verification",
-            "counter_evidence",
-            "contradiction_analysis",
-            "mission_persistence",
-            "sqlite_memory",
-        ],
-        "database_counts": {
-            "missions": missions,
-            "sources": sources,
-            "claims": claims,
-        },
+        "web_interface": "enabled",
     }
 
 
@@ -3115,273 +2309,306 @@ def status():
 def capabilities():
 
     return {
+        "name": APP_NAME,
         "version": VERSION,
         "build": BUILD,
-        "capabilities": [
+        "builtin_tools": [
+            {
+                "name": "capabilities",
+                "category": "builtin",
+                "permission": "safe",
+            },
+            {
+                "name": "health",
+                "category": "builtin",
+                "permission": "safe",
+            },
+            {
+                "name": "status",
+                "category": "builtin",
+                "permission": "safe",
+            },
             {
                 "name": "research",
-                "status": "enabled",
+                "category": "research",
+                "permission": "safe",
             },
             {
-                "name": "source_validation",
-                "status": "enabled",
+                "name": "evidence_validation",
+                "category": "evidence",
+                "permission": "safe",
             },
             {
-                "name": "binary_rejection",
-                "status": "enabled",
+                "name": "claim_verification",
+                "category": "verification",
+                "permission": "safe",
             },
             {
-                "name": "pdf_extraction",
-                "status": "optional_pypdf",
+                "name": "countercheck",
+                "category": "verification",
+                "permission": "safe",
             },
             {
-                "name": "challenge_detection",
-                "status": "enabled",
+                "name": "memory",
+                "category": "persistence",
+                "permission": "safe",
             },
-            {
-                "name": "claim_sanitization",
-                "status": "enabled",
-            },
-            {
-                "name": "evidence_graph",
-                "status": "enabled",
-            },
-            {
-                "name": "counter_evidence",
-                "status": "enabled",
-            },
-            {
-                "name": "verification",
-                "status": "enabled",
-            },
-            {
-                "name": "sqlite_persistence",
-                "status": "enabled",
-            },
+        ],
+        "providers": [
+            "OpenAlex",
+            "Crossref",
+            "DuckDuckGo",
+            "Wikipedia",
+        ],
+        "features": [
+            "SSRF protection",
+            "source validation",
+            "PDF extraction",
+            "challenge-page detection",
+            "binary-content rejection",
+            "source deduplication",
+            "source-quality scoring",
+            "claim extraction",
+            "claim verification",
+            "counter-evidence",
+            "contradiction detection",
+            "independent-domain analysis",
+            "SQLite persistence",
+            "browser dashboard",
         ],
     }
 
 
+# ============================================================
+# MISSION ROUTES
+# ============================================================
+
 @app.post("/mission")
 def mission(request: MissionRequest):
 
-    return execute_mission(
+    return create_mission(
         request.objective,
-        verify=request.verify,
+        request.remember,
     )
 
 
 @app.post("/missions")
-def missions(request: MissionRequest):
+def missions_create(request: MissionRequest):
 
-    return execute_mission(
+    return create_mission(
         request.objective,
-        verify=request.verify,
+        request.remember,
     )
 
 
 @app.post("/research")
 def research(request: ResearchRequest):
 
-    return execute_mission(
+    return create_mission(
         request.objective,
-        verify=request.verify,
+        remember=False,
     )
 
 
 @app.post("/run")
-def run(request: CommandRequest):
+def run(request: MissionRequest):
 
-    return execute_mission(
-        request.command,
-        verify=True,
+    return create_mission(
+        request.objective,
+        request.remember,
     )
 
 
 @app.post("/command")
 def command(request: CommandRequest):
 
-    return execute_mission(
-        request.command,
-        verify=True,
+    objective = (
+        request.objective
+        or request.command
+    )
+
+    return create_mission(
+        objective,
+        request.remember,
     )
 
 
-@app.get("/mission/{mission_id}")
-def get_mission(mission_id: str):
+# ============================================================
+# MISSION LOOKUP
+# ============================================================
 
-    rows = db_execute(
+@app.get("/mission/{mission_id}")
+def get_mission(
+    mission_id: str,
+):
+
+    conn = db()
+
+    row = conn.execute(
         """
         SELECT *
         FROM missions
         WHERE id = ?
         """,
         (mission_id,),
-        fetch=True,
-    )
+    ).fetchone()
 
-    if not rows:
+    conn.close()
+
+    if not row:
         raise HTTPException(
             status_code=404,
             detail="Mission not found",
         )
 
-    mission_data = rows[0]
+    result = dict(row)
 
-    result = None
-
-    if mission_data.get("result_json"):
+    if result.get("result_json"):
         try:
-            result = json.loads(
-                mission_data["result_json"]
+            result["result"] = json.loads(
+                result["result_json"]
             )
         except Exception:
-            result = mission_data["result_json"]
+            pass
 
-    return {
-        "id": mission_data["id"],
-        "objective": mission_data["objective"],
-        "status": mission_data["status"],
-        "version": mission_data["version"],
-        "build": mission_data["build"],
-        "created_at": mission_data["created_at"],
-        "updated_at": mission_data["updated_at"],
-        "result": result,
-    }
+    return result
 
 
 @app.get("/missions")
-def list_missions(limit: int = 20):
+def get_missions():
 
-    limit = max(1, min(limit, 100))
+    conn = db()
 
-    rows = db_execute(
+    rows = conn.execute(
         """
         SELECT
             id,
             objective,
             status,
-            version,
-            build,
             created_at,
-            updated_at
+            completed_at
         FROM missions
         ORDER BY created_at DESC
-        LIMIT ?
-        """,
-        (limit,),
-        fetch=True,
-    )
+        LIMIT 100
+        """
+    ).fetchall()
+
+    conn.close()
 
     return {
         "count": len(rows),
-        "missions": rows,
+        "missions": [
+            {
+                **dict(row),
+                "created_at": iso(
+                    row["created_at"]
+                ),
+                "completed_at": (
+                    iso(row["completed_at"])
+                    if row["completed_at"]
+                    else None
+                ),
+            }
+            for row in rows
+        ],
     }
 
 
 @app.get("/mission/{mission_id}/sources")
-def mission_sources(mission_id: str):
+def get_sources(
+    mission_id: str,
+):
 
-    rows = db_execute(
+    conn = db()
+
+    rows = conn.execute(
         """
-        SELECT
-            id,
-            provider,
-            title,
-            url,
-            canonical_url,
-            domain,
-            doi,
-            source_key,
-            source_type,
-            fetched_status,
-            content_valid,
-            rejection_reason,
-            evidence_length,
-            quality_score,
-            health_score,
-            independent,
-            created_at
+        SELECT *
         FROM sources
         WHERE mission_id = ?
-        ORDER BY quality_score DESC
+        ORDER BY quality DESC
         """,
         (mission_id,),
-        fetch=True,
-    )
+    ).fetchall()
+
+    conn.close()
 
     return {
         "mission_id": mission_id,
         "count": len(rows),
-        "sources": rows,
+        "sources": [
+            dict(row)
+            for row in rows
+        ],
     }
 
 
 @app.get("/mission/{mission_id}/claims")
-def mission_claims(mission_id: str):
+def get_claims(
+    mission_id: str,
+):
 
-    rows = db_execute(
+    conn = db()
+
+    rows = conn.execute(
         """
-        SELECT
-            id,
-            source_id,
-            claim_text,
-            claim_hash,
-            status,
-            confidence,
-            created_at
+        SELECT *
         FROM claims
         WHERE mission_id = ?
-        ORDER BY created_at
+        ORDER BY confidence DESC
         """,
         (mission_id,),
-        fetch=True,
-    )
+    ).fetchall()
+
+    conn.close()
 
     return {
         "mission_id": mission_id,
         "count": len(rows),
-        "claims": rows,
+        "claims": [
+            dict(row)
+            for row in rows
+        ],
     }
 
 
 @app.get("/mission/{mission_id}/events")
-def mission_events(mission_id: str):
+def get_events(
+    mission_id: str,
+):
 
-    rows = db_execute(
+    conn = db()
+
+    rows = conn.execute(
         """
-        SELECT
-            id,
-            event_type,
-            payload_json,
-            created_at
+        SELECT *
         FROM events
         WHERE mission_id = ?
-        ORDER BY created_at
+        ORDER BY created_at ASC
         """,
         (mission_id,),
-        fetch=True,
-    )
+    ).fetchall()
+
+    conn.close()
 
     events = []
 
     for row in rows:
 
-        payload = row["payload_json"]
+        item = dict(row)
 
         try:
-            payload = json.loads(payload)
+            item["payload"] = json.loads(
+                item["payload"]
+            )
         except Exception:
             pass
 
-        events.append(
-            {
-                "id": row["id"],
-                "event_type": row["event_type"],
-                "payload": payload,
-                "created_at": row["created_at"],
-            }
+        item["created_at"] = iso(
+            item["created_at"]
         )
+
+        events.append(item)
 
     return {
         "mission_id": mission_id,
@@ -3391,53 +2618,87 @@ def mission_events(mission_id: str):
 
 
 # ============================================================
-# OPTIONAL DIRECT URL VALIDATION
+# SOURCE VALIDATION API
 # ============================================================
 
-class URLCheckRequest(BaseModel):
-    url: str = Field(..., min_length=8, max_length=2048)
+class SourceRequest(BaseModel):
+    url: str
 
 
 @app.post("/validate-source")
-def validate_source(request: URLCheckRequest):
+def validate_source(
+    request: SourceRequest,
+):
 
-    result = fetch_url(request.url)
-
-    return {
-        "url": request.url,
-        "valid": result.get("ok", False),
-        "status": result.get("status"),
-        "content_type": result.get(
-            "content_type"
-        ),
-        "reason": result.get("reason"),
-        "evidence_length": len(
-            result.get("text", "")
-        ),
-        "is_pdf": result.get(
-            "is_pdf",
-            False,
-        ),
-    }
-
-
-# ============================================================
-# ERROR HANDLER
-# ============================================================
-
-@app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
+    result = fetch_url(
+        request.url
+    )
 
     return {
-        "status": "error",
         "version": VERSION,
-        "error": str(exc),
-        "error_type": type(exc).__name__,
+        "url": request.url,
+        "validation": result,
     }
 
 
 # ============================================================
-# LOCAL ENTRYPOINT
+# ROOT API INFORMATION
+# ============================================================
+
+@app.get("/api")
+def api_info():
+
+    return {
+        "name": APP_NAME,
+        "version": VERSION,
+        "build": BUILD,
+        "status": "online",
+        "dashboard": "/",
+        "health": "/health",
+        "status_endpoint": "/status",
+        "capabilities": "/capabilities",
+        "mission": "POST /mission",
+        "research": "POST /research",
+        "command": "POST /command",
+    }
+
+
+# ============================================================
+# STARTUP
+# ============================================================
+
+@app.on_event("startup")
+def startup():
+
+    init_db()
+
+    print(
+        f"{APP_NAME} {VERSION} online"
+    )
+
+    print(
+        f"Build: {BUILD}"
+    )
+
+    print(
+        "Dashboard: /"
+    )
+
+    print(
+        "Evidence integrity: enabled"
+    )
+
+    print(
+        "Claim verification: enabled"
+    )
+
+    print(
+        "Countercheck: enabled"
+    )
+
+
+# ============================================================
+# LOCAL DEVELOPMENT
 # ============================================================
 
 if __name__ == "__main__":
@@ -3445,7 +2706,9 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
-        app,
+        "main:app",
         host="0.0.0.0",
-        port=PORT,
+        port=int(
+            os.getenv("PORT", "8000")
+        ),
     )
