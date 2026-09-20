@@ -1776,7 +1776,7 @@ def run_help():
 
 
 @app.post("/run")
-def run(request: CreateRequest):
+async def run(request: CreateRequest):
 
     mission_id = (
         "mission-"
