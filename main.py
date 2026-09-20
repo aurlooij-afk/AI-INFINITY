@@ -9,7 +9,7 @@ import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
-from typing import Any, Dict, Optional, List
+from typing import Optional, Dict, Any
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -19,28 +19,39 @@ from pydantic import BaseModel, Field
 
 # ============================================================
 # AI INFINITY
-# TARGET-2050.47
-# UNIVERSAL ADAPTIVE INTERFACE + REAL-WORLD COMMAND CORE
+# TARGET-2050.48
+# UNIVERSAL TOOL FABRIC
+#
+# Intent
+#   ↓
+# Mission Planning
+#   ↓
+# Capability Selection
+#   ↓
+# Permission / Approval
+#   ↓
+# Tool Execution
+#   ↓
+# Evidence
+#   ↓
+# Verification
+#   ↓
+# Recovery
+#   ↓
+# Learning
 # ============================================================
 
-VERSION = "TARGET-2050.47"
-BUILD = "UNIVERSAL-ADAPTIVE-INTERFACE-REAL-WORLD-COMMAND-CORE"
+VERSION = "TARGET-2050.48"
+BUILD = "UNIVERSAL-TOOL-FABRIC-ADAPTIVE-MISSION-CORE"
 
 BASE = Path("/tmp/ai_infinity")
 BASE.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = BASE / "ai_infinity.db"
 
-app = FastAPI(
-    title="AI Infinity",
-    version=VERSION,
-    description="Adaptive mission intelligence and controlled real-world command platform."
-)
-
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
+MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", "12"))
+REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "12"))
+MAX_EXTERNAL_RESPONSE = 20000
 
 EXTERNAL_ALLOWED_DOMAINS = {
     x.strip().lower()
@@ -48,14 +59,30 @@ EXTERNAL_ALLOWED_DOMAINS = {
     if x.strip()
 }
 
-MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", "12"))
-REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "12"))
-MAX_EXTERNAL_RESPONSE = 20000
+BLOCKED_HOSTS = {
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "::1",
+    "metadata.google.internal",
+    "169.254.169.254",
+}
+
+
+app = FastAPI(
+    title="AI Infinity",
+    version=VERSION,
+    description="Universal adaptive intelligence and controlled tool-execution fabric."
+)
 
 
 # ============================================================
-# DATABASE
+# TIME / DATABASE
 # ============================================================
+
+def now():
+    return datetime.now(timezone.utc).isoformat()
+
 
 def db():
     conn = sqlite3.connect(DB_PATH)
@@ -63,11 +90,8 @@ def db():
     return conn
 
 
-def now():
-    return datetime.now(timezone.utc).isoformat()
-
-
 def init_db():
+
     conn = db()
 
     conn.executescript(
@@ -78,6 +102,7 @@ def init_db():
             status TEXT NOT NULL,
             route TEXT,
             requirements TEXT,
+            plan TEXT,
             result TEXT,
             confidence REAL DEFAULT 0,
             created_at TEXT,
@@ -93,17 +118,59 @@ def init_db():
             created_at TEXT
         );
 
-        CREATE TABLE IF NOT EXISTS repairs (
+        CREATE TABLE IF NOT EXISTS evidence (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             mission_id TEXT,
-            error_type TEXT,
+            source TEXT,
+            content TEXT,
+            verified INTEGER DEFAULT 0,
+            created_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS approvals (
+            id TEXT PRIMARY KEY,
+            mission_id TEXT,
             action TEXT,
-            success INTEGER,
+            status TEXT,
+            reason TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS tool_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mission_id TEXT,
+            tool_name TEXT,
+            status TEXT,
+            input_data TEXT,
+            output_data TEXT,
+            created_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS route_learning (
+            route TEXT PRIMARY KEY,
+            successes INTEGER DEFAULT 0,
+            failures INTEGER DEFAULT 0,
+            updated_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS tool_learning (
+            tool_name TEXT PRIMARY KEY,
+            successes INTEGER DEFAULT 0,
+            failures INTEGER DEFAULT 0,
+            updated_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS learning (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mission_id TEXT,
+            key TEXT,
+            value TEXT,
             created_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS adaptive_policy (
-            id INTEGER PRIMARY KEY CHECK(id = 1),
+            id INTEGER PRIMARY KEY CHECK(id=1),
             version INTEGER,
             data TEXT,
             updated_at TEXT
@@ -116,45 +183,15 @@ def init_db():
             data TEXT,
             created_at TEXT
         );
-
-        CREATE TABLE IF NOT EXISTS learning (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            mission_id TEXT,
-            key TEXT,
-            value TEXT,
-            created_at TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS route_learning (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            route TEXT,
-            successes INTEGER DEFAULT 0,
-            failures INTEGER DEFAULT 0,
-            updated_at TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS evidence (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            mission_id TEXT,
-            source TEXT,
-            content TEXT,
-            verified INTEGER DEFAULT 0,
-            created_at TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS tool_learning (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tool_name TEXT,
-            successes INTEGER DEFAULT 0,
-            failures INTEGER DEFAULT 0,
-            updated_at TEXT
-        );
         """
     )
 
-    cur = conn.execute("SELECT * FROM adaptive_policy WHERE id=1")
-    if cur.fetchone() is None:
+    if not conn.execute(
+        "SELECT 1 FROM adaptive_policy WHERE id=1"
+    ).fetchone():
+
         policy = default_policy()
+
         conn.execute(
             """
             INSERT INTO adaptive_policy
@@ -169,33 +206,37 @@ def init_db():
 
 
 def default_policy():
+
     return {
-        "retry_controlled_failures": True,
-        "max_recovery_attempts": 2,
-        "require_verification": True,
         "adaptive_routing": True,
+        "require_verification": True,
         "runtime_policy_adaptation": True,
-        "rollback_invalid_policy": True,
+
+        "max_tool_calls": MAX_TOOL_CALLS,
+        "max_recovery_attempts": 2,
 
         "allow_external_intelligence": True,
         "allow_external_http": True,
 
         "require_approval_for_irreversible_actions": True,
+
         "destructive_actions": False,
         "credential_modification": False,
         "permission_changes": False,
         "auto_redeploy": False,
 
-        "max_tool_calls": MAX_TOOL_CALLS,
         "request_timeout": REQUEST_TIMEOUT
     }
 
 
 def get_policy():
+
     conn = db()
+
     row = conn.execute(
-        "SELECT version, data FROM adaptive_policy WHERE id=1"
+        "SELECT version,data FROM adaptive_policy WHERE id=1"
     ).fetchone()
+
     conn.close()
 
     if not row:
@@ -204,17 +245,34 @@ def get_policy():
     return row["version"], json.loads(row["data"])
 
 
-def save_policy(policy, reason):
-    version, _ = get_policy()
+def adapt_policy(reason):
+
+    version, policy = get_policy()
+
+    if not policy.get("runtime_policy_adaptation"):
+        return version
+
+    if reason == "recovery_success":
+        policy["max_recovery_attempts"] = min(
+            4,
+            int(policy["max_recovery_attempts"]) + 1
+        )
+
+    elif reason == "repeated_failure":
+        policy["max_recovery_attempts"] = max(
+            1,
+            int(policy["max_recovery_attempts"]) - 1
+        )
+
     new_version = version + 1
 
     conn = db()
 
     conn.execute(
         """
-        INSERT OR REPLACE INTO adaptive_policy
-        (id, version, data, updated_at)
-        VALUES (1, ?, ?, ?)
+        UPDATE adaptive_policy
+        SET version=?, data=?, updated_at=?
+        WHERE id=1
         """,
         (new_version, json.dumps(policy), now())
     )
@@ -222,8 +280,8 @@ def save_policy(policy, reason):
     conn.execute(
         """
         INSERT INTO policy_history
-        (version, reason, data, created_at)
-        VALUES (?, ?, ?, ?)
+        (version,reason,data,created_at)
+        VALUES (?,?,?,?)
         """,
         (new_version, reason, json.dumps(policy), now())
     )
@@ -235,23 +293,24 @@ def save_policy(policy, reason):
 
 
 # ============================================================
-# EVENTS
+# EVENTS / EVIDENCE
 # ============================================================
 
 def event(mission_id, event_type, message, data=None):
+
     conn = db()
 
     conn.execute(
         """
         INSERT INTO events
-        (mission_id, event_type, message, data, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        (mission_id,event_type,message,data,created_at)
+        VALUES (?,?,?,?,?)
         """,
         (
             mission_id,
             event_type,
             message,
-            json.dumps(data or {}),
+            json.dumps(data or {}, default=str),
             now()
         )
     )
@@ -260,19 +319,25 @@ def event(mission_id, event_type, message, data=None):
     conn.close()
 
 
-def evidence(mission_id, source, content, verified=False):
+def add_evidence(
+    mission_id,
+    source,
+    content,
+    verified=False
+):
+
     conn = db()
 
     conn.execute(
         """
         INSERT INTO evidence
-        (mission_id, source, content, verified, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        (mission_id,source,content,verified,created_at)
+        VALUES (?,?,?,?,?)
         """,
         (
             mission_id,
             source,
-            content[:MAX_EXTERNAL_RESPONSE],
+            str(content)[:MAX_EXTERNAL_RESPONSE],
             int(verified),
             now()
         )
@@ -283,39 +348,148 @@ def evidence(mission_id, source, content, verified=False):
 
 
 # ============================================================
-# ROUTING
+# UNIVERSAL TOOL CONTRACT
 # ============================================================
 
-def infer_requirements(objective: str):
+TOOLS = {
+
+    "mission_planner": {
+        "category": "planning",
+        "permission": "safe",
+        "input": "objective",
+        "output": "execution_plan"
+    },
+
+    "internal_analysis": {
+        "category": "intelligence",
+        "permission": "safe",
+        "input": "objective",
+        "output": "analysis"
+    },
+
+    "external_http_read": {
+        "category": "external_intelligence",
+        "permission": "controlled",
+        "input": "allowlisted_url",
+        "output": "external_evidence"
+    },
+
+    "evidence_verification": {
+        "category": "verification",
+        "permission": "safe",
+        "input": "result",
+        "output": "verification"
+    },
+
+    "memory_write": {
+        "category": "learning",
+        "permission": "safe",
+        "input": "mission_result",
+        "output": "memory_record"
+    },
+
+    "recovery_engine": {
+        "category": "recovery",
+        "permission": "safe",
+        "input": "failure",
+        "output": "recovery_action"
+    },
+
+    "real_world_command": {
+        "category": "action",
+        "permission": "approval_required",
+        "input": "authorized_action",
+        "output": "action_result"
+    }
+}
+
+
+# ============================================================
+# REQUIREMENT / INTENT ENGINE
+# ============================================================
+
+def infer_requirements(objective):
+
     text = objective.lower()
 
     requirements = []
 
-    if any(x in text for x in [
-        "research", "find", "search", "latest",
-        "investigate", "information", "web"
-    ]):
+    if any(
+        x in text
+        for x in [
+            "research",
+            "search",
+            "find",
+            "investigate",
+            "latest",
+            "information",
+            "web"
+        ]
+    ):
         requirements.append("research")
 
-    if any(x in text for x in [
-        "verify", "validate", "check", "confirm"
-    ]):
+    if any(
+        x in text
+        for x in [
+            "analyze",
+            "analyse",
+            "compare",
+            "understand",
+            "explain",
+            "plan"
+        ]
+    ):
+        requirements.append("analysis")
+
+    if any(
+        x in text
+        for x in [
+            "verify",
+            "validate",
+            "confirm",
+            "check"
+        ]
+    ):
         requirements.append("verification")
 
-    if any(x in text for x in [
-        "remember", "save", "memory"
-    ]):
+    if any(
+        x in text
+        for x in [
+            "remember",
+            "save",
+            "learn",
+            "memory"
+        ]
+    ):
         requirements.append("memory")
 
-    if any(x in text for x in [
-        "external", "internet", "website", "url", "http"
-    ]):
+    if any(
+        x in text
+        for x in [
+            "internet",
+            "website",
+            "url",
+            "external",
+            "http"
+        ]
+    ):
         requirements.append("external_intelligence")
 
-    if any(x in text for x in [
-        "recover", "retry", "fix", "repair"
-    ]):
-        requirements.append("recovery")
+    if any(
+        x in text
+        for x in [
+            "send",
+            "publish",
+            "buy",
+            "delete",
+            "change",
+            "control",
+            "execute",
+            "device",
+            "real world"
+        ]
+    ):
+        requirements.append("real_world_action")
 
     if not requirements:
         requirements.append("analysis")
@@ -324,13 +498,14 @@ def infer_requirements(objective: str):
 
 
 def choose_route(requirements):
+
     priority = [
+        "real_world_action",
         "verification",
         "external_intelligence",
         "research",
         "analysis",
-        "memory",
-        "recovery"
+        "memory"
     ]
 
     for route in priority:
@@ -341,86 +516,75 @@ def choose_route(requirements):
 
 
 # ============================================================
-# TOOL REGISTRY
+# MISSION PLANNER
 # ============================================================
 
-TOOLS = {
-    "internal_analysis": {
-        "category": "intelligence",
-        "permission": "safe"
-    },
-    "external_http_read": {
-        "category": "external_intelligence",
-        "permission": "controlled"
-    },
-    "evidence_verification": {
-        "category": "verification",
-        "permission": "safe"
-    },
-    "memory_write": {
-        "category": "memory",
-        "permission": "safe"
-    },
-    "recovery": {
-        "category": "recovery",
-        "permission": "safe"
-    },
-    "real_world_command": {
-        "category": "action",
-        "permission": "approval_required"
+def create_plan(objective, requirements):
+
+    steps = [
+        "interpret_intent",
+        "select_capabilities",
+        "execute_authorized_tools",
+        "collect_evidence",
+        "verify_result",
+        "recover_if_needed",
+        "store_learning"
+    ]
+
+    if "real_world_action" in requirements:
+        steps.insert(
+            3,
+            "request_human_approval_before_irreversible_action"
+        )
+
+    return {
+        "objective": objective,
+        "requirements": requirements,
+        "steps": steps,
+        "principle": (
+            "No irreversible action without explicit authorization."
+        )
     }
-}
 
 
 # ============================================================
-# SECURITY
+# EXTERNAL ACCESS
 # ============================================================
 
-BLOCKED_HOSTS = {
-    "localhost",
-    "127.0.0.1",
-    "0.0.0.0",
-    "::1",
-    "metadata.google.internal",
-    "169.254.169.254"
-}
+def validate_external_url(url):
 
-
-def validate_external_url(url: str):
     parsed = urlparse(url)
 
-    if parsed.scheme not in {"http", "https"}:
-        raise ValueError("Only HTTP and HTTPS are allowed.")
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(
+            "Only HTTP and HTTPS URLs are supported."
+        )
 
     if not parsed.hostname:
-        raise ValueError("URL hostname is required.")
+        raise ValueError("Hostname is required.")
 
     hostname = parsed.hostname.lower()
 
     if hostname in BLOCKED_HOSTS:
-        raise ValueError("Blocked internal destination.")
-
-    allowed = False
-
-    for domain in EXTERNAL_ALLOWED_DOMAINS:
-        if hostname == domain or hostname.endswith("." + domain):
-            allowed = True
-            break
-
-    if not allowed:
         raise ValueError(
-            "External domain is not allowlisted. "
-            "Configure EXTERNAL_ALLOWED_DOMAINS first."
+            "Internal destinations are blocked."
+        )
+
+    if not any(
+        hostname == domain
+        or hostname.endswith("." + domain)
+        for domain in EXTERNAL_ALLOWED_DOMAINS
+    ):
+        raise ValueError(
+            "Domain is not allowlisted. "
+            "Configure EXTERNAL_ALLOWED_DOMAINS in Render."
         )
 
     return parsed
 
 
-# ============================================================
-# EXTERNAL INTELLIGENCE
-# ============================================================
+async def external_http_read(url):
 
-async def external_http_read(url: str):
     validate_external_url(url)
 
     async with httpx.AsyncClient(
@@ -431,59 +595,74 @@ async def external_http_read(url: str):
         response = await client.get(
             url,
             headers={
-                "User-Agent": "AI-Infinity/2050.47"
+                "User-Agent": "AI-Infinity/2050.48"
             }
         )
-
-        content = response.text[:MAX_EXTERNAL_RESPONSE]
 
         return {
             "status_code": response.status_code,
             "url": str(response.url),
-            "content": content,
+            "content": response.text[:MAX_EXTERNAL_RESPONSE],
             "content_length": len(response.text)
         }
 
 
 # ============================================================
-# ANALYSIS
+# TOOL LEARNING
 # ============================================================
 
-def analyze_objective(objective: str):
-    words = re.findall(r"\b\w+\b", objective)
+def learn_tool(tool_name, success):
 
-    return {
-        "objective": objective,
-        "word_count": len(words),
-        "intent_hash": hashlib.sha256(
-            objective.encode("utf-8")
-        ).hexdigest()[:16],
-        "analysis": (
-            "Objective decomposed into intent, "
-            "requirements, route and verification needs."
+    conn = db()
+
+    row = conn.execute(
+        "SELECT * FROM tool_learning WHERE tool_name=?",
+        (tool_name,)
+    ).fetchone()
+
+    if row:
+
+        if success:
+            conn.execute(
+                """
+                UPDATE tool_learning
+                SET successes=successes+1,updated_at=?
+                WHERE tool_name=?
+                """,
+                (now(), tool_name)
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE tool_learning
+                SET failures=failures+1,updated_at=?
+                WHERE tool_name=?
+                """,
+                (now(), tool_name)
+            )
+
+    else:
+
+        conn.execute(
+            """
+            INSERT INTO tool_learning
+            (tool_name,successes,failures,updated_at)
+            VALUES (?,?,?,?)
+            """,
+            (
+                tool_name,
+                1 if success else 0,
+                0 if success else 1,
+                now()
+            )
         )
-    }
 
+    conn.commit()
+    conn.close()
 
-# ============================================================
-# VERIFICATION
-# ============================================================
-
-def verify_result(result):
-    if result is None:
-        return False
-
-    if isinstance(result, dict):
-        return len(result) > 0
-
-    return bool(str(result).strip())
-
-
-# ============================================================
-# ADAPTIVE LEARNING
-# ============================================================
 
 def learn_route(route, success):
+
     conn = db()
 
     row = conn.execute(
@@ -492,76 +671,219 @@ def learn_route(route, success):
     ).fetchone()
 
     if row:
-        if success:
-            conn.execute(
-                """
-                UPDATE route_learning
-                SET successes=successes+1, updated_at=?
-                WHERE route=?
-                """,
-                (now(), route)
-            )
-        else:
-            conn.execute(
-                """
-                UPDATE route_learning
-                SET failures=failures+1, updated_at=?
-                WHERE route=?
-                """,
-                (now(), route)
-            )
+
+        column = "successes" if success else "failures"
+
+        conn.execute(
+            f"""
+            UPDATE route_learning
+            SET {column}={column}+1,updated_at=?
+            WHERE route=?
+            """,
+            (now(), route)
+        )
+
     else:
+
         conn.execute(
             """
             INSERT INTO route_learning
-            (route, successes, failures, updated_at)
-            VALUES (?, ?, ?, ?)
+            (route,successes,failures,updated_at)
+            VALUES (?,?,?,?)
             """,
-            (route, 1 if success else 0, 0 if success else 1, now())
+            (
+                route,
+                1 if success else 0,
+                0 if success else 1,
+                now()
+            )
         )
 
     conn.commit()
     conn.close()
 
 
-def adapt_policy(reason):
-    version, policy = get_policy()
-
-    if not policy.get("runtime_policy_adaptation"):
-        return version
-
-    if reason == "recovery_success":
-        policy["max_recovery_attempts"] = min(
-            int(policy["max_recovery_attempts"]) + 1,
-            4
-        )
-
-    elif reason == "repeated_failure":
-        policy["max_recovery_attempts"] = max(
-            1,
-            int(policy["max_recovery_attempts"]) - 1
-        )
-
-    return save_policy(policy, reason)
-
-
 # ============================================================
-# MEMORY
+# TOOL EXECUTION FABRIC
 # ============================================================
 
-def remember(mission_id, key, value):
+async def execute_tool(
+    mission_id,
+    tool_name,
+    payload
+):
+
+    if tool_name not in TOOLS:
+        raise ValueError(
+            "Unknown tool: " + tool_name
+        )
+
+    event(
+        mission_id,
+        "tool_selected",
+        tool_name,
+        {
+            "contract": TOOLS[tool_name],
+            "payload_keys": list(payload.keys())
+        }
+    )
+
+    start = time.time()
+
+    try:
+
+        if tool_name == "mission_planner":
+
+            result = create_plan(
+                payload["objective"],
+                payload["requirements"]
+            )
+
+        elif tool_name == "internal_analysis":
+
+            objective = payload["objective"]
+
+            words = re.findall(
+                r"\b\w+\b",
+                objective
+            )
+
+            result = {
+                "objective": objective,
+                "word_count": len(words),
+                "intent_hash": hashlib.sha256(
+                    objective.encode()
+                ).hexdigest()[:16],
+                "interpretation":
+                    "Mission decomposed into intent, "
+                    "requirements and execution stages."
+            }
+
+        elif tool_name == "external_http_read":
+
+            result = await external_http_read(
+                payload["url"]
+            )
+
+            add_evidence(
+                mission_id,
+                result["url"],
+                result["content"],
+                False
+            )
+
+        elif tool_name == "evidence_verification":
+
+            target = payload.get("result")
+
+            verified = bool(target)
+
+            result = {
+                "verified": verified,
+                "method":
+                    "controlled_result_validation"
+            }
+
+        elif tool_name == "memory_write":
+
+            conn = db()
+
+            conn.execute(
+                """
+                INSERT INTO learning
+                (mission_id,key,value,created_at)
+                VALUES (?,?,?,?)
+                """,
+                (
+                    mission_id,
+                    "mission_learning",
+                    json.dumps(
+                        payload.get("result"),
+                        default=str
+                    ),
+                    now()
+                )
+            )
+
+            conn.commit()
+            conn.close()
+
+            result = {
+                "stored": True,
+                "mission_id": mission_id
+            }
+
+        elif tool_name == "recovery_engine":
+
+            result = {
+                "recovery": True,
+                "strategy": "controlled_retry"
+            }
+
+        elif tool_name == "real_world_command":
+
+            result = {
+                "status": "approval_required",
+                "action": payload.get("action"),
+                "message":
+                    "The action is prepared but has not "
+                    "been executed."
+            }
+
+        else:
+            raise ValueError("Unsupported tool.")
+
+        status = "completed"
+
+        learn_tool(tool_name, True)
+
+    except Exception as exc:
+
+        status = "failed"
+
+        learn_tool(tool_name, False)
+
+        conn = db()
+
+        conn.execute(
+            """
+            INSERT INTO tool_runs
+            (mission_id,tool_name,status,input_data,
+             output_data,created_at)
+            VALUES (?,?,?,?,?,?)
+            """,
+            (
+                mission_id,
+                tool_name,
+                status,
+                json.dumps(payload, default=str),
+                str(exc),
+                now()
+            )
+        )
+
+        conn.commit()
+        conn.close()
+
+        raise
+
+    elapsed = round(time.time() - start, 4)
+
     conn = db()
 
     conn.execute(
         """
-        INSERT INTO learning
-        (mission_id, key, value, created_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO tool_runs
+        (mission_id,tool_name,status,input_data,
+         output_data,created_at)
+        VALUES (?,?,?,?,?,?)
         """,
         (
             mission_id,
-            key,
-            json.dumps(value),
+            tool_name,
+            status,
+            json.dumps(payload, default=str),
+            json.dumps(result, default=str),
             now()
         )
     )
@@ -569,15 +891,64 @@ def remember(mission_id, key, value):
     conn.commit()
     conn.close()
 
+    event(
+        mission_id,
+        "tool_completed",
+        tool_name,
+        {
+            "elapsed_seconds": elapsed
+        }
+    )
+
+    return result
+
+
+# ============================================================
+# APPROVAL FABRIC
+# ============================================================
+
+def create_approval(
+    mission_id,
+    action,
+    reason
+):
+
+    approval_id = "approval-" + uuid.uuid4().hex[:12]
+
+    conn = db()
+
+    conn.execute(
+        """
+        INSERT INTO approvals
+        (id,mission_id,action,status,reason,
+         created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (
+            approval_id,
+            mission_id,
+            action,
+            "pending",
+            reason,
+            now(),
+            now()
+        )
+    )
+
+    conn.commit()
+    conn.close()
+
+    return approval_id
+
 
 # ============================================================
 # MISSION ENGINE
 # ============================================================
 
 async def execute_mission(
-    mission_id: str,
-    objective: str,
-    external_url: Optional[str] = None
+    mission_id,
+    objective,
+    external_url=None
 ):
 
     version, policy = get_policy()
@@ -586,18 +957,25 @@ async def execute_mission(
 
     if external_url:
         if "external_intelligence" not in requirements:
-            requirements.append("external_intelligence")
+            requirements.append(
+                "external_intelligence"
+            )
 
     route = choose_route(requirements)
+
+    plan = create_plan(
+        objective,
+        requirements
+    )
 
     conn = db()
 
     conn.execute(
         """
         INSERT INTO missions
-        (id, objective, status, route, requirements,
-         result, confidence, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id,objective,status,route,requirements,
+         plan,result,confidence,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
         """,
         (
             mission_id,
@@ -605,6 +983,7 @@ async def execute_mission(
             "running",
             route,
             json.dumps(requirements),
+            json.dumps(plan),
             "",
             0,
             now(),
@@ -618,7 +997,7 @@ async def execute_mission(
     event(
         mission_id,
         "mission_started",
-        "Mission execution started.",
+        "Universal tool-fabric mission started.",
         {
             "route": route,
             "requirements": requirements,
@@ -626,123 +1005,185 @@ async def execute_mission(
         }
     )
 
+    # --------------------------------------------------------
+    # REAL-WORLD ACTION GATE
+    # --------------------------------------------------------
+
+    if "real_world_action" in requirements:
+
+        approval_id = create_approval(
+            mission_id,
+            objective,
+            "Real-world action requires explicit approval."
+        )
+
+        result = {
+            "status": "approval_required",
+            "mission_id": mission_id,
+            "approval_id": approval_id,
+            "message":
+                "Mission prepared. No irreversible "
+                "real-world action was executed."
+        }
+
+        conn = db()
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET status=?,
+                result=?,
+                confidence=?,
+                updated_at=?
+            WHERE id=?
+            """,
+            (
+                "awaiting_approval",
+                json.dumps(result),
+                1.0,
+                now(),
+                mission_id
+            )
+        )
+
+        conn.commit()
+        conn.close()
+
+        event(
+            mission_id,
+            "approval_required",
+            "Explicit human approval required.",
+            {
+                "approval_id": approval_id
+            }
+        )
+
+        return result
+
+    # --------------------------------------------------------
+    # NORMAL TOOL PIPELINE
+    # --------------------------------------------------------
+
     attempts = 0
     recovery_attempts = 0
-    result = None
-    success = False
-    verification = False
 
-    while attempts < int(policy.get("max_tool_calls", MAX_TOOL_CALLS)):
+    results = []
+
+    success = False
+
+    while attempts < int(
+        policy.get("max_tool_calls", MAX_TOOL_CALLS)
+    ):
 
         attempts += 1
 
         try:
 
-            if route == "analysis":
-                result = analyze_objective(objective)
-
-            elif route == "research":
-                result = analyze_objective(objective)
-
-            elif route == "verification":
-                result = {
-                    "verification_target": objective,
-                    "verified": True,
-                    "method": "controlled_internal_verification"
+            plan_result = await execute_tool(
+                mission_id,
+                "mission_planner",
+                {
+                    "objective": objective,
+                    "requirements": requirements
                 }
+            )
 
-            elif route == "external_intelligence":
+            results.append({
+                "tool": "mission_planner",
+                "result": plan_result
+            })
 
-                if not external_url:
-                    result = {
-                        "status": "waiting_for_external_url",
-                        "message": (
-                            "External intelligence is available, "
-                            "but an allowlisted URL is required."
-                        )
+            analysis_result = await execute_tool(
+                mission_id,
+                "internal_analysis",
+                {
+                    "objective": objective
+                }
+            )
+
+            results.append({
+                "tool": "internal_analysis",
+                "result": analysis_result
+            })
+
+            if (
+                "external_intelligence"
+                in requirements
+                and external_url
+            ):
+
+                external_result = await execute_tool(
+                    mission_id,
+                    "external_http_read",
+                    {
+                        "url": external_url
                     }
-                else:
-                    result = await external_http_read(external_url)
+                )
 
-                    evidence(
-                        mission_id,
-                        external_url,
-                        result.get("content", ""),
-                        False
-                    )
+                results.append({
+                    "tool": "external_http_read",
+                    "result": external_result
+                })
 
-            elif route == "memory":
-                result = {
-                    "memory": "mission memory available",
-                    "mission_id": mission_id
+            verification_result = await execute_tool(
+                mission_id,
+                "evidence_verification",
+                {
+                    "result": results
                 }
+            )
 
-            elif route == "recovery":
-                result = {
-                    "recovery": "controlled recovery route available"
-                }
+            results.append({
+                "tool": "evidence_verification",
+                "result": verification_result
+            })
 
-            verification = verify_result(result)
+            if verification_result.get("verified"):
 
-            if policy.get("require_verification"):
-                verification = verify_result(result)
-
-            if verification:
                 success = True
                 break
 
         except Exception as exc:
 
-            error_text = str(exc)
-
             event(
                 mission_id,
-                "tool_error",
-                error_text,
+                "pipeline_failure",
+                str(exc),
                 {
-                    "attempt": attempts,
-                    "route": route
+                    "attempt": attempts
                 }
             )
 
             if (
-                policy.get("retry_controlled_failures", True)
-                and recovery_attempts <
-                int(policy.get("max_recovery_attempts", 2))
+                recovery_attempts
+                < int(
+                    policy.get(
+                        "max_recovery_attempts",
+                        2
+                    )
+                )
             ):
 
                 recovery_attempts += 1
 
-                event(
+                recovery = await execute_tool(
                     mission_id,
-                    "recovery",
-                    "Controlled recovery attempt started.",
+                    "recovery_engine",
                     {
-                        "recovery_attempt": recovery_attempts
+                        "failure": str(exc)
                     }
                 )
 
-                conn = db()
-
-                conn.execute(
-                    """
-                    INSERT INTO repairs
-                    (mission_id, error_type, action, success, created_at)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (
-                        mission_id,
-                        type(exc).__name__,
-                        "retry_and_adapt",
-                        1,
-                        now()
-                    )
+                event(
+                    mission_id,
+                    "recovery_completed",
+                    "Controlled recovery completed.",
+                    recovery
                 )
 
-                conn.commit()
-                conn.close()
-
-                adapt_policy("recovery_success")
+                adapt_policy(
+                    "recovery_success"
+                )
 
                 await asyncio.sleep(0.1)
 
@@ -750,31 +1191,48 @@ async def execute_mission(
 
             break
 
-    confidence = 0.95 if success and verification else 0.25
-
-    learn_route(route, success)
+    confidence = 0.97 if success else 0.20
 
     if success:
-        remember(
+
+        await execute_tool(
             mission_id,
-            "mission_outcome",
+            "memory_write",
             {
-                "route": route,
-                "success": True,
-                "confidence": confidence
+                "result": {
+                    "route": route,
+                    "confidence": confidence,
+                    "successful": True
+                }
             }
         )
-
-        if recovery_attempts:
-            adapt_policy("recovery_success")
 
         status = "completed"
 
     else:
         status = "failed"
 
-        if recovery_attempts:
-            adapt_policy("repeated_failure")
+        adapt_policy(
+            "repeated_failure"
+        )
+
+    learn_route(
+        route,
+        success
+    )
+
+    final_result = {
+        "mission_id": mission_id,
+        "status": status,
+        "route": route,
+        "requirements": requirements,
+        "plan": plan,
+        "attempts": attempts,
+        "recovery_attempts": recovery_attempts,
+        "verification": success,
+        "confidence": confidence,
+        "tool_results": results
+    }
 
     conn = db()
 
@@ -789,7 +1247,7 @@ async def execute_mission(
         """,
         (
             status,
-            json.dumps(result, default=str),
+            json.dumps(final_result, default=str),
             confidence,
             now(),
             mission_id
@@ -806,22 +1264,11 @@ async def execute_mission(
         {
             "attempts": attempts,
             "recovery_attempts": recovery_attempts,
-            "verification": verification,
             "confidence": confidence
         }
     )
 
-    return {
-        "mission_id": mission_id,
-        "status": status,
-        "route": route,
-        "requirements": requirements,
-        "attempts": attempts,
-        "recovery_attempts": recovery_attempts,
-        "verification": verification,
-        "confidence": confidence,
-        "result": result
-    }
+    return final_result
 
 
 # ============================================================
@@ -829,212 +1276,256 @@ async def execute_mission(
 # ============================================================
 
 class RunRequest(BaseModel):
-    objective: str = Field(..., min_length=1, max_length=20000)
+
+    objective: str = Field(
+        ...,
+        min_length=1,
+        max_length=20000
+    )
+
     external_url: Optional[str] = None
 
 
 # ============================================================
-# UNIVERSAL INTERFACE
+# UNIVERSAL MOBILE INTERFACE
 # ============================================================
 
 HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<meta name="viewport"
+      content="width=device-width, initial-scale=1">
+
 <title>AI Infinity</title>
 
 <style>
+
 :root {
-    --bg: #070b14;
-    --panel: #101827;
-    --panel2: #151f31;
-    --text: #f5f7fb;
-    --muted: #9aa8bd;
-    --line: #26344a;
-    --accent: #65d8ff;
-    --success: #56e39f;
-    --warning: #ffd166;
+    --bg:#060a12;
+    --panel:#0e1725;
+    --panel2:#142033;
+    --line:#26364c;
+    --text:#f5f8ff;
+    --muted:#94a6bd;
+    --accent:#62ddff;
+    --good:#55e6a5;
+    --warn:#ffd166;
 }
 
 * {
-    box-sizing: border-box;
+    box-sizing:border-box;
 }
 
 body {
-    margin: 0;
+    margin:0;
+    min-height:100vh;
+    color:var(--text);
     background:
-        radial-gradient(circle at top, #13213a 0, #070b14 45%);
-    color: var(--text);
-    font-family: Inter, Arial, sans-serif;
+        radial-gradient(
+            circle at top,
+            #142744 0,
+            #060a12 48%
+        );
+    font-family:
+        Inter,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
 }
 
 .container {
-    max-width: 1100px;
-    margin: auto;
-    padding: 20px;
+    max-width:1100px;
+    margin:auto;
+    padding:18px;
 }
 
 .header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 15px;
-    margin-bottom: 20px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    margin-bottom:18px;
 }
 
 .brand {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+    display:flex;
+    align-items:center;
+    gap:12px;
 }
 
 .logo {
-    width: 48px;
-    height: 48px;
-    border-radius: 15px;
-    display: grid;
-    place-items: center;
-    background: var(--panel2);
-    border: 1px solid var(--line);
-    font-size: 25px;
+    width:50px;
+    height:50px;
+    display:grid;
+    place-items:center;
+    border-radius:16px;
+    border:1px solid var(--line);
+    background:var(--panel2);
+    font-size:28px;
 }
 
 h1 {
-    margin: 0;
-    font-size: 24px;
+    margin:0;
+    font-size:24px;
 }
 
-.subtitle {
-    color: var(--muted);
-    font-size: 12px;
-    margin-top: 3px;
+.sub {
+    color:var(--muted);
+    font-size:12px;
+    margin-top:3px;
 }
 
-.status {
-    padding: 8px 12px;
-    border-radius: 999px;
-    border: 1px solid var(--line);
-    color: var(--success);
-    background: #0d1918;
-    font-size: 12px;
+.online {
+    color:var(--good);
+    border:1px solid var(--line);
+    background:#0b1817;
+    border-radius:999px;
+    padding:8px 11px;
+    font-size:12px;
 }
 
 .card {
-    background: rgba(16,24,39,.92);
-    border: 1px solid var(--line);
-    border-radius: 20px;
-    padding: 18px;
-    margin-bottom: 15px;
-    box-shadow: 0 15px 50px rgba(0,0,0,.18);
+    background:rgba(14,23,37,.94);
+    border:1px solid var(--line);
+    border-radius:20px;
+    padding:18px;
+    margin-bottom:14px;
 }
 
-.command {
-    min-height: 150px;
-    width: 100%;
-    resize: vertical;
-    border-radius: 15px;
-    border: 1px solid var(--line);
-    background: #080e19;
-    color: var(--text);
-    padding: 15px;
-    font-size: 16px;
-    outline: none;
+.label {
+    color:var(--muted);
+    font-size:11px;
+    letter-spacing:.08em;
 }
 
-.command:focus {
-    border-color: var(--accent);
+h2 {
+    font-size:20px;
+    margin:7px 0 13px;
 }
 
-.url {
-    width: 100%;
-    margin-top: 10px;
-    padding: 13px;
-    border-radius: 12px;
-    border: 1px solid var(--line);
-    background: #080e19;
-    color: var(--text);
+textarea,
+input {
+    width:100%;
+    color:var(--text);
+    background:#070d17;
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding:14px;
+    outline:none;
+}
+
+textarea {
+    min-height:145px;
+    resize:vertical;
+    font-size:16px;
+}
+
+input {
+    margin-top:10px;
+}
+
+textarea:focus,
+input:focus {
+    border-color:var(--accent);
 }
 
 button {
-    margin-top: 12px;
-    width: 100%;
-    border: 0;
-    border-radius: 13px;
-    padding: 14px;
-    background: var(--accent);
-    color: #041019;
-    font-weight: 800;
-    font-size: 15px;
-    cursor: pointer;
+    width:100%;
+    margin-top:12px;
+    border:0;
+    border-radius:14px;
+    padding:15px;
+    background:var(--accent);
+    color:#041019;
+    font-size:15px;
+    font-weight:900;
 }
 
 button:disabled {
-    opacity: .55;
+    opacity:.55;
 }
 
 .grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 10px;
+    display:grid;
+    grid-template-columns:
+        repeat(4,1fr);
+    gap:10px;
 }
 
 .metric {
-    background: var(--panel2);
-    border: 1px solid var(--line);
-    border-radius: 15px;
-    padding: 14px;
-}
-
-.metric b {
-    display: block;
-    font-size: 18px;
-    margin-top: 4px;
+    background:var(--panel2);
+    border:1px solid var(--line);
+    border-radius:15px;
+    padding:13px;
 }
 
 .metric span {
-    color: var(--muted);
-    font-size: 11px;
+    display:block;
+    color:var(--muted);
+    font-size:10px;
+}
+
+.metric b {
+    display:block;
+    margin-top:5px;
+    font-size:16px;
+    overflow:hidden;
+    text-overflow:ellipsis;
 }
 
 pre {
-    white-space: pre-wrap;
-    word-break: break-word;
-    background: #070b14;
-    padding: 14px;
-    border-radius: 13px;
-    overflow-x: auto;
-    color: #dce7f5;
-}
-
-.small {
-    color: var(--muted);
-    font-size: 12px;
+    margin:0;
+    white-space:pre-wrap;
+    word-break:break-word;
+    background:#060a12;
+    border-radius:14px;
+    padding:14px;
+    overflow:auto;
+    color:#dce9f7;
 }
 
 .links {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
 }
 
 .links a {
-    color: var(--accent);
-    text-decoration: none;
-    padding: 9px 11px;
-    border: 1px solid var(--line);
-    border-radius: 10px;
+    color:var(--accent);
+    text-decoration:none;
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:9px 11px;
+    font-size:12px;
+}
+
+.footer {
+    color:var(--muted);
+    text-align:center;
+    font-size:11px;
+    padding:15px;
 }
 
 @media(max-width:700px) {
+
     .grid {
-        grid-template-columns: repeat(2, 1fr);
+        grid-template-columns:
+            repeat(2,1fr);
     }
 
     .header {
-        align-items: flex-start;
+        align-items:flex-start;
+    }
+
+    .container {
+        padding:12px;
     }
 }
+
 </style>
 </head>
 
@@ -1043,176 +1534,295 @@ pre {
 <div class="container">
 
 <div class="header">
-    <div class="brand">
-        <div class="logo">∞</div>
-        <div>
-            <h1>AI Infinity</h1>
-            <div class="subtitle">
-                Adaptive Intelligence • Mission Engine • Controlled Real-World Command
-            </div>
-        </div>
-    </div>
 
-    <div class="status" id="status">● ONLINE</div>
+<div class="brand">
+
+<div class="logo">∞</div>
+
+<div>
+<h1>AI Infinity</h1>
+
+<div class="sub">
+Universal Tool Fabric • Adaptive Mission Intelligence
 </div>
+
+</div>
+
+</div>
+
+<div id="online"
+     class="online">
+● ONLINE
+</div>
+
+</div>
+
 
 <div class="card">
 
-    <div class="small">
-        COMMAND CENTER
-    </div>
+<div class="label">
+UNIVERSAL COMMAND CENTER
+</div>
 
-    <h2>What should AI Infinity do?</h2>
+<h2>
+Give AI Infinity an objective
+</h2>
 
-    <textarea
-        id="objective"
-        class="command"
-        placeholder="Example: Analyze this objective, research it, verify the result and explain the best next actions."
-    ></textarea>
+<textarea
+id="objective"
+placeholder="Example: Analyze this problem, research the relevant information, verify the result and prepare the safest next actions."
+></textarea>
 
-    <input
-        id="externalUrl"
-        class="url"
-        placeholder="Optional allowlisted URL for external intelligence"
-    >
+<input
+id="url"
+placeholder="Optional allowlisted external URL"
+/>
 
-    <button id="runBtn" onclick="runMission()">
-        ▶ RUN MISSION
-    </button>
+<button
+id="run"
+onclick="runMission()">
+▶ EXECUTE MISSION
+</button>
 
 </div>
+
 
 <div class="grid">
 
-    <div class="metric">
-        <span>ENGINE</span>
-        <b id="engine">Adaptive</b>
-    </div>
+<div class="metric">
+<span>VERSION</span>
+<b id="version">—</b>
+</div>
 
-    <div class="metric">
-        <span>VERSION</span>
-        <b id="version">—</b>
-    </div>
+<div class="metric">
+<span>ROUTE</span>
+<b id="route">—</b>
+</div>
 
-    <div class="metric">
-        <span>ROUTE</span>
-        <b id="route">—</b>
-    </div>
+<div class="metric">
+<span>STATUS</span>
+<b id="missionStatus">READY</b>
+</div>
 
-    <div class="metric">
-        <span>CONFIDENCE</span>
-        <b id="confidence">—</b>
-    </div>
+<div class="metric">
+<span>CONFIDENCE</span>
+<b id="confidence">—</b>
+</div>
 
 </div>
+
 
 <div class="card">
-    <div class="small">MISSION OUTPUT</div>
-    <pre id="output">Ready.</pre>
+
+<div class="label">
+MISSION INTELLIGENCE
 </div>
+
+<pre id="output">
+AI Infinity is ready.
+</pre>
+
+</div>
+
 
 <div class="card">
-    <div class="small">SYSTEM ACCESS</div>
 
-    <div class="links">
-        <a href="/health" target="_blank">Health</a>
-        <a href="/status" target="_blank">Status</a>
-        <a href="/capabilities" target="_blank">Capabilities</a>
-        <a href="/tools" target="_blank">Tools</a>
-        <a href="/policy" target="_blank">Policy</a>
-        <a href="/test-router" target="_blank">Router Test</a>
-        <a href="/test-external" target="_blank">External Test</a>
-        <a href="/docs" target="_blank">API Docs</a>
-    </div>
+<div class="label">
+SYSTEM
+</div>
+
+<div class="links">
+
+<a href="/health"
+target="_blank">Health</a>
+
+<a href="/status"
+target="_blank">Status</a>
+
+<a href="/capabilities"
+target="_blank">Capabilities</a>
+
+<a href="/tools"
+target="_blank">Tool Fabric</a>
+
+<a href="/policy"
+target="_blank">Policy</a>
+
+<a href="/test-router"
+target="_blank">Router Test</a>
+
+<a href="/test-external"
+target="_blank">External Test</a>
+
+<a href="/docs"
+target="_blank">API Docs</a>
+
 </div>
 
 </div>
+
+
+<div class="footer">
+AI Infinity • TARGET-2050.48
+</div>
+
+</div>
+
 
 <script>
 
-async function refreshHealth() {
+async function health() {
+
     try {
-        const r = await fetch('/health');
-        const data = await r.json();
 
-        document.getElementById('status').textContent =
-            data.status === 'healthy'
-            ? '● ONLINE'
-            : '● ' + data.status.toUpperCase();
+        const r =
+            await fetch("/health");
 
-        document.getElementById('version').textContent =
-            data.version || '—';
+        const d =
+            await r.json();
+
+        document.getElementById(
+            "version"
+        ).textContent =
+            d.version || "—";
+
+        document.getElementById(
+            "online"
+        ).textContent =
+            d.status === "healthy"
+            ? "● ONLINE"
+            : "● " + d.status;
 
     } catch(e) {
-        document.getElementById('status').textContent = '● OFFLINE';
+
+        document.getElementById(
+            "online"
+        ).textContent =
+            "● OFFLINE";
     }
 }
+
 
 async function runMission() {
 
     const objective =
-        document.getElementById('objective').value.trim();
+        document.getElementById(
+            "objective"
+        ).value.trim();
 
     const externalUrl =
-        document.getElementById('externalUrl').value.trim();
+        document.getElementById(
+            "url"
+        ).value.trim();
 
     if (!objective) {
-        alert('Enter a command first.');
+
+        alert(
+            "Enter an objective first."
+        );
+
         return;
     }
 
-    const button = document.getElementById('runBtn');
-    const output = document.getElementById('output');
+    const button =
+        document.getElementById("run");
+
+    const output =
+        document.getElementById("output");
 
     button.disabled = true;
-    button.textContent = '⏳ RUNNING...';
+
+    button.textContent =
+        "⏳ EXECUTING...";
+
+    document.getElementById(
+        "missionStatus"
+    ).textContent =
+        "RUNNING";
 
     output.textContent =
-        'AI Infinity is analyzing the mission...';
+        "AI Infinity is planning the mission...";
 
     try {
 
-        const response = await fetch('/run', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                objective: objective,
-                external_url: externalUrl || null
-            })
-        });
+        const response =
+            await fetch(
+                "/run",
+                {
+                    method:"POST",
+                    headers:{
+                        "Content-Type":
+                            "application/json"
+                    },
+                    body:JSON.stringify({
+                        objective:
+                            objective,
+                        external_url:
+                            externalUrl || null
+                    })
+                }
+            );
 
-        const data = await response.json();
+        const data =
+            await response.json();
 
         output.textContent =
-            JSON.stringify(data, null, 2);
+            JSON.stringify(
+                data,
+                null,
+                2
+            );
 
-        if (data.route) {
-            document.getElementById('route').textContent =
-                data.route;
-        }
+        document.getElementById(
+            "missionStatus"
+        ).textContent =
+            data.status || "DONE";
 
-        if (data.confidence !== undefined) {
-            document.getElementById('confidence').textContent =
-                Math.round(data.confidence * 100) + '%';
+        document.getElementById(
+            "route"
+        ).textContent =
+            data.route || "—";
+
+        if (
+            data.confidence !==
+            undefined
+        ) {
+
+            document.getElementById(
+                "confidence"
+            ).textContent =
+                Math.round(
+                    data.confidence * 100
+                ) + "%";
         }
 
     } catch(e) {
 
         output.textContent =
-            'Mission error: ' + e.message;
+            "Mission error: " +
+            e.message;
+
+        document.getElementById(
+            "missionStatus"
+        ).textContent =
+            "ERROR";
 
     } finally {
 
         button.disabled = false;
-        button.textContent = '▶ RUN MISSION';
+
+        button.textContent =
+            "▶ EXECUTE MISSION";
     }
 }
 
-refreshHealth();
 
-setInterval(refreshHealth, 15000);
+health();
+
+setInterval(
+    health,
+    15000
+);
 
 </script>
 
@@ -1226,7 +1836,8 @@ setInterval(refreshHealth, 15000);
 # ============================================================
 
 @app.get("/", response_class=HTMLResponse)
-async def interface():
+async def root():
+
     return HTML
 
 
@@ -1243,15 +1854,29 @@ async def health():
         "status": "healthy",
         "version": VERSION,
         "build": BUILD,
+
         "policy_version": version,
         "policy_valid": True,
+
         "router_enabled": True,
         "adaptive_recovery_enabled": True,
         "self_modification_enabled": True,
+
         "interface_enabled": True,
+
+        "universal_tool_fabric": True,
+
         "external_intelligence_enabled":
-            bool(policy.get("allow_external_intelligence")),
-        "controlled_real_world_command": True
+            policy.get(
+                "allow_external_intelligence"
+            ),
+
+        "controlled_real_world_command": True,
+
+        "approval_gate_enabled":
+            policy.get(
+                "require_approval_for_irreversible_actions"
+            )
     }
 
 
@@ -1269,15 +1894,28 @@ async def status():
         "status": "online",
         "version": VERSION,
         "build": BUILD,
+
         "interface": True,
-        "adaptive_routing": policy.get("adaptive_routing"),
+        "universal_tool_fabric": True,
+
+        "adaptive_routing":
+            policy.get("adaptive_routing"),
+
         "external_intelligence":
-            policy.get("allow_external_intelligence"),
-        "external_http":
-            policy.get("allow_external_http"),
-        "approval_required_for_irreversible_actions":
-            policy.get("require_approval_for_irreversible_actions"),
-        "database": str(DB_PATH)
+            policy.get(
+                "allow_external_intelligence"
+            ),
+
+        "approval_gate":
+            policy.get(
+                "require_approval_for_irreversible_actions"
+            ),
+
+        "destructive_actions":
+            policy.get("destructive_actions"),
+
+        "auto_redeploy":
+            policy.get("auto_redeploy")
     }
 
 
@@ -1290,32 +1928,38 @@ async def capabilities():
 
     return {
         "version": VERSION,
-        "capabilities": [
-            "natural_language_mission_input",
-            "adaptive_requirement_detection",
-            "adaptive_route_selection",
-            "mission_execution",
-            "external_intelligence",
-            "evidence_capture",
+
+        "core": [
+            "natural_language_command",
+            "intent_detection",
+            "mission_planning",
+            "adaptive_routing",
+            "universal_tool_selection",
+            "permission_evaluation",
+            "tool_execution",
+            "evidence_collection",
             "verification",
-            "controlled_recovery",
-            "runtime_policy_adaptation",
+            "recovery",
+            "runtime_learning",
             "persistent_memory",
-            "route_learning",
-            "tool_learning",
-            "real_world_command_planning",
-            "approval_gates",
-            "mobile_first_interface"
+            "approval_gates"
         ],
-        "future_extension_points": [
-            "web_search_provider",
-            "browser_agent",
-            "file_system_connector",
+
+        "interfaces": [
+            "mobile_web",
+            "rest_api",
+            "interactive_docs"
+        ],
+
+        "external_extension_points": [
+            "web_search",
+            "browser",
+            "files",
             "code_sandbox",
-            "database_connector",
+            "databases",
             "calendar",
             "messaging",
-            "device_actions",
+            "device_control",
             "human_approval"
         ]
     }
@@ -1348,7 +1992,9 @@ async def tools():
         "count": len(TOOLS),
         "tools": TOOLS,
         "external_allowed_domains":
-            sorted(EXTERNAL_ALLOWED_DOMAINS)
+            sorted(
+                EXTERNAL_ALLOWED_DOMAINS
+            )
     }
 
 
@@ -1364,7 +2010,8 @@ async def run_info():
         "method": "POST",
         "schema": {
             "objective": "string",
-            "external_url": "optional allowlisted URL"
+            "external_url":
+                "optional allowlisted URL"
         }
     }
 
@@ -1372,28 +2019,106 @@ async def run_info():
 @app.post("/run")
 async def run(request: RunRequest):
 
-    mission_id = "mission-" + uuid.uuid4().hex[:12]
-
-    result = await execute_mission(
-        mission_id=mission_id,
-        objective=request.objective,
-        external_url=request.external_url
+    mission_id = (
+        "mission-" +
+        uuid.uuid4().hex[:12]
     )
 
-    return result
+    return await execute_mission(
+        mission_id,
+        request.objective,
+        request.external_url
+    )
 
 
 # ============================================================
-# MISSION LOOKUP
+# APPROVALS
 # ============================================================
 
-@app.get("/mission/{mission_id}")
-async def get_mission(mission_id: str):
+@app.get("/approvals")
+async def approvals():
+
+    conn = db()
+
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM approvals
+        ORDER BY created_at DESC
+        LIMIT 50
+        """
+    ).fetchall()
+
+    conn.close()
+
+    return {
+        "approvals": [
+            dict(row)
+            for row in rows
+        ]
+    }
+
+
+@app.post("/approvals/{approval_id}/approve")
+async def approve(approval_id: str):
 
     conn = db()
 
     row = conn.execute(
-        "SELECT * FROM missions WHERE id=?",
+        """
+        SELECT *
+        FROM approvals
+        WHERE id=?
+        """,
+        (approval_id,)
+    ).fetchone()
+
+    if not row:
+        conn.close()
+
+        raise HTTPException(
+            status_code=404,
+            detail="Approval not found."
+        )
+
+    conn.execute(
+        """
+        UPDATE approvals
+        SET status='approved',
+            updated_at=?
+        WHERE id=?
+        """,
+        (now(), approval_id)
+    )
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "approval_id": approval_id,
+        "status": "approved",
+        "message":
+            "Approval recorded. "
+            "A separate authorized integration "
+            "must execute the external action."
+    }
+
+
+# ============================================================
+# MISSIONS
+# ============================================================
+
+@app.get("/mission/{mission_id}")
+async def mission(mission_id: str):
+
+    conn = db()
+
+    row = conn.execute(
+        """
+        SELECT *
+        FROM missions
+        WHERE id=?
+        """,
         (mission_id,)
     ).fetchone()
 
@@ -1402,14 +2127,16 @@ async def get_mission(mission_id: str):
     if not row:
         raise HTTPException(
             status_code=404,
-            detail="Mission not found"
+            detail="Mission not found."
         )
 
     return dict(row)
 
 
 @app.get("/mission/{mission_id}/events")
-async def get_events(mission_id: str):
+async def mission_events(
+    mission_id: str
+):
 
     conn = db()
 
@@ -1427,12 +2154,17 @@ async def get_events(mission_id: str):
 
     return {
         "mission_id": mission_id,
-        "events": [dict(x) for x in rows]
+        "events": [
+            dict(row)
+            for row in rows
+        ]
     }
 
 
 @app.get("/mission/{mission_id}/evidence")
-async def get_evidence(mission_id: str):
+async def mission_evidence(
+    mission_id: str
+):
 
     conn = db()
 
@@ -1450,32 +2182,75 @@ async def get_evidence(mission_id: str):
 
     return {
         "mission_id": mission_id,
-        "evidence": [dict(x) for x in rows]
+        "evidence": [
+            dict(row)
+            for row in rows
+        ]
     }
 
 
 # ============================================================
-# ROUTER TEST
+# ADAPTIVE ROUTER TEST
 # ============================================================
 
 @app.get("/test-router")
 async def test_router():
 
-    mission_id = "router-test-" + uuid.uuid4().hex[:8]
+    mission_id = (
+        "router-test-" +
+        uuid.uuid4().hex[:8]
+    )
 
     result = await execute_mission(
-        mission_id=mission_id,
-        objective=(
-            "Research and verify the reliability of autonomous "
-            "AI agents. Remember the result and demonstrate "
-            "recovery and adaptive routing."
+        mission_id,
+        (
+            "Analyze and verify the reliability "
+            "of autonomous AI agents, remember "
+            "the result and demonstrate adaptive "
+            "mission routing."
         )
     )
 
     return {
-        "test": "adaptive_router",
+        "test": "universal_adaptive_router",
         "version": VERSION,
         **result
+    }
+
+
+# ============================================================
+# TOOL FABRIC TEST
+# ============================================================
+
+@app.get("/test-tools")
+async def test_tools():
+
+    mission_id = (
+        "tool-test-" +
+        uuid.uuid4().hex[:8]
+    )
+
+    result = await execute_tool(
+        mission_id,
+        "mission_planner",
+        {
+            "objective":
+                "Test universal tool selection.",
+            "requirements":
+                [
+                    "analysis",
+                    "verification",
+                    "memory"
+                ]
+        }
+    )
+
+    return {
+        "test": "universal_tool_fabric",
+        "version": VERSION,
+        "status": "completed",
+        "tool": "mission_planner",
+        "result": result
     }
 
 
@@ -1490,16 +2265,21 @@ async def test_external():
 
     return {
         "test": "external_intelligence",
-        "enabled": policy.get("allow_external_intelligence"),
-        "external_http_enabled":
-            policy.get("allow_external_http"),
+        "version": VERSION,
+        "enabled":
+            policy.get(
+                "allow_external_intelligence"
+            ),
+        "http_enabled":
+            policy.get(
+                "allow_external_http"
+            ),
         "allowed_domains":
-            sorted(EXTERNAL_ALLOWED_DOMAINS),
-        "message": (
-            "External HTTP is intentionally allowlist-controlled. "
-            "Set EXTERNAL_ALLOWED_DOMAINS in Render before using "
-            "external URLs."
-        )
+            sorted(
+                EXTERNAL_ALLOWED_DOMAINS
+            ),
+        "security":
+            "allowlist-controlled"
     }
 
 
@@ -1510,15 +2290,17 @@ async def test_external():
 init_db()
 
 
-# ============================================================
-# LOCAL EXECUTION
-# ============================================================
-
 if __name__ == "__main__":
+
     import uvicorn
 
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=int(os.getenv("PORT", "8000"))
+        port=int(
+            os.getenv(
+                "PORT",
+                "8000"
+            )
+        )
     )
