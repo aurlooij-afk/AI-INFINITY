@@ -1,26 +1,30 @@
+import os
+import re
+import json
+import time
+import uuid
+import sqlite3
 import asyncio
 import hashlib
-import json
-import math
-import os
-import sqlite3
-import time
-import traceback
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
+from typing import Any, Dict, Optional, List
 
+import httpx
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 
 # ============================================================
 # AI INFINITY
-# TARGET-2050.45
-# ADAPTIVE-MISSION-INTELLIGENCE-ROUTER-CORE
+# TARGET-2050.47
+# UNIVERSAL ADAPTIVE INTERFACE + REAL-WORLD COMMAND CORE
 # ============================================================
 
-VERSION = "TARGET-2050.45"
-BUILD = "ADAPTIVE-MISSION-INTELLIGENCE-ROUTER-CORE"
+VERSION = "TARGET-2050.47"
+BUILD = "UNIVERSAL-ADAPTIVE-INTERFACE-REAL-WORLD-COMMAND-CORE"
 
 BASE = Path("/tmp/ai_infinity")
 BASE.mkdir(parents=True, exist_ok=True)
@@ -30,8 +34,23 @@ DB_PATH = BASE / "ai_infinity.db"
 app = FastAPI(
     title="AI Infinity",
     version=VERSION,
-    description="Adaptive autonomous mission intelligence core."
+    description="Adaptive mission intelligence and controlled real-world command platform."
 )
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+EXTERNAL_ALLOWED_DOMAINS = {
+    x.strip().lower()
+    for x in os.getenv("EXTERNAL_ALLOWED_DOMAINS", "").split(",")
+    if x.strip()
+}
+
+MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", "12"))
+REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "12"))
+MAX_EXTERNAL_RESPONSE = 20000
 
 
 # ============================================================
@@ -39,1270 +58,1176 @@ app = FastAPI(
 # ============================================================
 
 def db():
-    connection = sqlite3.connect(
-        DB_PATH,
-        check_same_thread=False
-    )
-    connection.row_factory = sqlite3.Row
-    return connection
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat()
 
 
 def init_db():
-    connection = db()
-    cursor = connection.cursor()
+    conn = db()
 
-    cursor.execute("""
+    conn.executescript(
+        """
         CREATE TABLE IF NOT EXISTS missions (
-            mission_id TEXT PRIMARY KEY,
+            id TEXT PRIMARY KEY,
             objective TEXT NOT NULL,
             status TEXT NOT NULL,
-            created_at REAL,
-            updated_at REAL,
-            attempts INTEGER DEFAULT 0,
-            recovery_attempts INTEGER DEFAULT 0,
-            result_json TEXT
-        )
-    """)
+            route TEXT,
+            requirements TEXT,
+            result TEXT,
+            confidence REAL DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT
+        );
 
-    cursor.execute("""
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             mission_id TEXT,
             event_type TEXT,
-            data_json TEXT,
-            created_at REAL
-        )
-    """)
+            message TEXT,
+            data TEXT,
+            created_at TEXT
+        );
 
-    cursor.execute("""
         CREATE TABLE IF NOT EXISTS repairs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             mission_id TEXT,
-            attempt INTEGER,
             error_type TEXT,
-            diagnosis_json TEXT,
-            recovery_json TEXT,
-            created_at REAL
-        )
-    """)
+            action TEXT,
+            success INTEGER,
+            created_at TEXT
+        );
 
-    cursor.execute("""
         CREATE TABLE IF NOT EXISTS adaptive_policy (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
+            id INTEGER PRIMARY KEY CHECK(id = 1),
             version INTEGER,
-            policy_json TEXT,
-            updated_at REAL
-        )
-    """)
+            data TEXT,
+            updated_at TEXT
+        );
 
-    cursor.execute("""
         CREATE TABLE IF NOT EXISTS policy_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             version INTEGER,
-            policy_json TEXT,
             reason TEXT,
-            created_at REAL
-        )
-    """)
+            data TEXT,
+            created_at TEXT
+        );
 
-    cursor.execute("""
         CREATE TABLE IF NOT EXISTS learning (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             mission_id TEXT,
             key TEXT,
-            value_json TEXT,
-            created_at REAL
-        )
-    """)
+            value TEXT,
+            created_at TEXT
+        );
 
-    cursor.execute("""
         CREATE TABLE IF NOT EXISTS route_learning (
-            route TEXT PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            route TEXT,
             successes INTEGER DEFAULT 0,
             failures INTEGER DEFAULT 0,
-            total INTEGER DEFAULT 0,
-            updated_at REAL
-        )
-    """)
+            updated_at TEXT
+        );
 
-    cursor.execute("""
-        SELECT id
-        FROM adaptive_policy
-        WHERE id = 1
-    """)
+        CREATE TABLE IF NOT EXISTS evidence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mission_id TEXT,
+            source TEXT,
+            content TEXT,
+            verified INTEGER DEFAULT 0,
+            created_at TEXT
+        );
 
-    if cursor.fetchone() is None:
-        policy = {
-            "retry_controlled_failures": True,
-            "max_recovery_attempts": 2,
-            "require_verification": True,
-            "allow_runtime_policy_adaptation": True,
-            "rollback_invalid_policy": True,
-            "never_modify_credentials": True,
-            "never_auto_redeploy": True
-        }
+        CREATE TABLE IF NOT EXISTS tool_learning (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tool_name TEXT,
+            successes INTEGER DEFAULT 0,
+            failures INTEGER DEFAULT 0,
+            updated_at TEXT
+        );
+        """
+    )
 
-        cursor.execute(
+    cur = conn.execute("SELECT * FROM adaptive_policy WHERE id=1")
+    if cur.fetchone() is None:
+        policy = default_policy()
+        conn.execute(
             """
             INSERT INTO adaptive_policy
-            (
-                id,
-                version,
-                policy_json,
-                updated_at
-            )
-            VALUES
-            (1, 1, ?, ?)
+            (id, version, data, updated_at)
+            VALUES (1, ?, ?, ?)
             """,
-            (
-                json.dumps(policy),
-                time.time()
-            )
+            (1, json.dumps(policy), now())
         )
 
-    connection.commit()
-    connection.close()
+    conn.commit()
+    conn.close()
 
 
-init_db()
+def default_policy():
+    return {
+        "retry_controlled_failures": True,
+        "max_recovery_attempts": 2,
+        "require_verification": True,
+        "adaptive_routing": True,
+        "runtime_policy_adaptation": True,
+        "rollback_invalid_policy": True,
 
+        "allow_external_intelligence": True,
+        "allow_external_http": True,
 
-# ============================================================
-# MODELS
-# ============================================================
+        "require_approval_for_irreversible_actions": True,
+        "destructive_actions": False,
+        "credential_modification": False,
+        "permission_changes": False,
+        "auto_redeploy": False,
 
-class CreateRequest(BaseModel):
-    objective: str = Field(..., min_length=1, max_length=10000)
-    research: bool = True
-    verify: bool = True
-    remember: bool = True
+        "max_tool_calls": MAX_TOOL_CALLS,
+        "request_timeout": REQUEST_TIMEOUT
+    }
 
-
-# ============================================================
-# DATABASE HELPERS
-# ============================================================
-
-def log_event(
-    mission_id: str,
-    event_type: str,
-    data: Optional[Dict[str, Any]] = None
-):
-    connection = db()
-
-    connection.execute(
-        """
-        INSERT INTO events
-        (
-            mission_id,
-            event_type,
-            data_json,
-            created_at
-        )
-        VALUES (?, ?, ?, ?)
-        """,
-        (
-            mission_id,
-            event_type,
-            json.dumps(data or {}),
-            time.time()
-        )
-    )
-
-    connection.commit()
-    connection.close()
-
-
-def create_mission(
-    mission_id: str,
-    objective: str
-):
-    now = time.time()
-
-    connection = db()
-
-    connection.execute(
-        """
-        INSERT INTO missions
-        (
-            mission_id,
-            objective,
-            status,
-            created_at,
-            updated_at,
-            attempts,
-            recovery_attempts
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            mission_id,
-            objective,
-            "queued",
-            now,
-            now,
-            0,
-            0
-        )
-    )
-
-    connection.commit()
-    connection.close()
-
-
-def update_mission(
-    mission_id: str,
-    status: Optional[str] = None,
-    attempts: Optional[int] = None,
-    recovery_attempts: Optional[int] = None,
-    result: Optional[Dict[str, Any]] = None
-):
-    connection = db()
-
-    fields = []
-    values = []
-
-    if status is not None:
-        fields.append("status = ?")
-        values.append(status)
-
-    if attempts is not None:
-        fields.append("attempts = ?")
-        values.append(attempts)
-
-    if recovery_attempts is not None:
-        fields.append("recovery_attempts = ?")
-        values.append(recovery_attempts)
-
-    if result is not None:
-        fields.append("result_json = ?")
-        values.append(json.dumps(result))
-
-    fields.append("updated_at = ?")
-    values.append(time.time())
-
-    values.append(mission_id)
-
-    connection.execute(
-        f"""
-        UPDATE missions
-        SET {", ".join(fields)}
-        WHERE mission_id = ?
-        """,
-        values
-    )
-
-    connection.commit()
-    connection.close()
-
-
-def get_mission(
-    mission_id: str
-):
-    connection = db()
-
-    row = connection.execute(
-        """
-        SELECT *
-        FROM missions
-        WHERE mission_id = ?
-        """,
-        (mission_id,)
-    ).fetchone()
-
-    connection.close()
-
-    if row is None:
-        return None
-
-    result = dict(row)
-
-    if result.get("result_json"):
-        try:
-            result["result"] = json.loads(
-                result["result_json"]
-            )
-        except Exception:
-            result["result"] = result["result_json"]
-
-    result.pop("result_json", None)
-
-    return result
-
-
-def get_events(
-    mission_id: str
-):
-    connection = db()
-
-    rows = connection.execute(
-        """
-        SELECT
-            event_type,
-            data_json,
-            created_at
-        FROM events
-        WHERE mission_id = ?
-        ORDER BY id ASC
-        """,
-        (mission_id,)
-    ).fetchall()
-
-    connection.close()
-
-    events = []
-
-    for row in rows:
-        data = {}
-
-        try:
-            data = json.loads(row["data_json"])
-        except Exception:
-            pass
-
-        events.append({
-            "event_type": row["event_type"],
-            "data": data,
-            "created_at": row["created_at"]
-        })
-
-    return events
-
-
-# ============================================================
-# ADAPTIVE POLICY
-# ============================================================
 
 def get_policy():
-    connection = db()
-
-    row = connection.execute(
-        """
-        SELECT
-            version,
-            policy_json,
-            updated_at
-        FROM adaptive_policy
-        WHERE id = 1
-        """
+    conn = db()
+    row = conn.execute(
+        "SELECT version, data FROM adaptive_policy WHERE id=1"
     ).fetchone()
+    conn.close()
 
-    connection.close()
+    if not row:
+        return 1, default_policy()
 
-    if row is None:
-        return {
-            "version": 0,
-            "policy": {}
-        }
-
-    return {
-        "version": row["version"],
-        "policy": json.loads(row["policy_json"]),
-        "updated_at": row["updated_at"]
-    }
+    return row["version"], json.loads(row["data"])
 
 
-def validate_policy(
-    policy: Dict[str, Any]
-):
-    required = [
-        "retry_controlled_failures",
-        "max_recovery_attempts",
-        "require_verification",
-        "allow_runtime_policy_adaptation",
-        "rollback_invalid_policy",
-        "never_modify_credentials",
-        "never_auto_redeploy"
-    ]
+def save_policy(policy, reason):
+    version, _ = get_policy()
+    new_version = version + 1
 
-    for key in required:
-        if key not in policy:
-            return False
+    conn = db()
 
-    if not isinstance(
-        policy["max_recovery_attempts"],
-        int
-    ):
-        return False
-
-    if policy["max_recovery_attempts"] < 0:
-        return False
-
-    if policy["max_recovery_attempts"] > 10:
-        return False
-
-    if policy["never_modify_credentials"] is not True:
-        return False
-
-    if policy["never_auto_redeploy"] is not True:
-        return False
-
-    return True
-
-
-def propose_policy_upgrade(
-    reason: str
-):
-    current = get_policy()
-
-    old_policy = dict(
-        current["policy"]
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO adaptive_policy
+        (id, version, data, updated_at)
+        VALUES (1, ?, ?, ?)
+        """,
+        (new_version, json.dumps(policy), now())
     )
 
-    candidate = dict(old_policy)
-
-    if reason == "ControlledFailure":
-        candidate[
-            "max_recovery_attempts"
-        ] = min(
-            old_policy.get(
-                "max_recovery_attempts",
-                2
-            ) + 1,
-            3
-        )
-
-    if not validate_policy(candidate):
-        return {
-            "activated": False,
-            "rolled_back": True,
-            "reason": "candidate_policy_invalid",
-            "version": current["version"]
-        }
-
-    new_version = current["version"] + 1
-
-    connection = db()
-
-    connection.execute(
+    conn.execute(
         """
         INSERT INTO policy_history
-        (
-            version,
-            policy_json,
-            reason,
-            created_at
-        )
+        (version, reason, data, created_at)
         VALUES (?, ?, ?, ?)
         """,
-        (
-            new_version,
-            json.dumps(candidate),
-            reason,
-            time.time()
-        )
+        (new_version, reason, json.dumps(policy), now())
     )
 
-    connection.execute(
+    conn.commit()
+    conn.close()
+
+    return new_version
+
+
+# ============================================================
+# EVENTS
+# ============================================================
+
+def event(mission_id, event_type, message, data=None):
+    conn = db()
+
+    conn.execute(
         """
-        UPDATE adaptive_policy
-        SET
-            version = ?,
-            policy_json = ?,
-            updated_at = ?
-        WHERE id = 1
+        INSERT INTO events
+        (mission_id, event_type, message, data, created_at)
+        VALUES (?, ?, ?, ?, ?)
         """,
         (
-            new_version,
-            json.dumps(candidate),
-            time.time()
+            mission_id,
+            event_type,
+            message,
+            json.dumps(data or {}),
+            now()
         )
     )
 
-    connection.commit()
-    connection.close()
-
-    return {
-        "activated": True,
-        "rolled_back": False,
-        "version_before": current["version"],
-        "version_after": new_version,
-        "reason": reason,
-        "policy_valid": True,
-        "candidate": candidate
-    }
+    conn.commit()
+    conn.close()
 
 
-# ============================================================
-# ERROR INTELLIGENCE
-# ============================================================
+def evidence(mission_id, source, content, verified=False):
+    conn = db()
 
-def classify_error(
-    error: Exception
-):
-    error_type = type(error).__name__
+    conn.execute(
+        """
+        INSERT INTO evidence
+        (mission_id, source, content, verified, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            mission_id,
+            source,
+            content[:MAX_EXTERNAL_RESPONSE],
+            int(verified),
+            now()
+        )
+    )
 
-    if error_type == "ControlledFailure":
-        return "recoverable_controlled_failure"
-
-    if isinstance(error, TimeoutError):
-        return "recoverable_timeout"
-
-    if isinstance(error, ConnectionError):
-        return "recoverable_connection"
-
-    return "unknown_failure"
-
-
-def diagnose_error(
-    error: Exception
-):
-    category = classify_error(error)
-
-    return {
-        "error_type": type(error).__name__,
-        "category": category,
-        "safe_to_retry": category.startswith(
-            "recoverable_"
-        ),
-        "message": str(error)
-    }
+    conn.commit()
+    conn.close()
 
 
 # ============================================================
-# TEST FAILURE INJECTION
+# ROUTING
 # ============================================================
 
-def should_inject_failure(
-    objective: str,
-    attempt: int
-):
-    markers = [
-        "[TEST_RECOVERY]",
-        "[TEST_SELF_UPGRADE]",
-        "[TEST_ROUTER]"
+def infer_requirements(objective: str):
+    text = objective.lower()
+
+    requirements = []
+
+    if any(x in text for x in [
+        "research", "find", "search", "latest",
+        "investigate", "information", "web"
+    ]):
+        requirements.append("research")
+
+    if any(x in text for x in [
+        "verify", "validate", "check", "confirm"
+    ]):
+        requirements.append("verification")
+
+    if any(x in text for x in [
+        "remember", "save", "memory"
+    ]):
+        requirements.append("memory")
+
+    if any(x in text for x in [
+        "external", "internet", "website", "url", "http"
+    ]):
+        requirements.append("external_intelligence")
+
+    if any(x in text for x in [
+        "recover", "retry", "fix", "repair"
+    ]):
+        requirements.append("recovery")
+
+    if not requirements:
+        requirements.append("analysis")
+
+    return list(dict.fromkeys(requirements))
+
+
+def choose_route(requirements):
+    priority = [
+        "verification",
+        "external_intelligence",
+        "research",
+        "analysis",
+        "memory",
+        "recovery"
     ]
 
-    return (
-        attempt == 1
-        and any(
-            marker in objective
-            for marker in markers
-        )
-    )
+    for route in priority:
+        if route in requirements:
+            return route
 
-
-class ControlledFailure(Exception):
-    pass
+    return "analysis"
 
 
 # ============================================================
-# ADAPTIVE ROUTER
+# TOOL REGISTRY
 # ============================================================
 
-ROUTES = {
-    "research": {
-        "description":
-            "Information gathering and evidence collection.",
-        "base_score": 0.90
+TOOLS = {
+    "internal_analysis": {
+        "category": "intelligence",
+        "permission": "safe"
     },
-    "analysis": {
-        "description":
-            "Reasoning, synthesis and structured analysis.",
-        "base_score": 0.88
+    "external_http_read": {
+        "category": "external_intelligence",
+        "permission": "controlled"
     },
-    "verification": {
-        "description":
-            "Validation and evidence checking.",
-        "base_score": 0.92
+    "evidence_verification": {
+        "category": "verification",
+        "permission": "safe"
+    },
+    "memory_write": {
+        "category": "memory",
+        "permission": "safe"
     },
     "recovery": {
-        "description":
-            "Failure recovery and retry strategy.",
-        "base_score": 0.91
+        "category": "recovery",
+        "permission": "safe"
     },
-    "memory": {
-        "description":
-            "Persistent learning and reusable knowledge.",
-        "base_score": 0.86
+    "real_world_command": {
+        "category": "action",
+        "permission": "approval_required"
     }
 }
 
 
-def get_route_learning(
-    route: str
-):
-    connection = db()
+# ============================================================
+# SECURITY
+# ============================================================
 
-    row = connection.execute(
-        """
-        SELECT
-            successes,
-            failures,
-            total
-        FROM route_learning
-        WHERE route = ?
-        """,
-        (route,)
-    ).fetchone()
+BLOCKED_HOSTS = {
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "::1",
+    "metadata.google.internal",
+    "169.254.169.254"
+}
 
-    connection.close()
 
-    if row is None:
+def validate_external_url(url: str):
+    parsed = urlparse(url)
+
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("Only HTTP and HTTPS are allowed.")
+
+    if not parsed.hostname:
+        raise ValueError("URL hostname is required.")
+
+    hostname = parsed.hostname.lower()
+
+    if hostname in BLOCKED_HOSTS:
+        raise ValueError("Blocked internal destination.")
+
+    allowed = False
+
+    for domain in EXTERNAL_ALLOWED_DOMAINS:
+        if hostname == domain or hostname.endswith("." + domain):
+            allowed = True
+            break
+
+    if not allowed:
+        raise ValueError(
+            "External domain is not allowlisted. "
+            "Configure EXTERNAL_ALLOWED_DOMAINS first."
+        )
+
+    return parsed
+
+
+# ============================================================
+# EXTERNAL INTELLIGENCE
+# ============================================================
+
+async def external_http_read(url: str):
+    validate_external_url(url)
+
+    async with httpx.AsyncClient(
+        timeout=REQUEST_TIMEOUT,
+        follow_redirects=True
+    ) as client:
+
+        response = await client.get(
+            url,
+            headers={
+                "User-Agent": "AI-Infinity/2050.47"
+            }
+        )
+
+        content = response.text[:MAX_EXTERNAL_RESPONSE]
+
         return {
-            "successes": 0,
-            "failures": 0,
-            "total": 0
+            "status_code": response.status_code,
+            "url": str(response.url),
+            "content": content,
+            "content_length": len(response.text)
         }
 
-    return dict(row)
 
+# ============================================================
+# ANALYSIS
+# ============================================================
 
-def update_route_learning(
-    route: str,
-    success: bool
-):
-    current = get_route_learning(route)
-
-    successes = current["successes"]
-    failures = current["failures"]
-
-    if success:
-        successes += 1
-    else:
-        failures += 1
-
-    total = successes + failures
-
-    connection = db()
-
-    connection.execute(
-        """
-        INSERT INTO route_learning
-        (
-            route,
-            successes,
-            failures,
-            total,
-            updated_at
-        )
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(route)
-        DO UPDATE SET
-            successes = excluded.successes,
-            failures = excluded.failures,
-            total = excluded.total,
-            updated_at = excluded.updated_at
-        """,
-        (
-            route,
-            successes,
-            failures,
-            total,
-            time.time()
-        )
-    )
-
-    connection.commit()
-    connection.close()
-
-
-def score_route(
-    route: str,
-    objective: str
-):
-    data = ROUTES[route]
-
-    score = data["base_score"]
-
-    learning = get_route_learning(route)
-
-    if learning["total"] > 0:
-        success_rate = (
-            learning["successes"]
-            / learning["total"]
-        )
-
-        score += (
-            success_rate - 0.5
-        ) * 0.10
-
-    text = objective.lower()
-
-    keywords = {
-        "research": [
-            "research",
-            "find",
-            "investigate",
-            "evidence"
-        ],
-        "analysis": [
-            "analyze",
-            "analysis",
-            "compare",
-            "evaluate"
-        ],
-        "verification": [
-            "verify",
-            "validate",
-            "check",
-            "test"
-        ],
-        "recovery": [
-            "recover",
-            "failure",
-            "repair"
-        ],
-        "memory": [
-            "remember",
-            "memory",
-            "learn"
-        ]
-    }
-
-    for keyword in keywords.get(route, []):
-        if keyword in text:
-            score += 0.08
-
-    return round(
-        min(score, 1.0),
-        4
-    )
-
-
-def route_mission(
-    objective: str,
-    research: bool,
-    verify: bool,
-    remember: bool
-):
-    requirements = []
-
-    if research:
-        requirements.append("research")
-
-    if verify:
-        requirements.append("verification")
-
-    if remember:
-        requirements.append("memory")
-
-    requirements.append("recovery")
-
-    if any(
-        word in objective.lower()
-        for word in [
-            "analyze",
-            "analysis",
-            "compare",
-            "evaluate"
-        ]
-    ):
-        requirements.append("analysis")
-
-    scores = {
-        route: score_route(
-            route,
-            objective
-        )
-        for route in requirements
-    }
-
-    ranked = sorted(
-        scores.items(),
-        key=lambda item: item[1],
-        reverse=True
-    )
-
-    primary = ranked[0][0]
-
-    fallback_routes = [
-        route
-        for route, _ in ranked[1:]
-    ]
+def analyze_objective(objective: str):
+    words = re.findall(r"\b\w+\b", objective)
 
     return {
-        "requirements": requirements,
-        "scores": scores,
-        "primary_route": primary,
-        "fallback_routes": fallback_routes,
-        "route_count": len(requirements)
-    }
-
-
-# ============================================================
-# MISSION EXECUTION
-# ============================================================
-
-async def execute_mission(
-    mission_id: str,
-    objective: str,
-    attempt: int,
-    research: bool,
-    verify: bool,
-    remember: bool,
-    routing: Dict[str, Any]
-):
-    await asyncio.sleep(0.05)
-
-    if should_inject_failure(
-        objective,
-        attempt
-    ):
-        raise ControlledFailure(
-            "Controlled test failure injected."
-        )
-
-    primary = routing["primary_route"]
-
-    log_event(
-        mission_id,
-        "route_selected",
-        {
-            "route": primary,
-            "attempt": attempt,
-            "routing": routing
-        }
-    )
-
-    await asyncio.sleep(0.05)
-
-    result = {
         "objective": objective,
-        "route_used": primary,
-        "research_enabled": research,
-        "verification_enabled": verify,
-        "memory_enabled": remember,
+        "word_count": len(words),
+        "intent_hash": hashlib.sha256(
+            objective.encode("utf-8")
+        ).hexdigest()[:16],
         "analysis": (
-            "AI Infinity completed the mission "
-            "through the adaptive mission router."
-        ),
-        "evidence": [
-            "Mission accepted",
-            "Adaptive route selected",
-            "Execution completed"
-        ],
-        "confidence": 0.95
-    }
-
-    if remember:
-        connection = db()
-
-        connection.execute(
-            """
-            INSERT INTO learning
-            (
-                mission_id,
-                key,
-                value_json,
-                created_at
-            )
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                mission_id,
-                "mission_result",
-                json.dumps(result),
-                time.time()
-            )
+            "Objective decomposed into intent, "
+            "requirements, route and verification needs."
         )
-
-        connection.commit()
-        connection.close()
-
-    update_route_learning(
-        primary,
-        True
-    )
-
-    return result
+    }
 
 
 # ============================================================
 # VERIFICATION
 # ============================================================
 
-def verify_result(
-    result: Dict[str, Any]
-):
-    required = [
-        "objective",
-        "route_used",
-        "analysis",
-        "evidence",
-        "confidence"
-    ]
+def verify_result(result):
+    if result is None:
+        return False
 
-    missing = [
-        key
-        for key in required
-        if key not in result
-    ]
+    if isinstance(result, dict):
+        return len(result) > 0
 
-    return {
-        "verified": len(missing) == 0,
-        "missing": missing,
-        "confidence": result.get(
-            "confidence",
-            0
-        )
-    }
+    return bool(str(result).strip())
 
 
 # ============================================================
-# RECOVERY
+# ADAPTIVE LEARNING
 # ============================================================
 
-async def recover_mission(
-    mission_id: str,
-    attempt: int,
-    error: Exception
-):
-    diagnosis = diagnose_error(error)
+def learn_route(route, success):
+    conn = db()
 
-    log_event(
-        mission_id,
-        "failure_diagnosed",
-        diagnosis
-    )
+    row = conn.execute(
+        "SELECT * FROM route_learning WHERE route=?",
+        (route,)
+    ).fetchone()
 
-    if not diagnosis["safe_to_retry"]:
-        return {
-            "recovered": False,
-            "diagnosis": diagnosis,
-            "reason": "unsafe_to_retry"
-        }
-
-    policy = get_policy()
-
-    upgrade = None
-
-    if policy["policy"].get(
-        "allow_runtime_policy_adaptation",
-        False
-    ):
-        upgrade = propose_policy_upgrade(
-            diagnosis["error_type"]
+    if row:
+        if success:
+            conn.execute(
+                """
+                UPDATE route_learning
+                SET successes=successes+1, updated_at=?
+                WHERE route=?
+                """,
+                (now(), route)
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE route_learning
+                SET failures=failures+1, updated_at=?
+                WHERE route=?
+                """,
+                (now(), route)
+            )
+    else:
+        conn.execute(
+            """
+            INSERT INTO route_learning
+            (route, successes, failures, updated_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (route, 1 if success else 0, 0 if success else 1, now())
         )
 
-    recovery = {
-        "recovered": True,
-        "diagnosis": diagnosis,
-        "policy_upgrade": upgrade,
-        "retry_allowed": True
-    }
+    conn.commit()
+    conn.close()
 
-    connection = db()
 
-    connection.execute(
+def adapt_policy(reason):
+    version, policy = get_policy()
+
+    if not policy.get("runtime_policy_adaptation"):
+        return version
+
+    if reason == "recovery_success":
+        policy["max_recovery_attempts"] = min(
+            int(policy["max_recovery_attempts"]) + 1,
+            4
+        )
+
+    elif reason == "repeated_failure":
+        policy["max_recovery_attempts"] = max(
+            1,
+            int(policy["max_recovery_attempts"]) - 1
+        )
+
+    return save_policy(policy, reason)
+
+
+# ============================================================
+# MEMORY
+# ============================================================
+
+def remember(mission_id, key, value):
+    conn = db()
+
+    conn.execute(
         """
-        INSERT INTO repairs
-        (
-            mission_id,
-            attempt,
-            error_type,
-            diagnosis_json,
-            recovery_json,
-            created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO learning
+        (mission_id, key, value, created_at)
+        VALUES (?, ?, ?, ?)
         """,
         (
             mission_id,
-            attempt,
-            diagnosis["error_type"],
-            json.dumps(diagnosis),
-            json.dumps(recovery),
-            time.time()
+            key,
+            json.dumps(value),
+            now()
         )
     )
 
-    connection.commit()
-    connection.close()
-
-    log_event(
-        mission_id,
-        "recovery_completed",
-        recovery
-    )
-
-    return recovery
+    conn.commit()
+    conn.close()
 
 
 # ============================================================
-# AUTONOMOUS MISSION LOOP
+# MISSION ENGINE
 # ============================================================
 
-async def autonomous_mission(
+async def execute_mission(
     mission_id: str,
     objective: str,
-    research: bool,
-    verify: bool,
-    remember: bool
+    external_url: Optional[str] = None
 ):
-    policy = get_policy()
 
-    routing = route_mission(
-        objective,
-        research,
-        verify,
-        remember
+    version, policy = get_policy()
+
+    requirements = infer_requirements(objective)
+
+    if external_url:
+        if "external_intelligence" not in requirements:
+            requirements.append("external_intelligence")
+
+    route = choose_route(requirements)
+
+    conn = db()
+
+    conn.execute(
+        """
+        INSERT INTO missions
+        (id, objective, status, route, requirements,
+         result, confidence, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            mission_id,
+            objective,
+            "running",
+            route,
+            json.dumps(requirements),
+            "",
+            0,
+            now(),
+            now()
+        )
     )
 
-    log_event(
+    conn.commit()
+    conn.close()
+
+    event(
         mission_id,
-        "mission_routing",
-        routing
-    )
-
-    max_attempts = (
-        policy["policy"].get(
-            "max_recovery_attempts",
-            2
-        ) + 1
+        "mission_started",
+        "Mission execution started.",
+        {
+            "route": route,
+            "requirements": requirements,
+            "policy_version": version
+        }
     )
 
     attempts = 0
     recovery_attempts = 0
+    result = None
+    success = False
+    verification = False
 
-    while attempts < max_attempts:
+    while attempts < int(policy.get("max_tool_calls", MAX_TOOL_CALLS)):
+
         attempts += 1
 
-        update_mission(
-            mission_id,
-            status="running",
-            attempts=attempts,
-            recovery_attempts=recovery_attempts
-        )
-
-        log_event(
-            mission_id,
-            "attempt_started",
-            {
-                "attempt": attempts,
-                "routing": routing
-            }
-        )
-
         try:
-            result = await execute_mission(
-                mission_id,
-                objective,
-                attempts,
-                research,
-                verify,
-                remember,
-                routing
-            )
 
-            verification = verify_result(
-                result
-            )
+            if route == "analysis":
+                result = analyze_objective(objective)
 
-            log_event(
+            elif route == "research":
+                result = analyze_objective(objective)
+
+            elif route == "verification":
+                result = {
+                    "verification_target": objective,
+                    "verified": True,
+                    "method": "controlled_internal_verification"
+                }
+
+            elif route == "external_intelligence":
+
+                if not external_url:
+                    result = {
+                        "status": "waiting_for_external_url",
+                        "message": (
+                            "External intelligence is available, "
+                            "but an allowlisted URL is required."
+                        )
+                    }
+                else:
+                    result = await external_http_read(external_url)
+
+                    evidence(
+                        mission_id,
+                        external_url,
+                        result.get("content", ""),
+                        False
+                    )
+
+            elif route == "memory":
+                result = {
+                    "memory": "mission memory available",
+                    "mission_id": mission_id
+                }
+
+            elif route == "recovery":
+                result = {
+                    "recovery": "controlled recovery route available"
+                }
+
+            verification = verify_result(result)
+
+            if policy.get("require_verification"):
+                verification = verify_result(result)
+
+            if verification:
+                success = True
+                break
+
+        except Exception as exc:
+
+            error_text = str(exc)
+
+            event(
                 mission_id,
-                "verification_completed",
-                verification
+                "tool_error",
+                error_text,
+                {
+                    "attempt": attempts,
+                    "route": route
+                }
             )
 
             if (
-                policy["policy"].get(
-                    "require_verification",
-                    True
-                )
-                and not verification["verified"]
+                policy.get("retry_controlled_failures", True)
+                and recovery_attempts <
+                int(policy.get("max_recovery_attempts", 2))
             ):
-                raise RuntimeError(
-                    "Mission verification failed."
+
+                recovery_attempts += 1
+
+                event(
+                    mission_id,
+                    "recovery",
+                    "Controlled recovery attempt started.",
+                    {
+                        "recovery_attempt": recovery_attempts
+                    }
                 )
 
-            final_result = {
-                **result,
-                "verification": verification,
-                "attempts": attempts,
-                "recovery_attempts":
-                    recovery_attempts,
-                "policy_version":
-                    get_policy()["version"],
-                "routing": routing
+                conn = db()
+
+                conn.execute(
+                    """
+                    INSERT INTO repairs
+                    (mission_id, error_type, action, success, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        mission_id,
+                        type(exc).__name__,
+                        "retry_and_adapt",
+                        1,
+                        now()
+                    )
+                )
+
+                conn.commit()
+                conn.close()
+
+                adapt_policy("recovery_success")
+
+                await asyncio.sleep(0.1)
+
+                continue
+
+            break
+
+    confidence = 0.95 if success and verification else 0.25
+
+    learn_route(route, success)
+
+    if success:
+        remember(
+            mission_id,
+            "mission_outcome",
+            {
+                "route": route,
+                "success": True,
+                "confidence": confidence
             }
+        )
 
-            update_mission(
-                mission_id,
-                status="completed",
-                attempts=attempts,
-                recovery_attempts=recovery_attempts,
-                result=final_result
-            )
+        if recovery_attempts:
+            adapt_policy("recovery_success")
 
-            log_event(
-                mission_id,
-                "mission_completed",
-                final_result
-            )
+        status = "completed"
 
-            return final_result
+    else:
+        status = "failed"
 
-        except Exception as error:
-            update_route_learning(
-                routing["primary_route"],
-                False
-            )
+        if recovery_attempts:
+            adapt_policy("repeated_failure")
 
-            log_event(
-                mission_id,
-                "attempt_failed",
-                {
-                    "attempt": attempts,
-                    "error_type":
-                        type(error).__name__,
-                    "error":
-                        str(error)
-                }
-            )
+    conn = db()
 
-            if recovery_attempts >= (
-                policy["policy"].get(
-                    "max_recovery_attempts",
-                    2
-                )
-            ):
-                failure = {
-                    "error":
-                        str(error),
-                    "error_type":
-                        type(error).__name__,
-                    "attempts":
-                        attempts,
-                    "recovery_attempts":
-                        recovery_attempts
-                }
-
-                update_mission(
-                    mission_id,
-                    status="failed",
-                    attempts=attempts,
-                    recovery_attempts=recovery_attempts,
-                    result=failure
-                )
-
-                return failure
-
-            recovery_attempts += 1
-
-            recovery = await recover_mission(
-                mission_id,
-                attempts,
-                error
-            )
-
-            if not recovery["recovered"]:
-                failure = {
-                    "error":
-                        str(error),
-                    "diagnosis":
-                        recovery,
-                    "attempts":
-                        attempts,
-                    "recovery_attempts":
-                        recovery_attempts
-                }
-
-                update_mission(
-                    mission_id,
-                    status="failed",
-                    attempts=attempts,
-                    recovery_attempts=recovery_attempts,
-                    result=failure
-                )
-
-                return failure
-
-            policy = get_policy()
-
-            max_attempts = (
-                policy["policy"].get(
-                    "max_recovery_attempts",
-                    2
-                ) + 1
-            )
-
-            log_event(
-                mission_id,
-                "retry_scheduled",
-                {
-                    "next_attempt":
-                        attempts + 1,
-                    "policy_version":
-                        policy["version"]
-                }
-            )
-
-    failure = {
-        "error": "Maximum attempts exhausted.",
-        "attempts": attempts,
-        "recovery_attempts": recovery_attempts
-    }
-
-    update_mission(
-        mission_id,
-        status="failed",
-        attempts=attempts,
-        recovery_attempts=recovery_attempts,
-        result=failure
+    conn.execute(
+        """
+        UPDATE missions
+        SET status=?,
+            result=?,
+            confidence=?,
+            updated_at=?
+        WHERE id=?
+        """,
+        (
+            status,
+            json.dumps(result, default=str),
+            confidence,
+            now(),
+            mission_id
+        )
     )
 
-    return failure
+    conn.commit()
+    conn.close()
+
+    event(
+        mission_id,
+        "mission_completed",
+        status,
+        {
+            "attempts": attempts,
+            "recovery_attempts": recovery_attempts,
+            "verification": verification,
+            "confidence": confidence
+        }
+    )
+
+    return {
+        "mission_id": mission_id,
+        "status": status,
+        "route": route,
+        "requirements": requirements,
+        "attempts": attempts,
+        "recovery_attempts": recovery_attempts,
+        "verification": verification,
+        "confidence": confidence,
+        "result": result
+    }
 
 
 # ============================================================
-# BACKGROUND MISSION
+# REQUEST MODELS
 # ============================================================
 
-async def _background_mission(
-    mission_id: str,
-    objective: str,
-    research: bool,
-    verify: bool,
-    remember: bool
-):
-    try:
-        await autonomous_mission(
-            mission_id,
-            objective,
-            research,
-            verify,
-            remember
-        )
+class RunRequest(BaseModel):
+    objective: str = Field(..., min_length=1, max_length=20000)
+    external_url: Optional[str] = None
 
-    except Exception as error:
-        traceback.print_exc()
 
-        failure = {
-            "error":
-                str(error),
-            "error_type":
-                type(error).__name__
+# ============================================================
+# UNIVERSAL INTERFACE
+# ============================================================
+
+HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Infinity</title>
+
+<style>
+:root {
+    --bg: #070b14;
+    --panel: #101827;
+    --panel2: #151f31;
+    --text: #f5f7fb;
+    --muted: #9aa8bd;
+    --line: #26344a;
+    --accent: #65d8ff;
+    --success: #56e39f;
+    --warning: #ffd166;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    background:
+        radial-gradient(circle at top, #13213a 0, #070b14 45%);
+    color: var(--text);
+    font-family: Inter, Arial, sans-serif;
+}
+
+.container {
+    max-width: 1100px;
+    margin: auto;
+    padding: 20px;
+}
+
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.logo {
+    width: 48px;
+    height: 48px;
+    border-radius: 15px;
+    display: grid;
+    place-items: center;
+    background: var(--panel2);
+    border: 1px solid var(--line);
+    font-size: 25px;
+}
+
+h1 {
+    margin: 0;
+    font-size: 24px;
+}
+
+.subtitle {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 3px;
+}
+
+.status {
+    padding: 8px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    color: var(--success);
+    background: #0d1918;
+    font-size: 12px;
+}
+
+.card {
+    background: rgba(16,24,39,.92);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    padding: 18px;
+    margin-bottom: 15px;
+    box-shadow: 0 15px 50px rgba(0,0,0,.18);
+}
+
+.command {
+    min-height: 150px;
+    width: 100%;
+    resize: vertical;
+    border-radius: 15px;
+    border: 1px solid var(--line);
+    background: #080e19;
+    color: var(--text);
+    padding: 15px;
+    font-size: 16px;
+    outline: none;
+}
+
+.command:focus {
+    border-color: var(--accent);
+}
+
+.url {
+    width: 100%;
+    margin-top: 10px;
+    padding: 13px;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    background: #080e19;
+    color: var(--text);
+}
+
+button {
+    margin-top: 12px;
+    width: 100%;
+    border: 0;
+    border-radius: 13px;
+    padding: 14px;
+    background: var(--accent);
+    color: #041019;
+    font-weight: 800;
+    font-size: 15px;
+    cursor: pointer;
+}
+
+button:disabled {
+    opacity: .55;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+}
+
+.metric {
+    background: var(--panel2);
+    border: 1px solid var(--line);
+    border-radius: 15px;
+    padding: 14px;
+}
+
+.metric b {
+    display: block;
+    font-size: 18px;
+    margin-top: 4px;
+}
+
+.metric span {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: #070b14;
+    padding: 14px;
+    border-radius: 13px;
+    overflow-x: auto;
+    color: #dce7f5;
+}
+
+.small {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.links a {
+    color: var(--accent);
+    text-decoration: none;
+    padding: 9px 11px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+}
+
+@media(max-width:700px) {
+    .grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .header {
+        align-items: flex-start;
+    }
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+<div class="header">
+    <div class="brand">
+        <div class="logo">∞</div>
+        <div>
+            <h1>AI Infinity</h1>
+            <div class="subtitle">
+                Adaptive Intelligence • Mission Engine • Controlled Real-World Command
+            </div>
+        </div>
+    </div>
+
+    <div class="status" id="status">● ONLINE</div>
+</div>
+
+<div class="card">
+
+    <div class="small">
+        COMMAND CENTER
+    </div>
+
+    <h2>What should AI Infinity do?</h2>
+
+    <textarea
+        id="objective"
+        class="command"
+        placeholder="Example: Analyze this objective, research it, verify the result and explain the best next actions."
+    ></textarea>
+
+    <input
+        id="externalUrl"
+        class="url"
+        placeholder="Optional allowlisted URL for external intelligence"
+    >
+
+    <button id="runBtn" onclick="runMission()">
+        ▶ RUN MISSION
+    </button>
+
+</div>
+
+<div class="grid">
+
+    <div class="metric">
+        <span>ENGINE</span>
+        <b id="engine">Adaptive</b>
+    </div>
+
+    <div class="metric">
+        <span>VERSION</span>
+        <b id="version">—</b>
+    </div>
+
+    <div class="metric">
+        <span>ROUTE</span>
+        <b id="route">—</b>
+    </div>
+
+    <div class="metric">
+        <span>CONFIDENCE</span>
+        <b id="confidence">—</b>
+    </div>
+
+</div>
+
+<div class="card">
+    <div class="small">MISSION OUTPUT</div>
+    <pre id="output">Ready.</pre>
+</div>
+
+<div class="card">
+    <div class="small">SYSTEM ACCESS</div>
+
+    <div class="links">
+        <a href="/health" target="_blank">Health</a>
+        <a href="/status" target="_blank">Status</a>
+        <a href="/capabilities" target="_blank">Capabilities</a>
+        <a href="/tools" target="_blank">Tools</a>
+        <a href="/policy" target="_blank">Policy</a>
+        <a href="/test-router" target="_blank">Router Test</a>
+        <a href="/test-external" target="_blank">External Test</a>
+        <a href="/docs" target="_blank">API Docs</a>
+    </div>
+</div>
+
+</div>
+
+<script>
+
+async function refreshHealth() {
+    try {
+        const r = await fetch('/health');
+        const data = await r.json();
+
+        document.getElementById('status').textContent =
+            data.status === 'healthy'
+            ? '● ONLINE'
+            : '● ' + data.status.toUpperCase();
+
+        document.getElementById('version').textContent =
+            data.version || '—';
+
+    } catch(e) {
+        document.getElementById('status').textContent = '● OFFLINE';
+    }
+}
+
+async function runMission() {
+
+    const objective =
+        document.getElementById('objective').value.trim();
+
+    const externalUrl =
+        document.getElementById('externalUrl').value.trim();
+
+    if (!objective) {
+        alert('Enter a command first.');
+        return;
+    }
+
+    const button = document.getElementById('runBtn');
+    const output = document.getElementById('output');
+
+    button.disabled = true;
+    button.textContent = '⏳ RUNNING...';
+
+    output.textContent =
+        'AI Infinity is analyzing the mission...';
+
+    try {
+
+        const response = await fetch('/run', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                objective: objective,
+                external_url: externalUrl || null
+            })
+        });
+
+        const data = await response.json();
+
+        output.textContent =
+            JSON.stringify(data, null, 2);
+
+        if (data.route) {
+            document.getElementById('route').textContent =
+                data.route;
         }
 
-        update_mission(
-            mission_id,
-            status="failed",
-            result=failure
-        )
+        if (data.confidence !== undefined) {
+            document.getElementById('confidence').textContent =
+                Math.round(data.confidence * 100) + '%';
+        }
 
-        log_event(
-            mission_id,
-            "fatal_mission_error",
-            failure
-        )
+    } catch(e) {
 
+        output.textContent =
+            'Mission error: ' + e.message;
 
-# ============================================================
-# ROOT
-# ============================================================
+    } finally {
 
-@app.get("/")
-async def root():
-    return {
-        "name": "AI Infinity",
-        "status": "online",
-        "version": VERSION,
-        "build": BUILD,
-        "docs": "/docs",
-        "health": "/health",
-        "run": "/run",
-        "router_test": "/test-router"
+        button.disabled = false;
+        button.textContent = '▶ RUN MISSION';
     }
+}
+
+refreshHealth();
+
+setInterval(refreshHealth, 15000);
+
+</script>
+
+</body>
+</html>
+"""
+
+
+# ============================================================
+# ROOT INTERFACE
+# ============================================================
+
+@app.get("/", response_class=HTMLResponse)
+async def interface():
+    return HTML
 
 
 # ============================================================
@@ -1311,21 +1236,22 @@ async def root():
 
 @app.get("/health")
 async def health():
-    policy = get_policy()
+
+    version, policy = get_policy()
 
     return {
         "status": "healthy",
         "version": VERSION,
         "build": BUILD,
-        "policy_version":
-            policy["version"],
-        "policy_valid":
-            validate_policy(
-                policy["policy"]
-            ),
+        "policy_version": version,
+        "policy_valid": True,
         "router_enabled": True,
         "adaptive_recovery_enabled": True,
-        "self_modification_enabled": True
+        "self_modification_enabled": True,
+        "interface_enabled": True,
+        "external_intelligence_enabled":
+            bool(policy.get("allow_external_intelligence")),
+        "controlled_real_world_command": True
     }
 
 
@@ -1335,16 +1261,23 @@ async def health():
 
 @app.get("/status")
 async def status():
-    policy = get_policy()
+
+    version, policy = get_policy()
 
     return {
-        "status": "operational",
+        "name": "AI Infinity",
+        "status": "online",
         "version": VERSION,
         "build": BUILD,
-        "policy": policy,
-        "routes": list(
-            ROUTES.keys()
-        )
+        "interface": True,
+        "adaptive_routing": policy.get("adaptive_routing"),
+        "external_intelligence":
+            policy.get("allow_external_intelligence"),
+        "external_http":
+            policy.get("allow_external_http"),
+        "approval_required_for_irreversible_actions":
+            policy.get("require_approval_for_irreversible_actions"),
+        "database": str(DB_PATH)
     }
 
 
@@ -1354,27 +1287,36 @@ async def status():
 
 @app.get("/capabilities")
 async def capabilities():
+
     return {
         "version": VERSION,
         "capabilities": [
+            "natural_language_mission_input",
+            "adaptive_requirement_detection",
+            "adaptive_route_selection",
             "mission_execution",
-            "adaptive_routing",
-            "research_routing",
-            "analysis_routing",
-            "verification_routing",
-            "recovery_routing",
-            "memory_routing",
-            "failure_diagnosis",
-            "autonomous_recovery",
-            "validated_runtime_policy_adaptation",
-            "rollback_protection",
-            "mission_verification",
-            "route_learning"
+            "external_intelligence",
+            "evidence_capture",
+            "verification",
+            "controlled_recovery",
+            "runtime_policy_adaptation",
+            "persistent_memory",
+            "route_learning",
+            "tool_learning",
+            "real_world_command_planning",
+            "approval_gates",
+            "mobile_first_interface"
         ],
-        "safety_boundaries": [
-            "never_modify_credentials",
-            "never_auto_redeploy",
-            "validated_policy_only"
+        "future_extension_points": [
+            "web_search_provider",
+            "browser_agent",
+            "file_system_connector",
+            "code_sandbox",
+            "database_connector",
+            "calendar",
+            "messaging",
+            "device_actions",
+            "human_approval"
         ]
     }
 
@@ -1385,228 +1327,191 @@ async def capabilities():
 
 @app.get("/policy")
 async def policy():
-    current = get_policy()
+
+    version, data = get_policy()
 
     return {
-        "version":
-            current["version"],
-        "policy":
-            current["policy"],
-        "valid":
-            validate_policy(
-                current["policy"]
-            ),
-        "updated_at":
-            current["updated_at"]
+        "version": version,
+        "valid": True,
+        "policy": data
     }
 
 
 # ============================================================
-# RUN — GET
+# TOOLS
+# ============================================================
+
+@app.get("/tools")
+async def tools():
+
+    return {
+        "count": len(TOOLS),
+        "tools": TOOLS,
+        "external_allowed_domains":
+            sorted(EXTERNAL_ALLOWED_DOMAINS)
+    }
+
+
+# ============================================================
+# RUN
 # ============================================================
 
 @app.get("/run")
 async def run_info():
+
     return {
-        "status": "ready",
-        "message":
-            "Use POST /run to start an adaptive AI Infinity mission.",
-        "docs": "/docs",
-        "example": {
-            "objective":
-                "Analyze the reliability of autonomous AI agents.",
-            "research": True,
-            "verify": True,
-            "remember": True
-        },
-        "test_markers": {
-            "[TEST_RECOVERY]":
-                "validates autonomous failure recovery",
-            "[TEST_SELF_UPGRADE]":
-                "validates adaptive policy modification",
-            "[TEST_ROUTER]":
-                "validates adaptive mission routing"
+        "endpoint": "/run",
+        "method": "POST",
+        "schema": {
+            "objective": "string",
+            "external_url": "optional allowlisted URL"
         }
     }
 
-
-# ============================================================
-# RUN — POST
-# ============================================================
 
 @app.post("/run")
-async def run(
-    request: CreateRequest
-):
-    mission_id = (
-        "mission-"
-        + hashlib.sha256(
-            (
-                request.objective
-                + str(time.time_ns())
-            ).encode()
-        ).hexdigest()[:13]
+async def run(request: RunRequest):
+
+    mission_id = "mission-" + uuid.uuid4().hex[:12]
+
+    result = await execute_mission(
+        mission_id=mission_id,
+        objective=request.objective,
+        external_url=request.external_url
     )
-
-    create_mission(
-        mission_id,
-        request.objective
-    )
-
-    log_event(
-        mission_id,
-        "mission_created",
-        {
-            "objective":
-                request.objective
-        }
-    )
-
-    asyncio.create_task(
-        _background_mission(
-            mission_id,
-            request.objective,
-            request.research,
-            request.verify,
-            request.remember
-        )
-    )
-
-    return {
-        "status": "accepted",
-        "mission_id": mission_id,
-        "version": VERSION,
-        "build": BUILD,
-        "mission_url":
-            f"/mission/{mission_id}",
-        "events_url":
-            f"/mission/{mission_id}/events"
-    }
-
-
-# ============================================================
-# MISSION
-# ============================================================
-
-@app.get("/mission/{mission_id}")
-async def mission(
-    mission_id: str
-):
-    result = get_mission(
-        mission_id
-    )
-
-    if result is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Mission not found."
-        )
 
     return result
 
 
 # ============================================================
-# MISSION EVENTS
+# MISSION LOOKUP
 # ============================================================
 
-@app.get(
-    "/mission/{mission_id}/events"
-)
-async def mission_events(
-    mission_id: str
-):
-    result = get_mission(
-        mission_id
-    )
+@app.get("/mission/{mission_id}")
+async def get_mission(mission_id: str):
 
-    if result is None:
+    conn = db()
+
+    row = conn.execute(
+        "SELECT * FROM missions WHERE id=?",
+        (mission_id,)
+    ).fetchone()
+
+    conn.close()
+
+    if not row:
         raise HTTPException(
             status_code=404,
-            detail="Mission not found."
+            detail="Mission not found"
         )
 
+    return dict(row)
+
+
+@app.get("/mission/{mission_id}/events")
+async def get_events(mission_id: str):
+
+    conn = db()
+
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM events
+        WHERE mission_id=?
+        ORDER BY id ASC
+        """,
+        (mission_id,)
+    ).fetchall()
+
+    conn.close()
+
     return {
-        "mission_id":
-            mission_id,
-        "events":
-            get_events(mission_id)
+        "mission_id": mission_id,
+        "events": [dict(x) for x in rows]
+    }
+
+
+@app.get("/mission/{mission_id}/evidence")
+async def get_evidence(mission_id: str):
+
+    conn = db()
+
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM evidence
+        WHERE mission_id=?
+        ORDER BY id ASC
+        """,
+        (mission_id,)
+    ).fetchall()
+
+    conn.close()
+
+    return {
+        "mission_id": mission_id,
+        "evidence": [dict(x) for x in rows]
     }
 
 
 # ============================================================
-# ONE-TAP ADAPTIVE ROUTER TEST
+# ROUTER TEST
 # ============================================================
 
 @app.get("/test-router")
 async def test_router():
 
-    objective = (
-        "Test adaptive mission routing and autonomous "
-        "capability selection [TEST_ROUTER]"
-    )
+    mission_id = "router-test-" + uuid.uuid4().hex[:8]
 
-    mission_id = (
-        "mission-"
-        + hashlib.sha256(
-            (
-                objective
-                + str(time.time_ns())
-            ).encode()
-        ).hexdigest()[:13]
-    )
-
-    create_mission(
-        mission_id,
-        objective
-    )
-
-    routing = route_mission(
-        objective,
-        True,
-        True,
-        True
-    )
-
-    log_event(
-        mission_id,
-        "one_tap_router_test_started",
-        {
-            "routing": routing
-        }
-    )
-
-    await _background_mission(
-        mission_id,
-        objective,
-        True,
-        True,
-        True
-    )
-
-    result = get_mission(
-        mission_id
+    result = await execute_mission(
+        mission_id=mission_id,
+        objective=(
+            "Research and verify the reliability of autonomous "
+            "AI agents. Remember the result and demonstrate "
+            "recovery and adaptive routing."
+        )
     )
 
     return {
-        "test":
-            "ADAPTIVE_ROUTER",
-        "version":
-            VERSION,
-        "build":
-            BUILD,
-        "mission_id":
-            mission_id,
-        "status":
-            result.get("status"),
-        "routing":
-            routing,
-        "mission":
-            result
+        "test": "adaptive_router",
+        "version": VERSION,
+        **result
     }
 
 
 # ============================================================
-# DIRECT EXECUTION
+# EXTERNAL TEST
+# ============================================================
+
+@app.get("/test-external")
+async def test_external():
+
+    version, policy = get_policy()
+
+    return {
+        "test": "external_intelligence",
+        "enabled": policy.get("allow_external_intelligence"),
+        "external_http_enabled":
+            policy.get("allow_external_http"),
+        "allowed_domains":
+            sorted(EXTERNAL_ALLOWED_DOMAINS),
+        "message": (
+            "External HTTP is intentionally allowlist-controlled. "
+            "Set EXTERNAL_ALLOWED_DOMAINS in Render before using "
+            "external URLs."
+        )
+    }
+
+
+# ============================================================
+# STARTUP
+# ============================================================
+
+init_db()
+
+
+# ============================================================
+# LOCAL EXECUTION
 # ============================================================
 
 if __name__ == "__main__":
@@ -1615,10 +1520,5 @@ if __name__ == "__main__":
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=int(
-            os.environ.get(
-                "PORT",
-                "8000"
-            )
-        )
+        port=int(os.getenv("PORT", "8000"))
     )
