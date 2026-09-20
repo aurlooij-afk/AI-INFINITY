@@ -3781,11 +3781,4 @@ def shutdown():
         cancel_futures=False,
     )
 
-"requirements.txt"
 
-fastapi
-uvicorn[standard]
-requests
-pydantic
-python-multipart
-lxml
