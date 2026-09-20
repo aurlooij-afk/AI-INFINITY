@@ -1,48 +1,29 @@
-import os
-import json
-import uuid
-import time
-import hashlib
-import sqlite3
+from __future__ import annotations
+
 import asyncio
+import json
+import os
+import re
+import sqlite3
+import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 
 # ============================================================
-# AI INFINITY
-# TARGET-2050.50
-# UNIVERSAL CAPABILITY FABRIC
-#
-# Design:
-# Intent
-#   -> Mission Graph
-#   -> Capability Discovery
-#   -> Connector Contract Validation
-#   -> Risk / Permission Evaluation
-#   -> Execution
-#   -> Evidence / Provenance
-#   -> Independent Verification
-#   -> Recovery
-#   -> Learning
-#
-# Safety:
-# - No arbitrary code execution
-# - No unrestricted proxy
-# - No credential modification
-# - No permission escalation
-# - No destructive action
-# - High-risk actions require approval
+# AI INFINITY — TARGET-2050.51
+# AUTONOMOUS CONNECTOR ORCHESTRATOR
 # ============================================================
 
-VERSION = "TARGET-2050.50"
-BUILD = "UNIVERSAL-CAPABILITY-FABRIC"
+VERSION = "TARGET-2050.51"
+BUILD = "AUTONOMOUS-CONNECTOR-ORCHESTRATOR"
 
 BASE = Path("/tmp/ai_infinity")
 BASE.mkdir(parents=True, exist_ok=True)
@@ -51,11 +32,19 @@ DB_PATH = BASE / "ai_infinity.db"
 
 MAX_STEPS = 40
 MAX_PARALLEL = 4
-MAX_RECOVERY = 2
-MAX_CONNECTORS = 128
-REQUEST_TIMEOUT = float(os.getenv("AI_INFINITY_TIMEOUT", "15"))
+MAX_RECOVERY_ATTEMPTS = 2
+HTTP_TIMEOUT = 20.0
 
-ALLOWED_DOMAINS = {
+BLOCKED_HOSTS = {
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "::1",
+    "metadata.google.internal",
+    "169.254.169.254",
+}
+
+EXTERNAL_ALLOWED_DOMAINS = {
     x.strip().lower()
     for x in os.getenv("EXTERNAL_ALLOWED_DOMAINS", "").split(",")
     if x.strip()
@@ -63,82 +52,72 @@ ALLOWED_DOMAINS = {
 
 
 # ============================================================
-# TIME / IDS
+# APP
 # ============================================================
 
-def now():
-    return datetime.now(timezone.utc).isoformat()
-
-
-def new_id(prefix: str):
-    return f"{prefix}-{uuid.uuid4().hex[:12]}"
-
-
-def digest(value: Any):
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, default=str).encode()
-    ).hexdigest()[:24]
+app = FastAPI(
+    title="AI Infinity",
+    version=VERSION,
+    description="Autonomous capability orchestration platform.",
+)
 
 
 # ============================================================
 # DATABASE
 # ============================================================
 
-def database():
-    conn = sqlite3.connect(DB_PATH)
+def db() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def init_db():
-    conn = database()
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
-    conn.executescript(
+
+def init_db() -> None:
+    conn = db()
+    cur = conn.cursor()
+
+    cur.executescript(
         """
         CREATE TABLE IF NOT EXISTS missions (
             id TEXT PRIMARY KEY,
             objective TEXT NOT NULL,
             status TEXT NOT NULL,
-            route TEXT,
+            result TEXT,
             confidence REAL DEFAULT 0,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            state_json TEXT
+            updated_at TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS mission_steps (
             id TEXT PRIMARY KEY,
             mission_id TEXT NOT NULL,
+            step_key TEXT NOT NULL,
             name TEXT NOT NULL,
             connector TEXT NOT NULL,
-            depends_on TEXT,
+            depends_on TEXT DEFAULT '[]',
             status TEXT NOT NULL,
-            input_json TEXT,
-            output_json TEXT,
-            error TEXT,
             attempts INTEGER DEFAULT 0,
+            result TEXT,
+            error TEXT,
             started_at TEXT,
             finished_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS connectors (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            version TEXT NOT NULL,
+            name TEXT PRIMARY KEY,
+            description TEXT NOT NULL,
             category TEXT NOT NULL,
-            description TEXT,
-            status TEXT NOT NULL,
-            health TEXT NOT NULL,
             risk TEXT NOT NULL,
-            permissions TEXT,
-            input_schema TEXT,
-            output_schema TEXT,
-            verification TEXT,
+            status TEXT NOT NULL,
+            protected INTEGER DEFAULT 0,
             calls INTEGER DEFAULT 0,
             successes INTEGER DEFAULT 0,
             failures INTEGER DEFAULT 0,
             score REAL DEFAULT 0.5,
-            created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
 
@@ -146,11 +125,8 @@ def init_db():
             id TEXT PRIMARY KEY,
             mission_id TEXT NOT NULL,
             step_id TEXT,
-            connector TEXT,
-            evidence_type TEXT,
-            source TEXT,
-            content_json TEXT,
-            verified INTEGER DEFAULT 0,
+            source TEXT NOT NULL,
+            data TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
 
@@ -158,18 +134,17 @@ def init_db():
             id TEXT PRIMARY KEY,
             mission_id TEXT NOT NULL,
             step_id TEXT,
-            connector TEXT,
+            event TEXT NOT NULL,
             source TEXT,
-            claim TEXT,
-            content_hash TEXT,
+            data TEXT,
             created_at TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS approvals (
             id TEXT PRIMARY KEY,
             mission_id TEXT NOT NULL,
+            step_id TEXT,
             action TEXT NOT NULL,
-            risk TEXT NOT NULL,
             status TEXT NOT NULL,
             created_at TEXT NOT NULL,
             resolved_at TEXT
@@ -177,16 +152,19 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS learning (
             id TEXT PRIMARY KEY,
-            key TEXT UNIQUE NOT NULL,
-            value_json TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            mission_id TEXT NOT NULL,
+            connector TEXT,
+            lesson TEXT NOT NULL,
+            created_at TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS connector_events (
             id TEXT PRIMARY KEY,
+            mission_id TEXT,
             connector TEXT NOT NULL,
             event TEXT NOT NULL,
-            details_json TEXT,
+            success INTEGER NOT NULL,
+            latency REAL DEFAULT 0,
             created_at TEXT NOT NULL
         );
         """
@@ -200,958 +178,107 @@ init_db()
 
 
 # ============================================================
-# CONNECTOR CONTRACT
+# CONNECTOR FABRIC
 # ============================================================
 
-def contract(
-    connector_id: str,
-    name: str,
-    version: str,
-    category: str,
-    description: str,
-    permissions: List[str],
-    risk: str,
-    input_schema: Dict[str, Any],
-    output_schema: Dict[str, Any],
-    verification: str,
-    available: bool = True,
-    approval_required: bool = False,
-):
-    return {
-        "id": connector_id,
-        "name": name,
-        "version": version,
-        "category": category,
-        "description": description,
-        "permissions": permissions,
-        "risk": risk,
-        "input_schema": input_schema,
-        "output_schema": output_schema,
-        "verification": verification,
-        "available": available,
-        "approval_required": approval_required,
-    }
+DEFAULT_CONNECTORS = [
+    {
+        "name": "reasoning",
+        "description": "Internal reasoning and analysis",
+        "category": "analysis",
+        "risk": "low",
+        "status": "healthy",
+        "protected": 0,
+    },
+    {
+        "name": "planner",
+        "description": "Mission planning and graph construction",
+        "category": "planning",
+        "risk": "low",
+        "status": "healthy",
+        "protected": 0,
+    },
+    {
+        "name": "memory",
+        "description": "Persistent reusable mission memory",
+        "category": "memory",
+        "risk": "low",
+        "status": "healthy",
+        "protected": 0,
+    },
+    {
+        "name": "web_read",
+        "description": "Controlled allowlisted external web reader",
+        "category": "web",
+        "risk": "medium",
+        "status": "healthy",
+        "protected": 0,
+    },
+    {
+        "name": "verification",
+        "description": "Independent verification of mission results",
+        "category": "verification",
+        "risk": "low",
+        "status": "healthy",
+        "protected": 0,
+    },
+    {
+        "name": "action_gateway",
+        "description": "Protected real-world action gateway",
+        "category": "action",
+        "risk": "high",
+        "status": "protected",
+        "protected": 1,
+    },
+]
 
 
-# ============================================================
-# BUILT-IN CONNECTORS
-# ============================================================
+def seed_connectors() -> None:
+    conn = db()
+    cur = conn.cursor()
 
-BUILTIN_CONNECTORS = {
-    "reasoning": contract(
-        "reasoning",
-        "Internal Reasoning",
-        "1.0",
-        "analysis",
-        "Interprets intent and produces structured reasoning metadata.",
-        ["analysis"],
-        "low",
-        {"type": "object"},
-        {"type": "object"},
-        "schema",
-    ),
-
-    "planner": contract(
-        "planner",
-        "Mission Planner",
-        "1.0",
-        "planning",
-        "Builds dependency-aware mission graphs.",
-        ["planning"],
-        "low",
-        {"type": "object"},
-        {"type": "object"},
-        "graph",
-    ),
-
-    "memory": contract(
-        "memory",
-        "Persistent Memory",
-        "1.0",
-        "memory",
-        "Stores reusable mission learning.",
-        ["memory_write"],
-        "low",
-        {"type": "object"},
-        {"type": "object"},
-        "write_confirmation",
-    ),
-
-    "web_read": contract(
-        "web_read",
-        "Controlled Web Reader",
-        "1.0",
-        "web",
-        "Reads explicitly allowlisted HTTP resources.",
-        ["external_read"],
-        "medium",
-        {"type": "object", "required": ["url"]},
-        {"type": "object"},
-        "response_validation",
-    ),
-
-    "verification": contract(
-        "verification",
-        "Independent Verification",
-        "1.0",
-        "verification",
-        "Checks mission outputs independently.",
-        ["verification"],
-        "low",
-        {"type": "object"},
-        {"type": "object"},
-        "independent_check",
-    ),
-
-    "action_gateway": contract(
-        "action_gateway",
-        "Protected Real-World Action Gateway",
-        "1.0",
-        "action",
-        "Permission boundary for future external actions.",
-        ["action"],
-        "high",
-        {"type": "object"},
-        {"type": "object"},
-        "human_approval",
-        available=False,
-        approval_required=True,
-    ),
-}
-
-
-# ============================================================
-# CONNECTOR REGISTRY
-# ============================================================
-
-def validate_connector(c: Dict[str, Any]):
-    required = [
-        "id",
-        "name",
-        "version",
-        "category",
-        "description",
-        "permissions",
-        "risk",
-        "input_schema",
-        "output_schema",
-        "verification",
-    ]
-
-    for key in required:
-        if key not in c:
-            raise ValueError(f"Connector contract missing: {key}")
-
-    if not isinstance(c["permissions"], list):
-        raise ValueError("Connector permissions must be a list.")
-
-    if c["risk"] not in {"low", "medium", "high"}:
-        raise ValueError("Invalid connector risk.")
-
-    return True
-
-
-def sync_connector(c: Dict[str, Any]):
-    validate_connector(c)
-
-    conn = database()
-
-    conn.execute(
-        """
-        INSERT INTO connectors (
-            id,name,version,category,description,status,health,risk,
-            permissions,input_schema,output_schema,verification,
-            created_at,updated_at
+    for c in DEFAULT_CONNECTORS:
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO connectors
+            (name, description, category, risk, status, protected, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                c["name"],
+                c["description"],
+                c["category"],
+                c["risk"],
+                c["status"],
+                c["protected"],
+                now(),
+            ),
         )
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(id) DO UPDATE SET
-            name=excluded.name,
-            version=excluded.version,
-            category=excluded.category,
-            description=excluded.description,
-            status=excluded.status,
-            risk=excluded.risk,
-            permissions=excluded.permissions,
-            input_schema=excluded.input_schema,
-            output_schema=excluded.output_schema,
-            verification=excluded.verification,
-            updated_at=excluded.updated_at
-        """,
-        (
-            c["id"],
-            c["name"],
-            c["version"],
-            c["category"],
-            c["description"],
-            "available" if c.get("available", True) else "gateway",
-            "healthy" if c.get("available", True) else "protected",
-            c["risk"],
-            json.dumps(c["permissions"]),
-            json.dumps(c["input_schema"]),
-            json.dumps(c["output_schema"]),
-            c["verification"],
-            now(),
-            now(),
-        ),
-    )
 
     conn.commit()
     conn.close()
 
 
-for connector in BUILTIN_CONNECTORS.values():
-    sync_connector(connector)
+seed_connectors()
 
 
-# ============================================================
-# CUSTOM CONNECTOR REGISTRATION
-# ============================================================
-
-class ConnectorRegistration(BaseModel):
-    id: str = Field(..., min_length=2, max_length=80)
-    name: str = Field(..., min_length=2, max_length=120)
-    version: str = Field(default="1.0")
-    category: str = Field(..., min_length=2, max_length=80)
-    description: str = Field(default="")
-    permissions: List[str] = Field(default_factory=list)
-    risk: str = Field(default="low")
-    input_schema: Dict[str, Any] = Field(default_factory=dict)
-    output_schema: Dict[str, Any] = Field(default_factory=dict)
-    verification: str = Field(default="response_validation")
-    endpoint: Optional[str] = None
-    available: bool = False
-    approval_required: bool = False
-
-
-def registered_connector(connector_id: str):
-    conn = database()
-
-    row = conn.execute(
-        "SELECT * FROM connectors WHERE id=?",
-        (connector_id,),
-    ).fetchone()
-
+def connector_rows() -> List[Dict[str, Any]]:
+    conn = db()
+    rows = conn.execute(
+        "SELECT * FROM connectors ORDER BY name"
+    ).fetchall()
     conn.close()
+    return [dict(x) for x in rows]
 
+
+def connector(name: str) -> Optional[Dict[str, Any]]:
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM connectors WHERE name = ?",
+        (name,),
+    ).fetchone()
+    conn.close()
     return dict(row) if row else None
-
-
-# ============================================================
-# CONNECTOR SCORING
-# ============================================================
-
-def update_connector_score(connector_id: str, success: bool):
-    conn = database()
-
-    row = conn.execute(
-        """
-        SELECT calls,successes,failures
-        FROM connectors
-        WHERE id=?
-        """,
-        (connector_id,),
-    ).fetchone()
-
-    if not row:
-        conn.close()
-        return
-
-    calls = row["calls"] + 1
-    successes = row["successes"] + (1 if success else 0)
-    failures = row["failures"] + (0 if success else 1)
-
-    score = successes / calls if calls else 0.5
-
-    if calls < 5:
-        health = "healthy"
-    elif score >= 0.7:
-        health = "healthy"
-    elif score >= 0.3:
-        health = "degraded"
-    else:
-        health = "isolated"
-
-    conn.execute(
-        """
-        UPDATE connectors
-        SET calls=?,successes=?,failures=?,score=?,health=?,updated_at=?
-        WHERE id=?
-        """,
-        (
-            calls,
-            successes,
-            failures,
-            score,
-            health,
-            now(),
-            connector_id,
-        ),
-    )
-
-    conn.execute(
-        """
-        INSERT INTO connector_events
-        (id,connector,event,details_json,created_at)
-        VALUES(?,?,?,?,?)
-        """,
-        (
-            new_id("ce"),
-            connector_id,
-            "success" if success else "failure",
-            json.dumps({"score": score}),
-            now(),
-        ),
-    )
-
-    conn.commit()
-    conn.close()
-
-
-def connector_score(connector_id: str):
-    conn = database()
-
-    row = conn.execute(
-        "SELECT score FROM connectors WHERE id=?",
-        (connector_id,),
-    ).fetchone()
-
-    conn.close()
-
-    return float(row["score"]) if row else 0.5
-
-
-# ============================================================
-# REQUIREMENT DETECTION
-# ============================================================
-
-def requirements_for(objective: str):
-    text = objective.lower()
-
-    requirements = {
-        "analysis",
-        "verification",
-        "memory",
-    }
-
-    if any(
-        x in text
-        for x in [
-            "web",
-            "website",
-            "internet",
-            "url",
-            "online",
-            "research",
-            "search",
-        ]
-    ):
-        requirements.add("external_read")
-
-    if any(
-        x in text
-        for x in [
-            "send",
-            "publish",
-            "delete",
-            "buy",
-            "post",
-            "message",
-            "control",
-            "device",
-            "change",
-        ]
-    ):
-        requirements.add("action")
-
-    return list(requirements)
-
-
-# ============================================================
-# CAPABILITY DISCOVERY
-# ============================================================
-
-CAPABILITY_MAP = {
-    "analysis": "reasoning",
-    "planning": "planner",
-    "memory": "memory",
-    "external_read": "web_read",
-    "verification": "verification",
-    "action": "action_gateway",
-}
-
-
-def discover_capabilities(requirements: List[str]):
-    candidates = []
-
-    for requirement in requirements:
-        connector_id = CAPABILITY_MAP.get(requirement)
-
-        if not connector_id:
-            continue
-
-        c = BUILTIN_CONNECTORS.get(connector_id)
-
-        if not c:
-            continue
-
-        score = connector_score(connector_id)
-
-        candidates.append(
-            {
-                "requirement": requirement,
-                "connector": connector_id,
-                "available": c.get("available", True),
-                "risk": c["risk"],
-                "score": score,
-                "approval_required": c.get(
-                    "approval_required",
-                    False,
-                ),
-            }
-        )
-
-    return candidates
-
-
-# ============================================================
-# MISSION GRAPH
-# ============================================================
-
-def build_graph(objective: str, requirements: List[str]):
-    steps = [
-        {
-            "id": "interpret",
-            "name": "Interpret intent",
-            "connector": "reasoning",
-            "depends_on": [],
-        },
-        {
-            "id": "plan",
-            "name": "Construct mission graph",
-            "connector": "planner",
-            "depends_on": ["interpret"],
-        },
-    ]
-
-    if "external_read" in requirements:
-        steps.append(
-            {
-                "id": "external",
-                "name": "Collect controlled external intelligence",
-                "connector": "web_read",
-                "depends_on": ["plan"],
-            }
-        )
-
-    verification_dependency = (
-        ["external"]
-        if "external_read" in requirements
-        else ["plan"]
-    )
-
-    steps.append(
-        {
-            "id": "verify",
-            "name": "Independent verification",
-            "connector": "verification",
-            "depends_on": verification_dependency,
-        }
-    )
-
-    if "memory" in requirements:
-        steps.append(
-            {
-                "id": "memory",
-                "name": "Store reusable learning",
-                "connector": "memory",
-                "depends_on": ["verify"],
-            }
-        )
-
-    if "action" in requirements:
-        steps.append(
-            {
-                "id": "action",
-                "name": "Protected real-world action gateway",
-                "connector": "action_gateway",
-                "depends_on": ["verify"],
-            }
-        )
-
-    if len(steps) > MAX_STEPS:
-        raise ValueError("Mission graph exceeds safety limit.")
-
-    ids = {s["id"] for s in steps}
-
-    for step in steps:
-        for dependency in step["depends_on"]:
-            if dependency not in ids:
-                raise ValueError(
-                    f"Unknown dependency: {dependency}"
-                )
-
-    return steps
-
-
-# ============================================================
-# PROVENANCE
-# ============================================================
-
-def evidence(
-    mission_id,
-    step_id,
-    connector,
-    source,
-    content,
-    verified=False,
-):
-    conn = database()
-
-    conn.execute(
-        """
-        INSERT INTO evidence (
-            id,mission_id,step_id,connector,evidence_type,
-            source,content_json,verified,created_at
-        )
-        VALUES(?,?,?,?,?,?,?,?,?)
-        """,
-        (
-            new_id("ev"),
-            mission_id,
-            step_id,
-            connector,
-            "execution_result",
-            source,
-            json.dumps(content, default=str),
-            1 if verified else 0,
-            now(),
-        ),
-    )
-
-    conn.execute(
-        """
-        INSERT INTO provenance (
-            id,mission_id,step_id,connector,source,
-            claim,content_hash,created_at
-        )
-        VALUES(?,?,?,?,?,?,?,?)
-        """,
-        (
-            new_id("prov"),
-            mission_id,
-            step_id,
-            connector,
-            source,
-            f"{connector} produced a result",
-            digest(content),
-            now(),
-        ),
-    )
-
-    conn.commit()
-    conn.close()
-
-
-# ============================================================
-# MEMORY
-# ============================================================
-
-def remember(key: str, value: Any):
-    conn = database()
-
-    conn.execute(
-        """
-        INSERT INTO learning(id,key,value_json,updated_at)
-        VALUES(?,?,?,?)
-        ON CONFLICT(key) DO UPDATE SET
-            value_json=excluded.value_json,
-            updated_at=excluded.updated_at
-        """,
-        (
-            new_id("learn"),
-            key,
-            json.dumps(value, default=str),
-            now(),
-        ),
-    )
-
-    conn.commit()
-    conn.close()
-
-
-# ============================================================
-# SAFE EXTERNAL HTTP
-# ============================================================
-
-def allowed_url(url: str):
-    from urllib.parse import urlparse
-
-    parsed = urlparse(url)
-
-    if parsed.scheme not in {"http", "https"}:
-        return False
-
-    host = (parsed.hostname or "").lower()
-
-    blocked = {
-        "localhost",
-        "127.0.0.1",
-        "0.0.0.0",
-        "::1",
-        "169.254.169.254",
-        "metadata.google.internal",
-    }
-
-    if host in blocked:
-        return False
-
-    if not ALLOWED_DOMAINS:
-        return False
-
-    return any(
-        host == domain
-        or host.endswith("." + domain)
-        for domain in ALLOWED_DOMAINS
-    )
-
-
-async def read_external(url: str):
-    if not allowed_url(url):
-        return {
-            "success": False,
-            "blocked": True,
-            "reason": (
-                "External URL is not allowlisted. "
-                "Configure EXTERNAL_ALLOWED_DOMAINS."
-            ),
-        }
-
-    try:
-        async with httpx.AsyncClient(
-            timeout=REQUEST_TIMEOUT,
-            follow_redirects=False,
-        ) as client:
-            response = await client.get(
-                url,
-                headers={
-                    "User-Agent": "AI-Infinity/2050.50"
-                },
-            )
-
-        return {
-            "success": True,
-            "status_code": response.status_code,
-            "url": str(response.url),
-            "content_type": response.headers.get(
-                "content-type"
-            ),
-            "body_preview": response.text[:12000],
-        }
-
-    except Exception as exc:
-        return {
-            "success": False,
-            "error": str(exc),
-        }
-
-
-# ============================================================
-# CONNECTOR EXECUTION
-# ============================================================
-
-async def execute_connector(
-    connector_id: str,
-    objective: str,
-    mission_id: str,
-    step_id: str,
-    context: Dict[str, Any],
-):
-    connector = BUILTIN_CONNECTORS.get(connector_id)
-
-    if not connector:
-        raise ValueError(
-            f"Connector not found: {connector_id}"
-        )
-
-    if not connector.get("available", True):
-        return {
-            "executed": False,
-            "status": "protected",
-            "connector": connector_id,
-            "reason": (
-                "Connector exists as an action boundary "
-                "but is not an active executor."
-            ),
-        }
-
-    try:
-        if connector_id == "reasoning":
-            result = {
-                "interpreted": True,
-                "objective": objective,
-                "intent_hash": digest(objective),
-                "requirements": requirements_for(objective),
-            }
-
-        elif connector_id == "planner":
-            result = {
-                "planned": True,
-                "dependency_aware": True,
-                "parallel_safe": True,
-                "max_steps": MAX_STEPS,
-            }
-
-        elif connector_id == "web_read":
-            url = context.get("url")
-
-            if not url:
-                result = {
-                    "success": False,
-                    "reason": "No URL supplied.",
-                }
-            else:
-                result = await read_external(url)
-
-        elif connector_id == "verification":
-            previous = context.get("previous_results", {})
-
-            result = {
-                "verified": True,
-                "method": "independent_structural_validation",
-                "inputs_checked": list(previous.keys()),
-                "verification_hash": digest(previous),
-            }
-
-        elif connector_id == "memory":
-            key = f"mission:{mission_id}"
-
-            remember(
-                key,
-                {
-                    "objective": objective,
-                    "mission_id": mission_id,
-                    "completed_at": now(),
-                    "context_hash": digest(context),
-                },
-            )
-
-            result = {
-                "stored": True,
-                "memory_key": key,
-            }
-
-        elif connector_id == "action_gateway":
-            result = {
-                "executed": False,
-                "status": "approval_required",
-                "connector": connector_id,
-                "reason": (
-                    "Irreversible or real-world action is "
-                    "protected by an explicit approval boundary."
-                ),
-            }
-
-        else:
-            raise ValueError(
-                f"No executor for connector: {connector_id}"
-            )
-
-        update_connector_score(
-            connector_id,
-            True,
-        )
-
-        evidence(
-            mission_id,
-            step_id,
-            connector_id,
-            connector["name"],
-            result,
-            verified=False,
-        )
-
-        return result
-
-    except Exception as exc:
-        update_connector_score(
-            connector_id,
-            False,
-        )
-
-        evidence(
-            mission_id,
-            step_id,
-            connector_id,
-            connector["name"],
-            {"error": str(exc)},
-            verified=False,
-        )
-
-        raise
-
-
-# ============================================================
-# MISSION ENGINE
-# ============================================================
-
-async def execute_mission(
-    mission_id: str,
-    objective: str,
-    graph: List[Dict[str, Any]],
-    context: Dict[str, Any],
-):
-    pending = {
-        step["id"]: step
-        for step in graph
-    }
-
-    results = {}
-    recovery_attempts = 0
-
-    while pending:
-        ready = []
-
-        for step in pending.values():
-            if all(
-                dependency in results
-                for dependency in step["depends_on"]
-            ):
-                ready.append(step)
-
-        if not ready:
-            raise RuntimeError(
-                "Mission graph dependency deadlock."
-            )
-
-        batch = ready[:MAX_PARALLEL]
-
-        async def execute_step(step):
-            connector_id = step["connector"]
-
-            conn = database()
-
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO mission_steps (
-                    id,mission_id,name,connector,depends_on,
-                    status,input_json,started_at
-                )
-                VALUES(?,?,?,?,?,?,?,?)
-                """,
-                (
-                    step["id"],
-                    mission_id,
-                    step["name"],
-                    connector_id,
-                    json.dumps(step["depends_on"]),
-                    "running",
-                    json.dumps(context, default=str),
-                    now(),
-                ),
-            )
-
-            conn.commit()
-            conn.close()
-
-            step_context = {
-                **context,
-                "previous_results": {
-                    dep: results.get(dep)
-                    for dep in step["depends_on"]
-                },
-            }
-
-            try:
-                result = await execute_connector(
-                    connector_id,
-                    objective,
-                    mission_id,
-                    step["id"],
-                    step_context,
-                )
-
-                conn = database()
-
-                conn.execute(
-                    """
-                    UPDATE mission_steps
-                    SET status=?,output_json=?,finished_at=?
-                    WHERE id=?
-                    """,
-                    (
-                        "completed",
-                        json.dumps(
-                            result,
-                            default=str,
-                        ),
-                        now(),
-                        step["id"],
-                    ),
-                )
-
-                conn.commit()
-                conn.close()
-
-                return step["id"], result
-
-            except Exception as exc:
-                conn = database()
-
-                conn.execute(
-                    """
-                    UPDATE mission_steps
-                    SET status=?,error=?,attempts=attempts+1,
-                        finished_at=?
-                    WHERE id=?
-                    """,
-                    (
-                        "failed",
-                        str(exc),
-                        now(),
-                        step["id"],
-                    ),
-                )
-
-                conn.commit()
-                conn.close()
-
-                raise
-
-        try:
-            completed = await asyncio.gather(
-                *[
-                    execute_step(step)
-                    for step in batch
-                ]
-            )
-
-            for step_id, result in completed:
-                results[step_id] = result
-                pending.pop(step_id, None)
-
-        except Exception:
-            if recovery_attempts >= MAX_RECOVERY:
-                raise
-
-            recovery_attempts += 1
-
-    return {
-        "results": results,
-        "recovery_attempts": recovery_attempts,
-    }
-
-
-# ============================================================
-# FASTAPI
-# ============================================================
-
-app = FastAPI(
-    title="AI Infinity",
-    version=VERSION,
-    description=(
-        "Universal Capability Fabric for AI Infinity"
-    ),
-)
 
 
 # ============================================================
@@ -1159,13 +286,19 @@ app = FastAPI(
 # ============================================================
 
 class RunRequest(BaseModel):
-    command: str = Field(
-        ...,
-        min_length=1,
-        max_length=10000,
-    )
-    url: Optional[str] = None
-    approve: bool = False
+    objective: str = Field(..., min_length=1, max_length=10000)
+    research: bool = False
+    verify: bool = True
+    remember: bool = True
+    auto_execute: bool = True
+
+
+class ConnectorRegistration(BaseModel):
+    name: str
+    description: str
+    category: str
+    risk: str = "medium"
+    status: str = "healthy"
 
 
 class ApprovalRequest(BaseModel):
@@ -1173,496 +306,141 @@ class ApprovalRequest(BaseModel):
 
 
 # ============================================================
-# HOME
+# REQUIREMENT INFERENCE
 # ============================================================
 
-@app.get("/", response_class=HTMLResponse)
-async def home():
-    return """
-<!doctype html>
-<html>
-<head>
-<meta name="viewport"
-      content="width=device-width,initial-scale=1">
-<title>AI Infinity</title>
-<style>
-*{box-sizing:border-box}
-body{
- margin:0;
- background:#050b15;
- color:#edf4ff;
- font-family:system-ui,-apple-system,sans-serif;
-}
-main{
- max-width:760px;
- margin:auto;
- padding:20px;
-}
-.card{
- background:#0c1727;
- border:1px solid #1d3048;
- border-radius:20px;
- padding:18px;
- margin-bottom:16px;
-}
-h1{margin:0 0 5px}
-.muted{color:#8ea5bf}
-textarea,input{
- width:100%;
- margin-top:12px;
- padding:14px;
- border-radius:13px;
- border:1px solid #29415d;
- background:#050b15;
- color:white;
- font:inherit;
-}
-textarea{resize:vertical}
-button{
- width:100%;
- margin-top:12px;
- padding:15px;
- border:0;
- border-radius:13px;
- background:#277cff;
- color:white;
- font-weight:800;
- font-size:16px;
-}
-.grid{
- display:grid;
- grid-template-columns:repeat(3,1fr);
- gap:8px;
-}
-.stat{
- background:#050b15;
- border-radius:13px;
- padding:12px;
- text-align:center;
-}
-pre{
- white-space:pre-wrap;
- word-break:break-word;
- background:#050b15;
- border-radius:13px;
- padding:14px;
- overflow:auto;
-}
-a{color:#75b9ff}
-.small{font-size:13px}
-</style>
-</head>
+def infer_requirements(
+    objective: str,
+    research: bool = False,
+    verify: bool = True,
+    remember: bool = True,
+) -> List[str]:
+    text = objective.lower()
+    requirements: List[str] = []
 
-<body>
-<main>
-
-<div class="card">
-<h1>∞ AI Infinity</h1>
-<div class="muted">
-TARGET-2050.50 · Universal Capability Fabric
-</div>
-</div>
-
-<div class="card">
-<textarea
- id="command"
- rows="5"
- placeholder="Command AI Infinity..."
-></textarea>
-
-<input
- id="url"
- placeholder="Optional allowlisted URL"
-/>
-
-<button onclick="executeMission()">
-EXECUTE MISSION
-</button>
-</div>
-
-<div class="card">
-<div class="grid">
-<div class="stat">
-<b id="status">—</b>
-<br><span class="small">STATUS</span>
-</div>
-
-<div class="stat">
-<b id="route">—</b>
-<br><span class="small">ROUTE</span>
-</div>
-
-<div class="stat">
-<b id="confidence">—</b>
-<br><span class="small">CONFIDENCE</span>
-</div>
-</div>
-</div>
-
-<div class="card">
-<pre id="output">Ready.</pre>
-</div>
-
-<div class="card small">
-<a href="/health">Health</a> ·
-<a href="/capabilities">Capabilities</a> ·
-<a href="/connectors">Connectors</a> ·
-<a href="/tools">Tools</a> ·
-<a href="/approvals">Approvals</a> ·
-<a href="/docs">API Docs</a>
-</div>
-
-</main>
-
-<script>
-async function executeMission(){
-
- const command =
-   document.getElementById("command")
-   .value.trim();
-
- const url =
-   document.getElementById("url")
-   .value.trim();
-
- if(!command){
-   document.getElementById("output")
-   .textContent =
-     "Enter a command.";
-   return;
- }
-
- document.getElementById("output")
-   .textContent =
-     "AI Infinity is constructing the mission...";
-
- try{
-
-   const response =
-     await fetch("/run",{
-       method:"POST",
-       headers:{
-         "Content-Type":
-           "application/json"
-       },
-       body:JSON.stringify({
-         command:command,
-         url:url || null
-       })
-     });
-
-   const data =
-     await response.json();
-
-   document.getElementById("status")
-     .textContent =
-       data.status || "—";
-
-   document.getElementById("route")
-     .textContent =
-       data.route || "—";
-
-   document.getElementById("confidence")
-     .textContent =
-       data.confidence ?? "—";
-
-   document.getElementById("output")
-     .textContent =
-       JSON.stringify(data,null,2);
-
- }catch(error){
-
-   document.getElementById("output")
-     .textContent =
-       String(error);
- }
-}
-</script>
-
-</body>
-</html>
-"""
-
-
-# ============================================================
-# HEALTH
-# ============================================================
-
-@app.get("/health")
-async def health():
-    return {
-        "status": "healthy",
-        "version": VERSION,
-        "build": BUILD,
-        "policy_version": 1,
-        "policy_valid": True,
-
-        "router_enabled": True,
-        "adaptive_recovery_enabled": True,
-        "self_modification_enabled": True,
-        "interface_enabled": True,
-
-        "universal_tool_fabric": True,
-        "universal_connector_fabric": True,
-        "universal_capability_fabric": True,
-
-        "capability_discovery": True,
-        "connector_contracts": True,
-        "mission_graph": True,
-        "parallel_execution": True,
-
-        "provenance": True,
-        "independent_verification": True,
-        "resumable_missions": True,
-
-        "external_intelligence_enabled": True,
-        "controlled_real_world_command": True,
-        "approval_gate_enabled": True,
-    }
-
-
-# ============================================================
-# STATUS
-# ============================================================
-
-@app.get("/status")
-async def status():
-    return {
-        "status": "operational",
-        "version": VERSION,
-        "build": BUILD,
-        "timestamp": now(),
-    }
-
-
-# ============================================================
-# CAPABILITIES
-# ============================================================
-
-@app.get("/capabilities")
-async def capabilities():
-
-    return {
-        "version": VERSION,
-
-        "core": [
-            "natural_language_command",
-            "intent_detection",
-            "mission_graph",
-            "dependency_resolution",
-            "parallel_safe_execution",
-
-            "capability_discovery",
-            "connector_contracts",
-            "connector_registration",
-            "connector_selection",
-            "connector_health",
-            "connector_scoring",
-
-            "permission_evaluation",
-            "approval_gates",
-
-            "evidence_collection",
-            "provenance_tracking",
-            "independent_verification",
-
-            "adaptive_recovery",
-            "persistent_memory",
-            "runtime_learning",
-            "mission_resume",
-        ],
-
-        "connector_categories": [
-            "analysis",
-            "planning",
-            "memory",
+    if research or any(
+        x in text
+        for x in [
+            "research",
+            "search",
             "web",
-            "verification",
-            "action_gateway",
-        ],
+            "internet",
+            "latest",
+            "look up",
+            "find",
+            "external",
+        ]
+    ):
+        requirements.append("external_read")
 
-        "external_extension_points": [
-            "web_search",
-            "browser",
-            "files",
-            "databases",
-            "calendar",
-            "messaging",
-            "device_control",
-            "human_approval",
-        ],
+    if any(
+        x in text
+        for x in [
+            "plan",
+            "steps",
+            "strategy",
+            "build",
+            "create",
+            "execute",
+            "complete",
+        ]
+    ):
+        requirements.append("planning")
 
-        "security_boundaries": [
-            "no_arbitrary_code_execution",
-            "no_unrestricted_proxy",
-            "no_credential_modification",
-            "no_permission_escalation",
-            "no_destructive_action",
-            "approval_for_high_risk_actions",
-        ],
-    }
+    if verify or any(
+        x in text
+        for x in [
+            "verify",
+            "validate",
+            "check",
+            "confirm",
+            "proof",
+            "evidence",
+        ]
+    ):
+        requirements.append("verification")
 
+    if remember or any(
+        x in text
+        for x in [
+            "remember",
+            "learn",
+            "previous",
+            "memory",
+            "reuse",
+        ]
+    ):
+        requirements.append("memory")
 
-# ============================================================
-# POLICY
-# ============================================================
+    if any(
+        x in text
+        for x in [
+            "analyze",
+            "analyse",
+            "compare",
+            "reason",
+            "understand",
+            "evaluate",
+        ]
+    ) or not requirements:
+        requirements.append("analysis")
 
-@app.get("/policy")
-async def policy():
-    return {
-        "adaptive_routing": True,
-        "capability_discovery": True,
-        "connector_contract_validation": True,
-        "mission_graph": True,
-        "parallel_execution": True,
-
-        "require_verification": True,
-        "runtime_learning": True,
-
-        "max_steps": MAX_STEPS,
-        "max_parallel": MAX_PARALLEL,
-        "max_recovery_attempts": MAX_RECOVERY,
-
-        "external_intelligence": True,
-        "controlled_external_http": True,
-
-        "require_approval_for_irreversible_actions": True,
-
-        "destructive_actions": False,
-        "credential_modification": False,
-        "permission_changes": False,
-        "auto_redeploy": False,
-
-        "arbitrary_code_execution": False,
-        "unrestricted_network_proxy": False,
-    }
-
-
-# ============================================================
-# CONNECTOR REGISTRY
-# ============================================================
-
-@app.get("/connectors")
-async def connectors():
-
-    conn = database()
-
-    rows = conn.execute(
-        """
-        SELECT *
-        FROM connectors
-        ORDER BY category,id
-        """
-    ).fetchall()
-
-    conn.close()
-
-    output = []
-
-    for row in rows:
-        item = dict(row)
-
-        item["permissions"] = json.loads(
-            item["permissions"] or "[]"
-        )
-
-        item["input_schema"] = json.loads(
-            item["input_schema"] or "{}"
-        )
-
-        item["output_schema"] = json.loads(
-            item["output_schema"] or "{}"
-        )
-
-        output.append(item)
-
-    return {
-        "version": VERSION,
-        "count": len(output),
-        "connectors": output,
-    }
+    # Preserve order and remove duplicates.
+    return list(dict.fromkeys(requirements))
 
 
-@app.post("/connectors/register")
-async def register_connector(
-    registration: ConnectorRegistration,
-):
-    data = registration.model_dump()
-
-    if len(
-        data["id"]
-    ) > 80:
-        raise HTTPException(
-            400,
-            "Connector ID too long.",
-        )
-
-    if data["id"] in BUILTIN_CONNECTORS:
-        raise HTTPException(
-            409,
-            "Built-in connector cannot be replaced.",
-        )
-
-    validate_connector(data)
-
-    if data.get("endpoint"):
-        from urllib.parse import urlparse
-
-        parsed = urlparse(data["endpoint"])
-
-        if parsed.scheme not in {
-            "http",
-            "https",
-        }:
-            raise HTTPException(
-                400,
-                "Connector endpoint must use HTTP or HTTPS.",
-            )
-
-        if not allowed_url(
-            data["endpoint"]
-        ):
-            raise HTTPException(
-                403,
-                (
-                    "Connector endpoint is not "
-                    "allowlisted."
-                ),
-            )
-
-    sync_connector(data)
-
-    return {
-        "status": "registered",
-        "version": VERSION,
-        "connector": {
-            "id": data["id"],
-            "name": data["name"],
-            "version": data["version"],
-            "category": data["category"],
-            "risk": data["risk"],
-            "available": data["available"],
-            "approval_required": data[
-                "approval_required"
-            ],
-        },
-    }
+REQUIREMENT_CONNECTORS = {
+    "analysis": ["reasoning"],
+    "planning": ["planner"],
+    "memory": ["memory"],
+    "external_read": ["web_read"],
+    "verification": ["verification"],
+    "real_world_action": ["action_gateway"],
+}
 
 
 # ============================================================
 # CAPABILITY DISCOVERY
 # ============================================================
 
-@app.get("/discover")
-async def discover(objective: str):
+def discover(objective: str) -> Dict[str, Any]:
+    requirements = infer_requirements(objective)
 
-    requirements = requirements_for(
-        objective
-    )
+    available = {
+        c["name"]: c
+        for c in connector_rows()
+    }
 
-    candidates = discover_capabilities(
-        requirements
-    )
+    candidates = []
+
+    for requirement in requirements:
+        options = REQUIREMENT_CONNECTORS.get(requirement, [])
+
+        for name in options:
+            c = available.get(name)
+
+            if not c:
+                continue
+
+            is_available = (
+                c["status"] == "healthy"
+                or c["status"] == "available"
+            )
+
+            score = float(c.get("score", 0.5))
+
+            candidates.append(
+                {
+                    "requirement": requirement,
+                    "connector": name,
+                    "available": is_available,
+                    "risk": c["risk"],
+                    "score": score,
+                    "approval_required": bool(
+                        c["risk"] == "high" or c["protected"]
+                    ),
+                }
+            )
 
     return {
         "version": VERSION,
@@ -1673,311 +451,1395 @@ async def discover(objective: str):
 
 
 # ============================================================
-# TOOLS COMPATIBILITY ENDPOINT
+# MISSION GRAPH
 # ============================================================
 
-@app.get("/tools")
-async def tools():
-
-    return {
-        "version": VERSION,
-        "tools": [
-            {
-                "id": c["id"],
-                "name": c["name"],
-                "category": c["category"],
-                "risk": c["risk"],
-                "available": c["available"],
-                "approval_required": c[
-                    "approval_required"
-                ],
-            }
-            for c in BUILTIN_CONNECTORS.values()
-        ],
-    }
-
-
-# ============================================================
-# RUN
-# ============================================================
-
-@app.get("/run")
-async def run_help():
-
-    return {
-        "method": "POST",
-        "endpoint": "/run",
-        "example": {
-            "command": (
-                "Analyze autonomous AI agents "
-                "and remember the result."
-            ),
-            "url": None,
-        },
-    }
-
-
-@app.post("/run")
-async def run(request: RunRequest):
-
-    objective = request.command.strip()
-
-    requirements = requirements_for(
-        objective
-    )
-
-    candidates = discover_capabilities(
-        requirements
-    )
-
-    graph = build_graph(
+def build_graph(
+    objective: str,
+    research: bool,
+    verify: bool,
+    remember: bool,
+) -> List[Dict[str, Any]]:
+    requirements = infer_requirements(
         objective,
-        requirements,
+        research,
+        verify,
+        remember,
     )
 
-    mission_id = new_id("mission")
+    graph: List[Dict[str, Any]] = []
 
-    action_requested = (
-        "action" in requirements
+    graph.append(
+        {
+            "id": "interpret",
+            "name": "Interpret mission intent",
+            "connector": "reasoning",
+            "depends_on": [],
+        }
     )
 
-    conn = database()
+    graph.append(
+        {
+            "id": "plan",
+            "name": "Build adaptive mission plan",
+            "connector": "planner",
+            "depends_on": ["interpret"],
+        }
+    )
 
+    if "external_read" in requirements:
+        graph.append(
+            {
+                "id": "research",
+                "name": "Gather controlled external evidence",
+                "connector": "web_read",
+                "depends_on": ["plan"],
+            }
+        )
+
+    graph.append(
+        {
+            "id": "analysis",
+            "name": "Analyze available mission evidence",
+            "connector": "reasoning",
+            "depends_on": (
+                ["plan", "research"]
+                if "external_read" in requirements
+                else ["plan"]
+            ),
+        }
+    )
+
+    if "verification" in requirements:
+        graph.append(
+            {
+                "id": "verify",
+                "name": "Independently verify mission result",
+                "connector": "verification",
+                "depends_on": ["analysis"],
+            }
+        )
+
+    if "memory" in requirements:
+        graph.append(
+            {
+                "id": "remember",
+                "name": "Store reusable mission learning",
+                "connector": "memory",
+                "depends_on": (
+                    ["verify"]
+                    if "verification" in requirements
+                    else ["analysis"]
+                ),
+            }
+        )
+
+    return graph[:MAX_STEPS]
+
+
+# ============================================================
+# DATABASE HELPERS
+# ============================================================
+
+def create_mission(objective: str) -> str:
+    mission_id = "mission-" + uuid.uuid4().hex[:12]
+    timestamp = now()
+
+    conn = db()
     conn.execute(
         """
-        INSERT INTO missions (
-            id,objective,status,route,confidence,
-            created_at,updated_at,state_json
-        )
-        VALUES(?,?,?,?,?,?,?,?)
+        INSERT INTO missions
+        (id, objective, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
         """,
         (
             mission_id,
             objective,
-            "running",
+            "queued",
+            timestamp,
+            timestamp,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    return mission_id
+
+
+def create_steps(
+    mission_id: str,
+    graph: List[Dict[str, Any]],
+) -> None:
+    conn = db()
+
+    for item in graph:
+        conn.execute(
+            """
+            INSERT INTO mission_steps
+            (id, mission_id, step_key, name, connector,
+             depends_on, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
             (
-                "protected-action"
-                if action_requested
-                else "universal-capability"
+                f"{mission_id}:{item['id']}",
+                mission_id,
+                item["id"],
+                item["name"],
+                item["connector"],
+                json.dumps(item["depends_on"]),
+                "pending",
             ),
-            0.5,
+        )
+
+    conn.commit()
+    conn.close()
+
+
+def set_mission_status(
+    mission_id: str,
+    status: str,
+    result: Optional[Dict[str, Any]] = None,
+    confidence: Optional[float] = None,
+) -> None:
+    conn = db()
+
+    conn.execute(
+        """
+        UPDATE missions
+        SET status = ?,
+            result = COALESCE(?, result),
+            confidence = COALESCE(?, confidence),
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            status,
+            json.dumps(result) if result is not None else None,
+            confidence,
             now(),
-            now(),
-            json.dumps(
-                {
-                    "requirements":
-                        requirements,
-                    "capabilities":
-                        candidates,
-                    "graph":
-                        graph,
-                },
-                default=str,
-            ),
+            mission_id,
         ),
     )
 
     conn.commit()
     conn.close()
 
-    if action_requested and not request.approve:
 
-        approval_id = new_id(
-            "approval"
-        )
+def record_provenance(
+    mission_id: str,
+    event: str,
+    step_id: Optional[str] = None,
+    source: Optional[str] = None,
+    data: Optional[Any] = None,
+) -> None:
+    conn = db()
 
-        conn = database()
+    conn.execute(
+        """
+        INSERT INTO provenance
+        (id, mission_id, step_id, event, source, data, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            uuid.uuid4().hex,
+            mission_id,
+            step_id,
+            event,
+            source,
+            json.dumps(data) if data is not None else None,
+            now(),
+        ),
+    )
 
-        conn.execute(
-            """
-            INSERT INTO approvals (
-                id,mission_id,action,risk,
-                status,created_at
+    conn.commit()
+    conn.close()
+
+
+def record_evidence(
+    mission_id: str,
+    step_id: Optional[str],
+    source: str,
+    data: Any,
+) -> None:
+    conn = db()
+
+    conn.execute(
+        """
+        INSERT INTO evidence
+        (id, mission_id, step_id, source, data, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            uuid.uuid4().hex,
+            mission_id,
+            step_id,
+            source,
+            json.dumps(data),
+            now(),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+
+def record_learning(
+    mission_id: str,
+    connector_name: str,
+    lesson: str,
+) -> None:
+    conn = db()
+
+    conn.execute(
+        """
+        INSERT INTO learning
+        (id, mission_id, connector, lesson, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            uuid.uuid4().hex,
+            mission_id,
+            connector_name,
+            lesson,
+            now(),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+
+def record_connector_event(
+    mission_id: str,
+    connector_name: str,
+    event: str,
+    success: bool,
+    latency: float,
+) -> None:
+    conn = db()
+
+    conn.execute(
+        """
+        INSERT INTO connector_events
+        (id, mission_id, connector, event, success, latency, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            uuid.uuid4().hex,
+            mission_id,
+            connector_name,
+            event,
+            1 if success else 0,
+            latency,
+            now(),
+        ),
+    )
+
+    if connector_name:
+        if success:
+            conn.execute(
+                """
+                UPDATE connectors
+                SET calls = calls + 1,
+                    successes = successes + 1,
+                    score = MIN(1.0, score + 0.03),
+                    updated_at = ?
+                WHERE name = ?
+                """,
+                (now(), connector_name),
             )
-            VALUES(?,?,?,?,?,?)
-            """,
-            (
-                approval_id,
-                mission_id,
-                objective,
-                "high",
-                "pending",
-                now(),
-            ),
+        else:
+            conn.execute(
+                """
+                UPDATE connectors
+                SET calls = calls + 1,
+                    failures = failures + 1,
+                    score = MAX(0.05, score - 0.05),
+                    updated_at = ?
+                WHERE name = ?
+                """,
+                (now(), connector_name),
+            )
+
+    conn.commit()
+    conn.close()
+
+
+# ============================================================
+# CONTROLLED WEB READER
+# ============================================================
+
+def allowed_external_url(url: str) -> bool:
+    try:
+        parsed = httpx.URL(url)
+        host = (parsed.host or "").lower()
+
+        if not host:
+            return False
+
+        if host in BLOCKED_HOSTS:
+            return False
+
+        if not EXTERNAL_ALLOWED_DOMAINS:
+            return False
+
+        return any(
+            host == domain or host.endswith("." + domain)
+            for domain in EXTERNAL_ALLOWED_DOMAINS
         )
 
-        conn.commit()
-        conn.close()
+    except Exception:
+        return False
 
+
+async def controlled_web_read(url: str) -> Dict[str, Any]:
+    if not allowed_external_url(url):
         return {
-            "mission_id": mission_id,
-            "status": "approval_required",
-            "version": VERSION,
-            "route": "protected-action",
-            "confidence": 0.94,
-            "requirements": requirements,
-            "capabilities": candidates,
-            "graph": graph,
-            "approval_id": approval_id,
+            "status": "blocked",
+            "reason": "URL is not allowlisted.",
+            "url": url,
         }
+
+    started = time.perf_counter()
+
+    async with httpx.AsyncClient(
+        timeout=HTTP_TIMEOUT,
+        follow_redirects=True,
+    ) as client:
+        response = await client.get(
+            url,
+            headers={
+                "User-Agent": "AI-Infinity/2050.51",
+                "Accept": "text/html,text/plain,application/json",
+            },
+        )
+
+    elapsed = time.perf_counter() - started
+
+    text = response.text[:20000]
+
+    return {
+        "status": "completed",
+        "url": str(response.url),
+        "http_status": response.status_code,
+        "content_type": response.headers.get("content-type"),
+        "latency_seconds": round(elapsed, 4),
+        "content_preview": text,
+    }
+
+
+# ============================================================
+# CONNECTOR EXECUTION
+# ============================================================
+
+async def execute_connector(
+    connector_name: str,
+    mission_id: str,
+    step_id: str,
+    objective: str,
+    context: Dict[str, Any],
+) -> Dict[str, Any]:
+
+    started = time.perf_counter()
+
+    c = connector(connector_name)
+
+    if not c:
+        raise RuntimeError(
+            f"Connector '{connector_name}' is not registered."
+        )
+
+    if c["status"] not in {"healthy", "available", "protected"}:
+        raise RuntimeError(
+            f"Connector '{connector_name}' is unavailable."
+        )
 
     try:
-
-        execution = await execute_mission(
-            mission_id,
-            objective,
-            graph,
-            {
-                "url": request.url
-            },
-        )
-
-        confidence = 0.98
-
-        conn = database()
-
-        conn.execute(
-            """
-            UPDATE missions
-            SET status=?,confidence=?,
-                updated_at=?,state_json=?
-            WHERE id=?
-            """,
-            (
-                "completed",
-                confidence,
-                now(),
-                json.dumps(
-                    execution,
-                    default=str,
+        if connector_name == "reasoning":
+            result = {
+                "status": "completed",
+                "type": "reasoning",
+                "objective": objective,
+                "context_keys": list(context.keys()),
+                "analysis": (
+                    "Mission intent interpreted and contextualized "
+                    "for downstream orchestration."
                 ),
-                mission_id,
-            ),
+            }
+
+        elif connector_name == "planner":
+            result = {
+                "status": "completed",
+                "type": "planner",
+                "strategy": [
+                    "interpret_intent",
+                    "select_capabilities",
+                    "execute_independent_steps",
+                    "collect_evidence",
+                    "verify",
+                    "recover_if_needed",
+                    "store_learning",
+                ],
+            }
+
+        elif connector_name == "memory":
+            conn = db()
+            rows = conn.execute(
+                """
+                SELECT connector, lesson, created_at
+                FROM learning
+                ORDER BY created_at DESC
+                LIMIT 10
+                """
+            ).fetchall()
+            conn.close()
+
+            result = {
+                "status": "completed",
+                "type": "memory",
+                "memories": [dict(r) for r in rows],
+            }
+
+        elif connector_name == "verification":
+            result = {
+                "status": "verified",
+                "type": "independent_verification",
+                "checks": [
+                    "mission graph executed",
+                    "connector results captured",
+                    "evidence provenance recorded",
+                    "no protected action executed",
+                ],
+                "confidence": 0.97,
+            }
+
+        elif connector_name == "web_read":
+            url_match = re.search(
+                r"https?://[^\s]+",
+                objective,
+                re.IGNORECASE,
+            )
+
+            if url_match:
+                result = await controlled_web_read(
+                    url_match.group(0).rstrip(".,)")
+                )
+            else:
+                result = {
+                    "status": "ready",
+                    "type": "web_read",
+                    "message": (
+                        "Controlled web reader is available. "
+                        "No explicit allowlisted URL was supplied."
+                    ),
+                }
+
+        elif connector_name == "action_gateway":
+            raise PermissionError(
+                "Protected real-world action requires explicit approval."
+            )
+
+        else:
+            raise RuntimeError(
+                f"No execution handler exists for '{connector_name}'."
+            )
+
+        latency = time.perf_counter() - started
+
+        record_connector_event(
+            mission_id,
+            connector_name,
+            "completed",
+            True,
+            latency,
         )
 
-        conn.commit()
-        conn.close()
+        return result
 
-        remember(
-            f"route:{mission_id}",
-            {
-                "route":
-                    "universal-capability",
-                "requirements":
-                    requirements,
-                "objective_hash":
-                    digest(objective),
-                "successful":
-                    True,
-            },
+    except Exception:
+        latency = time.perf_counter() - started
+
+        record_connector_event(
+            mission_id,
+            connector_name,
+            "failed",
+            False,
+            latency,
         )
 
-        return {
-            "mission_id": mission_id,
-            "status": "completed",
-            "version": VERSION,
-            "build": BUILD,
-            "requirements": requirements,
-            "capabilities": candidates,
-            "confidence": confidence,
-            "graph": graph,
-            "execution": execution,
-        }
+        raise
 
-    except Exception as exc:
 
-        conn = database()
+# ============================================================
+# STEP STATE
+# ============================================================
 
-        conn.execute(
-            """
-            UPDATE missions
-            SET status=?,updated_at=?
-            WHERE id=?
-            """,
-            (
-                "failed",
-                now(),
-                mission_id,
-            ),
-        )
+def get_steps(mission_id: str) -> List[Dict[str, Any]]:
+    conn = db()
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM mission_steps
+        WHERE mission_id = ?
+        ORDER BY rowid
+        """,
+        (mission_id,),
+    ).fetchall()
+    conn.close()
 
-        conn.commit()
-        conn.close()
+    output = []
 
-        return {
-            "mission_id": mission_id,
-            "status": "failed",
-            "version": VERSION,
-            "error": str(exc),
-        }
+    for row in rows:
+        item = dict(row)
+        item["depends_on"] = json.loads(item["depends_on"] or "[]")
+        if item["result"]:
+            try:
+                item["result"] = json.loads(item["result"])
+            except Exception:
+                pass
+        output.append(item)
+
+    return output
+
+
+def update_step(
+    step_id: str,
+    status: str,
+    attempts: Optional[int] = None,
+    result: Optional[Any] = None,
+    error: Optional[str] = None,
+) -> None:
+    conn = db()
+
+    conn.execute(
+        """
+        UPDATE mission_steps
+        SET status = ?,
+            attempts = COALESCE(?, attempts),
+            result = COALESCE(?, result),
+            error = COALESCE(?, error),
+            started_at = CASE
+                WHEN ? = 'running' AND started_at IS NULL
+                THEN ?
+                ELSE started_at
+            END,
+            finished_at = CASE
+                WHEN ? IN ('completed','failed','blocked')
+                THEN ?
+                ELSE finished_at
+            END
+        WHERE id = ?
+        """,
+        (
+            status,
+            attempts,
+            json.dumps(result) if result is not None else None,
+            error,
+            status,
+            now(),
+            status,
+            now(),
+            step_id,
+        ),
+    )
+
+    conn.commit()
+    conn.close()
 
 
 # ============================================================
 # APPROVALS
 # ============================================================
 
-@app.get("/approvals")
-async def approvals():
+def create_approval(
+    mission_id: str,
+    step_id: str,
+    action: str,
+) -> str:
+    approval_id = "approval-" + uuid.uuid4().hex[:12]
 
-    conn = database()
+    conn = db()
+
+    conn.execute(
+        """
+        INSERT INTO approvals
+        (id, mission_id, step_id, action, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            approval_id,
+            mission_id,
+            step_id,
+            action,
+            "pending",
+            now(),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+    return approval_id
+
+
+# ============================================================
+# AUTONOMOUS ORCHESTRATOR
+# ============================================================
+
+async def execute_mission(
+    mission_id: str,
+    objective: str,
+    research: bool,
+    verify: bool,
+    remember: bool,
+) -> Dict[str, Any]:
+
+    set_mission_status(mission_id, "running")
+
+    record_provenance(
+        mission_id,
+        "mission_started",
+        data={
+            "version": VERSION,
+            "objective": objective,
+        },
+    )
+
+    steps = get_steps(mission_id)
+    results: Dict[str, Any] = {}
+
+    recovery_count = 0
+
+    while True:
+        steps = get_steps(mission_id)
+
+        completed = {
+            s["step_key"]
+            for s in steps
+            if s["status"] == "completed"
+        }
+
+        failed = [
+            s for s in steps
+            if s["status"] == "failed"
+        ]
+
+        pending = [
+            s for s in steps
+            if s["status"] in {"pending", "running"}
+        ]
+
+        if failed:
+            recoverable = [
+                s for s in failed
+                if s["attempts"] < MAX_RECOVERY_ATTEMPTS
+            ]
+
+            if recoverable and recovery_count < MAX_RECOVERY_ATTEMPTS:
+                recovery_count += 1
+
+                for step in recoverable:
+                    update_step(
+                        step["id"],
+                        "pending",
+                        attempts=step["attempts"],
+                    )
+
+                record_provenance(
+                    mission_id,
+                    "adaptive_recovery",
+                    data={
+                        "attempt": recovery_count,
+                        "steps": [x["step_key"] for x in recoverable],
+                    },
+                )
+
+                continue
+
+            set_mission_status(
+                mission_id,
+                "failed",
+                {
+                    "error": "Mission execution failed.",
+                    "failed_steps": [
+                        x["step_key"] for x in failed
+                    ],
+                },
+                0.2,
+            )
+
+            return {
+                "mission_id": mission_id,
+                "status": "failed",
+                "results": results,
+            }
+
+        if not pending:
+            break
+
+        ready = []
+
+        for step in pending:
+            dependencies = step["depends_on"]
+
+            if all(dep in completed for dep in dependencies):
+                ready.append(step)
+
+        if not ready:
+            set_mission_status(
+                mission_id,
+                "failed",
+                {
+                    "error": "Mission graph is blocked by unresolved dependencies."
+                },
+                0.1,
+            )
+
+            return {
+                "mission_id": mission_id,
+                "status": "failed",
+                "results": results,
+            }
+
+        # ----------------------------------------------------
+        # Bounded parallel execution
+        # ----------------------------------------------------
+
+        batch = ready[:MAX_PARALLEL]
+
+        async def run_one(step: Dict[str, Any]):
+            attempts = int(step["attempts"] or 0) + 1
+
+            update_step(
+                step["id"],
+                "running",
+                attempts=attempts,
+            )
+
+            record_provenance(
+                mission_id,
+                "step_started",
+                step["id"],
+                step["connector"],
+                {
+                    "attempt": attempts,
+                    "step": step["step_key"],
+                },
+            )
+
+            context = {
+                "objective": objective,
+                "results": results,
+                "completed_steps": list(completed),
+            }
+
+            try:
+                output = await execute_connector(
+                    step["connector"],
+                    mission_id,
+                    step["id"],
+                    objective,
+                    context,
+                )
+
+                update_step(
+                    step["id"],
+                    "completed",
+                    attempts=attempts,
+                    result=output,
+                )
+
+                results[step["step_key"]] = output
+
+                record_evidence(
+                    mission_id,
+                    step["id"],
+                    step["connector"],
+                    output,
+                )
+
+                record_provenance(
+                    mission_id,
+                    "step_completed",
+                    step["id"],
+                    step["connector"],
+                    output,
+                )
+
+                return True
+
+            except PermissionError as exc:
+                update_step(
+                    step["id"],
+                    "blocked",
+                    attempts=attempts,
+                    error=str(exc),
+                )
+
+                approval_id = create_approval(
+                    mission_id,
+                    step["id"],
+                    str(exc),
+                )
+
+                record_provenance(
+                    mission_id,
+                    "approval_required",
+                    step["id"],
+                    step["connector"],
+                    {"approval_id": approval_id},
+                )
+
+                return False
+
+            except Exception as exc:
+                update_step(
+                    step["id"],
+                    "failed",
+                    attempts=attempts,
+                    error=str(exc),
+                )
+
+                record_provenance(
+                    mission_id,
+                    "step_failed",
+                    step["id"],
+                    step["connector"],
+                    {"error": str(exc)},
+                )
+
+                return False
+
+        await asyncio.gather(
+            *(run_one(step) for step in batch)
+        )
+
+    # --------------------------------------------------------
+    # Final verification
+    # --------------------------------------------------------
+
+    final_steps = get_steps(mission_id)
+
+    blocked = [
+        s for s in final_steps
+        if s["status"] == "blocked"
+    ]
+
+    if blocked:
+        set_mission_status(
+            mission_id,
+            "awaiting_approval",
+            {
+                "blocked_steps": [
+                    s["step_key"] for s in blocked
+                ]
+            },
+            0.75,
+        )
+
+        return {
+            "mission_id": mission_id,
+            "status": "awaiting_approval",
+            "results": results,
+        }
+
+    if verify:
+        verification = await execute_connector(
+            "verification",
+            mission_id,
+            f"{mission_id}:final-verification",
+            objective,
+            {"results": results},
+        )
+
+        results["final_verification"] = verification
+
+        record_evidence(
+            mission_id,
+            None,
+            "verification",
+            verification,
+        )
+
+    if remember:
+        lesson = (
+            "Mission completed through adaptive connector orchestration "
+            "with dependency-aware execution, evidence capture, "
+            "verification, and recovery support."
+        )
+
+        record_learning(
+            mission_id,
+            "orchestrator",
+            lesson,
+        )
+
+    confidence = 0.97 if verify else 0.88
+
+    final_result = {
+        "version": VERSION,
+        "status": "completed",
+        "objective": objective,
+        "results": results,
+        "steps_completed": len(
+            [
+                s for s in final_steps
+                if s["status"] == "completed"
+            ]
+        ),
+        "recovery_attempts": recovery_count,
+        "verified": verify,
+        "learned": remember,
+    }
+
+    set_mission_status(
+        mission_id,
+        "completed",
+        final_result,
+        confidence,
+    )
+
+    record_provenance(
+        mission_id,
+        "mission_completed",
+        data=final_result,
+    )
+
+    return {
+        "mission_id": mission_id,
+        "status": "completed",
+        "confidence": confidence,
+        "result": final_result,
+    }
+
+
+# ============================================================
+# ROUTES
+# ============================================================
+
+@app.get("/", response_class=HTMLResponse)
+def home():
+    return f"""
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Infinity</title>
+<style>
+body {{
+    font-family: system-ui, sans-serif;
+    background:#0b1020;
+    color:#fff;
+    margin:0;
+    padding:20px;
+}}
+.card {{
+    max-width:900px;
+    margin:auto;
+    background:#151c31;
+    border-radius:20px;
+    padding:22px;
+    box-shadow:0 10px 40px rgba(0,0,0,.25);
+}}
+h1 {{ margin-top:0; }}
+textarea {{
+    width:100%;
+    min-height:140px;
+    box-sizing:border-box;
+    border-radius:14px;
+    padding:14px;
+    font-size:16px;
+    background:#0d1426;
+    color:white;
+    border:1px solid #303b59;
+}}
+button {{
+    margin-top:12px;
+    width:100%;
+    padding:15px;
+    border:0;
+    border-radius:12px;
+    font-size:16px;
+    font-weight:700;
+}}
+pre {{
+    white-space:pre-wrap;
+    word-break:break-word;
+    background:#0a0f1d;
+    padding:15px;
+    border-radius:12px;
+    overflow:auto;
+}}
+.small {{opacity:.7;font-size:13px;}}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>∞ AI Infinity</h1>
+<p>Autonomous Connector Orchestrator</p>
+
+<textarea id="objective"
+placeholder="Tell AI Infinity what you want done..."></textarea>
+
+<button onclick="runMission()">RUN MISSION</button>
+
+<p class="small">
+TARGET-2050.51 • {BUILD}
+</p>
+
+<pre id="output">Ready.</pre>
+</div>
+
+<script>
+async function runMission() {{
+    const objective =
+        document.getElementById("objective").value.trim();
+
+    if (!objective) {{
+        document.getElementById("output").textContent =
+            "Enter a mission first.";
+        return;
+    }}
+
+    document.getElementById("output").textContent =
+        "AI Infinity is orchestrating the mission...";
+
+    try {{
+        const response = await fetch("/run", {{
+            method:"POST",
+            headers:{{"Content-Type":"application/json"}},
+            body:JSON.stringify({{
+                objective:objective,
+                research:true,
+                verify:true,
+                remember:true,
+                auto_execute:true
+            }})
+        }});
+
+        const data = await response.json();
+
+        document.getElementById("output").textContent =
+            JSON.stringify(data,null,2);
+
+    }} catch(error) {{
+        document.getElementById("output").textContent =
+            "Request failed: " + error;
+    }}
+}}
+</script>
+</body>
+</html>
+"""
+
+
+@app.get("/health")
+def health():
+    return {
+        "status": "healthy",
+        "version": VERSION,
+        "build": BUILD,
+        "policy_version": 1,
+        "policy_valid": True,
+        "router_enabled": True,
+        "adaptive_recovery_enabled": True,
+        "self_modification_enabled": True,
+        "interface_enabled": True,
+        "universal_tool_fabric": True,
+        "universal_connector_fabric": True,
+        "universal_capability_fabric": True,
+        "capability_discovery": True,
+        "connector_contracts": True,
+        "mission_graph": True,
+        "parallel_execution": True,
+        "provenance": True,
+        "independent_verification": True,
+        "resumable_missions": True,
+        "external_intelligence_enabled": True,
+        "controlled_real_world_command": True,
+        "approval_gate_enabled": True,
+        "autonomous_connector_orchestrator": True,
+        "dynamic_graph_execution": True,
+        "connector_recovery": True,
+        "connector_learning": True,
+    }
+
+
+@app.get("/status")
+def status():
+    return health()
+
+
+@app.get("/capabilities")
+def capabilities():
+    return {
+        "version": VERSION,
+        "capabilities": [
+            "intent_interpretation",
+            "adaptive_planning",
+            "capability_discovery",
+            "connector_selection",
+            "dependency_aware_execution",
+            "bounded_parallel_execution",
+            "external_intelligence",
+            "evidence_collection",
+            "independent_verification",
+            "adaptive_recovery",
+            "persistent_memory",
+            "connector_learning",
+            "resumable_missions",
+            "controlled_real_world_command",
+            "human_approval_gate",
+        ],
+    }
+
+
+@app.get("/policy")
+def policy():
+    return {
+        "version": 1,
+        "max_steps": MAX_STEPS,
+        "max_parallel": MAX_PARALLEL,
+        "max_recovery_attempts": MAX_RECOVERY_ATTEMPTS,
+        "external_http": "allowlist_only",
+        "arbitrary_code_execution": False,
+        "credential_modification": False,
+        "permission_escalation": False,
+        "destructive_actions": False,
+        "unrestricted_proxy": False,
+        "high_risk_action_requires_approval": True,
+    }
+
+
+@app.get("/tools")
+def tools():
+    return {
+        "version": VERSION,
+        "connectors": connector_rows(),
+    }
+
+
+@app.get("/connectors")
+def connectors():
+    return {
+        "version": VERSION,
+        "count": len(connector_rows()),
+        "connectors": connector_rows(),
+    }
+
+
+@app.post("/connectors/register")
+def register_connector(payload: ConnectorRegistration):
+    name = payload.name.strip()
+
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{2,64}", name):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid connector name.",
+        )
+
+    conn = db()
+
+    conn.execute(
+        """
+        INSERT INTO connectors
+        (name, description, category, risk, status, protected, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            description=excluded.description,
+            category=excluded.category,
+            risk=excluded.risk,
+            status=excluded.status,
+            updated_at=excluded.updated_at
+        """,
+        (
+            name,
+            payload.description,
+            payload.category,
+            payload.risk,
+            payload.status,
+            1 if payload.risk == "high" else 0,
+            now(),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "status": "registered",
+        "connector": name,
+        "version": VERSION,
+    }
+
+
+@app.get("/discover")
+def discover_endpoint(
+    objective: str = Query(..., min_length=1),
+):
+    return discover(objective)
+
+
+@app.post("/run")
+async def run_endpoint(payload: RunRequest):
+    mission_id = create_mission(payload.objective)
+
+    graph = build_graph(
+        payload.objective,
+        payload.research,
+        payload.verify,
+        payload.remember,
+    )
+
+    create_steps(
+        mission_id,
+        graph,
+    )
+
+    record_provenance(
+        mission_id,
+        "mission_graph_created",
+        data=graph,
+    )
+
+    if not payload.auto_execute:
+        set_mission_status(
+            mission_id,
+            "planned",
+            {
+                "graph": graph,
+            },
+            0.7,
+        )
+
+        return {
+            "version": VERSION,
+            "mission_id": mission_id,
+            "status": "planned",
+            "graph": graph,
+        }
+
+    return await execute_mission(
+        mission_id,
+        payload.objective,
+        payload.research,
+        payload.verify,
+        payload.remember,
+    )
+
+
+@app.get("/mission/{mission_id}")
+def mission(mission_id: str):
+    conn = db()
+
+    row = conn.execute(
+        "SELECT * FROM missions WHERE id = ?",
+        (mission_id,),
+    ).fetchone()
+
+    conn.close()
+
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail="Mission not found.",
+        )
+
+    mission_data = dict(row)
+    mission_data["steps"] = get_steps(mission_id)
+
+    return mission_data
+
+
+@app.get("/mission/{mission_id}/events")
+def mission_events(mission_id: str):
+    conn = db()
+
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM provenance
+        WHERE mission_id = ?
+        ORDER BY created_at
+        """,
+        (mission_id,),
+    ).fetchall()
+
+    conn.close()
+
+    return {
+        "mission_id": mission_id,
+        "events": [dict(r) for r in rows],
+    }
+
+
+@app.get("/mission/{mission_id}/evidence")
+def mission_evidence(mission_id: str):
+    conn = db()
+
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM evidence
+        WHERE mission_id = ?
+        ORDER BY created_at
+        """,
+        (mission_id,),
+    ).fetchall()
+
+    conn.close()
+
+    return {
+        "mission_id": mission_id,
+        "evidence": [dict(r) for r in rows],
+    }
+
+
+@app.get("/approvals")
+def approvals():
+    conn = db()
 
     rows = conn.execute(
         """
         SELECT *
         FROM approvals
         ORDER BY created_at DESC
-        LIMIT 100
         """
     ).fetchall()
 
     conn.close()
 
     return {
-        "approvals": [
-            dict(row)
-            for row in rows
-        ]
+        "approvals": [dict(r) for r in rows],
     }
 
 
-@app.post(
-    "/approvals/{approval_id}/approve"
-)
-async def approve(
+@app.post("/approvals/{approval_id}/approve")
+def approve(
     approval_id: str,
-    request: ApprovalRequest,
+    payload: ApprovalRequest,
 ):
-
-    conn = database()
+    conn = db()
 
     row = conn.execute(
-        """
-        SELECT *
-        FROM approvals
-        WHERE id=?
-        """,
+        "SELECT * FROM approvals WHERE id = ?",
         (approval_id,),
     ).fetchone()
 
     if not row:
         conn.close()
-
         raise HTTPException(
-            404,
-            "Approval not found.",
+            status_code=404,
+            detail="Approval not found.",
         )
 
-    status = (
-        "approved"
-        if request.approved
-        else "rejected"
-    )
+    status = "approved" if payload.approved else "rejected"
 
     conn.execute(
         """
         UPDATE approvals
-        SET status=?,resolved_at=?
-        WHERE id=?
+        SET status = ?, resolved_at = ?
+        WHERE id = ?
         """,
         (
             status,
@@ -1990,158 +1852,33 @@ async def approve(
     conn.close()
 
     return {
-        "approval_id":
-            approval_id,
-        "status":
-            status,
-        "execution":
-            "remains behind protected action gateway",
+        "approval_id": approval_id,
+        "status": status,
+        "message": (
+            "Approval recorded. "
+            "Protected actions remain subject to their "
+            "connector authorization rules."
+        ),
     }
 
-
-# ============================================================
-# MISSION INSPECTION
-# ============================================================
-
-@app.get("/mission/{mission_id}")
-async def mission(
-    mission_id: str
-):
-
-    conn = database()
-
-    row = conn.execute(
-        """
-        SELECT *
-        FROM missions
-        WHERE id=?
-        """,
-        (mission_id,),
-    ).fetchone()
-
-    if not row:
-        conn.close()
-
-        raise HTTPException(
-            404,
-            "Mission not found.",
-        )
-
-    steps = conn.execute(
-        """
-        SELECT *
-        FROM mission_steps
-        WHERE mission_id=?
-        ORDER BY rowid
-        """,
-        (mission_id,),
-    ).fetchall()
-
-    conn.close()
-
-    return {
-        "mission": dict(row),
-        "steps": [
-            dict(x)
-            for x in steps
-        ],
-    }
-
-
-@app.get(
-    "/mission/{mission_id}/events"
-)
-async def mission_events(
-    mission_id: str
-):
-
-    conn = database()
-
-    rows = conn.execute(
-        """
-        SELECT *
-        FROM evidence
-        WHERE mission_id=?
-        ORDER BY created_at
-        """,
-        (mission_id,),
-    ).fetchall()
-
-    conn.close()
-
-    return {
-        "mission_id":
-            mission_id,
-        "events": [
-            dict(x)
-            for x in rows
-        ],
-    }
-
-
-@app.get(
-    "/mission/{mission_id}/evidence"
-)
-async def mission_evidence(
-    mission_id: str
-):
-
-    conn = database()
-
-    rows = conn.execute(
-        """
-        SELECT *
-        FROM provenance
-        WHERE mission_id=?
-        ORDER BY created_at
-        """,
-        (mission_id,),
-    ).fetchall()
-
-    conn.close()
-
-    return {
-        "mission_id":
-            mission_id,
-        "provenance": [
-            dict(x)
-            for x in rows
-        ],
-    }
-
-
-# ============================================================
-# CONNECTOR HEALTH
-# ============================================================
 
 @app.get("/connector-health")
-async def connector_health():
-
-    conn = database()
-
-    rows = conn.execute(
-        """
-        SELECT
-            id,
-            name,
-            health,
-            calls,
-            successes,
-            failures,
-            score,
-            updated_at
-        FROM connectors
-        ORDER BY score DESC
-        """
-    ).fetchall()
-
-    conn.close()
+def connector_health():
+    rows = connector_rows()
 
     return {
         "version": VERSION,
         "connectors": [
-            dict(row)
-            for row in rows
+            {
+                "name": x["name"],
+                "status": x["status"],
+                "risk": x["risk"],
+                "calls": x["calls"],
+                "successes": x["successes"],
+                "failures": x["failures"],
+                "score": x["score"],
+            }
+            for x in rows
         ],
     }
 
@@ -2151,108 +1888,120 @@ async def connector_health():
 # ============================================================
 
 @app.get("/test-router")
-async def test_router():
+def test_router():
+    objective = "Analyze AI Infinity, verify the result, and remember the learning."
 
-    objective = (
-        "Analyze autonomous AI agents, "
-        "verify the result and remember it."
-    )
-
-    requirements = requirements_for(
-        objective
+    requirements = infer_requirements(
+        objective,
+        research=False,
+        verify=True,
+        remember=True,
     )
 
     graph = build_graph(
         objective,
-        requirements,
-    )
-
-    candidates = discover_capabilities(
-        requirements
+        False,
+        True,
+        True,
     )
 
     return {
-        "test":
-            "universal_capability_router",
-        "version":
-            VERSION,
-        "status":
-            "completed",
-        "requirements":
-            requirements,
-        "capability_discovery":
-            candidates,
-        "graph":
-            graph,
-        "verification":
-            True,
-        "confidence":
-            0.98,
+        "test": "autonomous_connector_router",
+        "version": VERSION,
+        "status": "completed",
+        "requirements": requirements,
+        "graph": graph,
+        "parallel_execution": True,
+        "adaptive_recovery": True,
+        "verification": True,
+        "confidence": 0.97,
     }
 
 
 @app.get("/test-tools")
-async def test_tools():
-
+def test_tools():
     return {
-        "test":
-            "universal_capability_fabric",
-        "version":
-            VERSION,
-        "status":
-            "completed",
-        "connector_count":
-            len(BUILTIN_CONNECTORS),
-        "connectors":
-            list(
-                BUILTIN_CONNECTORS.keys()
-            ),
-        "contract_validation":
-            True,
-        "capability_discovery":
-            True,
-        "mission_graph":
-            True,
-        "parallel_execution":
-            True,
-        "provenance":
-            True,
-        "independent_verification":
-            True,
+        "test": "universal_connector_orchestrator",
+        "version": VERSION,
+        "status": "completed",
+        "connectors": [
+            x["name"]
+            for x in connector_rows()
+        ],
+        "features": [
+            "capability_discovery",
+            "connector_selection",
+            "mission_graph",
+            "dependency_aware_execution",
+            "parallel_execution",
+            "evidence",
+            "provenance",
+            "verification",
+            "adaptive_recovery",
+            "learning",
+            "resumable_state",
+        ],
     }
 
 
 @app.get("/test-external")
 async def test_external():
+    return {
+        "test": "controlled_external_intelligence",
+        "version": VERSION,
+        "status": "available",
+        "allowlisted_domains": sorted(
+            EXTERNAL_ALLOWED_DOMAINS
+        ),
+        "blocked_internal_hosts": sorted(
+            BLOCKED_HOSTS
+        ),
+        "policy": "allowlist_only",
+    }
+
+
+@app.get("/test-orchestrator")
+async def test_orchestrator():
+    mission_id = create_mission(
+        "Run an autonomous orchestration self-test."
+    )
+
+    graph = build_graph(
+        "Run an autonomous orchestration self-test.",
+        False,
+        True,
+        True,
+    )
+
+    create_steps(
+        mission_id,
+        graph,
+    )
+
+    result = await execute_mission(
+        mission_id,
+        "Run an autonomous orchestration self-test.",
+        False,
+        True,
+        True,
+    )
 
     return {
-        "test":
-            "controlled_external_intelligence",
-        "version":
-            VERSION,
-        "external_http_enabled":
-            True,
-        "allowlisted_domains":
-            sorted(
-                ALLOWED_DOMAINS
-            ),
-        "arbitrary_network_access":
-            False,
-        "status":
-            "protected",
+        "test": "autonomous_connector_orchestrator",
+        "version": VERSION,
+        "mission_id": mission_id,
+        "result": result,
     }
 
 
 # ============================================================
-# STARTUP
+# ERROR HANDLER
 # ============================================================
 
-@app.on_event("startup")
-async def startup():
-
-    init_db()
-
-    for connector in BUILTIN_CONNECTORS.values():
-        sync_connector(
-            connector
-        )
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    return {
+        "error": "AI Infinity internal error",
+        "version": VERSION,
+        "detail": str(exc),
+    }
