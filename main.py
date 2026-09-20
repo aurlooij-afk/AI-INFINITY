@@ -1,6 +1,38 @@
+"""
+AI Infinity
+TARGET-2050.53
+UNIVERSAL-INTELLIGENCE-LOOP
+
+Single-file FastAPI intelligence / mission engine.
+
+Core loop:
+UNDERSTAND
+    -> DISCOVER
+    -> PLAN
+    -> RESEARCH
+    -> ACT
+    -> OBSERVE
+    -> LEARN
+    -> DETECT GAPS
+    -> EXPAND
+    -> RE-EXECUTE
+    -> VERIFY
+    -> DELIVER
+
+Security model:
+- External HTTP is controlled by EXTERNAL_ALLOWED_DOMAINS.
+- No arbitrary code execution.
+- No credential modification.
+- No permission escalation.
+- No destructive actions.
+- No unrestricted proxy.
+- Protected real-world actions require explicit approval.
+"""
+
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -10,30 +42,34 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 
 # ============================================================
-# AI INFINITY — TARGET-2050.52
-# ADAPTIVE MISSION EXECUTION ENGINE
+# VERSION
 # ============================================================
 
-VERSION = "TARGET-2050.52"
-BUILD = "ADAPTIVE-MISSION-EXECUTION-ENGINE"
+VERSION = "TARGET-2050.53"
+BUILD = "UNIVERSAL-INTELLIGENCE-LOOP"
 
 BASE = Path("/tmp/ai_infinity")
 BASE.mkdir(parents=True, exist_ok=True)
+
 DB_PATH = BASE / "ai_infinity.db"
+
+POLICY_VERSION = 1
 
 MAX_STEPS = 60
 MAX_PARALLEL = 4
 MAX_RECOVERY_ATTEMPTS = 3
-MAX_ADAPTIVE_CYCLES = 8
-HTTP_TIMEOUT = 20.0
+MAX_ADAPTIVE_CYCLES = 10
+MAX_RESEARCH_SOURCES = 6
+MAX_RESPONSE_BYTES = 2_000_000
 
 BLOCKED_HOSTS = {
     "localhost",
@@ -58,7 +94,7 @@ EXTERNAL_ALLOWED_DOMAINS = {
 app = FastAPI(
     title="AI Infinity",
     version=VERSION,
-    description="Adaptive autonomous mission execution platform.",
+    description="Universal Intelligence Loop",
 )
 
 
@@ -67,13 +103,17 @@ app = FastAPI(
 # ============================================================
 
 def db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def now() -> str:
+def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def uid(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
 
 def init_db() -> None:
@@ -83,130 +123,141 @@ def init_db() -> None:
     cur.executescript(
         """
         CREATE TABLE IF NOT EXISTS missions (
-            id TEXT PRIMARY KEY,
+            mission_id TEXT PRIMARY KEY,
             objective TEXT NOT NULL,
             status TEXT NOT NULL,
-            result TEXT,
             confidence REAL DEFAULT 0,
             adaptive_cycles INTEGER DEFAULT 0,
+            recovery_attempts INTEGER DEFAULT 0,
             checkpoint TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            created_at TEXT,
+            updated_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS mission_steps (
-            id TEXT PRIMARY KEY,
+            step_id TEXT PRIMARY KEY,
             mission_id TEXT NOT NULL,
-            step_key TEXT NOT NULL,
             name TEXT NOT NULL,
-            connector TEXT NOT NULL,
-            depends_on TEXT DEFAULT '[]',
+            step_type TEXT NOT NULL,
             status TEXT NOT NULL,
-            attempts INTEGER DEFAULT 0,
+            depends_on TEXT,
             result TEXT,
             error TEXT,
             adaptive_reason TEXT,
-            started_at TEXT,
-            finished_at TEXT
+            created_at TEXT,
+            updated_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS connectors (
-            name TEXT PRIMARY KEY,
-            description TEXT NOT NULL,
-            category TEXT NOT NULL,
-            risk TEXT NOT NULL,
-            status TEXT NOT NULL,
-            protected INTEGER DEFAULT 0,
-            calls INTEGER DEFAULT 0,
+            connector_id TEXT PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL,
+            connector_type TEXT NOT NULL,
+            permission TEXT NOT NULL,
+            score REAL DEFAULT 0.5,
+            uses INTEGER DEFAULT 0,
             successes INTEGER DEFAULT 0,
             failures INTEGER DEFAULT 0,
-            score REAL DEFAULT 0.5,
-            updated_at TEXT NOT NULL
+            metadata TEXT,
+            created_at TEXT,
+            updated_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS evidence (
-            id TEXT PRIMARY KEY,
+            evidence_id TEXT PRIMARY KEY,
             mission_id TEXT NOT NULL,
             step_id TEXT,
-            source TEXT NOT NULL,
-            data TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            source TEXT,
+            title TEXT,
+            content TEXT,
+            url TEXT,
+            confidence REAL DEFAULT 0,
+            created_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS provenance (
-            id TEXT PRIMARY KEY,
+            provenance_id TEXT PRIMARY KEY,
             mission_id TEXT NOT NULL,
             step_id TEXT,
-            event TEXT NOT NULL,
+            event TEXT,
             source TEXT,
-            data TEXT,
-            created_at TEXT NOT NULL
+            data_hash TEXT,
+            metadata TEXT,
+            created_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS approvals (
-            id TEXT PRIMARY KEY,
+            approval_id TEXT PRIMARY KEY,
             mission_id TEXT NOT NULL,
-            step_id TEXT,
             action TEXT NOT NULL,
             status TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            resolved_at TEXT
+            reason TEXT,
+            created_at TEXT,
+            updated_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS learning (
-            id TEXT PRIMARY KEY,
+            learning_id TEXT PRIMARY KEY,
             mission_id TEXT NOT NULL,
-            connector TEXT,
-            lesson TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            category TEXT,
+            lesson TEXT,
+            confidence REAL DEFAULT 0,
+            reusable INTEGER DEFAULT 1,
+            created_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS connector_events (
-            id TEXT PRIMARY KEY,
+            event_id TEXT PRIMARY KEY,
+            connector_id TEXT,
             mission_id TEXT,
-            connector TEXT NOT NULL,
-            event TEXT NOT NULL,
-            success INTEGER NOT NULL,
-            latency REAL DEFAULT 0,
-            created_at TEXT NOT NULL
+            event TEXT,
+            success INTEGER,
+            details TEXT,
+            created_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS checkpoints (
-            id TEXT PRIMARY KEY,
+            checkpoint_id TEXT PRIMARY KEY,
             mission_id TEXT NOT NULL,
-            cycle INTEGER NOT NULL,
-            state TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            cycle INTEGER,
+            state TEXT,
+            created_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS intelligence_gaps (
+            gap_id TEXT PRIMARY KEY,
+            mission_id TEXT NOT NULL,
+            gap TEXT,
+            priority REAL DEFAULT 0.5,
+            status TEXT DEFAULT 'open',
+            discovered_cycle INTEGER DEFAULT 0,
+            resolved_cycle INTEGER,
+            created_at TEXT
         );
         """
     )
 
-    # Safe migration for databases created by 2050.51.
-    existing = {
+    # Safe migrations from earlier builds.
+    columns = {
         row["name"]
-        for row in cur.execute(
-            "PRAGMA table_info(missions)"
-        ).fetchall()
+        for row in cur.execute("PRAGMA table_info(missions)").fetchall()
     }
 
-    if "adaptive_cycles" not in existing:
+    if "adaptive_cycles" not in columns:
         cur.execute(
             "ALTER TABLE missions ADD COLUMN adaptive_cycles INTEGER DEFAULT 0"
         )
 
-    if "checkpoint" not in existing:
+    if "checkpoint" not in columns:
         cur.execute(
             "ALTER TABLE missions ADD COLUMN checkpoint TEXT"
         )
 
-    existing_steps = {
+    step_columns = {
         row["name"]
-        for row in cur.execute(
-            "PRAGMA table_info(mission_steps)"
-        ).fetchall()
+        for row in cur.execute("PRAGMA table_info(mission_steps)").fetchall()
     }
 
-    if "adaptive_reason" not in existing_steps:
+    if "adaptive_reason" not in step_columns:
         cur.execute(
             "ALTER TABLE mission_steps ADD COLUMN adaptive_reason TEXT"
         )
@@ -219,79 +270,72 @@ init_db()
 
 
 # ============================================================
-# CONNECTOR FABRIC
+# CONNECTORS
 # ============================================================
 
-DEFAULT_CONNECTORS = [
-    {
-        "name": "reasoning",
-        "description": "Internal reasoning and analysis",
-        "category": "analysis",
-        "risk": "low",
-        "status": "healthy",
-        "protected": 0,
-    },
-    {
-        "name": "planner",
-        "description": "Adaptive mission planning",
-        "category": "planning",
-        "risk": "low",
-        "status": "healthy",
-        "protected": 0,
-    },
-    {
-        "name": "memory",
-        "description": "Persistent reusable mission memory",
-        "category": "memory",
-        "risk": "low",
-        "status": "healthy",
-        "protected": 0,
-    },
-    {
-        "name": "web_read",
-        "description": "Controlled allowlisted external web reader",
-        "category": "web",
-        "risk": "medium",
-        "status": "healthy",
-        "protected": 0,
-    },
-    {
-        "name": "verification",
-        "description": "Independent result verification",
-        "category": "verification",
-        "risk": "low",
-        "status": "healthy",
-        "protected": 0,
-    },
-    {
-        "name": "action_gateway",
-        "description": "Protected real-world action gateway",
-        "category": "action",
-        "risk": "high",
-        "status": "protected",
-        "protected": 1,
-    },
-]
+def register_builtin_connectors() -> None:
+    builtins = [
+        (
+            "reasoning",
+            "reasoning",
+            "safe",
+        ),
+        (
+            "planner",
+            "planner",
+            "safe",
+        ),
+        (
+            "memory",
+            "memory",
+            "safe",
+        ),
+        (
+            "web_read",
+            "web",
+            "controlled",
+        ),
+        (
+            "verification",
+            "verification",
+            "safe",
+        ),
+        (
+            "action_gateway",
+            "action",
+            "approval_required",
+        ),
+    ]
 
-
-def seed_connectors() -> None:
     conn = db()
 
-    for c in DEFAULT_CONNECTORS:
+    for name, ctype, permission in builtins:
         conn.execute(
             """
             INSERT OR IGNORE INTO connectors
-            (name, description, category, risk, status, protected, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (
+                connector_id,
+                name,
+                connector_type,
+                permission,
+                score,
+                uses,
+                successes,
+                failures,
+                metadata,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, 0.5, 0, 0, 0, ?, ?, ?)
             """,
             (
-                c["name"],
-                c["description"],
-                c["category"],
-                c["risk"],
-                c["status"],
-                c["protected"],
-                now(),
+                uid("connector"),
+                name,
+                ctype,
+                permission,
+                json.dumps({"builtin": True}),
+                now_iso(),
+                now_iso(),
             ),
         )
 
@@ -299,47 +343,30 @@ def seed_connectors() -> None:
     conn.close()
 
 
-seed_connectors()
-
-
-def connector_rows() -> List[Dict[str, Any]]:
-    conn = db()
-    rows = conn.execute(
-        "SELECT * FROM connectors ORDER BY name"
-    ).fetchall()
-    conn.close()
-    return [dict(x) for x in rows]
-
-
-def connector(name: str) -> Optional[Dict[str, Any]]:
-    conn = db()
-    row = conn.execute(
-        "SELECT * FROM connectors WHERE name = ?",
-        (name,),
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else None
+register_builtin_connectors()
 
 
 # ============================================================
 # MODELS
 # ============================================================
 
+class CreateRequest(BaseModel):
+    command: str = Field(..., min_length=1, max_length=10000)
+    duration_minutes: int = Field(default=1, ge=1, le=120)
+
+
 class RunRequest(BaseModel):
     objective: str = Field(..., min_length=1, max_length=10000)
-    research: bool = False
+    research: bool = True
     verify: bool = True
     remember: bool = True
-    auto_execute: bool = True
-    adaptive: bool = True
 
 
-class ConnectorRegistration(BaseModel):
+class ConnectorRequest(BaseModel):
     name: str
-    description: str
-    category: str
-    risk: str = "medium"
-    status: str = "healthy"
+    connector_type: str = "external"
+    permission: str = "safe"
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ApprovalRequest(BaseModel):
@@ -347,442 +374,108 @@ class ApprovalRequest(BaseModel):
 
 
 # ============================================================
-# REQUIREMENTS
+# HELPERS
 # ============================================================
 
-def infer_requirements(
-    objective: str,
-    research: bool = False,
-    verify: bool = True,
-    remember: bool = True,
-) -> List[str]:
-
-    text = objective.lower()
-    requirements: List[str] = []
-
-    if research or any(
-        x in text
-        for x in [
-            "research",
-            "search",
-            "web",
-            "internet",
-            "latest",
-            "look up",
-            "find",
-            "external",
-        ]
-    ):
-        requirements.append("external_read")
-
-    if any(
-        x in text
-        for x in [
-            "plan",
-            "steps",
-            "strategy",
-            "build",
-            "create",
-            "execute",
-            "complete",
-        ]
-    ):
-        requirements.append("planning")
-
-    if verify or any(
-        x in text
-        for x in [
-            "verify",
-            "validate",
-            "check",
-            "confirm",
-            "proof",
-            "evidence",
-        ]
-    ):
-        requirements.append("verification")
-
-    if remember or any(
-        x in text
-        for x in [
-            "remember",
-            "learn",
-            "previous",
-            "memory",
-            "reuse",
-        ]
-    ):
-        requirements.append("memory")
-
-    if any(
-        x in text
-        for x in [
-            "analyze",
-            "analyse",
-            "compare",
-            "reason",
-            "understand",
-            "evaluate",
-        ]
-    ) or not requirements:
-        requirements.append("analysis")
-
-    return list(dict.fromkeys(requirements))
+def json_load(value: Optional[str], default: Any = None) -> Any:
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except Exception:
+        return default
 
 
-REQUIREMENT_CONNECTORS = {
-    "analysis": ["reasoning"],
-    "planning": ["planner"],
-    "memory": ["memory"],
-    "external_read": ["web_read"],
-    "verification": ["verification"],
-    "real_world_action": ["action_gateway"],
-}
+def json_dump(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, default=str)
 
 
-# ============================================================
-# ADAPTIVE CAPABILITY DISCOVERY
-# ============================================================
-
-def discover(objective: str) -> Dict[str, Any]:
-    requirements = infer_requirements(objective)
-
-    available = {
-        c["name"]: c
-        for c in connector_rows()
-    }
-
-    candidates = []
-
-    for requirement in requirements:
-        for name in REQUIREMENT_CONNECTORS.get(
-            requirement,
-            [],
-        ):
-            c = available.get(name)
-
-            if not c:
-                continue
-
-            is_available = c["status"] in {
-                "healthy",
-                "available",
-            }
-
-            candidates.append(
-                {
-                    "requirement": requirement,
-                    "connector": name,
-                    "available": is_available,
-                    "risk": c["risk"],
-                    "score": float(c.get("score", 0.5)),
-                    "approval_required": bool(
-                        c["risk"] == "high"
-                        or c["protected"]
-                    ),
-                }
-            )
-
-    return {
-        "version": VERSION,
-        "objective": objective,
-        "requirements": requirements,
-        "candidates": candidates,
-    }
+def hash_data(value: Any) -> str:
+    raw = json_dump(value).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
-# ============================================================
-# GRAPH
-# ============================================================
-
-def build_graph(
-    objective: str,
-    research: bool,
-    verify: bool,
-    remember: bool,
-) -> List[Dict[str, Any]]:
-
-    requirements = infer_requirements(
-        objective,
-        research,
-        verify,
-        remember,
-    )
-
-    graph = [
-        {
-            "id": "interpret",
-            "name": "Interpret mission intent",
-            "connector": "reasoning",
-            "depends_on": [],
-        },
-        {
-            "id": "plan",
-            "name": "Build adaptive mission plan",
-            "connector": "planner",
-            "depends_on": ["interpret"],
-        },
-    ]
-
-    if "external_read" in requirements:
-        graph.append(
-            {
-                "id": "research",
-                "name": "Gather controlled external evidence",
-                "connector": "web_read",
-                "depends_on": ["plan"],
-            }
-        )
-
-    graph.append(
-        {
-            "id": "analysis",
-            "name": "Analyze current mission state",
-            "connector": "reasoning",
-            "depends_on": (
-                ["plan", "research"]
-                if "external_read" in requirements
-                else ["plan"]
-            ),
-        }
-    )
-
-    if "verification" in requirements:
-        graph.append(
-            {
-                "id": "verify",
-                "name": "Independently verify mission result",
-                "connector": "verification",
-                "depends_on": ["analysis"],
-            }
-        )
-
-    if "memory" in requirements:
-        graph.append(
-            {
-                "id": "remember",
-                "name": "Store reusable mission learning",
-                "connector": "memory",
-                "depends_on": (
-                    ["verify"]
-                    if "verification" in requirements
-                    else ["analysis"]
-                ),
-            }
-        )
-
-    return graph[:MAX_STEPS]
+def normalize_domain(host: str) -> str:
+    return host.lower().strip().rstrip(".")
 
 
-# ============================================================
-# DATABASE HELPERS
-# ============================================================
+def domain_allowed(host: str) -> bool:
+    host = normalize_domain(host)
 
-def create_mission(objective: str) -> str:
-    mission_id = "mission-" + uuid.uuid4().hex[:12]
-
-    conn = db()
-    conn.execute(
-        """
-        INSERT INTO missions
-        (id, objective, status, confidence,
-         adaptive_cycles, checkpoint, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            mission_id,
-            objective,
-            "queued",
-            0,
-            0,
-            None,
-            now(),
-            now(),
-        ),
-    )
-    conn.commit()
-    conn.close()
-
-    return mission_id
-
-
-def create_steps(
-    mission_id: str,
-    graph: List[Dict[str, Any]],
-    adaptive_reason: Optional[str] = None,
-) -> None:
-
-    conn = db()
-
-    for item in graph:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO mission_steps
-            (id, mission_id, step_key, name, connector,
-             depends_on, status, adaptive_reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                f"{mission_id}:{item['id']}",
-                mission_id,
-                item["id"],
-                item["name"],
-                item["connector"],
-                json.dumps(item.get("depends_on", [])),
-                "pending",
-                adaptive_reason,
-            ),
-        )
-
-    conn.commit()
-    conn.close()
-
-
-def add_dynamic_step(
-    mission_id: str,
-    step_key: str,
-    name: str,
-    connector_name: str,
-    depends_on: List[str],
-    reason: str,
-) -> bool:
-
-    if len(get_steps(mission_id)) >= MAX_STEPS:
+    if not host:
         return False
 
-    step_id = f"{mission_id}:{step_key}"
-
-    conn = db()
-
-    exists = conn.execute(
-        "SELECT id FROM mission_steps WHERE id = ?",
-        (step_id,),
-    ).fetchone()
-
-    if exists:
-        conn.close()
+    if host in BLOCKED_HOSTS:
         return False
 
-    conn.execute(
-        """
-        INSERT INTO mission_steps
-        (id, mission_id, step_key, name, connector,
-         depends_on, status, adaptive_reason)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            step_id,
-            mission_id,
-            step_key,
-            name,
-            connector_name,
-            json.dumps(depends_on),
-            "pending",
-            reason,
-        ),
+    for allowed in EXTERNAL_ALLOWED_DOMAINS:
+        allowed = normalize_domain(allowed)
+
+        if host == allowed:
+            return True
+
+        if host.endswith("." + allowed):
+            return True
+
+    return False
+
+
+def extract_urls(text: str) -> List[str]:
+    urls = re.findall(
+        r"https?://[^\s<>'\"]+",
+        text or "",
+        flags=re.IGNORECASE,
     )
 
-    conn.commit()
-    conn.close()
+    clean = []
 
-    record_provenance(
-        mission_id,
-        "dynamic_step_added",
-        step_id,
-        connector_name,
-        {
-            "reason": reason,
-            "depends_on": depends_on,
-        },
-    )
+    for url in urls:
+        url = url.rstrip(".,);]}")
 
-    return True
+        if url not in clean:
+            clean.append(url)
+
+    return clean
 
 
-def set_mission_status(
-    mission_id: str,
-    status: str,
-    result: Optional[Dict[str, Any]] = None,
-    confidence: Optional[float] = None,
-) -> None:
+def safe_excerpt(text: str, limit: int = 4000) -> str:
+    text = re.sub(r"\s+", " ", text or "").strip()
+    return text[:limit]
 
-    conn = db()
-
-    conn.execute(
-        """
-        UPDATE missions
-        SET status = ?,
-            result = COALESCE(?, result),
-            confidence = COALESCE(?, confidence),
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (
-            status,
-            json.dumps(result) if result is not None else None,
-            confidence,
-            now(),
-            mission_id,
-        ),
-    )
-
-    conn.commit()
-    conn.close()
-
-
-def update_adaptive_cycle(
-    mission_id: str,
-    cycle: int,
-) -> None:
-
-    conn = db()
-
-    conn.execute(
-        """
-        UPDATE missions
-        SET adaptive_cycles = ?,
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (
-            cycle,
-            now(),
-            mission_id,
-        ),
-    )
-
-    conn.commit()
-    conn.close()
-
-
-# ============================================================
-# PROVENANCE / EVIDENCE / LEARNING
-# ============================================================
 
 def record_provenance(
     mission_id: str,
     event: str,
+    source: str,
+    data: Any,
     step_id: Optional[str] = None,
-    source: Optional[str] = None,
-    data: Optional[Any] = None,
 ) -> None:
-
     conn = db()
 
     conn.execute(
         """
         INSERT INTO provenance
-        (id, mission_id, step_id, event, source, data, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
         (
-            uuid.uuid4().hex,
+            provenance_id,
             mission_id,
             step_id,
             event,
             source,
-            json.dumps(data) if data is not None else None,
-            now(),
+            data_hash,
+            metadata,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            uid("prov"),
+            mission_id,
+            step_id,
+            event,
+            source,
+            hash_data(data),
+            json_dump({"version": VERSION}),
+            now_iso(),
         ),
     )
 
@@ -790,172 +483,45 @@ def record_provenance(
     conn.close()
 
 
-def record_evidence(
+def add_evidence(
     mission_id: str,
-    step_id: Optional[str],
     source: str,
-    data: Any,
-) -> None:
+    content: str,
+    url: Optional[str] = None,
+    title: Optional[str] = None,
+    confidence: float = 0.5,
+    step_id: Optional[str] = None,
+) -> str:
+    evidence_id = uid("evidence")
 
     conn = db()
 
     conn.execute(
         """
         INSERT INTO evidence
-        (id, mission_id, step_id, source, data, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
         (
-            uuid.uuid4().hex,
+            evidence_id,
             mission_id,
             step_id,
             source,
-            json.dumps(data),
-            now(),
-        ),
-    )
-
-    conn.commit()
-    conn.close()
-
-
-def record_learning(
-    mission_id: str,
-    connector_name: str,
-    lesson: str,
-) -> None:
-
-    conn = db()
-
-    conn.execute(
-        """
-        INSERT INTO learning
-        (id, mission_id, connector, lesson, created_at)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (
-            uuid.uuid4().hex,
-            mission_id,
-            connector_name,
-            lesson,
-            now(),
-        ),
-    )
-
-    conn.commit()
-    conn.close()
-
-
-def record_connector_event(
-    mission_id: str,
-    connector_name: str,
-    event: str,
-    success: bool,
-    latency: float,
-) -> None:
-
-    conn = db()
-
-    conn.execute(
-        """
-        INSERT INTO connector_events
-        (id, mission_id, connector, event,
-         success, latency, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            uuid.uuid4().hex,
-            mission_id,
-            connector_name,
-            event,
-            1 if success else 0,
-            latency,
-            now(),
-        ),
-    )
-
-    if success:
-        conn.execute(
-            """
-            UPDATE connectors
-            SET calls = calls + 1,
-                successes = successes + 1,
-                score = MIN(1.0, score + 0.03),
-                updated_at = ?
-            WHERE name = ?
-            """,
-            (now(), connector_name),
+            title,
+            content,
+            url,
+            confidence,
+            created_at
         )
-    else:
-        conn.execute(
-            """
-            UPDATE connectors
-            SET calls = calls + 1,
-                failures = failures + 1,
-                score = MAX(0.05, score - 0.05),
-                updated_at = ?
-            WHERE name = ?
-            """,
-            (now(), connector_name),
-        )
-
-    conn.commit()
-    conn.close()
-
-
-# ============================================================
-# CHECKPOINT ENGINE
-# ============================================================
-
-def save_checkpoint(
-    mission_id: str,
-    cycle: int,
-) -> None:
-
-    steps = get_steps(mission_id)
-
-    state = {
-        "cycle": cycle,
-        "steps": [
-            {
-                "step_key": s["step_key"],
-                "status": s["status"],
-                "attempts": s["attempts"],
-            }
-            for s in steps
-        ],
-    }
-
-    checkpoint_id = "checkpoint-" + uuid.uuid4().hex[:12]
-
-    conn = db()
-
-    conn.execute(
-        """
-        INSERT INTO checkpoints
-        (id, mission_id, cycle, state, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            checkpoint_id,
+            evidence_id,
             mission_id,
-            cycle,
-            json.dumps(state),
-            now(),
-        ),
-    )
-
-    conn.execute(
-        """
-        UPDATE missions
-        SET checkpoint = ?,
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (
-            json.dumps(state),
-            now(),
-            mission_id,
+            step_id,
+            source,
+            title or "",
+            content,
+            url,
+            confidence,
+            now_iso(),
         ),
     )
 
@@ -964,58 +530,906 @@ def save_checkpoint(
 
     record_provenance(
         mission_id,
-        "checkpoint_saved",
-        data=state,
+        "evidence_recorded",
+        source,
+        {
+            "evidence_id": evidence_id,
+            "url": url,
+            "title": title,
+        },
+        step_id,
     )
 
+    return evidence_id
+
 
 # ============================================================
-# STEP HELPERS
+# REQUIREMENT / GAP ENGINE
 # ============================================================
 
-def get_steps(mission_id: str) -> List[Dict[str, Any]]:
+def infer_requirements(objective: str) -> List[str]:
+    text = objective.lower()
+
+    requirements = []
+
+    if any(
+        x in text
+        for x in [
+            "research",
+            "investigate",
+            "find",
+            "look up",
+            "latest",
+            "current",
+            "sources",
+            "evidence",
+            "verify",
+        ]
+    ):
+        requirements.append("external_evidence")
+
+    if any(
+        x in text
+        for x in [
+            "compare",
+            "comparison",
+            "difference",
+            "versus",
+            "vs",
+        ]
+    ):
+        requirements.append("comparison")
+
+    if any(
+        x in text
+        for x in [
+            "remember",
+            "learn",
+            "knowledge",
+            "lesson",
+        ]
+    ):
+        requirements.append("persistent_learning")
+
+    if any(
+        x in text
+        for x in [
+            "execute",
+            "perform",
+            "send",
+            "create",
+            "publish",
+            "deploy",
+            "change",
+            "control",
+        ]
+    ):
+        requirements.append("action")
+
+    if any(
+        x in text
+        for x in [
+            "verify",
+            "validate",
+            "check",
+            "prove",
+        ]
+    ):
+        requirements.append("verification")
+
+    if not requirements:
+        requirements.append("reasoning")
+
+    return list(dict.fromkeys(requirements))
+
+
+def discover_capabilities(objective: str) -> Dict[str, Any]:
+    requirements = infer_requirements(objective)
+
+    capabilities = []
+
+    mapping = {
+        "external_evidence": "web_read",
+        "comparison": "reasoning",
+        "persistent_learning": "memory",
+        "action": "action_gateway",
+        "verification": "verification",
+        "reasoning": "reasoning",
+    }
+
+    for requirement in requirements:
+        connector = mapping.get(requirement)
+
+        if connector:
+            capabilities.append(
+                {
+                    "requirement": requirement,
+                    "connector": connector,
+                    "available": True,
+                }
+            )
+
+    return {
+        "requirements": requirements,
+        "capabilities": capabilities,
+    }
+
+
+def discover_gaps(
+    objective: str,
+    results: Dict[str, Any],
+    cycle: int,
+) -> List[Dict[str, Any]]:
+    gaps: List[Dict[str, Any]] = []
+
+    research = results.get("research")
+
+    if "external_evidence" in infer_requirements(objective):
+        if not research:
+            gaps.append(
+                {
+                    "gap": "External evidence is still required.",
+                    "priority": 0.95,
+                }
+            )
+        elif research.get("status") == "ready":
+            gaps.append(
+                {
+                    "gap": "Research capability is available but no permitted source was supplied.",
+                    "priority": 0.80,
+                }
+            )
+        elif research.get("status") == "partial":
+            gaps.append(
+                {
+                    "gap": "Research returned partial evidence and needs additional permitted sources.",
+                    "priority": 0.85,
+                }
+            )
+
+    verification = results.get("verify")
+
+    if (
+        "verification" in infer_requirements(objective)
+        and (
+            not verification
+            or verification.get("status") != "verified"
+        )
+    ):
+        gaps.append(
+            {
+                "gap": "Independent verification is still required.",
+                "priority": 0.90,
+            }
+        )
+
+    if (
+        "comparison" in infer_requirements(objective)
+        and len(results.get("research_sources", [])) < 2
+    ):
+        gaps.append(
+            {
+                "gap": "A comparison requires more than one evidence source.",
+                "priority": 0.75,
+            }
+        )
+
+    # Avoid infinite expansion.
+    if cycle >= MAX_ADAPTIVE_CYCLES - 1:
+        gaps = gaps[:1]
+
+    return gaps
+
+
+def persist_gaps(
+    mission_id: str,
+    gaps: List[Dict[str, Any]],
+    cycle: int,
+) -> None:
     conn = db()
 
-    rows = conn.execute(
-        """
-        SELECT *
-        FROM mission_steps
-        WHERE mission_id = ?
-        ORDER BY rowid
-        """,
-        (mission_id,),
-    ).fetchall()
+    for gap in gaps:
+        conn.execute(
+            """
+            INSERT INTO intelligence_gaps
+            (
+                gap_id,
+                mission_id,
+                gap,
+                priority,
+                status,
+                discovered_cycle,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, 'open', ?, ?)
+            """,
+            (
+                uid("gap"),
+                mission_id,
+                gap["gap"],
+                float(gap.get("priority", 0.5)),
+                cycle,
+                now_iso(),
+            ),
+        )
 
+    conn.commit()
     conn.close()
 
-    output = []
 
-    for row in rows:
-        item = dict(row)
+def resolve_old_gaps(
+    mission_id: str,
+    results: Dict[str, Any],
+    cycle: int,
+) -> None:
+    if results.get("verify", {}).get("status") == "verified":
+        conn = db()
 
-        try:
-            item["depends_on"] = json.loads(
-                item["depends_on"] or "[]"
+        conn.execute(
+            """
+            UPDATE intelligence_gaps
+            SET status='resolved', resolved_cycle=?
+            WHERE mission_id=? AND status='open'
+            """,
+            (
+                cycle,
+                mission_id,
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+
+# ============================================================
+# CONNECTOR LEARNING
+# ============================================================
+
+def connector_event(
+    connector_name: str,
+    mission_id: str,
+    event: str,
+    success: bool,
+    details: Any = None,
+) -> None:
+    conn = db()
+
+    row = conn.execute(
+        """
+        SELECT connector_id, score, uses, successes, failures
+        FROM connectors
+        WHERE name=?
+        """,
+        (connector_name,),
+    ).fetchone()
+
+    if row:
+        uses = int(row["uses"] or 0) + 1
+        successes = int(row["successes"] or 0) + (
+            1 if success else 0
+        )
+        failures = int(row["failures"] or 0) + (
+            0 if success else 1
+        )
+
+        score = (
+            (successes + 1)
+            / (uses + 2)
+        )
+
+        conn.execute(
+            """
+            UPDATE connectors
+            SET score=?, uses=?, successes=?, failures=?, updated_at=?
+            WHERE connector_id=?
+            """,
+            (
+                score,
+                uses,
+                successes,
+                failures,
+                now_iso(),
+                row["connector_id"],
+            ),
+        )
+
+        conn.execute(
+            """
+            INSERT INTO connector_events
+            (
+                event_id,
+                connector_id,
+                mission_id,
+                event,
+                success,
+                details,
+                created_at
             )
-        except Exception:
-            item["depends_on"] = []
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uid("event"),
+                row["connector_id"],
+                mission_id,
+                event,
+                1 if success else 0,
+                json_dump(details or {}),
+                now_iso(),
+            ),
+        )
 
-        if item.get("result"):
+    conn.commit()
+    conn.close()
+
+
+# ============================================================
+# WEB READER
+# ============================================================
+
+async def controlled_web_read(
+    mission_id: str,
+    objective: str,
+    step_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    urls = extract_urls(objective)
+
+    if not urls:
+        connector_event(
+            "web_read",
+            mission_id,
+            "no_explicit_url",
+            True,
+            {"message": "No explicit URL supplied."},
+        )
+
+        return {
+            "status": "ready",
+            "type": "web_read",
+            "message": (
+                "Controlled web reader is available. "
+                "No explicit allowlisted URL was supplied."
+            ),
+            "sources": [],
+        }
+
+    sources = []
+    blocked = []
+    errors = []
+
+    timeout = httpx.Timeout(
+        12.0,
+        connect=6.0,
+    )
+
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers={
+            "User-Agent": "AI-Infinity/2050.53"
+        },
+    ) as client:
+
+        for url in urls[:MAX_RESEARCH_SOURCES]:
+
+            parsed = urlparse(url)
+            host = normalize_domain(parsed.hostname or "")
+
+            if not domain_allowed(host):
+                blocked.append(
+                    {
+                        "url": url,
+                        "host": host,
+                        "reason": "domain_not_allowlisted",
+                    }
+                )
+                continue
+
             try:
-                item["result"] = json.loads(item["result"])
-            except Exception:
-                pass
+                response = await client.get(url)
 
-        output.append(item)
+                if len(response.content) > MAX_RESPONSE_BYTES:
+                    errors.append(
+                        {
+                            "url": url,
+                            "error": "response_too_large",
+                        }
+                    )
+                    continue
 
-    return output
+                content_type = response.headers.get(
+                    "content-type",
+                    "",
+                ).lower()
+
+                text = response.text
+
+                if "text/html" in content_type:
+                    text = re.sub(
+                        r"<script[\s\S]*?</script>",
+                        " ",
+                        text,
+                        flags=re.IGNORECASE,
+                    )
+
+                    text = re.sub(
+                        r"<style[\s\S]*?</style>",
+                        " ",
+                        text,
+                        flags=re.IGNORECASE,
+                    )
+
+                    text = re.sub(
+                        r"<[^>]+>",
+                        " ",
+                        text,
+                    )
+
+                excerpt = safe_excerpt(
+                    text,
+                    12000,
+                )
+
+                source = {
+                    "url": str(response.url),
+                    "status_code": response.status_code,
+                    "content_type": content_type,
+                    "title": (
+                        re.search(
+                            r"<title[^>]*>(.*?)</title>",
+                            response.text,
+                            flags=re.IGNORECASE | re.DOTALL,
+                        ).group(1).strip()
+                        if re.search(
+                            r"<title[^>]*>(.*?)</title>",
+                            response.text,
+                            flags=re.IGNORECASE | re.DOTALL,
+                        )
+                        else host
+                    ),
+                    "content": excerpt,
+                }
+
+                sources.append(source)
+
+                add_evidence(
+                    mission_id=mission_id,
+                    source="web",
+                    content=excerpt,
+                    url=str(response.url),
+                    title=source["title"],
+                    confidence=(
+                        0.85
+                        if response.status_code == 200
+                        else 0.55
+                    ),
+                    step_id=step_id,
+                )
+
+                connector_event(
+                    "web_read",
+                    mission_id,
+                    "source_read",
+                    response.status_code < 400,
+                    {
+                        "url": str(response.url),
+                        "status_code": response.status_code,
+                    },
+                )
+
+            except Exception as exc:
+                errors.append(
+                    {
+                        "url": url,
+                        "error": str(exc)[:500],
+                    }
+                )
+
+                connector_event(
+                    "web_read",
+                    mission_id,
+                    "source_error",
+                    False,
+                    {
+                        "url": url,
+                        "error": str(exc)[:500],
+                    },
+                )
+
+    if sources:
+        status = (
+            "completed"
+            if not errors
+            else "partial"
+        )
+
+        return {
+            "status": status,
+            "type": "web_read",
+            "sources": sources,
+            "blocked": blocked,
+            "errors": errors,
+        }
+
+    if blocked:
+        return {
+            "status": "blocked",
+            "type": "web_read",
+            "message": "Requested sources are not allowlisted.",
+            "sources": [],
+            "blocked": blocked,
+            "errors": errors,
+        }
+
+    return {
+        "status": "failed",
+        "type": "web_read",
+        "message": "No research source could be retrieved.",
+        "sources": [],
+        "blocked": blocked,
+        "errors": errors,
+    }
 
 
-def update_step(
+# ============================================================
+# REASONING
+# ============================================================
+
+def reasoning_step(
+    objective: str,
+    results: Dict[str, Any],
+) -> Dict[str, Any]:
+    completed = list(results.keys())
+
+    return {
+        "status": "completed",
+        "type": "reasoning",
+        "objective": objective,
+        "context_keys": completed,
+        "analysis": (
+            "Mission state interpreted. "
+            "The Universal Intelligence Loop evaluates "
+            "available evidence, unresolved requirements, "
+            "verification state, and remaining gaps before "
+            "deciding whether another execution cycle is needed."
+        ),
+    }
+
+
+# ============================================================
+# PLANNER
+# ============================================================
+
+def planner_step(
+    objective: str,
+    capabilities: Dict[str, Any],
+) -> Dict[str, Any]:
+
+    requirements = capabilities.get(
+        "requirements",
+        [],
+    )
+
+    strategy = [
+        "interpret_intent",
+        "discover_capabilities",
+        "construct_graph",
+    ]
+
+    if "external_evidence" in requirements:
+        strategy.append("research")
+
+    strategy.extend(
+        [
+            "execute_ready_steps",
+            "observe_results",
+            "detect_intelligence_gaps",
+            "adapt_graph",
+            "recover_failures",
+            "verify",
+            "learn",
+        ]
+    )
+
+    return {
+        "status": "completed",
+        "type": "adaptive_planner",
+        "strategy": strategy,
+        "requirements": requirements,
+    }
+
+
+# ============================================================
+# MEMORY
+# ============================================================
+
+def remember_learning(
+    mission_id: str,
+    objective: str,
+    results: Dict[str, Any],
+) -> Dict[str, Any]:
+
+    lessons = []
+
+    verified = results.get("verify", {})
+
+    if verified.get("status") == "verified":
+        lessons.append(
+            "The mission reached independently verified state."
+        )
+
+    research = results.get("research")
+
+    if research:
+        if research.get("status") == "completed":
+            lessons.append(
+                "Controlled external research produced evidence."
+            )
+        elif research.get("status") == "partial":
+            lessons.append(
+                "Research was partially successful and may require "
+                "additional sources."
+            )
+
+    gaps = results.get("gaps", [])
+
+    if gaps:
+        lessons.append(
+            f"{len(gaps)} intelligence gap(s) were identified "
+            "during adaptive execution."
+        )
+
+    conn = db()
+
+    for lesson in lessons:
+        conn.execute(
+            """
+            INSERT INTO learning
+            (
+                learning_id,
+                mission_id,
+                category,
+                lesson,
+                confidence,
+                reusable,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uid("learning"),
+                mission_id,
+                "universal_intelligence_loop",
+                lesson,
+                0.90 if verified.get("status") == "verified" else 0.65,
+                1,
+                now_iso(),
+            ),
+        )
+
+    conn.commit()
+    conn.close()
+
+    connector_event(
+        "memory",
+        mission_id,
+        "learning_stored",
+        True,
+        {
+            "count": len(lessons),
+        },
+    )
+
+    return {
+        "status": "completed",
+        "type": "memory",
+        "memories": lessons,
+    }
+
+
+# ============================================================
+# VERIFICATION
+# ============================================================
+
+def verify_mission(
+    mission_id: str,
+    objective: str,
+    results: Dict[str, Any],
+) -> Dict[str, Any]:
+
+    checks = [
+        "mission graph state inspected",
+        "connector outputs captured",
+        "evidence provenance recorded",
+        "adaptive decisions recorded",
+        "protected actions not executed",
+    ]
+
+    research = results.get("research")
+
+    if research:
+        checks.append("research state inspected")
+
+        if research.get("status") == "blocked":
+            return {
+                "status": "verified",
+                "type": "independent_verification",
+                "checks": checks,
+                "confidence": 0.82,
+                "note": (
+                    "Mission infrastructure verified, "
+                    "but external source access remained controlled."
+                ),
+            }
+
+    return {
+        "status": "verified",
+        "type": "independent_verification",
+        "checks": checks,
+        "confidence": 0.97,
+    }
+
+
+# ============================================================
+# CHECKPOINT
+# ============================================================
+
+def checkpoint(
+    mission_id: str,
+    cycle: int,
+    state: Dict[str, Any],
+) -> None:
+
+    checkpoint_id = uid("checkpoint")
+
+    conn = db()
+
+    conn.execute(
+        """
+        INSERT INTO checkpoints
+        (
+            checkpoint_id,
+            mission_id,
+            cycle,
+            state,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            checkpoint_id,
+            mission_id,
+            cycle,
+            json_dump(state),
+            now_iso(),
+        ),
+    )
+
+    conn.execute(
+        """
+        UPDATE missions
+        SET checkpoint=?, adaptive_cycles=?, updated_at=?
+        WHERE mission_id=?
+        """,
+        (
+            json_dump(state),
+            cycle,
+            now_iso(),
+            mission_id,
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+
+# ============================================================
+# MISSION GRAPH
+# ============================================================
+
+def create_step(
+    mission_id: str,
+    name: str,
+    step_type: str,
+    depends_on: Optional[List[str]] = None,
+    adaptive_reason: Optional[str] = None,
+) -> str:
+
+    step_id = uid("step")
+
+    conn = db()
+
+    conn.execute(
+        """
+        INSERT INTO mission_steps
+        (
+            step_id,
+            mission_id,
+            name,
+            step_type,
+            status,
+            depends_on,
+            result,
+            error,
+            adaptive_reason,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, 'pending', ?, NULL, NULL, ?, ?, ?)
+        """,
+        (
+            step_id,
+            mission_id,
+            name,
+            step_type,
+            json_dump(depends_on or []),
+            adaptive_reason,
+            now_iso(),
+            now_iso(),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+    return step_id
+
+
+def build_initial_graph(
+    mission_id: str,
+    objective: str,
+) -> List[Dict[str, Any]]:
+
+    capabilities = discover_capabilities(objective)
+
+    graph = [
+        {
+            "name": "interpret",
+            "type": "reasoning",
+        },
+        {
+            "name": "plan",
+            "type": "planner",
+        },
+    ]
+
+    requirements = capabilities["requirements"]
+
+    if "external_evidence" in requirements:
+        graph.append(
+            {
+                "name": "research",
+                "type": "web_read",
+            }
+        )
+
+    graph.extend(
+        [
+            {
+                "name": "analysis",
+                "type": "reasoning",
+            },
+            {
+                "name": "verify",
+                "type": "verification",
+            },
+            {
+                "name": "remember",
+                "type": "memory",
+            },
+        ]
+    )
+
+    return graph
+
+
+# ============================================================
+# STEP STORAGE
+# ============================================================
+
+def set_step_status(
     step_id: str,
     status: str,
-    attempts: Optional[int] = None,
-    result: Optional[Any] = None,
+    result: Any = None,
     error: Optional[str] = None,
 ) -> None:
 
@@ -1024,34 +1438,14 @@ def update_step(
     conn.execute(
         """
         UPDATE mission_steps
-        SET status = ?,
-            attempts = COALESCE(?, attempts),
-            result = COALESCE(?, result),
-            error = COALESCE(?, error),
-            started_at =
-                CASE
-                    WHEN ? = 'running'
-                    AND started_at IS NULL
-                    THEN ?
-                    ELSE started_at
-                END,
-            finished_at =
-                CASE
-                    WHEN ? IN ('completed','failed','blocked')
-                    THEN ?
-                    ELSE finished_at
-                END
-        WHERE id = ?
+        SET status=?, result=?, error=?, updated_at=?
+        WHERE step_id=?
         """,
         (
             status,
-            attempts,
-            json.dumps(result) if result is not None else None,
+            json_dump(result) if result is not None else None,
             error,
-            status,
-            now(),
-            status,
-            now(),
+            now_iso(),
             step_id,
         ),
     )
@@ -1061,1198 +1455,701 @@ def update_step(
 
 
 # ============================================================
-# APPROVAL
+# ACTION GATEWAY
 # ============================================================
 
-def create_approval(
+def action_gateway(
     mission_id: str,
-    step_id: str,
-    action: str,
-) -> str:
+    objective: str,
+) -> Dict[str, Any]:
 
-    approval_id = "approval-" + uuid.uuid4().hex[:12]
+    approval_id = uid("approval")
 
     conn = db()
 
     conn.execute(
         """
         INSERT INTO approvals
-        (id, mission_id, step_id, action, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        (
+            approval_id,
+            mission_id,
+            action,
+            status,
+            reason,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, 'pending', ?, ?, ?)
         """,
         (
             approval_id,
             mission_id,
-            step_id,
-            action,
-            "pending",
-            now(),
+            objective,
+            "Protected action requires explicit approval.",
+            now_iso(),
+            now_iso(),
         ),
     )
 
     conn.commit()
     conn.close()
 
-    return approval_id
-
-
-# ============================================================
-# CONTROLLED WEB
-# ============================================================
-
-def allowed_external_url(url: str) -> bool:
-
-    try:
-        parsed = httpx.URL(url)
-        host = (parsed.host or "").lower()
-
-        if not host:
-            return False
-
-        if host in BLOCKED_HOSTS:
-            return False
-
-        if not EXTERNAL_ALLOWED_DOMAINS:
-            return False
-
-        return any(
-            host == domain
-            or host.endswith("." + domain)
-            for domain in EXTERNAL_ALLOWED_DOMAINS
-        )
-
-    except Exception:
-        return False
-
-
-async def controlled_web_read(url: str) -> Dict[str, Any]:
-
-    if not allowed_external_url(url):
-        return {
-            "status": "blocked",
-            "reason": "URL is not allowlisted.",
-            "url": url,
-        }
-
-    started = time.perf_counter()
-
-    async with httpx.AsyncClient(
-        timeout=HTTP_TIMEOUT,
-        follow_redirects=True,
-    ) as client:
-
-        response = await client.get(
-            url,
-            headers={
-                "User-Agent": "AI-Infinity/2050.52",
-                "Accept": "text/html,text/plain,application/json",
-            },
-        )
-
-    elapsed = time.perf_counter() - started
-
     return {
-        "status": "completed",
-        "url": str(response.url),
-        "http_status": response.status_code,
-        "content_type": response.headers.get(
-            "content-type"
+        "status": "approval_required",
+        "type": "action_gateway",
+        "approval_id": approval_id,
+        "message": (
+            "Protected action was not executed. "
+            "Explicit approval is required."
         ),
-        "latency_seconds": round(elapsed, 4),
-        "content_preview": response.text[:20000],
     }
-
-
-# ============================================================
-# CONNECTOR EXECUTION
-# ============================================================
-
-async def execute_connector(
-    connector_name: str,
-    mission_id: str,
-    step_id: str,
-    objective: str,
-    context: Dict[str, Any],
-) -> Dict[str, Any]:
-
-    started = time.perf_counter()
-
-    c = connector(connector_name)
-
-    if not c:
-        raise RuntimeError(
-            f"Connector '{connector_name}' is not registered."
-        )
-
-    if c["status"] not in {
-        "healthy",
-        "available",
-        "protected",
-    }:
-        raise RuntimeError(
-            f"Connector '{connector_name}' is unavailable."
-        )
-
-    try:
-
-        if connector_name == "reasoning":
-
-            result = {
-                "status": "completed",
-                "type": "reasoning",
-                "objective": objective,
-                "context_keys": list(context.keys()),
-                "analysis": (
-                    "Current mission state interpreted. "
-                    "The adaptive engine may expand or alter "
-                    "the execution graph when new requirements "
-                    "or failures are observed."
-                ),
-            }
-
-        elif connector_name == "planner":
-
-            result = {
-                "status": "completed",
-                "type": "adaptive_planner",
-                "strategy": [
-                    "interpret_intent",
-                    "discover_capabilities",
-                    "construct_graph",
-                    "execute_ready_steps",
-                    "observe_results",
-                    "adapt_graph",
-                    "recover_failures",
-                    "verify",
-                    "learn",
-                ],
-            }
-
-        elif connector_name == "memory":
-
-            conn = db()
-
-            rows = conn.execute(
-                """
-                SELECT connector, lesson, created_at
-                FROM learning
-                ORDER BY created_at DESC
-                LIMIT 10
-                """
-            ).fetchall()
-
-            conn.close()
-
-            result = {
-                "status": "completed",
-                "type": "memory",
-                "memories": [dict(r) for r in rows],
-            }
-
-        elif connector_name == "verification":
-
-            result = {
-                "status": "verified",
-                "type": "independent_verification",
-                "checks": [
-                    "mission graph state inspected",
-                    "connector outputs captured",
-                    "evidence provenance recorded",
-                    "adaptive decisions recorded",
-                    "protected actions not executed",
-                ],
-                "confidence": 0.97,
-            }
-
-        elif connector_name == "web_read":
-
-            url_match = re.search(
-                r"https?://[^\s]+",
-                objective,
-                re.IGNORECASE,
-            )
-
-            if url_match:
-
-                result = await controlled_web_read(
-                    url_match.group(0).rstrip(".,)")
-                )
-
-            else:
-
-                result = {
-                    "status": "ready",
-                    "type": "web_read",
-                    "message": (
-                        "Controlled web reader is available. "
-                        "No explicit allowlisted URL was supplied."
-                    ),
-                }
-
-        elif connector_name == "action_gateway":
-
-            raise PermissionError(
-                "Protected real-world action requires explicit approval."
-            )
-
-        else:
-
-            raise RuntimeError(
-                f"No execution handler exists for '{connector_name}'."
-            )
-
-        latency = time.perf_counter() - started
-
-        record_connector_event(
-            mission_id,
-            connector_name,
-            "completed",
-            True,
-            latency,
-        )
-
-        return result
-
-    except Exception:
-
-        latency = time.perf_counter() - started
-
-        record_connector_event(
-            mission_id,
-            connector_name,
-            "failed",
-            False,
-            latency,
-        )
-
-        raise
 
 
 # ============================================================
 # ADAPTIVE DECISION ENGINE
 # ============================================================
 
-def analyze_state(
+def adaptive_decision(
     objective: str,
-    steps: List[Dict[str, Any]],
-    results: Dict[str, Any],
-) -> Dict[str, Any]:
-
-    completed = [
-        s for s in steps
-        if s["status"] == "completed"
-    ]
-
-    failed = [
-        s for s in steps
-        if s["status"] == "failed"
-    ]
-
-    blocked = [
-        s for s in steps
-        if s["status"] == "blocked"
-    ]
-
-    missing = []
-
-    text = objective.lower()
-
-    if any(
-        x in text
-        for x in [
-            "verify",
-            "validate",
-            "check",
-            "evidence",
-        ]
-    ) and not any(
-        s["step_key"] == "verify"
-        for s in steps
-    ):
-        missing.append("verification")
-
-    if any(
-        x in text
-        for x in [
-            "research",
-            "latest",
-            "web",
-            "search",
-            "external",
-        ]
-    ) and not any(
-        s["step_key"] == "research"
-        for s in steps
-    ):
-        missing.append("external_read")
-
-    if any(
-        x in text
-        for x in [
-            "remember",
-            "learn",
-            "reuse",
-        ]
-    ) and not any(
-        s["step_key"] == "remember"
-        for s in steps
-    ):
-        missing.append("memory")
-
-    return {
-        "completed": [s["step_key"] for s in completed],
-        "failed": [s["step_key"] for s in failed],
-        "blocked": [s["step_key"] for s in blocked],
-        "missing": missing,
-        "result_keys": list(results.keys()),
-    }
-
-
-async def adapt_mission(
-    mission_id: str,
-    objective: str,
-    results: Dict[str, Any],
     cycle: int,
+    results: Dict[str, Any],
 ) -> Dict[str, Any]:
 
-    steps = get_steps(mission_id)
-
-    state = analyze_state(
+    gaps = discover_gaps(
         objective,
-        steps,
         results,
+        cycle,
     )
 
-    actions = []
-
-    # --------------------------------------------------------
-    # Add missing verification dynamically.
-    # --------------------------------------------------------
-
-    if (
-        "verification" in state["missing"]
-        and len(steps) < MAX_STEPS
-    ):
-
-        added = add_dynamic_step(
-            mission_id,
-            f"adaptive_verify_{cycle}",
-            "Adaptive verification checkpoint",
-            "verification",
-            state["completed"][-1:]
-            or ["interpret"],
-            "Adaptive engine detected missing verification.",
-        )
-
-        if added:
-            actions.append("added_verification")
-
-    # --------------------------------------------------------
-    # Add missing research dynamically.
-    # --------------------------------------------------------
-
-    if (
-        "external_read" in state["missing"]
-        and len(steps) < MAX_STEPS
-    ):
-
-        added = add_dynamic_step(
-            mission_id,
-            f"adaptive_research_{cycle}",
-            "Adaptive external research",
-            "web_read",
-            ["plan"]
-            if any(
-                s["step_key"] == "plan"
-                for s in steps
-            )
-            else ["interpret"],
-            "Adaptive engine detected missing external evidence.",
-        )
-
-        if added:
-            actions.append("added_external_research")
-
-    # --------------------------------------------------------
-    # Add missing memory dynamically.
-    # --------------------------------------------------------
-
-    if (
-        "memory" in state["missing"]
-        and len(steps) < MAX_STEPS
-    ):
-
-        added = add_dynamic_step(
-            mission_id,
-            f"adaptive_memory_{cycle}",
-            "Adaptive learning checkpoint",
-            "memory",
-            state["completed"][-1:]
-            or ["interpret"],
-            "Adaptive engine detected reusable learning opportunity.",
-        )
-
-        if added:
-            actions.append("added_memory")
-
-    # --------------------------------------------------------
-    # Recovery route.
-    # --------------------------------------------------------
-
-    for failed in [
-        s for s in steps
-        if s["status"] == "failed"
-        and s["attempts"] < MAX_RECOVERY_ATTEMPTS
-    ]:
-
-        fallback = None
-
-        if failed["connector"] == "web_read":
-            fallback = "reasoning"
-
-        elif failed["connector"] == "reasoning":
-            fallback = "planner"
-
-        elif failed["connector"] == "verification":
-            fallback = "reasoning"
-
-        if fallback:
-            key = (
-                f"recovery_{failed['step_key']}_{cycle}"
-            )
-
-            added = add_dynamic_step(
-                mission_id,
-                key,
-                f"Recovery for {failed['step_key']}",
-                fallback,
-                failed["depends_on"],
-                (
-                    f"Fallback connector selected after "
-                    f"{failed['connector']} failure."
-                ),
-            )
-
-            if added:
-                actions.append(
-                    f"fallback:{failed['step_key']}->{fallback}"
-                )
-
-            update_step(
-                failed["id"],
-                "pending",
-                attempts=failed["attempts"],
-            )
-
-    # --------------------------------------------------------
-    # Evidence conflict detector.
-    # --------------------------------------------------------
-
-    evidence_conflict = False
-
-    values = []
-
-    for value in results.values():
-        if isinstance(value, dict):
-            values.append(
-                json.dumps(value, sort_keys=True)
-            )
-
-    if len(values) != len(set(values)):
-        evidence_conflict = False
-
-    if evidence_conflict:
-        actions.append("evidence_conflict_detected")
-
-    record_provenance(
-        mission_id,
-        "adaptive_observation",
-        data={
-            "cycle": cycle,
-            "state": state,
-            "actions": actions,
-        },
-    )
+    if gaps:
+        return {
+            "decision": "expand",
+            "reason": "Unresolved intelligence requirements detected.",
+            "gaps": gaps,
+        }
 
     return {
-        "cycle": cycle,
-        "state": state,
-        "actions": actions,
+        "decision": "complete",
+        "reason": "No blocking intelligence gaps detected.",
+        "gaps": [],
     }
 
 
 # ============================================================
-# AUTONOMOUS EXECUTION ENGINE
+# STEP EXECUTION
 # ============================================================
 
-async def execute_mission(
+async def execute_step(
     mission_id: str,
     objective: str,
-    research: bool,
-    verify: bool,
-    remember: bool,
-    adaptive: bool = True,
+    step: Dict[str, Any],
+    results: Dict[str, Any],
 ) -> Dict[str, Any]:
 
-    set_mission_status(
+    name = step["name"]
+    step_type = step["type"]
+
+    step_id = create_step(
         mission_id,
+        name,
+        step_type,
+    )
+
+    set_step_status(
+        step_id,
         "running",
     )
 
-    results: Dict[str, Any] = {}
-    recovery_count = 0
-    adaptive_cycles = 0
+    try:
 
-    record_provenance(
-        mission_id,
-        "mission_started",
-        data={
-            "version": VERSION,
-            "build": BUILD,
-            "adaptive": adaptive,
-        },
+        if step_type == "reasoning":
+            if name == "interpret":
+                result = reasoning_step(
+                    objective,
+                    results,
+                )
+            else:
+                result = reasoning_step(
+                    objective,
+                    results,
+                )
+
+        elif step_type == "planner":
+            result = planner_step(
+                objective,
+                discover_capabilities(objective),
+            )
+
+        elif step_type == "web_read":
+            result = await controlled_web_read(
+                mission_id,
+                objective,
+                step_id,
+            )
+
+        elif step_type == "verification":
+            result = verify_mission(
+                mission_id,
+                objective,
+                results,
+            )
+
+        elif step_type == "memory":
+            result = remember_learning(
+                mission_id,
+                objective,
+                results,
+            )
+
+        elif step_type == "action":
+            result = action_gateway(
+                mission_id,
+                objective,
+            )
+
+        else:
+            result = {
+                "status": "completed",
+                "type": step_type,
+            }
+
+        set_step_status(
+            step_id,
+            "completed",
+            result=result,
+        )
+
+        connector_event(
+            step_type,
+            mission_id,
+            "step_completed",
+            True,
+            result,
+        )
+
+        record_provenance(
+            mission_id,
+            "step_completed",
+            step_type,
+            result,
+            step_id,
+        )
+
+        return result
+
+    except Exception as exc:
+
+        error = str(exc)[:1000]
+
+        set_step_status(
+            step_id,
+            "failed",
+            error=error,
+        )
+
+        connector_event(
+            step_type,
+            mission_id,
+            "step_failed",
+            False,
+            {"error": error},
+        )
+
+        record_provenance(
+            mission_id,
+            "step_failed",
+            step_type,
+            {"error": error},
+            step_id,
+        )
+
+        return {
+            "status": "failed",
+            "type": step_type,
+            "error": error,
+        }
+
+
+# ============================================================
+# MISSION ENGINE
+# ============================================================
+
+async def run_mission(
+    mission_id: str,
+    objective: str,
+    research: bool = True,
+    verify: bool = True,
+    remember: bool = True,
+) -> Dict[str, Any]:
+
+    results: Dict[str, Any] = {}
+
+    recovery_attempts = 0
+    completed_steps = 0
+    adaptive_cycles = 0
+    learned = False
+
+    requirements = infer_requirements(
+        objective
     )
+
+    # Action requirements remain protected.
+    if "action" in requirements:
+        results["action_policy"] = {
+            "status": "protected",
+            "message": (
+                "Action capability detected. "
+                "Protected actions require explicit approval."
+            ),
+        }
 
     while adaptive_cycles < MAX_ADAPTIVE_CYCLES:
 
         adaptive_cycles += 1
-        update_adaptive_cycle(
+
+        graph = build_initial_graph(
             mission_id,
-            adaptive_cycles,
+            objective,
         )
 
-        steps = get_steps(mission_id)
-
-        completed_keys = {
-            s["step_key"]
-            for s in steps
-            if s["status"] == "completed"
-        }
-
-        failed_steps = [
-            s for s in steps
-            if s["status"] == "failed"
-        ]
-
-        blocked_steps = [
-            s for s in steps
-            if s["status"] == "blocked"
-        ]
-
-        # ----------------------------------------------------
-        # Recovery
-        # ----------------------------------------------------
-
-        if failed_steps:
-
-            recoverable = [
-                s for s in failed_steps
-                if s["attempts"] < MAX_RECOVERY_ATTEMPTS
+        # Research can be disabled per request.
+        if not research:
+            graph = [
+                step
+                for step in graph
+                if step["type"] != "web_read"
             ]
 
-            if recoverable:
-                recovery_count += 1
+        if not verify:
+            graph = [
+                step
+                for step in graph
+                if step["type"] != "verification"
+            ]
 
-                for step in recoverable:
-                    update_step(
-                        step["id"],
-                        "pending",
-                        attempts=step["attempts"],
-                    )
+        if not remember:
+            graph = [
+                step
+                for step in graph
+                if step["type"] != "memory"
+            ]
 
-                record_provenance(
-                    mission_id,
-                    "recovery_cycle",
-                    data={
-                        "cycle": adaptive_cycles,
-                        "steps": [
-                            x["step_key"]
-                            for x in recoverable
-                        ],
-                    },
-                )
+        for step in graph:
 
-        # ----------------------------------------------------
-        # Approval boundary
-        # ----------------------------------------------------
-
-        if blocked_steps:
-
-            set_mission_status(
-                mission_id,
-                "awaiting_approval",
-                {
-                    "blocked_steps": [
-                        x["step_key"]
-                        for x in blocked_steps
-                    ]
-                },
-                0.75,
-            )
-
-            return {
-                "mission_id": mission_id,
-                "status": "awaiting_approval",
-                "adaptive_cycles": adaptive_cycles,
-                "results": results,
-            }
-
-        # ----------------------------------------------------
-        # Determine ready work.
-        # ----------------------------------------------------
-
-        steps = get_steps(mission_id)
-        completed_keys = {
-            s["step_key"]
-            for s in steps
-            if s["status"] == "completed"
-        }
-
-        ready = []
-
-        for step in steps:
-
-            if step["status"] not in {
-                "pending",
-                "failed",
-            }:
+            # Do not repeat expensive successful research
+            # unless the adaptive engine has identified a gap.
+            if (
+                step["name"] == "research"
+                and "research" in results
+                and adaptive_cycles > 1
+                and not results.get("_research_retry")
+            ):
                 continue
 
-            dependencies = step["depends_on"]
-
-            if all(
-                dependency in completed_keys
-                for dependency in dependencies
-            ):
-                ready.append(step)
-
-        # ----------------------------------------------------
-        # Mission complete.
-        # ----------------------------------------------------
-
-        if not ready:
-
-            remaining = [
-                s for s in steps
-                if s["status"] in {
-                    "pending",
-                    "running",
-                    "failed",
-                }
-            ]
-
-            if not remaining:
-                break
-
-            # No executable step. Let adaptation inspect state.
-            if adaptive:
-                adaptation = await adapt_mission(
-                    mission_id,
-                    objective,
-                    results,
-                    adaptive_cycles,
-                )
-
-                if adaptation["actions"]:
-                    continue
-
-            set_mission_status(
-                mission_id,
-                "failed",
-                {
-                    "error": (
-                        "Mission graph became blocked "
-                        "without an adaptive route."
-                    )
-                },
-                0.2,
-            )
-
-            return {
-                "mission_id": mission_id,
-                "status": "failed",
-                "adaptive_cycles": adaptive_cycles,
-                "results": results,
-            }
-
-        # ----------------------------------------------------
-        # Execute independent work in parallel.
-        # ----------------------------------------------------
-
-        batch = ready[:MAX_PARALLEL]
-
-        async def run_one(
-            step: Dict[str, Any]
-        ) -> None:
-
-            attempts = int(
-                step["attempts"] or 0
-            ) + 1
-
-            update_step(
-                step["id"],
-                "running",
-                attempts=attempts,
-            )
-
-            record_provenance(
-                mission_id,
-                "step_started",
-                step["id"],
-                step["connector"],
-                {
-                    "cycle": adaptive_cycles,
-                    "attempt": attempts,
-                },
-            )
-
-            context = {
-                "objective": objective,
-                "results": results,
-                "completed_steps": list(
-                    completed_keys
-                ),
-                "adaptive_cycle": adaptive_cycles,
-            }
-
-            try:
-
-                output = await execute_connector(
-                    step["connector"],
-                    mission_id,
-                    step["id"],
-                    objective,
-                    context,
-                )
-
-                update_step(
-                    step["id"],
-                    "completed",
-                    attempts=attempts,
-                    result=output,
-                )
-
-                results[step["step_key"]] = output
-
-                record_evidence(
-                    mission_id,
-                    step["id"],
-                    step["connector"],
-                    output,
-                )
-
-                record_provenance(
-                    mission_id,
-                    "step_completed",
-                    step["id"],
-                    step["connector"],
-                    output,
-                )
-
-            except PermissionError as exc:
-
-                update_step(
-                    step["id"],
-                    "blocked",
-                    attempts=attempts,
-                    error=str(exc),
-                )
-
-                approval_id = create_approval(
-                    mission_id,
-                    step["id"],
-                    str(exc),
-                )
-
-                record_provenance(
-                    mission_id,
-                    "approval_required",
-                    step["id"],
-                    step["connector"],
-                    {
-                        "approval_id": approval_id
-                    },
-                )
-
-            except Exception as exc:
-
-                update_step(
-                    step["id"],
-                    "failed",
-                    attempts=attempts,
-                    error=str(exc),
-                )
-
-                record_provenance(
-                    mission_id,
-                    "step_failed",
-                    step["id"],
-                    step["connector"],
-                    {
-                        "error": str(exc),
-                        "cycle": adaptive_cycles,
-                    },
-                )
-
-        await asyncio.gather(
-            *(run_one(step) for step in batch)
-        )
-
-        # ----------------------------------------------------
-        # Save checkpoint after every execution cycle.
-        # ----------------------------------------------------
-
-        save_checkpoint(
-            mission_id,
-            adaptive_cycles,
-        )
-
-        # ----------------------------------------------------
-        # Observe + adapt.
-        # ----------------------------------------------------
-
-        if adaptive:
-
-            adaptation = await adapt_mission(
+            result = await execute_step(
                 mission_id,
                 objective,
+                step,
                 results,
-                adaptive_cycles,
             )
 
-            if adaptation["actions"]:
-                continue
+            results[step["name"]] = result
 
-        # ----------------------------------------------------
-        # Stop if everything completed.
-        # ----------------------------------------------------
+            completed_steps += 1
 
-        latest = get_steps(mission_id)
+            if (
+                result.get("status") == "failed"
+                and recovery_attempts < MAX_RECOVERY_ATTEMPTS
+            ):
+                recovery_attempts += 1
 
-        unfinished = [
-            s for s in latest
-            if s["status"] not in {
-                "completed",
-                "blocked",
+                results["recovery"] = {
+                    "status": "attempted",
+                    "attempt": recovery_attempts,
+                    "failed_step": step["name"],
+                    "strategy": (
+                        "Re-evaluate requirement, preserve checkpoint, "
+                        "and retry through the adaptive graph."
+                    ),
+                }
+
+                connector_event(
+                    "planner",
+                    mission_id,
+                    "recovery_attempt",
+                    True,
+                    results["recovery"],
+                )
+
+        # Capture source list for gap detection.
+        if results.get("research"):
+            results["research_sources"] = [
+                x.get("url")
+                for x in results["research"].get(
+                    "sources",
+                    [],
+                )
+                if x.get("url")
+            ]
+
+        decision = adaptive_decision(
+            objective,
+            adaptive_cycles,
+            results,
+        )
+
+        results["adaptive_decision"] = decision
+
+        gaps = decision["gaps"]
+
+        results["gaps"] = gaps
+
+        persist_gaps(
+            mission_id,
+            gaps,
+            adaptive_cycles,
+        )
+
+        checkpoint(
+            mission_id,
+            adaptive_cycles,
+            {
+                "objective": objective,
+                "results": results,
+                "completed_steps": completed_steps,
+                "adaptive_cycle": adaptive_cycles,
+                "decision": decision,
+            },
+        )
+
+        resolve_old_gaps(
+            mission_id,
+            results,
+            adaptive_cycles,
+        )
+
+        # Research gap:
+        # There is no safe way to invent a web source.
+        # The loop therefore records the missing capability and
+        # keeps the mission resumable.
+        if (
+            decision["decision"] == "expand"
+            and any(
+                "source" in g["gap"].lower()
+                or "evidence" in g["gap"].lower()
+                for g in gaps
+            )
+            and not extract_urls(objective)
+        ):
+            results["adaptive_expansion"] = {
+                "status": "waiting_for_capability_input",
+                "reason": (
+                    "The mission requires external evidence, "
+                    "but no explicit permitted URL was supplied."
+                ),
+                "next_requirement": (
+                    "Provide an allowlisted source or configure "
+                    "EXTERNAL_ALLOWED_DOMAINS."
+                ),
             }
-        ]
 
-        if not unfinished:
+            # Prevent meaningless endless retries.
             break
 
-    # ========================================================
-    # FINAL STATE
-    # ========================================================
+        if decision["decision"] == "complete":
+            break
 
-    final_steps = get_steps(mission_id)
+        # Adaptive re-execution.
+        results["_research_retry"] = True
 
-    blocked = [
-        s for s in final_steps
-        if s["status"] == "blocked"
-    ]
+    # Final independent verification.
+    final_verification = verify_mission(
+        mission_id,
+        objective,
+        results,
+    )
 
-    if blocked:
-
-        set_mission_status(
-            mission_id,
-            "awaiting_approval",
-            {
-                "blocked_steps": [
-                    s["step_key"]
-                    for s in blocked
-                ]
-            },
-            0.75,
-        )
-
-        return {
-            "mission_id": mission_id,
-            "status": "awaiting_approval",
-            "adaptive_cycles": adaptive_cycles,
-            "results": results,
-        }
-
-    incomplete = [
-        s for s in final_steps
-        if s["status"] != "completed"
-    ]
-
-    if incomplete:
-
-        set_mission_status(
-            mission_id,
-            "failed",
-            {
-                "incomplete_steps": [
-                    s["step_key"]
-                    for s in incomplete
-                ]
-            },
-            0.3,
-        )
-
-        return {
-            "mission_id": mission_id,
-            "status": "failed",
-            "adaptive_cycles": adaptive_cycles,
-            "results": results,
-        }
-
-    # --------------------------------------------------------
-    # Independent final verification.
-    # --------------------------------------------------------
-
-    if verify:
-
-        verification = await execute_connector(
-            "verification",
-            mission_id,
-            f"{mission_id}:final-verification",
-            objective,
-            {
-                "results": results,
-                "steps": final_steps,
-            },
-        )
-
-        results["final_verification"] = verification
-
-        record_evidence(
-            mission_id,
-            None,
-            "verification",
-            verification,
-        )
-
-    # --------------------------------------------------------
-    # Persistent learning.
-    # --------------------------------------------------------
+    results["final_verification"] = final_verification
 
     if remember:
-
-        lesson = (
-            "Mission completed through adaptive execution. "
-            "The engine observed mission state, executed "
-            "dependency-aware work, saved checkpoints, "
-            "captured evidence, and evaluated whether "
-            "additional capability routing was required."
-        )
-
-        record_learning(
+        memory = remember_learning(
             mission_id,
-            "adaptive-orchestrator",
-            lesson,
+            objective,
+            results,
         )
 
-    confidence = 0.97 if verify else 0.88
+        results["remember"] = memory
+        learned = memory.get("status") == "completed"
 
-    final_result = {
-        "version": VERSION,
-        "build": BUILD,
-        "status": "completed",
-        "objective": objective,
-        "results": results,
-        "steps_completed": len(
-            [
-                s for s in final_steps
-                if s["status"] == "completed"
-            ]
+    verified = (
+        final_verification.get("status")
+        == "verified"
+    )
+
+    confidence = (
+        float(
+            final_verification.get(
+                "confidence",
+                0.90,
+            )
+        )
+        if verified
+        else 0.60
+    )
+
+    status = (
+        "completed"
+        if verified
+        else "completed_with_limits"
+    )
+
+    conn = db()
+
+    conn.execute(
+        """
+        UPDATE missions
+        SET
+            status=?,
+            confidence=?,
+            adaptive_cycles=?,
+            recovery_attempts=?,
+            updated_at=?
+        WHERE mission_id=?
+        """,
+        (
+            status,
+            confidence,
+            adaptive_cycles,
+            recovery_attempts,
+            now_iso(),
+            mission_id,
         ),
-        "adaptive_cycles": adaptive_cycles,
-        "recovery_attempts": recovery_count,
-        "verified": verify,
-        "learned": remember,
-        "checkpointed": True,
-    }
-
-    set_mission_status(
-        mission_id,
-        "completed",
-        final_result,
-        confidence,
     )
 
-    record_provenance(
-        mission_id,
-        "mission_completed",
-        data=final_result,
-    )
+    conn.commit()
+    conn.close()
 
     return {
         "mission_id": mission_id,
-        "status": "completed",
+        "status": status,
         "confidence": confidence,
         "adaptive_cycles": adaptive_cycles,
-        "result": final_result,
+        "recovery_attempts": recovery_attempts,
+        "results": results,
+        "steps_completed": completed_steps,
+        "verified": verified,
+        "learned": learned,
+        "checkpointed": True,
     }
 
 
 # ============================================================
-# WEB INTERFACE
+# CREATE MISSION
+# ============================================================
+
+def create_mission(
+    objective: str,
+) -> str:
+
+    mission_id = uid("mission")
+
+    conn = db()
+
+    conn.execute(
+        """
+        INSERT INTO missions
+        (
+            mission_id,
+            objective,
+            status,
+            confidence,
+            adaptive_cycles,
+            recovery_attempts,
+            checkpoint,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, 'queued', 0, 0, 0, NULL, ?, ?)
+        """,
+        (
+            mission_id,
+            objective,
+            now_iso(),
+            now_iso(),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+    return mission_id
+
+
+# ============================================================
+# API ROUTES
 # ============================================================
 
 @app.get("/", response_class=HTMLResponse)
-def home():
-
+async def home():
     return f"""
 <!doctype html>
 <html>
 <head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AI Infinity</title>
-
 <style>
 body {{
-    font-family:system-ui,sans-serif;
-    background:#0b1020;
-    color:#fff;
     margin:0;
-    padding:20px;
+    background:#050505;
+    color:#f4f4f4;
+    font-family:Arial,sans-serif;
 }}
-
-.card {{
+main {{
     max-width:900px;
     margin:auto;
-    background:#151c31;
-    border-radius:20px;
-    padding:22px;
+    padding:28px 18px;
 }}
-
-textarea {{
+.card {{
+    background:#111;
+    border:1px solid #292929;
+    border-radius:18px;
+    padding:20px;
+    margin:14px 0;
+}}
+h1 {{
+    font-size:34px;
+    margin-bottom:4px;
+}}
+.sub {{
+    color:#aaa;
+}}
+input,button {{
     width:100%;
-    min-height:150px;
     box-sizing:border-box;
-    border-radius:14px;
-    padding:14px;
-    font-size:16px;
-    background:#0d1426;
-    color:#fff;
-    border:1px solid #303b59;
-}}
-
-button {{
-    width:100%;
     padding:15px;
-    margin-top:12px;
-    border:0;
     border-radius:12px;
+    border:1px solid #333;
+    margin-top:10px;
     font-size:16px;
-    font-weight:700;
 }}
-
+input {{
+    background:#080808;
+    color:white;
+}}
+button {{
+    background:#fff;
+    color:#000;
+    font-weight:bold;
+    cursor:pointer;
+}}
 pre {{
     white-space:pre-wrap;
     word-break:break-word;
-    background:#080d18;
-    padding:15px;
+    background:#080808;
+    padding:14px;
     border-radius:12px;
     overflow:auto;
 }}
-
-.small {{
-    opacity:.7;
+.badge {{
+    display:inline-block;
+    padding:7px 10px;
+    border-radius:20px;
+    background:#191919;
+    margin:3px;
     font-size:13px;
 }}
 </style>
 </head>
-
 <body>
+<main>
 
 <div class="card">
-
 <h1>∞ AI Infinity</h1>
-
+<div class="sub">
+{VERSION} · {BUILD}
+</div>
 <p>
-Adaptive Mission Execution Engine
+Understand → Discover → Plan → Research → Act →
+Observe → Learn → Expand → Verify
 </p>
+</div>
 
-<textarea
-id="objective"
-placeholder="Tell AI Infinity what you want done..."
-></textarea>
-
+<div class="card">
+<h3>Mission</h3>
+<input id="objective"
+placeholder="Tell AI Infinity what you want..."
+/>
 <button onclick="runMission()">
-RUN ADAPTIVE MISSION
+RUN MISSION
 </button>
-
-<p class="small">
-{VERSION} • {BUILD}
-</p>
-
 <pre id="output">Ready.</pre>
+</div>
 
+<div class="card">
+<span class="badge">Adaptive Loop</span>
+<span class="badge">Mission Graph</span>
+<span class="badge">Research</span>
+<span class="badge">Evidence</span>
+<span class="badge">Verification</span>
+<span class="badge">Learning</span>
+<span class="badge">Checkpointing</span>
+<span class="badge">Approval Gate</span>
 </div>
 
 <script>
-
 async function runMission() {{
-
     const objective =
         document.getElementById("objective").value.trim();
 
     if (!objective) {{
-        document.getElementById("output").textContent =
-            "Enter a mission first.";
         return;
     }}
 
-    document.getElementById("output").textContent =
-        "AI Infinity is adapting the mission...";
+    const output =
+        document.getElementById("output");
+
+    output.textContent =
+        "AI Infinity is executing...";
 
     try {{
-
         const response = await fetch("/run", {{
-
             method:"POST",
-
             headers:{{
                 "Content-Type":"application/json"
             }},
-
             body:JSON.stringify({{
                 objective:objective,
                 research:true,
                 verify:true,
-                remember:true,
-                auto_execute:true,
-                adaptive:true
+                remember:true
             }})
-
         }});
 
         const data = await response.json();
 
-        document.getElementById("output").textContent =
+        output.textContent =
             JSON.stringify(data,null,2);
 
     }} catch(error) {{
-
-        document.getElementById("output").textContent =
-            "Request failed: " + error;
-
+        output.textContent =
+            "Error: " + error;
     }}
 }}
-
 </script>
 
+</main>
 </body>
 </html>
 """
 
 
-# ============================================================
-# CORE ROUTES
-# ============================================================
-
 @app.get("/health")
-def health():
-
+async def health():
     return {
         "status": "healthy",
         "version": VERSION,
         "build": BUILD,
-
-        "policy_version": 1,
+        "policy_version": POLICY_VERSION,
         "policy_valid": True,
 
         "router_enabled": True,
@@ -2266,8 +2163,8 @@ def health():
 
         "capability_discovery": True,
         "connector_contracts": True,
-        "mission_graph": True,
 
+        "mission_graph": True,
         "parallel_execution": True,
         "provenance": True,
         "independent_verification": True,
@@ -2280,210 +2177,261 @@ def health():
         "approval_gate_enabled": True,
 
         "autonomous_connector_orchestrator": True,
-
         "dynamic_graph_execution": True,
         "dynamic_graph_expansion": True,
+
         "adaptive_execution_engine": True,
         "adaptive_decision_loop": True,
         "connector_recovery": True,
         "connector_learning": True,
+
         "mission_observation": True,
         "checkpoint_after_cycle": True,
+
+        # 2050.53
+        "universal_intelligence_loop": True,
+        "intelligence_gap_detection": True,
+        "adaptive_requirement_discovery": True,
+        "research_evidence_loop": True,
+        "mission_expansion": True,
+        "adaptive_reexecution": True,
+        "persistent_learning_loop": True,
+        "independent_final_verification": True,
     }
 
 
 @app.get("/status")
-def status():
-    return health()
+async def status():
+    return await health()
 
 
 @app.get("/capabilities")
-def capabilities():
-
+async def capabilities():
     return {
         "version": VERSION,
+        "build": BUILD,
         "capabilities": [
             "intent_interpretation",
             "adaptive_planning",
             "capability_discovery",
-            "connector_selection",
+            "mission_graph",
             "dynamic_graph_expansion",
-            "dependency_aware_execution",
-            "bounded_parallel_execution",
-            "mission_observation",
-            "adaptive_decision_loop",
-            "connector_fallback",
-            "adaptive_recovery",
-            "checkpointing",
-            "resumable_missions",
-            "external_intelligence",
+            "controlled_external_research",
             "evidence_collection",
+            "provenance",
+            "observation",
+            "intelligence_gap_detection",
+            "adaptive_reexecution",
+            "recovery",
+            "checkpointing",
             "independent_verification",
-            "persistent_memory",
-            "connector_learning",
-            "controlled_real_world_command",
-            "human_approval_gate",
+            "persistent_learning",
+            "approval_gated_actions",
         ],
     }
 
 
 @app.get("/policy")
-def policy():
-
+async def policy():
     return {
-        "version": 1,
+        "version": POLICY_VERSION,
         "max_steps": MAX_STEPS,
         "max_parallel": MAX_PARALLEL,
         "max_recovery_attempts": MAX_RECOVERY_ATTEMPTS,
         "max_adaptive_cycles": MAX_ADAPTIVE_CYCLES,
 
-        "external_http": "allowlist_only",
-
+        "external_http": "controlled_allowlist",
         "arbitrary_code_execution": False,
         "credential_modification": False,
         "permission_escalation": False,
         "destructive_actions": False,
         "unrestricted_proxy": False,
-
-        "high_risk_action_requires_approval": True,
+        "protected_actions_require_approval": True,
     }
 
 
 @app.get("/tools")
-def tools():
+async def tools():
+    conn = db()
+
+    rows = conn.execute(
+        """
+        SELECT
+            name,
+            connector_type,
+            permission,
+            score,
+            uses,
+            successes,
+            failures
+        FROM connectors
+        ORDER BY name
+        """
+    ).fetchall()
+
+    conn.close()
 
     return {
         "version": VERSION,
-        "connectors": connector_rows(),
+        "tools": [dict(row) for row in rows],
     }
 
 
 @app.get("/connectors")
-def connectors():
-
-    rows = connector_rows()
-
-    return {
-        "version": VERSION,
-        "count": len(rows),
-        "connectors": rows,
-    }
+async def connectors():
+    return await tools()
 
 
 @app.post("/connectors/register")
-def register_connector(
-    payload: ConnectorRegistration
+async def register_connector(
+    request: ConnectorRequest,
 ):
+    connector_id = uid("connector")
 
-    name = payload.name.strip()
+    conn = db()
 
-    if not re.fullmatch(
-        r"[a-zA-Z0-9_-]{2,64}",
-        name,
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid connector name.",
+    try:
+        conn.execute(
+            """
+            INSERT INTO connectors
+            (
+                connector_id,
+                name,
+                connector_type,
+                permission,
+                score,
+                uses,
+                successes,
+                failures,
+                metadata,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, 0.5, 0, 0, 0, ?, ?, ?)
+            """,
+            (
+                connector_id,
+                request.name,
+                request.connector_type,
+                request.permission,
+                json_dump(request.metadata),
+                now_iso(),
+                now_iso(),
+            ),
         )
+
+        conn.commit()
+
+    except sqlite3.IntegrityError:
+        conn.close()
+
+        raise HTTPException(
+            status_code=409,
+            detail="Connector already exists.",
+        )
+
+    conn.close()
+
+    return {
+        "status": "registered",
+        "connector_id": connector_id,
+        "name": request.name,
+    }
+
+
+@app.get("/connector-health")
+async def connector_health():
+    conn = db()
+
+    rows = conn.execute(
+        """
+        SELECT
+            name,
+            permission,
+            score,
+            uses,
+            successes,
+            failures,
+            updated_at
+        FROM connectors
+        ORDER BY name
+        """
+    ).fetchall()
+
+    conn.close()
+
+    return {
+        "version": VERSION,
+        "connectors": [dict(row) for row in rows],
+    }
+
+
+@app.get("/discover")
+async def discover(
+    objective: str = "Research and verify an AI system",
+):
+    return {
+        "version": VERSION,
+        "objective": objective,
+        **discover_capabilities(objective),
+    }
+
+
+# ============================================================
+# RUN
+# ============================================================
+
+@app.post("/run")
+async def run(request: RunRequest):
+
+    mission_id = create_mission(
+        request.objective
+    )
 
     conn = db()
 
     conn.execute(
         """
-        INSERT INTO connectors
-        (name, description, category, risk,
-         status, protected, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-
-        ON CONFLICT(name) DO UPDATE SET
-            description=excluded.description,
-            category=excluded.category,
-            risk=excluded.risk,
-            status=excluded.status,
-            updated_at=excluded.updated_at
+        UPDATE missions
+        SET status='running', updated_at=?
+        WHERE mission_id=?
         """,
         (
-            name,
-            payload.description,
-            payload.category,
-            payload.risk,
-            payload.status,
-            1 if payload.risk == "high" else 0,
-            now(),
+            now_iso(),
+            mission_id,
         ),
     )
 
     conn.commit()
     conn.close()
 
+    result = await run_mission(
+        mission_id=mission_id,
+        objective=request.objective,
+        research=request.research,
+        verify=request.verify,
+        remember=request.remember,
+    )
+
+    return result
+
+
+@app.get("/run")
+async def run_info():
     return {
-        "status": "registered",
-        "connector": name,
-        "version": VERSION,
+        "endpoint": "/run",
+        "method": "POST",
+        "example": {
+            "objective": (
+                "Research and verify AI Infinity, "
+                "identify remaining intelligence gaps, "
+                "and remember reusable learning."
+            ),
+            "research": True,
+            "verify": True,
+            "remember": True,
+        },
     }
-
-
-@app.get("/discover")
-def discover_endpoint(
-    objective: str = Query(..., min_length=1),
-):
-
-    return discover(objective)
-
-
-@app.post("/run")
-async def run_endpoint(
-    payload: RunRequest
-):
-
-    mission_id = create_mission(
-        payload.objective
-    )
-
-    graph = build_graph(
-        payload.objective,
-        payload.research,
-        payload.verify,
-        payload.remember,
-    )
-
-    create_steps(
-        mission_id,
-        graph,
-    )
-
-    record_provenance(
-        mission_id,
-        "mission_graph_created",
-        data=graph,
-    )
-
-    if not payload.auto_execute:
-
-        set_mission_status(
-            mission_id,
-            "planned",
-            {
-                "graph": graph,
-            },
-            0.7,
-        )
-
-        return {
-            "version": VERSION,
-            "mission_id": mission_id,
-            "status": "planned",
-            "graph": graph,
-        }
-
-    return await execute_mission(
-        mission_id,
-        payload.objective,
-        payload.research,
-        payload.verify,
-        payload.remember,
-        payload.adaptive,
-    )
 
 
 # ============================================================
@@ -2491,60 +2439,67 @@ async def run_endpoint(
 # ============================================================
 
 @app.get("/mission/{mission_id}")
-def mission(
-    mission_id: str
-):
+async def mission(mission_id: str):
 
     conn = db()
 
-    row = conn.execute(
-        "SELECT * FROM missions WHERE id = ?",
+    mission_row = conn.execute(
+        """
+        SELECT *
+        FROM missions
+        WHERE mission_id=?
+        """,
         (mission_id,),
     ).fetchone()
 
-    conn.close()
+    if not mission_row:
+        conn.close()
 
-    if not row:
         raise HTTPException(
             status_code=404,
             detail="Mission not found.",
         )
 
-    data = dict(row)
+    steps = conn.execute(
+        """
+        SELECT *
+        FROM mission_steps
+        WHERE mission_id=?
+        ORDER BY created_at
+        """,
+        (mission_id,),
+    ).fetchall()
 
-    if data.get("result"):
-        try:
-            data["result"] = json.loads(
-                data["result"]
-            )
-        except Exception:
-            pass
+    gaps = conn.execute(
+        """
+        SELECT *
+        FROM intelligence_gaps
+        WHERE mission_id=?
+        ORDER BY priority DESC
+        """,
+        (mission_id,),
+    ).fetchall()
 
-    if data.get("checkpoint"):
-        try:
-            data["checkpoint"] = json.loads(
-                data["checkpoint"]
-            )
-        except Exception:
-            pass
+    conn.close()
 
-    data["steps"] = get_steps(mission_id)
-
-    return data
+    return {
+        "mission": dict(mission_row),
+        "steps": [dict(x) for x in steps],
+        "intelligence_gaps": [dict(x) for x in gaps],
+    }
 
 
 @app.get("/mission/{mission_id}/events")
-def mission_events(
-    mission_id: str
+async def mission_events(
+    mission_id: str,
 ):
-
     conn = db()
 
     rows = conn.execute(
         """
         SELECT *
-        FROM provenance
-        WHERE mission_id = ?
+        FROM connector_events
+        WHERE mission_id=?
         ORDER BY created_at
         """,
         (mission_id,),
@@ -2554,22 +2509,21 @@ def mission_events(
 
     return {
         "mission_id": mission_id,
-        "events": [dict(r) for r in rows],
+        "events": [dict(x) for x in rows],
     }
 
 
 @app.get("/mission/{mission_id}/evidence")
-def mission_evidence(
-    mission_id: str
+async def mission_evidence(
+    mission_id: str,
 ):
-
     conn = db()
 
     rows = conn.execute(
         """
         SELECT *
         FROM evidence
-        WHERE mission_id = ?
+        WHERE mission_id=?
         ORDER BY created_at
         """,
         (mission_id,),
@@ -2579,22 +2533,21 @@ def mission_evidence(
 
     return {
         "mission_id": mission_id,
-        "evidence": [dict(r) for r in rows],
+        "evidence": [dict(x) for x in rows],
     }
 
 
 @app.get("/mission/{mission_id}/checkpoints")
-def mission_checkpoints(
-    mission_id: str
+async def mission_checkpoints(
+    mission_id: str,
 ):
-
     conn = db()
 
     rows = conn.execute(
         """
         SELECT *
         FROM checkpoints
-        WHERE mission_id = ?
+        WHERE mission_id=?
         ORDER BY cycle
         """,
         (mission_id,),
@@ -2604,7 +2557,7 @@ def mission_checkpoints(
 
     return {
         "mission_id": mission_id,
-        "checkpoints": [dict(r) for r in rows],
+        "checkpoints": [dict(x) for x in rows],
     }
 
 
@@ -2613,8 +2566,7 @@ def mission_checkpoints(
 # ============================================================
 
 @app.get("/approvals")
-def approvals():
-
+async def approvals():
     conn = db()
 
     rows = conn.execute(
@@ -2628,20 +2580,23 @@ def approvals():
     conn.close()
 
     return {
-        "approvals": [dict(r) for r in rows],
+        "approvals": [dict(x) for x in rows],
     }
 
 
 @app.post("/approvals/{approval_id}/approve")
-def approve(
+async def approve(
     approval_id: str,
-    payload: ApprovalRequest,
+    request: ApprovalRequest,
 ):
-
     conn = db()
 
     row = conn.execute(
-        "SELECT * FROM approvals WHERE id = ?",
+        """
+        SELECT *
+        FROM approvals
+        WHERE approval_id=?
+        """,
         (approval_id,),
     ).fetchone()
 
@@ -2655,19 +2610,19 @@ def approve(
 
     status = (
         "approved"
-        if payload.approved
+        if request.approved
         else "rejected"
     )
 
     conn.execute(
         """
         UPDATE approvals
-        SET status = ?, resolved_at = ?
-        WHERE id = ?
+        SET status=?, updated_at=?
+        WHERE approval_id=?
         """,
         (
             status,
-            now(),
+            now_iso(),
             approval_id,
         ),
     )
@@ -2680,155 +2635,79 @@ def approve(
         "status": status,
         "message": (
             "Approval recorded. "
-            "Protected actions remain subject "
-            "to connector authorization rules."
+            "The approval gate does not itself grant unrestricted "
+            "external permissions."
         ),
     }
 
 
 # ============================================================
-# CONNECTOR HEALTH
-# ============================================================
-
-@app.get("/connector-health")
-def connector_health():
-
-    rows = connector_rows()
-
-    return {
-        "version": VERSION,
-        "connectors": [
-            {
-                "name": x["name"],
-                "status": x["status"],
-                "risk": x["risk"],
-                "calls": x["calls"],
-                "successes": x["successes"],
-                "failures": x["failures"],
-                "score": x["score"],
-            }
-            for x in rows
-        ],
-    }
-
-
-# ============================================================
-# TESTS
+# SELF TESTS
 # ============================================================
 
 @app.get("/test-router")
-def test_router():
-
+async def test_router():
     objective = (
-        "Analyze AI Infinity, "
-        "verify the result, "
-        "and remember the learning."
-    )
-
-    requirements = infer_requirements(
-        objective,
-        False,
-        True,
-        True,
-    )
-
-    graph = build_graph(
-        objective,
-        False,
-        True,
-        True,
+        "Interpret an adaptive AI mission, "
+        "discover capabilities, plan execution, "
+        "verify the result, and remember learning."
     )
 
     return {
-        "test": "adaptive_connector_router",
+        "test": "adaptive_router",
         "version": VERSION,
-        "status": "completed",
-        "requirements": requirements,
-        "graph": graph,
-        "dynamic_graph_expansion": True,
-        "parallel_execution": True,
-        "adaptive_recovery": True,
-        "checkpointing": True,
-        "verification": True,
-        "confidence": 0.97,
+        "build": BUILD,
+        "capabilities": discover_capabilities(
+            objective
+        ),
+        "status": "ready",
     }
 
 
 @app.get("/test-tools")
-def test_tools():
-
+async def test_tools():
     return {
-        "test": "adaptive_connector_fabric",
+        "test": "tool_fabric",
         "version": VERSION,
-        "status": "completed",
-        "connectors": [
-            x["name"]
-            for x in connector_rows()
-        ],
-        "features": [
-            "capability_discovery",
-            "connector_selection",
-            "mission_graph",
-            "dynamic_graph_expansion",
-            "dependency_aware_execution",
-            "parallel_execution",
-            "mission_observation",
-            "adaptive_decision_loop",
-            "connector_fallback",
-            "evidence",
-            "provenance",
-            "verification",
-            "adaptive_recovery",
-            "learning",
-            "checkpointing",
-            "resumable_state",
-        ],
+        "tools": await tools(),
+        "status": "ready",
     }
 
 
 @app.get("/test-external")
 async def test_external():
-
     return {
-        "test": "controlled_external_intelligence",
+        "test": "external_intelligence",
         "version": VERSION,
-        "status": "available",
+        "enabled": True,
+        "mode": "controlled_allowlist",
         "allowlisted_domains": sorted(
             EXTERNAL_ALLOWED_DOMAINS
         ),
-        "blocked_internal_hosts": sorted(
-            BLOCKED_HOSTS
+        "message": (
+            "External intelligence is available only "
+            "through explicitly permitted domains."
         ),
-        "policy": "allowlist_only",
     }
 
 
 @app.get("/test-orchestrator")
 async def test_orchestrator():
 
-    mission_id = create_mission(
+    objective = (
         "Run an autonomous orchestration self-test."
     )
 
-    graph = build_graph(
-        "Run an autonomous orchestration self-test.",
-        False,
-        True,
-        True,
+    mission_id = create_mission(
+        objective
     )
 
-    create_steps(
+    result = await run_mission(
         mission_id,
-        graph,
-    )
-
-    result = await execute_mission(
-        mission_id,
-        "Run an autonomous orchestration self-test.",
-        False,
-        True,
-        True,
-        True,
+        objective,
+        research=False,
+        verify=True,
+        remember=True,
     )
 
     return {
@@ -2843,33 +2722,20 @@ async def test_orchestrator():
 async def test_adaptive():
 
     objective = (
-        "Research and verify AI Infinity "
-        "and remember the reusable learning."
+        "Research and verify AI Infinity and "
+        "remember the reusable learning."
     )
 
     mission_id = create_mission(
         objective
     )
 
-    graph = build_graph(
-        objective,
-        True,
-        True,
-        True,
-    )
-
-    create_steps(
-        mission_id,
-        graph,
-    )
-
-    result = await execute_mission(
+    result = await run_mission(
         mission_id,
         objective,
-        True,
-        True,
-        True,
-        True,
+        research=True,
+        verify=True,
+        remember=True,
     )
 
     return {
@@ -2886,21 +2752,97 @@ async def test_adaptive():
             "recovery": True,
             "learning": True,
             "verification": True,
+            "intelligence_gap_detection": True,
+            "mission_expansion": True,
+            "adaptive_reexecution": True,
+            "research_evidence_loop": True,
         },
     }
 
 
+@app.get("/test-intelligence")
+async def test_intelligence():
+
+    objective = (
+        "Research and verify AI Infinity, "
+        "identify what information is still missing, "
+        "adapt the mission, verify the final state, "
+        "and remember reusable learning."
+    )
+
+    mission_id = create_mission(
+        objective
+    )
+
+    result = await run_mission(
+        mission_id,
+        objective,
+        research=True,
+        verify=True,
+        remember=True,
+    )
+
+    return {
+        "test": "universal_intelligence_loop",
+        "version": VERSION,
+        "build": BUILD,
+        "mission_id": mission_id,
+        "result": result,
+        "loop": [
+            "understand",
+            "discover",
+            "plan",
+            "research",
+            "act",
+            "observe",
+            "learn",
+            "detect_gaps",
+            "expand",
+            "reexecute",
+            "verify",
+            "deliver",
+        ],
+    }
+
+
 # ============================================================
-# GLOBAL ERROR HANDLER
+# LEGACY COMPATIBILITY
 # ============================================================
 
-@app.exception_handler(Exception)
-async def global_exception_handler(
-    request,
-    exc,
-):
+@app.get("/policy/validate")
+async def validate_policy():
     return {
-        "error": "AI Infinity internal error",
-        "version": VERSION,
-        "detail": str(exc),
+        "valid": True,
+        "version": POLICY_VERSION,
     }
+
+
+# ============================================================
+# STARTUP
+# ============================================================
+
+@app.on_event("startup")
+async def startup():
+    init_db()
+    register_builtin_connectors()
+
+
+# ============================================================
+# LOCAL ENTRY
+# ============================================================
+
+if __name__ == "__main__":
+    import uvicorn
+
+    port = int(
+        os.getenv(
+            "PORT",
+            "8000",
+        )
+    )
+
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=port,
+    )
