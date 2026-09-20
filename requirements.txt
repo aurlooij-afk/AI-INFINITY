@@ -1,4 +1,6 @@
 fastapi
-uvicorn
+uvicorn[standard]
+requests
 pydantic
-httpx
+python-multipart
+lxml
