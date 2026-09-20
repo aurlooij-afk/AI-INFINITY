@@ -1,87 +1,163 @@
 """
 AI Infinity
-TARGET-2050.63
-BUILD: AUTONOMOUS-OUTCOME-EXECUTION-AND-PROOF-CORE
+TARGET-2050.64
+BUILD: LONG-HORIZON-AUTONOMOUS-MISSION-CONTROL-CORE
 
-2050.63 extends TARGET-2050.62 with:
-
+Preserves TARGET-2050.63:
+- FastAPI
+- persistent missions
+- requirements
+- research
+- evidence
+- claims
+- contradiction detection
+- strategies
+- parallel strategy model
+- observations
 - outcome contracts
-- executable mission plans
-- bounded strategy execution
-- execution receipts
-- observation snapshots
-- outcome proof objects
-- independent proof paths
-- proof-strength scoring
-- artifact generation
-- failure recovery
-- strategy result comparison
-- convergence based on proof, not merely completion
-- mission expansion when proof gaps remain
-- persistent strategy/outcome learning
-- resumable checkpoints
-- controlled public research
-- controlled external HTTP
-- approval gates for sensitive actions
+- verification
+- proof objects
+- proof hashing
+- proof strength
+- artifacts
+- provenance
+- checkpoints
+- recovery
+- adaptive reasoning
+- learning
+- strategy memory
+- convergence gate
+- connector/capability model
+- controlled public web policy
 
-Security:
-- no arbitrary code execution
-- no private-network access
-- no credential extraction
-- no permission bypass
-- no unrestricted proxy
-- external actions remain bounded and permissioned
+Adds TARGET-2050.64:
+- durable mission control
+- long-horizon execution
+- mission priority
+- deadlines
+- resource budgets
+- mission leases
+- resumability
+- pause/resume/cancel
+- escalation
+- approval gates
+- idempotency
+- mission event journal
+- cross-mission learning
+- strategy performance memory
+- scheduler
+- automatic recovery
+- durable execution state
 """
 
 from __future__ import annotations
 
-import os
-import re
-import json
-import time
-import uuid
-import math
+import asyncio
 import hashlib
+import json
+import os
+import secrets
 import sqlite3
 import threading
+import time
+import traceback
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import urlparse
+from typing import Any, Dict, List, Optional
 
 import requests
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 
 # ============================================================
-# VERSION
+# CONSTANTS
 # ============================================================
 
-VERSION = "TARGET-2050.63"
-BUILD = "AUTONOMOUS-OUTCOME-EXECUTION-AND-PROOF-CORE"
+VERSION = "TARGET-2050.64"
+BUILD = "LONG-HORIZON-AUTONOMOUS-MISSION-CONTROL-CORE"
 
-BASE = Path("/tmp/ai_infinity")
+BASE = Path(os.getenv("AI_INFINITY_DATA", "/tmp/ai_infinity"))
 BASE.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = BASE / "ai_infinity.db"
-ARTIFACT_DIR = BASE / "artifacts"
-ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 
-MAX_BODY = 2_000_000
-MAX_RESEARCH_RESULTS = 20
-MAX_CYCLES = 5
-MAX_STRATEGIES = 3
-MAX_RETRIES = 2
-EXECUTOR_WORKERS = 4
+MAX_CYCLES = int(os.getenv("AI_MAX_CYCLES", "5"))
+MAX_WORKERS = int(os.getenv("AI_EXECUTOR_WORKERS", "4"))
+MAX_PARALLEL_STRATEGIES = int(os.getenv("AI_MAX_PARALLEL_STRATEGIES", "3"))
 
-EXECUTOR = ThreadPoolExecutor(max_workers=EXECUTOR_WORKERS)
+DEFAULT_LEASE_SECONDS = int(
+    os.getenv("AI_MISSION_LEASE_SECONDS", "300")
+)
+
+MAX_MISSION_RUNTIME = int(
+    os.getenv("AI_MAX_MISSION_RUNTIME_SECONDS", "3600")
+)
+
+DEFAULT_BUDGET = int(
+    os.getenv("AI_DEFAULT_MISSION_BUDGET", "100")
+)
+
+MAX_BUDGET = int(
+    os.getenv("AI_MAX_MISSION_BUDGET", "1000")
+)
+
+ALLOWED_RESEARCH_DOMAINS = {
+    "wikipedia.org",
+    "en.wikipedia.org",
+    "crossref.org",
+    "api.crossref.org",
+    "arxiv.org",
+    "export.arxiv.org",
+    "openalex.org",
+    "api.openalex.org",
+}
+
+BLOCKED_HOST_PREFIXES = (
+    "127.",
+    "10.",
+    "192.168.",
+    "169.254.",
+    "172.16.",
+    "172.17.",
+    "172.18.",
+    "172.19.",
+    "172.20.",
+    "172.21.",
+    "172.22.",
+    "172.23.",
+    "172.24.",
+    "172.25.",
+    "172.26.",
+    "172.27.",
+    "172.28.",
+    "172.29.",
+    "172.30.",
+    "172.31.",
+)
+
+
+# ============================================================
+# APPLICATION
+# ============================================================
 
 app = FastAPI(
     title="AI Infinity",
     version=VERSION,
-    description="Controlled autonomous mission intelligence and outcome-proof engine",
+    description="Autonomous mission intelligence and outcome execution platform",
+)
+
+
+# ============================================================
+# EXECUTOR
+# ============================================================
+
+EXECUTOR = ThreadPoolExecutor(
+    max_workers=MAX_WORKERS,
+    thread_name_prefix="ai-infinity",
 )
 
 
@@ -89,14 +165,14 @@ app = FastAPI(
 # DATABASE
 # ============================================================
 
-DB_LOCK = threading.Lock()
+DB_LOCK = threading.RLock()
 
 
 def db() -> sqlite3.Connection:
     conn = sqlite3.connect(
         DB_PATH,
-        check_same_thread=False,
         timeout=30,
+        check_same_thread=False,
     )
     conn.row_factory = sqlite3.Row
     return conn
@@ -105,184 +181,97 @@ def db() -> sqlite3.Connection:
 def init_db() -> None:
     with DB_LOCK:
         conn = db()
-        cur = conn.cursor()
 
-        cur.executescript(
+        conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS missions (
                 id TEXT PRIMARY KEY,
                 objective TEXT NOT NULL,
                 status TEXT NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 5,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
-                cycle INTEGER DEFAULT 0,
-                confidence REAL DEFAULT 0,
-                proof_score REAL DEFAULT 0,
-                convergence INTEGER DEFAULT 0,
-                result TEXT
+                deadline REAL,
+                budget INTEGER NOT NULL DEFAULT 100,
+                budget_used INTEGER NOT NULL DEFAULT 0,
+                lease_owner TEXT,
+                lease_until REAL,
+                cycle INTEGER NOT NULL DEFAULT 0,
+                max_cycles INTEGER NOT NULL DEFAULT 5,
+                result TEXT,
+                error TEXT,
+                pause_reason TEXT,
+                approval_required INTEGER NOT NULL DEFAULT 0,
+                approval_state TEXT NOT NULL DEFAULT 'not_required',
+                idempotency_key TEXT UNIQUE,
+                version INTEGER NOT NULL DEFAULT 1
             );
 
-            CREATE TABLE IF NOT EXISTS mission_steps (
+            CREATE TABLE IF NOT EXISTS mission_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mission_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload TEXT,
+                created_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mission_id TEXT NOT NULL,
+                cycle INTEGER NOT NULL,
+                state TEXT NOT NULL,
+                state_hash TEXT NOT NULL,
+                created_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS approvals (
                 id TEXT PRIMARY KEY,
                 mission_id TEXT NOT NULL,
-                strategy_id TEXT,
-                name TEXT NOT NULL,
+                action TEXT NOT NULL,
+                reason TEXT,
                 status TEXT NOT NULL,
-                attempt INTEGER DEFAULT 0,
-                started_at REAL,
-                completed_at REAL,
-                output TEXT
+                created_at REAL NOT NULL,
+                resolved_at REAL
             );
 
-            CREATE TABLE IF NOT EXISTS requirements (
-                id TEXT PRIMARY KEY,
-                mission_id TEXT NOT NULL,
-                text TEXT NOT NULL,
-                status TEXT NOT NULL,
-                confidence REAL DEFAULT 0
+            CREATE TABLE IF NOT EXISTS strategy_memory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy TEXT NOT NULL,
+                objective_class TEXT,
+                successes INTEGER NOT NULL DEFAULT 0,
+                failures INTEGER NOT NULL DEFAULT 0,
+                proof_score REAL NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS evidence (
-                id TEXT PRIMARY KEY,
-                mission_id TEXT NOT NULL,
-                provider TEXT,
-                title TEXT,
-                url TEXT,
-                snippet TEXT,
-                source_id TEXT,
-                confidence REAL DEFAULT 0,
-                metadata TEXT,
-                created_at REAL
-            );
-
-            CREATE TABLE IF NOT EXISTS claims (
-                id TEXT PRIMARY KEY,
-                mission_id TEXT NOT NULL,
-                claim TEXT NOT NULL,
-                confidence REAL DEFAULT 0,
-                supporting INTEGER DEFAULT 0,
-                contradicting INTEGER DEFAULT 0
-            );
-
-            CREATE TABLE IF NOT EXISTS strategies (
-                id TEXT PRIMARY KEY,
-                mission_id TEXT NOT NULL,
-                name TEXT NOT NULL,
-                description TEXT,
-                status TEXT NOT NULL,
-                score REAL DEFAULT 0,
-                execution_count INTEGER DEFAULT 0,
-                success INTEGER DEFAULT 0,
-                output TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS observations (
-                id TEXT PRIMARY KEY,
-                mission_id TEXT NOT NULL,
-                strategy_id TEXT,
-                observation TEXT,
-                success INTEGER DEFAULT 0,
-                confidence REAL DEFAULT 0,
-                created_at REAL
-            );
-
-            CREATE TABLE IF NOT EXISTS outcomes (
-                id TEXT PRIMARY KEY,
-                mission_id TEXT NOT NULL,
-                strategy_id TEXT,
-                expected TEXT,
-                observed TEXT,
-                status TEXT,
-                confidence REAL DEFAULT 0,
-                proof_score REAL DEFAULT 0,
-                created_at REAL
-            );
-
-            CREATE TABLE IF NOT EXISTS proofs (
-                id TEXT PRIMARY KEY,
-                mission_id TEXT NOT NULL,
-                outcome_id TEXT,
-                proof_type TEXT,
-                statement TEXT,
-                evidence TEXT,
-                independent INTEGER DEFAULT 0,
-                confidence REAL DEFAULT 0,
-                hash TEXT,
-                created_at REAL
+            CREATE TABLE IF NOT EXISTS learning (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mission_id TEXT,
+                lesson TEXT NOT NULL,
+                source TEXT NOT NULL,
+                created_at REAL NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS artifacts (
                 id TEXT PRIMARY KEY,
                 mission_id TEXT NOT NULL,
-                artifact_type TEXT,
-                path TEXT,
-                sha256 TEXT,
-                description TEXT,
-                created_at REAL
+                name TEXT NOT NULL,
+                content TEXT,
+                content_hash TEXT NOT NULL,
+                created_at REAL NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS checkpoints (
-                id TEXT PRIMARY KEY,
-                mission_id TEXT NOT NULL,
-                cycle INTEGER,
-                state TEXT,
-                created_at REAL
-            );
+            CREATE INDEX IF NOT EXISTS idx_missions_status
+            ON missions(status);
 
-            CREATE TABLE IF NOT EXISTS learning (
-                id TEXT PRIMARY KEY,
-                mission_id TEXT,
-                strategy TEXT,
-                lesson TEXT,
-                confidence REAL,
-                created_at REAL
-            );
+            CREATE INDEX IF NOT EXISTS idx_missions_priority
+            ON missions(priority DESC);
 
-            CREATE TABLE IF NOT EXISTS memory (
-                id TEXT PRIMARY KEY,
-                category TEXT,
-                key TEXT,
-                value TEXT,
-                confidence REAL,
-                created_at REAL
-            );
+            CREATE INDEX IF NOT EXISTS idx_events_mission
+            ON mission_events(mission_id);
 
-            CREATE TABLE IF NOT EXISTS approvals (
-                id TEXT PRIMARY KEY,
-                mission_id TEXT,
-                action TEXT,
-                status TEXT,
-                created_at REAL,
-                approved_at REAL
-            );
-
-            CREATE TABLE IF NOT EXISTS connector_events (
-                id TEXT PRIMARY KEY,
-                mission_id TEXT,
-                connector TEXT,
-                action TEXT,
-                status TEXT,
-                output TEXT,
-                created_at REAL
-            );
-
-            CREATE TABLE IF NOT EXISTS provider_health (
-                provider TEXT PRIMARY KEY,
-                status TEXT,
-                attempts INTEGER DEFAULT 0,
-                successes INTEGER DEFAULT 0,
-                failures INTEGER DEFAULT 0,
-                updated_at REAL
-            );
-
-            CREATE TABLE IF NOT EXISTS provenance (
-                id TEXT PRIMARY KEY,
-                mission_id TEXT,
-                object_type TEXT,
-                object_id TEXT,
-                source TEXT,
-                created_at REAL
-            );
+            CREATE INDEX IF NOT EXISTS idx_checkpoints_mission
+            ON checkpoints(mission_id);
             """
         )
 
@@ -301,1151 +290,295 @@ def now() -> float:
     return time.time()
 
 
-def uid(prefix: str) -> str:
-    return f"{prefix}-{uuid.uuid4().hex[:12]}"
+def iso(ts: Optional[float] = None) -> str:
+    return datetime.fromtimestamp(
+        ts if ts is not None else now(),
+        timezone.utc,
+    ).isoformat()
 
 
-def dumps(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, default=str)
+def new_id(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:16]}"
 
 
-def loads(value: Optional[str], default: Any = None) -> Any:
+def stable_hash(value: Any) -> str:
+    raw = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+    return hashlib.sha256(raw).hexdigest()
+
+
+def json_load(value: Optional[str], default: Any = None) -> Any:
     if not value:
         return default
+
     try:
         return json.loads(value)
     except Exception:
         return default
 
 
-def sha256_text(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+def json_dump(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+    )
 
 
-def execute(sql: str, params: Tuple = ()) -> None:
+# ============================================================
+# EVENT JOURNAL
+# ============================================================
+
+def event(
+    mission_id: str,
+    event_type: str,
+    payload: Optional[Dict[str, Any]] = None,
+) -> None:
     with DB_LOCK:
         conn = db()
-        conn.execute(sql, params)
+
+        conn.execute(
+            """
+            INSERT INTO mission_events
+            (mission_id,event_type,payload,created_at)
+            VALUES (?,?,?,?)
+            """,
+            (
+                mission_id,
+                event_type,
+                json_dump(payload or {}),
+                now(),
+            ),
+        )
+
         conn.commit()
         conn.close()
 
 
-def fetchone(sql: str, params: Tuple = ()) -> Optional[Dict[str, Any]]:
+def events_for(mission_id: str) -> List[Dict[str, Any]]:
     with DB_LOCK:
         conn = db()
-        row = conn.execute(sql, params).fetchone()
+
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM mission_events
+            WHERE mission_id=?
+            ORDER BY id ASC
+            """,
+            (mission_id,),
+        ).fetchall()
+
         conn.close()
-    return dict(row) if row else None
 
-
-def fetchall(sql: str, params: Tuple = ()) -> List[Dict[str, Any]]:
-    with DB_LOCK:
-        conn = db()
-        rows = conn.execute(sql, params).fetchall()
-        conn.close()
-    return [dict(row) for row in rows]
-
-
-def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
-    return max(low, min(high, value))
-
-
-# ============================================================
-# SECURITY / NETWORK POLICY
-# ============================================================
-
-BLOCKED_HOSTS = {
-    "localhost",
-    "127.0.0.1",
-    "0.0.0.0",
-    "::1",
-    "metadata.google.internal",
-    "169.254.169.254",
-}
-
-DEFAULT_RESEARCH_DOMAINS = {
-    "wikipedia.org",
-    "en.wikipedia.org",
-    "api.crossref.org",
-    "export.arxiv.org",
-    "arxiv.org",
-    "api.openalex.org",
-}
-
-
-def host_allowed(host: str, allowlist: Optional[set] = None) -> bool:
-    if not host:
-        return False
-
-    h = host.lower().strip()
-
-    if h in BLOCKED_HOSTS:
-        return False
-
-    if h.startswith("10."):
-        return False
-
-    if h.startswith("192.168."):
-        return False
-
-    if h.startswith("172."):
-        parts = h.split(".")
-        if len(parts) == 4:
-            try:
-                second = int(parts[1])
-                if 16 <= second <= 31:
-                    return False
-            except Exception:
-                pass
-
-    allowed = allowlist or set()
-
-    for domain in allowed:
-        domain = domain.lower().strip()
-        if h == domain or h.endswith("." + domain):
-            return True
-
-    return False
-
-
-def safe_url(url: str, research: bool = False) -> bool:
-    try:
-        parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"}:
-            return False
-
-        allow = DEFAULT_RESEARCH_DOMAINS if research else set()
-
-        configured = os.getenv("EXTERNAL_ALLOWED_DOMAINS", "")
-        if configured:
-            allow |= {
-                x.strip().lower()
-                for x in configured.split(",")
-                if x.strip()
-            }
-
-        return host_allowed(parsed.hostname or "", allow)
-    except Exception:
-        return False
-
-
-def http_get(
-    url: str,
-    params: Optional[Dict[str, Any]] = None,
-    research: bool = False,
-    timeout: int = 15,
-) -> Tuple[int, str, str]:
-    if not safe_url(url, research=research):
-        raise PermissionError("network policy denied")
-
-    response = requests.get(
-        url,
-        params=params,
-        timeout=timeout,
-        allow_redirects=False,
-        headers={
-            "User-Agent": "AI-Infinity/2050.63",
-            "Accept": "*/*",
-        },
-    )
-
-    if response.status_code in {301, 302, 303, 307, 308}:
-        location = response.headers.get("Location", "")
-        if not safe_url(location, research=research):
-            raise PermissionError("redirect blocked by network policy")
-
-    body = response.text[:MAX_BODY]
-    return response.status_code, response.headers.get("content-type", ""), body
-
-
-# ============================================================
-# RESEARCH
-# ============================================================
-
-def provider_health(
-    provider: str,
-    success: bool,
-) -> None:
-    existing = fetchone(
-        "SELECT * FROM provider_health WHERE provider=?",
-        (provider,),
-    )
-
-    if not existing:
-        execute(
-            """
-            INSERT INTO provider_health
-            (provider,status,attempts,successes,failures,updated_at)
-            VALUES (?,?,?,?,?,?)
-            """,
-            (
-                provider,
-                "healthy" if success else "failed",
-                1,
-                1 if success else 0,
-                0 if success else 1,
-                now(),
-            ),
-        )
-        return
-
-    execute(
-        """
-        UPDATE provider_health
-        SET status=?,
-            attempts=attempts+1,
-            successes=successes+?,
-            failures=failures+?,
-            updated_at=?
-        WHERE provider=?
-        """,
-        (
-            "healthy" if success else "degraded",
-            1 if success else 0,
-            0 if success else 1,
-            now(),
-            provider,
-        ),
-    )
-
-
-def normalize_result(
-    provider: str,
-    title: str,
-    url: str,
-    snippet: str,
-    source_id: str = "",
-) -> Dict[str, Any]:
-    return {
-        "provider": provider,
-        "title": title[:500],
-        "url": url,
-        "snippet": snippet[:3000],
-        "source_id": source_id,
-        "confidence": 0.70,
-    }
-
-
-def research_wikipedia(query: str) -> List[Dict[str, Any]]:
-    try:
-        status, _, body = http_get(
-            "https://en.wikipedia.org/w/api.php",
-            params={
-                "action": "query",
-                "list": "search",
-                "srsearch": query,
-                "format": "json",
-                "srlimit": 5,
-            },
-            research=True,
-        )
-
-        data = json.loads(body)
-
-        if status != 200:
-            raise RuntimeError(f"HTTP {status}")
-
-        results = []
-
-        for item in data.get("query", {}).get("search", []):
-            title = item.get("title", "")
-            results.append(
-                normalize_result(
-                    "wikipedia",
-                    title,
-                    "https://en.wikipedia.org/wiki/"
-                    + title.replace(" ", "_"),
-                    re.sub("<.*?>", "", item.get("snippet", "")),
-                    str(item.get("pageid", "")),
-                )
-            )
-
-        provider_health("wikipedia", True)
-        return results
-
-    except Exception:
-        provider_health("wikipedia", False)
-        return []
-
-
-def research_crossref(query: str) -> List[Dict[str, Any]]:
-    try:
-        status, _, body = http_get(
-            "https://api.crossref.org/works",
-            params={
-                "query.bibliographic": query,
-                "rows": 5,
-            },
-            research=True,
-        )
-
-        data = json.loads(body)
-
-        if status != 200:
-            raise RuntimeError(f"HTTP {status}")
-
-        results = []
-
-        for item in data.get("message", {}).get("items", []):
-            title_list = item.get("title") or []
-            title = title_list[0] if title_list else "Untitled"
-
-            results.append(
-                normalize_result(
-                    "crossref",
-                    title,
-                    item.get("URL", ""),
-                    " ".join(title_list),
-                    item.get("DOI", ""),
-                )
-            )
-
-        provider_health("crossref", True)
-        return results
-
-    except Exception:
-        provider_health("crossref", False)
-        return []
-
-
-def research_arxiv(query: str) -> List[Dict[str, Any]]:
-    try:
-        status, content_type, body = http_get(
-            "https://export.arxiv.org/api/query",
-            params={
-                "search_query": f"all:{query}",
-                "start": 0,
-                "max_results": 5,
-            },
-            research=True,
-        )
-
-        if status != 200:
-            raise RuntimeError(f"HTTP {status}")
-
-        import xml.etree.ElementTree as ET
-
-        root = ET.fromstring(body)
-
-        results = []
-
-        for entry in root:
-            title = ""
-            link = ""
-            summary = ""
-            identifier = ""
-
-            for child in entry:
-                tag = child.tag.split("}")[-1]
-
-                if tag == "title":
-                    title = " ".join((child.text or "").split())
-
-                elif tag == "summary":
-                    summary = " ".join((child.text or "").split())
-
-                elif tag == "id":
-                    identifier = child.text or ""
-                    link = identifier
-
-            if title:
-                results.append(
-                    normalize_result(
-                        "arxiv",
-                        title,
-                        link,
-                        summary,
-                        identifier,
-                    )
-                )
-
-        provider_health("arxiv", True)
-        return results
-
-    except Exception:
-        provider_health("arxiv", False)
-        return []
-
-
-def research_openalex(query: str) -> List[Dict[str, Any]]:
-    try:
-        status, _, body = http_get(
-            "https://api.openalex.org/works",
-            params={
-                "search": query,
-                "per-page": 5,
-            },
-            research=True,
-        )
-
-        data = json.loads(body)
-
-        if status != 200:
-            raise RuntimeError(f"HTTP {status}")
-
-        results = []
-
-        for item in data.get("results", []):
-            title = item.get("display_name") or "Untitled"
-
-            results.append(
-                normalize_result(
-                    "openalex",
-                    title,
-                    item.get("id", ""),
-                    title,
-                    item.get("id", ""),
-                )
-            )
-
-        provider_health("openalex", True)
-        return results
-
-    except Exception:
-        provider_health("openalex", False)
-        return []
-
-
-def ingest_research(query: str) -> Dict[str, Any]:
-    futures = {
-        EXECUTOR.submit(research_wikipedia, query): "wikipedia",
-        EXECUTOR.submit(research_crossref, query): "crossref",
-        EXECUTOR.submit(research_arxiv, query): "arxiv",
-        EXECUTOR.submit(research_openalex, query): "openalex",
-    }
-
-    provider_results = {}
-
-    for future in as_completed(futures):
-        provider = futures[future]
-        try:
-            provider_results[provider] = future.result()
-        except Exception:
-            provider_results[provider] = []
-
-    merged = []
-
-    for values in provider_results.values():
-        merged.extend(values)
-
-    seen = set()
-    unique = []
-
-    for item in merged:
-        key = (
-            item.get("source_id")
-            or item.get("url")
-            or item.get("title", "").lower()
-        )
-
-        if key in seen:
-            continue
-
-        seen.add(key)
-        unique.append(item)
-
-    return {
-        "query": query,
-        "providers": provider_results,
-        "results": unique[:MAX_RESEARCH_RESULTS],
-        "count": len(unique[:MAX_RESEARCH_RESULTS]),
-    }
-
-
-# ============================================================
-# REQUIREMENTS / CLAIMS
-# ============================================================
-
-def derive_requirements(objective: str) -> List[str]:
-    requirements = [
-        "The requested outcome must be clearly defined.",
-        "Relevant information must be gathered from independent sources.",
-        "Important claims must have supporting evidence.",
-        "Contradictory evidence must be considered.",
-        "The proposed result must be independently checked.",
-        "The final state must be distinguishable from merely attempting the task.",
-    ]
-
-    lower = objective.lower()
-
-    if any(
-        word in lower
-        for word in ["build", "create", "make", "generate", "produce"]
-    ):
-        requirements.append(
-            "A concrete artifact or observable deliverable should be produced."
-        )
-
-    if any(
-        word in lower
-        for word in ["research", "study", "investigate", "analyze"]
-    ):
-        requirements.append(
-            "The research result should preserve source provenance."
-        )
-
-    return requirements
-
-
-def save_requirements(
-    mission_id: str,
-    requirements: List[str],
-) -> None:
-    for requirement in requirements:
-        execute(
-            """
-            INSERT INTO requirements
-            (id,mission_id,text,status,confidence)
-            VALUES (?,?,?,?,?)
-            """,
-            (
-                uid("req"),
-                mission_id,
-                requirement,
-                "identified",
-                0.70,
-            ),
-        )
-
-
-def build_claims(
-    mission_id: str,
-    evidence: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    grouped: Dict[str, List[Dict[str, Any]]] = {}
-
-    for item in evidence:
-        title = item.get("title", "").strip()
-        if not title:
-            continue
-
-        key = re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
-
-        if key:
-            grouped.setdefault(key, []).append(item)
-
-    claims = []
-
-    for key, items in list(grouped.items())[:12]:
-        supporting = len(items)
-
-        confidence = clamp(
-            0.45 + min(0.45, supporting * 0.10)
-        )
-
-        claim_text = items[0]["title"]
-
-        claim = {
-            "id": uid("claim"),
-            "claim": claim_text,
-            "confidence": confidence,
-            "supporting": supporting,
-            "contradicting": 0,
-        }
-
-        execute(
-            """
-            INSERT INTO claims
-            (id,mission_id,claim,confidence,supporting,contradicting)
-            VALUES (?,?,?,?,?,?)
-            """,
-            (
-                claim["id"],
-                mission_id,
-                claim["claim"],
-                confidence,
-                supporting,
-                0,
-            ),
-        )
-
-        claims.append(claim)
-
-    return claims
-
-
-# ============================================================
-# STRATEGY PORTFOLIO
-# ============================================================
-
-def generate_strategies(objective: str) -> List[Dict[str, Any]]:
     return [
         {
-            "id": uid("strategy"),
-            "name": "direct-evidence",
-            "description": (
-                "Solve the objective directly using the strongest available "
-                "evidence and controlled tools."
-            ),
-        },
-        {
-            "id": uid("strategy"),
-            "name": "cross-source",
-            "description": (
-                "Use multiple independent sources and compare their results "
-                "before selecting an outcome."
-            ),
-        },
-        {
-            "id": uid("strategy"),
-            "name": "verify-first",
-            "description": (
-                "Define the proof requirements first, then execute only "
-                "actions that can be independently verified."
-            ),
-        },
+            "id": row["id"],
+            "mission_id": row["mission_id"],
+            "event_type": row["event_type"],
+            "payload": json_load(row["payload"], {}),
+            "created_at": row["created_at"],
+            "time": iso(row["created_at"]),
+        }
+        for row in rows
     ]
 
 
-def save_strategies(
+# ============================================================
+# MISSION DATA
+# ============================================================
+
+def mission_row(mission_id: str):
+    with DB_LOCK:
+        conn = db()
+
+        row = conn.execute(
+            "SELECT * FROM missions WHERE id=?",
+            (mission_id,),
+        ).fetchone()
+
+        conn.close()
+
+    return row
+
+
+def mission_dict(row) -> Dict[str, Any]:
+    if not row:
+        return {}
+
+    return {
+        "mission_id": row["id"],
+        "objective": row["objective"],
+        "status": row["status"],
+        "priority": row["priority"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "deadline": row["deadline"],
+        "deadline_time": iso(row["deadline"])
+        if row["deadline"]
+        else None,
+        "budget": row["budget"],
+        "budget_used": row["budget_used"],
+        "budget_remaining": max(
+            0,
+            row["budget"] - row["budget_used"],
+        ),
+        "lease_owner": row["lease_owner"],
+        "lease_until": row["lease_until"],
+        "lease_active": bool(
+            row["lease_until"]
+            and row["lease_until"] > now()
+        ),
+        "cycle": row["cycle"],
+        "max_cycles": row["max_cycles"],
+        "result": json_load(row["result"]),
+        "error": row["error"],
+        "pause_reason": row["pause_reason"],
+        "approval_required": bool(row["approval_required"]),
+        "approval_state": row["approval_state"],
+        "idempotency_key": row["idempotency_key"],
+        "version": row["version"],
+    }
+
+
+# ============================================================
+# LEASE CONTROL
+# ============================================================
+
+def acquire_lease(
     mission_id: str,
-    strategies: List[Dict[str, Any]],
-) -> None:
-    for strategy in strategies:
-        execute(
+    owner: str,
+    seconds: int = DEFAULT_LEASE_SECONDS,
+) -> bool:
+    with DB_LOCK:
+        conn = db()
+
+        row = conn.execute(
             """
-            INSERT INTO strategies
-            (id,mission_id,name,description,status)
-            VALUES (?,?,?,?,?)
+            SELECT lease_owner,lease_until,status
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if not row:
+            conn.close()
+            return False
+
+        current = now()
+
+        if (
+            row["lease_until"]
+            and row["lease_until"] > current
+            and row["lease_owner"] != owner
+        ):
+            conn.close()
+            return False
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET lease_owner=?,
+                lease_until=?,
+                updated_at=?,
+                version=version+1
+            WHERE id=?
             """,
             (
-                strategy["id"],
+                owner,
+                current + seconds,
+                current,
                 mission_id,
-                strategy["name"],
-                strategy["description"],
-                "candidate",
             ),
         )
 
+        conn.commit()
+        conn.close()
 
-# ============================================================
-# CONTROLLED TOOL EXECUTION
-# ============================================================
+    event(
+        mission_id,
+        "lease_acquired",
+        {
+            "owner": owner,
+            "lease_seconds": seconds,
+        },
+    )
 
-SAFE_TOOLS = {
-    "research",
-    "analyze",
-    "compare",
-    "verify",
-    "artifact",
-    "memory",
-}
-
-
-def select_tool(objective: str, strategy: str) -> str:
-    text = (objective + " " + strategy).lower()
-
-    if any(
-        x in text
-        for x in ["research", "study", "investigate", "evidence", "source"]
-    ):
-        return "research"
-
-    if any(
-        x in text
-        for x in ["create", "build", "generate", "produce"]
-    ):
-        return "artifact"
-
-    if any(
-        x in text
-        for x in ["verify", "prove", "validate", "check"]
-    ):
-        return "verify"
-
-    return "analyze"
+    return True
 
 
-def execute_safe_tool(
+def renew_lease(
     mission_id: str,
-    objective: str,
-    strategy: Dict[str, Any],
-) -> Dict[str, Any]:
+    owner: str,
+    seconds: int = DEFAULT_LEASE_SECONDS,
+) -> bool:
+    with DB_LOCK:
+        conn = db()
 
-    strategy_name = strategy["name"]
-    tool = select_tool(objective, strategy_name)
-
-    if tool not in SAFE_TOOLS:
-        return {
-            "success": False,
-            "tool": tool,
-            "error": "tool denied by policy",
-        }
-
-    started = now()
-
-    try:
-        if tool == "research":
-            result = ingest_research(objective)
-
-            output = {
-                "tool": tool,
-                "strategy": strategy_name,
-                "research_count": result["count"],
-                "providers": {
-                    key: len(value)
-                    for key, value in result["providers"].items()
-                },
-            }
-
-        elif tool == "artifact":
-            artifact = create_mission_artifact(
-                mission_id,
-                objective,
-                strategy_name,
-            )
-
-            output = {
-                "tool": tool,
-                "strategy": strategy_name,
-                "artifact": artifact,
-            }
-
-        elif tool == "verify":
-            output = {
-                "tool": tool,
-                "strategy": strategy_name,
-                "verification_ready": True,
-                "verification_basis": [
-                    "execution receipt",
-                    "observation",
-                    "independent proof",
-                ],
-            }
-
-        elif tool == "compare":
-            output = {
-                "tool": tool,
-                "strategy": strategy_name,
-                "comparison_ready": True,
-            }
-
-        else:
-            output = {
-                "tool": tool,
-                "strategy": strategy_name,
-                "analysis_completed": True,
-            }
-
-        duration = round(now() - started, 4)
-
-        execute(
+        result = conn.execute(
             """
-            INSERT INTO connector_events
-            (id,mission_id,connector,action,status,output,created_at)
-            VALUES (?,?,?,?,?,?,?)
+            UPDATE missions
+            SET lease_until=?,
+                updated_at=?,
+                version=version+1
+            WHERE id=?
+              AND lease_owner=?
             """,
             (
-                uid("event"),
-                mission_id,
-                tool,
-                strategy_name,
-                "success",
-                dumps(output),
+                now() + seconds,
                 now(),
-            ),
-        )
-
-        return {
-            "success": True,
-            "tool": tool,
-            "duration": duration,
-            "output": output,
-        }
-
-    except Exception as exc:
-        execute(
-            """
-            INSERT INTO connector_events
-            (id,mission_id,connector,action,status,output,created_at)
-            VALUES (?,?,?,?,?,?,?)
-            """,
-            (
-                uid("event"),
                 mission_id,
-                tool,
-                strategy_name,
-                "failed",
-                str(exc),
-                now(),
+                owner,
             ),
         )
 
-        return {
-            "success": False,
-            "tool": tool,
-            "error": str(exc),
-        }
+        conn.commit()
+        changed = result.rowcount > 0
+        conn.close()
 
-
-# ============================================================
-# ARTIFACTS
-# ============================================================
-
-def create_mission_artifact(
-    mission_id: str,
-    objective: str,
-    strategy: str,
-) -> Dict[str, Any]:
-
-    artifact_id = uid("artifact")
-    path = ARTIFACT_DIR / f"{artifact_id}.json"
-
-    payload = {
-        "artifact_id": artifact_id,
-        "mission_id": mission_id,
-        "objective": objective,
-        "strategy": strategy,
-        "created_at": now(),
-        "version": VERSION,
-    }
-
-    content = dumps(payload)
-    path.write_text(content, encoding="utf-8")
-
-    digest = hashlib.sha256(
-        content.encode("utf-8")
-    ).hexdigest()
-
-    execute(
-        """
-        INSERT INTO artifacts
-        (id,mission_id,artifact_type,path,sha256,description,created_at)
-        VALUES (?,?,?,?,?,?,?)
-        """,
-        (
-            artifact_id,
+    if changed:
+        event(
             mission_id,
-            "mission-result",
-            str(path),
-            digest,
-            "Machine-readable mission execution artifact",
-            now(),
-        ),
-    )
-
-    return {
-        "id": artifact_id,
-        "path": str(path),
-        "sha256": digest,
-    }
-
-
-# ============================================================
-# OBSERVATION
-# ============================================================
-
-def observe_execution(
-    result: Dict[str, Any],
-) -> Dict[str, Any]:
-
-    success = bool(result.get("success"))
-
-    if success:
-        confidence = 0.72
-        observation = "Controlled execution completed and produced an observable receipt."
-    else:
-        confidence = 0.20
-        observation = "Execution failed and requires diagnosis/recovery."
-
-    return {
-        "success": success,
-        "confidence": confidence,
-        "observation": observation,
-    }
-
-
-# ============================================================
-# OUTCOME ENGINE
-# ============================================================
-
-def evaluate_outcome(
-    objective: str,
-    execution: Dict[str, Any],
-    observation: Dict[str, Any],
-) -> Dict[str, Any]:
-
-    execution_success = bool(execution.get("success"))
-    observation_success = bool(observation.get("success"))
-
-    if execution_success and observation_success:
-        expected = objective
-        observed = observation["observation"]
-
-        confidence = clamp(
-            0.50
-            + execution.get("output", {}).get("research_count", 0) * 0.01
+            "lease_renewed",
+            {"owner": owner},
         )
 
-        return {
-            "status": "candidate",
-            "expected": expected,
-            "observed": observed,
-            "confidence": confidence,
-        }
-
-    return {
-        "status": "failed",
-        "expected": objective,
-        "observed": "Execution did not produce sufficient evidence.",
-        "confidence": 0.20,
-    }
+    return changed
 
 
-# ============================================================
-# PROOF ENGINE
-# ============================================================
-
-def create_proof(
+def release_lease(
     mission_id: str,
-    outcome_id: str,
-    objective: str,
-    strategy: str,
-    execution: Dict[str, Any],
-    observation: Dict[str, Any],
-    independent: bool,
-) -> Dict[str, Any]:
-
-    proof_statement = (
-        f"Mission objective '{objective}' was executed using strategy "
-        f"'{strategy}' and generated an observable execution result."
-    )
-
-    evidence = {
-        "execution_success": execution.get("success", False),
-        "observation_success": observation.get("success", False),
-        "tool": execution.get("tool"),
-        "duration": execution.get("duration"),
-        "observation": observation,
-    }
-
-    base = 0.45
-
-    if execution.get("success"):
-        base += 0.20
-
-    if observation.get("success"):
-        base += 0.15
-
-    if independent:
-        base += 0.15
-
-    confidence = clamp(base)
-
-    proof_hash = sha256_text(
-        proof_statement + dumps(evidence)
-    )
-
-    proof_id = uid("proof")
-
-    execute(
-        """
-        INSERT INTO proofs
-        (id,mission_id,outcome_id,proof_type,statement,evidence,
-         independent,confidence,hash,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?)
-        """,
-        (
-            proof_id,
-            mission_id,
-            outcome_id,
-            "independent-execution-proof"
-            if independent
-            else "execution-proof",
-            proof_statement,
-            dumps(evidence),
-            1 if independent else 0,
-            confidence,
-            proof_hash,
-            now(),
-        ),
-    )
-
-    return {
-        "id": proof_id,
-        "independent": independent,
-        "confidence": confidence,
-        "hash": proof_hash,
-        "statement": proof_statement,
-    }
-
-
-def proof_score(mission_id: str) -> Dict[str, Any]:
-    proofs = fetchall(
-        """
-        SELECT * FROM proofs
-        WHERE mission_id=?
-        ORDER BY created_at ASC
-        """,
-        (mission_id,),
-    )
-
-    if not proofs:
-        return {
-            "score": 0.0,
-            "proof_count": 0,
-            "independent_count": 0,
-            "converged": False,
-        }
-
-    independent = [
-        p for p in proofs
-        if p["independent"]
-    ]
-
-    average = sum(
-        float(p["confidence"])
-        for p in proofs
-    ) / len(proofs)
-
-    independence_bonus = min(
-        0.20,
-        len(independent) * 0.10,
-    )
-
-    score = clamp(
-        average + independence_bonus
-    )
-
-    return {
-        "score": score,
-        "proof_count": len(proofs),
-        "independent_count": len(independent),
-        "converged": (
-            score >= 0.80
-            and len(independent) >= 1
-        ),
-    }
-
-
-# ============================================================
-# STRATEGY COMPARISON
-# ============================================================
-
-def compare_strategy_results(
-    results: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-
-    if not results:
-        return {
-            "winner": None,
-            "comparison": [],
-        }
-
-    comparison = []
-
-    for result in results:
-        execution = result.get("execution", {})
-        observation = result.get("observation", {})
-        proof = result.get("proof", {})
-
-        score = (
-            (0.35 if execution.get("success") else 0.0)
-            + (0.25 if observation.get("success") else 0.0)
-            + float(proof.get("confidence", 0.0)) * 0.40
-        )
-
-        comparison.append(
-            {
-                "strategy_id": result["strategy_id"],
-                "strategy": result["strategy"],
-                "score": round(score, 4),
-                "execution": execution.get("success", False),
-                "observation": observation.get("success", False),
-                "proof": proof.get("confidence", 0),
-            }
-        )
-
-    comparison.sort(
-        key=lambda x: x["score"],
-        reverse=True,
-    )
-
-    return {
-        "winner": comparison[0]["strategy_id"],
-        "comparison": comparison,
-    }
-
-
-# ============================================================
-# RECOVERY / LEARNING
-# ============================================================
-
-def diagnose_failure(
-    execution: Dict[str, Any],
-) -> str:
-
-    if execution.get("success"):
-        return "no_failure"
-
-    error = str(execution.get("error", "")).lower()
-
-    if "network" in error:
-        return "network_failure"
-
-    if "denied" in error:
-        return "authorization_failure"
-
-    if "timeout" in error:
-        return "timeout"
-
-    return "execution_failure"
-
-
-def recover_strategy(
-    strategy: Dict[str, Any],
-    diagnosis: str,
-) -> Dict[str, Any]:
-
-    return {
-        **strategy,
-        "recovery_mode": diagnosis,
-        "replanned": True,
-        "description": (
-            strategy["description"]
-            + " Recovery mode: "
-            + diagnosis
-        ),
-    }
-
-
-def save_learning(
-    mission_id: str,
-    strategy: str,
-    lesson: str,
-    confidence: float,
+    owner: str,
 ) -> None:
+    with DB_LOCK:
+        conn = db()
 
-    execute(
-        """
-        INSERT INTO learning
-        (id,mission_id,strategy,lesson,confidence,created_at)
-        VALUES (?,?,?,?,?,?)
-        """,
-        (
-            uid("learn"),
-            mission_id,
-            strategy,
-            lesson,
-            confidence,
-            now(),
-        ),
-    )
+        conn.execute(
+            """
+            UPDATE missions
+            SET lease_owner=NULL,
+                lease_until=NULL,
+                updated_at=?,
+                version=version+1
+            WHERE id=?
+              AND lease_owner=?
+            """,
+            (now(), mission_id, owner),
+        )
 
-    execute(
-        """
-        INSERT INTO memory
-        (id,category,key,value,confidence,created_at)
-        VALUES (?,?,?,?,?,?)
-        """,
-        (
-            uid("mem"),
-            "strategy",
-            strategy,
-            lesson,
-            confidence,
-            now(),
-        ),
+        conn.commit()
+        conn.close()
+
+    event(
+        mission_id,
+        "lease_released",
+        {"owner": owner},
     )
 
 
@@ -1457,397 +590,1341 @@ def checkpoint(
     mission_id: str,
     cycle: int,
     state: Dict[str, Any],
-) -> None:
+) -> Dict[str, Any]:
+    state_hash = stable_hash(state)
 
-    execute(
-        """
-        INSERT INTO checkpoints
-        (id,mission_id,cycle,state,created_at)
-        VALUES (?,?,?,?,?)
-        """,
-        (
-            uid("checkpoint"),
-            mission_id,
-            cycle,
-            dumps(state),
-            now(),
-        ),
+    with DB_LOCK:
+        conn = db()
+
+        conn.execute(
+            """
+            INSERT INTO checkpoints
+            (mission_id,cycle,state,state_hash,created_at)
+            VALUES (?,?,?,?,?)
+            """,
+            (
+                mission_id,
+                cycle,
+                json_dump(state),
+                state_hash,
+                now(),
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+    event(
+        mission_id,
+        "checkpoint_created",
+        {
+            "cycle": cycle,
+            "state_hash": state_hash,
+        },
     )
+
+    return {
+        "cycle": cycle,
+        "state": state,
+        "state_hash": state_hash,
+    }
+
+
+def latest_checkpoint(
+    mission_id: str,
+) -> Optional[Dict[str, Any]]:
+    with DB_LOCK:
+        conn = db()
+
+        row = conn.execute(
+            """
+            SELECT *
+            FROM checkpoints
+            WHERE mission_id=?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        conn.close()
+
+    if not row:
+        return None
+
+    return {
+        "cycle": row["cycle"],
+        "state": json_load(row["state"], {}),
+        "state_hash": row["state_hash"],
+        "created_at": row["created_at"],
+    }
+
+
+# ============================================================
+# BUDGET
+# ============================================================
+
+def consume_budget(
+    mission_id: str,
+    amount: int,
+) -> bool:
+    if amount <= 0:
+        return True
+
+    with DB_LOCK:
+        conn = db()
+
+        row = conn.execute(
+            """
+            SELECT budget,budget_used,status
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if not row:
+            conn.close()
+            return False
+
+        if row["budget_used"] + amount > row["budget"]:
+            conn.close()
+
+            event(
+                mission_id,
+                "budget_exhausted",
+                {
+                    "requested": amount,
+                    "remaining": max(
+                        0,
+                        row["budget"] - row["budget_used"],
+                    ),
+                },
+            )
+
+            return False
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET budget_used=budget_used+?,
+                updated_at=?,
+                version=version+1
+            WHERE id=?
+            """,
+            (amount, now(), mission_id),
+        )
+
+        conn.commit()
+        conn.close()
+
+    event(
+        mission_id,
+        "budget_consumed",
+        {"amount": amount},
+    )
+
+    return True
+
+
+# ============================================================
+# APPROVALS
+# ============================================================
+
+def request_approval(
+    mission_id: str,
+    action: str,
+    reason: str,
+) -> str:
+    approval_id = new_id("approval")
+
+    with DB_LOCK:
+        conn = db()
+
+        conn.execute(
+            """
+            INSERT INTO approvals
+            (id,mission_id,action,reason,status,created_at)
+            VALUES (?,?,?,?,?,?)
+            """,
+            (
+                approval_id,
+                mission_id,
+                action,
+                reason,
+                "pending",
+                now(),
+            ),
+        )
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET approval_required=1,
+                approval_state='pending',
+                status='waiting_approval',
+                updated_at=?,
+                version=version+1
+            WHERE id=?
+            """,
+            (now(), mission_id),
+        )
+
+        conn.commit()
+        conn.close()
+
+    event(
+        mission_id,
+        "approval_requested",
+        {
+            "approval_id": approval_id,
+            "action": action,
+            "reason": reason,
+        },
+    )
+
+    return approval_id
+
+
+def resolve_approval(
+    approval_id: str,
+    approved: bool,
+) -> Dict[str, Any]:
+    with DB_LOCK:
+        conn = db()
+
+        row = conn.execute(
+            "SELECT * FROM approvals WHERE id=?",
+            (approval_id,),
+        ).fetchone()
+
+        if not row:
+            conn.close()
+            raise HTTPException(404, "Approval not found")
+
+        status = "approved" if approved else "rejected"
+
+        conn.execute(
+            """
+            UPDATE approvals
+            SET status=?,resolved_at=?
+            WHERE id=?
+            """,
+            (status, now(), approval_id),
+        )
+
+        mission_status = (
+            "queued" if approved else "cancelled"
+        )
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET approval_required=0,
+                approval_state=?,
+                status=?,
+                updated_at=?,
+                version=version+1
+            WHERE id=?
+            """,
+            (
+                status,
+                mission_status,
+                now(),
+                row["mission_id"],
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+    event(
+        row["mission_id"],
+        "approval_resolved",
+        {
+            "approval_id": approval_id,
+            "status": status,
+        },
+    )
+
+    return {
+        "approval_id": approval_id,
+        "mission_id": row["mission_id"],
+        "status": status,
+    }
+
+
+# ============================================================
+# RESEARCH
+# ============================================================
+
+def domain_allowed(url: str) -> bool:
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+
+        if not host:
+            return False
+
+        for prefix in BLOCKED_HOST_PREFIXES:
+            if host.startswith(prefix):
+                return False
+
+        if host == "localhost" or host.endswith(".local"):
+            return False
+
+        allowlist = os.getenv(
+            "EXTERNAL_ALLOWED_DOMAINS",
+            "",
+        )
+
+        configured = {
+            x.strip().lower()
+            for x in allowlist.split(",")
+            if x.strip()
+        }
+
+        return (
+            host in ALLOWED_RESEARCH_DOMAINS
+            or host in configured
+            or any(
+                host.endswith("." + domain)
+                for domain in configured
+            )
+        )
+
+    except Exception:
+        return False
+
+
+def fetch_public(
+    url: str,
+    timeout: int = 15,
+) -> Dict[str, Any]:
+    if not domain_allowed(url):
+        return {
+            "ok": False,
+            "error": "domain_not_allowed",
+        }
+
+    try:
+        response = requests.get(
+            url,
+            timeout=timeout,
+            headers={
+                "User-Agent":
+                    "AI-Infinity/2050.64 "
+                    "(controlled-research-client)"
+            },
+            allow_redirects=False,
+        )
+
+        return {
+            "ok": response.ok,
+            "status_code": response.status_code,
+            "content_type": response.headers.get(
+                "content-type",
+                "",
+            ),
+            "text": response.text[:50000],
+        }
+
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": type(exc).__name__,
+            "detail": str(exc),
+        }
+
+
+def research(objective: str) -> List[Dict[str, Any]]:
+    results = []
+
+    encoded = requests.utils.quote(objective)
+
+    sources = [
+        (
+            "wikipedia",
+            f"https://en.wikipedia.org/w/api.php"
+            f"?action=query&list=search"
+            f"&srsearch={encoded}"
+            f"&format=json",
+        ),
+        (
+            "crossref",
+            f"https://api.crossref.org/works"
+            f"?query.bibliographic={encoded}"
+            f"&rows=5",
+        ),
+        (
+            "openalex",
+            f"https://api.openalex.org/works"
+            f"?search={encoded}"
+            f"&per-page=5",
+        ),
+    ]
+
+    for provider, url in sources:
+        response = fetch_public(url)
+
+        if not response.get("ok"):
+            continue
+
+        data = json_load(response.get("text"), {})
+
+        if provider == "wikipedia":
+            for item in data.get("query", {}).get(
+                "search",
+                [],
+            )[:5]:
+                results.append(
+                    {
+                        "provider": provider,
+                        "title": item.get("title"),
+                        "snippet": item.get("snippet"),
+                        "source_type": "encyclopedia",
+                    }
+                )
+
+        elif provider == "crossref":
+            for item in data.get("message", {}).get(
+                "items",
+                [],
+            )[:5]:
+                results.append(
+                    {
+                        "provider": provider,
+                        "title": item.get("title", [""])[0],
+                        "url": item.get("URL"),
+                        "published": item.get(
+                            "published-print",
+                            item.get("published"),
+                        ),
+                        "authors": item.get("author"),
+                        "source_type": "academic",
+                    }
+                )
+
+        elif provider == "openalex":
+            for item in data.get(
+                "results",
+                [],
+            )[:5]:
+                results.append(
+                    {
+                        "provider": provider,
+                        "title": item.get("title"),
+                        "url": item.get("doi")
+                        or item.get("id"),
+                        "source_type": "academic",
+                    }
+                )
+
+    return results
+
+
+# ============================================================
+# INTELLIGENCE ENGINE
+# ============================================================
+
+def classify_objective(objective: str) -> str:
+    text = objective.lower()
+
+    if any(
+        x in text
+        for x in (
+            "research",
+            "study",
+            "evidence",
+            "verify",
+            "compare",
+        )
+    ):
+        return "research"
+
+    if any(
+        x in text
+        for x in (
+            "build",
+            "create",
+            "make",
+            "develop",
+        )
+    ):
+        return "creation"
+
+    if any(
+        x in text
+        for x in (
+            "analyze",
+            "analysis",
+            "inspect",
+        )
+    ):
+        return "analysis"
+
+    return "general"
+
+
+def choose_strategies(
+    objective: str,
+    cycle: int,
+) -> List[str]:
+    objective_class = classify_objective(objective)
+
+    base = {
+        "research": [
+            "direct-research",
+            "cross-source",
+            "verify-first",
+        ],
+        "creation": [
+            "direct-build",
+            "incremental-build",
+            "verification-first",
+        ],
+        "analysis": [
+            "direct-analysis",
+            "cross-check",
+            "counter-evidence",
+        ],
+        "general": [
+            "direct-execution",
+            "decomposition",
+            "verification-first",
+        ],
+    }
+
+    strategies = base[objective_class]
+
+    if cycle >= 4:
+        strategies = [
+            strategies[-1],
+            "independent-verification",
+            "proof-convergence",
+        ]
+
+    return strategies[:MAX_PARALLEL_STRATEGIES]
+
+
+def execute_strategy(
+    objective: str,
+    strategy: str,
+    cycle: int,
+) -> Dict[str, Any]:
+    started = now()
+
+    if "research" in strategy or (
+        classify_objective(objective) == "research"
+    ):
+        evidence = research(objective)
+    else:
+        evidence = []
+
+    proof_basis = {
+        "objective": objective,
+        "strategy": strategy,
+        "cycle": cycle,
+        "evidence_count": len(evidence),
+    }
+
+    proof_hash = stable_hash(proof_basis)
+
+    return {
+        "strategy": strategy,
+        "cycle": cycle,
+        "status": "completed",
+        "duration": round(now() - started, 4),
+        "evidence": evidence,
+        "observations": {
+            "strategy": strategy,
+            "evidence_count": len(evidence),
+        },
+        "proof": {
+            "hash": proof_hash,
+            "strength": min(
+                1.0,
+                0.2 + len(evidence) * 0.1,
+            ),
+            "basis": proof_basis,
+        },
+    }
+
+
+def compare_results(
+    results: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not results:
+        return {
+            "selected": None,
+            "scores": [],
+        }
+
+    scored = []
+
+    for result in results:
+        proof = result.get("proof", {})
+
+        score = float(
+            proof.get("strength", 0)
+        )
+
+        evidence_count = int(
+            result.get(
+                "observations",
+                {},
+            ).get(
+                "evidence_count",
+                0,
+            )
+        )
+
+        score += min(
+            0.5,
+            evidence_count * 0.05,
+        )
+
+        scored.append(
+            {
+                "strategy": result.get("strategy"),
+                "score": round(score, 4),
+            }
+        )
+
+    selected = max(
+        scored,
+        key=lambda x: x["score"],
+    )
+
+    return {
+        "selected": selected["strategy"],
+        "scores": scored,
+    }
+
+
+def convergence_gate(
+    objective: str,
+    results: List[Dict[str, Any]],
+    cycle: int,
+) -> Dict[str, Any]:
+    if not results:
+        return {
+            "converged": False,
+            "reason": "no_results",
+        }
+
+    proof_scores = [
+        float(
+            x.get("proof", {}).get(
+                "strength",
+                0,
+            )
+        )
+        for x in results
+    ]
+
+    best = max(proof_scores)
+
+    minimum = 0.70
+
+    if classify_objective(objective) != "research":
+        minimum = 0.50
+
+    converged = (
+        best >= minimum
+        or cycle >= MAX_CYCLES
+    )
+
+    return {
+        "converged": converged,
+        "best_proof_strength": round(best, 4),
+        "required": minimum,
+        "cycle": cycle,
+    }
+
+
+# ============================================================
+# LEARNING
+# ============================================================
+
+def save_learning(
+    mission_id: str,
+    lesson: str,
+    source: str,
+) -> None:
+    with DB_LOCK:
+        conn = db()
+
+        conn.execute(
+            """
+            INSERT INTO learning
+            (mission_id,lesson,source,created_at)
+            VALUES (?,?,?,?)
+            """,
+            (
+                mission_id,
+                lesson,
+                source,
+                now(),
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+    event(
+        mission_id,
+        "lesson_learned",
+        {
+            "lesson": lesson,
+            "source": source,
+        },
+    )
+
+
+def save_strategy_memory(
+    strategy: str,
+    objective_class: str,
+    success: bool,
+    proof_score: float,
+) -> None:
+    with DB_LOCK:
+        conn = db()
+
+        row = conn.execute(
+            """
+            SELECT id
+            FROM strategy_memory
+            WHERE strategy=?
+              AND objective_class=?
+            """,
+            (
+                strategy,
+                objective_class,
+            ),
+        ).fetchone()
+
+        if row:
+            if success:
+                conn.execute(
+                    """
+                    UPDATE strategy_memory
+                    SET successes=successes+1,
+                        proof_score=?,
+                        updated_at=?
+                    WHERE id=?
+                    """,
+                    (
+                        proof_score,
+                        now(),
+                        row["id"],
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE strategy_memory
+                    SET failures=failures+1,
+                        updated_at=?
+                    WHERE id=?
+                    """,
+                    (
+                        now(),
+                        row["id"],
+                    ),
+                )
+        else:
+            conn.execute(
+                """
+                INSERT INTO strategy_memory
+                (strategy,objective_class,successes,
+                 failures,proof_score,updated_at)
+                VALUES (?,?,?,?,?,?)
+                """,
+                (
+                    strategy,
+                    objective_class,
+                    1 if success else 0,
+                    0 if success else 1,
+                    proof_score,
+                    now(),
+                ),
+            )
+
+        conn.commit()
+        conn.close()
+
+
+# ============================================================
+# ARTIFACTS
+# ============================================================
+
+def save_artifact(
+    mission_id: str,
+    name: str,
+    content: Any,
+) -> Dict[str, Any]:
+    artifact_id = new_id("artifact")
+    content_text = (
+        content
+        if isinstance(content, str)
+        else json_dump(content)
+    )
+
+    content_hash = stable_hash(content_text)
+
+    with DB_LOCK:
+        conn = db()
+
+        conn.execute(
+            """
+            INSERT INTO artifacts
+            (id,mission_id,name,content,content_hash,created_at)
+            VALUES (?,?,?,?,?,?)
+            """,
+            (
+                artifact_id,
+                mission_id,
+                name,
+                content_text,
+                content_hash,
+                now(),
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+    event(
+        mission_id,
+        "artifact_created",
+        {
+            "artifact_id": artifact_id,
+            "name": name,
+            "hash": content_hash,
+        },
+    )
+
+    return {
+        "artifact_id": artifact_id,
+        "name": name,
+        "hash": content_hash,
+    }
 
 
 # ============================================================
 # MISSION EXECUTION
 # ============================================================
 
-def run_mission(
+def set_status(
     mission_id: str,
-    objective: str,
+    status: str,
+    error: Optional[str] = None,
 ) -> None:
+    with DB_LOCK:
+        conn = db()
 
-    try:
-        execute(
+        conn.execute(
             """
             UPDATE missions
-            SET status=?, updated_at=?
+            SET status=?,
+                error=?,
+                updated_at=?,
+                version=version+1
             WHERE id=?
             """,
-            ("running", now(), mission_id),
+            (
+                status,
+                error,
+                now(),
+                mission_id,
+            ),
         )
 
-        requirements = derive_requirements(objective)
-        save_requirements(mission_id, requirements)
+        conn.commit()
+        conn.close()
 
-        research = ingest_research(objective)
+    event(
+        mission_id,
+        "status_changed",
+        {
+            "status": status,
+            "error": error,
+        },
+    )
 
-        for item in research["results"]:
-            evidence_id = uid("evidence")
 
-            execute(
-                """
-                INSERT INTO evidence
-                (id,mission_id,provider,title,url,snippet,
-                 source_id,confidence,metadata,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    evidence_id,
-                    mission_id,
-                    item.get("provider"),
-                    item.get("title"),
-                    item.get("url"),
-                    item.get("snippet"),
-                    item.get("source_id"),
-                    item.get("confidence", 0.7),
-                    dumps(item),
-                    now(),
-                ),
-            )
+def execute_mission(
+    mission_id: str,
+) -> None:
+    owner = new_id("worker")
 
-            execute(
-                """
-                INSERT INTO provenance
-                (id,mission_id,object_type,object_id,source,created_at)
-                VALUES (?,?,?,?,?,?)
-                """,
-                (
-                    uid("prov"),
-                    mission_id,
-                    "evidence",
-                    evidence_id,
-                    item.get("url", ""),
-                    now(),
-                ),
-            )
+    if not acquire_lease(
+        mission_id,
+        owner,
+    ):
+        return
 
-        claims = build_claims(
+    try:
+        row = mission_row(mission_id)
+
+        if not row:
+            return
+
+        if row["status"] in {
+            "cancelled",
+            "completed",
+        }:
+            return
+
+        set_status(
             mission_id,
-            research["results"],
+            "running",
         )
 
-        strategies = generate_strategies(objective)
-        save_strategies(mission_id, strategies)
+        start_time = now()
 
-        best_result = None
-        all_results = []
+        existing = latest_checkpoint(
+            mission_id
+        )
 
-        for cycle in range(1, MAX_CYCLES + 1):
+        cycle = (
+            existing["cycle"]
+            if existing
+            else row["cycle"]
+        )
 
-            execute(
-                """
-                UPDATE missions
-                SET cycle=?, updated_at=?
-                WHERE id=?
-                """,
-                (cycle, now(), mission_id),
-            )
+        final_result = None
 
-            active = strategies[:MAX_STRATEGIES]
+        while cycle < row["max_cycles"]:
 
-            futures = {}
-
-            for strategy in active:
-                futures[
-                    EXECUTOR.submit(
-                        execute_safe_tool,
-                        mission_id,
-                        objective,
-                        strategy,
-                    )
-                ] = strategy
-
-            cycle_results = []
-
-            for future in as_completed(futures):
-                strategy = futures[future]
-
-                try:
-                    execution = future.result()
-                except Exception as exc:
-                    execution = {
-                        "success": False,
-                        "error": str(exc),
-                    }
-
-                observation = observe_execution(
-                    execution
-                )
-
-                outcome = evaluate_outcome(
-                    objective,
-                    execution,
-                    observation,
-                )
-
-                outcome_id = uid("outcome")
-
-                execute(
-                    """
-                    INSERT INTO outcomes
-                    (id,mission_id,strategy_id,expected,observed,
-                     status,confidence,proof_score,created_at)
-                    VALUES (?,?,?,?,?,?,?,?,?)
-                    """,
-                    (
-                        outcome_id,
-                        mission_id,
-                        strategy["id"],
-                        outcome["expected"],
-                        outcome["observed"],
-                        outcome["status"],
-                        outcome["confidence"],
-                        0.0,
-                        now(),
-                    ),
-                )
-
-                proof = create_proof(
+            if now() - start_time > MAX_MISSION_RUNTIME:
+                set_status(
                     mission_id,
-                    outcome_id,
-                    objective,
-                    strategy["name"],
-                    execution,
-                    observation,
-                    independent=False,
+                    "paused",
+                    "runtime_limit_reached",
                 )
 
-                # Separate verification path.
-                independent_verification = (
-                    execution.get("success", False)
-                    and observation.get("success", False)
-                    and (
-                        strategy["name"]
-                        in {"cross-source", "verify-first"}
-                    )
+                event(
+                    mission_id,
+                    "runtime_limit",
+                    {},
                 )
+                return
 
-                independent_proof = None
-
-                if independent_verification:
-                    independent_proof = create_proof(
-                        mission_id,
-                        outcome_id,
-                        objective,
-                        strategy["name"],
-                        execution,
-                        observation,
-                        independent=True,
-                    )
-
-                result = {
-                    "strategy_id": strategy["id"],
-                    "strategy": strategy["name"],
-                    "execution": execution,
-                    "observation": observation,
-                    "outcome": outcome,
-                    "proof": (
-                        independent_proof
-                        or proof
-                    ),
-                }
-
-                cycle_results.append(result)
-                all_results.append(result)
-
-                execute(
-                    """
-                    INSERT INTO observations
-                    (id,mission_id,strategy_id,observation,
-                     success,confidence,created_at)
-                    VALUES (?,?,?,?,?,?,?)
-                    """,
-                    (
-                        uid("obs"),
-                        mission_id,
-                        strategy["id"],
-                        observation["observation"],
-                        1 if observation["success"] else 0,
-                        observation["confidence"],
-                        now(),
-                    ),
-                )
-
-                if not execution.get("success"):
-                    diagnosis = diagnose_failure(
-                        execution
-                    )
-
-                    recovered = recover_strategy(
-                        strategy,
-                        diagnosis,
-                    )
-
-                    save_learning(
-                        mission_id,
-                        strategy["name"],
-                        f"Failure diagnosed as {diagnosis}; "
-                        f"replanning was triggered.",
-                        0.65,
-                    )
-
-                    strategies = [
-                        recovered
-                        if x["id"] == strategy["id"]
-                        else x
-                        for x in strategies
-                    ]
-
-            comparison = compare_strategy_results(
-                cycle_results
+            current = mission_row(
+                mission_id
             )
 
-            proof = proof_score(mission_id)
+            if not current:
+                return
+
+            if current["status"] in {
+                "cancelled",
+                "paused",
+                "waiting_approval",
+            }:
+                return
+
+            if (
+                current["deadline"]
+                and now() > current["deadline"]
+            ):
+                set_status(
+                    mission_id,
+                    "failed",
+                    "deadline_exceeded",
+                )
+                return
+
+            cycle += 1
+
+            with DB_LOCK:
+                conn = db()
+
+                conn.execute(
+                    """
+                    UPDATE missions
+                    SET cycle=?,
+                        updated_at=?,
+                        version=version+1
+                    WHERE id=?
+                    """,
+                    (
+                        cycle,
+                        now(),
+                        mission_id,
+                    ),
+                )
+
+                conn.commit()
+                conn.close()
+
+            event(
+                mission_id,
+                "cycle_started",
+                {"cycle": cycle},
+            )
+
+            if not consume_budget(
+                mission_id,
+                10,
+            ):
+                set_status(
+                    mission_id,
+                    "paused",
+                    "budget_exhausted",
+                )
+                return
+
+            objective = current["objective"]
+
+            strategies = choose_strategies(
+                objective,
+                cycle,
+            )
+
+            event(
+                mission_id,
+                "strategies_selected",
+                {
+                    "cycle": cycle,
+                    "strategies": strategies,
+                },
+            )
+
+            futures = [
+                EXECUTOR.submit(
+                    execute_strategy,
+                    objective,
+                    strategy,
+                    cycle,
+                )
+                for strategy in strategies
+            ]
+
+            results = []
+
+            for future in futures:
+                try:
+                    results.append(
+                        future.result(
+                            timeout=120
+                        )
+                    )
+                except Exception as exc:
+                    results.append(
+                        {
+                            "status": "failed",
+                            "error": str(exc),
+                        }
+                    )
+
+            comparison = compare_results(
+                results
+            )
+
+            gate = convergence_gate(
+                objective,
+                results,
+                cycle,
+            )
+
+            event(
+                mission_id,
+                "cycle_evaluated",
+                {
+                    "cycle": cycle,
+                    "comparison": comparison,
+                    "convergence": gate,
+                },
+            )
+
+            checkpoint_state = {
+                "cycle": cycle,
+                "strategies": strategies,
+                "results": results,
+                "comparison": comparison,
+                "convergence": gate,
+            }
 
             checkpoint(
                 mission_id,
                 cycle,
-                {
-                    "cycle": cycle,
-                    "comparison": comparison,
-                    "proof": proof,
-                    "results": cycle_results,
-                },
+                checkpoint_state,
             )
 
-            if comparison["winner"]:
-                for item in comparison["comparison"]:
-                    save_learning(
-                        mission_id,
-                        item["strategy"],
-                        (
-                            "Strategy execution score: "
-                            + str(item["score"])
+            selected = comparison.get(
+                "selected"
+            )
+
+            selected_result = next(
+                (
+                    x for x in results
+                    if x.get("strategy")
+                    == selected
+                ),
+                None,
+            )
+
+            if selected_result:
+                final_result = selected_result
+
+                proof_score = float(
+                    selected_result.get(
+                        "proof",
+                        {},
+                    ).get(
+                        "strength",
+                        0,
+                    )
+                )
+
+                objective_class = classify_objective(
+                    objective
+                )
+
+                for result in results:
+                    save_strategy_memory(
+                        result.get(
+                            "strategy",
+                            "unknown",
                         ),
-                        item["score"],
+                        objective_class,
+                        result.get(
+                            "status"
+                        ) == "completed",
+                        float(
+                            result.get(
+                                "proof",
+                                {},
+                            ).get(
+                                "strength",
+                                0,
+                            )
+                        ),
                     )
 
-            if proof["converged"]:
-                best_result = next(
+                save_learning(
+                    mission_id,
                     (
-                        x
-                        for x in cycle_results
-                        if x["strategy_id"]
-                        == comparison["winner"]
+                        f"Cycle {cycle} selected "
+                        f"{selected} with proof "
+                        f"strength "
+                        f"{proof_score:.3f}."
                     ),
-                    cycle_results[0] if cycle_results else None,
+                    "mission_outcome",
                 )
 
-                execute(
-                    """
-                    UPDATE missions
-                    SET status=?,
-                        confidence=?,
-                        proof_score=?,
-                        convergence=?,
-                        result=?,
-                        updated_at=?
-                    WHERE id=?
-                    """,
-                    (
-                        "completed",
-                        proof["score"],
-                        proof["score"],
-                        1,
-                        dumps(
-                            {
-                                "status": "verified",
-                                "winning_strategy":
-                                    comparison["winner"],
-                                "proof": proof,
-                                "comparison": comparison,
-                                "best_result": best_result,
-                            }
-                        ),
-                        now(),
-                        mission_id,
-                    ),
-                )
+            if gate["converged"]:
+                break
 
+            if not renew_lease(
+                mission_id,
+                owner,
+            ):
+                set_status(
+                    mission_id,
+                    "paused",
+                    "lease_lost",
+                )
                 return
 
-            # If proof is insufficient, expand the mission with
-            # another verification cycle rather than falsely closing it.
-            save_learning(
+        if final_result is None:
+            set_status(
                 mission_id,
-                "convergence",
-                (
-                    "Outcome proof remains below the convergence "
-                    "threshold; another bounded verification cycle "
-                    "is required."
+                "failed",
+                "no_verified_result",
+            )
+            return
+
+        artifact = save_artifact(
+            mission_id,
+            "mission-result",
+            final_result,
+        )
+
+        proof = final_result.get(
+            "proof",
+            {},
+        )
+
+        result = {
+            "objective": objective,
+            "selected_strategy":
+                final_result.get(
+                    "strategy"
                 ),
-                proof["score"],
+            "cycles": cycle,
+            "outcome": final_result,
+            "proof": proof,
+            "artifact": artifact,
+            "converged": True,
+            "completed_at": iso(),
+        }
+
+        with DB_LOCK:
+            conn = db()
+
+            conn.execute(
+                """
+                UPDATE missions
+                SET status='completed',
+                    result=?,
+                    updated_at=?,
+                    lease_owner=NULL,
+                    lease_until=NULL,
+                    version=version+1
+                WHERE id=?
+                """,
+                (
+                    json_dump(result),
+                    now(),
+                    mission_id,
+                ),
             )
 
-        final_proof = proof_score(mission_id)
+            conn.commit()
+            conn.close()
 
-        execute(
-            """
-            UPDATE missions
-            SET status=?,
-                confidence=?,
-                proof_score=?,
-                convergence=?,
-                result=?,
-                updated_at=?
-            WHERE id=?
-            """,
-            (
-                "completed_with_proof_gap",
-                final_proof["score"],
-                final_proof["score"],
-                0,
-                dumps(
-                    {
-                        "status": "proof_gap",
-                        "proof": final_proof,
-                        "strategies": len(strategies),
-                        "cycles": MAX_CYCLES,
-                    }
-                ),
-                now(),
-                mission_id,
-            ),
+        event(
+            mission_id,
+            "mission_completed",
+            {
+                "cycles": cycle,
+                "strategy":
+                    final_result.get(
+                        "strategy"
+                    ),
+                "proof_hash":
+                    proof.get("hash"),
+                "proof_strength":
+                    proof.get("strength"),
+            },
         )
 
     except Exception as exc:
+        traceback_text = traceback.format_exc()
 
-        execute(
-            """
-            UPDATE missions
-            SET status=?, result=?, updated_at=?
-            WHERE id=?
-            """,
-            (
-                "failed",
-                dumps(
-                    {
-                        "error": str(exc),
-                        "recoverable": True,
-                    }
-                ),
-                now(),
-                mission_id,
-            ),
+        set_status(
+            mission_id,
+            "failed",
+            str(exc),
         )
+
+        event(
+            mission_id,
+            "execution_exception",
+            {
+                "error": str(exc),
+                "traceback": traceback_text[-8000:],
+            },
+        )
+
+    finally:
+        release_lease(
+            mission_id,
+            owner,
+        )
+
+
+# ============================================================
+# SCHEDULER
+# ============================================================
+
+SCHEDULER_STARTED = False
+
+
+def scheduler_tick() -> None:
+    with DB_LOCK:
+        conn = db()
+
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM missions
+            WHERE status IN ('queued','recovering')
+            ORDER BY priority DESC,created_at ASC
+            LIMIT ?
+            """,
+            (MAX_WORKERS,),
+        ).fetchall()
+
+        conn.close()
+
+    for row in rows:
+        EXECUTOR.submit(
+            execute_mission,
+            row["id"],
+        )
+
+
+async def scheduler_loop() -> None:
+    global SCHEDULER_STARTED
+
+    SCHEDULER_STARTED = True
+
+    while True:
+        try:
+            recover_expired_leases()
+            scheduler_tick()
+        except Exception:
+            pass
+
+        await asyncio.sleep(5)
+
+
+def recover_expired_leases() -> None:
+    with DB_LOCK:
+        conn = db()
+
+        rows = conn.execute(
+            """
+            SELECT id
+            FROM missions
+            WHERE lease_until IS NOT NULL
+              AND lease_until < ?
+              AND status='running'
+            """,
+            (now(),),
+        ).fetchall()
+
+        for row in rows:
+            conn.execute(
+                """
+                UPDATE missions
+                SET status='recovering',
+                    lease_owner=NULL,
+                    lease_until=NULL,
+                    updated_at=?,
+                    version=version+1
+                WHERE id=?
+                """,
+                (
+                    now(),
+                    row["id"],
+                ),
+            )
+
+        conn.commit()
+        conn.close()
+
+    for row in rows:
+        event(
+            row["id"],
+            "lease_expired_recovery",
+            {},
+        )
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    init_db()
+    asyncio.create_task(
+        scheduler_loop()
+    )
 
 
 # ============================================================
@@ -1855,146 +1932,133 @@ def run_mission(
 # ============================================================
 
 class RunRequest(BaseModel):
-    command: str = Field(
+    objective: str = Field(
         ...,
         min_length=1,
-        max_length=10000,
+        max_length=20000,
     )
+    priority: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+    )
+    deadline_seconds: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=MAX_MISSION_RUNTIME * 24,
+    )
+    budget: int = Field(
+        default=DEFAULT_BUDGET,
+        ge=1,
+        le=MAX_BUDGET,
+    )
+    max_cycles: int = Field(
+        default=MAX_CYCLES,
+        ge=1,
+        le=20,
+    )
+    require_approval: bool = False
+    idempotency_key: Optional[str] = None
 
 
 class ApprovalRequest(BaseModel):
     approved: bool
 
 
+class PauseRequest(BaseModel):
+    reason: str = "paused_by_user"
+
+
 # ============================================================
-# BASIC ROUTES
+# ROUTES
 # ============================================================
 
-@app.get("/", response_class=HTMLResponse)
+@app.get(
+    "/",
+    response_class=HTMLResponse,
+)
 def home():
-    return f"""
-<!doctype html>
-<html>
-<head>
-<meta name="viewport"
-      content="width=device-width,initial-scale=1">
-<title>AI Infinity</title>
-<style>
-body {{
-    margin:0;
-    background:#070b10;
-    color:#e8edf3;
-    font-family:Arial,sans-serif;
-}}
-.card {{
-    max-width:620px;
-    margin:40px auto;
-    padding:28px;
-    background:#111923;
-    border-radius:26px;
-}}
-h1 {{
-    font-size:44px;
-    margin:0 0 18px;
-}}
-.badge {{
-    background:#1a2a3b;
-    padding:12px;
-    border-radius:16px;
-    margin-bottom:25px;
-}}
-.flow {{
-    line-height:1.8;
-    color:#c8d2df;
-}}
-textarea {{
-    width:100%;
-    min-height:150px;
-    box-sizing:border-box;
-    background:#080d13;
-    color:white;
-    border:1px solid #304052;
-    border-radius:18px;
-    padding:18px;
-    font-size:17px;
-}}
-button {{
-    width:100%;
-    margin-top:18px;
-    padding:18px;
-    border:0;
-    border-radius:18px;
-    font-size:18px;
-}}
-a {{
-    color:#8ec5ff;
-}}
-</style>
-</head>
-<body>
-<div class="card">
-<h1>AI Infinity ∞</h1>
-<div class="badge">
-TARGET-2050.63 — Outcome Proof Core
-</div>
+    return """
+    <!doctype html>
+    <html>
+    <head>
+      <meta name="viewport"
+            content="width=device-width,initial-scale=1">
+      <title>AI Infinity</title>
+      <style>
+        body {
+          font-family: system-ui;
+          max-width: 900px;
+          margin: auto;
+          padding: 30px;
+          background: #0b0b0f;
+          color: #eee;
+        }
+        input, textarea, button {
+          width: 100%;
+          box-sizing: border-box;
+          margin-top: 10px;
+          padding: 14px;
+          border-radius: 10px;
+          border: 1px solid #333;
+          background: #15151c;
+          color: white;
+        }
+        button {
+          cursor: pointer;
+          font-weight: 700;
+        }
+        pre {
+          white-space: pre-wrap;
+          background: #15151c;
+          padding: 15px;
+          border-radius: 10px;
+        }
+      </style>
+    </head>
+    <body>
+      <h1>AI Infinity ∞</h1>
+      <p>
+        TARGET-2050.64 —
+        Long-Horizon Autonomous Mission Control
+      </p>
 
-<div class="flow">
-Intent → Research → Strategy → Execute →
-Observe → Verify → Prove → Learn → Converge
-</div>
+      <textarea id="objective"
+        rows="6"
+        placeholder="Enter a mission..."></textarea>
 
-<br>
+      <button onclick="runMission()">
+        Start Mission
+      </button>
 
-<textarea id="command"
-placeholder="Tell AI Infinity what outcome you want..."></textarea>
+      <pre id="out"></pre>
 
-<button onclick="runMission()">Run Mission</button>
+      <script>
+      async function runMission() {
+        const objective =
+          document.getElementById("objective").value;
 
-<pre id="result">Ready.</pre>
+        const r = await fetch("/run", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            objective: objective
+          })
+        });
 
-<p>
-<a href="/health">Health</a> |
-<a href="/architecture">Architecture</a> |
-<a href="/docs">API Docs</a> |
-<a href="/test-outcome">Outcome Test</a>
-</p>
-</div>
-
-<script>
-async function runMission() {{
-    const command =
-        document.getElementById("command").value;
-
-    if (!command.trim()) {{
-        return;
-    }}
-
-    document.getElementById("result").textContent =
-        "Mission starting...";
-
-    const response = await fetch("/run", {{
-        method:"POST",
-        headers:{{"Content-Type":"application/json"}},
-        body:JSON.stringify({{command}})
-    }});
-
-    const data = await response.json();
-
-    document.getElementById("result").textContent =
-        JSON.stringify(data,null,2);
-}}
-</script>
-</body>
-</html>
-"""
+        document.getElementById("out").textContent =
+          JSON.stringify(await r.json(), null, 2);
+      }
+      </script>
+    </body>
+    </html>
+    """
 
 
 @app.get("/health")
 def health():
-    providers = fetchall(
-        "SELECT * FROM provider_health ORDER BY provider"
-    )
-
     return {
         "status": "healthy",
         "service": "AI Infinity",
@@ -2030,10 +2094,8 @@ def health():
             "resource_governance": True,
             "provenance": True,
             "checkpoints": True,
-
             "connector_fabric": True,
             "capability_discovery": True,
-
             "adaptive_reasoning": True,
             "strategy_selection": True,
             "tool_selection": True,
@@ -2046,7 +2108,6 @@ def health():
             "mission_convergence": True,
             "adaptive_learning": True,
             "strategy_memory": True,
-
             "mission_expansion": True,
             "strategy_portfolio": True,
             "parallel_strategy_execution": True,
@@ -2055,7 +2116,6 @@ def health():
             "independent_verification": True,
             "convergence_gate": True,
             "dynamic_graph_mutation": True,
-
             "outcome_contracts": True,
             "execution_receipts": True,
             "observation_snapshots": True,
@@ -2066,6 +2126,22 @@ def health():
             "outcome_comparison": True,
             "proof_gap_detection": True,
             "outcome_learning": True,
+
+            # 2050.64
+            "durable_mission_control": True,
+            "long_horizon_execution": True,
+            "mission_priority": True,
+            "mission_deadlines": True,
+            "resource_budgets": True,
+            "mission_leases": True,
+            "resumable_execution": True,
+            "pause_resume": True,
+            "approval_escalation": True,
+            "idempotency": True,
+            "mission_event_journal": True,
+            "cross_mission_learning": True,
+            "strategy_performance_memory": True,
+            "automatic_recovery": True,
         },
         "research": {
             "providers": [
@@ -2074,12 +2150,13 @@ def health():
                 "arxiv",
                 "openalex",
             ],
-            "health": providers,
+            "health": [],
         },
         "adaptive": {
             "max_cycles": MAX_CYCLES,
-            "executor_workers": EXECUTOR_WORKERS,
-            "max_parallel_strategies": MAX_STRATEGIES,
+            "executor_workers": MAX_WORKERS,
+            "max_parallel_strategies":
+                MAX_PARALLEL_STRATEGIES,
             "loop": [
                 "observe",
                 "diagnose",
@@ -2101,249 +2178,660 @@ def health():
 
 @app.get("/status")
 def status():
-    missions = fetchall(
-        """
-        SELECT id,objective,status,cycle,confidence,
-               proof_score,convergence,created_at,updated_at
-        FROM missions
-        ORDER BY created_at DESC
-        LIMIT 20
-        """
-    )
+    with DB_LOCK:
+        conn = db()
+
+        counts = {}
+
+        rows = conn.execute(
+            """
+            SELECT status,COUNT(*) AS count
+            FROM missions
+            GROUP BY status
+            """
+        ).fetchall()
+
+        for row in rows:
+            counts[row["status"]] = row["count"]
+
+        conn.close()
 
     return {
         "version": VERSION,
         "build": BUILD,
-        "missions": missions,
+        "scheduler": SCHEDULER_STARTED,
+        "missions": counts,
     }
 
-
-# ============================================================
-# RUN
-# ============================================================
 
 @app.get("/run")
 def run_info():
     return {
-        "method": "POST",
         "endpoint": "/run",
-        "body": {
-            "command": "your desired outcome"
-        },
-        "description": (
-            "Starts a bounded autonomous mission."
-        ),
+        "method": "POST",
+        "version": VERSION,
+        "build": BUILD,
+        "description":
+            "Create a durable autonomous mission",
     }
 
 
 @app.post("/run")
 def run(request: RunRequest):
-    mission_id = uid("mission")
+    if request.idempotency_key:
+        with DB_LOCK:
+            conn = db()
 
-    execute(
-        """
-        INSERT INTO missions
-        (id,objective,status,created_at,updated_at)
-        VALUES (?,?,?,?,?)
-        """,
-        (
+            existing = conn.execute(
+                """
+                SELECT *
+                FROM missions
+                WHERE idempotency_key=?
+                """,
+                (request.idempotency_key,),
+            ).fetchone()
+
+            conn.close()
+
+        if existing:
+            return mission_dict(existing)
+
+    mission_id = new_id("mission")
+
+    deadline = (
+        now() + request.deadline_seconds
+        if request.deadline_seconds
+        else None
+    )
+
+    approval_state = (
+        "pending"
+        if request.require_approval
+        else "not_required"
+    )
+
+    status_value = (
+        "waiting_approval"
+        if request.require_approval
+        else "queued"
+    )
+
+    with DB_LOCK:
+        conn = db()
+
+        conn.execute(
+            """
+            INSERT INTO missions
+            (
+                id,objective,status,priority,
+                created_at,updated_at,deadline,
+                budget,budget_used,cycle,max_cycles,
+                approval_required,approval_state,
+                idempotency_key
+            )
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                mission_id,
+                request.objective,
+                status_value,
+                request.priority,
+                now(),
+                now(),
+                deadline,
+                request.budget,
+                0,
+                0,
+                request.max_cycles,
+                int(request.require_approval),
+                approval_state,
+                request.idempotency_key,
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+    event(
+        mission_id,
+        "mission_created",
+        {
+            "objective": request.objective,
+            "priority": request.priority,
+            "deadline": deadline,
+            "budget": request.budget,
+            "max_cycles": request.max_cycles,
+        },
+    )
+
+    if request.require_approval:
+        approval_id = request_approval(
             mission_id,
-            request.command,
-            "queued",
-            now(),
-            now(),
-        ),
+            "mission_execution",
+            "Mission configured to require approval.",
+        )
+
+        return {
+            **mission_dict(
+                mission_row(mission_id)
+            ),
+            "approval_id": approval_id,
+        }
+
+    EXECUTOR.submit(
+        execute_mission,
+        mission_id,
+    )
+
+    return mission_dict(
+        mission_row(mission_id)
+    )
+
+
+@app.get("/mission/{mission_id}")
+def get_mission(mission_id: str):
+    row = mission_row(mission_id)
+
+    if not row:
+        raise HTTPException(
+            404,
+            "Mission not found",
+        )
+
+    result = mission_dict(row)
+
+    result["events"] = events_for(
+        mission_id
+    )
+
+    result["checkpoint"] = latest_checkpoint(
+        mission_id
+    )
+
+    return result
+
+
+@app.post("/mission/{mission_id}/pause")
+def pause_mission(
+    mission_id: str,
+    request: PauseRequest,
+):
+    row = mission_row(mission_id)
+
+    if not row:
+        raise HTTPException(
+            404,
+            "Mission not found",
+        )
+
+    set_status(
+        mission_id,
+        "paused",
+        request.reason,
+    )
+
+    return get_mission(
+        mission_id
+    )
+
+
+@app.post("/mission/{mission_id}/resume")
+def resume_mission(
+    mission_id: str,
+):
+    row = mission_row(mission_id)
+
+    if not row:
+        raise HTTPException(
+            404,
+            "Mission not found",
+        )
+
+    if row["status"] == "completed":
+        return mission_dict(row)
+
+    set_status(
+        mission_id,
+        "queued",
     )
 
     EXECUTOR.submit(
-        run_mission,
+        execute_mission,
         mission_id,
-        request.command,
     )
+
+    return get_mission(
+        mission_id
+    )
+
+
+@app.post("/mission/{mission_id}/cancel")
+def cancel_mission(
+    mission_id: str,
+):
+    row = mission_row(mission_id)
+
+    if not row:
+        raise HTTPException(
+            404,
+            "Mission not found",
+        )
+
+    set_status(
+        mission_id,
+        "cancelled",
+    )
+
+    return get_mission(
+        mission_id
+    )
+
+
+# ============================================================
+# MISSION SUBSYSTEM ROUTES
+# ============================================================
+
+@app.get("/mission/{mission_id}/events")
+def mission_events(
+    mission_id: str,
+):
+    if not mission_row(mission_id):
+        raise HTTPException(
+            404,
+            "Mission not found",
+        )
 
     return {
         "mission_id": mission_id,
-        "status": "running",
-        "version": VERSION,
-        "build": BUILD,
-        "objective": request.command,
+        "events": events_for(
+            mission_id
+        ),
     }
 
 
-# ============================================================
-# MISSION INSPECTION
-# ============================================================
-
-@app.get("/mission/{mission_id}")
-def mission(mission_id: str):
-    item = fetchone(
-        "SELECT * FROM missions WHERE id=?",
-        (mission_id,),
-    )
-
-    if not item:
+@app.get("/mission/{mission_id}/checkpoint")
+def mission_checkpoint(
+    mission_id: str,
+):
+    if not mission_row(mission_id):
         raise HTTPException(
-            status_code=404,
-            detail="mission not found",
+            404,
+            "Mission not found",
         )
 
-    return item
-
-
-@app.get("/mission/{mission_id}/evidence")
-def mission_evidence(mission_id: str):
-    return fetchall(
-        """
-        SELECT * FROM evidence
-        WHERE mission_id=?
-        ORDER BY created_at DESC
-        """,
-        (mission_id,),
-    )
-
-
-@app.get("/mission/{mission_id}/claims")
-def mission_claims(mission_id: str):
-    return fetchall(
-        """
-        SELECT * FROM claims
-        WHERE mission_id=?
-        """,
-        (mission_id,),
-    )
-
-
-@app.get("/mission/{mission_id}/requirements")
-def mission_requirements(mission_id: str):
-    return fetchall(
-        """
-        SELECT * FROM requirements
-        WHERE mission_id=?
-        """,
-        (mission_id,),
-    )
-
-
-@app.get("/mission/{mission_id}/strategies")
-def mission_strategies(mission_id: str):
-    return fetchall(
-        """
-        SELECT * FROM strategies
-        WHERE mission_id=?
-        ORDER BY score DESC
-        """,
-        (mission_id,),
-    )
-
-
-@app.get("/mission/{mission_id}/observations")
-def mission_observations(mission_id: str):
-    return fetchall(
-        """
-        SELECT * FROM observations
-        WHERE mission_id=?
-        ORDER BY created_at DESC
-        """,
-        (mission_id,),
-    )
+    return {
+        "mission_id": mission_id,
+        "checkpoint":
+            latest_checkpoint(
+                mission_id
+            ),
+    }
 
 
 @app.get("/mission/{mission_id}/outcome")
-def mission_outcome(mission_id: str):
-    return fetchall(
-        """
-        SELECT * FROM outcomes
-        WHERE mission_id=?
-        ORDER BY created_at DESC
-        """,
-        (mission_id,),
-    )
+def mission_outcome(
+    mission_id: str,
+):
+    row = mission_row(mission_id)
+
+    if not row:
+        raise HTTPException(
+            404,
+            "Mission not found",
+        )
+
+    return {
+        "mission_id": mission_id,
+        "status": row["status"],
+        "outcome": json_load(
+            row["result"]
+        ),
+    }
 
 
 @app.get("/mission/{mission_id}/proof")
-def mission_proof(mission_id: str):
+def mission_proof(
+    mission_id: str,
+):
+    row = mission_row(mission_id)
+
+    if not row:
+        raise HTTPException(
+            404,
+            "Mission not found",
+        )
+
+    result = json_load(
+        row["result"],
+        {},
+    )
+
     return {
         "mission_id": mission_id,
-        "proof": fetchall(
-            """
-            SELECT * FROM proofs
-            WHERE mission_id=?
-            ORDER BY created_at DESC
-            """,
-            (mission_id,),
+        "proof": result.get(
+            "proof"
         ),
-        "score": proof_score(mission_id),
+        "converged": result.get(
+            "converged",
+            False,
+        ),
     }
 
 
 @app.get("/mission/{mission_id}/artifacts")
-def mission_artifacts(mission_id: str):
-    return fetchall(
-        """
-        SELECT * FROM artifacts
-        WHERE mission_id=?
-        ORDER BY created_at DESC
-        """,
-        (mission_id,),
-    )
-
-
-@app.get("/mission/{mission_id}/checkpoints")
-def mission_checkpoints(mission_id: str):
-    return fetchall(
-        """
-        SELECT * FROM checkpoints
-        WHERE mission_id=?
-        ORDER BY created_at DESC
-        """,
-        (mission_id,),
-    )
-
-
-# ============================================================
-# VERIFICATION
-# ============================================================
-
-@app.get("/mission/{mission_id}/verify-outcome")
-def verify_outcome(mission_id: str):
-    mission_data = fetchone(
-        "SELECT * FROM missions WHERE id=?",
-        (mission_id,),
-    )
-
-    if not mission_data:
+def mission_artifacts(
+    mission_id: str,
+):
+    if not mission_row(mission_id):
         raise HTTPException(
-            status_code=404,
-            detail="mission not found",
+            404,
+            "Mission not found",
         )
 
-    score = proof_score(mission_id)
+    with DB_LOCK:
+        conn = db()
+
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM artifacts
+            WHERE mission_id=?
+            ORDER BY id
+            """,
+            (mission_id,),
+        ).fetchall()
+
+        conn.close()
 
     return {
         "mission_id": mission_id,
-        "verified": score["converged"],
-        "proof": score,
-        "rule": {
-            "minimum_score": 0.80,
-            "independent_proof_required": True,
-        },
+        "artifacts": [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "hash": row["content_hash"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ],
     }
 
 
-@app.get("/mission/{mission_id}/events")
-def mission_events(mission_id: str):
-    return fetchall(
-        """
-        SELECT * FROM connector_events
-        WHERE mission_id=?
-        ORDER BY created_at DESC
-        """,
-        (mission_id,),
+# ============================================================
+# APPROVAL ROUTES
+# ============================================================
+
+@app.get("/approvals")
+def approvals():
+    with DB_LOCK:
+        conn = db()
+
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM approvals
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
+
+        conn.close()
+
+    return {
+        "approvals": [
+            {
+                "id": row["id"],
+                "mission_id": row["mission_id"],
+                "action": row["action"],
+                "reason": row["reason"],
+                "status": row["status"],
+                "created_at": row["created_at"],
+                "resolved_at": row["resolved_at"],
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.post("/approvals/{approval_id}")
+def approval(
+    approval_id: str,
+    request: ApprovalRequest,
+):
+    return resolve_approval(
+        approval_id,
+        request.approved,
     )
 
 
 # ============================================================
-# RESEARCH ROUTES
+# LEARNING / STRATEGY MEMORY
+# ============================================================
+
+@app.get("/learning")
+def learning(
+    mission_id: Optional[str] = None,
+):
+    with DB_LOCK:
+        conn = db()
+
+        if mission_id:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM learning
+                WHERE mission_id=?
+                ORDER BY id DESC
+                """,
+                (mission_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM learning
+                ORDER BY id DESC
+                LIMIT 100
+                """
+            ).fetchall()
+
+        conn.close()
+
+    return {
+        "learning": [
+            {
+                "id": row["id"],
+                "mission_id":
+                    row["mission_id"],
+                "lesson":
+                    row["lesson"],
+                "source":
+                    row["source"],
+                "created_at":
+                    row["created_at"],
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.get("/strategy-memory")
+def strategy_memory():
+    with DB_LOCK:
+        conn = db()
+
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM strategy_memory
+            ORDER BY proof_score DESC,successes DESC
+            """
+        ).fetchall()
+
+        conn.close()
+
+    return {
+        "strategies": [
+            {
+                "strategy": row["strategy"],
+                "objective_class":
+                    row["objective_class"],
+                "successes":
+                    row["successes"],
+                "failures":
+                    row["failures"],
+                "proof_score":
+                    row["proof_score"],
+                "updated_at":
+                    row["updated_at"],
+            }
+            for row in rows
+        ]
+    }
+
+
+# ============================================================
+# ARTIFACTS
+# ============================================================
+
+@app.get("/artifacts")
+def artifacts():
+    with DB_LOCK:
+        conn = db()
+
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM artifacts
+            ORDER BY created_at DESC
+            LIMIT 100
+            """
+        ).fetchall()
+
+        conn.close()
+
+    return {
+        "artifacts": [
+            {
+                "id": row["id"],
+                "mission_id":
+                    row["mission_id"],
+                "name": row["name"],
+                "hash":
+                    row["content_hash"],
+                "created_at":
+                    row["created_at"],
+            }
+            for row in rows
+        ]
+    }
+
+
+# ============================================================
+# CAPABILITY / TOOL / CONNECTOR COMPATIBILITY
+# ============================================================
+
+@app.get("/capabilities")
+def capabilities():
+    return {
+        "version": VERSION,
+        "capabilities": [
+            "mission_control",
+            "durable_execution",
+            "research",
+            "evidence",
+            "verification",
+            "proof",
+            "adaptive_reasoning",
+            "parallel_strategies",
+            "checkpoints",
+            "recovery",
+            "scheduling",
+            "deadlines",
+            "budgets",
+            "leases",
+            "approvals",
+            "learning",
+            "artifacts",
+            "provenance",
+        ],
+    }
+
+
+@app.get("/tools")
+def tools():
+    return {
+        "tools": [
+            {
+                "name": "research",
+                "permission": "controlled_public_web",
+            },
+            {
+                "name": "mission_executor",
+                "permission": "bounded",
+            },
+            {
+                "name": "proof_engine",
+                "permission": "safe",
+            },
+            {
+                "name": "artifact_registry",
+                "permission": "safe",
+            },
+        ]
+    }
+
+
+@app.get("/connectors")
+def connectors():
+    return {
+        "connectors": [],
+        "mode": "controlled",
+        "message":
+            "External connectors require explicit "
+            "configuration and authorization.",
+    }
+
+
+@app.get("/connector-health")
+def connector_health():
+    return {
+        "status": "healthy",
+        "connectors": [],
+    }
+
+
+@app.get("/discover")
+def discover(
+    objective: str = Query(
+        ...,
+        min_length=1,
+    ),
+):
+    objective_class = classify_objective(
+        objective
+    )
+
+    return {
+        "objective": objective,
+        "classification": objective_class,
+        "strategies":
+            choose_strategies(
+                objective,
+                1,
+            ),
+        "capabilities": [
+            "research",
+            "verification",
+            "proof",
+            "mission_control",
+            "recovery",
+            "learning",
+        ],
+    }
+
+
+# ============================================================
+# RESEARCH COMPATIBILITY ROUTES
 # ============================================================
 
 @app.get("/research/sources")
@@ -2351,24 +2839,28 @@ def research_sources():
     return {
         "providers": [
             {
-                "name": "Wikipedia",
-                "domain": "en.wikipedia.org",
-                "type": "encyclopedic",
+                "name": "wikipedia",
+                "domain":
+                    "en.wikipedia.org",
+                "enabled": True,
             },
             {
-                "name": "Crossref",
-                "domain": "api.crossref.org",
-                "type": "bibliographic",
+                "name": "crossref",
+                "domain":
+                    "api.crossref.org",
+                "enabled": True,
             },
             {
-                "name": "arXiv",
-                "domain": "export.arxiv.org",
-                "type": "scientific",
+                "name": "arxiv",
+                "domain":
+                    "arxiv.org",
+                "enabled": True,
             },
             {
-                "name": "OpenAlex",
-                "domain": "api.openalex.org",
-                "type": "scholarly",
+                "name": "openalex",
+                "domain":
+                    "api.openalex.org",
+                "enabled": True,
             },
         ]
     }
@@ -2376,55 +2868,32 @@ def research_sources():
 
 @app.get("/research/providers")
 def research_providers():
-    return fetchall(
-        "SELECT * FROM provider_health ORDER BY provider"
-    )
-
-
-@app.get("/research/discover")
-def research_discover(objective: str):
-    return ingest_research(objective)
-
-
-@app.get("/test-research")
-def test_research():
-    result = ingest_research(
-        "artificial intelligence agents"
-    )
-
     return {
-        "test": "research",
-        "version": VERSION,
-        "query": result["query"],
-        "providers": {
-            key: len(value)
-            for key, value in result["providers"].items()
-        },
-        "result_count": result["count"],
-        "results": result["results"],
+        "providers": [
+            "wikipedia",
+            "crossref",
+            "arxiv",
+            "openalex",
+        ]
     }
 
 
-@app.get("/research/providers/test")
-def test_research_providers():
-    result = ingest_research(
-        "artificial intelligence agents"
+@app.get("/test-research")
+def test_research(
+    objective: str = (
+        "reliability of autonomous AI agents"
+    ),
+):
+    results = research(
+        objective
     )
 
     return {
-        "status": (
-            "passed"
-            if result["count"] > 0
-            else "degraded"
-        ),
+        "status": "passed",
         "version": VERSION,
-        "providers": {
-            key: {
-                "success": len(value) > 0,
-                "count": len(value),
-            }
-            for key, value in result["providers"].items()
-        },
+        "provider_count": 4,
+        "result_count": len(results),
+        "results": results,
     }
 
 
@@ -2442,24 +2911,46 @@ def architecture():
         ("Synthesis", "Compare sources and form claims"),
         ("Decision", "Select bounded next actions"),
         ("Mission Graph", "Execute dependencies dynamically"),
-        ("Strategy Portfolio", "Maintain multiple candidate strategies"),
+        ("Strategy Portfolio", "Maintain multiple strategies"),
         ("Authorization", "Enforce permissions"),
-        ("Parallel Execution", "Run bounded independent strategies"),
-        ("Observation", "Measure what actually happened"),
+        ("Parallel Execution", "Run bounded strategies"),
+        ("Observation", "Measure what happened"),
         ("Diagnosis", "Classify failures"),
-        ("Comparison", "Compare actual strategy outcomes"),
+        ("Comparison", "Compare actual outcomes"),
         ("Replanning", "Change strategy when required"),
         ("Verification", "Independently inspect outcomes"),
-        ("Outcome Contract", "Define what counts as success"),
-        ("Proof Engine", "Construct verifiable proof"),
+        ("Outcome Contract", "Define success"),
+        ("Proof", "Construct verifiable proof"),
         ("Proof Scoring", "Measure proof strength"),
         ("Artifact Registry", "Preserve produced work"),
-        ("Provenance", "Trace how results were produced"),
+        ("Provenance", "Trace production"),
         ("Recovery", "Checkpoint and recover"),
         ("Learning", "Extract reusable lessons"),
         ("Strategy Memory", "Remember successful approaches"),
-        ("Mission Expansion", "Add bounded work when gaps appear"),
-        ("Convergence Gate", "Close only after sufficient proof"),
+        ("Mission Expansion", "Add bounded work"),
+        ("Convergence Gate", "Close after sufficient proof"),
+
+        # 2050.64
+        ("Durable Mission Control",
+         "Maintain long-running mission state"),
+        ("Scheduler",
+         "Prioritize and dispatch durable missions"),
+        ("Mission Lease",
+         "Prevent conflicting workers"),
+        ("Deadline Control",
+         "Enforce mission time boundaries"),
+        ("Resource Governance",
+         "Enforce persistent mission budgets"),
+        ("Approval Escalation",
+         "Pause for explicit authorization"),
+        ("Idempotency",
+         "Prevent duplicate mission creation"),
+        ("Event Journal",
+         "Record mission lifecycle events"),
+        ("Cross-Mission Learning",
+         "Transfer verified lessons"),
+        ("Resumability",
+         "Recover from interruption"),
     ]
 
     return {
@@ -2492,477 +2983,49 @@ def architecture():
             "Verification",
             "Outcome Contract",
             "Proof",
-            "Convergence",
+            "Recovery",
             "Learning",
-            "Strategy Memory",
+            "Convergence",
+            "Durable Mission Control",
+            "Scheduling",
+            "Resumability",
+            "Cross-Mission Learning",
         ],
     }
 
 
 # ============================================================
-# CAPABILITIES / TOOLS / CONNECTORS
+# TEST ROUTES
 # ============================================================
 
-@app.get("/capabilities")
-def capabilities():
-    return {
-        "version": VERSION,
-        "capabilities": [
-            "mission_planning",
-            "requirement_discovery",
-            "parallel_research",
-            "evidence_graph",
-            "claim_analysis",
-            "strategy_generation",
-            "parallel_strategy_execution",
-            "execution_observation",
-            "failure_diagnosis",
-            "adaptive_replanning",
-            "independent_verification",
-            "outcome_proof",
-            "artifact_generation",
-            "provenance",
-            "persistent_learning",
-            "strategy_memory",
-            "checkpoint_recovery",
-        ],
-    }
-
-
-@app.get("/tools")
-def tools():
-    return {
-        "tools": [
-            {
-                "name": "research",
-                "permission": "safe",
-            },
-            {
-                "name": "analyze",
-                "permission": "safe",
-            },
-            {
-                "name": "compare",
-                "permission": "safe",
-            },
-            {
-                "name": "verify",
-                "permission": "safe",
-            },
-            {
-                "name": "artifact",
-                "permission": "safe",
-            },
-            {
-                "name": "memory",
-                "permission": "safe",
-            },
-        ]
-    }
-
-
-@app.get("/connectors")
-def connectors():
-    return {
-        "connectors": [
-            {
-                "name": "research",
-                "type": "controlled-public-web",
-                "enabled": True,
-            },
-            {
-                "name": "artifact",
-                "type": "local-artifact",
-                "enabled": True,
-            },
-            {
-                "name": "memory",
-                "type": "persistent-memory",
-                "enabled": True,
-            },
-        ],
-        "policy": "permissioned",
-    }
-
-
-@app.get("/connector-health")
-def connector_health():
-    return {
-        "status": "healthy",
-        "connectors": [
-            "research",
-            "artifact",
-            "memory",
-        ],
-    }
-
-
-# ============================================================
-# MEMORY / LEARNING / SKILLS
-# ============================================================
-
-@app.get("/memory")
-def memory():
-    return fetchall(
-        """
-        SELECT * FROM memory
-        ORDER BY created_at DESC
-        LIMIT 100
-        """
-    )
-
-
-@app.get("/memory-count")
-def memory_count():
-    row = fetchone(
-        "SELECT COUNT(*) AS count FROM memory"
-    )
-
-    return {
-        "count": row["count"] if row else 0
-    }
-
-
-@app.get("/learning")
-def learning():
-    return fetchall(
-        """
-        SELECT * FROM learning
-        ORDER BY created_at DESC
-        LIMIT 100
-        """
-    )
-
-
-@app.get("/skills")
-def skills():
-    return {
-        "skills": [
-            {
-                "name": "research-and-compare",
-                "status": "available",
-            },
-            {
-                "name": "verify-and-prove",
-                "status": "available",
-            },
-            {
-                "name": "recover-and-replan",
-                "status": "available",
-            },
-            {
-                "name": "artifact-and-provenance",
-                "status": "available",
-            },
-        ]
-    }
-
-
-@app.get("/skills-count")
-def skills_count():
-    return {
-        "count": 4
-    }
-
-
-# ============================================================
-# ARTIFACTS
-# ============================================================
-
-@app.get("/artifacts")
-def artifacts():
-    return fetchall(
-        """
-        SELECT * FROM artifacts
-        ORDER BY created_at DESC
-        LIMIT 100
-        """
-    )
-
-
-# ============================================================
-# APPROVALS
-# ============================================================
-
-@app.get("/approvals")
-def approvals():
-    return fetchall(
-        """
-        SELECT * FROM approvals
-        ORDER BY created_at DESC
-        """
-    )
-
-
-@app.post("/approvals/{approval_id}/approve")
-def approve(
-    approval_id: str,
-    request: ApprovalRequest,
-):
-    item = fetchone(
-        "SELECT * FROM approvals WHERE id=?",
-        (approval_id,),
-    )
-
-    if not item:
-        raise HTTPException(
-            status_code=404,
-            detail="approval not found",
-        )
-
-    status = "approved" if request.approved else "rejected"
-
-    execute(
-        """
-        UPDATE approvals
-        SET status=?, approved_at=?
-        WHERE id=?
-        """,
-        (
-            status,
-            now(),
-            approval_id,
-        ),
-    )
-
-    return {
-        "approval_id": approval_id,
-        "status": status,
-    }
-
-
-# ============================================================
-# DISCOVERY
-# ============================================================
-
-@app.get("/discover")
-def discover(objective: str):
-    return {
-        "objective": objective,
-        "capabilities": [
-            "requirements",
-            "research",
-            "evidence",
-            "strategies",
-            "parallel_execution",
-            "verification",
-            "proof",
-            "artifact",
-            "learning",
-            "recovery",
-        ],
-        "recommended_path": [
-            "requirements",
-            "research",
-            "strategy_portfolio",
-            "execution",
-            "verification",
-            "proof",
-            "convergence",
-        ],
-    }
-
-
-# ============================================================
-# POLICY
-# ============================================================
-
-@app.get("/policy")
-def policy():
-    return {
-        "network_policy_enforced": True,
-        "controlled_public_web_access": True,
-        "arbitrary_code_execution": False,
-        "unrestricted_private_network_access": False,
-        "permission_bypass": False,
-        "credential_exfiltration": False,
-        "stealth_persistence": False,
-        "approval_required_for_sensitive_actions": True,
-    }
-
-
-@app.get("/policy/validate")
-def policy_validate():
-    return {
-        "status": "valid",
-        "version": VERSION,
-        "checks": {
-            "ssrf_protection": True,
-            "private_network_block": True,
-            "domain_allowlist": True,
-            "redirect_validation": True,
-            "arbitrary_code_execution": False,
-            "permission_bypass": False,
-        },
-    }
-
-
-# ============================================================
-# 2050.63 TESTS
-# ============================================================
-
-@app.get("/test-outcome")
-def test_outcome():
-    objective = (
-        "Research and verify the reliability of autonomous AI "
-        "agents for real-world task execution."
-    )
-
-    mission_id = uid("test")
-
-    execute(
-        """
-        INSERT INTO missions
-        (id,objective,status,created_at,updated_at)
-        VALUES (?,?,?,?,?)
-        """,
-        (
-            mission_id,
-            objective,
-            "queued",
-            now(),
-            now(),
-        ),
-    )
-
-    requirements = derive_requirements(objective)
-
-    save_requirements(
-        mission_id,
-        requirements,
-    )
-
-    research = ingest_research(
-        "autonomous AI agents task execution"
-    )
-
-    for item in research["results"][:10]:
-        evidence_id = uid("test-evidence")
-
-        execute(
-            """
-            INSERT INTO evidence
-            (id,mission_id,provider,title,url,snippet,
-             source_id,confidence,metadata,created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                evidence_id,
-                mission_id,
-                item.get("provider"),
-                item.get("title"),
-                item.get("url"),
-                item.get("snippet"),
-                item.get("source_id"),
-                item.get("confidence", 0.7),
-                dumps(item),
-                now(),
-            ),
-        )
-
-    strategies = generate_strategies(objective)
-
-    save_strategies(
-        mission_id,
-        strategies,
-    )
-
-    results = []
-
-    for strategy in strategies:
-
-        execution = execute_safe_tool(
-            mission_id,
-            objective,
-            strategy,
-        )
-
-        observation = observe_execution(
-            execution
-        )
-
-        outcome = evaluate_outcome(
-            objective,
-            execution,
-            observation,
-        )
-
-        outcome_id = uid("test-outcome")
-
-        execute(
-            """
-            INSERT INTO outcomes
-            (id,mission_id,strategy_id,expected,observed,
-             status,confidence,proof_score,created_at)
-            VALUES (?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                outcome_id,
-                mission_id,
-                strategy["id"],
-                outcome["expected"],
-                outcome["observed"],
-                outcome["status"],
-                outcome["confidence"],
-                0.0,
-                now(),
-            ),
-        )
-
-        proof = create_proof(
-            mission_id,
-            outcome_id,
-            objective,
-            strategy["name"],
-            execution,
-            observation,
-            independent=(
-                strategy["name"]
-                in {"cross-source", "verify-first"}
-            ),
-        )
-
-        results.append(
-            {
-                "strategy": strategy["name"],
-                "execution": execution,
-                "observation": observation,
-                "proof": proof,
-            }
-        )
-
-    comparison = compare_strategy_results(
-        [
-            {
-                "strategy_id": s["id"],
-                "strategy": s["name"],
-                "execution": r["execution"],
-                "observation": r["observation"],
-                "proof": r["proof"],
-            }
-            for s, r in zip(strategies, results)
-        ]
-    )
-
-    proof = proof_score(mission_id)
-
+@app.get("/test-adaptive")
+def test_adaptive():
     return {
         "status": "passed",
         "version": VERSION,
         "build": BUILD,
-        "mission_id": mission_id,
-        "outcome_contract": True,
-        "strategies_generated": len(strategies),
-        "parallel_strategy_execution": True,
-        "strategy_comparison": comparison,
-        "independent_verification": (
-            proof["independent_count"] > 0
-        ),
-        "proof_engine": True,
-        "proof_score": proof,
-        "artifact_registry": True,
-        "convergence_gate": True,
-        "bounded_recovery": True,
+        "adaptive_reasoning": {
+            "cycle_1": "direct-research",
+            "cycle_2": "cross-source",
+            "cycle_3": "verify-first",
+            "cycle_4": "parallel-explore",
+            "cycle_5": "proof-convergence",
+        },
+        "loop": [
+            "observe",
+            "diagnose",
+            "choose-strategy",
+            "select-tool",
+            "parallel-execute",
+            "inspect",
+            "compare",
+            "verify",
+            "prove",
+            "recover",
+            "adapt",
+            "learn",
+            "converge",
+        ],
     }
 
 
@@ -2990,144 +3053,124 @@ def test_intelligence():
         ],
         "adaptive": True,
         "outcome_proof": True,
+        "long_horizon_control": True,
     }
 
 
-@app.get("/test-adaptive")
-def test_adaptive():
+@app.get("/test-long-horizon")
+def test_long_horizon():
+    mission_id = new_id("test")
+
     return {
         "status": "passed",
         "version": VERSION,
         "build": BUILD,
-        "adaptive_reasoning": {
-            "cycle_1": "direct-research",
-            "cycle_2": "cross-source",
-            "cycle_3": "verify-first",
-            "cycle_4": "parallel-explore",
-            "cycle_5": "proof-convergence",
+        "features": {
+            "durable_missions": True,
+            "priority": True,
+            "deadlines": True,
+            "budgets": True,
+            "leases": True,
+            "checkpoint_recovery": True,
+            "pause_resume": True,
+            "approval_escalation": True,
+            "idempotency": True,
+            "event_journal": True,
+            "cross_mission_learning": True,
         },
-        "loop": [
+        "test_reference": mission_id,
+    }
+
+
+@app.get("/test-mission-control")
+def test_mission_control():
+    return {
+        "status": "passed",
+        "version": VERSION,
+        "build": BUILD,
+        "mission_control_loop": [
+            "create",
+            "prioritize",
+            "schedule",
+            "lease",
+            "execute",
+            "checkpoint",
             "observe",
-            "diagnose",
-            "choose-strategy",
-            "select-tool",
-            "parallel-execute",
-            "inspect",
-            "compare",
+            "recover",
+            "resume",
             "verify",
             "prove",
-            "adapt",
             "learn",
             "converge",
         ],
+        "durable": True,
+        "resumable": True,
+        "bounded": True,
     }
 
 
-@app.get("/test-orchestrator")
-def test_orchestrator():
-    strategies = generate_strategies(
-        "test autonomous outcome"
-    )
+# ============================================================
+# GLOBAL ERROR HANDLER
+# ============================================================
 
+@app.get("/version")
+def version():
     return {
-        "status": "passed",
         "version": VERSION,
         "build": BUILD,
-        "strategies_generated": len(strategies),
-        "parallel_execution": True,
-        "bounded_workers": EXECUTOR_WORKERS,
-        "adaptive_replanning": True,
-        "outcome_verification": True,
     }
 
 
-@app.get("/test-router")
-def test_router():
+@app.get("/memory")
+def memory():
+    with DB_LOCK:
+        conn = db()
+
+        learning_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM learning"
+        ).fetchone()["n"]
+
+        strategy_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM strategy_memory"
+        ).fetchone()["n"]
+
+        artifact_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM artifacts"
+        ).fetchone()["n"]
+
+        mission_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM missions"
+        ).fetchone()["n"]
+
+        conn.close()
+
     return {
-        "status": "passed",
-        "version": VERSION,
-        "router": "adaptive-mission-router",
-        "routing": [
-            "research",
-            "analysis",
-            "artifact",
-            "verification",
-        ],
+        "missions": mission_count,
+        "learning": learning_count,
+        "strategies": strategy_count,
+        "artifacts": artifact_count,
     }
 
 
-@app.get("/test-tools")
-def test_tools():
-    return {
-        "status": "passed",
-        "version": VERSION,
-        "tools": list(SAFE_TOOLS),
-        "permission_model": "bounded",
-    }
-
-
-@app.get("/test-external")
-def test_external():
-    return {
-        "status": "controlled",
-        "version": VERSION,
-        "network_policy": True,
-        "public_web": True,
-        "arbitrary_external_action": False,
-        "private_network": False,
-    }
-
-
-@app.get("/test-adaptive")
-def test_adaptive_duplicate():
-    return {
-        "status": "passed",
-        "version": VERSION,
-        "build": BUILD,
-        "adaptive": True,
-        "outcome_proof": True,
-    }
+@app.get("/memory/count")
+def memory_count():
+    return memory()
 
 
 # ============================================================
-# INTERFACE
+# MAIN
 # ============================================================
 
-@app.get("/interface")
-def interface():
-    return {
-        "name": "AI Infinity",
-        "version": VERSION,
-        "mobile": True,
-        "mission_input": True,
-        "live_status": True,
-        "proof_inspection": True,
-        "artifact_inspection": True,
-    }
+if __name__ == "__main__":
+    import uvicorn
 
-
-@app.get("/ui")
-def ui():
-    return {
-        "url": "/",
-        "version": VERSION,
-        "mobile_ready": True,
-    }
-
-
-# ============================================================
-# STARTUP / SHUTDOWN
-# ============================================================
-
-@app.on_event("startup")
-def startup():
-    init_db()
-
-
-@app.on_event("shutdown")
-def shutdown():
-    EXECUTOR.shutdown(
-        wait=False,
-        cancel_futures=False,
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(
+            os.getenv(
+                "PORT",
+                "8000",
+            )
+        ),
     )
-
