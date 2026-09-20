@@ -1,3 +1,66 @@
+# ============================================================
+# ONE-TAP ROUTER TEST
+# ============================================================
+
+@app.get("/test-router")
+async def test_router():
+
+    objective = (
+        "Test adaptive mission routing and autonomous "
+        "capability selection [TEST_ROUTER]"
+    )
+
+    mission_id = (
+        "mission-"
+        + hashlib.sha256(
+            (
+                objective
+                + str(time.time_ns())
+            ).encode()
+        ).hexdigest()[:13]
+    )
+
+    create_mission(
+        mission_id,
+        objective
+    )
+
+    routing = route_mission(
+        objective,
+        True,
+        True,
+        True
+    )
+
+    log_event(
+        mission_id,
+        "one_tap_router_test_started",
+        {
+            "routing": routing
+        }
+    )
+
+    await _background_mission(
+        mission_id,
+        objective,
+        True,
+        True,
+        True
+    )
+
+    result = get_mission(
+        mission_id
+    )
+
+    return {
+        "test": "ADAPTIVE_ROUTER",
+        "version": VERSION,
+        "mission_id": mission_id,
+        "status": result.get("status"),
+        "routing": routing,
+        "mission": result
+    }
+
 import os
 import json
 import sqlite3
