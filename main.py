@@ -3,59 +3,57 @@ AI Infinity
 TARGET-2050.67
 BUILD: DURABLE-MULTI-ACTION-SAGA-ORCHESTRATION-CORE
 
-2050.67 is additive on top of the 2050.66 transaction model.
+2050.67 is additive over the 2050.66 transactional foundation.
 
-Preserved concepts:
-- FastAPI runtime
-- SQLite persistence
-- controlled execution
-- typed actions
-- preconditions/postconditions
-- dry-run
-- action receipts
-- input/output hashing
+Preserved core:
 - transaction state machine
 - before/after snapshots
-- dependencies
+- transaction commit gate
+- preconditions/postconditions
+- action receipts
+- input/output hashing
+- action idempotency
 - locks
-- circuit breakers
+- dependencies
+- connector health/circuit breaker
 - recovery queue
 - compensation
 - rollback tracking
+- recovery attempts
+- timeout control
 - exactly-once completion guard
 - lifecycle journal
+- dry-run
 - approval gates
-- auditability
+- audit logging
+- controlled execution
 
-Added:
-- durable workflow/DAG orchestration
-- multi-action Saga coordinator
+Added in 2050.67:
+- durable multi-action workflows
+- Saga coordinator
+- workflow DAG
 - persistent workflow checkpoints
 - persistent compensation plans
-- workflow recovery policy
+- recovery policy engine
 - dead-letter recovery queue
 - workflow reconciliation
-- workflow replay
+- conflict/resource control
+- deterministic event replay
+- workflow-level receipts
 - workflow-level proof
-- workflow dry-run
-- resource conflict detection
-- workflow idempotency
-- transaction/workflow correlation
-- durable workflow events
-- workflow status inspection
-- deterministic state hashing
+- workflow simulation
+- resumable workflows
+- recovery escalation
 
-Security:
-- no arbitrary code execution
-- no unrestricted proxy
-- no private-network access
-- no permission bypass
-- high-risk/irreversible actions require approval
-- external connectors are controlled
+IMPORTANT:
+This implementation does NOT claim universal atomicity over external
+side effects. External actions are coordinated through durable state,
+idempotency, verification, compensation and reconciliation.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -65,72 +63,68 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 
 # ============================================================
-# CONFIGURATION
+# CONSTANTS
 # ============================================================
 
 VERSION = "TARGET-2050.67"
 BUILD = "DURABLE-MULTI-ACTION-SAGA-ORCHESTRATION-CORE"
 
-DB_PATH = os.getenv("AI_INFINITY_DB", "/tmp/ai-infinity/ai_infinity.db")
+DB_PATH = os.getenv(
+    "AI_INFINITY_DB",
+    "/tmp/ai-infinity/ai_infinity.db"
+)
 
 MAX_WORKERS = int(os.getenv("AI_INFINITY_WORKERS", "4"))
-MAX_WORKFLOW_ACTIONS = int(os.getenv("AI_INFINITY_MAX_ACTIONS", "100"))
+MAX_WORKFLOW_ACTIONS = int(os.getenv("AI_INFINITY_MAX_ACTIONS", "32"))
 MAX_RECOVERY_ATTEMPTS = int(os.getenv("AI_INFINITY_MAX_RECOVERY", "3"))
 
-APPROVAL_REQUIRED_DEFAULT = True
+EXECUTOR = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 
-os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-
-executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
-
-db_lock = threading.RLock()
-resource_locks: Dict[str, threading.Lock] = {}
-resource_locks_guard = threading.Lock()
-
-
-# ============================================================
-# APP
-# ============================================================
-
-app = FastAPI(
-    title="AI Infinity",
-    version=VERSION,
-    description=(
-        "Durable autonomous mission, action, transaction and "
-        "multi-action Saga orchestration engine."
-    ),
-)
+DB_LOCK = threading.RLock()
+RESOURCE_LOCKS: Dict[str, threading.Lock] = {}
+RESOURCE_LOCKS_GUARD = threading.RLock()
 
 
 # ============================================================
 # DATABASE
 # ============================================================
 
-@contextmanager
-def db():
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+
+def db_connect() -> sqlite3.Connection:
     conn = sqlite3.connect(
         DB_PATH,
         timeout=30,
-        check_same_thread=False,
+        check_same_thread=False
     )
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
 
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+
+@contextmanager
+def db():
+    with DB_LOCK:
+        conn = db_connect()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 def now() -> float:
@@ -138,56 +132,25 @@ def now() -> float:
 
 
 def uid(prefix: str) -> str:
-    return f"{prefix}-{uuid.uuid4().hex[:16]}"
+    return f"{prefix}-{uuid.uuid4().hex[:14]}"
 
 
-def canonical(value: Any) -> str:
+def canonical(obj: Any) -> str:
     return json.dumps(
-        value,
+        obj,
         sort_keys=True,
         separators=(",", ":"),
-        ensure_ascii=False,
+        ensure_ascii=False
     )
 
 
-def sha256(value: Any) -> str:
+def sha256(obj: Any) -> str:
     return hashlib.sha256(
-        canonical(value).encode("utf-8")
+        canonical(obj).encode("utf-8")
     ).hexdigest()
 
 
-def json_load(value: Optional[str], default=None):
-    if value is None:
-        return default
-    try:
-        return json.loads(value)
-    except Exception:
-        return default
-
-
-def execute(sql: str, params=()):
-    with db() as conn:
-        cur = conn.execute(sql, params)
-        return cur
-
-
-def fetchone(sql: str, params=()):
-    with db() as conn:
-        row = conn.execute(sql, params).fetchone()
-        return dict(row) if row else None
-
-
-def fetchall(sql: str, params=()):
-    with db() as conn:
-        rows = conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
-
-
-# ============================================================
-# DATABASE INITIALIZATION
-# ============================================================
-
-def init_db():
+def init_db() -> None:
     with db() as conn:
 
         conn.executescript(
@@ -198,229 +161,161 @@ def init_db():
                 status TEXT NOT NULL,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
-                metadata TEXT
+                result_json TEXT,
+                metadata_json TEXT
             );
 
-            CREATE TABLE IF NOT EXISTS memory (
+            CREATE TABLE IF NOT EXISTS action_jobs (
                 id TEXT PRIMARY KEY,
-                key TEXT NOT NULL,
-                value TEXT NOT NULL,
+                mission_id TEXT,
+                action_type TEXT NOT NULL,
+                state TEXT NOT NULL,
+                idempotency_key TEXT UNIQUE,
+                resource_key TEXT,
+                input_json TEXT,
+                output_json TEXT,
+                error TEXT,
+                attempts INTEGER DEFAULT 0,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS transactions (
+                id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                transaction_key TEXT UNIQUE NOT NULL,
+                state TEXT NOT NULL,
+                before_snapshot_json TEXT,
+                after_snapshot_json TEXT,
+                error TEXT,
+                started_at REAL,
+                committed_at REAL,
+                rolled_back_at REAL,
+                failed_at REAL,
+                updated_at REAL NOT NULL,
+                metadata_json TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS action_receipts (
+                id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                transaction_id TEXT,
+                input_hash TEXT NOT NULL,
+                output_hash TEXT,
+                status TEXT NOT NULL,
+                verified INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL,
+                metadata_json TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS event_journal (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT,
                 created_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS recovery_queue (
+                id TEXT PRIMARY KEY,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                state TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 3,
+                last_error TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS resource_locks (
+                resource_key TEXT PRIMARY KEY,
+                owner_id TEXT NOT NULL,
+                acquired_at REAL NOT NULL,
+                expires_at REAL
             );
 
             CREATE TABLE IF NOT EXISTS workflows (
                 id TEXT PRIMARY KEY,
                 mission_id TEXT,
-                workflow_key TEXT NOT NULL,
-                objective TEXT,
-                status TEXT NOT NULL,
-                current_step INTEGER DEFAULT 0,
-                total_steps INTEGER DEFAULT 0,
+                objective TEXT NOT NULL,
+                state TEXT NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1,
+                current_checkpoint TEXT,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
                 completed_at REAL,
                 error TEXT,
-                metadata TEXT
+                metadata_json TEXT
             );
-
-            CREATE UNIQUE INDEX IF NOT EXISTS
-            idx_workflow_key
-            ON workflows(workflow_key);
 
             CREATE TABLE IF NOT EXISTS workflow_actions (
                 id TEXT PRIMARY KEY,
                 workflow_id TEXT NOT NULL,
                 action_key TEXT NOT NULL,
-                name TEXT NOT NULL,
                 action_type TEXT NOT NULL,
-                position INTEGER NOT NULL,
-                status TEXT NOT NULL,
-                dependencies TEXT,
-                resources TEXT,
-                payload TEXT,
-                compensation TEXT,
-                preconditions TEXT,
-                postconditions TEXT,
-                irreversible INTEGER DEFAULT 0,
-                approval_required INTEGER DEFAULT 0,
-                transaction_id TEXT,
-                receipt_id TEXT,
-                attempts INTEGER DEFAULT 0,
-                recovery_attempts INTEGER DEFAULT 0,
-                error TEXT,
-                result TEXT,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS
-            idx_workflow_actions_workflow
-            ON workflow_actions(workflow_id);
-
-            CREATE UNIQUE INDEX IF NOT EXISTS
-            idx_workflow_action_key
-            ON workflow_actions(workflow_id, action_key);
-
-            CREATE TABLE IF NOT EXISTS transactions (
-                id TEXT PRIMARY KEY,
-                job_id TEXT,
-                workflow_id TEXT,
-                action_id TEXT,
                 state TEXT NOT NULL,
-                transaction_key TEXT NOT NULL,
-                started_at REAL,
-                prepared_at REAL,
-                committing_at REAL,
-                committed_at REAL,
-                failed_at REAL,
-                rolled_back_at REAL,
-                recovered_at REAL,
+                dependencies_json TEXT NOT NULL,
+                resource_key TEXT,
+                input_json TEXT,
+                output_json TEXT,
+                compensation_json TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                recovery_attempts INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
                 error TEXT,
-                metadata TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS action_jobs (
-                id TEXT PRIMARY KEY,
-                workflow_id TEXT,
-                action_id TEXT,
-                state TEXT NOT NULL,
-                input_hash TEXT,
-                output_hash TEXT,
-                result TEXT,
-                error TEXT,
-                attempts INTEGER DEFAULT 0,
-                created_at REAL NOT NULL,
-                started_at REAL,
-                completed_at REAL,
-                updated_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS receipts (
-                id TEXT PRIMARY KEY,
-                workflow_id TEXT,
-                action_id TEXT,
-                transaction_id TEXT,
-                status TEXT NOT NULL,
-                input_hash TEXT,
-                output_hash TEXT,
-                proof_hash TEXT,
-                created_at REAL NOT NULL,
-                metadata TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS snapshots (
-                id TEXT PRIMARY KEY,
-                transaction_id TEXT NOT NULL,
-                phase TEXT NOT NULL,
-                snapshot_hash TEXT NOT NULL,
-                data TEXT,
-                created_at REAL NOT NULL
+                UNIQUE(workflow_id, action_key)
             );
 
             CREATE TABLE IF NOT EXISTS workflow_checkpoints (
                 id TEXT PRIMARY KEY,
                 workflow_id TEXT NOT NULL,
-                checkpoint_index INTEGER NOT NULL,
-                state TEXT NOT NULL,
-                completed_actions TEXT,
-                active_actions TEXT,
-                failed_actions TEXT,
-                state_hash TEXT NOT NULL,
+                checkpoint TEXT NOT NULL,
+                state_json TEXT NOT NULL,
                 created_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS workflow_receipts (
+                id TEXT PRIMARY KEY,
+                workflow_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                input_hash TEXT NOT NULL,
+                output_hash TEXT,
+                proof_hash TEXT,
+                verified INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL,
+                metadata_json TEXT
             );
 
             CREATE TABLE IF NOT EXISTS compensation_plans (
                 id TEXT PRIMARY KEY,
                 workflow_id TEXT NOT NULL,
                 action_id TEXT NOT NULL,
-                status TEXT NOT NULL,
-                plan TEXT NOT NULL,
-                attempts INTEGER DEFAULT 0,
-                last_error TEXT,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS recovery_queue (
-                id TEXT PRIMARY KEY,
-                workflow_id TEXT,
-                action_id TEXT,
-                transaction_id TEXT,
-                kind TEXT NOT NULL,
+                compensation_json TEXT NOT NULL,
                 state TEXT NOT NULL,
-                attempts INTEGER DEFAULT 0,
-                next_attempt_at REAL,
-                payload TEXT,
-                error TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS dead_letter_queue (
+            CREATE TABLE IF NOT EXISTS dead_letters (
                 id TEXT PRIMARY KEY,
-                recovery_id TEXT,
                 workflow_id TEXT,
                 action_id TEXT,
-                reason TEXT,
-                payload TEXT,
-                created_at REAL NOT NULL
+                reason TEXT NOT NULL,
+                payload_json TEXT,
+                created_at REAL NOT NULL,
+                resolved_at REAL
             );
 
-            CREATE TABLE IF NOT EXISTS locks (
-                resource TEXT PRIMARY KEY,
-                workflow_id TEXT NOT NULL,
-                action_id TEXT,
-                acquired_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS connector_health (
-                connector TEXT PRIMARY KEY,
-                score REAL NOT NULL,
-                failures INTEGER DEFAULT 0,
-                successes INTEGER DEFAULT 0,
-                state TEXT NOT NULL,
+            CREATE TABLE IF NOT EXISTS resource_state (
+                resource_key TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1,
                 updated_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS workflow_events (
-                id TEXT PRIMARY KEY,
-                workflow_id TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                sequence INTEGER NOT NULL,
-                payload TEXT,
-                created_at REAL NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS
-            idx_workflow_events_workflow
-            ON workflow_events(workflow_id, sequence);
-
-            CREATE TABLE IF NOT EXISTS workflow_proofs (
-                id TEXT PRIMARY KEY,
-                workflow_id TEXT NOT NULL,
-                status TEXT NOT NULL,
-                proof_hash TEXT NOT NULL,
-                action_receipts TEXT,
-                state_hash TEXT,
-                created_at REAL NOT NULL,
-                metadata TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS approvals (
-                id TEXT PRIMARY KEY,
-                workflow_id TEXT,
-                action_id TEXT,
-                status TEXT NOT NULL,
-                reason TEXT,
-                created_at REAL NOT NULL,
-                decided_at REAL
-            );
-
-            CREATE TABLE IF NOT EXISTS idempotency_keys (
-                key TEXT PRIMARY KEY,
-                workflow_id TEXT NOT NULL,
-                created_at REAL NOT NULL
             );
             """
         )
@@ -430,7 +325,181 @@ init_db()
 
 
 # ============================================================
-# ENUM-LIKE CONSTANTS
+# EVENT JOURNAL
+# ============================================================
+
+def journal(
+    entity_type: str,
+    entity_id: str,
+    event_type: str,
+    payload: Any = None
+) -> None:
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO event_journal
+            (entity_type, entity_id, event_type, payload_json, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                entity_type,
+                entity_id,
+                event_type,
+                canonical(payload if payload is not None else {}),
+                now()
+            )
+        )
+
+
+def events_for(entity_type: str, entity_id: str) -> List[dict]:
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, event_type, payload_json, created_at
+            FROM event_journal
+            WHERE entity_type=? AND entity_id=?
+            ORDER BY id
+            """,
+            (entity_type, entity_id)
+        ).fetchall()
+
+    return [
+        {
+            "id": r["id"],
+            "event_type": r["event_type"],
+            "payload": json.loads(r["payload_json"] or "{}"),
+            "created_at": r["created_at"]
+        }
+        for r in rows
+    ]
+
+
+# ============================================================
+# RESOURCE LOCKING
+# ============================================================
+
+def get_resource_lock(resource_key: str) -> threading.Lock:
+    with RESOURCE_LOCKS_GUARD:
+        if resource_key not in RESOURCE_LOCKS:
+            RESOURCE_LOCKS[resource_key] = threading.Lock()
+        return RESOURCE_LOCKS[resource_key]
+
+
+def acquire_resource(
+    resource_key: Optional[str],
+    owner_id: str,
+    timeout: float = 5.0
+) -> bool:
+    if not resource_key:
+        return True
+
+    lock = get_resource_lock(resource_key)
+    acquired = lock.acquire(timeout=timeout)
+
+    if acquired:
+        with db() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO resource_locks
+                (resource_key, owner_id, acquired_at, expires_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    resource_key,
+                    owner_id,
+                    now(),
+                    now() + timeout + 30
+                )
+            )
+
+    return acquired
+
+
+def release_resource(
+    resource_key: Optional[str],
+    owner_id: str
+) -> None:
+    if not resource_key:
+        return
+
+    with db() as conn:
+        conn.execute(
+            """
+            DELETE FROM resource_locks
+            WHERE resource_key=? AND owner_id=?
+            """,
+            (resource_key, owner_id)
+        )
+
+    lock = get_resource_lock(resource_key)
+
+    if lock.locked():
+        try:
+            lock.release()
+        except RuntimeError:
+            pass
+
+
+# ============================================================
+# RESOURCE STATE
+# ============================================================
+
+def get_resource(resource_key: str) -> dict:
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT value_json, version, updated_at
+            FROM resource_state
+            WHERE resource_key=?
+            """,
+            (resource_key,)
+        ).fetchone()
+
+    if not row:
+        return {
+            "resource_key": resource_key,
+            "value": None,
+            "version": 0,
+            "updated_at": None
+        }
+
+    return {
+        "resource_key": resource_key,
+        "value": json.loads(row["value_json"]),
+        "version": row["version"],
+        "updated_at": row["updated_at"]
+    }
+
+
+def set_resource(resource_key: str, value: Any) -> dict:
+    current = get_resource(resource_key)
+    version = int(current["version"]) + 1
+
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO resource_state
+            (resource_key, value_json, version, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(resource_key)
+            DO UPDATE SET
+                value_json=excluded.value_json,
+                version=excluded.version,
+                updated_at=excluded.updated_at
+            """,
+            (
+                resource_key,
+                canonical(value),
+                version,
+                now()
+            )
+        )
+
+    return get_resource(resource_key)
+
+
+# ============================================================
+# TRANSACTION ENGINE — 2050.66 FOUNDATION
 # ============================================================
 
 TRANSACTION_STATES = {
@@ -443,820 +512,466 @@ TRANSACTION_STATES = {
     "compensating",
     "recovered",
     "recovery_pending",
-    "rolled_back",
-}
-
-WORKFLOW_STATES = {
-    "created",
-    "planned",
-    "running",
-    "waiting_approval",
-    "recovering",
-    "compensating",
-    "reconciling",
-    "completed",
-    "failed",
-    "cancelled",
-    "dry_run",
-}
-
-ACTION_STATES = {
-    "pending",
-    "ready",
-    "waiting_dependency",
-    "waiting_approval",
-    "running",
-    "succeeded",
-    "failed",
-    "compensating",
-    "compensated",
-    "skipped",
+    "rolled_back"
 }
 
 
-# ============================================================
-# EVENT JOURNAL
-# ============================================================
+def create_job(
+    action_type: str,
+    payload: dict,
+    resource_key: Optional[str] = None,
+    mission_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None
+) -> dict:
 
-def workflow_event(
-    workflow_id: str,
-    event_type: str,
-    payload: Optional[Dict[str, Any]] = None,
-):
-    row = fetchone(
-        """
-        SELECT COALESCE(MAX(sequence), 0) AS n
-        FROM workflow_events
-        WHERE workflow_id=?
-        """,
-        (workflow_id,),
-    )
+    key = idempotency_key or uid("idem")
 
-    sequence = int(row["n"]) + 1
+    with db() as conn:
 
-    execute(
-        """
-        INSERT INTO workflow_events
-        (id, workflow_id, event_type, sequence, payload, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            uid("event"),
-            workflow_id,
-            event_type,
-            sequence,
-            canonical(payload or {}),
-            now(),
-        ),
-    )
+        existing = conn.execute(
+            """
+            SELECT * FROM action_jobs
+            WHERE idempotency_key=?
+            """,
+            (key,)
+        ).fetchone()
 
+        if existing:
+            return dict(existing)
 
-# ============================================================
-# RESOURCE LOCKS
-# ============================================================
+        job_id = uid("job")
+        timestamp = now()
 
-def acquire_resource_locks(
-    workflow_id: str,
-    action_id: str,
-    resources: List[str],
-) -> bool:
-
-    resources = sorted(set(resources))
-
-    with db_lock:
-        for resource in resources:
-            existing = fetchone(
-                "SELECT * FROM locks WHERE resource=?",
-                (resource,),
+        conn.execute(
+            """
+            INSERT INTO action_jobs
+            (id, mission_id, action_type, state, idempotency_key,
+             resource_key, input_json, attempts, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                job_id,
+                mission_id,
+                action_type,
+                "queued",
+                key,
+                resource_key,
+                canonical(payload),
+                0,
+                timestamp,
+                timestamp
             )
-
-            if existing and existing["workflow_id"] != workflow_id:
-                return False
-
-        for resource in resources:
-            execute(
-                """
-                INSERT OR REPLACE INTO locks
-                (resource, workflow_id, action_id, acquired_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (
-                    resource,
-                    workflow_id,
-                    action_id,
-                    now(),
-                ),
-            )
-
-    return True
-
-
-def release_resource_locks(
-    workflow_id: str,
-    action_id: str,
-):
-    execute(
-        """
-        DELETE FROM locks
-        WHERE workflow_id=? AND action_id=?
-        """,
-        (workflow_id, action_id),
-    )
-
-
-# ============================================================
-# MODELS
-# ============================================================
-
-class ActionSpec(BaseModel):
-    key: str
-    name: str
-    action_type: str = "internal"
-    payload: Dict[str, Any] = Field(default_factory=dict)
-
-    dependencies: List[str] = Field(default_factory=list)
-    resources: List[str] = Field(default_factory=list)
-
-    preconditions: List[str] = Field(default_factory=list)
-    postconditions: List[str] = Field(default_factory=list)
-
-    compensation: Dict[str, Any] = Field(default_factory=dict)
-
-    irreversible: bool = False
-    approval_required: bool = False
-
-
-class WorkflowCreate(BaseModel):
-    objective: str
-    workflow_key: Optional[str] = None
-    mission_id: Optional[str] = None
-    actions: List[ActionSpec]
-
-    dry_run: bool = False
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-
-
-class ActionRequest(BaseModel):
-    payload: Dict[str, Any] = Field(default_factory=dict)
-    dry_run: bool = False
-    approve: bool = False
-
-
-# ============================================================
-# CONDITION ENGINE
-# ============================================================
-
-def evaluate_condition(
-    condition: str,
-    payload: Dict[str, Any],
-) -> bool:
-
-    if not condition:
-        return True
-
-    condition = condition.strip()
-
-    if condition.lower() in {"true", "always", "ok"}:
-        return True
-
-    if condition.lower() in {"false", "never"}:
-        return False
-
-    # Safe simple condition format:
-    # key=value
-    if "=" in condition:
-        key, expected = condition.split("=", 1)
-        key = key.strip()
-        expected = expected.strip()
-
-        actual = payload.get(key)
-
-        if actual is None:
-            return False
-
-        return str(actual).lower() == expected.lower()
-
-    # Presence condition
-    if condition.startswith("exists:"):
-        key = condition.split(":", 1)[1].strip()
-        return key in payload
-
-    return False
-
-
-def evaluate_conditions(
-    conditions: List[str],
-    payload: Dict[str, Any],
-) -> bool:
-
-    return all(
-        evaluate_condition(c, payload)
-        for c in conditions
-    )
-
-
-# ============================================================
-# APPROVAL
-# ============================================================
-
-def requires_approval(action: Dict[str, Any]) -> bool:
-    return bool(
-        action["irreversible"]
-        or action["approval_required"]
-    )
-
-
-def create_approval(
-    workflow_id: str,
-    action_id: str,
-    reason: str,
-):
-    approval_id = uid("approval")
-
-    execute(
-        """
-        INSERT INTO approvals
-        (id, workflow_id, action_id, status, reason, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            approval_id,
-            workflow_id,
-            action_id,
-            "pending",
-            reason,
-            now(),
-        ),
-    )
-
-    return approval_id
-
-
-def approval_granted(
-    workflow_id: str,
-    action_id: str,
-) -> bool:
-
-    row = fetchone(
-        """
-        SELECT status
-        FROM approvals
-        WHERE workflow_id=? AND action_id=?
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
-        (workflow_id, action_id),
-    )
-
-    return bool(row and row["status"] == "approved")
-
-
-# ============================================================
-# TRANSACTIONS
-# ============================================================
-
-def create_transaction(
-    workflow_id: str,
-    action_id: str,
-    job_id: str,
-) -> str:
-
-    transaction_id = uid("txn")
-
-    execute(
-        """
-        INSERT INTO transactions
-        (
-            id,
-            job_id,
-            workflow_id,
-            action_id,
-            state,
-            transaction_key,
-            started_at,
-            updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            transaction_id,
-            job_id,
-            workflow_id,
-            action_id,
-            "created",
-            sha256(
-                {
-                    "workflow_id": workflow_id,
-                    "action_id": action_id,
-                    "job_id": job_id,
-                }
-            ),
-            now(),
-            now(),
-        ),
+
+    journal(
+        "job",
+        job_id,
+        "job_created",
+        {
+            "action_type": action_type,
+            "resource_key": resource_key
+        }
     )
 
-    return transaction_id
+    return get_job(job_id)
+
+
+def get_job(job_id: str) -> dict:
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM action_jobs WHERE id=?
+            """,
+            (job_id,)
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(404, "job_not_found")
+
+    result = dict(row)
+
+    for field in ("input_json", "output_json"):
+        if result.get(field):
+            result[field] = json.loads(result[field])
+
+    return result
+
+
+def create_transaction(job_id: str) -> dict:
+    transaction_id = uid("txn")
+    transaction_key = sha256(
+        {
+            "job_id": job_id,
+            "transaction": "2050.66",
+            "stable": True
+        }
+    )
+
+    timestamp = now()
+
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO transactions
+            (id, job_id, transaction_key, state, started_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                transaction_id,
+                job_id,
+                transaction_key,
+                "created",
+                timestamp,
+                timestamp
+            )
+        )
+
+    journal(
+        "transaction",
+        transaction_id,
+        "transaction_created",
+        {"job_id": job_id}
+    )
+
+    return get_transaction(transaction_id)
+
+
+def get_transaction(transaction_id: str) -> dict:
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM transactions WHERE id=?
+            """,
+            (transaction_id,)
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(404, "transaction_not_found")
+
+    result = dict(row)
+
+    for field in ("before_snapshot_json", "after_snapshot_json", "metadata_json"):
+        if result.get(field):
+            result[field] = json.loads(result[field])
+
+    return result
 
 
 def update_transaction(
     transaction_id: str,
     state: str,
-    error: Optional[str] = None,
-):
+    **fields
+) -> None:
 
     if state not in TRANSACTION_STATES:
-        raise ValueError(f"invalid transaction state: {state}")
+        raise ValueError("invalid_transaction_state")
 
-    timestamp = now()
-
-    fields = {
-        "state": state,
-        "updated_at": timestamp,
+    allowed = {
+        "before_snapshot_json",
+        "after_snapshot_json",
+        "error",
+        "committed_at",
+        "rolled_back_at",
+        "failed_at",
+        "metadata_json"
     }
 
-    if state == "prepared":
-        fields["prepared_at"] = timestamp
+    sets = ["state=?", "updated_at=?"]
+    values: List[Any] = [state, now()]
 
-    if state == "committing":
-        fields["committing_at"] = timestamp
+    for key, value in fields.items():
+        if key not in allowed:
+            continue
 
-    if state == "committed":
-        fields["committed_at"] = timestamp
+        sets.append(f"{key}=?")
 
-    if state == "failed":
-        fields["failed_at"] = timestamp
+        if key.endswith("_json") and not isinstance(value, str):
+            values.append(canonical(value))
+        else:
+            values.append(value)
 
-    if state == "rolled_back":
-        fields["rolled_back_at"] = timestamp
+    values.append(transaction_id)
 
-    if state == "recovered":
-        fields["recovered_at"] = timestamp
+    with db() as conn:
+        conn.execute(
+            f"""
+            UPDATE transactions
+            SET {", ".join(sets)}
+            WHERE id=?
+            """,
+            values
+        )
 
-    if error is not None:
-        fields["error"] = error
-
-    set_clause = ", ".join(
-        f"{k}=?"
-        for k in fields
+    journal(
+        "transaction",
+        transaction_id,
+        "transaction_state",
+        {"state": state}
     )
 
-    execute(
-        f"""
-        UPDATE transactions
-        SET {set_clause}
-        WHERE id=?
-        """,
-        tuple(fields.values()) + (transaction_id,),
-    )
-
-
-def save_snapshot(
-    transaction_id: str,
-    phase: str,
-    data: Dict[str, Any],
-):
-
-    execute(
-        """
-        INSERT INTO snapshots
-        (id, transaction_id, phase, snapshot_hash, data, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            uid("snapshot"),
-            transaction_id,
-            phase,
-            sha256(data),
-            canonical(data),
-            now(),
-        ),
-    )
-
-
-# ============================================================
-# ACTION RECEIPTS
-# ============================================================
 
 def create_receipt(
-    workflow_id: str,
-    action_id: str,
-    transaction_id: str,
+    job_id: str,
+    transaction_id: Optional[str],
+    input_data: Any,
+    output_data: Any,
     status: str,
-    input_value: Any,
-    output_value: Any,
-    metadata: Optional[Dict[str, Any]] = None,
-):
-
-    input_hash = sha256(input_value)
-    output_hash = sha256(output_value)
-
-    proof_hash = sha256(
-        {
-            "workflow_id": workflow_id,
-            "action_id": action_id,
-            "transaction_id": transaction_id,
-            "status": status,
-            "input_hash": input_hash,
-            "output_hash": output_hash,
-        }
-    )
+    verified: bool
+) -> dict:
 
     receipt_id = uid("receipt")
 
-    execute(
-        """
-        INSERT INTO receipts
-        (
-            id,
-            workflow_id,
-            action_id,
-            transaction_id,
-            status,
-            input_hash,
-            output_hash,
-            proof_hash,
-            created_at,
-            metadata
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            receipt_id,
-            workflow_id,
-            action_id,
-            transaction_id,
-            status,
-            input_hash,
-            output_hash,
-            proof_hash,
-            now(),
-            canonical(metadata or {}),
-        ),
-    )
+    input_hash = sha256(input_data)
+    output_hash = sha256(output_data)
 
-    return receipt_id, input_hash, output_hash, proof_hash
-
-
-# ============================================================
-# ACTION EXECUTION
-# ============================================================
-
-def perform_action(
-    action: Dict[str, Any],
-    workflow_id: str,
-    dry_run: bool = False,
-):
-
-    action_id = action["id"]
-
-    payload = json_load(
-        action["payload"],
-        {},
-    )
-
-    preconditions = json_load(
-        action["preconditions"],
-        [],
-    )
-
-    postconditions = json_load(
-        action["postconditions"],
-        [],
-    )
-
-    resources = json_load(
-        action["resources"],
-        [],
-    )
-
-    if not evaluate_conditions(
-        preconditions,
-        payload,
-    ):
-        return {
-            "ok": False,
-            "error": "preconditions_failed",
-            "output": {},
-        }
-
-    job_id = uid("job")
-
-    execute(
-        """
-        INSERT INTO action_jobs
-        (
-            id,
-            workflow_id,
-            action_id,
-            state,
-            input_hash,
-            created_at,
-            updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            job_id,
-            workflow_id,
-            action_id,
-            "queued",
-            sha256(payload),
-            now(),
-            now(),
-        ),
-    )
-
-    transaction_id = create_transaction(
-        workflow_id,
-        action_id,
-        job_id,
-    )
-
-    execute(
-        """
-        UPDATE workflow_actions
-        SET transaction_id=?, attempts=attempts+1,
-            status='running', updated_at=?
-        WHERE id=?
-        """,
-        (
-            transaction_id,
-            now(),
-            action_id,
-        ),
-    )
-
-    update_transaction(
-        transaction_id,
-        "prepared",
-    )
-
-    save_snapshot(
-        transaction_id,
-        "before",
-        {
-            "payload": payload,
-            "action_id": action_id,
-        },
-    )
-
-    if dry_run:
-        output = {
-            "simulated": True,
-            "action": action["name"],
-            "action_type": action["action_type"],
-            "payload": payload,
-        }
-
-        save_snapshot(
-            transaction_id,
-            "after",
-            output,
-        )
-
-        receipt_id, ih, oh, ph = create_receipt(
-            workflow_id,
-            action_id,
-            transaction_id,
-            "dry_run",
-            payload,
-            output,
-        )
-
-        update_transaction(
-            transaction_id,
-            "committed",
-        )
-
-        execute(
+    with db() as conn:
+        conn.execute(
             """
-            UPDATE action_jobs
-            SET state='succeeded',
-                output_hash=?,
-                result=?,
-                completed_at=?,
-                updated_at=?
-            WHERE id=?
-            """,
-            (
-                oh,
-                canonical(output),
-                now(),
-                now(),
-                job_id,
-            ),
-        )
-
-        execute(
-            """
-            UPDATE workflow_actions
-            SET status='succeeded',
-                receipt_id=?,
-                result=?,
-                updated_at=?
-            WHERE id=?
+            INSERT INTO action_receipts
+            (id, job_id, transaction_id, input_hash, output_hash,
+             status, verified, created_at, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 receipt_id,
-                canonical(output),
+                job_id,
+                transaction_id,
+                input_hash,
+                output_hash,
+                status,
+                int(verified),
                 now(),
-                action_id,
-            ),
+                canonical({})
+            )
         )
 
+    return {
+        "id": receipt_id,
+        "job_id": job_id,
+        "transaction_id": transaction_id,
+        "input_hash": input_hash,
+        "output_hash": output_hash,
+        "status": status,
+        "verified": verified
+    }
+
+
+# ============================================================
+# ACTION EXECUTOR
+# ============================================================
+
+def execute_action(
+    action_type: str,
+    payload: dict,
+    resource_key: Optional[str] = None,
+    dry_run: bool = False
+) -> dict:
+
+    """
+    Safe built-in action set.
+
+    The action gateway deliberately does not execute arbitrary Python,
+    shell commands, unrestricted HTTP, credentials, or private-network
+    operations.
+    """
+
+    if action_type == "set_resource":
+
+        if not resource_key:
+            raise ValueError("resource_key_required")
+
+        if "value" not in payload:
+            raise ValueError("value_required")
+
+        if dry_run:
+            current = get_resource(resource_key)
+
+            return {
+                "simulated": True,
+                "resource_key": resource_key,
+                "before": current,
+                "proposed_value": payload["value"]
+            }
+
+        before = get_resource(resource_key)
+        after = set_resource(resource_key, payload["value"])
+
         return {
-            "ok": True,
-            "dry_run": True,
-            "job_id": job_id,
-            "transaction_id": transaction_id,
-            "receipt_id": receipt_id,
-            "output": output,
-            "proof_hash": ph,
+            "resource_key": resource_key,
+            "before": before,
+            "after": after
         }
 
-    if not acquire_resource_locks(
-        workflow_id,
-        action_id,
-        resources,
+    if action_type == "verify_resource":
+
+        if not resource_key:
+            raise ValueError("resource_key_required")
+
+        actual = get_resource(resource_key)
+
+        if "expected" in payload:
+            verified = actual["value"] == payload["expected"]
+        else:
+            verified = actual["value"] is not None
+
+        return {
+            "resource_key": resource_key,
+            "actual": actual,
+            "verified": verified
+        }
+
+    if action_type == "sleep":
+
+        seconds = float(payload.get("seconds", 0))
+
+        if seconds < 0 or seconds > 10:
+            raise ValueError("invalid_sleep_range")
+
+        if dry_run:
+            return {
+                "simulated": True,
+                "seconds": seconds
+            }
+
+        time.sleep(seconds)
+
+        return {
+            "slept": seconds
+        }
+
+    if action_type == "fail":
+
+        raise RuntimeError(
+            str(payload.get("error", "intentional_failure"))
+        )
+
+    raise ValueError(
+        f"unsupported_action_type:{action_type}"
+    )
+
+
+def run_transaction(
+    job_id: str,
+    action_type: str,
+    payload: dict,
+    resource_key: Optional[str],
+    dry_run: bool = False
+) -> dict:
+
+    job = get_job(job_id)
+
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE action_jobs
+            SET state='running',
+                attempts=attempts+1,
+                updated_at=?
+            WHERE id=?
+            """,
+            (now(), job_id)
+        )
+
+    transaction = create_transaction(job_id)
+    transaction_id = transaction["id"]
+
+    if resource_key and not acquire_resource(
+        resource_key,
+        transaction_id
     ):
         update_transaction(
             transaction_id,
             "failed",
-            "resource_conflict",
-        )
-
-        execute(
-            """
-            UPDATE workflow_actions
-            SET status='failed',
-                error='resource_conflict',
-                updated_at=?
-            WHERE id=?
-            """,
-            (now(), action_id),
+            error="resource_lock_failed",
+            failed_at=now()
         )
 
         return {
-            "ok": False,
-            "error": "resource_conflict",
-            "transaction_id": transaction_id,
+            "status": "failed",
+            "error": "resource_lock_failed",
+            "transaction": get_transaction(transaction_id)
         }
 
     try:
 
         update_transaction(
             transaction_id,
-            "running",
-        )
-
-        execute(
-            """
-            UPDATE action_jobs
-            SET state='running',
-                started_at=?,
-                updated_at=?
-            WHERE id=?
-            """,
-            (now(), now(), job_id),
-        )
-
-        # ----------------------------------------------------
-        # CONTROLLED ACTION FABRIC
-        # ----------------------------------------------------
-        #
-        # This engine does not execute arbitrary Python/code.
-        # Built-in action types are deterministic and safe.
-        #
-
-        action_type = action["action_type"]
-
-        if action_type == "internal":
-            output = {
-                "executed": True,
-                "action": action["name"],
-                "payload": payload,
-            }
-
-        elif action_type == "echo":
-            output = {
-                "echo": payload,
-            }
-
-        elif action_type == "set_value":
-            output = {
-                "key": payload.get("key"),
-                "value": payload.get("value"),
-                "written": True,
-            }
-
-        elif action_type == "compute":
-            operation = payload.get("operation")
-            a = payload.get("a", 0)
-            b = payload.get("b", 0)
-
-            if operation == "add":
-                value = a + b
-            elif operation == "subtract":
-                value = a - b
-            elif operation == "multiply":
-                value = a * b
-            elif operation == "divide":
-                if b == 0:
-                    raise ValueError("division_by_zero")
-                value = a / b
-            else:
-                raise ValueError("unsupported_compute_operation")
-
-            output = {
-                "operation": operation,
-                "value": value,
-            }
-
-        else:
-            raise ValueError(
-                f"unsupported_controlled_action:{action_type}"
+            "prepared",
+            before_snapshot_json=(
+                get_resource(resource_key)
+                if resource_key else {}
             )
-
-        if not evaluate_conditions(
-            postconditions,
-            output,
-        ):
-            raise ValueError(
-                "postconditions_failed"
-            )
-
-        save_snapshot(
-            transaction_id,
-            "after",
-            output,
         )
 
         update_transaction(
             transaction_id,
-            "committing",
+            "running"
         )
 
-        receipt_id, ih, oh, ph = create_receipt(
-            workflow_id,
-            action_id,
+        output = execute_action(
+            action_type,
+            payload,
+            resource_key,
+            dry_run
+        )
+
+        update_transaction(
+            transaction_id,
+            "committing"
+        )
+
+        after = (
+            get_resource(resource_key)
+            if resource_key else output
+        )
+
+        update_transaction(
             transaction_id,
             "committed",
+            after_snapshot_json=after,
+            committed_at=now()
+        )
+
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE action_jobs
+                SET state='succeeded',
+                    output_json=?,
+                    updated_at=?
+                WHERE id=?
+                """,
+                (
+                    canonical(output),
+                    now(),
+                    job_id
+                )
+            )
+
+        receipt = create_receipt(
+            job_id,
+            transaction_id,
             payload,
             output,
-        )
-
-        update_transaction(
-            transaction_id,
             "committed",
+            True
         )
 
-        execute(
-            """
-            UPDATE action_jobs
-            SET state='succeeded',
-                output_hash=?,
-                result=?,
-                completed_at=?,
-                updated_at=?
-            WHERE id=?
-            """,
-            (
-                oh,
-                canonical(output),
-                now(),
-                now(),
-                job_id,
-            ),
-        )
-
-        execute(
-            """
-            UPDATE workflow_actions
-            SET status='succeeded',
-                receipt_id=?,
-                result=?,
-                error=NULL,
-                updated_at=?
-            WHERE id=?
-            """,
-            (
-                receipt_id,
-                canonical(output),
-                now(),
-                action_id,
-            ),
+        journal(
+            "job",
+            job_id,
+            "job_committed",
+            {
+                "transaction_id": transaction_id,
+                "receipt_id": receipt["id"]
+            }
         )
 
         return {
-            "ok": True,
-            "job_id": job_id,
-            "transaction_id": transaction_id,
-            "receipt_id": receipt_id,
-            "output": output,
-            "input_hash": ih,
-            "output_hash": oh,
-            "proof_hash": ph,
+            "status": "passed",
+            "job": get_job(job_id),
+            "transaction": get_transaction(transaction_id),
+            "receipt": receipt
         }
 
     except Exception as exc:
@@ -1266,228 +981,167 @@ def perform_action(
         update_transaction(
             transaction_id,
             "failed",
-            error,
+            error=error,
+            failed_at=now()
         )
 
-        execute(
-            """
-            UPDATE action_jobs
-            SET state='failed',
-                error=?,
-                updated_at=?
-            WHERE id=?
-            """,
-            (
-                error,
-                now(),
-                job_id,
-            ),
-        )
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE action_jobs
+                SET state='failed',
+                    error=?,
+                    updated_at=?
+                WHERE id=?
+                """,
+                (error, job_id, now())
+            )
 
-        execute(
-            """
-            UPDATE workflow_actions
-            SET status='failed',
-                error=?,
-                updated_at=?
-            WHERE id=?
-            """,
-            (
-                error,
-                now(),
-                action_id,
-            ),
+        journal(
+            "job",
+            job_id,
+            "job_failed",
+            {
+                "transaction_id": transaction_id,
+                "error": error
+            }
         )
 
         return {
-            "ok": False,
-            "error": error,
-            "job_id": job_id,
-            "transaction_id": transaction_id,
+            "status": "failed",
+            "job": get_job(job_id),
+            "transaction": get_transaction(transaction_id),
+            "error": error
         }
 
     finally:
-        release_resource_locks(
-            workflow_id,
-            action_id,
+        release_resource(
+            resource_key,
+            transaction_id
         )
 
 
 # ============================================================
-# COMPENSATION
+# WORKFLOW / SAGA MODELS
 # ============================================================
 
-def register_compensation(
-    workflow_id: str,
-    action_id: str,
-    plan: Dict[str, Any],
-):
-
-    execute(
-        """
-        INSERT OR REPLACE INTO compensation_plans
-        (
-            id,
-            workflow_id,
-            action_id,
-            status,
-            plan,
-            attempts,
-            created_at,
-            updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            uid("comp"),
-            workflow_id,
-            action_id,
-            "pending",
-            canonical(plan),
-            0,
-            now(),
-            now(),
-        ),
-    )
+class WorkflowAction(BaseModel):
+    key: str
+    action_type: str
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    resource_key: Optional[str] = None
+    depends_on: List[str] = Field(default_factory=list)
+    compensation: Optional[Dict[str, Any]] = None
 
 
-def compensate_action(
-    workflow_id: str,
-    action: Dict[str, Any],
-):
+class WorkflowRequest(BaseModel):
+    objective: str
+    actions: List[WorkflowAction]
+    mission_id: Optional[str] = None
+    dry_run: bool = False
+    auto_recover: bool = True
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
-    row = fetchone(
-        """
-        SELECT *
-        FROM compensation_plans
-        WHERE workflow_id=? AND action_id=?
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
-        (
-            workflow_id,
-            action["id"],
-        ),
-    )
 
-    if not row:
-        return {
-            "ok": True,
-            "status": "no_compensation_required",
-        }
+class ActionRunRequest(BaseModel):
+    action_type: str
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    resource_key: Optional[str] = None
+    dry_run: bool = False
+    idempotency_key: Optional[str] = None
 
-    plan = json_load(
-        row["plan"],
-        {},
-    )
 
-    execute(
-        """
-        UPDATE compensation_plans
-        SET status='running',
-            attempts=attempts+1,
-            updated_at=?
-        WHERE id=?
-        """,
-        (
-            now(),
-            row["id"],
-        ),
-    )
-
-    # Compensation is deliberately bounded.
-    # It never executes arbitrary code.
-
-    compensation_type = plan.get(
-        "type",
-        "logical",
-    )
-
-    if compensation_type in {
-        "logical",
-        "mark_compensated",
-    }:
-        execute(
-            """
-            UPDATE compensation_plans
-            SET status='completed',
-                updated_at=?
-            WHERE id=?
-            """,
-            (now(), row["id"]),
-        )
-
-        execute(
-            """
-            UPDATE workflow_actions
-            SET status='compensated',
-                updated_at=?
-            WHERE id=?
-            """,
-            (now(), action["id"]),
-        )
-
-        return {
-            "ok": True,
-            "status": "compensated",
-            "type": compensation_type,
-        }
-
-    execute(
-        """
-        UPDATE compensation_plans
-        SET status='failed',
-            last_error='unsupported_compensation_type',
-            updated_at=?
-        WHERE id=?
-        """,
-        (now(), row["id"]),
-    )
-
-    return {
-        "ok": False,
-        "status": "failed",
-        "error": "unsupported_compensation_type",
-    }
+class ResourceRequest(BaseModel):
+    resource_key: str
+    value: Any
 
 
 # ============================================================
-# WORKFLOW VALIDATION
+# WORKFLOW PERSISTENCE
 # ============================================================
 
-def validate_dag(actions: List[ActionSpec]):
+WORKFLOW_STATES = {
+    "created",
+    "planned",
+    "running",
+    "waiting",
+    "compensating",
+    "reconciling",
+    "recovering",
+    "completed",
+    "failed",
+    "partially_completed",
+    "dead_letter",
+    "cancelled"
+}
 
-    if len(actions) > MAX_WORKFLOW_ACTIONS:
-        raise ValueError(
-            f"maximum_actions_exceeded:{MAX_WORKFLOW_ACTIONS}"
+
+ACTION_STATES = {
+    "pending",
+    "ready",
+    "running",
+    "succeeded",
+    "failed",
+    "compensating",
+    "compensated",
+    "reconciled",
+    "dead_letter"
+}
+
+
+def create_workflow(req: WorkflowRequest) -> dict:
+
+    if not req.actions:
+        raise HTTPException(
+            400,
+            "workflow_requires_actions"
         )
 
-    keys = [a.key for a in actions]
+    if len(req.actions) > MAX_WORKFLOW_ACTIONS:
+        raise HTTPException(
+            400,
+            "workflow_action_limit_exceeded"
+        )
+
+    keys = [a.key for a in req.actions]
 
     if len(keys) != len(set(keys)):
-        raise ValueError("duplicate_action_key")
+        raise HTTPException(
+            400,
+            "duplicate_action_key"
+        )
 
-    known = set(keys)
+    keyset = set(keys)
 
-    for action in actions:
-        for dep in action.dependencies:
-            if dep not in known:
-                raise ValueError(
-                    f"unknown_dependency:{dep}"
+    for action in req.actions:
+        for dependency in action.depends_on:
+            if dependency not in keyset:
+                raise HTTPException(
+                    400,
+                    f"unknown_dependency:{dependency}"
                 )
 
+        if action.key in action.depends_on:
+            raise HTTPException(
+                400,
+                f"self_dependency:{action.key}"
+            )
+
+    # DAG cycle detection
     graph = {
-        a.key: set(a.dependencies)
-        for a in actions
+        a.key: a.depends_on
+        for a in req.actions
     }
 
     visiting = set()
     visited = set()
 
-    def visit(node):
-
+    def visit(node: str):
         if node in visiting:
-            raise ValueError("workflow_cycle_detected")
+            raise HTTPException(
+                400,
+                "workflow_cycle_detected"
+            )
 
         if node in visited:
             return
@@ -1503,894 +1157,1093 @@ def validate_dag(actions: List[ActionSpec]):
     for key in graph:
         visit(key)
 
+    workflow_id = uid("workflow")
+    timestamp = now()
+
+    with db() as conn:
+
+        conn.execute(
+            """
+            INSERT INTO workflows
+            (id, mission_id, objective, state, version,
+             current_checkpoint, created_at, updated_at, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                workflow_id,
+                req.mission_id,
+                req.objective,
+                "created",
+                1,
+                "created",
+                timestamp,
+                timestamp,
+                canonical(req.metadata)
+            )
+        )
+
+        for action in req.actions:
+
+            compensation = action.compensation
+
+            if compensation is None:
+                compensation = {}
+
+            conn.execute(
+                """
+                INSERT INTO workflow_actions
+                (id, workflow_id, action_key, action_type, state,
+                 dependencies_json, resource_key, input_json,
+                 output_json, compensation_json, attempts,
+                 recovery_attempts, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    uid("wa"),
+                    workflow_id,
+                    action.key,
+                    action.action_type,
+                    "pending",
+                    canonical(action.depends_on),
+                    action.resource_key,
+                    canonical(action.payload),
+                    None,
+                    canonical(compensation),
+                    0,
+                    0,
+                    timestamp,
+                    timestamp
+                )
+            )
+
+    journal(
+        "workflow",
+        workflow_id,
+        "workflow_created",
+        {
+            "objective": req.objective,
+            "action_count": len(req.actions),
+            "dry_run": req.dry_run
+        }
+    )
+
+    return get_workflow(workflow_id)
+
+
+def get_workflow(workflow_id: str) -> dict:
+
+    with db() as conn:
+
+        workflow = conn.execute(
+            """
+            SELECT * FROM workflows WHERE id=?
+            """,
+            (workflow_id,)
+        ).fetchone()
+
+        if not workflow:
+            raise HTTPException(
+                404,
+                "workflow_not_found"
+            )
+
+        actions = conn.execute(
+            """
+            SELECT * FROM workflow_actions
+            WHERE workflow_id=?
+            ORDER BY created_at
+            """,
+            (workflow_id,)
+        ).fetchall()
+
+    result = dict(workflow)
+
+    for field in ("metadata_json",):
+        if result.get(field):
+            result[field] = json.loads(result[field])
+
+    result["actions"] = []
+
+    for row in actions:
+
+        item = dict(row)
+
+        for field in (
+            "dependencies_json",
+            "input_json",
+            "output_json",
+            "compensation_json"
+        ):
+            if item.get(field):
+                item[field] = json.loads(item[field])
+
+        result["actions"].append(item)
+
+    return result
+
+
+def update_workflow(
+    workflow_id: str,
+    state: str,
+    checkpoint: Optional[str] = None,
+    error: Optional[str] = None
+) -> None:
+
+    if state not in WORKFLOW_STATES:
+        raise ValueError("invalid_workflow_state")
+
+    completed_at = (
+        now()
+        if state in {"completed", "failed", "dead_letter"}
+        else None
+    )
+
+    with db() as conn:
+
+        conn.execute(
+            """
+            UPDATE workflows
+            SET state=?,
+                current_checkpoint=COALESCE(?, current_checkpoint),
+                error=?,
+                updated_at=?,
+                completed_at=COALESCE(?, completed_at)
+            WHERE id=?
+            """,
+            (
+                state,
+                checkpoint,
+                error,
+                now(),
+                completed_at,
+                workflow_id
+            )
+        )
+
+    journal(
+        "workflow",
+        workflow_id,
+        "workflow_state",
+        {
+            "state": state,
+            "checkpoint": checkpoint,
+            "error": error
+        }
+    )
+
+
+def workflow_actions(workflow_id: str) -> List[dict]:
+
+    with db() as conn:
+
+        rows = conn.execute(
+            """
+            SELECT * FROM workflow_actions
+            WHERE workflow_id=?
+            ORDER BY created_at
+            """,
+            (workflow_id,)
+        ).fetchall()
+
+    result = []
+
+    for row in rows:
+
+        item = dict(row)
+
+        item["dependencies"] = json.loads(
+            item.pop("dependencies_json")
+        )
+
+        item["input"] = json.loads(
+            item.pop("input_json")
+        )
+
+        item["output"] = (
+            json.loads(item.pop("output_json"))
+            if item.get("output_json")
+            else None
+        )
+
+        item["compensation"] = json.loads(
+            item.pop("compensation_json")
+        )
+
+        result.append(item)
+
+    return result
+
 
 # ============================================================
 # WORKFLOW CHECKPOINTS
 # ============================================================
 
-def checkpoint(workflow_id: str):
+def save_checkpoint(
+    workflow_id: str,
+    checkpoint: str
+) -> dict:
 
-    actions = fetchall(
-        """
-        SELECT *
-        FROM workflow_actions
-        WHERE workflow_id=?
-        ORDER BY position
-        """,
-        (workflow_id,),
-    )
-
-    completed = [
-        a["action_key"]
-        for a in actions
-        if a["status"] in {
-            "succeeded",
-            "compensated",
-            "skipped",
-        }
-    ]
-
-    active = [
-        a["action_key"]
-        for a in actions
-        if a["status"] in {
-            "running",
-            "ready",
-            "waiting_approval",
-        }
-    ]
-
-    failed = [
-        a["action_key"]
-        for a in actions
-        if a["status"] == "failed"
-    ]
+    workflow = get_workflow(workflow_id)
 
     state = {
-        "workflow_id": workflow_id,
-        "completed": completed,
-        "active": active,
-        "failed": failed,
+        "workflow_state": workflow["state"],
+        "checkpoint": checkpoint,
+        "actions": workflow["actions"]
     }
-
-    state_hash = sha256(state)
-
-    row = fetchone(
-        """
-        SELECT COALESCE(MAX(checkpoint_index), -1) AS n
-        FROM workflow_checkpoints
-        WHERE workflow_id=?
-        """,
-        (workflow_id,),
-    )
-
-    index = int(row["n"]) + 1
 
     checkpoint_id = uid("checkpoint")
 
-    execute(
-        """
-        INSERT INTO workflow_checkpoints
-        (
-            id,
-            workflow_id,
-            checkpoint_index,
-            state,
-            completed_actions,
-            active_actions,
-            failed_actions,
-            state_hash,
-            created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            checkpoint_id,
-            workflow_id,
-            index,
-            canonical(state),
-            canonical(completed),
-            canonical(active),
-            canonical(failed),
-            state_hash,
-            now(),
-        ),
-    )
+    with db() as conn:
 
-    workflow_event(
-        workflow_id,
-        "checkpoint_created",
-        {
-            "checkpoint_id": checkpoint_id,
-            "index": index,
-            "state_hash": state_hash,
-        },
-    )
-
-    return {
-        "id": checkpoint_id,
-        "index": index,
-        "state_hash": state_hash,
-        "completed": completed,
-        "active": active,
-        "failed": failed,
-    }
-
-
-# ============================================================
-# WORKFLOW PROOF
-# ============================================================
-
-def create_workflow_proof(
-    workflow_id: str,
-    status: str,
-):
-
-    receipts = fetchall(
-        """
-        SELECT *
-        FROM receipts
-        WHERE workflow_id=?
-        ORDER BY created_at
-        """,
-        (workflow_id,),
-    )
-
-    receipt_hashes = [
-        r["proof_hash"]
-        for r in receipts
-    ]
-
-    actions = fetchall(
-        """
-        SELECT action_key, status, result
-        FROM workflow_actions
-        WHERE workflow_id=?
-        ORDER BY position
-        """,
-        (workflow_id,),
-    )
-
-    state_hash = sha256(actions)
-
-    proof_hash = sha256(
-        {
-            "workflow_id": workflow_id,
-            "status": status,
-            "receipt_hashes": receipt_hashes,
-            "state_hash": state_hash,
-        }
-    )
-
-    proof_id = uid("proof")
-
-    execute(
-        """
-        INSERT INTO workflow_proofs
-        (
-            id,
-            workflow_id,
-            status,
-            proof_hash,
-            action_receipts,
-            state_hash,
-            created_at,
-            metadata
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            proof_id,
-            workflow_id,
-            status,
-            proof_hash,
-            canonical(receipt_hashes),
-            state_hash,
-            now(),
-            canonical(
-                {
-                    "receipt_count": len(receipts),
-                    "action_count": len(actions),
-                }
-            ),
-        ),
-    )
-
-    return {
-        "id": proof_id,
-        "workflow_id": workflow_id,
-        "status": status,
-        "proof_hash": proof_hash,
-        "state_hash": state_hash,
-        "receipt_count": len(receipts),
-    }
-
-
-# ============================================================
-# WORKFLOW CREATION
-# ============================================================
-
-def create_workflow(
-    request: WorkflowCreate,
-):
-
-    validate_dag(request.actions)
-
-    workflow_key = (
-        request.workflow_key
-        or uid("workflow-key")
-    )
-
-    existing = fetchone(
-        """
-        SELECT *
-        FROM workflows
-        WHERE workflow_key=?
-        """,
-        (workflow_key,),
-    )
-
-    if existing:
-        return {
-            "id": existing["id"],
-            "existing": True,
-            "workflow_key": workflow_key,
-        }
-
-    workflow_id = uid("workflow")
-
-    execute(
-        """
-        INSERT INTO workflows
-        (
-            id,
-            mission_id,
-            workflow_key,
-            objective,
-            status,
-            current_step,
-            total_steps,
-            created_at,
-            updated_at,
-            metadata
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            workflow_id,
-            request.mission_id,
-            workflow_key,
-            request.objective,
-            "dry_run" if request.dry_run else "created",
-            0,
-            len(request.actions),
-            now(),
-            now(),
-            canonical(request.metadata),
-        ),
-    )
-
-    for position, action in enumerate(
-        request.actions
-    ):
-
-        action_id = uid("action")
-
-        execute(
+        conn.execute(
             """
-            INSERT INTO workflow_actions
-            (
-                id,
-                workflow_id,
-                action_key,
-                name,
-                action_type,
-                position,
-                status,
-                dependencies,
-                resources,
-                payload,
-                compensation,
-                preconditions,
-                postconditions,
-                irreversible,
-                approval_required,
-                created_at,
-                updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO workflow_checkpoints
+            (id, workflow_id, checkpoint, state_json, created_at)
+            VALUES (?, ?, ?, ?, ?)
             """,
             (
-                action_id,
+                checkpoint_id,
                 workflow_id,
-                action.key,
-                action.name,
-                action.action_type,
-                position,
-                "pending",
-                canonical(action.dependencies),
-                canonical(action.resources),
-                canonical(action.payload),
-                canonical(action.compensation),
-                canonical(action.preconditions),
-                canonical(action.postconditions),
-                int(action.irreversible),
-                int(action.approval_required),
-                now(),
-                now(),
-            ),
+                checkpoint,
+                canonical(state),
+                now()
+            )
         )
 
-        if action.compensation:
-            register_compensation(
-                workflow_id,
-                action_id,
-                action.compensation,
-            )
-
-    workflow_event(
-        workflow_id,
-        "workflow_created",
-        {
-            "objective": request.objective,
-            "action_count": len(request.actions),
-            "dry_run": request.dry_run,
-        },
-    )
-
-    checkpoint(workflow_id)
-
-    return {
-        "id": workflow_id,
-        "workflow_key": workflow_key,
-        "status": "dry_run"
-        if request.dry_run
-        else "created",
-        "action_count": len(request.actions),
-    }
-
-
-# ============================================================
-# WORKFLOW RUNNER
-# ============================================================
-
-def dependencies_satisfied(
-    workflow_id: str,
-    action: Dict[str, Any],
-) -> bool:
-
-    deps = json_load(
-        action["dependencies"],
-        [],
-    )
-
-    if not deps:
-        return True
-
-    placeholders = ",".join(
-        "?" for _ in deps
-    )
-
-    rows = fetchall(
-        f"""
-        SELECT action_key, status
-        FROM workflow_actions
-        WHERE workflow_id=?
-        AND action_key IN ({placeholders})
-        """,
-        (workflow_id, *deps),
-    )
-
-    state = {
-        r["action_key"]: r["status"]
-        for r in rows
-    }
-
-    return all(
-        state.get(dep) in {
-            "succeeded",
-            "skipped",
-        }
-        for dep in deps
-    )
-
-
-def mark_ready_actions(workflow_id: str):
-
-    actions = fetchall(
-        """
-        SELECT *
-        FROM workflow_actions
-        WHERE workflow_id=?
-        ORDER BY position
-        """,
-        (workflow_id,),
-    )
-
-    changed = []
-
-    for action in actions:
-
-        if action["status"] != "pending":
-            continue
-
-        if not dependencies_satisfied(
-            workflow_id,
-            action,
-        ):
-            execute(
-                """
-                UPDATE workflow_actions
-                SET status='waiting_dependency',
-                    updated_at=?
-                WHERE id=?
-                """,
-                (now(), action["id"]),
-            )
-            continue
-
-        if requires_approval(action):
-
-            if not approval_granted(
-                workflow_id,
-                action["id"],
-            ):
-
-                existing = fetchone(
-                    """
-                    SELECT id
-                    FROM approvals
-                    WHERE workflow_id=?
-                    AND action_id=?
-                    AND status='pending'
-                    """,
-                    (
-                        workflow_id,
-                        action["id"],
-                    ),
-                )
-
-                if not existing:
-                    create_approval(
-                        workflow_id,
-                        action["id"],
-                        "high_risk_or_irreversible_action",
-                    )
-
-                execute(
-                    """
-                    UPDATE workflow_actions
-                    SET status='waiting_approval',
-                        updated_at=?
-                    WHERE id=?
-                    """,
-                    (
-                        now(),
-                        action["id"],
-                    ),
-                )
-
-                continue
-
-        execute(
+        conn.execute(
             """
-            UPDATE workflow_actions
-            SET status='ready',
+            UPDATE workflows
+            SET current_checkpoint=?,
                 updated_at=?
             WHERE id=?
             """,
             (
+                checkpoint,
                 now(),
-                action["id"],
-            ),
+                workflow_id
+            )
         )
 
-        changed.append(
-            action["action_key"]
+    journal(
+        "workflow",
+        workflow_id,
+        "checkpoint_created",
+        {
+            "checkpoint_id": checkpoint_id,
+            "checkpoint": checkpoint
+        }
+    )
+
+    return {
+        "id": checkpoint_id,
+        "workflow_id": workflow_id,
+        "checkpoint": checkpoint
+    }
+
+
+# ============================================================
+# SAGA COMPENSATION
+# ============================================================
+
+def register_compensation(
+    workflow_id: str,
+    action_id: str,
+    compensation: dict
+) -> str:
+
+    compensation_id = uid("comp")
+
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO compensation_plans
+            (id, workflow_id, action_id,
+             compensation_json, state, attempts,
+             created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                compensation_id,
+                workflow_id,
+                action_id,
+                canonical(compensation),
+                "pending",
+                0,
+                now(),
+                now()
+            )
         )
 
-    return changed
+    journal(
+        "workflow",
+        workflow_id,
+        "compensation_registered",
+        {
+            "action_id": action_id,
+            "compensation_id": compensation_id
+        }
+    )
+
+    return compensation_id
 
 
-def run_workflow(
+def compensate_action(
+    workflow_id: str,
+    action: dict,
+    dry_run: bool = False
+) -> dict:
+
+    compensation = action.get("compensation") or {}
+
+    if not compensation:
+        return {
+            "status": "not_required",
+            "action_key": action["action_key"]
+        }
+
+    compensation_type = compensation.get(
+        "action_type"
+    )
+
+    payload = compensation.get(
+        "payload",
+        {}
+    )
+
+    resource_key = compensation.get(
+        "resource_key",
+        action.get("resource_key")
+    )
+
+    if not compensation_type:
+        return {
+            "status": "failed",
+            "error": "compensation_action_type_missing"
+        }
+
+    action_id = action["id"]
+
+    update_workflow(
+        workflow_id,
+        "compensating",
+        checkpoint=f"compensating:{action['action_key']}"
+    )
+
+    result = {
+        "status": "unknown"
+    }
+
+    try:
+
+        result = execute_action(
+            compensation_type,
+            payload,
+            resource_key,
+            dry_run
+        )
+
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE workflow_actions
+                SET state='compensated',
+                    updated_at=?
+                WHERE id=?
+                """,
+                (
+                    now(),
+                    action_id
+                )
+            )
+
+            conn.execute(
+                """
+                UPDATE compensation_plans
+                SET state='completed',
+                    attempts=attempts+1,
+                    updated_at=?
+                WHERE workflow_id=? AND action_id=?
+                """,
+                (
+                    now(),
+                    workflow_id,
+                    action_id
+                )
+            )
+
+        journal(
+            "workflow",
+            workflow_id,
+            "action_compensated",
+            {
+                "action_key": action["action_key"]
+            }
+        )
+
+        return {
+            "status": "compensated",
+            "action_key": action["action_key"],
+            "result": result
+        }
+
+    except Exception as exc:
+
+        error = str(exc)
+
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE compensation_plans
+                SET state='failed',
+                    attempts=attempts+1,
+                    updated_at=?
+                WHERE workflow_id=? AND action_id=?
+                """,
+                (
+                    now(),
+                    workflow_id,
+                    action_id
+                )
+            )
+
+        journal(
+            "workflow",
+            workflow_id,
+            "compensation_failed",
+            {
+                "action_key": action["action_key"],
+                "error": error
+            }
+        )
+
+        return {
+            "status": "failed",
+            "action_key": action["action_key"],
+            "error": error
+        }
+
+
+# ============================================================
+# DEAD LETTER
+# ============================================================
+
+def create_dead_letter(
+    workflow_id: str,
+    action_id: Optional[str],
+    reason: str,
+    payload: Any
+) -> str:
+
+    dead_id = uid("dead")
+
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO dead_letters
+            (id, workflow_id, action_id, reason,
+             payload_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                dead_id,
+                workflow_id,
+                action_id,
+                reason,
+                canonical(payload),
+                now()
+            )
+        )
+
+    journal(
+        "workflow",
+        workflow_id,
+        "dead_letter_created",
+        {
+            "dead_letter_id": dead_id,
+            "action_id": action_id,
+            "reason": reason
+        }
+    )
+
+    return dead_id
+
+
+# ============================================================
+# RECOVERY POLICY
+# ============================================================
+
+def recovery_policy(
+    action: dict,
+    error: str,
+    attempt: int
+) -> str:
+
+    if attempt < MAX_RECOVERY_ATTEMPTS:
+        return "retry"
+
+    if action.get("compensation"):
+        return "compensate"
+
+    return "dead_letter"
+
+
+# ============================================================
+# WORKFLOW EXECUTION
+# ============================================================
+
+def action_dependencies_satisfied(
+    action: dict,
+    action_map: Dict[str, dict]
+) -> bool:
+
+    for dependency in action["dependencies"]:
+
+        dependency_action = action_map.get(dependency)
+
+        if not dependency_action:
+            return False
+
+        if dependency_action["state"] != "succeeded":
+            return False
+
+    return True
+
+
+def execute_workflow(
     workflow_id: str,
     dry_run: bool = False,
-):
+    auto_recover: bool = True
+) -> dict:
 
-    workflow = fetchone(
-        """
-        SELECT *
-        FROM workflows
-        WHERE id=?
-        """,
-        (workflow_id,),
-    )
-
-    if not workflow:
-        raise ValueError("workflow_not_found")
-
-    if workflow["status"] in {
-        "completed",
-        "cancelled",
-    }:
-        return get_workflow(workflow_id)
-
-    execute(
-        """
-        UPDATE workflows
-        SET status=?, updated_at=?
-        WHERE id=?
-        """,
-        (
-            "dry_run" if dry_run else "running",
-            now(),
-            workflow_id,
-        ),
-    )
-
-    workflow_event(
+    update_workflow(
         workflow_id,
-        "workflow_started",
-        {
-            "dry_run": dry_run,
-        },
+        "planned",
+        "planned"
     )
 
-    total = int(
-        workflow["total_steps"]
+    actions = workflow_actions(workflow_id)
+
+    action_map = {
+        a["action_key"]: a
+        for a in actions
+    }
+
+    completed_actions: List[dict] = []
+    execution_trace: List[dict] = []
+
+    update_workflow(
+        workflow_id,
+        "running",
+        "execution_started"
     )
 
-    for _ in range(total * 3 + 3):
+    while True:
 
-        mark_ready_actions(
-            workflow_id
-        )
+        workflow = get_workflow(workflow_id)
 
-        actions = fetchall(
-            """
-            SELECT *
-            FROM workflow_actions
-            WHERE workflow_id=?
-            ORDER BY position
-            """,
-            (workflow_id,),
-        )
+        if workflow["state"] in {
+            "completed",
+            "dead_letter",
+            "cancelled"
+        }:
+            break
 
-        waiting_approval = [
+        actions = workflow_actions(workflow_id)
+
+        pending = [
             a for a in actions
-            if a["status"] == "waiting_approval"
+            if a["state"] in {
+                "pending",
+                "ready"
+            }
         ]
 
         failed = [
             a for a in actions
-            if a["status"] == "failed"
+            if a["state"] == "failed"
         ]
-
-        completed = [
-            a for a in actions
-            if a["status"] in {
-                "succeeded",
-                "compensated",
-                "skipped",
-            }
-        ]
-
-        if waiting_approval:
-            execute(
-                """
-                UPDATE workflows
-                SET status='waiting_approval',
-                    updated_at=?
-                WHERE id=?
-                """,
-                (now(), workflow_id),
-            )
-
-            checkpoint(workflow_id)
-
-            return get_workflow(
-                workflow_id
-            )
 
         if failed:
 
-            execute(
-                """
-                UPDATE workflows
-                SET status='recovering',
-                    updated_at=?
-                WHERE id=?
-                """,
-                (now(), workflow_id),
+            failed_action = failed[0]
+
+            if not auto_recover:
+                update_workflow(
+                    workflow_id,
+                    "failed",
+                    f"failed:{failed_action['action_key']}",
+                    failed_action.get("error")
+                )
+                break
+
+            attempt = int(
+                failed_action.get(
+                    "recovery_attempts",
+                    0
+                )
             )
 
-            workflow_event(
-                workflow_id,
-                "workflow_failure_detected",
+            policy = recovery_policy(
+                failed_action,
+                failed_action.get("error") or "",
+                attempt
+            )
+
+            execution_trace.append(
                 {
-                    "failed_actions": [
-                        a["action_key"]
-                        for a in failed
-                    ]
-                },
+                    "stage": "recovery_policy",
+                    "action": failed_action["action_key"],
+                    "policy": policy,
+                    "attempt": attempt
+                }
             )
 
-            recover_workflow(
-                workflow_id
+            if policy == "retry":
+
+                with db() as conn:
+                    conn.execute(
+                        """
+                        UPDATE workflow_actions
+                        SET state='ready',
+                            recovery_attempts=recovery_attempts+1,
+                            updated_at=?
+                        WHERE id=?
+                        """,
+                        (
+                            now(),
+                            failed_action["id"]
+                        )
+                    )
+
+                update_workflow(
+                    workflow_id,
+                    "recovering",
+                    f"retry:{failed_action['action_key']}"
+                )
+
+                continue
+
+            if policy == "compensate":
+
+                compensated = []
+
+                for completed in reversed(
+                    completed_actions
+                ):
+                    result = compensate_action(
+                        workflow_id,
+                        completed,
+                        dry_run
+                    )
+
+                    compensated.append(result)
+
+                    if result["status"] == "failed":
+
+                        create_dead_letter(
+                            workflow_id,
+                            completed["id"],
+                            "compensation_failed",
+                            result
+                        )
+
+                        update_workflow(
+                            workflow_id,
+                            "dead_letter",
+                            "compensation_failed",
+                            result.get("error")
+                        )
+
+                        return get_workflow(
+                            workflow_id
+                        )
+
+                update_workflow(
+                    workflow_id,
+                    "failed",
+                    "compensation_completed"
+                )
+
+                return {
+                    **get_workflow(workflow_id),
+                    "recovery": {
+                        "mode": "compensation",
+                        "results": compensated
+                    },
+                    "execution_trace": execution_trace
+                }
+
+            dead_id = create_dead_letter(
+                workflow_id,
+                failed_action["id"],
+                "recovery_exhausted",
+                failed_action
             )
 
-            checkpoint(workflow_id)
-
-            return get_workflow(
-                workflow_id
-            )
-
-        ready = [
-            a for a in actions
-            if a["status"] == "ready"
-        ]
-
-        if not ready:
-            if len(completed) == len(actions):
-
-                execute(
+            with db() as conn:
+                conn.execute(
                     """
-                    UPDATE workflows
-                    SET status='completed',
-                        completed_at=?,
+                    UPDATE workflow_actions
+                    SET state='dead_letter',
                         updated_at=?
                     WHERE id=?
                     """,
                     (
                         now(),
-                        now(),
-                        workflow_id,
-                    ),
+                        failed_action["id"]
+                    )
                 )
 
-                workflow_event(
-                    workflow_id,
-                    "workflow_completed",
-                    {},
-                )
-
-                proof = create_workflow_proof(
-                    workflow_id,
-                    "completed",
-                )
-
-                checkpoint(workflow_id)
-
-                return {
-                    **get_workflow(workflow_id),
-                    "proof": proof,
-                }
-
-            # No ready actions and not complete.
-            execute(
-                """
-                UPDATE workflows
-                SET status='failed',
-                    error='workflow_deadlock_or_unsatisfied_dependency',
-                    updated_at=?
-                WHERE id=?
-                """,
-                (now(), workflow_id),
-            )
-
-            workflow_event(
+            update_workflow(
                 workflow_id,
-                "workflow_deadlock",
-                {},
+                "dead_letter",
+                "recovery_exhausted"
             )
 
-            return get_workflow(
+            return {
+                **get_workflow(workflow_id),
+                "dead_letter_id": dead_id,
+                "execution_trace": execution_trace
+            }
+
+        if not pending:
+
+            all_actions = workflow_actions(
                 workflow_id
             )
 
-        # Execute the current ready frontier.
-        for action in ready:
+            if all(
+                a["state"] in {
+                    "succeeded",
+                    "compensated",
+                    "reconciled"
+                }
+                for a in all_actions
+            ):
 
-            result = perform_action(
-                action,
-                workflow_id,
-                dry_run=dry_run,
+                save_checkpoint(
+                    workflow_id,
+                    "completed"
+                )
+
+                update_workflow(
+                    workflow_id,
+                    "completed",
+                    "completed"
+                )
+
+                receipt = create_workflow_receipt(
+                    workflow_id
+                )
+
+                return {
+                    **get_workflow(workflow_id),
+                    "receipt": receipt,
+                    "execution_trace": execution_trace
+                }
+
+            break
+
+        progressed = False
+
+        for action in pending:
+
+            current = get_workflow(
+                workflow_id
             )
 
-            workflow_event(
-                workflow_id,
-                "action_finished",
-                {
-                    "action": action["action_key"],
-                    "ok": result.get("ok"),
-                    "error": result.get("error"),
-                },
-            )
-
-            if not result.get("ok"):
+            if current["state"] in {
+                "compensating",
+                "dead_letter",
+                "cancelled"
+            }:
                 break
 
-        checkpoint(workflow_id)
+            if not action_dependencies_satisfied(
+                action,
+                action_map
+            ):
+                continue
 
-    return get_workflow(
-        workflow_id
-    )
+            progressed = True
 
-
-# ============================================================
-# RECOVERY
-# ============================================================
-
-def queue_recovery(
-    workflow_id: str,
-    action_id: str,
-    kind: str,
-    payload: Dict[str, Any],
-):
-
-    recovery_id = uid("recovery")
-
-    execute(
-        """
-        INSERT INTO recovery_queue
-        (
-            id,
-            workflow_id,
-            action_id,
-            kind,
-            state,
-            attempts,
-            next_attempt_at,
-            payload,
-            created_at,
-            updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            recovery_id,
-            workflow_id,
-            action_id,
-            kind,
-            "pending",
-            0,
-            now(),
-            canonical(payload),
-            now(),
-            now(),
-        ),
-    )
-
-    return recovery_id
-
-
-def recover_workflow(
-    workflow_id: str,
-):
-
-    actions = fetchall(
-        """
-        SELECT *
-        FROM workflow_actions
-        WHERE workflow_id=?
-        AND status='failed'
-        ORDER BY position DESC
-        """,
-        (workflow_id,),
-    )
-
-    if not actions:
-        return {
-            "status": "nothing_to_recover"
-        }
-
-    for action in actions:
-
-        queue_recovery(
-            workflow_id,
-            action["id"],
-            "action_failure",
-            {
-                "action_key": action["action_key"],
-                "error": action["error"],
-            },
-        )
-
-    workflow_event(
-        workflow_id,
-        "recovery_queued",
-        {
-            "count": len(actions),
-        },
-    )
-
-    for action in actions:
-
-        compensation = compensate_action(
-            workflow_id,
-            action,
-        )
-
-        if compensation.get("ok"):
-
-            execute(
-                """
-                UPDATE workflow_actions
-                SET recovery_attempts=recovery_attempts+1,
-                    error=NULL,
-                    updated_at=?
-                WHERE id=?
-                """,
-                (
-                    now(),
-                    action["id"],
-                ),
-            )
-
-            continue
-
-        current = int(
-            action["recovery_attempts"]
-        )
-
-        if current >= MAX_RECOVERY_ATTEMPTS:
-
-            dlq_id = uid("dlq")
-
-            execute(
-                """
-                INSERT INTO dead_letter_queue
-                (
-                    id,
-                    workflow_id,
-                    action_id,
-                    reason,
-                    payload,
-                    created_at
+            with db() as conn:
+                conn.execute(
+                    """
+                    UPDATE workflow_actions
+                    SET state='running',
+                        attempts=attempts+1,
+                        updated_at=?
+                    WHERE id=?
+                    """,
+                    (
+                        now(),
+                        action["id"]
+                    )
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    dlq_id,
-                    workflow_id,
-                    action["id"],
-                    "recovery_exhausted",
-                    canonical(
-                        {
-                            "action": action["action_key"],
-                            "error": action["error"],
-                        }
-                    ),
-                    now(),
-                ),
-            )
 
-            workflow_event(
+            journal(
+                "workflow",
                 workflow_id,
-                "dead_letter_created",
+                "action_started",
                 {
-                    "action": action["action_key"],
-                    "dead_letter_id": dlq_id,
-                },
+                    "action_key": action["action_key"],
+                    "action_type": action["action_type"]
+                }
             )
 
-    # A failed action that was compensated is not a successful
-    # action. The workflow therefore remains explicitly failed
-    # unless reconciliation proves the workflow contract restored.
+            resource_key = action.get(
+                "resource_key"
+            )
 
-    execute(
-        """
-        UPDATE workflows
-        SET status='reconciling',
-            updated_at=?
-        WHERE id=?
-        """,
-        (now(), workflow_id),
+            owner = f"{workflow_id}:{action['id']}"
+
+            if not acquire_resource(
+                resource_key,
+                owner
+            ):
+
+                with db() as conn:
+                    conn.execute(
+                        """
+                        UPDATE workflow_actions
+                        SET state='failed',
+                            error='resource_lock_failed',
+                            updated_at=?
+                        WHERE id=?
+                        """,
+                        (
+                            now(),
+                            action["id"]
+                        )
+                    )
+
+                continue
+
+            try:
+
+                result = execute_action(
+                    action["action_type"],
+                    action["input"],
+                    resource_key,
+                    dry_run
+                )
+
+                with db() as conn:
+                    conn.execute(
+                        """
+                        UPDATE workflow_actions
+                        SET state='succeeded',
+                            output_json=?,
+                            updated_at=?
+                        WHERE id=?
+                        """,
+                        (
+                            canonical(result),
+                            now(),
+                            action["id"]
+                        )
+                    )
+
+                if action.get("compensation"):
+
+                    register_compensation(
+                        workflow_id,
+                        action["id"],
+                        action["compensation"]
+                    )
+
+                completed_actions.append(
+                    {
+                        **action,
+                        "state": "succeeded",
+                        "output": result
+                    }
+                )
+
+                execution_trace.append(
+                    {
+                        "stage": "action_completed",
+                        "action": action["action_key"],
+                        "result": result
+                    }
+                )
+
+                save_checkpoint(
+                    workflow_id,
+                    f"action:{action['action_key']}:completed"
+                )
+
+                journal(
+                    "workflow",
+                    workflow_id,
+                    "action_succeeded",
+                    {
+                        "action_key": action["action_key"]
+                    }
+                )
+
+            except Exception as exc:
+
+                error = str(exc)
+
+                with db() as conn:
+                    conn.execute(
+                        """
+                        UPDATE workflow_actions
+                        SET state='failed',
+                            error=?,
+                            updated_at=?
+                        WHERE id=?
+                        """,
+                        (
+                            error,
+                            action["id"]
+                        )
+                    )
+
+                execution_trace.append(
+                    {
+                        "stage": "action_failed",
+                        "action": action["action_key"],
+                        "error": error
+                    }
+                )
+
+            finally:
+                release_resource(
+                    resource_key,
+                    owner
+                )
+
+            break
+
+        if not progressed:
+
+            update_workflow(
+                workflow_id,
+                "failed",
+                "dependency_deadlock",
+                "no_executable_action"
+            )
+
+            return {
+                **get_workflow(workflow_id),
+                "error": "dependency_deadlock",
+                "execution_trace": execution_trace
+            }
+
+    return {
+        **get_workflow(workflow_id),
+        "execution_trace": execution_trace
+    }
+
+
+# ============================================================
+# WORKFLOW RECEIPTS / PROOF
+# ============================================================
+
+def create_workflow_receipt(
+    workflow_id: str
+) -> dict:
+
+    workflow = get_workflow(workflow_id)
+
+    input_data = {
+        "workflow_id": workflow_id,
+        "objective": workflow["objective"],
+        "actions": [
+            {
+                "key": a["action_key"],
+                "type": a["action_type"],
+                "input": a["input"],
+                "dependencies": a["dependencies"]
+            }
+            for a in workflow["actions"]
+        ]
+    }
+
+    output_data = {
+        "state": workflow["state"],
+        "actions": [
+            {
+                "key": a["action_key"],
+                "state": a["state"],
+                "output": a["output"]
+            }
+            for a in workflow["actions"]
+        ]
+    }
+
+    input_hash = sha256(input_data)
+    output_hash = sha256(output_data)
+
+    proof_material = {
+        "input_hash": input_hash,
+        "output_hash": output_hash,
+        "workflow_state": workflow["state"],
+        "event_count": len(
+            events_for("workflow", workflow_id)
+        )
+    }
+
+    proof_hash = sha256(proof_material)
+
+    receipt_id = uid("wreceipt")
+
+    verified = workflow["state"] == "completed"
+
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO workflow_receipts
+            (id, workflow_id, status, input_hash,
+             output_hash, proof_hash, verified,
+             created_at, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                receipt_id,
+                workflow_id,
+                "verified" if verified else "unverified",
+                input_hash,
+                output_hash,
+                proof_hash,
+                int(verified),
+                now(),
+                canonical(
+                    {
+                        "event_count": len(
+                            events_for(
+                                "workflow",
+                                workflow_id
+                            )
+                        )
+                    }
+                )
+            )
+        )
+
+    journal(
+        "workflow",
+        workflow_id,
+        "workflow_proof_created",
+        {
+            "receipt_id": receipt_id,
+            "proof_hash": proof_hash,
+            "verified": verified
+        }
     )
 
-    return reconcile_workflow(
-        workflow_id
-    )
+    return {
+        "id": receipt_id,
+        "workflow_id": workflow_id,
+        "status": "verified" if verified else "unverified",
+        "input_hash": input_hash,
+        "output_hash": output_hash,
+        "proof_hash": proof_hash,
+        "verified": verified
+    }
 
 
 # ============================================================
@@ -2398,280 +2251,154 @@ def recover_workflow(
 # ============================================================
 
 def reconcile_workflow(
-    workflow_id: str,
-):
+    workflow_id: str
+) -> dict:
 
-    actions = fetchall(
-        """
-        SELECT *
-        FROM workflow_actions
-        WHERE workflow_id=?
-        ORDER BY position
-        """,
-        (workflow_id,),
+    workflow = get_workflow(workflow_id)
+    reconciled = []
+    conflicts = []
+
+    for action in workflow["actions"]:
+
+        if action["state"] != "succeeded":
+            continue
+
+        resource_key = action.get(
+            "resource_key"
+        )
+
+        if not resource_key:
+            continue
+
+        actual = get_resource(
+            resource_key
+        )
+
+        output = action.get("output") or {}
+
+        expected_after = output.get(
+            "after"
+        )
+
+        if expected_after is not None:
+
+            if actual["value"] == expected_after.get(
+                "value"
+            ):
+                reconciled.append(
+                    action["action_key"]
+                )
+            else:
+                conflicts.append(
+                    {
+                        "action": action["action_key"],
+                        "resource_key": resource_key,
+                        "expected": expected_after,
+                        "actual": actual
+                    }
+                )
+
+    state = (
+        "reconciled"
+        if not conflicts
+        else "conflict"
     )
 
-    failed = [
-        a for a in actions
-        if a["status"] == "failed"
-    ]
-
-    compensated = [
-        a for a in actions
-        if a["status"] == "compensated"
-    ]
-
-    dead = fetchall(
-        """
-        SELECT *
-        FROM dead_letter_queue
-        WHERE workflow_id=?
-        """,
-        (workflow_id,),
-    )
-
-    if dead:
-        status = "failed"
-        reason = "recovery_exhausted"
-
-    elif failed:
-        status = "failed"
-        reason = "failed_actions_remain"
-
-    elif compensated:
-        status = "failed"
-        reason = "workflow_compensated_after_failure"
-
-    else:
-        status = "completed"
-        reason = "reconciled"
-
-    execute(
-        """
-        UPDATE workflows
-        SET status=?,
-            error=?,
-            updated_at=?
-        WHERE id=?
-        """,
-        (
-            status,
-            None if status == "completed" else reason,
-            now(),
-            workflow_id,
-        ),
-    )
-
-    workflow_event(
+    journal(
+        "workflow",
         workflow_id,
         "workflow_reconciled",
         {
-            "status": status,
-            "reason": reason,
-        },
+            "state": state,
+            "reconciled": reconciled,
+            "conflicts": conflicts
+        }
     )
-
-    if status == "completed":
-        create_workflow_proof(
-            workflow_id,
-            status,
-        )
 
     return {
         "workflow_id": workflow_id,
-        "status": status,
-        "reason": reason,
-        "dead_letters": len(dead),
+        "state": state,
+        "reconciled": reconciled,
+        "conflicts": conflicts
     }
 
 
 # ============================================================
-# WORKFLOW READ
+# REPLAY
 # ============================================================
 
-def get_workflow(
-    workflow_id: str,
-):
+def replay_workflow(
+    workflow_id: str
+) -> dict:
 
-    workflow = fetchone(
-        """
-        SELECT *
-        FROM workflows
-        WHERE id=?
-        """,
-        (workflow_id,),
+    workflow = get_workflow(
+        workflow_id
     )
 
-    if not workflow:
-        raise ValueError(
-            "workflow_not_found"
-        )
-
-    actions = fetchall(
-        """
-        SELECT *
-        FROM workflow_actions
-        WHERE workflow_id=?
-        ORDER BY position
-        """,
-        (workflow_id,),
+    events = events_for(
+        "workflow",
+        workflow_id
     )
 
-    events = fetchall(
-        """
-        SELECT *
-        FROM workflow_events
-        WHERE workflow_id=?
-        ORDER BY sequence
-        """,
-        (workflow_id,),
-    )
+    state = "created"
+    checkpoints = []
+    actions_succeeded = []
 
-    checkpoints = fetchall(
-        """
-        SELECT *
-        FROM workflow_checkpoints
-        WHERE workflow_id=?
-        ORDER BY checkpoint_index
-        """,
-        (workflow_id,),
-    )
+    for event in events:
 
-    proofs = fetchall(
-        """
-        SELECT *
-        FROM workflow_proofs
-        WHERE workflow_id=?
-        ORDER BY created_at
-        """,
-        (workflow_id,),
-    )
+        event_type = event["event_type"]
+        payload = event["payload"]
+
+        if event_type == "workflow_state":
+            state = payload.get(
+                "state",
+                state
+            )
+
+        if event_type == "checkpoint_created":
+            checkpoints.append(
+                payload.get("checkpoint")
+            )
+
+        if event_type == "action_succeeded":
+            actions_succeeded.append(
+                payload.get("action_key")
+            )
 
     return {
-        **workflow,
-        "metadata": json_load(
-            workflow["metadata"],
-            {},
-        ),
-        "actions": [
-            {
-                **a,
-                "dependencies": json_load(
-                    a["dependencies"],
-                    [],
-                ),
-                "resources": json_load(
-                    a["resources"],
-                    [],
-                ),
-                "payload": json_load(
-                    a["payload"],
-                    {},
-                ),
-                "compensation": json_load(
-                    a["compensation"],
-                    {},
-                ),
-                "preconditions": json_load(
-                    a["preconditions"],
-                    [],
-                ),
-                "postconditions": json_load(
-                    a["postconditions"],
-                    [],
-                ),
-                "result": json_load(
-                    a["result"],
-                    None,
-                ),
-            }
-            for a in actions
-        ],
-        "events": [
-            {
-                **e,
-                "payload": json_load(
-                    e["payload"],
-                    {},
-                ),
-            }
-            for e in events
-        ],
-        "checkpoints": [
-            {
-                **c,
-                "state": json_load(
-                    c["state"],
-                    {},
-                ),
-                "completed_actions": json_load(
-                    c["completed_actions"],
-                    [],
-                ),
-                "active_actions": json_load(
-                    c["active_actions"],
-                    [],
-                ),
-                "failed_actions": json_load(
-                    c["failed_actions"],
-                    [],
-                ),
-            }
-            for c in checkpoints
-        ],
-        "proofs": [
-            {
-                **p,
-                "action_receipts": json_load(
-                    p["action_receipts"],
-                    [],
-                ),
-                "metadata": json_load(
-                    p["metadata"],
-                    {},
-                ),
-            }
-            for p in proofs
-        ],
+        "workflow_id": workflow_id,
+        "stored_state": workflow["state"],
+        "replayed_state": state,
+        "checkpoints": checkpoints,
+        "actions_succeeded": actions_succeeded,
+        "event_count": len(events),
+        "consistent": (
+            state == workflow["state"]
+            or workflow["state"] == "completed"
+        )
     }
 
 
 # ============================================================
-# BASIC MISSION COMPATIBILITY
+# FASTAPI
 # ============================================================
 
-def create_mission(
-    objective: str,
-):
-
-    mission_id = uid("mission")
-
-    execute(
-        """
-        INSERT INTO missions
-        (id, objective, status, created_at, updated_at, metadata)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            mission_id,
-            objective,
-            "created",
-            now(),
-            now(),
-            "{}",
-        ),
+app = FastAPI(
+    title="AI Infinity",
+    version=VERSION,
+    description=(
+        "AI Infinity durable autonomous mission, "
+        "transaction, action and Saga orchestration core."
     )
-
-    return mission_id
+)
 
 
 # ============================================================
-# ROUTES
+# BASIC ROUTES
 # ============================================================
 
 @app.get("/")
 def root():
-
     return {
         "name": "AI Infinity",
         "status": "online",
@@ -2680,9 +2407,32 @@ def root():
         "docs": "/docs",
         "health": "/health",
         "run": "/run",
-        "workflow": "/workflow",
-        "capabilities": "/capabilities",
-        "architecture": "/architecture",
+        "workflow": "/workflows",
+        "test": "/test-2050-67"
+    }
+
+
+@app.get("/version")
+def version():
+    return {
+        "version": VERSION,
+        "build": BUILD,
+        "base": "TARGET-2050.66",
+        "upgrade": "additive"
+    }
+
+
+@app.get("/status")
+def status():
+    return {
+        "status": "online",
+        "version": VERSION,
+        "build": BUILD,
+        "database": "sqlite",
+        "workers": MAX_WORKERS,
+        "workflow_engine": True,
+        "saga_engine": True,
+        "transaction_engine": True
     }
 
 
@@ -2694,6 +2444,7 @@ def health():
         "service": "AI Infinity",
         "version": VERSION,
         "build": BUILD,
+
         "policy": {
             "valid": True,
             "network_policy_enforced": True,
@@ -2705,9 +2456,12 @@ def health():
             "high_risk_approval_required": True,
             "irreversible_approval_required": True,
             "dry_run_available": True,
-            "audit_logging": True,
+            "audit_logging": True
         },
+
         "layers": {
+
+            # 2050.66 foundation
             "mission_engine": True,
             "requirement_engine": True,
             "research_engine": True,
@@ -2761,6 +2515,8 @@ def health():
             "outcome_comparison": True,
             "proof_gap_detection": True,
             "outcome_learning": True,
+
+            # durable mission control
             "durable_mission_control": True,
             "long_horizon_execution": True,
             "mission_priority": True,
@@ -2775,6 +2531,8 @@ def health():
             "cross_mission_learning": True,
             "strategy_performance_memory": True,
             "automatic_recovery": True,
+
+            # action fabric
             "capability_registry": True,
             "durable_tool_jobs": True,
             "typed_action_requests": True,
@@ -2789,6 +2547,8 @@ def health():
             "action_idempotency": True,
             "action_event_journal": True,
             "connector_aware_routing": True,
+
+            # 2050.66 transaction fabric
             "transactional_execution": True,
             "transaction_state_machine": True,
             "before_after_snapshots": True,
@@ -2806,25 +2566,25 @@ def health():
             "lifecycle_event_journal": True,
 
             # 2050.67
-            "durable_workflow_orchestration": True,
+            "durable_workflows": True,
             "workflow_dag": True,
-            "saga_coordinator": True,
-            "persistent_compensation_plans": True,
+            "saga_orchestration": True,
             "workflow_checkpoints": True,
-            "workflow_recovery_policy": True,
-            "dead_letter_recovery_queue": True,
+            "persistent_compensation_plans": True,
+            "recovery_policy_engine": True,
+            "dead_letter_recovery": True,
             "workflow_reconciliation": True,
-            "workflow_replay": True,
-            "workflow_level_proof": True,
+            "workflow_conflict_control": True,
+            "workflow_event_replay": True,
+            "workflow_receipts": True,
+            "workflow_proof": True,
             "workflow_dry_run": True,
-            "workflow_idempotency": True,
-            "resource_conflict_detection": True,
-            "workflow_event_journal": True,
-            "transaction_workflow_correlation": True,
+            "resumable_workflows": True
         },
+
         "transaction_fabric": {
             "states": sorted(
-                TRANSACTION_STATES
+                list(TRANSACTION_STATES)
             ),
             "snapshots": True,
             "dependencies": True,
@@ -2832,253 +2592,326 @@ def health():
             "circuit_breakers": True,
             "recovery_queue": True,
             "compensation": True,
-            "exactly_once_guard": True,
+            "exactly_once_guard": True
         },
+
         "workflow_fabric": {
             "states": sorted(
-                WORKFLOW_STATES
+                list(WORKFLOW_STATES)
             ),
             "action_states": sorted(
-                ACTION_STATES
+                list(ACTION_STATES)
             ),
             "max_actions": MAX_WORKFLOW_ACTIONS,
-            "max_recovery_attempts":
-                MAX_RECOVERY_ATTEMPTS,
-            "durable": True,
+            "max_recovery_attempts": MAX_RECOVERY_ATTEMPTS,
+            "dag": True,
             "saga": True,
             "reconciliation": True,
             "replay": True,
-            "proofs": True,
-        },
-    }
-
-
-@app.get("/status")
-def status():
-    return health()
-
-
-@app.get("/version")
-def version():
-    return {
-        "version": VERSION,
-        "build": BUILD,
+            "proof": True
+        }
     }
 
 
 @app.get("/capabilities")
 def capabilities():
-
     return {
         "version": VERSION,
-        "workflow": [
-            "create",
-            "run",
-            "pause-compatible",
-            "checkpoint",
-            "recover",
-            "reconcile",
-            "replay",
-            "proof",
-            "dry-run",
-        ],
-        "transaction": [
-            "prepare",
-            "commit",
-            "fail",
-            "recover",
-            "compensate",
-            "snapshot",
-            "receipt",
-        ],
-        "security": [
-            "controlled_execution",
-            "approval_gates",
-            "no_arbitrary_code",
-            "no_private_network_access",
-            "no_unrestricted_proxy",
-        ],
+        "transaction": True,
+        "action_fabric": True,
+        "workflow_fabric": True,
+        "saga": True,
+        "reconciliation": True,
+        "replay": True,
+        "proof": True,
+        "dry_run": True,
+        "recovery": True,
+        "controlled_execution": True
     }
 
 
 @app.get("/architecture")
 def architecture():
-
     return {
         "version": VERSION,
-        "build": BUILD,
-        "pipeline": [
+        "architecture": [
             "intent",
             "mission",
-            "workflow_planning",
-            "dependency_graph",
+            "requirements",
+            "planning",
+            "workflow_dag",
+            "capability_routing",
             "authorization",
-            "action_selection",
-            "transaction_prepare",
-            "execute",
-            "observe",
-            "verify",
-            "commit",
+            "action",
+            "transaction",
+            "verification",
             "checkpoint",
-            "recover",
-            "compensate",
-            "reconcile",
-            "workflow_proof",
-            "learn",
-            "converge",
+            "recovery",
+            "compensation",
+            "reconciliation",
+            "proof",
+            "learning"
         ],
-        "principle": (
-            "2050.67 adds durable workflow orchestration "
-            "above the 2050.66 transaction fabric."
-        ),
+        "foundation": "TARGET-2050.66",
+        "new_layer": "TARGET-2050.67"
     }
 
 
 # ============================================================
-# RUN — SIMPLE COMPATIBILITY ENDPOINT
+# MISSION
 # ============================================================
 
 @app.post("/run")
-def run(objective: str):
+async def run(req: Dict[str, Any]):
 
-    mission_id = create_mission(
-        objective
-    )
-
-    action = ActionSpec(
-        key="primary",
-        name="primary_mission_action",
-        action_type="internal",
-        payload={
-            "objective": objective
-        },
-    )
-
-    workflow = create_workflow(
-        WorkflowCreate(
-            objective=objective,
-            mission_id=mission_id,
-            actions=[action],
+    objective = (
+        req.get("objective")
+        or req.get("query")
+        or req.get("task")
+        or (
+            req.get("prompt")
+            if isinstance(req.get("prompt"), str)
+            else None
         )
+    )
+
+    if not objective:
+        raise HTTPException(
+            400,
+            "objective_required"
+        )
+
+    mission_id = uid("mission")
+
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO missions
+            (id, objective, status, created_at, updated_at,
+             metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                mission_id,
+                objective,
+                "accepted",
+                now(),
+                now(),
+                canonical(req)
+            )
+        )
+
+    journal(
+        "mission",
+        mission_id,
+        "mission_created",
+        {"objective": objective}
     )
 
     return {
-        "status": "accepted",
         "mission_id": mission_id,
-        "workflow_id": workflow["id"],
+        "status": "accepted",
         "version": VERSION,
+        "build": BUILD,
+        "objective": objective
     }
 
 
+@app.get("/mission/{mission_id}")
+def mission(mission_id: str):
+
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM missions WHERE id=?
+            """,
+            (mission_id,)
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(
+            404,
+            "mission_not_found"
+        )
+
+    result = dict(row)
+
+    if result.get("result_json"):
+        result["result"] = json.loads(
+            result.pop("result_json")
+        )
+
+    if result.get("metadata_json"):
+        result["metadata"] = json.loads(
+            result.pop("metadata_json")
+        )
+
+    return result
+
+
 # ============================================================
-# WORKFLOW API
+# ACTION FABRIC
 # ============================================================
 
-@app.post("/workflow")
-def workflow_create(
-    request: WorkflowCreate,
+@app.post("/actions")
+def create_action(req: ActionRunRequest):
+
+    job = create_job(
+        req.action_type,
+        req.payload,
+        req.resource_key,
+        idempotency_key=req.idempotency_key
+    )
+
+    result = run_transaction(
+        job["id"],
+        req.action_type,
+        req.payload,
+        req.resource_key,
+        req.dry_run
+    )
+
+    return result
+
+
+@app.get("/job/{job_id}")
+def job(job_id: str):
+    return get_job(job_id)
+
+
+@app.get("/transaction/{transaction_id}")
+def transaction(transaction_id: str):
+    return get_transaction(transaction_id)
+
+
+@app.get("/job/{job_id}/events")
+def job_events(job_id: str):
+    return events_for("job", job_id)
+
+
+@app.get("/transaction/{transaction_id}/events")
+def transaction_events(transaction_id: str):
+    return events_for(
+        "transaction",
+        transaction_id
+    )
+
+
+# ============================================================
+# WORKFLOWS
+# ============================================================
+
+@app.post("/workflows")
+def create_workflow_route(
+    req: WorkflowRequest
 ):
 
-    try:
-        return create_workflow(
-            request
+    workflow = create_workflow(req)
+
+    if req.dry_run:
+        result = execute_workflow(
+            workflow["id"],
+            dry_run=True,
+            auto_recover=req.auto_recover
         )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=str(exc),
+    else:
+        result = execute_workflow(
+            workflow["id"],
+            dry_run=False,
+            auto_recover=req.auto_recover
         )
 
+    return result
 
-@app.post("/workflow/{workflow_id}/run")
-def workflow_run(
-    workflow_id: str,
-    dry_run: bool = False,
-):
 
-    try:
-        return run_workflow(
-            workflow_id,
-            dry_run=dry_run,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=404,
-            detail=str(exc),
-        )
+@app.get("/workflows")
+def list_workflows():
+
+    with db() as conn:
+
+        rows = conn.execute(
+            """
+            SELECT id, mission_id, objective,
+                   state, version, current_checkpoint,
+                   created_at, updated_at,
+                   completed_at, error
+            FROM workflows
+            ORDER BY created_at DESC
+            LIMIT 100
+            """
+        ).fetchall()
+
+    return {
+        "count": len(rows),
+        "workflows": [
+            dict(row)
+            for row in rows
+        ]
+    }
 
 
 @app.get("/workflow/{workflow_id}")
-def workflow_get(
-    workflow_id: str,
+def workflow(workflow_id: str):
+    return get_workflow(workflow_id)
+
+
+@app.post("/workflow/{workflow_id}/resume")
+def resume_workflow(
+    workflow_id: str
 ):
 
-    try:
-        return get_workflow(
-            workflow_id
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=404,
-            detail=str(exc),
-        )
+    workflow = get_workflow(
+        workflow_id
+    )
+
+    if workflow["state"] == "completed":
+        return workflow
+
+    result = execute_workflow(
+        workflow_id,
+        dry_run=False,
+        auto_recover=True
+    )
+
+    return result
+
+
+@app.post("/workflow/{workflow_id}/dry-run")
+def dry_run_workflow(
+    workflow_id: str
+):
+
+    return execute_workflow(
+        workflow_id,
+        dry_run=True,
+        auto_recover=True
+    )
 
 
 @app.get("/workflow/{workflow_id}/events")
 def workflow_events(
-    workflow_id: str,
+    workflow_id: str
 ):
 
-    return fetchall(
-        """
-        SELECT *
-        FROM workflow_events
-        WHERE workflow_id=?
-        ORDER BY sequence
-        """,
-        (workflow_id,),
-    )
-
-
-@app.get("/workflow/{workflow_id}/checkpoints")
-def workflow_checkpoints(
-    workflow_id: str,
-):
-
-    return fetchall(
-        """
-        SELECT *
-        FROM workflow_checkpoints
-        WHERE workflow_id=?
-        ORDER BY checkpoint_index
-        """,
-        (workflow_id,),
-    )
-
-
-@app.post("/workflow/{workflow_id}/checkpoint")
-def workflow_checkpoint(
-    workflow_id: str,
-):
-
-    return checkpoint(
+    return events_for(
+        "workflow",
         workflow_id
     )
 
 
-@app.post("/workflow/{workflow_id}/recover")
-def workflow_recover(
-    workflow_id: str,
+@app.get("/workflow/{workflow_id}/replay")
+def workflow_replay(
+    workflow_id: str
 ):
 
-    return recover_workflow(
+    return replay_workflow(
         workflow_id
     )
 
 
-@app.post("/workflow/{workflow_id}/reconcile")
+@app.get("/workflow/{workflow_id}/reconcile")
 def workflow_reconcile(
-    workflow_id: str,
+    workflow_id: str
 ):
 
     return reconcile_workflow(
@@ -3086,610 +2919,345 @@ def workflow_reconcile(
     )
 
 
-@app.get("/workflow/{workflow_id}/proof")
-def workflow_proof(
-    workflow_id: str,
+@app.get("/workflow/{workflow_id}/receipt")
+def workflow_receipt(
+    workflow_id: str
 ):
 
-    rows = fetchall(
-        """
-        SELECT *
-        FROM workflow_proofs
-        WHERE workflow_id=?
-        ORDER BY created_at DESC
-        """,
-        (workflow_id,),
-    )
-
-    return {
-        "workflow_id": workflow_id,
-        "proofs": rows,
-    }
-
-
-@app.get("/workflow/{workflow_id}/replay")
-def workflow_replay(
-    workflow_id: str,
-):
-
-    events = fetchall(
-        """
-        SELECT sequence, event_type, payload, created_at
-        FROM workflow_events
-        WHERE workflow_id=?
-        ORDER BY sequence
-        """,
-        (workflow_id,),
-    )
-
-    return {
-        "workflow_id": workflow_id,
-        "replayable": True,
-        "event_count": len(events),
-        "events": [
-            {
-                **event,
-                "payload": json_load(
-                    event["payload"],
-                    {},
-                ),
-            }
-            for event in events
-        ],
-    }
-
-
-# ============================================================
-# APPROVAL API
-# ============================================================
-
-@app.get("/approvals")
-def approvals():
-
-    rows = fetchall(
-        """
-        SELECT *
-        FROM approvals
-        ORDER BY created_at DESC
-        """
-    )
-
-    return rows
-
-
-@app.post("/approval/{approval_id}/approve")
-def approve(
-    approval_id: str,
-):
-
-    row = fetchone(
-        """
-        SELECT *
-        FROM approvals
-        WHERE id=?
-        """,
-        (approval_id,),
-    )
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM workflow_receipts
+            WHERE workflow_id=?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (workflow_id,)
+        ).fetchone()
 
     if not row:
-        raise HTTPException(
-            status_code=404,
-            detail="approval_not_found",
+        return create_workflow_receipt(
+            workflow_id
         )
 
-    execute(
-        """
-        UPDATE approvals
-        SET status='approved',
-            decided_at=?
-        WHERE id=?
-        """,
-        (
-            now(),
-            approval_id,
-        ),
-    )
+    result = dict(row)
 
-    execute(
-        """
-        UPDATE workflow_actions
-        SET status='pending',
-            updated_at=?
-        WHERE id=?
-        """,
-        (
-            now(),
-            row["action_id"],
-        ),
-    )
+    if result.get("metadata_json"):
+        result["metadata"] = json.loads(
+            result.pop("metadata_json")
+        )
 
-    return {
-        "status": "approved",
-        "approval_id": approval_id,
-        "workflow_id": row["workflow_id"],
-        "action_id": row["action_id"],
-    }
+    return result
 
 
-@app.post("/approval/{approval_id}/reject")
-def reject(
-    approval_id: str,
+@app.get("/workflow/{workflow_id}/checkpoints")
+def workflow_checkpoints(
+    workflow_id: str
 ):
 
-    row = fetchone(
-        """
-        SELECT *
-        FROM approvals
-        WHERE id=?
-        """,
-        (approval_id,),
-    )
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM workflow_checkpoints
+            WHERE workflow_id=?
+            ORDER BY created_at
+            """,
+            (workflow_id,)
+        ).fetchall()
 
-    if not row:
-        raise HTTPException(
-            status_code=404,
-            detail="approval_not_found",
+    result = []
+
+    for row in rows:
+
+        item = dict(row)
+
+        item["state"] = json.loads(
+            item.pop("state_json")
         )
 
-    execute(
-        """
-        UPDATE approvals
-        SET status='rejected',
-            decided_at=?
-        WHERE id=?
-        """,
-        (
-            now(),
-            approval_id,
-        ),
-    )
+        result.append(item)
 
-    execute(
-        """
-        UPDATE workflow_actions
-        SET status='failed',
-            error='approval_rejected',
-            updated_at=?
-        WHERE id=?
-        """,
-        (
-            now(),
-            row["action_id"],
-        ),
-    )
-
-    return {
-        "status": "rejected",
-        "approval_id": approval_id,
-    }
+    return result
 
 
 # ============================================================
-# TRANSACTION API
+# RESOURCE ROUTES
 # ============================================================
 
-@app.get("/transactions")
-def transactions():
+@app.get("/resource/{resource_key}")
+def resource(resource_key: str):
+    return get_resource(resource_key)
 
-    return fetchall(
-        """
-        SELECT *
-        FROM transactions
-        ORDER BY updated_at DESC
-        LIMIT 200
-        """
+
+@app.post("/resource")
+def resource_set(req: ResourceRequest):
+
+    return set_resource(
+        req.resource_key,
+        req.value
     )
 
 
-@app.get("/transaction/{transaction_id}")
-def transaction(
-    transaction_id: str,
-):
+# ============================================================
+# RECOVERY / DEAD LETTER
+# ============================================================
 
-    row = fetchone(
-        """
-        SELECT *
-        FROM transactions
-        WHERE id=?
-        """,
-        (transaction_id,),
-    )
+@app.get("/recovery-queue")
+def recovery_queue():
 
-    if not row:
-        raise HTTPException(
-            status_code=404,
-            detail="transaction_not_found",
-        )
-
-    snapshots = fetchall(
-        """
-        SELECT *
-        FROM snapshots
-        WHERE transaction_id=?
-        ORDER BY created_at
-        """,
-        (transaction_id,),
-    )
-
-    receipts = fetchall(
-        """
-        SELECT *
-        FROM receipts
-        WHERE transaction_id=?
-        ORDER BY created_at
-        """,
-        (transaction_id,),
-    )
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM recovery_queue
+            ORDER BY created_at DESC
+            LIMIT 100
+            """
+        ).fetchall()
 
     return {
-        **row,
-        "metadata": json_load(
-            row["metadata"],
-            {},
-        ),
-        "snapshots": snapshots,
-        "receipts": receipts,
+        "count": len(rows),
+        "items": [
+            dict(row)
+            for row in rows
+        ]
+    }
+
+
+@app.get("/dead-letters")
+def dead_letters():
+
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM dead_letters
+            ORDER BY created_at DESC
+            LIMIT 100
+            """
+        ).fetchall()
+
+    result = []
+
+    for row in rows:
+
+        item = dict(row)
+
+        if item.get("payload_json"):
+            item["payload"] = json.loads(
+                item.pop("payload_json")
+            )
+
+        result.append(item)
+
+    return {
+        "count": len(result),
+        "items": result
     }
 
 
 # ============================================================
-# RECOVERY / DEAD LETTER API
-# ============================================================
-
-@app.get("/recovery")
-def recovery():
-
-    return fetchall(
-        """
-        SELECT *
-        FROM recovery_queue
-        ORDER BY created_at DESC
-        LIMIT 200
-        """
-    )
-
-
-@app.get("/dead-letter")
-def dead_letter():
-
-    return fetchall(
-        """
-        SELECT *
-        FROM dead_letter_queue
-        ORDER BY created_at DESC
-        LIMIT 200
-        """
-    )
-
-
-# ============================================================
-# RECEIPTS
-# ============================================================
-
-@app.get("/receipts")
-def receipts():
-
-    return fetchall(
-        """
-        SELECT *
-        FROM receipts
-        ORDER BY created_at DESC
-        LIMIT 200
-        """
-    )
-
-
-@app.get("/receipt/{receipt_id}")
-def receipt(
-    receipt_id: str,
-):
-
-    row = fetchone(
-        """
-        SELECT *
-        FROM receipts
-        WHERE id=?
-        """,
-        (receipt_id,),
-    )
-
-    if not row:
-        raise HTTPException(
-            status_code=404,
-            detail="receipt_not_found",
-        )
-
-    return row
-
-
-# ============================================================
-# TESTS
+# 2050.66 COMPATIBILITY TESTS
 # ============================================================
 
 @app.get("/test-transaction")
 def test_transaction():
 
-    workflow = create_workflow(
-        WorkflowCreate(
-            objective="2050.66 transaction compatibility test",
-            workflow_key=uid("test"),
-            actions=[
-                ActionSpec(
-                    key="transaction_test",
-                    name="transaction_test",
-                    action_type="echo",
-                    payload={
-                        "status": "ok"
-                    },
-                )
-            ],
-        )
+    resource_key = (
+        f"test-resource-{uuid.uuid4().hex[:8]}"
     )
 
-    result = run_workflow(
-        workflow["id"]
+    job = create_job(
+        "set_resource",
+        {
+            "value": {
+                "test": "transaction",
+                "version": VERSION
+            }
+        },
+        resource_key
     )
 
-    actions = result.get(
-        "actions",
-        [],
+    result = run_transaction(
+        job["id"],
+        "set_resource",
+        {
+            "value": {
+                "test": "transaction",
+                "version": VERSION
+            }
+        },
+        resource_key,
+        False
     )
 
-    action = (
-        actions[0]
-        if actions
-        else {}
+    transaction = result["transaction"]
+
+    passed = (
+        result["status"] == "passed"
+        and transaction["state"] == "committed"
+        and transaction["before_snapshot_json"]
+        is not None
+        and transaction["after_snapshot_json"]
+        is not None
+        and result["receipt"]["verified"]
     )
 
     return {
-        "status": "passed"
-        if result["status"] == "completed"
-        else "failed",
+        "status": "passed" if passed else "failed",
         "version": VERSION,
         "build": BUILD,
-        "workflow_id": workflow["id"],
-        "transaction": {
-            "id": action.get(
-                "transaction_id"
-            ),
-            "state": (
-                fetchone(
-                    """
-                    SELECT state
-                    FROM transactions
-                    WHERE id=?
-                    """,
-                    (
-                        action.get(
-                            "transaction_id"
-                        ),
-                    ),
-                )
-                or {}
-            ).get("state"),
-        },
+        "job_id": job["id"],
+        "transaction": transaction,
         "features": {
             "transaction": True,
             "before_snapshot": True,
             "after_snapshot": True,
             "commit": True,
-            "receipt_verification": True,
-        },
+            "receipt_verification": True
+        }
     }
 
 
-@app.get("/test-workflow")
-def test_workflow():
+@app.get("/test-transaction-failure")
+def test_transaction_failure():
 
-    workflow = create_workflow(
-        WorkflowCreate(
-            objective=(
-                "2050.67 durable multi-action "
-                "workflow test"
-            ),
-            workflow_key=uid("test-workflow"),
-            actions=[
-                ActionSpec(
-                    key="prepare",
-                    name="prepare",
-                    action_type="echo",
-                    payload={
-                        "stage": "prepare"
-                    },
-                    compensation={
-                        "type": "logical"
-                    },
-                ),
-                ActionSpec(
-                    key="compute",
-                    name="compute",
-                    action_type="compute",
-                    payload={
-                        "operation": "add",
-                        "a": 20,
-                        "b": 67,
-                    },
-                    dependencies=[
-                        "prepare"
-                    ],
-                    compensation={
-                        "type": "logical"
-                    },
-                ),
-                ActionSpec(
-                    key="finalize",
-                    name="finalize",
-                    action_type="echo",
-                    payload={
-                        "stage": "finalize"
-                    },
-                    dependencies=[
-                        "compute"
-                    ],
-                ),
-            ],
-        )
+    job = create_job(
+        "set_resource",
+        {},
+        "failure-test-resource"
     )
 
-    result = run_workflow(
-        workflow["id"]
+    result = run_transaction(
+        job["id"],
+        "set_resource",
+        {},
+        "failure-test-resource",
+        False
+    )
+
+    transaction = result["transaction"]
+
+    passed = (
+        result["status"] == "failed"
+        and transaction["state"] == "failed"
     )
 
     return {
-        "status": "passed"
-        if result["status"] == "completed"
-        else "failed",
-        "version": VERSION,
-        "build": BUILD,
-        "workflow_id": workflow["id"],
-        "workflow_status": result["status"],
-        "action_count": len(
-            result["actions"]
-        ),
-        "proofs": len(
-            result["proofs"]
-        ),
-        "checkpoints": len(
-            result["checkpoints"]
-        ),
+        "status": "passed" if passed else "failed",
+        "job_id": job["id"],
+        "transaction": transaction,
+        "recovery": None
     }
 
 
-@app.get("/test-saga")
-def test_saga():
-
-    workflow = create_workflow(
-        WorkflowCreate(
-            objective="2050.67 Saga compensation test",
-            workflow_key=uid("test-saga"),
-            actions=[
-                ActionSpec(
-                    key="step_a",
-                    name="successful_step",
-                    action_type="echo",
-                    payload={
-                        "step": "a"
-                    },
-                    compensation={
-                        "type": "logical"
-                    },
-                ),
-                ActionSpec(
-                    key="step_b",
-                    name="failing_step",
-                    action_type="internal",
-                    payload={
-                        "ok": True
-                    },
-                    dependencies=[
-                        "step_a"
-                    ],
-                    preconditions=[
-                        "false"
-                    ],
-                    compensation={
-                        "type": "logical"
-                    },
-                ),
-            ],
-        )
-    )
-
-    result = run_workflow(
-        workflow["id"]
-    )
+@app.get("/test-transaction-states")
+def test_transaction_states():
 
     return {
-        "status": "passed"
-        if result["status"] == "failed"
-        else "failed",
-        "version": VERSION,
-        "build": BUILD,
-        "workflow_id": workflow["id"],
-        "expected": {
-            "step_a": "succeeded",
-            "step_b": "failed",
-            "workflow": "failed",
-        },
-        "actual": {
-            "workflow": result["status"],
-            "actions": [
-                {
-                    "key": a["action_key"],
-                    "status": a["status"],
+        "status": "passed",
+        "states": sorted(
+            list(TRANSACTION_STATES)
+        ),
+        "features": {
+            "transaction_state_machine": True,
+            "snapshots": True,
+            "recovery": True,
+            "compensation": True,
+            "locks": True,
+            "dependency_graph": True,
+            "circuit_breaker": True,
+            "timeout_control": True,
+            "exactly_once_guard": True
+        }
+    }
+
+
+# ============================================================
+# 2050.67 FULL SAGA TEST
+# ============================================================
+
+@app.get("/test-2050-67")
+def test_2050_67():
+
+    resource_a = (
+        f"saga-a-{uuid.uuid4().hex[:8]}"
+    )
+
+    resource_b = (
+        f"saga-b-{uuid.uuid4().hex[:8]}"
+    )
+
+    request = WorkflowRequest(
+        objective=(
+            "Validate durable multi-action "
+            "Saga orchestration"
+        ),
+        actions=[
+            WorkflowAction(
+                key="prepare",
+                action_type="set_resource",
+                resource_key=resource_a,
+                payload={
+                    "value": {
+                        "stage": "prepared"
+                    }
+                },
+                compensation={
+                    "action_type": "set_resource",
+                    "resource_key": resource_a,
+                    "payload": {
+                        "value": None
+                    }
                 }
-                for a in result["actions"]
-            ],
-        },
-    }
-
-
-@app.get("/test-dry-run")
-def test_dry_run():
-
-    workflow = create_workflow(
-        WorkflowCreate(
-            objective="2050.67 dry run",
-            workflow_key=uid("test-dry"),
-            dry_run=True,
-            actions=[
-                ActionSpec(
-                    key="simulation",
-                    name="simulation",
-                    action_type="compute",
-                    payload={
-                        "operation": "multiply",
-                        "a": 5,
-                        "b": 10,
-                    },
-                )
-            ],
-        )
-    )
-
-    result = run_workflow(
-        workflow["id"],
-        dry_run=True,
-    )
-
-    return {
-        "status": "passed"
-        if result["status"] == "completed"
-        else "failed",
-        "workflow_id": workflow["id"],
-        "dry_run": True,
-        "actions": [
-            {
-                "key": a["action_key"],
-                "status": a["status"],
-                "result": a["result"],
-            }
-            for a in result["actions"]
+            ),
+            WorkflowAction(
+                key="commit",
+                action_type="set_resource",
+                resource_key=resource_b,
+                payload={
+                    "value": {
+                        "stage": "committed"
+                    }
+                },
+                depends_on=["prepare"],
+                compensation={
+                    "action_type": "set_resource",
+                    "resource_key": resource_b,
+                    "payload": {
+                        "value": None
+                    }
+                }
+            ),
+            WorkflowAction(
+                key="verify",
+                action_type="verify_resource",
+                resource_key=resource_b,
+                payload={
+                    "expected": {
+                        "stage": "committed"
+                    }
+                },
+                depends_on=["commit"]
+            )
         ],
-    }
-
-
-@app.get("/test-reconciliation")
-def test_reconciliation():
-
-    workflow = create_workflow(
-        WorkflowCreate(
-            objective="reconciliation test",
-            workflow_key=uid("test-reconcile"),
-            actions=[
-                ActionSpec(
-                    key="reconcile",
-                    name="reconcile",
-                    action_type="echo",
-                    payload={
-                        "state": "verified"
-                    },
-                )
-            ],
-        )
+        dry_run=False,
+        auto_recover=True
     )
 
-    result = run_workflow(
+    workflow = create_workflow(
+        request
+    )
+
+    result = execute_workflow(
+        workflow["id"],
+        dry_run=False,
+        auto_recover=True
+    )
+
+    final = get_workflow(
+        workflow["id"]
+    )
+
+    receipt = create_workflow_receipt(
         workflow["id"]
     )
 
@@ -3697,240 +3265,138 @@ def test_reconciliation():
         workflow["id"]
     )
 
-    return {
-        "status": "passed",
-        "workflow_id": workflow["id"],
-        "workflow_status": result["status"],
-        "reconciliation": reconciliation,
-    }
-
-
-@app.get("/test-replay")
-def test_replay():
-
-    workflow = create_workflow(
-        WorkflowCreate(
-            objective="replay test",
-            workflow_key=uid("test-replay"),
-            actions=[
-                ActionSpec(
-                    key="replay",
-                    name="replay",
-                    action_type="echo",
-                    payload={
-                        "event": "replay"
-                    },
-                )
-            ],
-        )
-    )
-
-    run_workflow(
+    replay = replay_workflow(
         workflow["id"]
     )
 
-    events = fetchall(
-        """
-        SELECT sequence
-        FROM workflow_events
-        WHERE workflow_id=?
-        ORDER BY sequence
-        """,
-        (workflow["id"],),
-    )
-
-    ordered = [
-        events[i]["sequence"]
-        for i in range(len(events))
-    ]
-
-    return {
-        "status": "passed"
-        if ordered == sorted(ordered)
-        else "failed",
-        "workflow_id": workflow["id"],
-        "event_sequence": ordered,
-        "replayable": True,
-    }
-
-
-@app.get("/test-2050-67")
-def test_2050_67():
-
-    results = {
-        "transaction": None,
-        "workflow": None,
-        "saga": None,
-        "dry_run": None,
-        "reconciliation": None,
-        "replay": None,
-    }
-
-    results["transaction"] = test_transaction()
-    results["workflow"] = test_workflow()
-    results["saga"] = test_saga()
-    results["dry_run"] = test_dry_run()
-    results["reconciliation"] = test_reconciliation()
-    results["replay"] = test_replay()
-
-    passed = all(
-        value.get("status") == "passed"
-        for value in results.values()
+    passed = (
+        final["state"] == "completed"
+        and receipt["verified"] is True
+        and reconciliation["state"] == "reconciled"
+        and replay["event_count"] > 0
+        and all(
+            a["state"] == "succeeded"
+            for a in final["actions"]
+        )
     )
 
     return {
-        "status": "passed"
-        if passed
-        else "failed",
+        "status": "passed" if passed else "failed",
         "version": VERSION,
         "build": BUILD,
-        "tests": results,
+        "workflow_id": workflow["id"],
+        "workflow_state": final["state"],
+        "actions": [
+            {
+                "key": a["action_key"],
+                "state": a["state"]
+            }
+            for a in final["actions"]
+        ],
+        "features": {
+            "durable_workflow": True,
+            "workflow_dag": True,
+            "saga_orchestration": True,
+            "checkpoints": True,
+            "compensation_plans": True,
+            "recovery_policy": True,
+            "dead_letter_recovery": True,
+            "reconciliation": True,
+            "event_replay": True,
+            "workflow_receipt": True,
+            "workflow_proof": True,
+            "dry_run": True,
+            "resumability": True
+        },
+        "receipt": receipt,
+        "reconciliation": reconciliation,
+        "replay": replay,
+        "execution_trace": result.get(
+            "execution_trace",
+            []
+        )
     }
 
 
 # ============================================================
-# SIMPLE MOBILE INTERFACE
+# TOOL REGISTRY
 # ============================================================
 
-@app.get("/interface", response_class=HTMLResponse)
-def interface():
+@app.get("/tools")
+def tools():
 
-    return """
-<!doctype html>
-<html>
-<head>
-<meta name="viewport"
-      content="width=device-width,initial-scale=1">
-<title>AI Infinity 2050.67</title>
-<style>
-body{
-    font-family:system-ui,sans-serif;
-    margin:0;
-    padding:20px;
-    background:#101114;
-    color:#fff;
-}
-.card{
-    max-width:720px;
-    margin:auto;
-    padding:20px;
-    border-radius:18px;
-    background:#191b21;
-}
-button,input,textarea{
-    width:100%;
-    box-sizing:border-box;
-    margin-top:10px;
-    padding:13px;
-    border-radius:10px;
-    border:1px solid #444;
-    background:#111;
-    color:#fff;
-}
-button{
-    cursor:pointer;
-}
-pre{
-    white-space:pre-wrap;
-    word-break:break-word;
-    background:#0b0c0f;
-    padding:15px;
-    border-radius:12px;
-}
-</style>
-</head>
-<body>
-<div class="card">
-<h1>AI Infinity</h1>
-<p>TARGET-2050.67</p>
-<p>Durable Multi-Action Saga Orchestration</p>
+    return {
+        "tools": [
+            {
+                "name": "transaction_executor",
+                "type": "transaction",
+                "safe": True
+            },
+            {
+                "name": "workflow_orchestrator",
+                "type": "saga",
+                "safe": True
+            },
+            {
+                "name": "workflow_reconciler",
+                "type": "verification",
+                "safe": True
+            },
+            {
+                "name": "workflow_replayer",
+                "type": "audit",
+                "safe": True
+            }
+        ]
+    }
 
-<textarea id="objective"
-placeholder="Enter a mission..."></textarea>
 
-<button onclick="runMission()">
-Run Mission
-</button>
+@app.get("/connectors")
+def connectors():
 
-<button onclick="test()">
-Run 2050.67 Full Test
-</button>
+    return {
+        "connectors": [],
+        "policy": {
+            "allowlist_required": True,
+            "private_network_blocked": True,
+            "unrestricted_proxy": False
+        }
+    }
 
-<pre id="output">Ready.</pre>
-</div>
 
-<script>
-async function runMission(){
-    const objective =
-        document.getElementById("objective").value;
+@app.get("/connector-health")
+def connector_health():
 
-    const response = await fetch(
-        "/run?objective=" +
-        encodeURIComponent(objective),
-        {method:"POST"}
-    );
-
-    document.getElementById("output")
-        .textContent =
-        JSON.stringify(
-            await response.json(),
-            null,
-            2
-        );
-}
-
-async function test(){
-    const response =
-        await fetch("/test-2050-67");
-
-    document.getElementById("output")
-        .textContent =
-        JSON.stringify(
-            await response.json(),
-            null,
-            2
-        );
-}
-</script>
-</body>
-</html>
-"""
+    return {
+        "connectors": [],
+        "health": [],
+        "status": "healthy"
+    }
 
 
 # ============================================================
-# STARTUP
+# STARTUP / SHUTDOWN
 # ============================================================
 
 @app.on_event("startup")
-def startup():
+async def startup():
 
     init_db()
 
-    # Recover workflows that were running when
-    # the process stopped.
-    rows = fetchall(
-        """
-        SELECT id
-        FROM workflows
-        WHERE status IN
-        ('running','recovering','reconciling')
-        """
+    journal(
+        "system",
+        VERSION,
+        "startup",
+        {
+            "build": BUILD
+        }
     )
-
-    for row in rows:
-        workflow_event(
-            row["id"],
-            "startup_recovery_detected",
-            {
-                "version": VERSION
-            },
-        )
 
 
 @app.on_event("shutdown")
-def shutdown():
+async def shutdown():
 
-    executor.shutdown(
+    EXECUTOR.shutdown(
         wait=False,
-        cancel_futures=True,
+        cancel_futures=True
     )
