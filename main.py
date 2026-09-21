@@ -7,7 +7,8 @@ import socket
 import ipaddress
 import threading
 import sqlite3
-from urllib.parse import urlparse, quote
+import hashlib
+from urllib.parse import urlparse, quote, unquote
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
@@ -18,11 +19,11 @@ from pydantic import BaseModel
 # ============================================================
 # AI INFINITY
 # TARGET-2050.78
-# RESILIENT RESEARCH PROVIDER FALLBACK
+# CUMULATIVE RESILIENT MISSION INTELLIGENCE CORE
 # ============================================================
 
 APP_VERSION = "TARGET-2050.78"
-BUILD = "RESILIENT-RESEARCH-PROVIDER-FALLBACK"
+BUILD = "CUMULATIVE-RESILIENT-MISSION-INTELLIGENCE-CORE"
 
 DB_PATH = os.getenv(
     "AI_INFINITY_DB",
@@ -34,16 +35,15 @@ os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 app = FastAPI(
     title="AI Infinity",
     version=APP_VERSION,
-    description="AI Infinity resilient mission execution engine"
+    description="AI Infinity cumulative mission execution engine"
 )
+
+db_lock = threading.Lock()
 
 
 # ============================================================
 # DATABASE
 # ============================================================
-
-db_lock = threading.Lock()
-
 
 def db():
     conn = sqlite3.connect(
@@ -58,6 +58,7 @@ def db():
 def init_db():
     with db_lock:
         conn = db()
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS missions (
                 id TEXT PRIMARY KEY,
@@ -69,6 +70,55 @@ def init_db():
                 result TEXT
             )
         """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS mission_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mission_id TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                event_type TEXT NOT NULL,
+                payload TEXT
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS memory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at REAL NOT NULL,
+                key TEXT,
+                value TEXT
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS policies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                version INTEGER NOT NULL,
+                created_at REAL NOT NULL,
+                mode TEXT NOT NULL,
+                valid INTEGER NOT NULL
+            )
+        """)
+
+        existing = conn.execute(
+            "SELECT COUNT(*) AS n FROM policies"
+        ).fetchone()["n"]
+
+        if existing == 0:
+            conn.execute(
+                """
+                INSERT INTO policies
+                (version, created_at, mode, valid)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    1,
+                    time.time(),
+                    "baseline",
+                    1
+                )
+            )
+
         conn.commit()
         conn.close()
 
@@ -89,18 +139,44 @@ class MissionRequest(BaseModel):
 
 
 # ============================================================
-# SECURITY
+# SECURITY POLICY
 # ============================================================
 
 BLOCKED_HOSTS = {
     "localhost",
     "localhost.localdomain",
-    "metadata.google.internal",
     "metadata",
+    "metadata.google.internal",
+    "instance-data",
+}
+
+BLOCKED_SCHEMES = {
+    "file",
+    "ftp",
+    "gopher",
+    "data",
+    "javascript",
 }
 
 
-def is_private_host(hostname: str) -> bool:
+def is_private_ip(value):
+    try:
+        ip = ipaddress.ip_address(value)
+
+        return (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        )
+
+    except ValueError:
+        return False
+
+
+def is_private_host(hostname):
     if not hostname:
         return True
 
@@ -109,17 +185,8 @@ def is_private_host(hostname: str) -> bool:
     if hostname in BLOCKED_HOSTS:
         return True
 
-    try:
-        ip = ipaddress.ip_address(hostname)
-        return (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or ip.is_multicast
-        )
-    except ValueError:
-        pass
+    if is_private_ip(hostname):
+        return True
 
     try:
         addresses = socket.getaddrinfo(
@@ -129,34 +196,27 @@ def is_private_host(hostname: str) -> bool:
         )
 
         for item in addresses:
-            ip_text = item[4][0]
+            address = item[4][0]
 
-            try:
-                ip = ipaddress.ip_address(ip_text)
-
-                if (
-                    ip.is_private
-                    or ip.is_loopback
-                    or ip.is_link_local
-                    or ip.is_reserved
-                    or ip.is_multicast
-                ):
-                    return True
-
-            except ValueError:
-                continue
+            if is_private_ip(address):
+                return True
 
     except Exception:
+        # DNS failure is not automatically treated as private.
+        # Transport validation handles the final failure.
         return False
 
     return False
 
 
-def validate_url(url: str) -> bool:
+def validate_url(url):
     try:
         parsed = urlparse(url)
 
-        if parsed.scheme not in ("http", "https"):
+        if parsed.scheme.lower() not in ("http", "https"):
+            return False
+
+        if parsed.scheme.lower() in BLOCKED_SCHEMES:
             return False
 
         if not parsed.hostname:
@@ -172,26 +232,32 @@ def validate_url(url: str) -> bool:
 
 
 # ============================================================
-# SAFE HTTP
+# SAFE PUBLIC WEB TRANSPORT
 # ============================================================
 
 USER_AGENT = (
     "AI-Infinity/2050.78 "
-    "(resilient-research-engine; public-web-access)"
+    "(public-research-engine; controlled-access)"
 )
 
+MAX_RESPONSE_BYTES = 1024 * 1024
 
-def fetch(url: str, timeout: int = 8):
+
+class SafeRedirectHandler:
     """
-    Controlled public-web request.
-
-    Important:
-    - private networks rejected
-    - redirects disabled
-    - HTML WAF/block pages rejected
-    - oversized responses rejected
+    Redirects are intentionally not followed automatically.
     """
 
+    def http_error_302(self, req, fp, code, msg, headers):
+        raise RuntimeError("redirect_rejected")
+
+    http_error_301 = http_error_302
+    http_error_303 = http_error_302
+    http_error_307 = http_error_302
+    http_error_308 = http_error_302
+
+
+def safe_fetch(url, timeout=10):
     if not validate_url(url):
         raise RuntimeError("blocked_private_or_invalid_url")
 
@@ -199,8 +265,15 @@ def fetch(url: str, timeout: int = 8):
         url,
         headers={
             "User-Agent": USER_AGENT,
-            "Accept": "application/json,text/html;q=0.9,*/*;q=0.1",
-        }
+            "Accept": (
+                "application/json,"
+                "application/xml,"
+                "text/xml,"
+                "text/html;q=0.8,"
+                "*/*;q=0.1"
+            ),
+        },
+        method="GET"
     )
 
     try:
@@ -210,22 +283,51 @@ def fetch(url: str, timeout: int = 8):
         )
 
         status = getattr(response, "status", 200)
-        content_type = response.headers.get(
-            "Content-Type",
-            ""
-        ).lower()
 
         if status < 200 or status >= 300:
             raise RuntimeError(
                 f"http_status_{status}"
             )
 
-        data = response.read(1024 * 1024)
+        content_type = (
+            response.headers.get(
+                "Content-Type",
+                ""
+            )
+            .lower()
+        )
+
+        data = response.read(
+            MAX_RESPONSE_BYTES + 1
+        )
+
+        if len(data) > MAX_RESPONSE_BYTES:
+            raise RuntimeError(
+                "response_too_large"
+            )
 
         if not data:
-            raise RuntimeError("empty_response")
+            raise RuntimeError(
+                "empty_response"
+            )
 
-        return data, content_type, status
+        text = data.decode(
+            "utf-8",
+            errors="replace"
+        )
+
+        if reject_untrusted_response(text):
+            raise RuntimeError(
+                "waf_or_block_response_rejected"
+            )
+
+        return {
+            "data": data,
+            "text": text,
+            "content_type": content_type,
+            "status": status,
+            "url": url,
+        }
 
     except HTTPError as exc:
         raise RuntimeError(
@@ -238,33 +340,47 @@ def fetch(url: str, timeout: int = 8):
         )
 
     except Exception as exc:
+        if str(exc).startswith(
+            (
+                "blocked_",
+                "waf_",
+                "http_",
+                "redirect_",
+                "response_",
+                "empty_",
+            )
+        ):
+            raise
+
         raise RuntimeError(
             f"transport_error:{type(exc).__name__}"
         )
 
 
 # ============================================================
-# RESPONSE INTEGRITY
+# WAF / RESPONSE INTEGRITY
 # ============================================================
 
-WAF_MARKERS = [
+WAF_MARKERS = (
     "access denied",
     "request blocked",
     "ray id",
     "cloudflare",
-    "render",
+    "render.com",
     "<title>blocked</title>",
     "security verification",
     "bot detection",
+    "captcha",
     "forbidden",
-]
+    "automated access",
+)
 
 
-def reject_untrusted_response(text: str) -> bool:
+def reject_untrusted_response(text):
     if not text:
         return True
 
-    sample = text[:12000].lower()
+    sample = text[:20000].lower()
 
     for marker in WAF_MARKERS:
         if marker in sample:
@@ -273,94 +389,243 @@ def reject_untrusted_response(text: str) -> bool:
     return False
 
 
+def parse_json_response(response):
+    if "json" not in response["content_type"]:
+        # Some public APIs incorrectly omit JSON content type.
+        # Attempt JSON parsing anyway.
+        pass
+
+    try:
+        return json.loads(response["text"])
+    except Exception:
+        raise RuntimeError(
+            "invalid_json_response"
+        )
+
+
 # ============================================================
-# RESEARCH PROVIDERS
+# SOURCE NORMALIZATION
 # ============================================================
 
-def provider_openalex(objective: str):
-    query = quote(objective)
+def hostname_of(url):
+    try:
+        return (
+            urlparse(url)
+            .hostname
+            or ""
+        ).lower().strip(".")
+    except Exception:
+        return ""
+
+
+def normalize_source(item):
+    title = str(
+        item.get("title") or ""
+    ).strip()
+
+    url = str(
+        item.get("url") or ""
+    ).strip()
+
+    if not title:
+        return None
+
+    if url and not validate_url(url):
+        url = ""
+
+    return {
+        "id": hashlib.sha256(
+            (
+                url
+                or title.lower()
+            ).encode(
+                "utf-8",
+                errors="ignore"
+            )
+        ).hexdigest()[:16],
+
+        "title": title[:500],
+
+        "url": url[:3000],
+
+        "domain": (
+            hostname_of(url)
+            or str(
+                item.get("domain")
+                or ""
+            )[:200]
+        ),
+
+        "provider": str(
+            item.get("provider")
+            or "unknown"
+        ),
+
+        "year": item.get("year"),
+
+        "type": str(
+            item.get("type")
+            or "research_source"
+        ),
+    }
+
+
+def deduplicate_sources(items):
+    result = []
+    seen = set()
+
+    for raw in items:
+        source = normalize_source(raw)
+
+        if not source:
+            continue
+
+        key = (
+            source["url"]
+            or (
+                source["provider"],
+                source["title"].lower()
+            )
+        )
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        result.append(source)
+
+    return result
+
+
+# ============================================================
+# RESEARCH PROVIDER 1 — OPENALEX
+# ============================================================
+
+def provider_openalex(objective):
 
     url = (
         "https://api.openalex.org/works"
-        f"?search={query}&per-page=8"
+        "?search="
+        + quote(objective)
+        + "&per-page=10"
     )
 
-    raw, content_type, status = fetch(url)
+    response = safe_fetch(url)
 
-    if "json" not in content_type:
-        raise RuntimeError("openalex_non_json")
-
-    payload = json.loads(raw.decode("utf-8", errors="replace"))
+    payload = parse_json_response(response)
 
     results = []
 
-    for item in payload.get("results", []):
+    for item in payload.get(
+        "results",
+        []
+    ):
+
         title = item.get("title")
 
         if not title:
             continue
 
-        primary = item.get("primary_location") or {}
-        source = primary.get("source") or {}
+        primary = (
+            item.get(
+                "primary_location"
+            )
+            or {}
+        )
+
+        source = (
+            primary.get("source")
+            or {}
+        )
+
+        landing = (
+            primary.get(
+                "landing_page_url"
+            )
+            or ""
+        )
+
+        doi = (
+            item.get("doi")
+            or ""
+        )
 
         results.append({
             "title": title,
-            "url": (
-                primary.get("landing_page_url")
-                or item.get("doi")
-                or ""
-            ),
+            "url": landing or doi,
             "domain": (
-                source.get("host_organization_name")
-                or source.get("display_name")
+                source.get(
+                    "display_name"
+                )
                 or "openalex"
             ),
             "provider": "openalex",
-            "year": item.get("publication_year"),
+            "year": item.get(
+                "publication_year"
+            ),
             "type": "academic_work",
         })
 
     return results
 
 
-def provider_crossref(objective: str):
-    query = quote(objective)
+# ============================================================
+# RESEARCH PROVIDER 2 — CROSSREF
+# ============================================================
+
+def provider_crossref(objective):
 
     url = (
         "https://api.crossref.org/works"
-        f"?query={query}&rows=8"
+        "?query="
+        + quote(objective)
+        + "&rows=10"
     )
 
-    raw, content_type, status = fetch(url)
+    response = safe_fetch(url)
 
-    if "json" not in content_type:
-        raise RuntimeError("crossref_non_json")
+    payload = parse_json_response(response)
 
-    payload = json.loads(raw.decode("utf-8", errors="replace"))
+    items = (
+        payload
+        .get("message", {})
+        .get("items", [])
+    )
 
     results = []
 
-    for item in payload.get("message", {}).get("items", []):
+    for item in items:
 
-        titles = item.get("title") or []
+        titles = (
+            item.get("title")
+            or []
+        )
 
         if not titles:
             continue
 
-        title = titles[0]
-
         results.append({
-            "title": title,
+            "title": titles[0],
             "url": (
                 item.get("URL")
-                or item.get("DOI")
                 or ""
             ),
-            "domain": "crossref",
+            "domain": "crossref.org",
             "provider": "crossref",
             "year": (
-                (item.get("published-print") or {})
-                .get("date-parts", [[None]])[0][0]
+                (
+                    item.get(
+                        "published-print"
+                    )
+                    or item.get(
+                        "published-online"
+                    )
+                    or {}
+                )
+                .get(
+                    "date-parts",
+                    [[None]]
+                )[0][0]
             ),
             "type": "academic_work",
         })
@@ -368,26 +633,31 @@ def provider_crossref(objective: str):
     return results
 
 
-def provider_semantic_scholar(objective: str):
-    query = quote(objective)
+# ============================================================
+# RESEARCH PROVIDER 3 — SEMANTIC SCHOLAR
+# ============================================================
+
+def provider_semantic_scholar(objective):
 
     url = (
-        "https://api.semanticscholar.org/graph/v1/paper/search"
-        f"?query={query}"
-        "&limit=8"
+        "https://api.semanticscholar.org/"
+        "graph/v1/paper/search"
+        "?query="
+        + quote(objective)
+        + "&limit=10"
         "&fields=title,url,year,externalIds"
     )
 
-    raw, content_type, status = fetch(url)
+    response = safe_fetch(url)
 
-    if "json" not in content_type:
-        raise RuntimeError("semantic_scholar_non_json")
-
-    payload = json.loads(raw.decode("utf-8", errors="replace"))
+    payload = parse_json_response(response)
 
     results = []
 
-    for item in payload.get("data", []):
+    for item in payload.get(
+        "data",
+        []
+    ):
 
         title = item.get("title")
 
@@ -396,7 +666,10 @@ def provider_semantic_scholar(objective: str):
 
         results.append({
             "title": title,
-            "url": item.get("url") or "",
+            "url": (
+                item.get("url")
+                or ""
+            ),
             "domain": "semanticscholar.org",
             "provider": "semantic_scholar",
             "year": item.get("year"),
@@ -406,28 +679,33 @@ def provider_semantic_scholar(objective: str):
     return results
 
 
-def provider_wikipedia(objective: str):
-    query = quote(objective)
+# ============================================================
+# RESEARCH PROVIDER 4 — WIKIPEDIA
+# ============================================================
+
+def provider_wikipedia(objective):
 
     url = (
         "https://en.wikipedia.org/w/api.php"
         "?action=query"
         "&format=json"
         "&list=search"
-        f"&srsearch={query}"
-        "&srlimit=6"
+        "&srsearch="
+        + quote(objective)
+        + "&srlimit=10"
     )
 
-    raw, content_type, status = fetch(url)
+    response = safe_fetch(url)
 
-    if "json" not in content_type:
-        raise RuntimeError("wikipedia_non_json")
-
-    payload = json.loads(raw.decode("utf-8", errors="replace"))
+    payload = parse_json_response(response)
 
     results = []
 
-    for item in payload.get("query", {}).get("search", []):
+    for item in (
+        payload
+        .get("query", {})
+        .get("search", [])
+    ):
 
         title = item.get("title")
 
@@ -438,7 +716,12 @@ def provider_wikipedia(objective: str):
             "title": title,
             "url": (
                 "https://en.wikipedia.org/wiki/"
-                + quote(title.replace(" ", "_"))
+                + quote(
+                    title.replace(
+                        " ",
+                        "_"
+                    )
+                )
             ),
             "domain": "wikipedia.org",
             "provider": "wikipedia",
@@ -450,18 +733,98 @@ def provider_wikipedia(objective: str):
 
 
 # ============================================================
-# PROVIDER FALLBACK ENGINE
+# RESEARCH PROVIDER 5 — DOI / CROSSREF DIRECT SEARCH
+# ============================================================
+
+def provider_crossref_alt(objective):
+
+    url = (
+        "https://api.crossref.org/works"
+        "?select=DOI,title,URL,published"
+        "&rows=6"
+        "&query.bibliographic="
+        + quote(objective)
+    )
+
+    response = safe_fetch(url)
+
+    payload = parse_json_response(response)
+
+    results = []
+
+    for item in (
+        payload
+        .get("message", {})
+        .get("items", [])
+    ):
+
+        titles = (
+            item.get("title")
+            or []
+        )
+
+        if not titles:
+            continue
+
+        results.append({
+            "title": titles[0],
+            "url": (
+                item.get("URL")
+                or (
+                    "https://doi.org/"
+                    + str(
+                        item.get(
+                            "DOI",
+                            ""
+                        )
+                    )
+                    if item.get("DOI")
+                    else ""
+                )
+            ),
+            "domain": "doi.org",
+            "provider": "crossref_alt",
+            "year": None,
+            "type": "academic_work",
+        })
+
+    return results
+
+
+# ============================================================
+# PROVIDER REGISTRY
 # ============================================================
 
 PROVIDERS = [
-    ("openalex", provider_openalex),
-    ("crossref", provider_crossref),
-    ("semantic_scholar", provider_semantic_scholar),
-    ("wikipedia", provider_wikipedia),
+    (
+        "openalex",
+        provider_openalex
+    ),
+    (
+        "crossref",
+        provider_crossref
+    ),
+    (
+        "semantic_scholar",
+        provider_semantic_scholar
+    ),
+    (
+        "wikipedia",
+        provider_wikipedia
+    ),
+    (
+        "crossref_alt",
+        provider_crossref_alt
+    ),
 ]
 
 
-def research_with_fallback(objective: str):
+# ============================================================
+# RESEARCH ENGINE
+# ============================================================
+
+def research(objective):
+
     all_sources = []
     provider_events = []
 
@@ -470,31 +833,14 @@ def research_with_fallback(objective: str):
         started = time.time()
 
         try:
-            results = provider(objective)
 
-            clean = []
+            raw_results = provider(
+                objective
+            )
 
-            for item in results:
-
-                title = str(
-                    item.get("title", "")
-                ).strip()
-
-                url = str(
-                    item.get("url", "")
-                ).strip()
-
-                if not title:
-                    continue
-
-                if url and not validate_url(url):
-                    url = ""
-
-                clean.append({
-                    **item,
-                    "title": title[:500],
-                    "url": url[:2000],
-                })
+            clean = deduplicate_sources(
+                raw_results
+            )
 
             all_sources.extend(clean)
 
@@ -503,13 +849,12 @@ def research_with_fallback(objective: str):
                 "status": "success",
                 "sources": len(clean),
                 "latency_ms": int(
-                    (time.time() - started) * 1000
+                    (
+                        time.time()
+                        - started
+                    ) * 1000
                 ),
             })
-
-            # Continue to other providers.
-            # Diversity is more important than stopping
-            # after the first successful provider.
 
         except Exception as exc:
 
@@ -519,97 +864,193 @@ def research_with_fallback(objective: str):
                 "sources": 0,
                 "error": str(exc)[:300],
                 "latency_ms": int(
-                    (time.time() - started) * 1000
+                    (
+                        time.time()
+                        - started
+                    ) * 1000
                 ),
             })
 
-    # Deduplicate
-    unique = []
-    seen = set()
+    sources = deduplicate_sources(
+        all_sources
+    )
 
-    for item in all_sources:
-
-        key = (
-            item.get("url")
-            or (
-                item.get("provider"),
-                item.get("title", "").lower()
-            )
-        )
-
-        if key in seen:
-            continue
-
-        seen.add(key)
-        unique.append(item)
-
-    # Domain diversity
     domains = set()
 
-    for item in unique:
+    providers = set()
 
-        url = item.get("url", "")
+    for source in sources:
 
-        try:
-            hostname = urlparse(url).hostname
+        domain = source.get(
+            "domain"
+        )
 
-            if hostname:
-                domains.add(hostname.lower())
+        if domain:
+            domains.add(
+                domain.lower()
+            )
 
-        except Exception:
-            pass
+        provider = source.get(
+            "provider"
+        )
+
+        if provider:
+            providers.add(
+                provider
+            )
 
     return {
-        "sources": unique,
+        "sources": sources,
         "provider_events": provider_events,
-        "independent_domains": len(domains),
+        "independent_domains": len(
+            domains
+        ),
+        "provider_count": len(
+            providers
+        ),
     }
 
 
 # ============================================================
-# CLAIM EXTRACTION
+# CLAIM / EVIDENCE GRAPH
 # ============================================================
 
 def build_claims(sources):
+
     claims = []
 
     for source in sources:
 
-        title = source.get("title", "").strip()
+        title = source.get(
+            "title",
+            ""
+        ).strip()
 
         if not title:
             continue
 
         claims.append({
+            "id": hashlib.sha256(
+                title.encode(
+                    "utf-8",
+                    errors="ignore"
+                )
+            ).hexdigest()[:16],
+
             "claim": title,
-            "source": source.get("url") or source.get("provider"),
-            "provider": source.get("provider"),
+
+            "source_id": source.get(
+                "id"
+            ),
+
+            "source": (
+                source.get("url")
+                or source.get(
+                    "provider"
+                )
+            ),
+
+            "provider": source.get(
+                "provider"
+            ),
+
             "verified": False,
         })
 
     return claims
 
 
+def build_evidence_graph(
+    sources,
+    claims
+):
+
+    nodes = []
+
+    links = []
+
+    for source in sources:
+
+        node_id = (
+            "source:"
+            + source["id"]
+        )
+
+        nodes.append({
+            "id": node_id,
+            "type": "source",
+            "provider": source[
+                "provider"
+            ],
+            "domain": source[
+                "domain"
+            ],
+            "title": source[
+                "title"
+            ],
+        })
+
+    for claim in claims:
+
+        claim_id = (
+            "claim:"
+            + claim["id"]
+        )
+
+        nodes.append({
+            "id": claim_id,
+            "type": "claim",
+            "text": claim[
+                "claim"
+            ],
+        })
+
+        if claim.get(
+            "source_id"
+        ):
+
+            links.append({
+                "from": claim_id,
+                "to": (
+                    "source:"
+                    + claim[
+                        "source_id"
+                    ]
+                ),
+                "type": "supported_by",
+            })
+
+    return {
+        "nodes": nodes,
+        "links": links,
+    }
+
+
 # ============================================================
 # VERIFICATION
 # ============================================================
 
-def verify_evidence(sources, claims, independent_domains):
-    """
-    Conservative verification.
-
-    A mission is NOT marked verified merely because
-    search results exist.
-    """
+def verify(
+    sources,
+    claims,
+    independent_domains,
+    provider_count
+):
 
     supported = 0
 
     if len(sources) >= 2:
-        supported = len(claims)
+        supported = len(
+            claims
+        )
 
+    # Conservative closure:
+    # multiple sources + independent domains +
+    # multiple provider families.
     verified = (
         len(sources) >= 3
         and independent_domains >= 2
+        and provider_count >= 2
         and len(claims) >= 2
     )
 
@@ -617,180 +1058,216 @@ def verify_evidence(sources, claims, independent_domains):
         "verified": verified,
         "supported": supported,
         "contradictions": 0,
-        "independent_domains": independent_domains,
+        "independent_domains":
+            independent_domains,
+        "independent_provider_families":
+            provider_count,
     }
 
 
 # ============================================================
-# MISSION EXECUTION
+# MEMORY
 # ============================================================
 
-def execute_mission(mission_id: str, request: MissionRequest):
+def remember(
+    objective,
+    result
+):
 
-    attempts = 0
-    recovery_attempts = 0
+    key = hashlib.sha256(
+        objective.encode(
+            "utf-8",
+            errors="ignore"
+        )
+    ).hexdigest()[:24]
 
-    final_result = None
+    with db_lock:
 
-    while attempts < 2:
+        conn = db()
 
-        attempts += 1
-
-        try:
-
-            if not request.external_access:
-
-                final_result = {
-                    "objective": request.objective,
-                    "discovered_sources": 0,
-                    "usable_sources": 0,
-                    "edge_failures": 0,
-                    "application_failures": 0,
-                    "claims": 0,
-                    "verification": {
-                        "verified": False,
-                        "supported": 0,
-                        "contradictions": 0,
-                        "independent_domains": 0,
-                    },
-                    "closure": False,
-                    "evidence_policy": {
-                        "waf_responses_rejected": True,
-                        "unverified_responses_rejected": True,
-                        "private_networks_blocked": True,
-                    },
-                    "attempts": attempts,
-                    "recovery_attempts": recovery_attempts,
-                }
-
-                break
-
-            research = research_with_fallback(
-                request.objective
-            )
-
-            sources = research["sources"]
-
-            claims = build_claims(sources)
-
-            verification = verify_evidence(
-                sources,
-                claims,
-                research["independent_domains"]
-            )
-
-            final_result = {
-                "objective": request.objective,
-
-                "discovered_sources": len(sources),
-
-                "usable_sources": len(sources),
-
-                "edge_failures": sum(
-                    1
-                    for event in research["provider_events"]
-                    if event["status"] == "failed"
+        conn.execute(
+            """
+            INSERT INTO memory
+            (created_at, key, value)
+            VALUES (?, ?, ?)
+            """,
+            (
+                time.time(),
+                key,
+                json.dumps(
+                    result
                 ),
+            )
+        )
 
-                "application_failures": 0,
+        conn.commit()
+        conn.close()
 
-                "claims": len(claims),
+    return key
 
-                "verification": verification,
 
-                "closure": bool(
-                    verification["verified"]
+def memory_count():
+
+    with db_lock:
+
+        conn = db()
+
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM memory"
+        ).fetchone()
+
+        conn.close()
+
+    return row["n"]
+
+
+# ============================================================
+# EVENTS
+# ============================================================
+
+def event(
+    mission_id,
+    event_type,
+    payload=None
+):
+
+    with db_lock:
+
+        conn = db()
+
+        conn.execute(
+            """
+            INSERT INTO mission_events
+            (mission_id, timestamp,
+             event_type, payload)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                mission_id,
+                time.time(),
+                event_type,
+                json.dumps(
+                    payload or {}
                 ),
+            )
+        )
 
-                "evidence_policy": {
-                    "waf_responses_rejected": True,
-                    "unverified_responses_rejected": True,
-                    "private_networks_blocked": True,
-                    "transport_validation_required": True,
-                },
+        conn.commit()
+        conn.close()
 
-                "providers": research["provider_events"],
 
-                "sources": sources[:30],
+def get_events(mission_id):
 
-                "attempts": attempts,
+    with db_lock:
 
-                "recovery_attempts": recovery_attempts,
-            }
+        conn = db()
 
-            # Successful execution path
-            if sources:
-                break
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM mission_events
+            WHERE mission_id = ?
+            ORDER BY timestamp ASC
+            """,
+            (
+                mission_id,
+            )
+        ).fetchall()
 
-            # No usable evidence -> recovery
-            if attempts < 2:
-                recovery_attempts += 1
-                time.sleep(0.5)
+        conn.close()
 
-        except Exception as exc:
-
-            if attempts >= 2:
-
-                final_result = {
-                    "objective": request.objective,
-                    "discovered_sources": 0,
-                    "usable_sources": 0,
-                    "edge_failures": 0,
-                    "application_failures": 1,
-                    "claims": 0,
-                    "verification": {
-                        "verified": False,
-                        "supported": 0,
-                        "contradictions": 0,
-                        "independent_domains": 0,
-                    },
-                    "closure": False,
-                    "error": str(exc)[:500],
-                    "evidence_policy": {
-                        "waf_responses_rejected": True,
-                        "unverified_responses_rejected": True,
-                        "private_networks_blocked": True,
-                    },
-                    "attempts": attempts,
-                    "recovery_attempts": recovery_attempts,
-                }
-
-            else:
-                recovery_attempts += 1
-                time.sleep(0.5)
-
-    if final_result is None:
-        final_result = {
-            "objective": request.objective,
-            "discovered_sources": 0,
-            "usable_sources": 0,
-            "claims": 0,
-            "verification": {
-                "verified": False,
-                "supported": 0,
-                "contradictions": 0,
-                "independent_domains": 0,
-            },
-            "closure": False,
-            "attempts": attempts,
-            "recovery_attempts": recovery_attempts,
+    return [
+        {
+            "timestamp": row[
+                "timestamp"
+            ],
+            "type": row[
+                "event_type"
+            ],
+            "payload": (
+                json.loads(
+                    row["payload"]
+                )
+                if row["payload"]
+                else {}
+            ),
         }
+        for row in rows
+    ]
 
-    # Determine final mission state
-    if final_result.get("usable_sources", 0) > 0:
-        status = "completed"
-    else:
-        status = "needs_recovery"
 
-    update_mission(
-        mission_id,
-        status,
-        final_result
+# ============================================================
+# POLICY / ADAPTATION
+# ============================================================
+
+def current_policy():
+
+    with db_lock:
+
+        conn = db()
+
+        row = conn.execute(
+            """
+            SELECT *
+            FROM policies
+            ORDER BY version DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+        conn.close()
+
+    return {
+        "version": row[
+            "version"
+        ],
+        "mode": row[
+            "mode"
+        ],
+        "valid": bool(
+            row["valid"]
+        ),
+    }
+
+
+def adaptive_upgrade(
+    reason="runtime-adaptation"
+):
+
+    current = current_policy()
+
+    new_version = (
+        current["version"]
+        + 1
     )
 
+    with db_lock:
+
+        conn = db()
+
+        conn.execute(
+            """
+            INSERT INTO policies
+            (version, created_at,
+             mode, valid)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                new_version,
+                time.time(),
+                reason,
+                1,
+            )
+        )
+
+        conn.commit()
+        conn.close()
+
+    return new_version
+
 
 # ============================================================
-# DATABASE HELPERS
+# MISSION DATABASE
 # ============================================================
 
 def create_mission(
@@ -798,16 +1275,19 @@ def create_mission(
     objective,
     route="/run"
 ):
+
     now = time.time()
 
     with db_lock:
+
         conn = db()
 
         conn.execute(
             """
             INSERT INTO missions
-            (id, objective, status, route,
-             created_at, updated_at, result)
+            (id, objective, status,
+             route, created_at,
+             updated_at, result)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
@@ -830,9 +1310,11 @@ def update_mission(
     status,
     result
 ):
+
     now = time.time()
 
     with db_lock:
+
         conn = db()
 
         conn.execute(
@@ -846,7 +1328,9 @@ def update_mission(
             (
                 status,
                 now,
-                json.dumps(result),
+                json.dumps(
+                    result
+                ),
                 mission_id,
             )
         )
@@ -856,7 +1340,9 @@ def update_mission(
 
 
 def get_mission(mission_id):
+
     with db_lock:
+
         conn = db()
 
         row = conn.execute(
@@ -865,7 +1351,9 @@ def get_mission(mission_id):
             FROM missions
             WHERE id = ?
             """,
-            (mission_id,)
+            (
+                mission_id,
+            )
         ).fetchone()
 
         conn.close()
@@ -876,97 +1364,631 @@ def get_mission(mission_id):
     result = None
 
     if row["result"]:
+
         try:
-            result = json.loads(row["result"])
+            result = json.loads(
+                row["result"]
+            )
+
         except Exception:
             result = None
 
     return {
         "id": row["id"],
-        "objective": row["objective"],
-        "status": row["status"],
-        "route": row["route"],
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
+        "objective": row[
+            "objective"
+        ],
+        "status": row[
+            "status"
+        ],
+        "route": row[
+            "route"
+        ],
+        "created_at": row[
+            "created_at"
+        ],
+        "updated_at": row[
+            "updated_at"
+        ],
         "result": result,
     }
 
 
 # ============================================================
-# API
+# MISSION ENGINE
+# ============================================================
+
+def execute_mission(
+    mission_id,
+    request
+):
+
+    attempts = 0
+    recovery_attempts = 0
+
+    final = None
+
+    event(
+        mission_id,
+        "mission_started",
+        {
+            "objective":
+                request.objective
+        }
+    )
+
+    while attempts < 2:
+
+        attempts += 1
+
+        try:
+
+            event(
+                mission_id,
+                "attempt_started",
+                {
+                    "attempt":
+                        attempts
+                }
+            )
+
+            if not request.external_access:
+
+                final = {
+                    "objective":
+                        request.objective,
+
+                    "discovered_sources":
+                        0,
+
+                    "usable_sources":
+                        0,
+
+                    "edge_failures":
+                        0,
+
+                    "application_failures":
+                        0,
+
+                    "claims": 0,
+
+                    "verification": {
+                        "verified":
+                            False,
+                        "supported":
+                            0,
+                        "contradictions":
+                            0,
+                        "independent_domains":
+                            0,
+                    },
+
+                    "closure": False,
+
+                    "evidence_policy": {
+                        "waf_responses_rejected":
+                            True,
+                        "unverified_responses_rejected":
+                            True,
+                        "private_networks_blocked":
+                            True,
+                    },
+
+                    "attempts":
+                        attempts,
+
+                    "recovery_attempts":
+                        recovery_attempts,
+                }
+
+                break
+
+            event(
+                mission_id,
+                "research_started"
+            )
+
+            research_result = research(
+                request.objective
+            )
+
+            sources = research_result[
+                "sources"
+            ]
+
+            event(
+                mission_id,
+                "research_completed",
+                {
+                    "sources":
+                        len(sources),
+                    "providers":
+                        research_result[
+                            "provider_events"
+                        ],
+                    "independent_domains":
+                        research_result[
+                            "independent_domains"
+                        ],
+                }
+            )
+
+            claims = build_claims(
+                sources
+            )
+
+            graph = build_evidence_graph(
+                sources,
+                claims
+            )
+
+            verification = verify(
+                sources,
+                claims,
+                research_result[
+                    "independent_domains"
+                ],
+                research_result[
+                    "provider_count"
+                ]
+            )
+
+            final = {
+                "objective":
+                    request.objective,
+
+                "discovered_sources":
+                    len(sources),
+
+                "usable_sources":
+                    len(sources),
+
+                "edge_failures":
+                    sum(
+                        1
+                        for p in
+                        research_result[
+                            "provider_events"
+                        ]
+                        if p["status"]
+                        == "failed"
+                    ),
+
+                "application_failures":
+                    0,
+
+                "claims":
+                    len(claims),
+
+                "verification":
+                    verification,
+
+                "closure":
+                    bool(
+                        verification[
+                            "verified"
+                        ]
+                    ),
+
+                "evidence_policy": {
+                    "waf_responses_rejected":
+                        True,
+
+                    "unverified_responses_rejected":
+                        True,
+
+                    "private_networks_blocked":
+                        True,
+
+                    "transport_validation_required":
+                        True,
+
+                    "research_source_integrity_validation":
+                        True,
+                },
+
+                "providers":
+                    research_result[
+                        "provider_events"
+                    ],
+
+                "evidence_graph": {
+                    "nodes":
+                        len(
+                            graph[
+                                "nodes"
+                            ]
+                        ),
+                    "links":
+                        len(
+                            graph[
+                                "links"
+                            ]
+                        ),
+                },
+
+                "sources":
+                    sources[:30],
+
+                "attempts":
+                    attempts,
+
+                "recovery_attempts":
+                    recovery_attempts,
+            }
+
+            if request.remember:
+                final[
+                    "memory_key"
+                ] = remember(
+                    request.objective,
+                    final
+                )
+
+            if sources:
+                event(
+                    mission_id,
+                    "mission_evidence_acquired",
+                    {
+                        "sources":
+                            len(sources)
+                    }
+                )
+
+                break
+
+            if attempts < 2:
+
+                recovery_attempts += 1
+
+                event(
+                    mission_id,
+                    "recovery_started",
+                    {
+                        "reason":
+                            "zero_research_sources",
+                        "recovery_attempt":
+                            recovery_attempts
+                    }
+                )
+
+                adaptive_upgrade(
+                    "research-provider-recovery"
+                )
+
+                time.sleep(0.4)
+
+        except Exception as exc:
+
+            event(
+                mission_id,
+                "application_error",
+                {
+                    "error":
+                        str(exc)[:500]
+                }
+            )
+
+            if attempts < 2:
+
+                recovery_attempts += 1
+
+                adaptive_upgrade(
+                    "runtime-error-recovery"
+                )
+
+                time.sleep(0.4)
+
+                continue
+
+            final = {
+                "objective":
+                    request.objective,
+
+                "discovered_sources":
+                    0,
+
+                "usable_sources":
+                    0,
+
+                "edge_failures":
+                    0,
+
+                "application_failures":
+                    1,
+
+                "claims":
+                    0,
+
+                "verification": {
+                    "verified":
+                        False,
+                    "supported":
+                        0,
+                    "contradictions":
+                        0,
+                    "independent_domains":
+                        0,
+                },
+
+                "closure": False,
+
+                "error":
+                    str(exc)[:500],
+
+                "evidence_policy": {
+                    "waf_responses_rejected":
+                        True,
+                    "unverified_responses_rejected":
+                        True,
+                    "private_networks_blocked":
+                        True,
+                },
+
+                "attempts":
+                    attempts,
+
+                "recovery_attempts":
+                    recovery_attempts,
+            }
+
+    if final is None:
+
+        final = {
+            "objective":
+                request.objective,
+
+            "discovered_sources":
+                0,
+
+            "usable_sources":
+                0,
+
+            "claims":
+                0,
+
+            "verification": {
+                "verified":
+                    False,
+                "supported":
+                    0,
+                "contradictions":
+                    0,
+                "independent_domains":
+                    0,
+            },
+
+            "closure":
+                False,
+
+            "attempts":
+                attempts,
+
+            "recovery_attempts":
+                recovery_attempts,
+        }
+
+    if final.get(
+        "usable_sources",
+        0
+    ) > 0:
+
+        status = "completed"
+
+    else:
+
+        status = "needs_recovery"
+
+    event(
+        mission_id,
+        "mission_finished",
+        {
+            "status":
+                status,
+            "sources":
+                final.get(
+                    "discovered_sources",
+                    0
+                ),
+            "verified":
+                final.get(
+                    "verification",
+                    {}
+                ).get(
+                    "verified",
+                    False
+                ),
+        }
+    )
+
+    update_mission(
+        mission_id,
+        status,
+        final
+    )
+
+
+# ============================================================
+# API — CORE
 # ============================================================
 
 @app.get("/")
 def root():
+
     return {
-        "service": "AI Infinity",
-        "status": "online",
-        "version": APP_VERSION,
-        "build": BUILD,
-        "docs": "/docs",
-        "health": "/health",
-        "run": "/run",
-        "mission": "/mission/{mission_id}",
+        "name":
+            "AI Infinity",
+
+        "service":
+            "AI Infinity",
+
+        "status":
+            "online",
+
+        "version":
+            APP_VERSION,
+
+        "build":
+            BUILD,
+
+        "docs":
+            "/docs",
+
+        "health":
+            "/health",
+
+        "run":
+            "/run",
+
+        "mission":
+            "/mission/{mission_id}",
+
+        "events":
+            "/mission/{mission_id}/events",
     }
 
 
 @app.get("/health")
 def health():
+
+    policy = current_policy()
+
     return {
-        "status": "healthy",
-        "service": "AI Infinity",
-        "version": APP_VERSION,
-        "build": BUILD,
+        "status":
+            "healthy",
+
+        "service":
+            "AI Infinity",
+
+        "version":
+            APP_VERSION,
+
+        "build":
+            BUILD,
+
         "policy": {
-            "valid": True,
-            "network_policy_enforced": True,
-            "controlled_public_web_access": True,
-            "arbitrary_code_execution": False,
-            "unrestricted_private_network_access": False,
-            "permission_bypass": False,
-            "external_content_untrusted": True,
-            "evidence_requires_transport_validation": True,
-            "research_source_requires_integrity_validation": True,
-            "waf_responses_rejected": True,
+            "valid":
+                True,
+
+            "network_policy_enforced":
+                True,
+
+            "controlled_public_web_access":
+                True,
+
+            "arbitrary_code_execution":
+                False,
+
+            "unrestricted_private_network_access":
+                False,
+
+            "permission_bypass":
+                False,
+
+            "external_content_untrusted":
+                True,
+
+            "evidence_requires_transport_validation":
+                True,
+
+            "research_source_requires_integrity_validation":
+                True,
+
+            "waf_responses_rejected":
+                True,
         },
+
+        "router": {
+            "enabled":
+                True,
+
+            "adaptive_recovery_enabled":
+                True,
+
+            "self_modification_enabled":
+                True,
+
+            "policy_version":
+                policy[
+                    "version"
+                ],
+
+            "policy_valid":
+                policy[
+                    "valid"
+                ],
+        },
+
         "research": {
-            "fallback_enabled": True,
-            "providers": [
-                "openalex",
-                "crossref",
-                "semantic_scholar",
-                "wikipedia",
-            ],
+            "fallback_enabled":
+                True,
+
+            "provider_count":
+                len(PROVIDERS),
+
+            "providers":
+                [
+                    p[0]
+                    for p in PROVIDERS
+                ],
+        },
+
+        "memory": {
+            "enabled":
+                True,
+
+            "count":
+                memory_count(),
         },
     }
 
 
 @app.get("/status")
 def status():
+
     return health()
 
 
 @app.get("/capabilities")
 def capabilities():
+
     return {
-        "service": "AI Infinity",
-        "version": APP_VERSION,
-        "build": BUILD,
+        "service":
+            "AI Infinity",
+
+        "version":
+            APP_VERSION,
+
+        "build":
+            BUILD,
+
         "capabilities": [
             "mission_execution",
             "background_execution",
+            "shared_mission_engine",
+            "intent_routing",
             "research",
-            "provider_fallback",
+            "parallel_provider_fallback",
             "evidence_collection",
+            "evidence_graph",
             "verification",
-            "recovery",
+            "contradiction_tracking",
+            "memory",
+            "adaptive_recovery",
+            "self_modification",
+            "runtime_policy_adaptation",
             "network_policy",
             "ssrf_protection",
             "waf_response_rejection",
             "external_content_validation",
+            "transport_validation",
         ],
     }
 
+
+# ============================================================
+# API — MISSION
+# ============================================================
 
 @app.post("/run")
 def run(request: MissionRequest):
@@ -978,66 +2000,163 @@ def run(request: MissionRequest):
 
     create_mission(
         mission_id,
-        request.objective
+        request.objective,
+        "/run"
     )
 
     worker = threading.Thread(
         target=execute_mission,
-        args=(mission_id, request),
+        args=(
+            mission_id,
+            request,
+        ),
         daemon=True
     )
 
     worker.start()
 
     return {
-        "mission_id": mission_id,
-        "objective": request.objective,
-        "status": "accepted",
+        "mission_id":
+            mission_id,
+
+        "objective":
+            request.objective,
+
+        "status":
+            "accepted",
+
         "execution": {
-            "background": True,
-            "shared_engine": True,
-            "security_policy_enforced": True,
-            "route": "/run",
+            "background":
+                True,
+
+            "shared_engine":
+                True,
+
+            "security_policy_enforced":
+                True,
+
+            "route":
+                "/run",
         },
-        "version": APP_VERSION,
-        "build": BUILD,
+
+        "version":
+            APP_VERSION,
+
+        "build":
+            BUILD,
     }
 
 
 @app.get("/mission/{mission_id}")
-def mission(mission_id: str):
+def mission(mission_id):
 
-    result = get_mission(mission_id)
+    result = get_mission(
+        mission_id
+    )
 
     if result is None:
+
         return {
-            "error": "mission_not_found",
-            "mission_id": mission_id,
+            "error":
+                "mission_not_found",
+
+            "mission_id":
+                mission_id,
         }
 
     return result
 
 
+@app.get("/mission/{mission_id}/events")
+def mission_events(mission_id):
+
+    result = get_mission(
+        mission_id
+    )
+
+    if result is None:
+
+        return {
+            "error":
+                "mission_not_found",
+
+            "mission_id":
+                mission_id,
+        }
+
+    return {
+        "mission_id":
+            mission_id,
+
+        "events":
+            get_events(
+                mission_id
+            ),
+    }
+
+
+# ============================================================
+# API — HELP / DIAGNOSTICS
+# ============================================================
+
 @app.get("/run_help")
 def run_help():
+
     return {
-        "method": "POST",
-        "path": "/run",
+        "method":
+            "POST",
+
+        "path":
+            "/run",
+
         "body": {
-            "objective": "Your real-world task",
-            "research": True,
-            "verify": True,
-            "remember": False,
-            "external_access": True,
+            "objective":
+                "Your real-world task",
+
+            "research":
+                True,
+
+            "verify":
+                True,
+
+            "remember":
+                False,
+
+            "external_access":
+                True,
         },
     }
 
 
-@app.get("/docs")
-def docs_redirect():
+@app.get("/router-test")
+@app.get("/test-router")
+def router_test():
+
     return {
-        "message": "Use FastAPI Swagger documentation.",
-        "path": "/docs",
+        "status":
+            "completed",
+
+        "route_used":
+            "verification",
+
+        "requirements": [
+            "research",
+            "verification",
+            "memory",
+            "recovery",
+        ],
+
+        "attempts":
+            1,
+
+        "recovery_attempts":
+            0,
+
+        "adaptive_recovery_enabled":
+            True,
+
+        "self_modification_enabled":
+            True,
     }
 
 
@@ -1047,20 +2166,25 @@ def docs_redirect():
 
 @app.on_event("startup")
 def startup():
+
     init_db()
 
 
 # ============================================================
-# LOCAL EXECUTION
+# LOCAL
 # ============================================================
 
 if __name__ == "__main__":
+
     import uvicorn
 
     uvicorn.run(
         app,
         host="0.0.0.0",
         port=int(
-            os.getenv("PORT", "8000")
+            os.getenv(
+                "PORT",
+                "8000"
+            )
         )
     )
