@@ -17,8 +17,8 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 
-APP_VERSION = "TARGET-2050.80"
-BUILD = "CUMULATIVE-ALL-SUCCESSFUL-VERSIONS-REAL-WORLD-MISSION-CORE"
+APP_VERSION = "TARGET-2050.81"
+BUILD = "CUMULATIVE-EVIDENCE-INDEPENDENCE-AND-RELEVANCE-CLOSURE-CORE"
 
 DB_PATH = os.getenv("AI_INFINITY_DB", "/tmp/ai-infinity/ai_infinity.db")
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -97,7 +97,7 @@ BLOCKED_HOSTS = {
 }
 BLOCKED_SCHEMES = {"file", "ftp", "gopher", "data", "javascript"}
 MAX_RESPONSE_BYTES = 1024 * 1024
-USER_AGENT = "AI-Infinity/2050.80-controlled-public-research"
+USER_AGENT = "AI-Infinity/2050.81-controlled-public-research"
 
 WAF_MARKERS = (
     "<title>blocked</title>", "<title>access denied</title>",
@@ -406,11 +406,38 @@ def hostname_of(url):
     except Exception:
         return ""
 
+def publisher_identity(name="", url="", provider=""):
+    """Return a stable publisher identity without treating doi.org as a publisher."""
+    name = re.sub(r"\s+", " ", str(name or "").strip()).lower()
+    name = re.sub(r"[^a-z0-9&. -]", "", name)
+    if name:
+        aliases = {
+            "springer nature": "springer nature",
+            "springer": "springer nature",
+            "elsevier": "elsevier",
+            "wiley": "wiley",
+            "wiley-blackwell": "wiley",
+            "ieee": "ieee",
+            "institute of electrical and electronics engineers": "ieee",
+            "association for computing machinery": "acm",
+            "acm": "acm",
+            "oxford university press": "oxford university press",
+            "cambridge university press": "cambridge university press",
+            "frontiers": "frontiers",
+            "mdpi": "mdpi",
+            "sage": "sage",
+            "taylor & francis": "taylor & francis",
+            "ssrn": "ssrn",
+        }
+        return aliases.get(name, name)
+    host = hostname_of(url)
+    if not host or host in {"doi.org", "dx.doi.org"}:
+        return ""
+    return publisher_host(url)
+
 def publisher_host(url):
     host = hostname_of(url)
-    if not host:
-        return ""
-    if host in {"doi.org", "dx.doi.org"}:
+    if not host or host in {"doi.org", "dx.doi.org"}:
         return ""
     parts = host.split(".")
     return ".".join(parts[-2:]) if len(parts) >= 2 else host
@@ -422,16 +449,20 @@ def normalize_source(item):
         return None
     if url and not validate_url(url):
         url = ""
+    pub_name = str(item.get("publisher_name") or item.get("publisher") or "").strip()
+    pub_id = publisher_identity(pub_name, url, str(item.get("provider") or ""))
     return {
         "id": hashlib.sha256((url or title.lower()).encode()).hexdigest()[:16],
         "title": title[:500],
         "url": url[:3000],
         "domain": hostname_of(url) or str(item.get("domain") or "")[:200],
-        "publisher": publisher_host(url),
+        "publisher": pub_id,
+        "publisher_name": pub_name[:300],
         "provider": str(item.get("provider") or "unknown"),
         "year": item.get("year"),
         "type": str(item.get("type") or "research_source"),
         "relevance_score": 0.0,
+        "quality_score": 0.0,
     }
 
 def deduplicate_sources(items):
@@ -452,20 +483,26 @@ def relevance_score(source, objective):
     if not terms:
         return 0.0
     title = source["title"].lower()
-    text = (source["title"] + " " + source["type"]).lower()
-    hits = sum(1 for t in terms if t in text)
     title_hits = sum(1 for t in terms if t in title)
-    return round(min(1.0, hits/max(1,len(terms))*0.45 +
-                     title_hits/max(1,len(terms))*0.55), 4)
+    # Title-only relevance is deliberately strict: the evidence set should not
+    # contain generic AI material merely because it came from a trusted API.
+    score = title_hits / max(1, len(terms))
+    if title_hits >= 2:
+        score += 0.10
+    return round(min(1.0, score), 4)
 
 def quality_score(source):
     score = source.get("relevance_score", 0.0)
     if source.get("publisher"):
         score += 0.15
+    if source.get("publisher_name"):
+        score += 0.05
     if source.get("year"):
         score += 0.05
-    if source.get("provider") in {"openalex","crossref","semantic_scholar"}:
+    if source.get("provider") in {"openalex","crossref","semantic_scholar","crossref_alt"}:
         score += 0.15
+    if source.get("type") == "academic_work":
+        score += 0.10
     return round(min(1.0, score), 4)
 
 def rank_sources(items, objective):
@@ -477,8 +514,9 @@ def rank_sources(items, objective):
         key=lambda s: (s["relevance_score"], s["quality_score"], s.get("year") or 0),
         reverse=True,
     )
-    strong = [s for s in ranked if s["relevance_score"] >= 0.18]
-    return strong + [s for s in ranked if s not in strong][:3]
+    # Final evidence contains only sources that actually meet the relevance
+    # threshold. This fixes 2050.80's 0.0-relevance leakage.
+    return [s for s in ranked if s["relevance_score"] >= 0.18]
 
 def parse_json(response):
     return parse_json_response(response)
@@ -487,15 +525,22 @@ def provider_openalex(q):
     data = parse_json(safe_fetch(
         "https://api.openalex.org/works?search="+quote(q)+"&per-page=10"
     ))
-    return [
-        {
-            "title": x.get("title"),
-            "url": (x.get("primary_location") or {}).get("landing_page_url") or x.get("doi",""),
-            "provider": "openalex", "year": x.get("publication_year"),
+    out = []
+    for x in data.get("results", []):
+        title = x.get("title")
+        if not title:
+            continue
+        loc = x.get("primary_location") or {}
+        src = loc.get("source") or {}
+        out.append({
+            "title": title,
+            "url": loc.get("landing_page_url") or x.get("doi", ""),
+            "provider": "openalex",
+            "year": x.get("publication_year"),
             "type": "academic_work",
-        }
-        for x in data.get("results", []) if x.get("title")
-    ]
+            "publisher_name": src.get("display_name") or "",
+        })
+    return out
 
 def provider_crossref(q):
     data = parse_json(safe_fetch(
@@ -506,25 +551,29 @@ def provider_crossref(q):
         title = (x.get("title") or [None])[0]
         if not title:
             continue
-        d = x.get("published-print") or x.get("published-online") or {}
+        d = x.get("published-print") or x.get("published-online") or x.get("issued") or {}
         parts = d.get("date-parts", [[None]])
         year = parts[0][0] if parts and parts[0] else None
         out.append({
-            "title": title, "url": x.get("URL") or "",
-            "provider": "crossref", "year": year, "type": "academic_work",
+            "title": title,
+            "url": x.get("URL") or ("https://doi.org/"+x["DOI"] if x.get("DOI") else ""),
+            "provider": "crossref",
+            "year": year,
+            "type": "academic_work",
+            "publisher_name": x.get("publisher") or "",
         })
     return out
 
 def provider_semantic(q):
     data = parse_json(safe_fetch(
         "https://api.semanticscholar.org/graph/v1/paper/search?query="+
-        quote(q)+"&limit=10&fields=title,url,year"
+        quote(q)+"&limit=10&fields=title,url,year,venue"
     ))
     return [
         {
             "title": x.get("title"), "url": x.get("url") or "",
             "provider": "semantic_scholar", "year": x.get("year"),
-            "type": "academic_work",
+            "type": "academic_work", "publisher_name": x.get("venue") or "",
         }
         for x in data.get("data", []) if x.get("title")
     ]
@@ -539,13 +588,14 @@ def provider_wikipedia(q):
             "title": x.get("title"),
             "url": "https://en.wikipedia.org/wiki/"+quote(x["title"].replace(" ","_")),
             "provider": "wikipedia", "year": None, "type": "reference",
+            "publisher_name": "Wikipedia",
         }
         for x in data.get("query", {}).get("search", []) if x.get("title")
     ]
 
 def provider_crossref_alt(q):
     data = parse_json(safe_fetch(
-        "https://api.crossref.org/works?select=DOI,title,URL,published&rows=6"+
+        "https://api.crossref.org/works?select=DOI,title,URL,published,publisher&rows=6"+
         "&query.bibliographic="+quote(q)
     ))
     out = []
@@ -553,10 +603,14 @@ def provider_crossref_alt(q):
         title = (x.get("title") or [None])[0]
         if not title:
             continue
+        d = x.get("published") or x.get("issued") or {}
+        parts = d.get("date-parts", [[None]])
+        year = parts[0][0] if parts and parts[0] else None
         url = x.get("URL") or ("https://doi.org/"+x["DOI"] if x.get("DOI") else "")
         out.append({
             "title": title, "url": url, "provider": "crossref_alt",
-            "year": None, "type": "academic_work",
+            "year": year, "type": "academic_work",
+            "publisher_name": x.get("publisher") or "",
         })
     return out
 
@@ -609,6 +663,10 @@ def call_provider(name, fn, objective):
         "retries": max(0,len(errors)-1), "items": [],
     }
 
+def provider_family(name):
+    # Multiple endpoints from the same underlying provider are one family.
+    return {"crossref_alt":"crossref"}.get(name, name)
+
 def research(objective):
     results = []
     threads = []
@@ -639,17 +697,20 @@ def research(objective):
         events.append({k:v for k,v in r.items() if k != "items"})
 
     sources = rank_sources(deduplicate_sources(all_items), objective)
-    relevant = [s for s in sources if s["relevance_score"] >= 0.18]
+    relevant = list(sources)
+    publisher_ids = {s["publisher"] for s in relevant if s.get("publisher")}
     publisher_domains = {
-        s["publisher"] for s in sources if s.get("publisher")
+        publisher_host(s.get("url", "")) for s in relevant
+        if publisher_host(s.get("url", ""))
     }
-    providers = {s["provider"] for s in sources}
+    provider_families = {provider_family(s["provider"]) for s in relevant}
     return {
         "sources": sources,
         "relevant_sources": len(relevant),
         "provider_events": events,
+        "independent_publishers": len(publisher_ids),
         "independent_domains": len(publisher_domains),
-        "provider_count": len(providers),
+        "provider_count": len(provider_families),
         "query_terms": objective_terms(objective),
     }
 
@@ -670,23 +731,27 @@ def build_claims(sources):
         })
     return out
 
-def verify(sources, claims, domains, providers, requested):
+def verify(sources, claims, domains, providers, requested, publishers=0):
     relevant = [s for s in sources if s["relevance_score"] >= 0.18]
     high_quality = [s for s in relevant if s["quality_score"] >= 0.35]
+    # Do not claim contradiction analysis that the engine has not actually
+    # performed. Contradictions remain an explicit future evidence-analysis field.
     verified = bool(
         requested and len(relevant) >= 3 and len(high_quality) >= 2 and
-        domains >= 2 and providers >= 2 and len(claims) >= 2
+        publishers >= 2 and providers >= 2 and len(claims) >= 2
     )
     return {
         "verified": verified,
         "supported": len(relevant),
         "contradictions": 0,
         "independent_domains": domains,
+        "independent_publishers": publishers,
         "independent_provider_families": providers,
         "relevant_sources": len(relevant),
         "high_quality_sources": len(high_quality),
         "relevance_threshold": 0.18,
         "quality_threshold": 0.35,
+        "contradiction_analysis": "not_implemented",
     }
 
 def evidence_graph(sources, claims):
@@ -789,7 +854,7 @@ def execute_mission(mid, request):
             claims = build_claims(sources)
             verification = verify(
                 sources, claims, rr["independent_domains"],
-                rr["provider_count"], request.verify
+                rr["provider_count"], request.verify, rr["independent_publishers"]
             )
             graph = evidence_graph(sources,claims)
             provider_failures = sum(
@@ -810,11 +875,12 @@ def execute_mission(mid, request):
                 "discovered_sources":len(sources),
                 "usable_sources":len(sources),
                 "relevant_sources":rr["relevant_sources"],
+                "independent_publishers":rr["independent_publishers"],
                 "edge_failures":provider_failures,
                 "application_failures":0,
                 "claims":len(claims),
                 "verification":verification,
-                "closure":bool(verification["verified"]),
+                "closure":bool(verification["verified"] and rr["relevant_sources"] >= 3),
                 "providers":rr["provider_events"],
                 "query_terms":rr["query_terms"],
                 "evidence_graph":{
@@ -848,7 +914,7 @@ def execute_mission(mid, request):
                 "verified":verification["verified"],
             })
 
-            if sources:
+            if sources and (not request.verify or result["closure"]):
                 status = "completed"
                 update_mission(mid,status,result)
                 event(mid,"mission_finished",{"status":status,"closure":result["closure"]})
@@ -856,7 +922,7 @@ def execute_mission(mid, request):
 
             if attempts < 2:
                 recovery += 1
-                event(mid,"recovery_started",{"attempt":recovery,"reason":"zero_sources"})
+                event(mid,"recovery_started",{"attempt":recovery,"reason":"verification_or_source_closure_not_met"})
                 adaptive_upgrade("research-provider-recovery")
                 time.sleep(0.35)
 
@@ -937,6 +1003,8 @@ def health():
             "fallback_enabled":True,
             "query_adaptation_enabled":True,
             "relevance_filter_enabled":True,
+            "strict_final_evidence_set":True,
+            "publisher_independence_enabled":True,
             "evidence_graph":True,
             "provider_count":len(PROVIDERS),
             "providers":[x[0] for x in PROVIDERS],
@@ -958,7 +1026,8 @@ def capabilities():
             "intent_routing","mission_planning","dynamic_task_graph",
             "background_execution","persistent_missions","resumability",
             "research","parallel_provider_fallback","adaptive_query_planning",
-            "source_relevance_scoring","evidence_collection","evidence_graph",
+            "source_relevance_scoring","strict_relevance_evidence_set","publisher_independence",
+            "evidence_collection","evidence_graph",
             "verification","provenance","persistent_memory","health_tracking",
             "adaptive_recovery","self_modification","runtime_policy_adaptation",
             "approval_gates","controlled_action_gateway",
