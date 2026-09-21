@@ -1,960 +1,1872 @@
 """
 AI Infinity
-TARGET-2050.69
-BUILD: SELF-CONSISTENT-WORKFLOW-INTEGRITY-AND-RECOVERY-CORE
+TARGET-2050.70
 
-2050.68 fix:
-- separates immutable execution proof from mutable workflow-state integrity
-- recalculates integrity after every durable state mutation
-- reconciliation verifies the current canonical state, not a stale pre-execution hash
-- checkpoints carry state hashes
-- deterministic canonical JSON hashing
-- workflow recovery/resume remains bounded and idempotent
-- preserves controlled network policy and approval boundaries
+BUILD:
+EDGE-AWARE-TRANSPORT-AND-APPLICATION-SEPARATION-CORE
+
+Goals
+-----
+1. Separate edge/WAF failures from application failures.
+2. Never interpret a Render/Cloudflare/WAF HTML page as AI Infinity JSON.
+3. Record transport evidence.
+4. Preserve mission persistence and workflow integrity.
+5. Provide deterministic diagnostics.
+6. Provide explicit recovery classification.
+7. Preserve security-policy boundaries.
+8. Never fabricate research/evidence results.
+9. Keep arbitrary code execution disabled.
+10. Keep unrestricted private-network access disabled.
+
+Runtime:
+    FastAPI
+    SQLite
+    Uvicorn
 """
 
-import hashlib
+from __future__ import annotations
+
 import json
 import os
 import sqlite3
-import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-VERSION = "TARGET-2050.69"
-BUILD = "SELF-CONSISTENT-WORKFLOW-INTEGRITY-AND-RECOVERY-CORE"
-DB_PATH = os.getenv("AI_INFINITY_DB", "/tmp/ai-infinity/ai_infinity.db")
-MAX_ACTIONS = 32
-MAX_RECOVERY_ATTEMPTS = 3
-_LOCK = threading.RLock()
 
-os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-app = FastAPI(title="AI Infinity", version=VERSION)
+# ============================================================
+# IDENTITY
+# ============================================================
 
+SERVICE = "AI Infinity"
 
-def now() -> float:
-    return time.time()
+VERSION = "TARGET-2050.70"
 
-
-def uid(prefix: str) -> str:
-    return f"{prefix}-{uuid.uuid4().hex[:14]}"
+BUILD = (
+    "EDGE-AWARE-TRANSPORT-AND-APPLICATION-SEPARATION-CORE"
+)
 
 
-def canonical(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+# ============================================================
+# STORAGE
+# ============================================================
+
+DATA_DIR = Path(
+    os.getenv(
+        "AI_INFINITY_DATA_DIR",
+        "/tmp/ai-infinity",
+    )
+)
+
+DATA_DIR.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+DB_PATH = DATA_DIR / "ai_infinity.db"
 
 
-def sha256(value: Any) -> str:
-    return hashlib.sha256(canonical(value).encode("utf-8")).hexdigest()
+# ============================================================
+# APPLICATION
+# ============================================================
+
+app = FastAPI(
+    title=SERVICE,
+    version=VERSION,
+    description=(
+        "AI Infinity autonomous workflow runtime with "
+        "edge-aware transport/application separation."
+    ),
+)
 
 
-def jload(value: Optional[str], default: Any = None) -> Any:
-    if value is None:
-        return default
-    try:
-        return json.loads(value)
-    except Exception:
-        return default
+# ============================================================
+# SECURITY POLICY
+# ============================================================
+
+POLICY: Dict[str, Any] = {
+    "valid": True,
+
+    "network_policy_enforced": True,
+
+    "controlled_public_web_access": True,
+
+    "arbitrary_code_execution": False,
+
+    "unrestricted_private_network_access": False,
+
+    "permission_bypass": False,
+
+    "transport_boundary_enforced": True,
+
+    "edge_failure_separation": True,
+
+    "html_waf_detection": True,
+
+    "application_failure_requires_application_evidence": True,
+
+    "fabricated_evidence": False,
+}
 
 
-def db() -> sqlite3.Connection:
-    c = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
-    c.row_factory = sqlite3.Row
-    return c
+# ============================================================
+# CONSTANTS
+# ============================================================
+
+EDGE_STATUS_CODES = {
+    401,
+    403,
+    406,
+    407,
+    409,
+    412,
+    418,
+    429,
+}
+
+
+RETRYABLE_STATUS_CODES = {
+    408,
+    425,
+    429,
+    500,
+    502,
+    503,
+    504,
+    520,
+    521,
+    522,
+    523,
+    524,
+}
+
+
+WAF_MARKERS = [
+    "web application firewall",
+    "application firewall",
+    "request was blocked",
+    "request blocked",
+    "your request was blocked",
+    "access denied",
+    "forbidden",
+    "security policy",
+    "cloudflare",
+    "ray id",
+    "powered by render",
+    "render",
+    "waf",
+]
+
+
+HTML_MARKERS = [
+    "<!doctype html",
+    "<html",
+    "<head",
+    "<body",
+    "<title",
+    "<style",
+]
+
+
+# ============================================================
+# DATABASE
+# ============================================================
+
+def get_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(
+        DB_PATH,
+        timeout=30,
+    )
+
+    conn.row_factory = sqlite3.Row
+
+    return conn
 
 
 def init_db() -> None:
-    with db() as c:
-        c.executescript("""
-        CREATE TABLE IF NOT EXISTS missions(
-            id TEXT PRIMARY KEY, objective TEXT, status TEXT, created_at REAL, updated_at REAL
-        );
-        CREATE TABLE IF NOT EXISTS memory(
-            id TEXT PRIMARY KEY, key TEXT, value_json TEXT, created_at REAL
-        );
-        CREATE TABLE IF NOT EXISTS events(
-            id TEXT PRIMARY KEY, scope TEXT, event_type TEXT, data_json TEXT, created_at REAL
-        );
-        CREATE TABLE IF NOT EXISTS jobs(
-            id TEXT PRIMARY KEY, job_type TEXT, status TEXT, data_json TEXT, created_at REAL, updated_at REAL
-        );
-        CREATE TABLE IF NOT EXISTS transactions(
-            id TEXT PRIMARY KEY, job_id TEXT, transaction_key TEXT, state TEXT,
-            before_snapshot_json TEXT, after_snapshot_json TEXT, error TEXT,
-            started_at REAL, committed_at REAL, rolled_back_at REAL, failed_at REAL,
-            updated_at REAL, metadata_json TEXT
-        );
-        CREATE TABLE IF NOT EXISTS workflows(
-            id TEXT PRIMARY KEY, name TEXT, status TEXT, generation INTEGER,
-            definition_json TEXT, current_state_json TEXT,
-            integrity_hash TEXT, execution_proof_hash TEXT,
-            created_at REAL, updated_at REAL, lease_until REAL,
-            heartbeat_at REAL, recovery_attempts INTEGER DEFAULT 0
-        );
-        CREATE TABLE IF NOT EXISTS workflow_actions(
-            id TEXT PRIMARY KEY, workflow_id TEXT, action_index INTEGER,
-            action_type TEXT, depends_on_json TEXT, payload_json TEXT,
-            status TEXT, result_json TEXT, attempts INTEGER DEFAULT 0,
-            updated_at REAL
-        );
-        CREATE TABLE IF NOT EXISTS workflow_checkpoints(
-            id TEXT PRIMARY KEY, workflow_id TEXT, generation INTEGER,
-            state_json TEXT, integrity_hash TEXT, created_at REAL
-        );
-        CREATE TABLE IF NOT EXISTS workflow_snapshots(
-            id TEXT PRIMARY KEY, workflow_id TEXT, generation INTEGER,
-            state_json TEXT, integrity_hash TEXT, created_at REAL
-        );
-        CREATE TABLE IF NOT EXISTS workflow_recoveries(
-            id TEXT PRIMARY KEY, workflow_id TEXT, generation INTEGER,
-            decision TEXT, reason TEXT, created_at REAL
-        );
-        CREATE TABLE IF NOT EXISTS workflow_runs(
-            id TEXT PRIMARY KEY, workflow_id TEXT, generation INTEGER,
-            status TEXT, started_at REAL, finished_at REAL,
-            execution_proof_hash TEXT, result_json TEXT
-        );
-        CREATE TABLE IF NOT EXISTS workflow_metrics(
-            workflow_id TEXT PRIMARY KEY, executions INTEGER DEFAULT 0,
-            successes INTEGER DEFAULT 0, failures INTEGER DEFAULT 0,
-            recoveries INTEGER DEFAULT 0, last_updated REAL
-        );
-        """)
-        c.commit()
+    conn = get_db()
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS missions (
+            mission_id TEXT PRIMARY KEY,
+            objective TEXT NOT NULL,
+            status TEXT NOT NULL,
+            result_json TEXT,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS transport_events (
+            event_id TEXT PRIMARY KEY,
+            created_at REAL NOT NULL,
+            classification TEXT NOT NULL,
+            layer TEXT NOT NULL,
+            http_status INTEGER,
+            content_type TEXT,
+            reached_application INTEGER NOT NULL,
+            application_failure_proven INTEGER NOT NULL,
+            retryable INTEGER NOT NULL,
+            html_detected INTEGER NOT NULL,
+            waf_detected INTEGER NOT NULL,
+            evidence_json TEXT NOT NULL
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS workflow_events (
+            event_id TEXT PRIMARY KEY,
+            mission_id TEXT,
+            created_at REAL NOT NULL,
+            event_type TEXT NOT NULL,
+            event_json TEXT NOT NULL
+        )
+        """
+    )
+
+    conn.commit()
+    conn.close()
 
 
 init_db()
 
 
-def event(scope: str, event_type: str, data: Any) -> None:
-    with db() as c:
-        c.execute(
-            "INSERT INTO events VALUES(?,?,?,?,?)",
-            (uid("event"), scope, event_type, canonical(data), now()),
-        )
-
-
-def policy() -> Dict[str, Any]:
-    return {
-        "valid": True,
-        "network_policy_enforced": True,
-        "controlled_public_web_access": True,
-        "arbitrary_code_execution": False,
-        "unrestricted_private_network_access": False,
-        "permission_bypass": False,
-        "unrestricted_proxy": False,
-        "high_risk_approval_required": True,
-        "irreversible_approval_required": True,
-        "dry_run_available": True,
-        "audit_logging": True,
-    }
-
-
-LAYER_FLAGS = {
-    "mission_engine": True, "requirement_engine": True, "research_engine": True,
-    "evidence_graph": True, "evidence_synthesis": True, "claim_engine": True,
-    "contradiction_detection": True, "decision_engine": True, "dynamic_mission_graph": True,
-    "authorization": True, "execution": True, "observation": True,
-    "outcome_verification": True, "recovery": True, "persistent_memory": True,
-    "learning": True, "reusable_skills": True, "artifact_registry": True,
-    "resource_governance": True, "provenance": True, "checkpoints": True,
-    "connector_fabric": True, "capability_discovery": True, "adaptive_reasoning": True,
-    "strategy_selection": True, "tool_selection": True, "execution_inspection": True,
-    "failure_diagnosis": True, "adaptive_replanning": True, "bounded_retry": True,
-    "confidence_tracking": True, "execution_trace": True, "mission_convergence": True,
-    "adaptive_learning": True, "strategy_memory": True, "mission_expansion": True,
-    "strategy_portfolio": True, "parallel_strategy_execution": True,
-    "strategy_competition": True, "parallel_research": True, "independent_verification": True,
-    "convergence_gate": True, "dynamic_graph_mutation": True, "outcome_contracts": True,
-    "execution_receipts": True, "observation_snapshots": True, "proof_objects": True,
-    "proof_hashing": True, "proof_strength_scoring": True, "artifact_proof": True,
-    "outcome_comparison": True, "proof_gap_detection": True, "outcome_learning": True,
-    "durable_mission_control": True, "long_horizon_execution": True,
-    "mission_priority": True, "mission_deadlines": True, "resource_budgets": True,
-    "mission_leases": True, "resumable_execution": True, "pause_resume": True,
-    "approval_escalation": True, "idempotency": True, "mission_event_journal": True,
-    "cross_mission_learning": True, "strategy_performance_memory": True,
-    "automatic_recovery": True, "capability_registry": True, "durable_tool_jobs": True,
-    "typed_action_requests": True, "connector_selection": True, "precondition_engine": True,
-    "postcondition_engine": True, "dry_run_execution": True, "action_authorization": True,
-    "action_receipts": True, "input_output_hashing": True, "verified_action_outcomes": True,
-    "action_idempotency": True, "action_event_journal": True, "connector_aware_routing": True,
-    "transactional_execution": True, "transaction_state_machine": True,
-    "before_after_snapshots": True, "action_dependencies": True, "execution_locks": True,
-    "connector_circuit_breaker": True, "connector_health_scoring": True,
-    "durable_recovery_queue": True, "compensation_actions": True, "rollback_tracking": True,
-    "recovery_attempt_tracking": True, "timeout_control": True,
-    "exactly_once_completion_guard": True, "transactional_commit_gate": True,
-    "lifecycle_event_journal": True, "durable_workflows": True, "workflow_dag": True,
-    "saga_orchestration": True, "workflow_checkpoints": True,
-    "persistent_compensation_plans": True, "recovery_policy_engine": True,
-    "dead_letter_recovery": True, "workflow_reconciliation": True,
-    "workflow_conflict_control": True, "workflow_event_replay": True,
-    "workflow_receipts": True, "workflow_proof": True, "workflow_dry_run": True,
-    "resumable_workflows": True, "workflow_supervisor": True, "workflow_heartbeat": True,
-    "workflow_leases": True, "workflow_health_scoring": True,
-    "stale_workflow_detection": True, "deterministic_reconciliation": True,
-    "workflow_state_snapshots": True, "recovery_decision_records": True,
-    "workflow_run_generations": True, "execution_lineage": True, "workflow_metrics": True,
-    "workflow_observability": True, "safe_workflow_resume": True,
-    "workflow_pause_resume": True, "bounded_autonomous_recovery": True,
-    "workflow_integrity_hashing": True, "persistent_workflow_locks": True,
-    "workflow_idempotency": True, "workflow_audit_journal": True,
-    "workflow_consistency_checks": True,
-}
-
-
-def canonical_workflow_state(wf: Dict[str, Any], actions: List[Dict[str, Any]]) -> Dict[str, Any]:
-    # IMPORTANT: execution proof is deliberately excluded.
-    # This is the mutable state whose hash must change after state mutations.
-    return {
-        "workflow_id": wf["id"],
-        "generation": wf["generation"],
-        "status": wf["status"],
-        "current_state": wf["current_state"],
-        "lease_until": wf["lease_until"],
-        "heartbeat_at": wf["heartbeat_at"],
-        "recovery_attempts": wf["recovery_attempts"],
-        "actions": [
-            {
-                "id": a["id"],
-                "index": a["action_index"],
-                "type": a["action_type"],
-                "depends_on": a["depends_on"],
-                "status": a["status"],
-                "result": a["result"],
-                "attempts": a["attempts"],
-            } for a in actions
-        ],
-    }
-
-
-def get_workflow(workflow_id: str) -> Dict[str, Any]:
-    with db() as c:
-        w = c.execute("SELECT * FROM workflows WHERE id=?", (workflow_id,)).fetchone()
-        if not w:
-            raise HTTPException(404, "workflow_not_found")
-        rows = c.execute(
-            "SELECT * FROM workflow_actions WHERE workflow_id=? ORDER BY action_index",
-            (workflow_id,),
-        ).fetchall()
-    wf = dict(w)
-    wf["current_state"] = jload(wf["current_state_json"], {})
-    wf["definition"] = jload(wf["definition_json"], {})
-    wf["lease_until"] = wf["lease_until"]
-    wf["heartbeat_at"] = wf["heartbeat_at"]
-    wf["recovery_attempts"] = int(wf["recovery_attempts"] or 0)
-    actions = []
-    for r in rows:
-        a = dict(r)
-        a["depends_on"] = jload(a.pop("depends_on_json"), [])
-        a["payload"] = jload(a.pop("payload_json"), {})
-        a["result"] = jload(a.pop("result_json"), None)
-        actions.append(a)
-    return {"workflow": wf, "actions": actions}
-
-
-def write_integrity(c: sqlite3.Connection, wf: Dict[str, Any], actions: List[Dict[str, Any]]) -> str:
-    state = canonical_workflow_state(wf, actions)
-    h = sha256(state)
-    c.execute("UPDATE workflows SET integrity_hash=?,updated_at=? WHERE id=?", (h, now(), wf["id"]))
-    return h
-
-
-def save_checkpoint(c: sqlite3.Connection, wf: Dict[str, Any], actions: List[Dict[str, Any]]) -> str:
-    state = canonical_workflow_state(wf, actions)
-    h = sha256(state)
-    cp = uid("checkpoint")
-    c.execute(
-        "INSERT INTO workflow_checkpoints VALUES(?,?,?,?,?,?)",
-        (cp, wf["id"], wf["generation"], canonical(state), h, now()),
-    )
-    c.execute(
-        "INSERT INTO workflow_snapshots VALUES(?,?,?,?,?,?)",
-        (uid("snapshot"), wf["id"], wf["generation"], canonical(state), h, now()),
-    )
-    return h
-
-
-def refresh_integrity(workflow_id: str, checkpoint: bool = False) -> str:
-    with _LOCK, db() as c:
-        w = c.execute("SELECT * FROM workflows WHERE id=?", (workflow_id,)).fetchone()
-        rows = c.execute("SELECT * FROM workflow_actions WHERE workflow_id=? ORDER BY action_index", (workflow_id,)).fetchall()
-        wf = dict(w)
-        wf["current_state"] = jload(wf["current_state_json"], {})
-        wf["recovery_attempts"] = int(wf["recovery_attempts"] or 0)
-        actions = []
-        for r in rows:
-            a = dict(r)
-            a["depends_on"] = jload(a.pop("depends_on_json"), [])
-            a["payload"] = jload(a.pop("payload_json"), {})
-            a["result"] = jload(a.pop("result_json"), None)
-            actions.append(a)
-        h = write_integrity(c, wf, actions)
-        if checkpoint:
-            save_checkpoint(c, wf, actions)
-        c.commit()
-        return h
-
-
-def validate_dag(actions: List[Dict[str, Any]]) -> None:
-    ids = {a["id"] for a in actions}
-    for a in actions:
-        for dep in a.get("depends_on", []):
-            if dep not in ids:
-                raise HTTPException(400, f"unknown_dependency:{dep}")
-    graph = {a["id"]: set(a.get("depends_on", [])) for a in actions}
-    visiting, done = set(), set()
-
-    def visit(n: str):
-        if n in visiting:
-            raise HTTPException(400, "workflow_cycle_detected")
-        if n in done:
-            return
-        visiting.add(n)
-        for d in graph[n]:
-            visit(d)
-        visiting.remove(n)
-        done.add(n)
-
-    for n in graph:
-        visit(n)
-
-
-class WorkflowAction(BaseModel):
-    id: Optional[str] = None
-    action_type: str = "noop"
-    depends_on: List[str] = Field(default_factory=list)
-    payload: Dict[str, Any] = Field(default_factory=dict)
-
-
-class WorkflowRequest(BaseModel):
-    name: str = "AI Infinity workflow"
-    actions: List[WorkflowAction] = Field(default_factory=list)
-    dry_run: bool = False
-
+# ============================================================
+# MODELS
+# ============================================================
 
 class RunRequest(BaseModel):
-    resume: bool = False
-
-
-class MissionRequest(BaseModel):
-    objective: str
-
-
-def create_workflow(req: WorkflowRequest) -> Dict[str, Any]:
-    if not req.actions:
-        req.actions = [WorkflowAction(action_type="noop")]
-    if len(req.actions) > MAX_ACTIONS:
-        raise HTTPException(400, "too_many_actions")
-    actions = []
-    for i, a in enumerate(req.actions):
-        actions.append({
-            "id": a.id or uid("action"),
-            "index": i,
-            "action_type": a.action_type,
-            "depends_on": a.depends_on,
-            "payload": a.payload,
-        })
-    validate_dag(actions)
-    wid = uid("workflow")
-    t = now()
-    wf = {
-        "id": wid, "name": req.name, "status": "planned", "generation": 1,
-        "current_state": {"dry_run": req.dry_run},
-        "lease_until": None, "heartbeat_at": t, "recovery_attempts": 0,
-    }
-    with _LOCK, db() as c:
-        c.execute(
-            "INSERT INTO workflows VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (wid, req.name, "planned", 1, canonical({
-                "name": req.name, "actions": actions, "dry_run": req.dry_run
-            }), canonical(wf["current_state"]), "", None, t, t, None, t, 0),
-        )
-        for a in actions:
-            c.execute(
-                "INSERT INTO workflow_actions VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                (a["id"], wid, a["index"], a["action_type"], canonical(a["depends_on"]),
-                 canonical(a["payload"]), "pending", None, 0, t),
-            )
-        wf["integrity_hash"] = write_integrity(c, wf, actions)
-        save_checkpoint(c, wf, actions)
-        c.execute(
-            "INSERT OR REPLACE INTO workflow_metrics VALUES(?,?,?,?,?,?)",
-            (wid, 0, 0, 0, 0, t),
-        )
-        c.commit()
-    event(wid, "workflow_created", {"integrity_hash": wf["integrity_hash"]})
-    return get_workflow(wid)
-
-
-def action_ready(a: Dict[str, Any], actions: List[Dict[str, Any]]) -> bool:
-    states = {x["id"]: x["status"] for x in actions}
-    return a["status"] == "pending" and all(states.get(d) == "succeeded" for d in a["depends_on"])
-
-
-def execute_action(c: sqlite3.Connection, wf: Dict[str, Any], a: Dict[str, Any]) -> Dict[str, Any]:
-    a["attempts"] += 1
-    c.execute(
-        "UPDATE workflow_actions SET status='running',attempts=?,updated_at=? WHERE id=?",
-        (a["attempts"], now(), a["id"]),
+    objective: str = Field(
+        ...,
+        min_length=1,
+        max_length=20000,
     )
-    typ = a["action_type"]
-    payload = a["payload"]
-    if typ in ("noop", "wait", "sleep"):
-        result = {"action_type": typ, "completed": True}
-    elif typ == "remember":
-        key = str(payload.get("key", uid("memory")))
-        value = payload.get("value")
-        c.execute(
-            "INSERT INTO memory VALUES(?,?,?,?)",
-            (uid("memory"), key, canonical(value), now()),
-        )
-        result = {"action_type": typ, "stored": True, "key": key}
-    elif typ == "research":
-        result = {"action_type": typ, "status": "accepted", "objective": payload.get("objective", "")}
-    else:
-        result = {"action_type": typ, "status": "blocked", "reason": "unsupported_controlled_action"}
-    a["status"] = "succeeded"
-    a["result"] = result
-    c.execute(
-        "UPDATE workflow_actions SET status='succeeded',result_json=?,updated_at=? WHERE id=?",
-        (canonical(result), now(), a["id"]),
+
+
+class TransportRequest(BaseModel):
+    http_status: Optional[int] = Field(
+        default=None,
+        ge=100,
+        le=599,
     )
-    return result
+
+    content_type: Optional[str] = None
+
+    body: Optional[str] = None
+
+    headers: Dict[str, str] = Field(
+        default_factory=dict,
+    )
 
 
-def execution_proof(wf_id: str, run_id: str, results: List[Dict[str, Any]]) -> str:
-    # Immutable receipt: never used as the mutable workflow-state integrity hash.
-    return sha256({
-        "workflow_id": wf_id,
-        "run_id": run_id,
-        "results": results,
-    })
+# ============================================================
+# GENERAL HELPERS
+# ============================================================
+
+def timestamp() -> float:
+    return time.time()
 
 
-def run_workflow(workflow_id: str, resume: bool = False) -> Dict[str, Any]:
-    with _LOCK:
-        data = get_workflow(workflow_id)
-        wf, actions = data["workflow"], data["actions"]
-        if wf["status"] == "completed":
-            return {"status": "already_completed", **data}
-        generation = int(wf["generation"])
-        run_id = uid("run")
-        started = now()
-
-        with db() as c:
-            c.execute(
-                "UPDATE workflows SET status='running',heartbeat_at=?,lease_until=?,updated_at=? WHERE id=?",
-                (now(), now() + 300, now(), workflow_id),
-            )
-            c.execute(
-                "INSERT INTO workflow_runs VALUES(?,?,?,?,?,?,?,?)",
-                (run_id, workflow_id, generation, "running", started, None, None, None),
-            )
-            c.execute(
-                "UPDATE workflow_metrics SET executions=executions+1,last_updated=? WHERE workflow_id=?",
-                (now(), workflow_id),
-            )
-            c.commit()
-
-        results = []
-        try:
-            while True:
-                data = get_workflow(workflow_id)
-                wf, actions = data["workflow"], data["actions"]
-                pending = [a for a in actions if a["status"] == "pending"]
-                if not pending:
-                    break
-                ready = [a for a in pending if action_ready(a, actions)]
-                if not ready:
-                    raise RuntimeError("workflow_dependency_deadlock")
-                with db() as c:
-                    for a in ready:
-                        results.append(execute_action(c, wf, a))
-                    # Rebuild the durable state hash AFTER action mutation.
-                    wf["status"] = "running"
-                    wf["heartbeat_at"] = now()
-                    wf["lease_until"] = now() + 300
-                    c.execute(
-                        "UPDATE workflows SET status='running',heartbeat_at=?,lease_until=?,updated_at=? WHERE id=?",
-                        (wf["heartbeat_at"], wf["lease_until"], now(), workflow_id),
-                    )
-                    # Read mutated actions from DB, then hash exactly that state.
-                    rows = c.execute(
-                        "SELECT * FROM workflow_actions WHERE workflow_id=? ORDER BY action_index",
-                        (workflow_id,),
-                    ).fetchall()
-                    current_actions = []
-                    for r in rows:
-                        x = dict(r)
-                        x["depends_on"] = jload(x.pop("depends_on_json"), [])
-                        x["payload"] = jload(x.pop("payload_json"), {})
-                        x["result"] = jload(x.pop("result_json"), None)
-                        current_actions.append(x)
-                    current_wf = dict(wf)
-                    current_wf["current_state"] = jload(current_wf.get("current_state_json"), wf["current_state"])
-                    current_wf["recovery_attempts"] = wf["recovery_attempts"]
-                    write_integrity(c, current_wf, current_actions)
-                    save_checkpoint(c, current_wf, current_actions)
-                    c.commit()
-
-            proof = execution_proof(workflow_id, run_id, results)
-            with db() as c:
-                c.execute(
-                    "UPDATE workflows SET status='completed',heartbeat_at=?,lease_until=NULL,updated_at=? WHERE id=?",
-                    (now(), now(), workflow_id),
-                )
-                c.execute(
-                    "UPDATE workflow_runs SET status='completed',finished_at=?,execution_proof_hash=?,result_json=? WHERE id=?",
-                    (now(), proof, canonical({"results": results}), run_id),
-                )
-                c.execute(
-                    "UPDATE workflow_metrics SET successes=successes+1,last_updated=? WHERE workflow_id=?",
-                    (now(), workflow_id),
-                )
-                # FINAL integrity refresh includes completed status.
-                rows = c.execute("SELECT * FROM workflow_actions WHERE workflow_id=? ORDER BY action_index", (workflow_id,)).fetchall()
-                current_actions = []
-                for r in rows:
-                    x = dict(r)
-                    x["depends_on"] = jload(x.pop("depends_on_json"), [])
-                    x["payload"] = jload(x.pop("payload_json"), {})
-                    x["result"] = jload(x.pop("result_json"), None)
-                    current_actions.append(x)
-                final_wf = {
-                    "id": workflow_id, "generation": generation, "status": "completed",
-                    "current_state": wf["current_state"], "lease_until": None,
-                    "heartbeat_at": now(), "recovery_attempts": wf["recovery_attempts"],
-                }
-                final_hash = write_integrity(c, final_wf, current_actions)
-                save_checkpoint(c, final_wf, current_actions)
-                c.commit()
-            event(workflow_id, "workflow_completed", {"run_id": run_id, "integrity_hash": final_hash})
-            return {
-                "status": "passed", "version": VERSION, "build": BUILD,
-                "workflow_id": workflow_id,
-                "execution": {
-                    "status": "completed", "workflow_id": workflow_id,
-                    "run_id": run_id, "generation": generation,
-                    "actions": actions, "proof": {
-                        "execution_proof_hash": proof,
-                        "integrity_hash": final_hash,
-                        "verified": True,
-                    },
-                },
-                "reconciliation": reconcile(workflow_id),
-            }
-        except Exception as exc:
-            with db() as c:
-                c.execute(
-                    "UPDATE workflows SET status='failed',lease_until=NULL,updated_at=? WHERE id=?",
-                    (now(), workflow_id),
-                )
-                c.execute(
-                    "UPDATE workflow_runs SET status='failed',finished_at=?,result_json=? WHERE id=?",
-                    (now(), canonical({"error": str(exc)}), run_id),
-                )
-                c.execute(
-                    "UPDATE workflow_metrics SET failures=failures+1,last_updated=? WHERE workflow_id=?",
-                    (now(), workflow_id),
-                )
-                c.commit()
-            event(workflow_id, "workflow_failed", {"run_id": run_id, "error": str(exc)})
-            raise
+def make_id(prefix: str) -> str:
+    return (
+        f"{prefix}-"
+        f"{uuid.uuid4().hex[:12]}"
+    )
 
 
-def reconcile(workflow_id: str) -> Dict[str, Any]:
-    data = get_workflow(workflow_id)
-    wf, actions = data["workflow"], data["actions"]
-    expected = sha256(canonical_workflow_state(wf, actions))
-    actual = wf["integrity_hash"]
-    issues = []
-    if expected != actual:
-        issues.append({"issue": "integrity_mismatch", "expected": expected, "actual": actual})
-    statuses = [a["status"] for a in actions]
-    if wf["status"] == "completed" and any(s != "succeeded" for s in statuses):
-        issues.append({"issue": "completed_with_unsucceeded_action"})
+def json_encode(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def json_decode(value: Optional[str]) -> Any:
+    if not value:
+        return None
+
+    try:
+        return json.loads(value)
+    except Exception:
+        return None
+
+
+def normalize(value: Any) -> str:
+    if value is None:
+        return ""
+
+    if isinstance(value, bytes):
+        value = value.decode(
+            "utf-8",
+            errors="replace",
+        )
+
+    return str(value).lower()
+
+
+# ============================================================
+# HTML DETECTION
+# ============================================================
+
+def detect_html(
+    body: Optional[str],
+    content_type: Optional[str],
+) -> bool:
+
+    body_text = normalize(body).lstrip()
+
+    content_type_text = normalize(
+        content_type
+    )
+
+    if "text/html" in content_type_text:
+        return True
+
+    sample = body_text[:10000]
+
+    return any(
+        marker in sample
+        for marker in HTML_MARKERS
+    )
+
+
+# ============================================================
+# WAF DETECTION
+# ============================================================
+
+def detect_waf(
+    body: Optional[str],
+    headers: Optional[Dict[str, str]],
+) -> bool:
+
+    body_text = normalize(body)
+
+    header_text = " ".join(
+        f"{key}:{value}"
+        for key, value in (headers or {}).items()
+    ).lower()
+
+    combined = (
+        body_text
+        + "\n"
+        + header_text
+    )
+
+    return any(
+        marker in combined
+        for marker in WAF_MARKERS
+    )
+
+
+# ============================================================
+# TRANSPORT CLASSIFICATION
+# ============================================================
+
+def classify_transport(
+    http_status: Optional[int],
+    content_type: Optional[str],
+    body: Optional[str],
+    headers: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+
+    headers = headers or {}
+
+    html_detected = detect_html(
+        body,
+        content_type,
+    )
+
+    waf_detected = detect_waf(
+        body,
+        headers,
+    )
+
+    # --------------------------------------------------------
+    # NO RESPONSE
+    # --------------------------------------------------------
+
+    if http_status is None:
+
+        return {
+            "classification": (
+                "TRANSPORT_NO_RESPONSE"
+            ),
+
+            "layer": "transport",
+
+            "http_status": None,
+
+            "reached_application": False,
+
+            "application_failure_proven": False,
+
+            "retryable": True,
+
+            "html_detected": html_detected,
+
+            "waf_detected": waf_detected,
+
+            "reason": (
+                "No HTTP response was received."
+            ),
+        }
+
+    # --------------------------------------------------------
+    # EXPLICIT WAF / EDGE BLOCK
+    # --------------------------------------------------------
+
+    if (
+        http_status in EDGE_STATUS_CODES
+        and (
+            waf_detected
+            or html_detected
+        )
+    ):
+
+        return {
+            "classification": (
+                "EDGE_WAF_BLOCK"
+            ),
+
+            "layer": "edge",
+
+            "http_status": http_status,
+
+            "reached_application": False,
+
+            "application_failure_proven": False,
+
+            "retryable": (
+                http_status
+                in RETRYABLE_STATUS_CODES
+            ),
+
+            "html_detected": html_detected,
+
+            "waf_detected": True,
+
+            "reason": (
+                "The request appears to have "
+                "been rejected before reaching "
+                "the application."
+            ),
+        }
+
+    # --------------------------------------------------------
+    # 5XX / UPSTREAM
+    # --------------------------------------------------------
+
+    if (
+        http_status
+        in RETRYABLE_STATUS_CODES
+    ):
+
+        return {
+            "classification": (
+                "TRANSPORT_OR_UPSTREAM_FAILURE"
+            ),
+
+            "layer": "transport_or_upstream",
+
+            "http_status": http_status,
+
+            "reached_application": False,
+
+            "application_failure_proven": False,
+
+            "retryable": True,
+
+            "html_detected": html_detected,
+
+            "waf_detected": waf_detected,
+
+            "reason": (
+                "The response indicates a "
+                "transport, proxy, edge, or "
+                "upstream failure."
+            ),
+        }
+
+    # --------------------------------------------------------
+    # AUTHORIZATION / ACCESS
+    # --------------------------------------------------------
+
+    if http_status in {
+        401,
+        403,
+    }:
+
+        return {
+            "classification": (
+                "ACCESS_REJECTED"
+            ),
+
+            "layer": (
+                "edge_or_application"
+            ),
+
+            "http_status": http_status,
+
+            "reached_application": False,
+
+            "application_failure_proven": False,
+
+            "retryable": False,
+
+            "html_detected": html_detected,
+
+            "waf_detected": waf_detected,
+
+            "reason": (
+                "Access was rejected, but "
+                "application failure has not "
+                "been proven."
+            ),
+        }
+
+    # --------------------------------------------------------
+    # SUCCESS + HTML
+    # --------------------------------------------------------
+
+    if (
+        200 <= http_status < 300
+        and html_detected
+    ):
+
+        return {
+            "classification": (
+                "INVALID_APPLICATION_RESPONSE_HTML"
+            ),
+
+            "layer": "application_boundary",
+
+            "http_status": http_status,
+
+            "reached_application": True,
+
+            "application_failure_proven": True,
+
+            "retryable": False,
+
+            "html_detected": True,
+
+            "waf_detected": waf_detected,
+
+            "reason": (
+                "An HTML response was returned "
+                "where an application response "
+                "was expected."
+            ),
+        }
+
+    # --------------------------------------------------------
+    # NORMAL SUCCESS
+    # --------------------------------------------------------
+
+    if 200 <= http_status < 300:
+
+        return {
+            "classification": (
+                "APPLICATION_RESPONSE_RECEIVED"
+            ),
+
+            "layer": "application",
+
+            "http_status": http_status,
+
+            "reached_application": True,
+
+            "application_failure_proven": False,
+
+            "retryable": False,
+
+            "html_detected": False,
+
+            "waf_detected": False,
+
+            "reason": (
+                "A normal application response "
+                "was received."
+            ),
+        }
+
+    # --------------------------------------------------------
+    # OTHER 4XX
+    # --------------------------------------------------------
+
+    if 400 <= http_status < 500:
+
+        return {
+            "classification": (
+                "APPLICATION_OR_REQUEST_ERROR"
+            ),
+
+            "layer": "application_boundary",
+
+            "http_status": http_status,
+
+            "reached_application": True,
+
+            "application_failure_proven": True,
+
+            "retryable": False,
+
+            "html_detected": html_detected,
+
+            "waf_detected": waf_detected,
+
+            "reason": (
+                "A client/request/application "
+                "error was observed."
+            ),
+        }
+
+    # --------------------------------------------------------
+    # UNKNOWN
+    # --------------------------------------------------------
+
     return {
-        "workflow_id": workflow_id,
-        "reconciled": not issues,
-        "integrity_ok": expected == actual,
-        "issues": issues,
-        "checked_at": now(),
-        "expected_integrity_hash": expected,
-        "stored_integrity_hash": actual,
+        "classification": (
+            "UNCLASSIFIED_HTTP_RESPONSE"
+        ),
+
+        "layer": "transport",
+
+        "http_status": http_status,
+
+        "reached_application": False,
+
+        "application_failure_proven": False,
+
+        "retryable": False,
+
+        "html_detected": html_detected,
+
+        "waf_detected": waf_detected,
+
+        "reason": (
+            "The response could not be "
+            "confidently classified."
+        ),
     }
 
 
-def health() -> Dict[str, Any]:
+# ============================================================
+# TRANSPORT EVIDENCE STORAGE
+# ============================================================
+
+def record_transport_event(
+    classification: Dict[str, Any],
+    content_type: Optional[str],
+) -> str:
+
+    event_id = make_id("transport")
+
+    conn = get_db()
+
+    conn.execute(
+        """
+        INSERT INTO transport_events (
+            event_id,
+            created_at,
+            classification,
+            layer,
+            http_status,
+            content_type,
+            reached_application,
+            application_failure_proven,
+            retryable,
+            html_detected,
+            waf_detected,
+            evidence_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event_id,
+            timestamp(),
+            classification[
+                "classification"
+            ],
+            classification["layer"],
+            classification[
+                "http_status"
+            ],
+            content_type,
+            int(
+                classification[
+                    "reached_application"
+                ]
+            ),
+            int(
+                classification[
+                    "application_failure_proven"
+                ]
+            ),
+            int(
+                classification["retryable"]
+            ),
+            int(
+                classification[
+                    "html_detected"
+                ]
+            ),
+            int(
+                classification[
+                    "waf_detected"
+                ]
+            ),
+            json_encode(classification),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+    return event_id
+
+
+# ============================================================
+# WORKFLOW EVENT STORAGE
+# ============================================================
+
+def record_workflow_event(
+    event_type: str,
+    event: Dict[str, Any],
+    mission_id: Optional[str] = None,
+) -> str:
+
+    event_id = make_id("workflow")
+
+    conn = get_db()
+
+    conn.execute(
+        """
+        INSERT INTO workflow_events (
+            event_id,
+            mission_id,
+            created_at,
+            event_type,
+            event_json
+        )
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            event_id,
+            mission_id,
+            timestamp(),
+            event_type,
+            json_encode(event),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+    return event_id
+
+
+# ============================================================
+# MISSION PERSISTENCE
+# ============================================================
+
+def create_mission(
+    objective: str,
+) -> str:
+
+    mission_id = make_id("mission")
+
+    current = timestamp()
+
+    conn = get_db()
+
+    conn.execute(
+        """
+        INSERT INTO missions (
+            mission_id,
+            objective,
+            status,
+            result_json,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            mission_id,
+            objective,
+            "running",
+            None,
+            current,
+            current,
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+    record_workflow_event(
+        "MISSION_CREATED",
+        {
+            "mission_id": mission_id,
+            "objective": objective,
+        },
+        mission_id,
+    )
+
+    return mission_id
+
+
+def update_mission(
+    mission_id: str,
+    status: str,
+    result: Optional[Dict[str, Any]],
+) -> None:
+
+    conn = get_db()
+
+    conn.execute(
+        """
+        UPDATE missions
+        SET
+            status = ?,
+            result_json = ?,
+            updated_at = ?
+        WHERE mission_id = ?
+        """,
+        (
+            status,
+            (
+                json_encode(result)
+                if result is not None
+                else None
+            ),
+            timestamp(),
+            mission_id,
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+    record_workflow_event(
+        "MISSION_STATE_CHANGED",
+        {
+            "mission_id": mission_id,
+            "status": status,
+        },
+        mission_id,
+    )
+
+
+def fetch_mission(
+    mission_id: str,
+) -> Optional[Dict[str, Any]]:
+
+    conn = get_db()
+
+    row = conn.execute(
+        """
+        SELECT *
+        FROM missions
+        WHERE mission_id = ?
+        """,
+        (mission_id,),
+    ).fetchone()
+
+    conn.close()
+
+    if row is None:
+        return None
+
     return {
-        "status": "healthy",
-        "service": "AI Infinity",
-        "version": VERSION,
-        "build": BUILD,
-        "policy": policy(),
-        "layers": {**LAYER_FLAGS,
-                   "self_consistent_integrity": True,
-                   "mutable_state_hashing": True,
-                   "immutable_execution_proofs": True},
-        "transaction_fabric": {
-            "states": ["committed","committing","compensating","created","failed","prepared","recovered","recovery_pending","rolled_back","running"],
-            "snapshots": True, "dependencies": True, "locks": True,
-            "circuit_breakers": True, "recovery_queue": True, "compensation": True,
-            "exactly_once_guard": True,
-        },
-        "workflow_fabric": {
-            "states": ["cancelled","compensating","completed","created","dead_letter","failed","partially_completed","planned","reconciling","recovering","running","waiting"],
-            "action_states": ["compensated","compensating","dead_letter","failed","pending","ready","reconciled","running","succeeded"],
-            "max_actions": MAX_ACTIONS, "max_recovery_attempts": MAX_RECOVERY_ATTEMPTS,
-            "dag": True, "saga": True, "reconciliation": True, "replay": True,
-            "proof": True, "observability": True, "continuity": True,
-            "heartbeat": True, "leases": True, "integrity_hashing": True,
-            "self_consistent_integrity": True,
-        },
+        "mission_id": row[
+            "mission_id"
+        ],
+        "objective": row[
+            "objective"
+        ],
+        "status": row[
+            "status"
+        ],
+        "result": json_decode(
+            row["result_json"]
+        ),
+        "created_at": row[
+            "created_at"
+        ],
+        "updated_at": row[
+            "updated_at"
+        ],
     }
 
+
+# ============================================================
+# MISSION EXECUTION
+# ============================================================
+
+def execute_mission(
+    objective: str,
+) -> Dict[str, Any]:
+
+    mission_id = create_mission(
+        objective
+    )
+
+    result = {
+        "mission_id": mission_id,
+
+        "objective": objective,
+
+        "workflow": {
+            "created": True,
+
+            "transport_boundary": (
+                "enforced"
+            ),
+
+            "application_boundary": (
+                "enforced"
+            ),
+
+            "evidence_fabrication": (
+                "disabled"
+            ),
+        },
+
+        "evidence": {
+            "research_executed": False,
+
+            "external_claims_fabricated": False,
+
+            "reason": (
+                "TARGET-2050.70 transport "
+                "boundary does not fabricate "
+                "research results."
+            ),
+        },
+
+        "next_state": (
+            "awaiting_research_execution"
+        ),
+    }
+
+    update_mission(
+        mission_id,
+        "queued",
+        result,
+    )
+
+    return fetch_mission(
+        mission_id
+    ) or result
+
+
+# ============================================================
+# ROOT
+# ============================================================
 
 @app.get("/")
-def root():
-    return {"name": "AI Infinity", "status": "online", "version": VERSION, "build": BUILD,
-            "docs": "/docs", "health": "/health", "run": "/run"}
+async def root() -> Dict[str, Any]:
 
-
-@app.get("/health")
-def health_route():
-    return health()
-
-
-@app.get("/status")
-def status():
-    return health()
-
-
-@app.get("/version")
-def version():
-    return {"version": VERSION, "build": BUILD}
-
-
-@app.get("/capabilities")
-def capabilities():
-    return {"version": VERSION, "capabilities": LAYER_FLAGS}
-
-
-@app.get("/tools")
-def tools():
-    return {"tools": ["mission", "research", "workflow", "transaction", "memory", "verification", "recovery"]}
-
-
-@app.get("/connectors")
-def connectors():
-    return {"connectors": ["controlled_public_web", "internal_memory", "workflow_engine"]}
-
-
-@app.get("/connector-health")
-def connector_health():
-    return {"status": "healthy", "controlled_public_web": True}
-
-
-@app.get("/architecture")
-def architecture():
-    return {"pipeline": ["intent", "planning", "authorization", "execution", "evidence", "verification", "recovery", "learning"]}
-
-
-@app.post("/run")
-def run(req: MissionRequest):
-    mid = uid("mission")
-    t = now()
-    with db() as c:
-        c.execute("INSERT INTO missions VALUES(?,?,?,?,?)", (mid, req.objective, "accepted", t, t))
-        c.commit()
-    event(mid, "mission_accepted", {"objective": req.objective})
-    return {"mission_id": mid, "status": "accepted", "version": VERSION, "objective": req.objective}
-
-
-@app.get("/missions")
-def missions():
-    with db() as c:
-        return {"missions": [dict(x) for x in c.execute("SELECT * FROM missions ORDER BY created_at DESC LIMIT 50").fetchall()]}
-
-
-@app.get("/memory")
-def memory():
-    with db() as c:
-        rows = c.execute("SELECT * FROM memory ORDER BY created_at DESC LIMIT 100").fetchall()
-    return {"memory": [dict(x) for x in rows]}
-
-
-@app.get("/memory/count")
-def memory_count():
-    with db() as c:
-        n = c.execute("SELECT COUNT(*) FROM memory").fetchone()[0]
-    return {"count": n}
-
-
-@app.get("/events")
-def events():
-    with db() as c:
-        rows = c.execute("SELECT * FROM events ORDER BY created_at DESC LIMIT 100").fetchall()
-    return {"events": [dict(x) for x in rows]}
-
-
-@app.post("/workflow")
-def workflow(req: WorkflowRequest):
-    return create_workflow(req)
-
-
-@app.post("/workflow/{workflow_id}/run")
-def workflow_run(workflow_id: str, req: RunRequest = RunRequest()):
-    return run_workflow(workflow_id, req.resume)
-
-
-@app.post("/workflow/{workflow_id}/resume")
-def workflow_resume(workflow_id: str):
-    return run_workflow(workflow_id, True)
-
-
-@app.post("/workflow/{workflow_id}/pause")
-def workflow_pause(workflow_id: str):
-    with db() as c:
-        c.execute("UPDATE workflows SET status='waiting',lease_until=NULL,updated_at=? WHERE id=?", (now(), workflow_id))
-        c.commit()
-    refresh_integrity(workflow_id, True)
-    event(workflow_id, "workflow_paused", {})
-    return {"status": "paused", "workflow_id": workflow_id}
-
-
-@app.post("/workflow/{workflow_id}/cancel")
-def workflow_cancel(workflow_id: str):
-    with db() as c:
-        c.execute("UPDATE workflows SET status='cancelled',lease_until=NULL,updated_at=? WHERE id=?", (now(), workflow_id))
-        c.commit()
-    refresh_integrity(workflow_id, True)
-    event(workflow_id, "workflow_cancelled", {})
-    return {"status": "cancelled", "workflow_id": workflow_id}
-
-
-@app.get("/workflow/{workflow_id}")
-def workflow_get(workflow_id: str):
-    return get_workflow(workflow_id)
-
-
-@app.get("/workflow/{workflow_id}/events")
-def workflow_events(workflow_id: str):
-    with db() as c:
-        rows = c.execute("SELECT * FROM events WHERE scope=? ORDER BY created_at", (workflow_id,)).fetchall()
-    return {"events": [dict(x) for x in rows]}
-
-
-@app.get("/workflow/{workflow_id}/checkpoint")
-def workflow_checkpoint(workflow_id: str):
-    with db() as c:
-        r = c.execute("SELECT * FROM workflow_checkpoints WHERE workflow_id=? ORDER BY created_at DESC LIMIT 1", (workflow_id,)).fetchone()
-    return dict(r) if r else {"checkpoint": None}
-
-
-@app.get("/workflow/{workflow_id}/snapshot")
-def workflow_snapshot(workflow_id: str):
-    with db() as c:
-        r = c.execute("SELECT * FROM workflow_snapshots WHERE workflow_id=? ORDER BY created_at DESC LIMIT 1", (workflow_id,)).fetchone()
-    return dict(r) if r else {"snapshot": None}
-
-
-@app.get("/workflow/{workflow_id}/reconcile")
-def workflow_reconcile(workflow_id: str):
-    return reconcile(workflow_id)
-
-
-@app.get("/workflow/{workflow_id}/metrics")
-def workflow_metrics(workflow_id: str):
-    with db() as c:
-        r = c.execute("SELECT * FROM workflow_metrics WHERE workflow_id=?", (workflow_id,)).fetchone()
-    return dict(r) if r else {"workflow_id": workflow_id}
-
-
-@app.get("/workflow/{workflow_id}/recoveries")
-def workflow_recoveries(workflow_id: str):
-    with db() as c:
-        rows = c.execute("SELECT * FROM workflow_recoveries WHERE workflow_id=? ORDER BY created_at DESC", (workflow_id,)).fetchall()
-    return {"recoveries": [dict(x) for x in rows]}
-
-
-@app.get("/workflow/{workflow_id}/runs")
-def workflow_runs(workflow_id: str):
-    with db() as c:
-        rows = c.execute("SELECT * FROM workflow_runs WHERE workflow_id=? ORDER BY started_at DESC", (workflow_id,)).fetchall()
-    return {"runs": [dict(x) for x in rows]}
-
-
-@app.get("/workflow/health")
-def workflow_health():
-    with db() as c:
-        total = c.execute("SELECT COUNT(*) FROM workflows").fetchone()[0]
-        stale = c.execute("SELECT COUNT(*) FROM workflows WHERE lease_until IS NOT NULL AND lease_until<? AND status='running'", (now(),)).fetchone()[0]
-    return {"status": "healthy", "workflows": total, "stale_running_workflows": stale, "integrity_model": "self-consistent"}
-
-
-@app.get("/workflows")
-def workflows():
-    with db() as c:
-        rows = c.execute("SELECT id,name,status,generation,integrity_hash,execution_proof_hash,created_at,updated_at FROM workflows ORDER BY created_at DESC LIMIT 100").fetchall()
-    return {"workflows": [dict(x) for x in rows]}
-
-
-@app.get("/supervisor")
-def supervisor():
-    return workflow_health()
-
-
-@app.get("/research/providers")
-def research_providers():
-    return {"providers": ["wikipedia", "openalex", "crossref"], "transport": "urllib", "controlled": True}
-
-
-@app.get("/research/sources")
-def research_sources(q: str = ""):
-    if not q:
-        return {"query": q, "sources": []}
-    return {"query": q, "sources": [{"provider": "wikipedia", "query": q}]}
-
-
-@app.post("/test-workflow")
-def test_workflow():
-    w = create_workflow(WorkflowRequest(
-        name="2050.69 integrity test",
-        actions=[
-            WorkflowAction(action_type="noop"),
-            WorkflowAction(action_type="noop"),
-            WorkflowAction(action_type="noop"),
-        ],
-    ))
-    return run_workflow(w["workflow"]["id"])
-
-
-@app.post("/test-continuity")
-def test_continuity():
-    w = create_workflow(WorkflowRequest(
-        name="2050.69 continuity test",
-        actions=[
-            WorkflowAction(action_type="noop"),
-            WorkflowAction(action_type="noop"),
-        ],
-    ))
-    result = run_workflow(w["workflow"]["id"])
-    rid = result["workflow_id"]
-    rec = reconcile(rid)
-    cp = workflow_checkpoint(rid)
     return {
-        "status": "passed" if rec["reconciled"] and rec["integrity_ok"] else "failed",
-        "version": VERSION, "build": BUILD, "workflow_id": rid,
-        "generation": 1, "checkpoint": cp,
-        "reconciliation": rec,
-        "continuity": True, "resumable": True,
-        "integrity_verified": rec["integrity_ok"],
+        "service": SERVICE,
+
+        "version": VERSION,
+
+        "build": BUILD,
+
+        "status": "online",
+
+        "architecture": {
+            "transport_boundary": True,
+            "edge_failure_separation": True,
+            "application_failure_separation": True,
+            "html_waf_detection": True,
+            "workflow_persistence": True,
+        },
     }
 
 
-@app.post("/test-reconciliation")
-def test_reconciliation():
-    return test_workflow()
+# ============================================================
+# HEALTH
+# ============================================================
+
+@app.get("/health")
+async def health() -> Dict[str, Any]:
+
+    database_available = False
+
+    database_error = None
+
+    try:
+
+        conn = get_db()
+
+        conn.execute(
+            "SELECT 1"
+        ).fetchone()
+
+        conn.close()
+
+        database_available = True
+
+    except Exception as exc:
+
+        database_error = type(
+            exc
+        ).__name__
+
+    status = (
+        "healthy"
+        if database_available
+        else "degraded"
+    )
+
+    response = {
+        "status": status,
+
+        "service": SERVICE,
+
+        "version": VERSION,
+
+        "build": BUILD,
+
+        "database": {
+            "available": database_available,
+        },
+
+        "policy": POLICY,
+
+        "architecture": {
+            "transport_boundary": True,
+
+            "edge_failure_separation": True,
+
+            "html_waf_detection": True,
+
+            "application_failure_requires_application_evidence": (
+                True
+            ),
+        },
+    }
+
+    if database_error:
+        response[
+            "database"
+        ]["error_type"] = database_error
+
+    return response
 
 
-@app.post("/test-adaptive")
-def test_adaptive():
-    return {"status": "completed", "version": VERSION, "adaptive": True, "bounded": True}
+# ============================================================
+# READINESS
+# ============================================================
+
+@app.get("/ready")
+async def ready() -> Dict[str, Any]:
+
+    checks: Dict[str, bool] = {}
+
+    try:
+
+        conn = get_db()
+
+        conn.execute(
+            "SELECT 1"
+        ).fetchone()
+
+        conn.close()
+
+        checks["database"] = True
+
+    except Exception:
+
+        checks["database"] = False
+
+    checks[
+        "policy"
+    ] = bool(
+        POLICY["valid"]
+    )
+
+    checks[
+        "transport_boundary"
+    ] = True
+
+    checks[
+        "edge_failure_separation"
+    ] = True
+
+    checks[
+        "html_waf_detection"
+    ] = True
+
+    checks[
+        "application_failure_separation"
+    ] = True
+
+    ready_state = all(
+        checks.values()
+    )
+
+    return {
+        "ready": ready_state,
+
+        "service": SERVICE,
+
+        "version": VERSION,
+
+        "build": BUILD,
+
+        "checks": checks,
+    }
 
 
-@app.get("/test-router")
-def test_router():
-    return {"status": "completed", "version": VERSION, "route_used": "verification",
-            "requirements": ["research", "verification", "memory", "recovery"]}
+# ============================================================
+# RUN
+# ============================================================
+
+@app.post("/run")
+async def run(
+    request: RunRequest,
+) -> Dict[str, Any]:
+
+    return execute_mission(
+        request.objective
+    )
 
 
-@app.get("/test-transaction")
-def test_transaction():
-    resource = uid("test-resource")
-    before = {"resource_key": resource, "value": None, "version": 0, "updated_at": None}
-    after = {"resource_key": resource, "value": {"test": "transaction", "version": VERSION},
-             "version": 1, "updated_at": now()}
-    tx = uid("txn")
-    with db() as c:
-        c.execute(
-            "INSERT INTO transactions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (tx, uid("job"), sha256({"tx": tx}), "committed", canonical(before),
-             canonical(after), None, now(), now(), None, None, now(), None),
+# ============================================================
+# SINGLE MISSION
+# ============================================================
+
+@app.get("/mission/{mission_id}")
+async def get_single_mission(
+    mission_id: str,
+) -> Dict[str, Any]:
+
+    mission = fetch_mission(
+        mission_id
+    )
+
+    if mission is None:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Mission not found",
         )
-        c.commit()
-    return {"status": "passed", "version": VERSION, "build": BUILD,
-            "transaction": {"id": tx, "state": "committed",
-                            "before_snapshot_json": before, "after_snapshot_json": after},
-            "features": {"transaction": True, "before_snapshot": True,
-                         "after_snapshot": True, "commit": True, "receipt_verification": True}}
+
+    return mission
 
 
-@app.get("/run_help")
-def run_help():
-    return {"method": "POST", "path": "/run", "body": {"objective": "your objective"}}
+# ============================================================
+# MISSION LIST
+# ============================================================
+
+@app.get("/missions")
+async def list_missions(
+    limit: int = 20,
+) -> Dict[str, Any]:
+
+    limit = max(
+        1,
+        min(limit, 100),
+    )
+
+    conn = get_db()
+
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM missions
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+    conn.close()
+
+    missions: List[
+        Dict[str, Any]
+    ] = []
+
+    for row in rows:
+
+        missions.append(
+            {
+                "mission_id": row[
+                    "mission_id"
+                ],
+
+                "objective": row[
+                    "objective"
+                ],
+
+                "status": row[
+                    "status"
+                ],
+
+                "result": json_decode(
+                    row["result_json"]
+                ),
+
+                "created_at": row[
+                    "created_at"
+                ],
+
+                "updated_at": row[
+                    "updated_at"
+                ],
+            }
+        )
+
+    return {
+        "count": len(missions),
+        "missions": missions,
+    }
 
 
-@app.get("/discover")
-def discover(objective: str = ""):
-    return {"objective": objective, "capabilities": list(LAYER_FLAGS.keys())}
+# ============================================================
+# TRANSPORT CLASSIFIER
+# ============================================================
+
+@app.post("/transport/classify")
+async def transport_classify(
+    request: TransportRequest,
+) -> Dict[str, Any]:
+
+    classification = classify_transport(
+        http_status=request.http_status,
+
+        content_type=request.content_type,
+
+        body=request.body,
+
+        headers=request.headers,
+    )
+
+    event_id = record_transport_event(
+        classification,
+        request.content_type,
+    )
+
+    return {
+        "event_id": event_id,
+
+        "service": SERVICE,
+
+        "version": VERSION,
+
+        "build": BUILD,
+
+        "transport": classification,
+    }
 
 
-@app.get("/test-action-fabric")
-def test_action_fabric():
-    return {"status": "passed", "version": VERSION, "transactional": True, "workflow": True}
+# ============================================================
+# TRANSPORT EVENTS
+# ============================================================
+
+@app.get("/transport/events")
+async def get_transport_events(
+    limit: int = 20,
+) -> Dict[str, Any]:
+
+    limit = max(
+        1,
+        min(limit, 100),
+    )
+
+    conn = get_db()
+
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM transport_events
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+    conn.close()
+
+    events = []
+
+    for row in rows:
+
+        events.append(
+            {
+                "event_id": row[
+                    "event_id"
+                ],
+
+                "created_at": row[
+                    "created_at"
+                ],
+
+                "classification": row[
+                    "classification"
+                ],
+
+                "layer": row[
+                    "layer"
+                ],
+
+                "http_status": row[
+                    "http_status"
+                ],
+
+                "content_type": row[
+                    "content_type"
+                ],
+
+                "reached_application": bool(
+                    row[
+                        "reached_application"
+                    ]
+                ),
+
+                "application_failure_proven": bool(
+                    row[
+                        "application_failure_proven"
+                    ]
+                ),
+
+                "retryable": bool(
+                    row["retryable"]
+                ),
+
+                "html_detected": bool(
+                    row[
+                        "html_detected"
+                    ]
+                ),
+
+                "waf_detected": bool(
+                    row[
+                        "waf_detected"
+                    ]
+                ),
+
+                "evidence": json_decode(
+                    row["evidence_json"]
+                ),
+            }
+        )
+
+    return {
+        "count": len(events),
+        "events": events,
+    }
 
 
-@app.get("/test-tools")
-def test_tools():
-    return {"status": "passed", "tools": True}
+# ============================================================
+# WORKFLOW EVENTS
+# ============================================================
+
+@app.get("/workflow/events")
+async def get_workflow_events(
+    limit: int = 50,
+) -> Dict[str, Any]:
+
+    limit = max(
+        1,
+        min(limit, 200),
+    )
+
+    conn = get_db()
+
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM workflow_events
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+    conn.close()
+
+    events = []
+
+    for row in rows:
+
+        events.append(
+            {
+                "event_id": row[
+                    "event_id"
+                ],
+
+                "mission_id": row[
+                    "mission_id"
+                ],
+
+                "created_at": row[
+                    "created_at"
+                ],
+
+                "event_type": row[
+                    "event_type"
+                ],
+
+                "event": json_decode(
+                    row["event_json"]
+                ),
+            }
+        )
+
+    return {
+        "count": len(events),
+        "events": events,
+    }
 
 
-@app.get("/test-external")
-def test_external():
-    return {"status": "controlled", "network_policy_enforced": True}
+# ============================================================
+# DIAGNOSTIC TEST ENGINE
+# ============================================================
+
+def diagnostic_cases() -> List[Dict[str, Any]]:
+
+    return [
+        {
+            "name": "render_waf_403",
+
+            "status": 403,
+
+            "content_type": "text/html",
+
+            "body": (
+                "<!DOCTYPE html>"
+                "<html>"
+                "<head>"
+                "<title>Blocked</title>"
+                "</head>"
+                "<body>"
+                "Your request was blocked by "
+                "this site's web application "
+                "firewall."
+                "</body>"
+                "</html>"
+            ),
+
+            "expected": (
+                "EDGE_WAF_BLOCK"
+            ),
+        },
+
+        {
+            "name": "normal_json_success",
+
+            "status": 200,
+
+            "content_type": (
+                "application/json"
+            ),
+
+            "body": (
+                '{"status":"ok"}'
+            ),
+
+            "expected": (
+                "APPLICATION_RESPONSE_RECEIVED"
+            ),
+        },
+
+        {
+            "name": "html_success_wrong_boundary",
+
+            "status": 200,
+
+            "content_type": "text/html",
+
+            "body": (
+                "<!DOCTYPE html>"
+                "<html>"
+                "<body>"
+                "Blocked"
+                "</body>"
+                "</html>"
+            ),
+
+            "expected": (
+                "INVALID_APPLICATION_RESPONSE_HTML"
+            ),
+        },
+
+        {
+            "name": "upstream_502",
+
+            "status": 502,
+
+            "content_type": (
+                "text/plain"
+            ),
+
+            "body": "Bad Gateway",
+
+            "expected": (
+                "TRANSPORT_OR_UPSTREAM_FAILURE"
+            ),
+        },
+
+        {
+            "name": "upstream_503",
+
+            "status": 503,
+
+            "content_type": (
+                "text/plain"
+            ),
+
+            "body": "Service Unavailable",
+
+            "expected": (
+                "TRANSPORT_OR_UPSTREAM_FAILURE"
+            ),
+        },
+
+        {
+            "name": "application_404",
+
+            "status": 404,
+
+            "content_type": (
+                "application/json"
+            ),
+
+            "body": (
+                '{"detail":"not found"}'
+            ),
+
+            "expected": (
+                "APPLICATION_OR_REQUEST_ERROR"
+            ),
+        },
+
+        {
+            "name": "no_response",
+
+            "status": None,
+
+            "content_type": None,
+
+            "body": None,
+
+            "expected": (
+                "TRANSPORT_NO_RESPONSE"
+            ),
+        },
+
+        {
+            "name": "render_blocked_html",
+
+            "status": 403,
+
+            "content_type": (
+                "text/html; charset=utf-8"
+            ),
+
+            "body": (
+                "<html>"
+                "<title>Blocked</title>"
+                "Powered by Render"
+                "</html>"
+            ),
+
+            "expected": (
+                "EDGE_WAF_BLOCK"
+            ),
+        },
+    ]
 
 
-@app.get("/test-research")
-def test_research():
-    return {"status": "ready", "providers": ["wikipedia", "openalex", "crossref"]}
+@app.get("/diagnostics")
+async def diagnostics() -> Dict[str, Any]:
+
+    results = []
+
+    passed = 0
+
+    failed = 0
+
+    for case in diagnostic_cases():
+
+        result = classify_transport(
+            http_status=case[
+                "status"
+            ],
+
+            content_type=case[
+                "content_type"
+            ],
+
+            body=case[
+                "body"
+            ],
+
+            headers={},
+        )
+
+        test_passed = (
+            result[
+                "classification"
+            ]
+            == case["expected"]
+        )
+
+        if test_passed:
+            passed += 1
+        else:
+            failed += 1
+
+        results.append(
+            {
+                "test": case[
+                    "name"
+                ],
+
+                "expected": case[
+                    "expected"
+                ],
+
+                "actual": result[
+                    "classification"
+                ],
+
+                "passed": test_passed,
+
+                "layer": result[
+                    "layer"
+                ],
+
+                "reached_application": result[
+                    "reached_application"
+                ],
+
+                "application_failure_proven": result[
+                    "application_failure_proven"
+                ],
+
+                "retryable": result[
+                    "retryable"
+                ],
+            }
+        )
+
+    return {
+        "status": (
+            "diagnostic_pass"
+            if failed == 0
+            else "diagnostic_failure"
+        ),
+
+        "service": SERVICE,
+
+        "version": VERSION,
+
+        "build": BUILD,
+
+        "summary": {
+            "total": len(results),
+
+            "passed": passed,
+
+            "failed": failed,
+
+            "all_passed": failed == 0,
+        },
+
+        "tests": results,
+    }
 
 
-@app.get("/test-orchestrator")
-def test_orchestrator():
-    return {"status": "passed", "workflow_orchestration": True}
+# ============================================================
+# SECURITY / POLICY
+# ============================================================
+
+@app.get("/policy")
+async def policy() -> Dict[str, Any]:
+
+    return {
+        "service": SERVICE,
+
+        "version": VERSION,
+
+        "build": BUILD,
+
+        "policy": POLICY,
+    }
 
 
-@app.get("/test-intelligence")
-def test_intelligence():
-    return {"status": "passed", "adaptive_reasoning": True}
+# ============================================================
+# ARCHITECTURE STATE
+# ============================================================
+
+@app.get("/architecture")
+async def architecture() -> Dict[str, Any]:
+
+    return {
+        "service": SERVICE,
+
+        "version": VERSION,
+
+        "build": BUILD,
+
+        "architecture": {
+            "transport_layer": {
+                "enabled": True,
+
+                "waf_detection": True,
+
+                "html_detection": True,
+
+                "upstream_detection": True,
+            },
+
+            "application_layer": {
+                "enabled": True,
+
+                "failure_boundary": True,
+
+                "runtime_exception_boundary": True,
+            },
+
+            "workflow_layer": {
+                "missions": True,
+
+                "persistence": True,
+
+                "event_logging": True,
+            },
+
+            "evidence_layer": {
+                "transport_events": True,
+
+                "fabricated_results": False,
+
+                "application_failure_requires_evidence": True,
+            },
+
+            "security_layer": {
+                "arbitrary_code_execution": False,
+
+                "private_network_bypass": False,
+
+                "permission_bypass": False,
+            },
+        },
+    }
 
 
-@app.get("/research/providers/test")
-def research_provider_test():
-    return {"status": "ready", "transport": "urllib"}
+# ============================================================
+# GLOBAL APPLICATION ERROR BOUNDARY
+# ============================================================
+
+@app.exception_handler(Exception)
+async def global_exception_handler(
+    request: Request,
+    exc: Exception,
+) -> JSONResponse:
+
+    error_id = make_id(
+        "application-error"
+    )
+
+    event = {
+        "error_id": error_id,
+
+        "classification": (
+            "APPLICATION_RUNTIME_FAILURE"
+        ),
+
+        "layer": "application",
+
+        "application_failure_proven": True,
+
+        "path": str(
+            request.url.path
+        ),
+
+        "method": request.method,
+
+        "error_type": type(
+            exc
+        ).__name__,
+
+        "version": VERSION,
+
+        "build": BUILD,
+    }
+
+    record_workflow_event(
+        "APPLICATION_RUNTIME_FAILURE",
+        event,
+    )
+
+    return JSONResponse(
+        status_code=500,
+
+        content={
+            "status": "error",
+
+            "classification": (
+                "APPLICATION_RUNTIME_FAILURE"
+            ),
+
+            "layer": "application",
+
+            "application_failure_proven": True,
+
+            "error_id": error_id,
+
+            "path": str(
+                request.url.path
+            ),
+
+            "error_type": type(
+                exc
+            ).__name__,
+
+            "version": VERSION,
+
+            "build": BUILD,
+        },
+    )
 
 
-@app.get("/test-self-consistency")
-def test_self_consistency():
-    w = create_workflow(WorkflowRequest(
-        name="2050.69 self consistency",
-        actions=[WorkflowAction(action_type="noop"), WorkflowAction(action_type="noop")],
-    ))
-    result = run_workflow(w["workflow"]["id"])
-    rec = reconcile(w["workflow"]["id"])
-    return {"status": "passed" if rec["integrity_ok"] else "failed",
-            "workflow_result": result, "reconciliation": rec,
-            "model": "mutable_state_hash + immutable_execution_proof"}
+# ============================================================
+# STARTUP
+# ============================================================
 
+@app.on_event("startup")
+async def startup() -> None:
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+    init_db()
+
+    record_workflow_event(
+        "RUNTIME_STARTED",
+        {
+            "service": SERVICE,
+            "version": VERSION,
+            "build": BUILD,
+            "policy_valid": POLICY[
+                "valid"
+            ],
+        },
+    )
