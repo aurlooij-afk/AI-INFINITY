@@ -1,25 +1,30 @@
 """
 AI Infinity
-TARGET-2050.73
-BUILD: SELF-CONSISTENT-DISCOVERY-AND-MISSION-STATE-RECOVERY-CORE
+TARGET-2050.74
+BUILD: RESEARCH-DISCOVERY-INTEGRITY-AND-PROVIDER-FALLBACK-CORE
 
+Drop-in single-file FastAPI build.
 Preserves:
 - typed /run contract
 - Swagger request body
-- transport/WAF classification
-- SSRF/public-network protection
 - SQLite persistence
 - workflow events
-- evidence validation
-- truthful completion gate
-- recovery
-- inspection endpoints
-
-Fixes:
-- DDG redirect discovery
-- free public discovery fallbacks
 - mission state reconciliation
-- stale queued mission state
+- public-network/SSRF protection
+- transport/WAF classification
+- evidence storage
+- truthful completion gate
+- recovery/retry
+- diagnostics/inspection endpoints
+
+Adds:
+- search-result URL integrity firewall
+- Bing/DDG infrastructure-asset rejection
+- provider-aware discovery
+- canonical URL handling
+- OpenAlex/Crossref fallback
+- provider fallback when a provider yields invalid infrastructure
+- research-source validation separate from transport validation
 """
 
 from __future__ import annotations
@@ -36,7 +41,6 @@ import sqlite3
 import threading
 import time
 import uuid
-
 from typing import Any, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import (
@@ -45,152 +49,79 @@ from urllib.parse import (
     unquote,
     urljoin,
     urlparse,
+    urlunparse,
 )
-from urllib.request import (
-    HTTPRedirectHandler,
-    ProxyHandler,
-    Request as URLRequest,
-    build_opener,
-)
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request as URLRequest, build_opener
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 
-# ============================================================
-# IDENTITY
-# ============================================================
+VERSION = "TARGET-2050.74"
+BUILD = "RESEARCH-DISCOVERY-INTEGRITY-AND-PROVIDER-FALLBACK-CORE"
 
-VERSION = "TARGET-2050.73"
-BUILD = "SELF-CONSISTENT-DISCOVERY-AND-MISSION-STATE-RECOVERY-CORE"
-
-DATA_DIR = os.environ.get(
-    "AI_INFINITY_DATA_DIR",
-    "/tmp/ai-infinity",
-)
-
-DB_PATH = os.path.join(
-    DATA_DIR,
-    "ai_infinity.db",
-)
+DATA_DIR = os.environ.get("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity")
+DB_PATH = os.path.join(DATA_DIR, "ai_infinity.db")
 
 MAX_BODY = 1_500_000
 FETCH_TIMEOUT = 10.0
-MAX_SOURCES = 8
 MAX_REDIRECTS = 4
+MAX_SOURCES = 12
+MIN_TEXT = 250
 
 DB_LOCK = threading.RLock()
-
-
-# ============================================================
-# APP
-# ============================================================
 
 app = FastAPI(
     title="AI Infinity",
     version=VERSION,
-    description=(
-        "AI Infinity autonomous research, evidence, "
-        "verification, transport and recovery core."
-    ),
+    description="Autonomous research, evidence, transport and recovery core.",
 )
 
 
-# ============================================================
-# REQUEST CONTRACTS
-# ============================================================
-
 class RunRequest(BaseModel):
-    objective: str = Field(
-        ...,
-        min_length=1,
-        max_length=20000,
-        description="Mission objective",
-    )
-
-
-class TransportRequest(BaseModel):
-    http_status: Optional[int] = Field(
-        None,
-        ge=100,
-        le=599,
-    )
-    content_type: Optional[str] = None
-    body: Optional[str] = None
-    headers: dict[str, str] = Field(
-        default_factory=dict
-    )
+    objective: str = Field(..., min_length=1, max_length=20000, description="Mission objective")
 
 
 class MissionCreateRequest(BaseModel):
-    objective: str = Field(
-        ...,
-        min_length=1,
-        max_length=20000,
-    )
+    objective: str = Field(..., min_length=1, max_length=20000)
 
 
-# ============================================================
-# BASIC HELPERS
-# ============================================================
+class TransportRequest(BaseModel):
+    http_status: Optional[int] = Field(None, ge=100, le=599)
+    content_type: Optional[str] = None
+    body: Optional[str] = None
+    headers: dict[str, str] = Field(default_factory=dict)
+
 
 def now() -> float:
     return time.time()
 
 
 def make_id(prefix: str) -> str:
-    return (
-        f"{prefix}-{uuid.uuid4().hex[:12]}"
-    )
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
 
-def sha256(value: Any) -> str:
-    if isinstance(value, bytes):
-        raw = value
-    else:
-        raw = str(value).encode(
-            "utf-8",
-            "ignore",
-        )
-
+def digest(value: Any) -> str:
+    raw = value if isinstance(value, bytes) else str(value).encode("utf-8", "ignore")
     return hashlib.sha256(raw).hexdigest()
 
 
-def json_text(value: Any) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        default=str,
-    )
+def jdump(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, default=str)
 
 
-# ============================================================
-# DATABASE
-# ============================================================
-
-def get_db() -> sqlite3.Connection:
-    os.makedirs(
-        DATA_DIR,
-        exist_ok=True,
-    )
-
-    connection = sqlite3.connect(
-        DB_PATH,
-        timeout=30,
-        check_same_thread=False,
-    )
-
-    connection.row_factory = sqlite3.Row
-
-    return connection
+def db() -> sqlite3.Connection:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    c = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    c.row_factory = sqlite3.Row
+    return c
 
 
 def init_db() -> None:
-    with DB_LOCK, get_db() as connection:
-
-        connection.executescript(
+    with DB_LOCK, db() as c:
+        c.executescript(
             """
-            CREATE TABLE IF NOT EXISTS missions (
+            CREATE TABLE IF NOT EXISTS missions(
                 id TEXT PRIMARY KEY,
                 objective TEXT NOT NULL,
                 status TEXT NOT NULL,
@@ -199,8 +130,7 @@ def init_db() -> None:
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             );
-
-            CREATE TABLE IF NOT EXISTS workflow_events (
+            CREATE TABLE IF NOT EXISTS workflow_events(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 mission_id TEXT,
                 event TEXT NOT NULL,
@@ -208,8 +138,7 @@ def init_db() -> None:
                 detail_json TEXT,
                 created_at REAL NOT NULL
             );
-
-            CREATE TABLE IF NOT EXISTS transport_events (
+            CREATE TABLE IF NOT EXISTS transport_events(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 mission_id TEXT,
                 url TEXT,
@@ -217,8 +146,7 @@ def init_db() -> None:
                 detail_json TEXT,
                 created_at REAL NOT NULL
             );
-
-            CREATE TABLE IF NOT EXISTS evidence (
+            CREATE TABLE IF NOT EXISTS evidence(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 mission_id TEXT NOT NULL,
                 url TEXT NOT NULL,
@@ -227,649 +155,210 @@ def init_db() -> None:
                 text TEXT,
                 content_digest TEXT,
                 source_family TEXT,
+                provider TEXT,
                 created_at REAL NOT NULL
             );
-
-            CREATE TABLE IF NOT EXISTS claims (
+            CREATE TABLE IF NOT EXISTS claims(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 mission_id TEXT NOT NULL,
                 claim TEXT NOT NULL,
                 evidence_count INTEGER NOT NULL,
                 created_at REAL NOT NULL
             );
-
-            CREATE TABLE IF NOT EXISTS contradictions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                mission_id TEXT NOT NULL,
-                statement TEXT NOT NULL,
-                created_at REAL NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_missions_updated
-            ON missions(updated_at);
-
-            CREATE INDEX IF NOT EXISTS idx_events_mission
-            ON workflow_events(mission_id);
-
-            CREATE INDEX IF NOT EXISTS idx_transport_mission
-            ON transport_events(mission_id);
-
-            CREATE INDEX IF NOT EXISTS idx_evidence_mission
-            ON evidence(mission_id);
+            CREATE INDEX IF NOT EXISTS idx_events_mission ON workflow_events(mission_id);
+            CREATE INDEX IF NOT EXISTS idx_transport_mission ON transport_events(mission_id);
+            CREATE INDEX IF NOT EXISTS idx_evidence_mission ON evidence(mission_id);
             """
+        )
+        # Upgrade older 2050.73 databases without destroying data.
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(evidence)").fetchall()}
+        if "provider" not in cols:
+            c.execute("ALTER TABLE evidence ADD COLUMN provider TEXT")
+
+
+def event(mission_id: str, name: str, phase: str, detail: Any = None) -> None:
+    with DB_LOCK, db() as c:
+        c.execute(
+            """INSERT INTO workflow_events
+               (mission_id,event,phase,detail_json,created_at)
+               VALUES(?,?,?,?,?)""",
+            (mission_id, name, phase, jdump(detail) if detail is not None else None, now()),
         )
 
 
-# ============================================================
-# EVENTS
-# ============================================================
-
-def write_event(
-    mission_id: str,
-    event_name: str,
-    phase: str,
-    detail: Any = None,
-) -> None:
-
-    detail_json = (
-        json_text(detail)
-        if detail is not None
-        else None
-    )
-
-    with DB_LOCK, get_db() as connection:
-
-        connection.execute(
-            """
-            INSERT INTO workflow_events
-            (
-                mission_id,
-                event,
-                phase,
-                detail_json,
-                created_at
-            )
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                mission_id,
-                event_name,
-                phase,
-                detail_json,
-                now(),
-            ),
+def transport_event(mission_id: Optional[str], url: str, result: dict[str, Any]) -> None:
+    with DB_LOCK, db() as c:
+        c.execute(
+            """INSERT INTO transport_events
+               (mission_id,url,classification,detail_json,created_at)
+               VALUES(?,?,?,?,?)""",
+            (mission_id, url, result["classification"], jdump(result), now()),
         )
 
 
-def write_transport_event(
-    mission_id: Optional[str],
-    url: str,
-    result: dict[str, Any],
-) -> None:
+def create_mission(objective: str) -> str:
+    mid = make_id("mission")
+    t = now()
+    with DB_LOCK, db() as c:
+        c.execute(
+            """INSERT INTO missions
+               (id,objective,status,phase,result_json,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?)""",
+            (mid, objective, "queued", "queued", None, t, t),
+        )
+    event(mid, "mission_created", "queued", {"objective_length": len(objective)})
+    return mid
 
-    with DB_LOCK, get_db() as connection:
 
-        connection.execute(
-            """
-            INSERT INTO transport_events
-            (
-                mission_id,
-                url,
-                classification,
-                detail_json,
-                created_at
-            )
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                mission_id,
-                url,
-                result["classification"],
-                json_text(result),
-                now(),
-            ),
+def update_mission(mid: str, status: str, phase: str, result: Any = None) -> None:
+    with DB_LOCK, db() as c:
+        c.execute(
+            """UPDATE missions
+               SET status=?,phase=?,result_json=?,updated_at=?
+               WHERE id=?""",
+            (status, phase, jdump(result) if result is not None else None, now(), mid),
         )
 
 
-# ============================================================
-# MISSION STORAGE
-# ============================================================
-
-def create_mission(
-    objective: str,
-) -> str:
-
-    mission_id = make_id("mission")
-    timestamp = now()
-
-    with DB_LOCK, get_db() as connection:
-
-        connection.execute(
-            """
-            INSERT INTO missions
-            (
-                id,
-                objective,
-                status,
-                phase,
-                result_json,
-                created_at,
-                updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                mission_id,
-                objective,
-                "queued",
-                "queued",
-                None,
-                timestamp,
-                timestamp,
-            ),
-        )
-
-    write_event(
-        mission_id,
-        "mission_created",
-        "queued",
-        {
-            "objective_length": len(
-                objective
-            )
-        },
-    )
-
-    return mission_id
-
-
-def update_mission(
-    mission_id: str,
-    status: str,
-    phase: str,
-    result: Any = None,
-) -> None:
-
-    result_json = (
-        json_text(result)
-        if result is not None
-        else None
-    )
-
-    with DB_LOCK, get_db() as connection:
-
-        connection.execute(
-            """
-            UPDATE missions
-            SET
-                status = ?,
-                phase = ?,
-                result_json = ?,
-                updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                status,
-                phase,
-                result_json,
-                now(),
-                mission_id,
-            ),
-        )
-
-
-# ============================================================
-# MISSION STATE RECONCILIATION
-#
-# This is the important 2050.72 repair.
-# Workflow events are the audit trail.
-# The mission row is synchronized from the latest
-# authoritative lifecycle event when necessary.
-# ============================================================
-
-TERMINAL_EVENT_MAP = {
-    "mission_completed": (
-        "completed",
-        "closed",
-    ),
-    "mission_recovery_required": (
-        "needs_recovery",
-        "recovery",
-    ),
-    "mission_failed": (
-        "failed",
-        "recovery",
-    ),
+TERMINAL_MAP = {
+    "mission_completed": ("completed", "closed"),
+    "mission_recovery_required": ("needs_recovery", "recovery"),
+    "mission_failed": ("failed", "recovery"),
 }
 
 
-def reconcile_mission(
-    mission_id: str,
-) -> None:
-
-    with DB_LOCK, get_db() as connection:
-
-        mission = connection.execute(
-            """
-            SELECT *
-            FROM missions
-            WHERE id = ?
-            """,
-            (mission_id,),
+def reconcile(mid: str) -> None:
+    with DB_LOCK, db() as c:
+        mission = c.execute("SELECT * FROM missions WHERE id=?", (mid,)).fetchone()
+        latest = c.execute(
+            """SELECT event,phase,detail_json FROM workflow_events
+               WHERE mission_id=? ORDER BY id DESC LIMIT 1""",
+            (mid,),
         ).fetchone()
-
-        if not mission:
-            return
-
-        latest = connection.execute(
-            """
-            SELECT
-                event,
-                phase,
-                detail_json,
-                created_at
-            FROM workflow_events
-            WHERE mission_id = ?
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (mission_id,),
-        ).fetchone()
-
-    if not latest:
+    if not mission or not latest or latest["event"] not in TERMINAL_MAP:
         return
-
-    event_name = latest["event"]
-
-    if event_name not in TERMINAL_EVENT_MAP:
+    status, phase = TERMINAL_MAP[latest["event"]]
+    if mission["status"] == status:
         return
-
-    status, phase = TERMINAL_EVENT_MAP[
-        event_name
-    ]
-
-    current_status = mission["status"]
-
-    if current_status == status:
-        return
-
     detail = None
-
     if latest["detail_json"]:
         try:
-            detail = json.loads(
-                latest["detail_json"]
-            )
+            detail = json.loads(latest["detail_json"])
         except Exception:
             detail = None
-
-    update_mission(
-        mission_id,
-        status,
-        phase,
-        detail,
-    )
+    update_mission(mid, status, phase, detail)
 
 
-def get_mission(
-    mission_id: str,
-) -> Optional[dict[str, Any]]:
-
-    reconcile_mission(
-        mission_id
-    )
-
-    with DB_LOCK, get_db() as connection:
-
-        row = connection.execute(
-            """
-            SELECT *
-            FROM missions
-            WHERE id = ?
-            """,
-            (mission_id,),
-        ).fetchone()
-
+def get_mission(mid: str) -> Optional[dict[str, Any]]:
+    reconcile(mid)
+    with DB_LOCK, db() as c:
+        row = c.execute("SELECT * FROM missions WHERE id=?", (mid,)).fetchone()
     if not row:
         return None
-
-    result = dict(row)
-
-    raw_result = result.pop(
-        "result_json",
-        None,
-    )
-
-    if raw_result:
-        try:
-            result["result"] = json.loads(
-                raw_result
-            )
-        except Exception:
-            result["result"] = raw_result
-    else:
-        result["result"] = None
-
-    return result
-
-
-# ============================================================
-# PUBLIC NETWORK POLICY
-# ============================================================
-
-def public_ip(
-    value: str,
-) -> bool:
-
+    out = dict(row)
+    raw = out.pop("result_json", None)
     try:
-        address = ipaddress.ip_address(
-            value
-        )
+        out["result"] = json.loads(raw) if raw else None
+    except Exception:
+        out["result"] = raw
+    return out
 
+
+def public_ip(value: str) -> bool:
+    try:
+        a = ipaddress.ip_address(value)
         return not (
-            address.is_private
-            or address.is_loopback
-            or address.is_link_local
-            or address.is_multicast
-            or address.is_reserved
-            or address.is_unspecified
+            a.is_private or a.is_loopback or a.is_link_local or
+            a.is_multicast or a.is_reserved or a.is_unspecified
         )
-
     except ValueError:
         return False
 
 
-def validate_public_url(
-    url: str,
-) -> tuple[bool, str]:
-
+def validate_public_url(url: str) -> tuple[bool, str]:
     try:
-
-        parsed = urlparse(url)
-
-        if parsed.scheme not in (
-            "http",
-            "https",
-        ):
-            return (
-                False,
-                "Only HTTP/HTTPS is allowed.",
-            )
-
-        if not parsed.hostname:
-            return (
-                False,
-                "Missing hostname.",
-            )
-
-        if (
-            parsed.username
-            or parsed.password
-        ):
-            return (
-                False,
-                "Credential-bearing URL blocked.",
-            )
-
-        hostname = (
-            parsed.hostname
-            .rstrip(".")
-            .lower()
-        )
-
-        if (
-            hostname == "localhost"
-            or hostname.endswith(".local")
-        ):
-            return (
-                False,
-                "Local hostname blocked.",
-            )
-
-        port = (
-            parsed.port
-            or (
-                443
-                if parsed.scheme == "https"
-                else 80
-            )
-        )
-
-        infos = socket.getaddrinfo(
-            hostname,
-            port,
-            type=socket.SOCK_STREAM,
-        )
-
-        addresses = {
-            item[4][0]
-            for item in infos
-        }
-
+        p = urlparse(url)
+        if p.scheme not in ("http", "https"):
+            return False, "Only HTTP/HTTPS is allowed."
+        if not p.hostname:
+            return False, "Missing hostname."
+        if p.username or p.password:
+            return False, "Credential-bearing URL blocked."
+        host = p.hostname.rstrip(".").lower()
+        if host == "localhost" or host.endswith(".local"):
+            return False, "Local hostname blocked."
+        port = p.port or (443 if p.scheme == "https" else 80)
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        addresses = {x[4][0] for x in infos}
         if not addresses:
-            return (
-                False,
-                "No DNS address.",
-            )
-
-        for address in addresses:
-
-            if not public_ip(address):
-                return (
-                    False,
-                    "Non-public address blocked.",
-                )
-
+            return False, "No DNS address."
+        if any(not public_ip(a) for a in addresses):
+            return False, "Non-public address blocked."
         return True, "ok"
-
     except Exception as exc:
-
-        return (
-            False,
-            str(exc),
-        )
+        return False, str(exc)
 
 
-# ============================================================
-# SAFE FETCH
-# ============================================================
-
-class NoRedirect(
-    HTTPRedirectHandler
-):
-
-    def redirect_request(
-        self,
-        req,
-        fp,
-        code,
-        msg,
-        headers,
-        newurl,
-    ):
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
 
 
-def fetch(
-    url: str,
-) -> dict[str, Any]:
-
+def fetch(url: str) -> dict[str, Any]:
     current = url
+    opener = build_opener(ProxyHandler({}), NoRedirect())
 
-    opener = build_opener(
-        ProxyHandler({}),
-        NoRedirect(),
-    )
-
-    for _ in range(
-        MAX_REDIRECTS + 1
-    ):
-
-        valid, reason = (
-            validate_public_url(
-                current
-            )
-        )
-
+    for _ in range(MAX_REDIRECTS + 1):
+        valid, reason = validate_public_url(current)
         if not valid:
+            return {"ok": False, "url": current, "http_status": None, "headers": {}, "body": "", "error": reason}
 
-            return {
-                "ok": False,
-                "url": current,
-                "http_status": None,
-                "headers": {},
-                "body": "",
-                "error": reason,
-            }
-
-        request = URLRequest(
+        req = URLRequest(
             current,
             headers={
-                "User-Agent": (
-                    "AI-Infinity/2050.73 "
-                    "research"
-                ),
-                "Accept": (
-                    "text/html,text/plain,"
-                    "application/json,"
-                    "application/xhtml+xml"
-                ),
+                "User-Agent": "AI-Infinity/2050.74 research",
+                "Accept": "text/html,text/plain,application/json,application/xhtml+xml",
             },
         )
 
         try:
-
-            with opener.open(
-                request,
-                timeout=FETCH_TIMEOUT,
-            ) as response:
-
-                status = getattr(
-                    response,
-                    "status",
-                    200,
-                )
-
-                headers = {
-                    key.lower(): value
-                    for key, value
-                    in response.headers.items()
-                }
-
-                body = response.read(
-                    MAX_BODY + 1
-                )
-
+            with opener.open(req, timeout=FETCH_TIMEOUT) as response:
+                headers = {k.lower(): v for k, v in response.headers.items()}
+                body = response.read(MAX_BODY + 1)
                 if len(body) > MAX_BODY:
                     body = body[:MAX_BODY]
-
                 return {
                     "ok": True,
                     "url": current,
-                    "http_status": status,
+                    "http_status": getattr(response, "status", 200),
                     "headers": headers,
-                    "body": body.decode(
-                        "utf-8",
-                        "replace",
-                    ),
+                    "body": body.decode("utf-8", "replace"),
                     "error": None,
                 }
-
         except HTTPError as exc:
-
-            headers = {
-                key.lower(): value
-                for key, value
-                in (
-                    exc.headers.items()
-                    if exc.headers
-                    else []
-                )
-            }
-
-            body = ""
-
+            headers = {k.lower(): v for k, v in exc.headers.items()} if exc.headers else {}
             try:
-                body = exc.read(
-                    MAX_BODY + 1
-                ).decode(
-                    "utf-8",
-                    "replace",
-                )
+                body = exc.read(MAX_BODY + 1).decode("utf-8", "replace")
             except Exception:
-                pass
-
-            location = headers.get(
-                "location"
-            )
-
-            if (
-                exc.code
-                in (
-                    301,
-                    302,
-                    303,
-                    307,
-                    308,
-                )
-                and location
-            ):
-
-                current = urljoin(
-                    current,
-                    location,
-                )
-
+                body = ""
+            location = headers.get("location")
+            if exc.code in (301, 302, 303, 307, 308) and location:
+                current = urljoin(current, location)
                 continue
-
-            return {
-                "ok": False,
-                "url": current,
-                "http_status": exc.code,
-                "headers": headers,
-                "body": body,
-                "error": str(exc),
-            }
-
-        except (
-            URLError,
-            TimeoutError,
-            OSError,
-        ) as exc:
-
-            return {
-                "ok": False,
-                "url": current,
-                "http_status": None,
-                "headers": {},
-                "body": "",
-                "error": str(exc),
-            }
-
+            return {"ok": False, "url": current, "http_status": exc.code, "headers": headers, "body": body, "error": str(exc)}
+        except (URLError, TimeoutError, OSError) as exc:
+            return {"ok": False, "url": current, "http_status": None, "headers": {}, "body": "", "error": str(exc)}
         except Exception as exc:
+            return {"ok": False, "url": current, "http_status": None, "headers": {}, "body": "", "error": str(exc)}
 
-            return {
-                "ok": False,
-                "url": current,
-                "http_status": None,
-                "headers": {},
-                "body": "",
-                "error": str(exc),
-            }
-
-    return {
-        "ok": False,
-        "url": current,
-        "http_status": None,
-        "headers": {},
-        "body": "",
-        "error": "redirect limit exceeded",
-    }
+    return {"ok": False, "url": current, "http_status": None, "headers": {}, "body": "", "error": "redirect limit exceeded"}
 
 
-# ============================================================
-# TRANSPORT CLASSIFIER
-# ============================================================
+WAF_MARKERS = (
+    "waf", "request blocked", "access denied", "forbidden",
+    "cloudflare", "captcha", "web application firewall", "blocked",
+)
+
 
 def classify_transport(
     http_status: Optional[int],
@@ -877,899 +366,448 @@ def classify_transport(
     body: Optional[str],
     headers: dict[str, str],
 ) -> dict[str, Any]:
-
-    text = (
-        body or ""
-    )[:MAX_BODY]
-
+    text = (body or "")[:MAX_BODY]
     lowered = text.lower()
+    h = {str(k).lower(): str(v) for k, v in headers.items()}
+    ctype = (content_type or h.get("content-type", "")).lower()
 
-    normalized_headers = {
-        str(key).lower(): str(value)
-        for key, value
-        in headers.items()
-    }
-
-    ctype = (
-        content_type
-        or normalized_headers.get(
-            "content-type",
-            "",
-        )
-    ).lower()
-
-    waf_markers = (
-        "waf",
-        "request blocked",
-        "access denied",
-        "forbidden",
-        "cloudflare",
-        "captcha",
-        "web application firewall",
-        "blocked",
-    )
-
-    if (
-        http_status
-        in (
-            401,
-            403,
-            406,
-            429,
-        )
-        and any(
-            marker in lowered
-            for marker in waf_markers
-        )
-    ):
-
-        classification = (
-            "EDGE_WAF_BLOCK"
-        )
-
-        reason = (
-            "HTTP edge/WAF block page detected; "
-            "response is not research evidence."
-        )
-
-    elif (
-        http_status is not None
-        and http_status >= 500
-    ):
-
-        classification = (
-            "UPSTREAM_5XX"
-        )
-
-        reason = (
-            "Upstream server failure; "
-            "response is not research evidence."
-        )
-
+    if http_status in (401, 403, 406, 429) and any(x in lowered for x in WAF_MARKERS):
+        classification, reason = "EDGE_WAF_BLOCK", "HTTP edge/WAF block page detected; response is not research evidence."
+    elif http_status is not None and http_status >= 500:
+        classification, reason = "UPSTREAM_5XX", "Upstream server failure; response is not research evidence."
     elif not text.strip():
-
-        classification = (
-            "EMPTY_RESPONSE"
-        )
-
-        reason = (
-            "Empty response is not research evidence."
-        )
-
-    elif (
-        "text/html" in ctype
-        and any(
-            marker in lowered
-            for marker in waf_markers
-        )
-    ):
-
-        classification = (
-            "BLOCKED_HTML"
-        )
-
-        reason = (
-            "HTML block/interstitial detected; "
-            "response is not research evidence."
-        )
-
-    elif ctype.startswith(
-        (
-            "image/",
-            "audio/",
-            "video/",
-            "application/octet-stream",
-        )
-    ):
-
-        classification = (
-            "OPAQUE_ASSET"
-        )
-
-        reason = (
-            "Opaque binary asset is not research evidence."
-        )
-
-    elif (
-        http_status is not None
-        and 200 <= http_status < 400
-        and text.strip()
-    ):
-
-        classification = (
-            "VALID_PUBLIC_CONTENT"
-        )
-
-        reason = (
-            "Public response contains usable textual content."
-        )
-
+        classification, reason = "EMPTY_RESPONSE", "Empty response is not research evidence."
+    elif "text/html" in ctype and any(x in lowered for x in WAF_MARKERS):
+        classification, reason = "BLOCKED_HTML", "HTML block/interstitial detected; response is not research evidence."
+    elif ctype.startswith(("image/", "audio/", "video/", "application/octet-stream")):
+        classification, reason = "OPAQUE_ASSET", "Opaque binary asset is not research evidence."
+    elif http_status is not None and 200 <= http_status < 400 and text.strip():
+        classification, reason = "VALID_PUBLIC_CONTENT", "Public response contains usable textual content."
     else:
+        classification, reason = "UNVERIFIED_RESPONSE", "Response could not be safely classified as research evidence."
 
-        classification = (
-            "UNVERIFIED_RESPONSE"
-        )
-
-        reason = (
-            "Response could not be safely classified "
-            "as research evidence."
-        )
-
-    usable = (
-        classification
-        == "VALID_PUBLIC_CONTENT"
-    )
-
+    usable = classification == "VALID_PUBLIC_CONTENT"
     return {
         "classification": classification,
-        "edge_failure": classification
-        in {
-            "EDGE_WAF_BLOCK",
-            "BLOCKED_HTML",
-        },
-        "application_failure": (
-            classification
-            == "UPSTREAM_5XX"
-        ),
+        "edge_failure": classification in {"EDGE_WAF_BLOCK", "BLOCKED_HTML"},
+        "application_failure": classification == "UPSTREAM_5XX",
         "is_evidence": usable,
         "usable_for_research": usable,
         "http_status": http_status,
         "content_type": ctype,
         "reason": reason,
-        "digest": sha256(text),
+        "digest": digest(text),
     }
 
 
-# ============================================================
-# HTML
-# ============================================================
-
-def clean_html(
-    value: str,
-) -> str:
-
-    value = re.sub(
-        r"(?is)"
-        r"<script[^>]*>.*?</script>"
-        r"|<style[^>]*>.*?</style>"
-        r"|<noscript[^>]*>.*?</noscript>",
-        " ",
-        value,
-    )
-
-    value = re.sub(
-        r"(?s)<[^>]+>",
-        " ",
-        value,
-    )
-
-    return re.sub(
-        r"\s+",
-        " ",
-        html.unescape(value),
-    ).strip()
+def clean_html(value: str) -> str:
+    value = re.sub(r"(?is)<script[^>]*>.*?</script>|<style[^>]*>.*?</style>|<noscript[^>]*>.*?</noscript>", " ", value)
+    value = re.sub(r"(?s)<[^>]+>", " ", value)
+    return re.sub(r"\s+", " ", html.unescape(value)).strip()
 
 
-def title_from_html(
-    value: str,
-) -> str:
-
-    match = re.search(
-        r"(?is)<title[^>]*>(.*?)</title>",
-        value,
-    )
-
-    if not match:
-        return ""
-
-    return clean_html(
-        match.group(1)
-    )[:500]
+def title_from_html(value: str) -> str:
+    m = re.search(r"(?is)<title[^>]*>(.*?)</title>", value)
+    return clean_html(m.group(1))[:500] if m else ""
 
 
-# ============================================================
-# DISCOVERY
-#
-# 2050.72 problem:
-# DDG results can be wrapped in:
-# /l/?uddg=<encoded-real-url>
-#
-# 2050.73 decodes those links.
-# ============================================================
+# -----------------------------
+# DISCOVERY INTEGRITY FIREWALL
+# -----------------------------
 
-def normalize_candidate_url(
-    value: str,
-) -> Optional[str]:
+ASSET_EXTENSIONS = (
+    ".css", ".js", ".mjs", ".map", ".png", ".jpg", ".jpeg", ".gif",
+    ".svg", ".ico", ".webp", ".woff", ".woff2", ".ttf", ".eot",
+    ".mp3", ".mp4", ".webm", ".avi", ".zip", ".gz", ".bin",
+)
 
-    value = html.unescape(
-        value.strip()
-    )
+INFRASTRUCTURE_HOSTS = {
+    "r.bing.com",
+    "th.bing.com",
+    "cc.bingj.com",
+    "bat.bing.com",
+    "c.bing.com",
+    "bing.com",
+    "www.bing.com",
+    "duckduckgo.com",
+    "html.duckduckgo.com",
+    "links.duckduckgo.com",
+}
 
+TRACKING_HOST_PARTS = (
+    "doubleclick.net", "googlesyndication.com", "googleadservices.com",
+)
+
+
+def registrable_family(host: str) -> str:
+    host = host.lower().rstrip(".")
+    parts = host.split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+
+def canonicalize_url(value: str) -> Optional[str]:
+    if not value:
+        return None
+    value = html.unescape(value.strip())
     if value.startswith("//"):
         value = "https:" + value
-
-    parsed = urlparse(value)
-
-    if (
-        parsed.scheme
-        not in (
-            "http",
-            "https",
-        )
-    ):
+    p = urlparse(value)
+    if p.scheme not in ("http", "https") or not p.hostname:
         return None
 
-    host = (
-        parsed.hostname
-        or ""
-    ).lower()
+    # Decode common search-provider redirect wrappers.
+    qs = parse_qs(p.query)
+    for key in ("uddg", "url", "target", "dest", "destination"):
+        if key in qs and qs[key]:
+            nested = unquote(qs[key][0])
+            nested_url = canonicalize_url(nested)
+            if nested_url:
+                return nested_url
 
-    if not host:
-        return None
+    host = p.hostname.lower().rstrip(".")
+    path = p.path or "/"
 
-    if (
-        host.endswith(
-            (
-                "duckduckgo.com",
-                "bing.com",
-            )
-        )
-        and (
-            "uddg" in parse_qs(
-                parsed.query
-            )
-        )
-    ):
+    # Strip fragments and default ports.
+    netloc = host
+    if p.port and not ((p.scheme == "http" and p.port == 80) or (p.scheme == "https" and p.port == 443)):
+        netloc = f"{host}:{p.port}"
 
-        encoded = parse_qs(
-            parsed.query
-        ).get(
-            "uddg",
-            [""],
-        )[0]
-
-        decoded = unquote(
-            encoded
-        )
-
-        return normalize_candidate_url(
-            decoded
-        )
-
-    return value
+    return urlunparse((p.scheme, netloc, path, "", p.query, ""))
 
 
-def extract_urls(
-    html_text: str,
-) -> list[str]:
+def research_candidate_check(url: str, provider: str) -> tuple[bool, str]:
+    normalized = canonicalize_url(url)
+    if not normalized:
+        return False, "invalid_url"
 
-    candidates: list[str] = []
+    p = urlparse(normalized)
+    host = (p.hostname or "").lower().rstrip(".")
+    path = (p.path or "").lower()
 
-    patterns = [
-        r'href=["\']([^"\']+)["\']',
-        r'href=([^ >]+)',
-    ]
+    if path.endswith(ASSET_EXTENSIONS):
+        return False, "asset_extension"
 
-    for pattern in patterns:
+    if host in INFRASTRUCTURE_HOSTS:
+        return False, "search_infrastructure_host"
 
-        for raw in re.findall(
-            pattern,
-            html_text,
-            re.I,
-        ):
+    if any(part in host for part in TRACKING_HOST_PARTS):
+        return False, "tracking_host"
 
-            candidate = (
-                normalize_candidate_url(
-                    raw
-                )
-            )
+    if provider in {"bing", "ddg"}:
+        # Search providers are discovery sources, not evidence domains.
+        if host.endswith(".bing.com") or host.endswith(".duckduckgo.com"):
+            return False, "search_provider_host"
 
-            if (
-                candidate
-                and candidate not in candidates
-            ):
-                candidates.append(
-                    candidate
-                )
+    if "/rb/" in path or "/rp/" in path or "/th?id=" in path:
+        return False, "search_asset_path"
 
-            if len(candidates) >= 20:
-                return candidates
+    if any(x in path for x in ("/images/", "/imgres", "/favicon", "/static/")) and provider in {"bing", "ddg"}:
+        return False, "search_asset_path"
 
-    return candidates
+    if p.query:
+        q = p.query.lower()
+        if any(k in q for k in ("click=", "u=a1", "adurl=", "msclkid=", "gclid=")):
+            # Tracking is not automatically fatal, but it is suspicious for discovery.
+            if provider in {"bing", "ddg"}:
+                return False, "tracking_redirect"
 
+    ok, reason = validate_public_url(normalized)
+    if not ok:
+        return False, f"network:{reason}"
 
-def discovery_query(
-    objective: str,
-) -> str:
-
-    compact = re.sub(
-        r"\s+",
-        " ",
-        objective,
-    ).strip()
-
-    return compact[:900]
+    return True, normalized
 
 
-def discover_ddg(
-    query: str,
-) -> list[str]:
+def extract_anchor_urls(html_text: str) -> list[str]:
+    out = []
+    for raw in re.findall(r'href\s*=\s*["\']([^"\']+)["\']', html_text, re.I):
+        n = canonicalize_url(raw)
+        if n and n not in out:
+            out.append(n)
+    return out
 
-    search_url = (
-        "https://html.duckduckgo.com/html/?q="
-        + quote_plus(query)
+
+def extract_bing_result_urls(html_text: str) -> list[str]:
+    out = []
+    # Prefer result blocks over every anchor on the page.
+    blocks = re.findall(
+        r'(?is)<li[^>]+class=["\'][^"\']*\bb_algo\b[^"\']*["\'][^>]*>(.*?)</li>',
+        html_text,
     )
+    for block in blocks:
+        for raw in re.findall(r'href\s*=\s*["\']([^"\']+)["\']', block, re.I):
+            n = canonicalize_url(raw)
+            if n:
+                ok, _ = research_candidate_check(n, "bing")
+                if ok and n not in out:
+                    out.append(n)
+                    break
 
-    response = fetch(
-        search_url
+    if out:
+        return out
+
+    # Fallback only to anchors that are already non-Bing/non-asset URLs.
+    for raw in re.findall(r'href\s*=\s*["\']([^"\']+)["\']', html_text, re.I):
+        n = canonicalize_url(raw)
+        if not n:
+            continue
+        ok, _ = research_candidate_check(n, "bing")
+        if ok and n not in out:
+            out.append(n)
+    return out
+
+
+def extract_ddg_result_urls(html_text: str) -> list[str]:
+    out = []
+    blocks = re.findall(
+        r'(?is)<a[^>]+class=["\'][^"\']*\bresult__a\b[^"\']*["\'][^>]*href=["\']([^"\']+)["\']',
+        html_text,
     )
+    for raw in blocks:
+        n = canonicalize_url(raw)
+        if n:
+            ok, _ = research_candidate_check(n, "ddg")
+            if ok and n not in out:
+                out.append(n)
 
-    if not response.get("ok"):
+    if out:
+        return out
+
+    for raw in extract_anchor_urls(html_text):
+        ok, _ = research_candidate_check(raw, "ddg")
+        if ok and raw not in out:
+            out.append(raw)
+    return out
+
+
+def discovery_query(objective: str) -> str:
+    q = re.sub(r"\s+", " ", objective).strip()
+    return q[:900]
+
+
+def discover_ddg(query: str) -> list[str]:
+    r = fetch("https://html.duckduckgo.com/html/?q=" + quote_plus(query))
+    return extract_ddg_result_urls(r.get("body", "")) if r.get("ok") else []
+
+
+def discover_bing(query: str) -> list[str]:
+    r = fetch("https://www.bing.com/search?q=" + quote_plus(query))
+    return extract_bing_result_urls(r.get("body", "")) if r.get("ok") else []
+
+
+def discover_openalex(query: str) -> list[str]:
+    r = fetch("https://api.openalex.org/works?search=" + quote_plus(query) + "&per-page=10")
+    if not r.get("ok"):
         return []
-
-    return extract_urls(
-        response.get(
-            "body",
-            "",
-        )
-    )
-
-
-def discover_bing(
-    query: str,
-) -> list[str]:
-
-    search_url = (
-        "https://www.bing.com/search?q="
-        + quote_plus(query)
-    )
-
-    response = fetch(
-        search_url
-    )
-
-    if not response.get("ok"):
-        return []
-
-    return extract_urls(
-        response.get(
-            "body",
-            "",
-        )
-    )
-
-
-def discover_openalex(
-    query: str,
-) -> list[str]:
-
-    url = (
-        "https://api.openalex.org/works"
-        "?search="
-        + quote_plus(query)
-        + "&per-page=8"
-    )
-
-    response = fetch(
-        url
-    )
-
-    if not response.get("ok"):
-        return []
-
     try:
-        payload = json.loads(
-            response.get(
-                "body",
-                "",
-            )
-        )
+        payload = json.loads(r.get("body", ""))
     except Exception:
         return []
 
-    urls: list[str] = []
-
-    for item in payload.get(
-        "results",
-        [],
-    ):
-
-        primary = item.get(
-            "primary_location"
-        ) or {}
-
-        landing = primary.get(
-            "landing_page_url"
-        )
-
-        pdf = primary.get(
-            "pdf_url"
-        )
-
-        for candidate in (
-            landing,
-            pdf,
-        ):
-
-            normalized = (
-                normalize_candidate_url(
-                    candidate
-                )
-                if candidate
-                else None
-            )
-
-            if (
-                normalized
-                and normalized not in urls
-            ):
-                urls.append(
-                    normalized
-                )
-
-    return urls[:MAX_SOURCES]
+    out = []
+    for item in payload.get("results", []):
+        loc = item.get("primary_location") or {}
+        for candidate in (loc.get("landing_page_url"), loc.get("pdf_url")):
+            if not candidate:
+                continue
+            n = canonicalize_url(candidate)
+            if n:
+                ok, _ = research_candidate_check(n, "openalex")
+                if ok and n not in out:
+                    out.append(n)
+    return out[:MAX_SOURCES]
 
 
-def discover_crossref(
-    query: str,
-) -> list[str]:
-
-    url = (
-        "https://api.crossref.org/works"
-        "?query="
-        + quote_plus(query)
-        + "&rows=8"
-    )
-
-    response = fetch(
-        url
-    )
-
-    if not response.get("ok"):
+def discover_crossref(query: str) -> list[str]:
+    r = fetch("https://api.crossref.org/works?query=" + quote_plus(query) + "&rows=10")
+    if not r.get("ok"):
         return []
-
     try:
-        payload = json.loads(
-            response.get(
-                "body",
-                "",
-            )
-        )
+        payload = json.loads(r.get("body", ""))
     except Exception:
         return []
 
-    urls: list[str] = []
-
-    for item in (
-        payload
-        .get("message", {})
-        .get("items", [])
-    ):
-
-        candidate = (
-            item.get("URL")
-        )
-
-        normalized = (
-            normalize_candidate_url(
-                candidate
-            )
-            if candidate
-            else None
-        )
-
-        if (
-            normalized
-            and normalized not in urls
-        ):
-            urls.append(
-                normalized
-            )
-
-    return urls[:MAX_SOURCES]
+    out = []
+    for item in payload.get("message", {}).get("items", []):
+        n = canonicalize_url(item.get("URL", ""))
+        if n:
+            ok, _ = research_candidate_check(n, "crossref")
+            if ok and n not in out:
+                out.append(n)
+    return out[:MAX_SOURCES]
 
 
-def direct_urls(
-    objective: str,
-) -> list[str]:
-
-    values = re.findall(
-        r"https?://[^\s<>\"']+",
-        objective,
-    )
-
-    return list(
-        dict.fromkeys(
-            value.rstrip(
-                ".,);]"
-            )
-            for value in values
-        )
-    )[:MAX_SOURCES]
+def direct_urls(objective: str) -> list[str]:
+    out = []
+    for raw in re.findall(r"https?://[^\s<>\"']+", objective):
+        n = canonicalize_url(raw.rstrip(".,);]"))
+        if n and n not in out:
+            out.append(n)
+    return out[:MAX_SOURCES]
 
 
-def discover_sources(
-    objective: str,
-) -> tuple[list[str], dict[str, int]]:
-
-    direct = direct_urls(
-        objective
-    )
-
+def discover_sources(objective: str) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    direct = direct_urls(objective)
     if direct:
-        return direct, {
-            "direct": len(direct),
-            "ddg": 0,
-            "bing": 0,
-            "openalex": 0,
-            "crossref": 0,
-        }
+        return (
+            [{"url": x, "provider": "direct"} for x in direct],
+            {"direct": len(direct), "ddg": 0, "bing": 0, "openalex": 0, "crossref": 0,
+             "rejected": 0, "rejected_reasons": {}},
+        )
 
-    query = discovery_query(
-        objective
+    q = discovery_query(objective)
+    candidates: list[dict[str, str]] = []
+    seen = set()
+    counts = {"direct": 0, "ddg": 0, "bing": 0, "openalex": 0, "crossref": 0,
+              "rejected": 0, "rejected_reasons": {}}
+
+    providers = (
+        ("ddg", discover_ddg),
+        ("bing", discover_bing),
+        ("openalex", discover_openalex),
+        ("crossref", discover_crossref),
     )
 
-    discovered: list[str] = []
-
-    counts = {
-        "direct": 0,
-        "ddg": 0,
-        "bing": 0,
-        "openalex": 0,
-        "crossref": 0,
-    }
-
-    providers = [
-        (
-            "ddg",
-            discover_ddg,
-        ),
-        (
-            "bing",
-            discover_bing,
-        ),
-        (
-            "openalex",
-            discover_openalex,
-        ),
-        (
-            "crossref",
-            discover_crossref,
-        ),
-    ]
-
-    for name, provider in providers:
-
+    # Provider fallback is deliberate: a provider that returns only assets
+    # cannot consume the entire discovery budget.
+    for name, fn in providers:
         try:
-            results = provider(
-                query
-            )
+            results = fn(q)
         except Exception:
             results = []
 
-        added = 0
-
-        for candidate in results:
-
-            if candidate in discovered:
+        accepted = 0
+        for raw in results:
+            normalized = canonicalize_url(raw)
+            ok, reason = research_candidate_check(normalized or raw, name)
+            if not ok:
+                counts["rejected"] += 1
+                counts["rejected_reasons"][reason] = counts["rejected_reasons"].get(reason, 0) + 1
                 continue
-
-            valid, _ = (
-                validate_public_url(
-                    candidate
-                )
-            )
-
-            if not valid:
+            if normalized in seen:
                 continue
-
-            discovered.append(
-                candidate
-            )
-
-            added += 1
-
-            if len(discovered) >= MAX_SOURCES:
+            seen.add(normalized)
+            candidates.append({"url": normalized, "provider": name})
+            accepted += 1
+            if len(candidates) >= MAX_SOURCES:
                 break
 
-        counts[name] = added
-
-        if len(discovered) >= MAX_SOURCES:
+        counts[name] = accepted
+        if len(candidates) >= MAX_SOURCES:
             break
 
-    return (
-        discovered[:MAX_SOURCES],
-        counts,
-    )
+    return candidates, counts
 
 
-# ============================================================
-# EVIDENCE
-# ============================================================
-
-def store_evidence(
-    mission_id: str,
-    url: str,
-    title: str,
-    text: str,
-    source_family: str,
-) -> None:
-
-    domain = (
-        urlparse(url).hostname
-        or ""
-    ).lower()
-
-    with DB_LOCK, get_db() as connection:
-
-        connection.execute(
-            """
-            INSERT INTO evidence
-            (
-                mission_id,
-                url,
-                domain,
-                title,
-                text,
-                content_digest,
-                source_family,
-                created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                mission_id,
-                url,
-                domain,
-                title,
-                text[:12000],
-                sha256(text),
-                source_family,
-                now(),
-            ),
+def store_evidence(mid: str, url: str, title: str, text: str, provider: str) -> None:
+    domain = (urlparse(url).hostname or "").lower()
+    family = registrable_family(domain)
+    with DB_LOCK, db() as c:
+        c.execute(
+            """INSERT INTO evidence
+               (mission_id,url,domain,title,text,content_digest,source_family,provider,created_at)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
+            (mid, url, domain, title, text[:12000], digest(text), family, provider, now()),
         )
 
 
-# ============================================================
-# RESEARCH
-# ============================================================
+def run_research(mid: str, objective: str) -> dict[str, Any]:
+    event(mid, "research_started", "research")
 
-def run_research(
-    mission_id: str,
-    objective: str,
-) -> dict[str, Any]:
-
-    write_event(
-        mission_id,
-        "research_started",
-        "research",
-    )
-
-    urls, discovery = (
-        discover_sources(
-            objective
-        )
-    )
-
-    write_event(
-        mission_id,
+    candidates, discovery = discover_sources(objective)
+    event(
+        mid,
         "research_discovery_completed",
         "research",
-        {
-            "candidate_count": len(urls),
-            "providers": discovery,
-        },
+        {"candidate_count": len(candidates), "providers": discovery},
     )
 
-    usable: list[
-        dict[str, Any]
-    ] = []
+    usable = []
+    blocked = []
+    seen_domains = set()
 
-    blocked: list[
-        dict[str, Any]
-    ] = []
+    for item in candidates:
+        url = item["url"]
+        provider = item["provider"]
 
-    for url in urls:
+        # Final source firewall check before any network fetch.
+        ok, reason = research_candidate_check(url, provider)
+        if not ok:
+            blocked.append({"url": url, "provider": provider, "reason": reason})
+            continue
 
-        response = fetch(
-            url
-        )
-
-        headers = response.get(
-            "headers",
-            {},
-        )
-
+        response = fetch(url)
+        headers = response.get("headers", {})
         transport = classify_transport(
-            response.get(
-                "http_status"
-            ),
-            headers.get(
-                "content-type"
-            ),
-            response.get(
-                "body",
-                "",
-            ),
+            response.get("http_status"),
+            headers.get("content-type"),
+            response.get("body", ""),
             headers,
         )
+        transport_event(mid, url, transport)
 
-        write_transport_event(
-            mission_id,
-            url,
-            transport,
-        )
-
-        if not transport[
-            "usable_for_research"
-        ]:
-
-            blocked.append(
-                {
-                    "url": url,
-                    "reason": transport[
-                        "reason"
-                    ],
-                    "transport": transport,
-                }
-            )
-
-            continue
-
-        body = response.get(
-            "body",
-            "",
-        )
-
-        text = clean_html(
-            body
-        )
-
-        if len(text) < 200:
-
-            blocked.append(
-                {
-                    "url": url,
-                    "reason": (
-                        "insufficient textual content"
-                    ),
-                    "transport": transport,
-                }
-            )
-
-            continue
-
-        title = title_from_html(
-            body
-        )
-
-        hostname = (
-            urlparse(url).hostname
-            or ""
-        ).lower()
-
-        parts = hostname.split(
-            "."
-        )
-
-        family = (
-            ".".join(
-                parts[-2:]
-            )
-            if len(parts) >= 2
-            else hostname
-        )
-
-        store_evidence(
-            mission_id,
-            url,
-            title,
-            text,
-            family,
-        )
-
-        usable.append(
-            {
+        if not transport["usable_for_research"]:
+            blocked.append({
                 "url": url,
-                "domain": hostname,
-                "title": title,
-                "digest": sha256(text),
-            }
-        )
+                "provider": provider,
+                "reason": transport["reason"],
+                "transport": transport,
+            })
+            continue
 
-    with DB_LOCK, get_db() as connection:
+        raw = response.get("body", "")
+        text = clean_html(raw)
 
-        rows = connection.execute(
-            """
-            SELECT DISTINCT domain
-            FROM evidence
-            WHERE mission_id = ?
-            """,
-            (mission_id,),
-        ).fetchall()
+        if len(text) < MIN_TEXT:
+            blocked.append({
+                "url": url,
+                "provider": provider,
+                "reason": "insufficient textual content",
+                "transport": transport,
+            })
+            continue
 
-    domains = sorted(
-        {
-            row["domain"]
-            for row in rows
-            if row["domain"]
-        }
-    )
+        # Search-engine pages, CDN pages, and obvious interstitials cannot
+        # become evidence even when transport returned 200.
+        host = (urlparse(url).hostname or "").lower()
+        if host in INFRASTRUCTURE_HOSTS or host.endswith(".bing.com") or host.endswith(".duckduckgo.com"):
+            blocked.append({"url": url, "provider": provider, "reason": "search_infrastructure_host"})
+            continue
 
-    closure = (
-        len(usable) >= 2
-        and len(domains) >= 2
-    )
+        title = title_from_html(raw)
+        store_evidence(mid, url, title, text, provider)
 
-    claims: list[
-        dict[str, Any]
-    ] = []
+        domain = host
+        seen_domains.add(domain)
+        usable.append({
+            "url": url,
+            "domain": domain,
+            "title": title,
+            "provider": provider,
+            "digest": digest(text),
+        })
 
+    closure = len(usable) >= 2 and len(seen_domains) >= 2
+
+    claims = []
     if usable:
-
-        claim = (
-            f"Research produced "
-            f"{len(usable)} usable public source(s) "
-            f"across {len(domains)} independent domain(s)."
-        )
-
-        with DB_LOCK, get_db() as connection:
-
-            connection.execute(
-                """
-                INSERT INTO claims
-                (
-                    mission_id,
-                    claim,
-                    evidence_count,
-                    created_at
-                )
-                VALUES (?, ?, ?, ?)
-                """,
-                (
-                    mission_id,
-                    claim,
-                    len(usable),
-                    now(),
-                ),
+        claim = f"Research produced {len(usable)} usable public source(s) across {len(seen_domains)} independent domain(s)."
+        with DB_LOCK, db() as c:
+            c.execute(
+                "INSERT INTO claims(mission_id,claim,evidence_count,created_at) VALUES(?,?,?,?)",
+                (mid, claim, len(usable), now()),
             )
-
-        claims.append(
-            {
-                "claim": claim,
-                "evidence_count": len(usable),
-            }
-        )
+        claims.append({"claim": claim, "evidence_count": len(usable)})
 
     if closure:
-
-        next_actions: list[str] = []
-
-    else:
-
         next_actions = [
-            "Retry using additional independent discovery providers.",
-            "Do not treat blocked, WAF, empty, or opaque responses as evidence.",
+            "Proceed to claim-level verification using the validated evidence set.",
+            "Check contradictory evidence before final synthesis.",
+        ]
+    else:
+        next_actions = [
+            "Retry with provider fallback and broader independent sources.",
+            "Do not treat search-engine infrastructure, assets, WAF, empty, or opaque responses as evidence.",
             "Require at least two usable sources from two independent domains before completion.",
         ]
 
@@ -1777,195 +815,78 @@ def run_research(
         "mode": "research",
         "closure": closure,
         "evidence_count": len(usable),
-        "independent_domains": len(domains),
-        "domains": domains,
+        "independent_domains": len(seen_domains),
+        "domains": sorted(seen_domains),
         "sources": usable,
         "blocked_sources": blocked,
         "claims": claims,
         "discovery": discovery,
-        "candidate_count": len(urls),
+        "candidate_count": len(candidates),
         "next_actions": next_actions,
     }
 
-    write_event(
-        mission_id,
-        (
-            "research_closed"
-            if closure
-            else "research_needs_recovery"
-        ),
-        (
-            "closed"
-            if closure
-            else "recovery"
-        ),
+    event(
+        mid,
+        "research_closed" if closure else "research_needs_recovery",
+        "closed" if closure else "recovery",
         result,
     )
-
     return result
 
 
-# ============================================================
-# MISSION EXECUTION
-# ============================================================
-
-def execute_mission(
-    mission_id: str,
-    objective: str,
-) -> None:
-
+def execute_mission(mid: str, objective: str) -> None:
     try:
+        update_mission(mid, "running", "planning")
+        event(mid, "mission_started", "planning")
 
-        update_mission(
-            mission_id,
-            "running",
-            "planning",
-        )
-
-        write_event(
-            mission_id,
-            "mission_started",
-            "planning",
-        )
-
-        result = run_research(
-            mission_id,
-            objective,
-        )
+        result = run_research(mid, objective)
 
         if result["closure"]:
-
-            update_mission(
-                mission_id,
-                "completed",
-                "closed",
-                result,
-            )
-
-            write_event(
-                mission_id,
-                "mission_completed",
-                "closed",
-                {
-                    "closure": True,
-                    "evidence_count": result[
-                        "evidence_count"
-                    ],
-                    "independent_domains": result[
-                        "independent_domains"
-                    ],
-                },
-            )
-
+            update_mission(mid, "completed", "closed", result)
+            event(mid, "mission_completed", "closed", {
+                "closure": True,
+                "evidence_count": result["evidence_count"],
+                "independent_domains": result["independent_domains"],
+            })
         else:
-
-            update_mission(
-                mission_id,
-                "needs_recovery",
-                "recovery",
-                result,
-            )
-
-            write_event(
-                mission_id,
-                "mission_recovery_required",
-                "recovery",
-                {
-                    "closure": False,
-                    "evidence_count": result[
-                        "evidence_count"
-                    ],
-                    "independent_domains": result[
-                        "independent_domains"
-                    ],
-                },
-            )
-
+            update_mission(mid, "needs_recovery", "recovery", result)
+            event(mid, "mission_recovery_required", "recovery", {
+                "closure": False,
+                "evidence_count": result["evidence_count"],
+                "independent_domains": result["independent_domains"],
+            })
     except Exception as exc:
-
         failure = {
             "closure": False,
             "error": type(exc).__name__,
             "message": str(exc),
-            "next_actions": [
-                "Inspect workflow events.",
-                "Retry the mission after diagnosis.",
-            ],
+            "next_actions": ["Inspect workflow events.", "Retry the mission after diagnosis."],
         }
-
-        update_mission(
-            mission_id,
-            "failed",
-            "recovery",
-            failure,
-        )
-
-        write_event(
-            mission_id,
-            "mission_failed",
-            "recovery",
-            failure,
-        )
+        update_mission(mid, "failed", "recovery", failure)
+        event(mid, "mission_failed", "recovery", failure)
 
 
-async def background_mission(
-    mission_id: str,
-    objective: str,
-) -> None:
+async def background_mission(mid: str, objective: str) -> None:
+    await asyncio.to_thread(execute_mission, mid, objective)
 
-    await asyncio.to_thread(
-        execute_mission,
-        mission_id,
-        objective,
-    )
-
-
-# ============================================================
-# STARTUP
-# ============================================================
 
 @app.on_event("startup")
 def startup() -> None:
-
     init_db()
-
-    with DB_LOCK, get_db() as connection:
-
-        rows = connection.execute(
-            """
-            SELECT id
-            FROM missions
-            WHERE status IN ('queued', 'running')
-            """
+    # A process restart must never leave work pretending to be active.
+    with DB_LOCK, db() as c:
+        rows = c.execute(
+            "SELECT id FROM missions WHERE status IN ('queued','running')"
         ).fetchall()
-
     for row in rows:
+        update_mission(row["id"], "needs_recovery", "recovery", {
+            "reason": "Recovered after service restart."
+        })
+        event(row["id"], "startup_recovery", "recovery")
 
-        update_mission(
-            row["id"],
-            "needs_recovery",
-            "recovery",
-            {
-                "reason": (
-                    "Recovered after service restart."
-                )
-            },
-        )
-
-        write_event(
-            row["id"],
-            "startup_recovery",
-            "recovery",
-        )
-
-
-# ============================================================
-# ROOT
-# ============================================================
 
 @app.get("/")
 def root() -> dict[str, Any]:
-
     return {
         "name": "AI Infinity",
         "status": "online",
@@ -1978,13 +899,8 @@ def root() -> dict[str, Any]:
     }
 
 
-# ============================================================
-# HEALTH
-# ============================================================
-
 @app.get("/health")
 def health() -> dict[str, Any]:
-
     return {
         "service": "AI Infinity",
         "version": VERSION,
@@ -1999,594 +915,223 @@ def health() -> dict[str, Any]:
             "permission_bypass": False,
             "external_content_untrusted": True,
             "evidence_requires_transport_validation": True,
+            "research_source_requires_integrity_validation": True,
             "completion_requires_closure": True,
         },
     }
 
 
-# ============================================================
-# READY
-# ============================================================
-
 @app.get("/ready")
 def ready() -> dict[str, Any]:
-
     init_db()
+    return {"ready": True, "version": VERSION, "build": BUILD}
 
-    return {
-        "ready": True,
-        "version": VERSION,
-        "build": BUILD,
-    }
-
-
-# ============================================================
-# RUN
-# ============================================================
 
 @app.post("/run")
-async def run(
-    request: RunRequest,
-) -> dict[str, Any]:
-
+async def run(request: RunRequest) -> dict[str, Any]:
     objective = request.objective.strip()
-
     if not objective:
+        raise HTTPException(status_code=422, detail="objective cannot be empty")
+    mid = create_mission(objective)
+    asyncio.create_task(background_mission(mid, objective))
+    return {"mission_id": mid, "objective": objective, "status": "queued"}
 
-        raise HTTPException(
-            status_code=422,
-            detail="objective cannot be empty",
-        )
-
-    mission_id = create_mission(
-        objective
-    )
-
-    asyncio.create_task(
-        background_mission(
-            mission_id,
-            objective,
-        )
-    )
-
-    return {
-        "mission_id": mission_id,
-        "objective": objective,
-        "status": "queued",
-    }
-
-
-# ============================================================
-# MISSIONS
-# ============================================================
 
 @app.post("/missions")
-async def missions_create(
-    request: MissionCreateRequest,
-) -> dict[str, Any]:
-
+async def missions_create(request: MissionCreateRequest) -> dict[str, Any]:
     objective = request.objective.strip()
-
-    mission_id = create_mission(
-        objective
-    )
-
-    asyncio.create_task(
-        background_mission(
-            mission_id,
-            objective,
-        )
-    )
-
-    return {
-        "mission_id": mission_id,
-        "status": "queued",
-    }
+    mid = create_mission(objective)
+    asyncio.create_task(background_mission(mid, objective))
+    return {"mission_id": mid, "status": "queued"}
 
 
 @app.get("/mission/{mission_id}")
-def mission(
-    mission_id: str,
-) -> dict[str, Any]:
-
-    result = get_mission(
-        mission_id
-    )
-
-    if result is None:
-
-        raise HTTPException(
-            status_code=404,
-            detail="Mission not found",
-        )
-
-    return result
+def mission(mission_id: str) -> dict[str, Any]:
+    item = get_mission(mission_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Mission not found")
+    return item
 
 
 @app.get("/missions")
-def mission_list(
-    limit: int = Query(
-        20,
-        ge=1,
-        le=100,
-    ),
-) -> dict[str, Any]:
-
-    with DB_LOCK, get_db() as connection:
-
-        rows = connection.execute(
-            """
-            SELECT id
-            FROM missions
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            (limit,),
+def missions(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
+    with DB_LOCK, db() as c:
+        rows = c.execute(
+            "SELECT id FROM missions ORDER BY created_at DESC LIMIT ?", (limit,)
         ).fetchall()
-
-    results = []
-
-    for row in rows:
-
-        item = get_mission(
-            row["id"]
-        )
-
-        if item:
-            results.append(item)
-
-    return {
-        "missions": results
-    }
+    return {"missions": [x for r in rows if (x := get_mission(r["id"]))]}
 
 
 @app.post("/mission/{mission_id}/retry")
-async def mission_retry(
-    mission_id: str,
-) -> dict[str, Any]:
-
-    item = get_mission(
-        mission_id
-    )
-
+async def retry(mission_id: str) -> dict[str, Any]:
+    item = get_mission(mission_id)
     if item is None:
+        raise HTTPException(status_code=404, detail="Mission not found")
+    update_mission(mission_id, "queued", "queued", None)
+    event(mission_id, "manual_retry", "queued")
+    asyncio.create_task(background_mission(mission_id, item["objective"]))
+    return {"mission_id": mission_id, "status": "queued"}
 
-        raise HTTPException(
-            status_code=404,
-            detail="Mission not found",
-        )
-
-    update_mission(
-        mission_id,
-        "queued",
-        "queued",
-        None,
-    )
-
-    write_event(
-        mission_id,
-        "manual_retry",
-        "queued",
-    )
-
-    asyncio.create_task(
-        background_mission(
-            mission_id,
-            item["objective"],
-        )
-    )
-
-    return {
-        "mission_id": mission_id,
-        "status": "queued",
-    }
-
-
-# ============================================================
-# SOURCES
-# ============================================================
-
-@app.get("/sources/{mission_id}")
-def sources(
-    mission_id: str,
-) -> dict[str, Any]:
-
-    if get_mission(
-        mission_id
-    ) is None:
-
-        raise HTTPException(
-            status_code=404,
-            detail="Mission not found",
-        )
-
-    with DB_LOCK, get_db() as connection:
-
-        rows = connection.execute(
-            """
-            SELECT
-                url,
-                domain,
-                title,
-                content_digest,
-                source_family,
-                created_at
-            FROM evidence
-            WHERE mission_id = ?
-            ORDER BY id
-            """,
-            (mission_id,),
-        ).fetchall()
-
-    return {
-        "mission_id": mission_id,
-        "sources": [
-            dict(row)
-            for row in rows
-        ],
-    }
-
-
-# ============================================================
-# EVIDENCE
-# ============================================================
-
-@app.get("/evidence/{mission_id}")
-def evidence(
-    mission_id: str,
-) -> dict[str, Any]:
-
-    if get_mission(
-        mission_id
-    ) is None:
-
-        raise HTTPException(
-            status_code=404,
-            detail="Mission not found",
-        )
-
-    with DB_LOCK, get_db() as connection:
-
-        rows = connection.execute(
-            """
-            SELECT
-                url,
-                domain,
-                title,
-                text,
-                content_digest,
-                source_family,
-                created_at
-            FROM evidence
-            WHERE mission_id = ?
-            ORDER BY id
-            """,
-            (mission_id,),
-        ).fetchall()
-
-    return {
-        "mission_id": mission_id,
-        "evidence": [
-            dict(row)
-            for row in rows
-        ],
-    }
-
-
-# ============================================================
-# CLAIMS
-# ============================================================
-
-@app.get("/claims/{mission_id}")
-def claims(
-    mission_id: str,
-) -> dict[str, Any]:
-
-    if get_mission(
-        mission_id
-    ) is None:
-
-        raise HTTPException(
-            status_code=404,
-            detail="Mission not found",
-        )
-
-    with DB_LOCK, get_db() as connection:
-
-        rows = connection.execute(
-            """
-            SELECT
-                claim,
-                evidence_count,
-                created_at
-            FROM claims
-            WHERE mission_id = ?
-            ORDER BY id
-            """,
-            (mission_id,),
-        ).fetchall()
-
-    return {
-        "mission_id": mission_id,
-        "claims": [
-            dict(row)
-            for row in rows
-        ],
-    }
-
-
-# ============================================================
-# TRANSPORT CLASSIFICATION
-# ============================================================
-
-@app.post("/transport/classify")
-def transport_classify(
-    request: TransportRequest,
-) -> dict[str, Any]:
-
-    headers = {
-        key.lower(): value
-        for key, value
-        in request.headers.items()
-    }
-
-    return classify_transport(
-        request.http_status,
-        request.content_type,
-        request.body,
-        headers,
-    )
-
-
-# ============================================================
-# TRANSPORT EVENTS
-# ============================================================
-
-@app.get("/transport/events")
-def transport_events(
-    mission_id: Optional[str] = None,
-    limit: int = Query(
-        50,
-        ge=1,
-        le=500,
-    ),
-) -> dict[str, Any]:
-
-    with DB_LOCK, get_db() as connection:
-
-        if mission_id:
-
-            rows = connection.execute(
-                """
-                SELECT *
-                FROM transport_events
-                WHERE mission_id = ?
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                (
-                    mission_id,
-                    limit,
-                ),
-            ).fetchall()
-
-        else:
-
-            rows = connection.execute(
-                """
-                SELECT *
-                FROM transport_events
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
-
-    output = []
-
-    for row in rows:
-
-        item = dict(row)
-
-        raw = item.pop(
-            "detail_json",
-            None,
-        )
-
-        try:
-            item["detail"] = (
-                json.loads(raw)
-                if raw
-                else None
-            )
-        except Exception:
-            item["detail"] = raw
-
-        output.append(item)
-
-    return {
-        "events": output
-    }
-
-
-# ============================================================
-# WORKFLOW EVENTS
-# ============================================================
 
 @app.get("/workflow/events")
 def workflow_events(
     mission_id: Optional[str] = None,
-    limit: int = Query(
-        100,
-        ge=1,
-        le=500,
-    ),
+    limit: int = Query(100, ge=1, le=500),
 ) -> dict[str, Any]:
-
-    with DB_LOCK, get_db() as connection:
-
+    with DB_LOCK, db() as c:
         if mission_id:
-
-            rows = connection.execute(
-                """
-                SELECT *
-                FROM workflow_events
-                WHERE mission_id = ?
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                (
-                    mission_id,
-                    limit,
-                ),
+            rows = c.execute(
+                "SELECT * FROM workflow_events WHERE mission_id=? ORDER BY id DESC LIMIT ?",
+                (mission_id, limit),
             ).fetchall()
-
         else:
-
-            rows = connection.execute(
-                """
-                SELECT *
-                FROM workflow_events
-                ORDER BY id DESC
-                LIMIT ?
-                """,
+            rows = c.execute(
+                "SELECT * FROM workflow_events ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
-
-    output = []
-
-    for row in rows:
-
-        item = dict(row)
-
-        raw = item.pop(
-            "detail_json",
-            None,
-        )
-
+    out = []
+    for r in rows:
+        x = dict(r)
+        raw = x.pop("detail_json", None)
         try:
-            item["detail"] = (
-                json.loads(raw)
-                if raw
-                else None
-            )
+            x["detail"] = json.loads(raw) if raw else None
         except Exception:
-            item["detail"] = raw
-
-        output.append(item)
-
-    return {
-        "events": output
-    }
+            x["detail"] = raw
+        out.append(x)
+    return {"events": out}
 
 
-# ============================================================
-# DIAGNOSTICS
-# ============================================================
+@app.get("/transport/events")
+def transport_events(
+    mission_id: Optional[str] = None,
+    limit: int = Query(100, ge=1, le=500),
+) -> dict[str, Any]:
+    with DB_LOCK, db() as c:
+        if mission_id:
+            rows = c.execute(
+                "SELECT * FROM transport_events WHERE mission_id=? ORDER BY id DESC LIMIT ?",
+                (mission_id, limit),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT * FROM transport_events ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+    out = []
+    for r in rows:
+        x = dict(r)
+        raw = x.pop("detail_json", None)
+        try:
+            x["detail"] = json.loads(raw) if raw else None
+        except Exception:
+            x["detail"] = raw
+        out.append(x)
+    return {"events": out}
+
+
+@app.get("/evidence/{mission_id}")
+def evidence(mission_id: str) -> dict[str, Any]:
+    if get_mission(mission_id) is None:
+        raise HTTPException(status_code=404, detail="Mission not found")
+    with DB_LOCK, db() as c:
+        rows = c.execute(
+            """SELECT url,domain,title,text,content_digest,source_family,provider,created_at
+               FROM evidence WHERE mission_id=? ORDER BY id""",
+            (mission_id,),
+        ).fetchall()
+    return {"mission_id": mission_id, "evidence": [dict(x) for x in rows]}
+
+
+@app.get("/sources/{mission_id}")
+def sources(mission_id: str) -> dict[str, Any]:
+    if get_mission(mission_id) is None:
+        raise HTTPException(status_code=404, detail="Mission not found")
+    with DB_LOCK, db() as c:
+        rows = c.execute(
+            """SELECT url,domain,title,content_digest,source_family,provider,created_at
+               FROM evidence WHERE mission_id=? ORDER BY id""",
+            (mission_id,),
+        ).fetchall()
+    return {"mission_id": mission_id, "sources": [dict(x) for x in rows]}
+
+
+@app.get("/claims/{mission_id}")
+def claims(mission_id: str) -> dict[str, Any]:
+    if get_mission(mission_id) is None:
+        raise HTTPException(status_code=404, detail="Mission not found")
+    with DB_LOCK, db() as c:
+        rows = c.execute(
+            "SELECT claim,evidence_count,created_at FROM claims WHERE mission_id=? ORDER BY id",
+            (mission_id,),
+        ).fetchall()
+    return {"mission_id": mission_id, "claims": [dict(x) for x in rows]}
+
+
+@app.post("/transport/classify")
+def transport_classify(request: TransportRequest) -> dict[str, Any]:
+    return classify_transport(
+        request.http_status,
+        request.content_type,
+        request.body,
+        request.headers,
+    )
+
+
+@app.get("/policy")
+def policy() -> dict[str, Any]:
+    return health()["policy"]
+
 
 @app.get("/diagnostics")
 def diagnostics() -> dict[str, Any]:
-
-    with DB_LOCK, get_db() as connection:
-
-        mission_count = connection.execute(
-            """
-            SELECT COUNT(*) AS n
-            FROM missions
-            """
-        ).fetchone()["n"]
-
-        transport_count = connection.execute(
-            """
-            SELECT COUNT(*) AS n
-            FROM transport_events
-            """
-        ).fetchone()["n"]
-
-        evidence_count = connection.execute(
-            """
-            SELECT COUNT(*) AS n
-            FROM evidence
-            """
-        ).fetchone()["n"]
-
-        event_count = connection.execute(
-            """
-            SELECT COUNT(*) AS n
-            FROM workflow_events
-            """
-        ).fetchone()["n"]
-
+    with DB_LOCK, db() as c:
+        mc = c.execute("SELECT COUNT(*) n FROM missions").fetchone()["n"]
+        ec = c.execute("SELECT COUNT(*) n FROM workflow_events").fetchone()["n"]
+        tc = c.execute("SELECT COUNT(*) n FROM transport_events").fetchone()["n"]
+        vc = c.execute("SELECT COUNT(*) n FROM evidence").fetchone()["n"]
     return {
         "version": VERSION,
         "build": BUILD,
-        "missions": {
-            "count": mission_count
-        },
-        "workflow_events": {
-            "count": event_count
-        },
-        "transport_classifications": {
-            "count": transport_count
-        },
-        "evidence": {
-            "count": evidence_count
-        },
+        "missions": {"count": mc},
+        "workflow_events": {"count": ec},
+        "transport_classifications": {"count": tc},
+        "evidence": {"count": vc},
         "limits": {
             "max_body": MAX_BODY,
             "fetch_timeout": FETCH_TIMEOUT,
             "max_sources": MAX_SOURCES,
+            "min_text": MIN_TEXT,
         },
     }
 
 
-# ============================================================
-# POLICY
-# ============================================================
-
-@app.get("/policy")
-def policy() -> dict[str, Any]:
-
-    return health()["policy"]
-
-
-# ============================================================
-# ARCHITECTURE
-# ============================================================
-
 @app.get("/architecture")
 def architecture() -> dict[str, Any]:
-
     return {
         "version": VERSION,
         "build": BUILD,
-
         "typed_run_request": True,
         "swagger_request_body": True,
-
         "transport_boundary": True,
         "edge_failure_separation": True,
         "application_failure_separation": True,
         "html_waf_detection": True,
-
         "public_network_policy": True,
         "ssrf_protection": True,
-
-        "multi_provider_discovery": True,
+        "research_source_integrity_firewall": True,
+        "search_asset_rejection": True,
+        "search_infrastructure_rejection": True,
+        "provider_aware_extraction": True,
+        "provider_fallback": True,
         "ddg_redirect_decoding": True,
+        "bing_result_block_extraction": True,
         "openalex_discovery": True,
         "crossref_discovery": True,
-
         "workflow_persistence": True,
         "mission_state_reconciliation": True,
-
         "truthful_completion_gate": True,
         "recovery_integrity": True,
     }
 
-
-# ============================================================
-# INITIALIZE
-# ============================================================
 
 init_db()
