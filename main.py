@@ -1,17 +1,32 @@
 """
 AI Infinity
-TARGET-2050.72
-BUILD: SELF-CONSISTENT-MISSION-CONTRACT-AND-RESEARCH-RECOVERY-CORE
+TARGET-2050.73
+BUILD: SELF-CONSISTENT-DISCOVERY-AND-MISSION-STATE-RECOVERY-CORE
 
-Self-contained FastAPI service.
-Fixes the /run Swagger contract while preserving the 2050.71
-transport, evidence, recovery, and truthful-completion architecture.
+Preserves:
+- typed /run contract
+- Swagger request body
+- transport/WAF classification
+- SSRF/public-network protection
+- SQLite persistence
+- workflow events
+- evidence validation
+- truthful completion gate
+- recovery
+- inspection endpoints
+
+Fixes:
+- DDG redirect discovery
+- free public discovery fallbacks
+- mission state reconciliation
+- stale queued mission state
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import html
 import ipaddress
 import json
 import os
@@ -22,28 +37,32 @@ import threading
 import time
 import uuid
 
-from html import unescape
 from typing import Any, Optional
-from urllib.parse import quote_plus, urljoin, urlparse
+from urllib.error import HTTPError, URLError
+from urllib.parse import (
+    parse_qs,
+    quote_plus,
+    unquote,
+    urljoin,
+    urlparse,
+)
 from urllib.request import (
-    Request as URLRequest,
-    build_opener,
     HTTPRedirectHandler,
     ProxyHandler,
-    urlopen,
+    Request as URLRequest,
+    build_opener,
 )
-from urllib.error import HTTPError, URLError
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 
 # ============================================================
-# CORE IDENTITY
+# IDENTITY
 # ============================================================
 
-VERSION = "TARGET-2050.72"
-BUILD = "SELF-CONSISTENT-MISSION-CONTRACT-AND-RESEARCH-RECOVERY-CORE"
+VERSION = "TARGET-2050.73"
+BUILD = "SELF-CONSISTENT-DISCOVERY-AND-MISSION-STATE-RECOVERY-CORE"
 
 DATA_DIR = os.environ.get(
     "AI_INFINITY_DATA_DIR",
@@ -60,11 +79,11 @@ FETCH_TIMEOUT = 10.0
 MAX_SOURCES = 8
 MAX_REDIRECTS = 4
 
-LOCK = threading.RLock()
+DB_LOCK = threading.RLock()
 
 
 # ============================================================
-# FASTAPI
+# APP
 # ============================================================
 
 app = FastAPI(
@@ -72,15 +91,13 @@ app = FastAPI(
     version=VERSION,
     description=(
         "AI Infinity autonomous research, evidence, "
-        "verification, transport classification and recovery core."
+        "verification, transport and recovery core."
     ),
 )
 
 
 # ============================================================
 # REQUEST CONTRACTS
-# IMPORTANT:
-# These typed Pydantic models make Swagger expose request bodies.
 # ============================================================
 
 class RunRequest(BaseModel):
@@ -98,13 +115,10 @@ class TransportRequest(BaseModel):
         ge=100,
         le=599,
     )
-
     content_type: Optional[str] = None
-
     body: Optional[str] = None
-
     headers: dict[str, str] = Field(
-        default_factory=dict,
+        default_factory=dict
     )
 
 
@@ -117,18 +131,20 @@ class MissionCreateRequest(BaseModel):
 
 
 # ============================================================
-# UTILITIES
+# BASIC HELPERS
 # ============================================================
 
 def now() -> float:
     return time.time()
 
 
-def uid(prefix: str) -> str:
-    return f"{prefix}-{uuid.uuid4().hex[:12]}"
+def make_id(prefix: str) -> str:
+    return (
+        f"{prefix}-{uuid.uuid4().hex[:12]}"
+    )
 
 
-def digest(value: Any) -> str:
+def sha256(value: Any) -> str:
     if isinstance(value, bytes):
         raw = value
     else:
@@ -140,11 +156,19 @@ def digest(value: Any) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def json_text(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        default=str,
+    )
+
+
 # ============================================================
 # DATABASE
 # ============================================================
 
-def db() -> sqlite3.Connection:
+def get_db() -> sqlite3.Connection:
     os.makedirs(
         DATA_DIR,
         exist_ok=True,
@@ -162,7 +186,7 @@ def db() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    with LOCK, db() as connection:
+    with DB_LOCK, get_db() as connection:
 
         connection.executescript(
             """
@@ -221,39 +245,39 @@ def init_db() -> None:
                 created_at REAL NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS idx_evidence_mission
-            ON evidence(mission_id);
+            CREATE INDEX IF NOT EXISTS idx_missions_updated
+            ON missions(updated_at);
 
             CREATE INDEX IF NOT EXISTS idx_events_mission
             ON workflow_events(mission_id);
 
             CREATE INDEX IF NOT EXISTS idx_transport_mission
             ON transport_events(mission_id);
+
+            CREATE INDEX IF NOT EXISTS idx_evidence_mission
+            ON evidence(mission_id);
             """
         )
 
 
 # ============================================================
-# EVENT PERSISTENCE
+# EVENTS
 # ============================================================
 
-def event(
+def write_event(
     mission_id: str,
-    name: str,
+    event_name: str,
     phase: str,
     detail: Any = None,
 ) -> None:
 
-    detail_json = None
+    detail_json = (
+        json_text(detail)
+        if detail is not None
+        else None
+    )
 
-    if detail is not None:
-        detail_json = json.dumps(
-            detail,
-            ensure_ascii=False,
-            default=str,
-        )
-
-    with LOCK, db() as connection:
+    with DB_LOCK, get_db() as connection:
 
         connection.execute(
             """
@@ -269,7 +293,7 @@ def event(
             """,
             (
                 mission_id,
-                name,
+                event_name,
                 phase,
                 detail_json,
                 now(),
@@ -277,13 +301,13 @@ def event(
         )
 
 
-def transport_event(
+def write_transport_event(
     mission_id: Optional[str],
     url: str,
     result: dict[str, Any],
 ) -> None:
 
-    with LOCK, db() as connection:
+    with DB_LOCK, get_db() as connection:
 
         connection.execute(
             """
@@ -301,27 +325,24 @@ def transport_event(
                 mission_id,
                 url,
                 result["classification"],
-                json.dumps(
-                    result,
-                    ensure_ascii=False,
-                ),
+                json_text(result),
                 now(),
             ),
         )
 
 
 # ============================================================
-# MISSIONS
+# MISSION STORAGE
 # ============================================================
 
 def create_mission(
     objective: str,
 ) -> str:
 
-    mission_id = uid("mission")
+    mission_id = make_id("mission")
     timestamp = now()
 
-    with LOCK, db() as connection:
+    with DB_LOCK, get_db() as connection:
 
         connection.execute(
             """
@@ -348,12 +369,14 @@ def create_mission(
             ),
         )
 
-    event(
+    write_event(
         mission_id,
         "mission_created",
         "queued",
         {
-            "objective_length": len(objective),
+            "objective_length": len(
+                objective
+            )
         },
     )
 
@@ -367,16 +390,13 @@ def update_mission(
     result: Any = None,
 ) -> None:
 
-    result_json = None
+    result_json = (
+        json_text(result)
+        if result is not None
+        else None
+    )
 
-    if result is not None:
-        result_json = json.dumps(
-            result,
-            ensure_ascii=False,
-            default=str,
-        )
-
-    with LOCK, db() as connection:
+    with DB_LOCK, get_db() as connection:
 
         connection.execute(
             """
@@ -398,11 +418,108 @@ def update_mission(
         )
 
 
+# ============================================================
+# MISSION STATE RECONCILIATION
+#
+# This is the important 2050.72 repair.
+# Workflow events are the audit trail.
+# The mission row is synchronized from the latest
+# authoritative lifecycle event when necessary.
+# ============================================================
+
+TERMINAL_EVENT_MAP = {
+    "mission_completed": (
+        "completed",
+        "closed",
+    ),
+    "mission_recovery_required": (
+        "needs_recovery",
+        "recovery",
+    ),
+    "mission_failed": (
+        "failed",
+        "recovery",
+    ),
+}
+
+
+def reconcile_mission(
+    mission_id: str,
+) -> None:
+
+    with DB_LOCK, get_db() as connection:
+
+        mission = connection.execute(
+            """
+            SELECT *
+            FROM missions
+            WHERE id = ?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if not mission:
+            return
+
+        latest = connection.execute(
+            """
+            SELECT
+                event,
+                phase,
+                detail_json,
+                created_at
+            FROM workflow_events
+            WHERE mission_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (mission_id,),
+        ).fetchone()
+
+    if not latest:
+        return
+
+    event_name = latest["event"]
+
+    if event_name not in TERMINAL_EVENT_MAP:
+        return
+
+    status, phase = TERMINAL_EVENT_MAP[
+        event_name
+    ]
+
+    current_status = mission["status"]
+
+    if current_status == status:
+        return
+
+    detail = None
+
+    if latest["detail_json"]:
+        try:
+            detail = json.loads(
+                latest["detail_json"]
+            )
+        except Exception:
+            detail = None
+
+    update_mission(
+        mission_id,
+        status,
+        phase,
+        detail,
+    )
+
+
 def get_mission(
     mission_id: str,
 ) -> Optional[dict[str, Any]]:
 
-    with LOCK, db() as connection:
+    reconcile_mission(
+        mission_id
+    )
+
+    with DB_LOCK, get_db() as connection:
 
         row = connection.execute(
             """
@@ -418,25 +535,36 @@ def get_mission(
 
     result = dict(row)
 
-    result["result"] = (
-        json.loads(result.pop("result_json"))
-        if result.get("result_json")
-        else None
+    raw_result = result.pop(
+        "result_json",
+        None,
     )
+
+    if raw_result:
+        try:
+            result["result"] = json.loads(
+                raw_result
+            )
+        except Exception:
+            result["result"] = raw_result
+    else:
+        result["result"] = None
 
     return result
 
 
 # ============================================================
-# PUBLIC NETWORK SECURITY
+# PUBLIC NETWORK POLICY
 # ============================================================
 
-def is_public_ip(
-    ip: str,
+def public_ip(
+    value: str,
 ) -> bool:
 
     try:
-        address = ipaddress.ip_address(ip)
+        address = ipaddress.ip_address(
+            value
+        )
 
         return not (
             address.is_private
@@ -451,11 +579,12 @@ def is_public_ip(
         return False
 
 
-def validate_url(
+def validate_public_url(
     url: str,
 ) -> tuple[bool, str]:
 
     try:
+
         parsed = urlparse(url)
 
         if parsed.scheme not in (
@@ -464,84 +593,85 @@ def validate_url(
         ):
             return (
                 False,
-                "Only http/https URLs are allowed.",
+                "Only HTTP/HTTPS is allowed.",
             )
 
         if not parsed.hostname:
             return (
                 False,
-                "URL hostname is missing.",
+                "Missing hostname.",
             )
 
-        if parsed.username or parsed.password:
+        if (
+            parsed.username
+            or parsed.password
+        ):
             return (
                 False,
-                "Credential-bearing URLs are blocked.",
+                "Credential-bearing URL blocked.",
             )
 
-        host = parsed.hostname.rstrip(".").lower()
+        hostname = (
+            parsed.hostname
+            .rstrip(".")
+            .lower()
+        )
 
-        if host in {
-            "localhost",
-            "localhost.localdomain",
-        }:
+        if (
+            hostname == "localhost"
+            or hostname.endswith(".local")
+        ):
             return (
                 False,
-                "Local hostnames are blocked.",
+                "Local hostname blocked.",
             )
 
-        if host.endswith(".local"):
-            return (
-                False,
-                "Local domains are blocked.",
+        port = (
+            parsed.port
+            or (
+                443
+                if parsed.scheme == "https"
+                else 80
             )
+        )
 
-        try:
-            infos = socket.getaddrinfo(
-                host,
-                parsed.port
-                or (
-                    443
-                    if parsed.scheme == "https"
-                    else 80
-                ),
-                type=socket.SOCK_STREAM,
-            )
-
-        except OSError as exc:
-            return (
-                False,
-                f"DNS resolution failed: {exc}",
-            )
+        infos = socket.getaddrinfo(
+            hostname,
+            port,
+            type=socket.SOCK_STREAM,
+        )
 
         addresses = {
-            info[4][0]
-            for info in infos
+            item[4][0]
+            for item in infos
         }
 
         if not addresses:
             return (
                 False,
-                "No address resolved.",
+                "No DNS address.",
             )
 
-        if not all(
-            is_public_ip(address)
-            for address in addresses
-        ):
-            return (
-                False,
-                "URL resolves to a non-public address.",
-            )
+        for address in addresses:
+
+            if not public_ip(address):
+                return (
+                    False,
+                    "Non-public address blocked.",
+                )
 
         return True, "ok"
 
     except Exception as exc:
-        return False, str(exc)
+
+        return (
+            False,
+            str(exc),
+        )
 
 
 # ============================================================
-# SAFE HTTP
+# SAFE FETCH
 # ============================================================
 
 class NoRedirect(
@@ -560,7 +690,7 @@ class NoRedirect(
         return None
 
 
-def fetch_public(
+def fetch(
     url: str,
 ) -> dict[str, Any]:
 
@@ -571,35 +701,38 @@ def fetch_public(
         NoRedirect(),
     )
 
-    for hop in range(
+    for _ in range(
         MAX_REDIRECTS + 1
     ):
 
-        valid, reason = validate_url(
-            current
+        valid, reason = (
+            validate_public_url(
+                current
+            )
         )
 
         if not valid:
+
             return {
-                "url": current,
                 "ok": False,
-                "error": reason,
+                "url": current,
                 "http_status": None,
                 "headers": {},
                 "body": "",
+                "error": reason,
             }
 
         request = URLRequest(
             current,
             headers={
                 "User-Agent": (
-                    "AI-Infinity/2050.72 research"
+                    "AI-Infinity/2050.73 "
+                    "research"
                 ),
                 "Accept": (
-                    "text/html, "
-                    "text/plain, "
-                    "application/xhtml+xml, "
-                    "application/json"
+                    "text/html,text/plain,"
+                    "application/json,"
+                    "application/xhtml+xml"
                 ),
             },
         )
@@ -631,40 +764,44 @@ def fetch_public(
                     body = body[:MAX_BODY]
 
                 return {
-                    "url": current,
                     "ok": True,
+                    "url": current,
                     "http_status": status,
                     "headers": headers,
                     "body": body.decode(
                         "utf-8",
                         "replace",
                     ),
+                    "error": None,
                 }
 
         except HTTPError as exc:
 
-            headers = (
-                {
-                    key.lower(): value
-                    for key, value
-                    in exc.headers.items()
-                }
-                if exc.headers
-                else {}
-            )
+            headers = {
+                key.lower(): value
+                for key, value
+                in (
+                    exc.headers.items()
+                    if exc.headers
+                    else []
+                )
+            }
 
             body = ""
 
-            if exc.fp:
-                try:
-                    body = exc.read(
-                        MAX_BODY + 1
-                    ).decode(
-                        "utf-8",
-                        "replace",
-                    )
-                except Exception:
-                    body = ""
+            try:
+                body = exc.read(
+                    MAX_BODY + 1
+                ).decode(
+                    "utf-8",
+                    "replace",
+                )
+            except Exception:
+                pass
+
+            location = headers.get(
+                "location"
+            )
 
             if (
                 exc.code
@@ -675,20 +812,19 @@ def fetch_public(
                     307,
                     308,
                 )
-                and exc.headers.get(
-                    "Location"
-                )
-                and hop < MAX_REDIRECTS
+                and location
             ):
+
                 current = urljoin(
                     current,
-                    exc.headers["Location"],
+                    location,
                 )
+
                 continue
 
             return {
-                "url": current,
                 "ok": False,
+                "url": current,
                 "http_status": exc.code,
                 "headers": headers,
                 "body": body,
@@ -702,8 +838,8 @@ def fetch_public(
         ) as exc:
 
             return {
-                "url": current,
                 "ok": False,
+                "url": current,
                 "http_status": None,
                 "headers": {},
                 "body": "",
@@ -713,8 +849,8 @@ def fetch_public(
         except Exception as exc:
 
             return {
-                "url": current,
                 "ok": False,
+                "url": current,
                 "http_status": None,
                 "headers": {},
                 "body": "",
@@ -722,8 +858,8 @@ def fetch_public(
             }
 
     return {
-        "url": current,
         "ok": False,
+        "url": current,
         "http_status": None,
         "headers": {},
         "body": "",
@@ -732,10 +868,10 @@ def fetch_public(
 
 
 # ============================================================
-# TRANSPORT CLASSIFICATION
+# TRANSPORT CLASSIFIER
 # ============================================================
 
-def classify_transport_payload(
+def classify_transport(
     http_status: Optional[int],
     content_type: Optional[str],
     body: Optional[str],
@@ -748,15 +884,21 @@ def classify_transport_payload(
 
     lowered = text.lower()
 
-    content_type_value = (
+    normalized_headers = {
+        str(key).lower(): str(value)
+        for key, value
+        in headers.items()
+    }
+
+    ctype = (
         content_type
-        or headers.get(
+        or normalized_headers.get(
             "content-type",
             "",
         )
     ).lower()
 
-    markers = (
+    waf_markers = (
         "waf",
         "request blocked",
         "access denied",
@@ -767,7 +909,7 @@ def classify_transport_payload(
         "blocked",
     )
 
-    edge_block = (
+    if (
         http_status
         in (
             401,
@@ -777,13 +919,13 @@ def classify_transport_payload(
         )
         and any(
             marker in lowered
-            for marker in markers
+            for marker in waf_markers
         )
-    )
+    ):
 
-    if edge_block:
-
-        classification = "EDGE_WAF_BLOCK"
+        classification = (
+            "EDGE_WAF_BLOCK"
+        )
 
         reason = (
             "HTTP edge/WAF block page detected; "
@@ -795,7 +937,9 @@ def classify_transport_payload(
         and http_status >= 500
     ):
 
-        classification = "UPSTREAM_5XX"
+        classification = (
+            "UPSTREAM_5XX"
+        )
 
         reason = (
             "Upstream server failure; "
@@ -804,28 +948,32 @@ def classify_transport_payload(
 
     elif not text.strip():
 
-        classification = "EMPTY_RESPONSE"
+        classification = (
+            "EMPTY_RESPONSE"
+        )
 
         reason = (
             "Empty response is not research evidence."
         )
 
     elif (
-        "text/html" in content_type_value
+        "text/html" in ctype
         and any(
             marker in lowered
-            for marker in markers
+            for marker in waf_markers
         )
     ):
 
-        classification = "BLOCKED_HTML"
+        classification = (
+            "BLOCKED_HTML"
+        )
 
         reason = (
             "HTML block/interstitial detected; "
             "response is not research evidence."
         )
 
-    elif content_type_value.startswith(
+    elif ctype.startswith(
         (
             "image/",
             "audio/",
@@ -834,7 +982,9 @@ def classify_transport_payload(
         )
     ):
 
-        classification = "OPAQUE_ASSET"
+        classification = (
+            "OPAQUE_ASSET"
+        )
 
         reason = (
             "Opaque binary asset is not research evidence."
@@ -846,7 +996,9 @@ def classify_transport_payload(
         and text.strip()
     ):
 
-        classification = "VALID_PUBLIC_CONTENT"
+        classification = (
+            "VALID_PUBLIC_CONTENT"
+        )
 
         reason = (
             "Public response contains usable textual content."
@@ -854,7 +1006,9 @@ def classify_transport_payload(
 
     else:
 
-        classification = "UNVERIFIED_RESPONSE"
+        classification = (
+            "UNVERIFIED_RESPONSE"
+        )
 
         reason = (
             "Response could not be safely classified "
@@ -880,140 +1034,485 @@ def classify_transport_payload(
         "is_evidence": usable,
         "usable_for_research": usable,
         "http_status": http_status,
-        "content_type": content_type,
+        "content_type": ctype,
         "reason": reason,
-        "digest": digest(text),
+        "digest": sha256(text),
     }
 
 
 # ============================================================
-# CONTENT EXTRACTION
+# HTML
 # ============================================================
 
-def strip_html(
-    html: str,
+def clean_html(
+    value: str,
 ) -> str:
 
-    html = re.sub(
+    value = re.sub(
         r"(?is)"
         r"<script[^>]*>.*?</script>"
         r"|<style[^>]*>.*?</style>"
         r"|<noscript[^>]*>.*?</noscript>",
         " ",
-        html,
+        value,
     )
 
-    html = re.sub(
+    value = re.sub(
         r"(?s)<[^>]+>",
         " ",
-        html,
+        value,
     )
 
     return re.sub(
         r"\s+",
         " ",
-        unescape(html),
+        html.unescape(value),
     ).strip()
 
 
-def extract_title(
-    html: str,
+def title_from_html(
+    value: str,
 ) -> str:
 
     match = re.search(
         r"(?is)<title[^>]*>(.*?)</title>",
-        html,
+        value,
     )
 
     if not match:
         return ""
 
-    return re.sub(
-        r"\s+",
-        " ",
-        unescape(
-            strip_html(
-                match.group(1)
-            )
-        ),
+    return clean_html(
+        match.group(1)
     )[:500]
 
 
 # ============================================================
-# RESEARCH DISCOVERY
+# DISCOVERY
+#
+# 2050.72 problem:
+# DDG results can be wrapped in:
+# /l/?uddg=<encoded-real-url>
+#
+# 2050.73 decodes those links.
 # ============================================================
 
-def search_duckduckgo(
+def normalize_candidate_url(
+    value: str,
+) -> Optional[str]:
+
+    value = html.unescape(
+        value.strip()
+    )
+
+    if value.startswith("//"):
+        value = "https:" + value
+
+    parsed = urlparse(value)
+
+    if (
+        parsed.scheme
+        not in (
+            "http",
+            "https",
+        )
+    ):
+        return None
+
+    host = (
+        parsed.hostname
+        or ""
+    ).lower()
+
+    if not host:
+        return None
+
+    if (
+        host.endswith(
+            (
+                "duckduckgo.com",
+                "bing.com",
+            )
+        )
+        and (
+            "uddg" in parse_qs(
+                parsed.query
+            )
+        )
+    ):
+
+        encoded = parse_qs(
+            parsed.query
+        ).get(
+            "uddg",
+            [""],
+        )[0]
+
+        decoded = unquote(
+            encoded
+        )
+
+        return normalize_candidate_url(
+            decoded
+        )
+
+    return value
+
+
+def extract_urls(
+    html_text: str,
+) -> list[str]:
+
+    candidates: list[str] = []
+
+    patterns = [
+        r'href=["\']([^"\']+)["\']',
+        r'href=([^ >]+)',
+    ]
+
+    for pattern in patterns:
+
+        for raw in re.findall(
+            pattern,
+            html_text,
+            re.I,
+        ):
+
+            candidate = (
+                normalize_candidate_url(
+                    raw
+                )
+            )
+
+            if (
+                candidate
+                and candidate not in candidates
+            ):
+                candidates.append(
+                    candidate
+                )
+
+            if len(candidates) >= 20:
+                return candidates
+
+    return candidates
+
+
+def discovery_query(
+    objective: str,
+) -> str:
+
+    compact = re.sub(
+        r"\s+",
+        " ",
+        objective,
+    ).strip()
+
+    return compact[:900]
+
+
+def discover_ddg(
+    query: str,
+) -> list[str]:
+
+    search_url = (
+        "https://html.duckduckgo.com/html/?q="
+        + quote_plus(query)
+    )
+
+    response = fetch(
+        search_url
+    )
+
+    if not response.get("ok"):
+        return []
+
+    return extract_urls(
+        response.get(
+            "body",
+            "",
+        )
+    )
+
+
+def discover_bing(
+    query: str,
+) -> list[str]:
+
+    search_url = (
+        "https://www.bing.com/search?q="
+        + quote_plus(query)
+    )
+
+    response = fetch(
+        search_url
+    )
+
+    if not response.get("ok"):
+        return []
+
+    return extract_urls(
+        response.get(
+            "body",
+            "",
+        )
+    )
+
+
+def discover_openalex(
     query: str,
 ) -> list[str]:
 
     url = (
-        "https://html.duckduckgo.com/html/?q="
-        + quote_plus(query[:1000])
+        "https://api.openalex.org/works"
+        "?search="
+        + quote_plus(query)
+        + "&per-page=8"
     )
 
-    result = fetch_public(url)
+    response = fetch(
+        url
+    )
 
-    if not result.get("ok"):
+    if not response.get("ok"):
         return []
 
-    html = result.get(
-        "body",
-        "",
-    )
+    try:
+        payload = json.loads(
+            response.get(
+                "body",
+                "",
+            )
+        )
+    except Exception:
+        return []
 
-    found: list[str] = []
+    urls: list[str] = []
 
-    for raw in re.findall(
-        r'href=["\']([^"\']+)["\']',
-        html,
-        re.I,
+    for item in payload.get(
+        "results",
+        [],
     ):
 
-        candidate = unescape(raw)
+        primary = item.get(
+            "primary_location"
+        ) or {}
 
-        if (
-            candidate.startswith("http")
-            and "duckduckgo.com"
-            not in urlparse(
-                candidate
-            ).netloc
+        landing = primary.get(
+            "landing_page_url"
+        )
+
+        pdf = primary.get(
+            "pdf_url"
+        )
+
+        for candidate in (
+            landing,
+            pdf,
         ):
 
-            if candidate not in found:
-                found.append(candidate)
+            normalized = (
+                normalize_candidate_url(
+                    candidate
+                )
+                if candidate
+                else None
+            )
 
-        if len(found) >= MAX_SOURCES:
-            break
+            if (
+                normalized
+                and normalized not in urls
+            ):
+                urls.append(
+                    normalized
+                )
 
-    return found
+    return urls[:MAX_SOURCES]
+
+
+def discover_crossref(
+    query: str,
+) -> list[str]:
+
+    url = (
+        "https://api.crossref.org/works"
+        "?query="
+        + quote_plus(query)
+        + "&rows=8"
+    )
+
+    response = fetch(
+        url
+    )
+
+    if not response.get("ok"):
+        return []
+
+    try:
+        payload = json.loads(
+            response.get(
+                "body",
+                "",
+            )
+        )
+    except Exception:
+        return []
+
+    urls: list[str] = []
+
+    for item in (
+        payload
+        .get("message", {})
+        .get("items", [])
+    ):
+
+        candidate = (
+            item.get("URL")
+        )
+
+        normalized = (
+            normalize_candidate_url(
+                candidate
+            )
+            if candidate
+            else None
+        )
+
+        if (
+            normalized
+            and normalized not in urls
+        ):
+            urls.append(
+                normalized
+            )
+
+    return urls[:MAX_SOURCES]
 
 
 def direct_urls(
     objective: str,
 ) -> list[str]:
 
-    urls = re.findall(
+    values = re.findall(
         r"https?://[^\s<>\"']+",
         objective,
     )
 
-    return [
-        url.rstrip(".,);]")
-        for url in urls
-    ][:MAX_SOURCES]
+    return list(
+        dict.fromkeys(
+            value.rstrip(
+                ".,);]"
+            )
+            for value in values
+        )
+    )[:MAX_SOURCES]
+
+
+def discover_sources(
+    objective: str,
+) -> tuple[list[str], dict[str, int]]:
+
+    direct = direct_urls(
+        objective
+    )
+
+    if direct:
+        return direct, {
+            "direct": len(direct),
+            "ddg": 0,
+            "bing": 0,
+            "openalex": 0,
+            "crossref": 0,
+        }
+
+    query = discovery_query(
+        objective
+    )
+
+    discovered: list[str] = []
+
+    counts = {
+        "direct": 0,
+        "ddg": 0,
+        "bing": 0,
+        "openalex": 0,
+        "crossref": 0,
+    }
+
+    providers = [
+        (
+            "ddg",
+            discover_ddg,
+        ),
+        (
+            "bing",
+            discover_bing,
+        ),
+        (
+            "openalex",
+            discover_openalex,
+        ),
+        (
+            "crossref",
+            discover_crossref,
+        ),
+    ]
+
+    for name, provider in providers:
+
+        try:
+            results = provider(
+                query
+            )
+        except Exception:
+            results = []
+
+        added = 0
+
+        for candidate in results:
+
+            if candidate in discovered:
+                continue
+
+            valid, _ = (
+                validate_public_url(
+                    candidate
+                )
+            )
+
+            if not valid:
+                continue
+
+            discovered.append(
+                candidate
+            )
+
+            added += 1
+
+            if len(discovered) >= MAX_SOURCES:
+                break
+
+        counts[name] = added
+
+        if len(discovered) >= MAX_SOURCES:
+            break
+
+    return (
+        discovered[:MAX_SOURCES],
+        counts,
+    )
 
 
 # ============================================================
 # EVIDENCE
 # ============================================================
 
-def add_evidence(
+def store_evidence(
     mission_id: str,
     url: str,
     title: str,
     text: str,
-    family: str,
+    source_family: str,
 ) -> None:
 
     domain = (
@@ -1021,7 +1520,7 @@ def add_evidence(
         or ""
     ).lower()
 
-    with LOCK, db() as connection:
+    with DB_LOCK, get_db() as connection:
 
         connection.execute(
             """
@@ -1044,147 +1543,86 @@ def add_evidence(
                 domain,
                 title,
                 text[:12000],
-                digest(text),
-                family,
+                sha256(text),
+                source_family,
                 now(),
             ),
         )
 
 
 # ============================================================
-# RESEARCH ENGINE
+# RESEARCH
 # ============================================================
 
-def research_mission(
+def run_research(
     mission_id: str,
     objective: str,
 ) -> dict[str, Any]:
 
-    event(
+    write_event(
         mission_id,
         "research_started",
         "research",
     )
 
-    urls = direct_urls(
-        objective
-    )
-
-    if not urls:
-        urls = search_duckduckgo(
+    urls, discovery = (
+        discover_sources(
             objective
         )
+    )
 
-    urls = list(
-        dict.fromkeys(urls)
-    )[:MAX_SOURCES]
-
-    blocked: list[
-        dict[str, Any]
-    ] = []
+    write_event(
+        mission_id,
+        "research_discovery_completed",
+        "research",
+        {
+            "candidate_count": len(urls),
+            "providers": discovery,
+        },
+    )
 
     usable: list[
         dict[str, Any]
     ] = []
 
+    blocked: list[
+        dict[str, Any]
+    ] = []
+
     for url in urls:
 
-        fetched = fetch_public(
+        response = fetch(
             url
         )
 
-        response_headers = (
-            fetched.get(
-                "headers",
-                {},
-            )
+        headers = response.get(
+            "headers",
+            {},
         )
 
-        transport = classify_transport_payload(
-            fetched.get(
+        transport = classify_transport(
+            response.get(
                 "http_status"
             ),
-            response_headers.get(
+            headers.get(
                 "content-type"
             ),
-            fetched.get(
+            response.get(
                 "body",
                 "",
             ),
-            response_headers,
+            headers,
         )
 
-        transport_event(
+        write_transport_event(
             mission_id,
             url,
             transport,
         )
 
-        if transport[
+        if not transport[
             "usable_for_research"
         ]:
-
-            text = strip_html(
-                fetched.get(
-                    "body",
-                    "",
-                )
-            )
-
-            if len(text) >= 200:
-
-                title = extract_title(
-                    fetched.get(
-                        "body",
-                        "",
-                    )
-                )
-
-                hostname = (
-                    urlparse(url).hostname
-                    or ""
-                )
-
-                pieces = hostname.split(
-                    "."
-                )
-
-                family = (
-                    pieces[-2]
-                    if len(pieces) >= 2
-                    else "unknown"
-                )
-
-                add_evidence(
-                    mission_id,
-                    url,
-                    title,
-                    text,
-                    family,
-                )
-
-                usable.append(
-                    {
-                        "url": url,
-                        "domain": hostname.lower(),
-                        "title": title,
-                        "digest": digest(text),
-                    }
-                )
-
-            else:
-
-                blocked.append(
-                    {
-                        "url": url,
-                        "reason": (
-                            "insufficient textual content"
-                        ),
-                        "transport": transport,
-                    }
-                )
-
-        else:
 
             blocked.append(
                 {
@@ -1196,11 +1634,74 @@ def research_mission(
                 }
             )
 
-    with LOCK, db() as connection:
+            continue
+
+        body = response.get(
+            "body",
+            "",
+        )
+
+        text = clean_html(
+            body
+        )
+
+        if len(text) < 200:
+
+            blocked.append(
+                {
+                    "url": url,
+                    "reason": (
+                        "insufficient textual content"
+                    ),
+                    "transport": transport,
+                }
+            )
+
+            continue
+
+        title = title_from_html(
+            body
+        )
+
+        hostname = (
+            urlparse(url).hostname
+            or ""
+        ).lower()
+
+        parts = hostname.split(
+            "."
+        )
+
+        family = (
+            ".".join(
+                parts[-2:]
+            )
+            if len(parts) >= 2
+            else hostname
+        )
+
+        store_evidence(
+            mission_id,
+            url,
+            title,
+            text,
+            family,
+        )
+
+        usable.append(
+            {
+                "url": url,
+                "domain": hostname,
+                "title": title,
+                "digest": sha256(text),
+            }
+        )
+
+    with DB_LOCK, get_db() as connection:
 
         rows = connection.execute(
             """
-            SELECT domain
+            SELECT DISTINCT domain
             FROM evidence
             WHERE mission_id = ?
             """,
@@ -1227,12 +1728,12 @@ def research_mission(
     if usable:
 
         claim = (
-            f"Research collected "
-            f"{len(usable)} independently reachable "
-            f"textual source(s) for the mission."
+            f"Research produced "
+            f"{len(usable)} usable public source(s) "
+            f"across {len(domains)} independent domain(s)."
         )
 
-        with LOCK, db() as connection:
+        with DB_LOCK, get_db() as connection:
 
             connection.execute(
                 """
@@ -1260,6 +1761,18 @@ def research_mission(
             }
         )
 
+    if closure:
+
+        next_actions: list[str] = []
+
+    else:
+
+        next_actions = [
+            "Retry using additional independent discovery providers.",
+            "Do not treat blocked, WAF, empty, or opaque responses as evidence.",
+            "Require at least two usable sources from two independent domains before completion.",
+        ]
+
     result = {
         "mode": "research",
         "closure": closure,
@@ -1269,17 +1782,12 @@ def research_mission(
         "sources": usable,
         "blocked_sources": blocked,
         "claims": claims,
-        "next_actions": (
-            []
-            if closure
-            else [
-                "Retry with broader independent sources.",
-                "Do not treat blocked or WAF responses as evidence.",
-            ]
-        ),
+        "discovery": discovery,
+        "candidate_count": len(urls),
+        "next_actions": next_actions,
     }
 
-    event(
+    write_event(
         mission_id,
         (
             "research_closed"
@@ -1314,13 +1822,13 @@ def execute_mission(
             "planning",
         )
 
-        event(
+        write_event(
             mission_id,
             "mission_started",
             "planning",
         )
 
-        result = research_mission(
+        result = run_research(
             mission_id,
             objective,
         )
@@ -1334,12 +1842,18 @@ def execute_mission(
                 result,
             )
 
-            event(
+            write_event(
                 mission_id,
                 "mission_completed",
                 "closed",
                 {
                     "closure": True,
+                    "evidence_count": result[
+                        "evidence_count"
+                    ],
+                    "independent_domains": result[
+                        "independent_domains"
+                    ],
                 },
             )
 
@@ -1352,23 +1866,30 @@ def execute_mission(
                 result,
             )
 
-            event(
+            write_event(
                 mission_id,
                 "mission_recovery_required",
                 "recovery",
                 {
                     "closure": False,
+                    "evidence_count": result[
+                        "evidence_count"
+                    ],
+                    "independent_domains": result[
+                        "independent_domains"
+                    ],
                 },
             )
 
     except Exception as exc:
 
-        result = {
+        failure = {
+            "closure": False,
             "error": type(exc).__name__,
             "message": str(exc),
-            "closure": False,
             "next_actions": [
-                "Retry mission after inspecting workflow events."
+                "Inspect workflow events.",
+                "Retry the mission after diagnosis.",
             ],
         }
 
@@ -1376,18 +1897,18 @@ def execute_mission(
             mission_id,
             "failed",
             "recovery",
-            result,
+            failure,
         )
 
-        event(
+        write_event(
             mission_id,
             "mission_failed",
             "recovery",
-            result,
+            failure,
         )
 
 
-async def execute_mission_background(
+async def background_mission(
     mission_id: str,
     objective: str,
 ) -> None:
@@ -1408,17 +1929,17 @@ def startup() -> None:
 
     init_db()
 
-    with LOCK, db() as connection:
+    with DB_LOCK, get_db() as connection:
 
-        stale = connection.execute(
+        rows = connection.execute(
             """
-            SELECT id, objective
+            SELECT id
             FROM missions
             WHERE status IN ('queued', 'running')
             """
         ).fetchall()
 
-    for row in stale:
+    for row in rows:
 
         update_mission(
             row["id"],
@@ -1431,7 +1952,7 @@ def startup() -> None:
             },
         )
 
-        event(
+        write_event(
             row["id"],
             "startup_recovery",
             "recovery",
@@ -1447,7 +1968,6 @@ def root() -> dict[str, Any]:
 
     return {
         "name": "AI Infinity",
-        "service": "AI Infinity",
         "status": "online",
         "version": VERSION,
         "build": BUILD,
@@ -1502,15 +2022,6 @@ def ready() -> dict[str, Any]:
 
 # ============================================================
 # RUN
-#
-# CRITICAL FIX:
-# request: RunRequest
-#
-# This makes Swagger expose:
-# Request body
-# {
-#   "objective": "..."
-# }
 # ============================================================
 
 @app.post("/run")
@@ -1532,7 +2043,7 @@ async def run(
     )
 
     asyncio.create_task(
-        execute_mission_background(
+        background_mission(
             mission_id,
             objective,
         )
@@ -1550,7 +2061,7 @@ async def run(
 # ============================================================
 
 @app.post("/missions")
-async def create_mission_endpoint(
+async def missions_create(
     request: MissionCreateRequest,
 ) -> dict[str, Any]:
 
@@ -1561,7 +2072,7 @@ async def create_mission_endpoint(
     )
 
     asyncio.create_task(
-        execute_mission_background(
+        background_mission(
             mission_id,
             objective,
         )
@@ -1582,7 +2093,7 @@ def mission(
         mission_id
     )
 
-    if not result:
+    if result is None:
 
         raise HTTPException(
             status_code=404,
@@ -1593,7 +2104,7 @@ def mission(
 
 
 @app.get("/missions")
-def missions(
+def mission_list(
     limit: int = Query(
         20,
         ge=1,
@@ -1601,17 +2112,11 @@ def missions(
     ),
 ) -> dict[str, Any]:
 
-    with LOCK, db() as connection:
+    with DB_LOCK, get_db() as connection:
 
         rows = connection.execute(
             """
-            SELECT
-                id,
-                objective,
-                status,
-                phase,
-                created_at,
-                updated_at
+            SELECT id
             FROM missions
             ORDER BY created_at DESC
             LIMIT ?
@@ -1619,24 +2124,32 @@ def missions(
             (limit,),
         ).fetchall()
 
+    results = []
+
+    for row in rows:
+
+        item = get_mission(
+            row["id"]
+        )
+
+        if item:
+            results.append(item)
+
     return {
-        "missions": [
-            dict(row)
-            for row in rows
-        ]
+        "missions": results
     }
 
 
 @app.post("/mission/{mission_id}/retry")
-async def retry_mission(
+async def mission_retry(
     mission_id: str,
 ) -> dict[str, Any]:
 
-    mission_data = get_mission(
+    item = get_mission(
         mission_id
     )
 
-    if not mission_data:
+    if item is None:
 
         raise HTTPException(
             status_code=404,
@@ -1650,16 +2163,16 @@ async def retry_mission(
         None,
     )
 
-    event(
+    write_event(
         mission_id,
         "manual_retry",
         "queued",
     )
 
     asyncio.create_task(
-        execute_mission_background(
+        background_mission(
             mission_id,
-            mission_data["objective"],
+            item["objective"],
         )
     )
 
@@ -1678,16 +2191,16 @@ def sources(
     mission_id: str,
 ) -> dict[str, Any]:
 
-    if not get_mission(
+    if get_mission(
         mission_id
-    ):
+    ) is None:
 
         raise HTTPException(
             status_code=404,
             detail="Mission not found",
         )
 
-    with LOCK, db() as connection:
+    with DB_LOCK, get_db() as connection:
 
         rows = connection.execute(
             """
@@ -1723,16 +2236,16 @@ def evidence(
     mission_id: str,
 ) -> dict[str, Any]:
 
-    if not get_mission(
+    if get_mission(
         mission_id
-    ):
+    ) is None:
 
         raise HTTPException(
             status_code=404,
             detail="Mission not found",
         )
 
-    with LOCK, db() as connection:
+    with DB_LOCK, get_db() as connection:
 
         rows = connection.execute(
             """
@@ -1769,16 +2282,16 @@ def claims(
     mission_id: str,
 ) -> dict[str, Any]:
 
-    if not get_mission(
+    if get_mission(
         mission_id
-    ):
+    ) is None:
 
         raise HTTPException(
             status_code=404,
             detail="Mission not found",
         )
 
-    with LOCK, db() as connection:
+    with DB_LOCK, get_db() as connection:
 
         rows = connection.execute(
             """
@@ -1804,10 +2317,6 @@ def claims(
 
 # ============================================================
 # TRANSPORT CLASSIFICATION
-#
-# IMPORTANT:
-# This endpoint uses TransportRequest,
-# NOT RunRequest.
 # ============================================================
 
 @app.post("/transport/classify")
@@ -1815,17 +2324,17 @@ def transport_classify(
     request: TransportRequest,
 ) -> dict[str, Any]:
 
-    normalized_headers = {
+    headers = {
         key.lower(): value
         for key, value
         in request.headers.items()
     }
 
-    return classify_transport_payload(
+    return classify_transport(
         request.http_status,
         request.content_type,
         request.body,
-        normalized_headers,
+        headers,
     )
 
 
@@ -1843,7 +2352,7 @@ def transport_events(
     ),
 ) -> dict[str, Any]:
 
-    with LOCK, db() as connection:
+    with DB_LOCK, get_db() as connection:
 
         if mission_id:
 
@@ -1879,13 +2388,19 @@ def transport_events(
 
         item = dict(row)
 
-        item["detail"] = (
-            json.loads(
-                item.pop("detail_json")
-            )
-            if item.get("detail_json")
-            else None
+        raw = item.pop(
+            "detail_json",
+            None,
         )
+
+        try:
+            item["detail"] = (
+                json.loads(raw)
+                if raw
+                else None
+            )
+        except Exception:
+            item["detail"] = raw
 
         output.append(item)
 
@@ -1908,7 +2423,7 @@ def workflow_events(
     ),
 ) -> dict[str, Any]:
 
-    with LOCK, db() as connection:
+    with DB_LOCK, get_db() as connection:
 
         if mission_id:
 
@@ -1944,13 +2459,19 @@ def workflow_events(
 
         item = dict(row)
 
-        item["detail"] = (
-            json.loads(
-                item.pop("detail_json")
-            )
-            if item.get("detail_json")
-            else None
+        raw = item.pop(
+            "detail_json",
+            None,
         )
+
+        try:
+            item["detail"] = (
+                json.loads(raw)
+                if raw
+                else None
+            )
+        except Exception:
+            item["detail"] = raw
 
         output.append(item)
 
@@ -1966,18 +2487,34 @@ def workflow_events(
 @app.get("/diagnostics")
 def diagnostics() -> dict[str, Any]:
 
-    with LOCK, db() as connection:
+    with DB_LOCK, get_db() as connection:
 
         mission_count = connection.execute(
-            "SELECT COUNT(*) n FROM missions"
+            """
+            SELECT COUNT(*) AS n
+            FROM missions
+            """
         ).fetchone()["n"]
 
         transport_count = connection.execute(
-            "SELECT COUNT(*) n FROM transport_events"
+            """
+            SELECT COUNT(*) AS n
+            FROM transport_events
+            """
         ).fetchone()["n"]
 
         evidence_count = connection.execute(
-            "SELECT COUNT(*) n FROM evidence"
+            """
+            SELECT COUNT(*) AS n
+            FROM evidence
+            """
+        ).fetchone()["n"]
+
+        event_count = connection.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM workflow_events
+            """
         ).fetchone()["n"]
 
     return {
@@ -1985,6 +2522,9 @@ def diagnostics() -> dict[str, Any]:
         "build": BUILD,
         "missions": {
             "count": mission_count
+        },
+        "workflow_events": {
+            "count": event_count
         },
         "transport_classifications": {
             "count": transport_count
@@ -2021,23 +2561,32 @@ def architecture() -> dict[str, Any]:
         "version": VERSION,
         "build": BUILD,
 
+        "typed_run_request": True,
+        "swagger_request_body": True,
+
         "transport_boundary": True,
         "edge_failure_separation": True,
         "application_failure_separation": True,
         "html_waf_detection": True,
 
-        "workflow_persistence": True,
-        "contract_consistency": True,
-        "recovery_integrity": True,
-        "truthful_completion_gate": True,
+        "public_network_policy": True,
+        "ssrf_protection": True,
 
-        "typed_run_request": True,
-        "swagger_request_body": True,
+        "multi_provider_discovery": True,
+        "ddg_redirect_decoding": True,
+        "openalex_discovery": True,
+        "crossref_discovery": True,
+
+        "workflow_persistence": True,
+        "mission_state_reconciliation": True,
+
+        "truthful_completion_gate": True,
+        "recovery_integrity": True,
     }
 
 
 # ============================================================
-# INITIAL DATABASE
+# INITIALIZE
 # ============================================================
 
 init_db()
