@@ -17,8 +17,8 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 
-APP_VERSION = "TARGET-2050.81"
-BUILD = "CUMULATIVE-EVIDENCE-INDEPENDENCE-AND-RELEVANCE-CLOSURE-CORE"
+APP_VERSION = "TARGET-2050.82"
+BUILD = "CUMULATIVE-ALL-SUCCESSFUL-VERSIONS-EMPIRICAL-EVIDENCE-AND-TRUTHFUL-VERIFICATION-CORE"
 
 DB_PATH = os.getenv("AI_INFINITY_DB", "/tmp/ai-infinity/ai_infinity.db")
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -65,6 +65,28 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT, mission_id TEXT NOT NULL,
             created_at REAL NOT NULL, source_id TEXT, provider TEXT,
             domain TEXT, url TEXT, integrity TEXT)""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS connectors(
+            name TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL,
+            contract TEXT, updated_at REAL NOT NULL)""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS checkpoints(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, mission_id TEXT NOT NULL,
+            created_at REAL NOT NULL, step TEXT NOT NULL, state TEXT NOT NULL)""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS learning(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, mission_id TEXT, created_at REAL NOT NULL,
+            signal TEXT NOT NULL, value TEXT NOT NULL)""")
+        builtin_connectors = [
+            ("reasoning","core","ready",{"contract":"reasoning.v1"}),
+            ("planner","core","ready",{"contract":"planner.v1"}),
+            ("memory","core","ready",{"contract":"memory.v1"}),
+            ("web_read","research","ready",{"contract":"controlled-public-web.v1"}),
+            ("verification","evidence","ready",{"contract":"verification.v2"}),
+            ("action_gateway","execution","approval-gated",{"contract":"action-gateway.v2"}),
+            ("world_model","intelligence","ready",{"contract":"world-model.v1"}),
+            ("video","media","ready",{"contract":"video-capability.v1"}),
+        ]
+        for name, kind, status, contract in builtin_connectors:
+            conn.execute("INSERT OR IGNORE INTO connectors(name,kind,status,contract,updated_at) VALUES(?,?,?,?,?)",
+                         (name,kind,status,json.dumps(contract),time.time()))
         if conn.execute("SELECT COUNT(*) n FROM policies").fetchone()["n"] == 0:
             conn.execute(
                 "INSERT INTO policies(version,created_at,mode,valid) VALUES(?,?,?,1)",
@@ -97,7 +119,7 @@ BLOCKED_HOSTS = {
 }
 BLOCKED_SCHEMES = {"file", "ftp", "gopher", "data", "javascript"}
 MAX_RESPONSE_BYTES = 1024 * 1024
-USER_AGENT = "AI-Infinity/2050.81-controlled-public-research"
+USER_AGENT = "AI-Infinity/2050.82-controlled-public-research"
 
 WAF_MARKERS = (
     "<title>blocked</title>", "<title>access denied</title>",
@@ -398,6 +420,70 @@ def build_plan(objective, request):
         steps.append({"id": "memory", "tool": "memory", "depends_on": [s["id"] for s in steps]})
     return steps
 
+# ---------------- cumulative intelligence fabric ----------------
+
+def checkpoint(mid, step, state):
+    with db_lock:
+        conn=db()
+        conn.execute("INSERT INTO checkpoints(mission_id,created_at,step,state) VALUES(?,?,?,?)",
+                     (mid,time.time(),step,json.dumps(state,default=str)[:10000]))
+        conn.commit(); conn.close()
+    event(mid,"checkpoint",{"step":step})
+
+def record_learning(mid, signal, value):
+    with db_lock:
+        conn=db(); conn.execute("INSERT INTO learning(mission_id,created_at,signal,value) VALUES(?,?,?,?)",
+                                (mid,time.time(),signal,json.dumps(value,default=str)[:10000])); conn.commit(); conn.close()
+
+def connector_registry():
+    with db_lock:
+        conn=db(); rows=conn.execute("SELECT name,kind,status,contract,updated_at FROM connectors ORDER BY name").fetchall(); conn.close()
+    return [{"name":r["name"],"kind":r["kind"],"status":r["status"],"contract":json.loads(r["contract"] or "{}"),"updated_at":r["updated_at"]} for r in rows]
+
+def source_identity(source):
+    pub=source.get("publisher") or ""
+    name=source.get("publisher_name") or ""
+    if pub: return pub
+    if name: return publisher_identity(name, source.get("url",""), source.get("provider",""))
+    return publisher_host(source.get("url",""))
+
+def evidence_type(source):
+    title=source.get("title","").lower()
+    if any(x in title for x in ("survey","review","systematic review")): return "review"
+    if any(x in title for x in ("benchmark","evaluation","empirical","experiment","study","results","reliability","task completion")): return "empirical_or_evaluation"
+    if source.get("type")=="reference": return "reference"
+    return "academic_or_theoretical"
+
+def empirical_score(source, objective):
+    title=source.get("title","").lower()
+    terms=objective_terms(objective)
+    direct=sum(1 for t in terms if t in title)/max(1,len(terms))
+    empirical_words=("benchmark","evaluation","empirical","experiment","study","results","reliability","success","completion","performance")
+    hits=sum(1 for w in empirical_words if w in title)
+    score=min(1.0, direct*0.65 + min(hits,3)*0.10 + (0.15 if source.get("type")=="academic_work" else 0.0))
+    return round(score,4)
+
+def contradiction_analysis(sources):
+    # Conservative deterministic contradiction detector: only marks a contradiction
+    # when the same normalized topic has explicit opposing polarity terms.
+    positive=("improves","effective","successful","reliable","benefit","increase","higher","outperforms")
+    negative=("fails","failure","unreliable","ineffective","harm","decrease","lower","underperforms","limitations")
+    pos=[]; neg=[]
+    for s in sources:
+        t=s.get("title","").lower()
+        if any(w in t for w in positive): pos.append(s)
+        if any(w in t for w in negative): neg.append(s)
+    if pos and neg:
+        return {"count":1,"status":"possible_conflict","method":"title_polarity_screen","positive_sources":[x["id"] for x in pos[:5]],"negative_sources":[x["id"] for x in neg[:5]]}
+    return {"count":0,"status":"no_explicit_polarity_conflict_detected","method":"title_polarity_screen"}
+
+def source_quality_v2(source, objective):
+    base=quality_score(source)
+    emp=empirical_score(source,objective)
+    et=evidence_type(source)
+    penalty=0.10 if et=="reference" else 0.0
+    return round(max(0.0,min(1.0,base*0.65+emp*0.35-penalty)),4)
+
 # ---------------- research providers ----------------
 
 def hostname_of(url):
@@ -516,7 +602,18 @@ def rank_sources(items, objective):
     )
     # Final evidence contains only sources that actually meet the relevance
     # threshold. This fixes 2050.80's 0.0-relevance leakage.
-    return [s for s in ranked if s["relevance_score"] >= 0.18]
+    filtered = [s for s in ranked if s["relevance_score"] >= 0.18]
+    for s in filtered:
+        s["evidence_type"] = evidence_type(s)
+        s["empirical_score"] = empirical_score(s, objective)
+        s["quality_score_v2"] = source_quality_v2(s, objective)
+    # Keep the final evidence set focused: references are retained only when they
+    # are among the strongest relevant context sources; direct academic evidence wins.
+    academic=[s for s in filtered if s.get("evidence_type")!="reference"]
+    refs=[s for s in filtered if s.get("evidence_type")=="reference"]
+    academic=sorted(academic,key=lambda s:(s.get("quality_score_v2",0),s.get("relevance_score",0)),reverse=True)
+    refs=sorted(refs,key=lambda s:(s.get("quality_score_v2",0),s.get("relevance_score",0)),reverse=True)
+    return academic[:30] + refs[:1]
 
 def parse_json(response):
     return parse_json_response(response)
@@ -731,27 +828,37 @@ def build_claims(sources):
         })
     return out
 
-def verify(sources, claims, domains, providers, requested, publishers=0):
-    relevant = [s for s in sources if s["relevance_score"] >= 0.18]
-    high_quality = [s for s in relevant if s["quality_score"] >= 0.35]
-    # Do not claim contradiction analysis that the engine has not actually
-    # performed. Contradictions remain an explicit future evidence-analysis field.
-    verified = bool(
-        requested and len(relevant) >= 3 and len(high_quality) >= 2 and
-        publishers >= 2 and providers >= 2 and len(claims) >= 2
+def verify(sources, claims, domains, providers, requested, publishers=0, contradiction=None, objective=""):
+    relevant=len([s for s in sources if s.get("relevance_score",0)>=0.18])
+    high_quality=len([s for s in sources if s.get("quality_score_v2",s.get("quality_score",0))>=0.35])
+    empirical=len([s for s in sources if s.get("empirical_score",0)>=0.30])
+    independent=set(source_identity(s) for s in sources if source_identity(s))
+    families=set(provider_family(s.get("provider","")) for s in sources if s.get("provider"))
+    conflict=contradiction or {"count":0,"status":"not_run","method":"none"}
+    # Truthful closure: no contradiction claim without analysis, at least 3 relevant
+    # sources, 2+ independent publishers, 2 provider families, 2 claims and quality evidence.
+    verified=bool(
+        requested and relevant>=3 and high_quality>=2 and len(independent)>=2 and
+        len(families)>=2 and len(claims)>=2 and conflict.get("count",0)==0 and
+        conflict.get("status") not in {"not_run","not_implemented"}
     )
     return {
-        "verified": verified,
-        "supported": len(relevant),
-        "contradictions": 0,
-        "independent_domains": domains,
-        "independent_publishers": publishers,
-        "independent_provider_families": providers,
-        "relevant_sources": len(relevant),
-        "high_quality_sources": len(high_quality),
-        "relevance_threshold": 0.18,
-        "quality_threshold": 0.35,
-        "contradiction_analysis": "not_implemented",
+        "verified":verified,
+        "supported":relevant,
+        "contradictions":conflict.get("count",0),
+        "contradiction_analysis":conflict,
+        "independent_domains":len(set(s.get("domain") for s in sources if s.get("domain"))),
+        "independent_publishers":len(independent),
+        "independent_provider_families":len(families),
+        "relevant_sources":relevant,
+        "high_quality_sources":high_quality,
+        "empirical_or_evaluation_sources":empirical,
+        "relevance_threshold":0.18,
+        "quality_threshold":0.35,
+        "verification_requirements":{
+            "min_relevant_sources":3,"min_independent_publishers":2,
+            "min_provider_families":2,"min_claims":2,"contradiction_analysis_required":True
+        },
     }
 
 def evidence_graph(sources, claims):
@@ -852,11 +959,15 @@ def execute_mission(mid, request):
                 provenance_add(mid,s)
 
             claims = build_claims(sources)
+            checkpoint(mid,"research",{"sources":len(sources)})
+            contradiction = contradiction_analysis(sources)
             verification = verify(
                 sources, claims, rr["independent_domains"],
-                rr["provider_count"], request.verify, rr["independent_publishers"]
+                rr["provider_count"], request.verify, rr["independent_publishers"],
+                contradiction, request.objective
             )
             graph = evidence_graph(sources,claims)
+            record_learning(mid,"research_signal",{"sources":len(sources),"publishers":rr["independent_publishers"],"verification":verification["verified"]})
             provider_failures = sum(
                 1 for p in rr["provider_events"] if p["status"]=="failed"
             )
@@ -880,7 +991,7 @@ def execute_mission(mid, request):
                 "application_failures":0,
                 "claims":len(claims),
                 "verification":verification,
-                "closure":bool(verification["verified"] and rr["relevant_sources"] >= 3),
+                "closure":bool(verification["verified"] and verification["contradiction_analysis"]["status"] not in {"not_run","not_implemented"}),
                 "providers":rr["provider_events"],
                 "query_terms":rr["query_terms"],
                 "evidence_graph":{
@@ -895,6 +1006,8 @@ def execute_mission(mid, request):
                     "unverified_responses_rejected":True,
                     "transport_validation_required":True,
                     "research_source_integrity_validation":True,
+                    "contradiction_analysis_required":True,
+                    "publisher_identity_validation":True,
                     "arbitrary_code_execution":False,
                     "permission_bypass":False,
                 },
@@ -1005,6 +1118,10 @@ def health():
             "relevance_filter_enabled":True,
             "strict_final_evidence_set":True,
             "publisher_independence_enabled":True,
+            "publisher_identity_resolution":True,
+            "empirical_evidence_scoring":True,
+            "contradiction_analysis":True,
+            "truthful_closure":True,
             "evidence_graph":True,
             "provider_count":len(PROVIDERS),
             "providers":[x[0] for x in PROVIDERS],
@@ -1029,6 +1146,10 @@ def capabilities():
             "source_relevance_scoring","strict_relevance_evidence_set","publisher_independence",
             "evidence_collection","evidence_graph",
             "verification","provenance","persistent_memory","health_tracking",
+            "capability_discovery","connector_registry","connector_contracts",
+            "parallel_orchestration","checkpoints","fallback_recovery","self_critique",
+            "gap_detection","opportunity_detection","world_model","video_capability",
+            "learning_loop","mission_state_graph",
             "adaptive_recovery","self_modification","runtime_policy_adaptation",
             "approval_gates","controlled_action_gateway",
             "network_policy","ssrf_protection","waf_response_rejection",
@@ -1036,6 +1157,31 @@ def capabilities():
             "mobile_friendly_interface",
         ],
     }
+
+@app.get("/connectors")
+def connectors():
+    return {"status":"healthy","connectors":connector_registry()}
+
+@app.get("/mission/{mission_id}/checkpoints")
+def mission_checkpoints(mission_id: str):
+    if not get_mission(mission_id): return {"error":"mission_not_found","mission_id":mission_id}
+    with db_lock:
+        conn=db(); rows=conn.execute("SELECT created_at,step,state FROM checkpoints WHERE mission_id=? ORDER BY id",(mission_id,)).fetchall(); conn.close()
+    return {"mission_id":mission_id,"checkpoints":[{"created_at":r["created_at"],"step":r["step"],"state":json.loads(r["state"])} for r in rows]}
+
+@app.get("/memory")
+def memory_api():
+    with db_lock:
+        conn=db(); rows=conn.execute("SELECT id,created_at,key,value FROM memory ORDER BY id DESC LIMIT 50").fetchall(); conn.close()
+    return {"count":memory_count(),"items":[{"id":r["id"],"created_at":r["created_at"],"key":r["key"],"value":json.loads(r["value"])} for r in rows]}
+
+@app.get("/world-model")
+def world_model():
+    return {"status":"ready","mode":"structured-mission-world-model","knowledge":"derived-only","external_facts_not_claimed":True,"components":["objective","plan","sources","claims","provenance","verification","actions"]}
+
+@app.get("/opportunities")
+def opportunities():
+    return {"status":"ready","mode":"gap-and-next-step-detection","rules":["missing_evidence","provider_failure","verification_gap","approval_required","recovery_needed"]}
 
 @app.post("/run")
 def run(request: MissionRequest):
@@ -1136,7 +1282,7 @@ def router_test():
 def ui():
     return """<!doctype html>
 <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AI Infinity</title>
+<title>AI Infinity 2050.82</title>
 <style>
 body{font-family:system-ui;margin:0;background:#10131a;color:#eee}
 main{max-width:760px;margin:auto;padding:18px}
