@@ -75,7 +75,7 @@ from fastapi import (
 )
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
-
+app = FastAPI(title="AI Infinity", version="TARGET-2050.99")
 
 # ============================================================
 # VERSION
