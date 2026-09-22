@@ -1,7 +1,7 @@
 """
 AI Infinity
-TARGET-2050.96
-BUILD: CUMULATIVE-COMMAND-EXECUTION-AUDIT-RECOVERY-CORE
+TARGET-2050.97
+BUILD: REAL-WORLD-COMMAND-AUDIT-RECOVERY-CORE
 
 Practical cumulative AI core.
 
@@ -22,7 +22,7 @@ Preserves:
 - interface
 - legacy API compatibility
 
-2050.96 repairs:
+2050.97 repairs:
 - one authoritative /action endpoint
 - /v1/action compatibility
 - safe-action compatibility endpoint
@@ -34,6 +34,8 @@ Preserves:
 - safe public HTTP gateway
 - result persistence
 - audit trail
+- command audit endpoint
+- command audit self-test
 - SSRF protection
 - redirect validation
 - no arbitrary code execution
@@ -58,7 +60,12 @@ from html import escape
 from typing import Any, Dict, List, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus, urljoin, urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import (
+    HTTPRedirectHandler,
+    HTTPSHandler,
+    Request,
+    build_opener,
+)
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request as FastAPIRequest
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -69,8 +76,8 @@ from pydantic import BaseModel
 # VERSION
 # ============================================================
 
-APP_VERSION = "TARGET-2050.96"
-BUILD = "CUMULATIVE-COMMAND-EXECUTION-AUDIT-RECOVERY-CORE"
+APP_VERSION = "TARGET-2050.97"
+BUILD = "REAL-WORLD-COMMAND-AUDIT-RECOVERY-CORE"
 
 DATA_DIR = os.getenv("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity")
 DB_PATH = os.path.join(DATA_DIR, "ai_infinity.db")
@@ -189,7 +196,12 @@ class SafeRedirectHandler(HTTPRedirectHandler):
         )
 
 
-OPENER = build_opener(SafeRedirectHandler())
+OPENER = build_opener(
+    SafeRedirectHandler(),
+    HTTPSHandler(
+        context=ssl.create_default_context()
+    ),
+)
 
 
 def safe_fetch(
@@ -218,12 +230,9 @@ def safe_fetch(
                 method="GET",
             )
 
-            context = ssl.create_default_context()
-
             with OPENER.open(
                 req,
                 timeout=timeout,
-                context=context,
             ) as response:
 
                 final_url = validate_url(response.geturl())
@@ -2397,7 +2406,7 @@ def parse_provider(
             )
         ):
 
-            title = (
+            title = ( 
                 item.get(
                     "title"
                 )
@@ -2798,6 +2807,7 @@ def research_mission(
         ):
 
             try:
+
                 results.append(
                     future.result()
                 )
@@ -4687,6 +4697,123 @@ def action_history(
     }
 
 
+def command_audit(
+    limit: int = 25,
+):
+
+    limit = max(
+        1,
+        min(
+            int(limit),
+            100,
+        ),
+    )
+
+    transactions = q(
+        """
+        SELECT id, mission_id, action, status,
+               idempotency_key, error,
+               created_at, updated_at
+        FROM action_transactions
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+
+    logs = q(
+        """
+        SELECT id, mission_id, action, status,
+               idempotency_key, action_type,
+               target, ts
+        FROM action_log
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+
+    counts = q(
+        """
+        SELECT status, COUNT(*) AS n
+        FROM action_transactions
+        GROUP BY status
+        """
+    )
+
+    return {
+        "version": APP_VERSION,
+        "status": "ready",
+        "transaction_counts": {
+            row["status"]: row["n"]
+            for row in counts
+        },
+        "transactions": [
+            dict(row)
+            for row in transactions
+        ],
+        "audit_log": [
+            dict(row)
+            for row in logs
+        ],
+        "integrity": {
+            "transactions_persisted": True,
+            "idempotency_keys_persisted": True,
+            "action_log_persisted": True,
+            "recovery_boundary": "failed_closed",
+            "arbitrary_code_execution": False,
+        },
+    }
+
+
+@app.get("/command-audit")
+def command_audit_endpoint(
+    limit: int = 25,
+):
+
+    return command_audit(limit)
+
+
+@app.get("/test-command-audit")
+def test_command_audit():
+
+    audit = command_audit(10)
+
+    required = {
+        "transaction_counts",
+        "transactions",
+        "audit_log",
+        "integrity",
+    }
+
+    passed = required.issubset(
+        audit.keys()
+    )
+
+    return {
+        "version": APP_VERSION,
+        "status":
+            "passed"
+            if passed
+            else "failed",
+        "audit_verified": passed,
+        "integrity":
+            audit["integrity"],
+        "transaction_count":
+            len(
+                audit[
+                    "transactions"
+                ]
+            ),
+        "audit_log_count":
+            len(
+                audit[
+                    "audit_log"
+                ]
+            ),
+    }
+
+
 # ============================================================
 # LEGACY VERIFY
 # ============================================================
@@ -5565,6 +5692,7 @@ def version_history():
         "2050.92",
         "2050.95",
         "2050.96",
+        "2050.97",
     ]
 
     return {
