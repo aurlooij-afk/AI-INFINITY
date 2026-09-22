@@ -1,7 +1,7 @@
 """
 AI Infinity
-TARGET-2050.98
-BUILD: REAL-WORLD-COMMAND-TRANSACTION-RECOVERY-CORE
+TARGET-2050.99
+BUILD: REAL-WORLD-COMMAND-EXECUTION-CORE
 
 Practical cumulative AI core.
 
@@ -21,24 +21,24 @@ Preserves:
 - action fabric
 - interface
 - legacy API compatibility
+- 2050.98 stale transaction recovery
 
-2050.97 repairs:
-- one authoritative /action endpoint
-- /v1/action compatibility
-- safe-action compatibility endpoint
-- transactional action persistence
-- idempotency replay
-- action snapshots
-- bounded retries
-- circuit breakers
-- safe public HTTP gateway
-- result persistence
-- audit trail
-- command audit endpoint
-- command audit self-test
-- SSRF protection
-- redirect validation
-- no arbitrary code execution
+2050.99 adds:
+- real-world external HTTP command execution
+- explicit approval-gated side effects
+- host allowlist
+- public API/webhook execution
+- safe request methods
+- sensitive-header blocking
+- side-effect transaction persistence
+- approval transaction endpoint
+- rejection endpoint
+- no automatic replay of uncertain external effects
+- stale external transaction closure
+- bounded response/payload sizes
+- redirect blocking for side-effecting requests
+- audit trail integration
+- real-world command status endpoint
 """
 
 from __future__ import annotations
@@ -67,7 +67,12 @@ from urllib.request import (
     build_opener,
 )
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request as FastAPIRequest
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    HTTPException,
+    Request as FastAPIRequest,
+)
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -76,22 +81,63 @@ from pydantic import BaseModel
 # VERSION
 # ============================================================
 
-APP_VERSION = "TARGET-2050.98"
-BUILD = "REAL-WORLD-COMMAND-TRANSACTION-RECOVERY-CORE"
+APP_VERSION = "TARGET-2050.99"
+BUILD = "REAL-WORLD-COMMAND-EXECUTION-CORE"
 
-DATA_DIR = os.getenv("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity")
-DB_PATH = os.path.join(DATA_DIR, "ai_infinity.db")
+DATA_DIR = os.getenv(
+    "AI_INFINITY_DATA_DIR",
+    "/tmp/ai-infinity",
+)
+DB_PATH = os.path.join(
+    DATA_DIR,
+    "ai_infinity.db",
+)
 
 MAX_BODY = 1_000_000
 MAX_REDIRECTS = 4
 REQUEST_TIMEOUT = 12
+
 ACTION_MAX_BYTES = 512 * 1024
 ACTION_MAX_ATTEMPTS = 2
-ACTION_STALE_SECONDS = max(30, int(os.getenv("AI_INFINITY_ACTION_STALE_SECONDS", "120")))
+
+ACTION_STALE_SECONDS = max(
+    30,
+    int(
+        os.getenv(
+            "AI_INFINITY_ACTION_STALE_SECONDS",
+            "120",
+        )
+    ),
+)
+
+ACTION_HOST_ALLOWLIST = {
+    host.strip().lower().rstrip(".")
+    for host in os.getenv(
+        "AI_INFINITY_ACTION_HOST_ALLOWLIST",
+        "",
+    ).split(",")
+    if host.strip()
+}
+
+ACTION_MAX_RESPONSE_BYTES = 256 * 1024
+
+SENSITIVE_ACTION_HEADERS = {
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "set-cookie",
+    "x-api-key",
+    "x-auth-token",
+    "x-access-token",
+}
+
 
 STARTED_AT = time.time()
 
-os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(
+    DATA_DIR,
+    exist_ok=True,
+)
 
 
 # ============================================================
@@ -119,17 +165,29 @@ WAF_MARKERS = (
 )
 
 
-def _host_is_private(host: str) -> bool:
-    host = (host or "").strip().lower().rstrip(".")
+def _host_is_private(
+    host: str,
+) -> bool:
+
+    host = (
+        host
+        or ""
+    ).strip().lower().rstrip(".")
 
     if not host:
         return True
 
-    if host in BLOCKED_HOSTS or host.endswith(".local"):
+    if (
+        host in BLOCKED_HOSTS
+        or host.endswith(".local")
+    ):
         return True
 
     try:
-        ip = ipaddress.ip_address(host)
+
+        ip = ipaddress.ip_address(
+            host
+        )
 
         return (
             ip.is_private
@@ -140,14 +198,23 @@ def _host_is_private(host: str) -> bool:
         )
 
     except ValueError:
+
         pass
 
     try:
-        infos = socket.getaddrinfo(host, None)
+
+        infos = socket.getaddrinfo(
+            host,
+            None,
+        )
 
         for info in infos:
+
             address = info[4][0]
-            ip = ipaddress.ip_address(address)
+
+            ip = ipaddress.ip_address(
+                address
+            )
 
             if (
                 ip.is_private
@@ -156,37 +223,80 @@ def _host_is_private(host: str) -> bool:
                 or ip.is_reserved
                 or ip.is_multicast
             ):
+
                 return True
 
     except Exception:
+
         return True
 
     return False
 
 
-def validate_url(url: str) -> str:
+def validate_url(
+    url: str,
+) -> str:
+
     parsed = urlparse(url)
 
-    if parsed.scheme not in {"http", "https"}:
-        raise ValueError("only http/https URLs are allowed")
+    if parsed.scheme not in {
+        "http",
+        "https",
+    }:
+
+        raise ValueError(
+            "only http/https URLs are allowed"
+        )
 
     if not parsed.hostname:
-        raise ValueError("missing hostname")
 
-    if _host_is_private(parsed.hostname):
-        raise ValueError("blocked or private destination")
+        raise ValueError(
+            "missing hostname"
+        )
 
-    if parsed.username or parsed.password:
-        raise ValueError("credential-bearing URLs are not allowed")
+    if _host_is_private(
+        parsed.hostname
+    ):
+
+        raise ValueError(
+            "blocked or private destination"
+        )
+
+    if (
+        parsed.username
+        or parsed.password
+    ):
+
+        raise ValueError(
+            "credential-bearing URLs are not allowed"
+        )
 
     return url
 
 
-class SafeRedirectHandler(HTTPRedirectHandler):
+class SafeRedirectHandler(
+    HTTPRedirectHandler
+):
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        destination = urljoin(req.full_url, newurl)
-        validate_url(destination)
+    def redirect_request(
+        self,
+        req,
+        fp,
+        code,
+        msg,
+        headers,
+        newurl,
+    ):
+
+        destination = urljoin(
+            req.full_url,
+            newurl,
+        )
+
+        validate_url(
+            destination
+        )
+
         return super().redirect_request(
             req,
             fp,
@@ -210,17 +320,21 @@ def safe_fetch(
     timeout: int = REQUEST_TIMEOUT,
 ) -> Dict[str, Any]:
 
-    current = validate_url(url)
+    current = validate_url(
+        url
+    )
 
     redirects = 0
 
     while True:
 
         try:
+
             req = Request(
                 current,
                 headers={
-                    "User-Agent": "AI-Infinity/2050.98",
+                    "User-Agent":
+                        "AI-Infinity/2050.99",
                     "Accept": (
                         "application/json,"
                         "text/html,"
@@ -236,11 +350,16 @@ def safe_fetch(
                 timeout=timeout,
             ) as response:
 
-                final_url = validate_url(response.geturl())
+                final_url = validate_url(
+                    response.geturl()
+                )
 
-                body = response.read(MAX_BODY + 1)
+                body = response.read(
+                    MAX_BODY + 1
+                )
 
                 if len(body) > MAX_BODY:
+
                     raise ValueError(
                         "response exceeds 1 MB safety limit"
                     )
@@ -250,7 +369,9 @@ def safe_fetch(
                     errors="replace",
                 )
 
-                sample = text[:12000].lower()
+                sample = text[
+                    :12000
+                ].lower()
 
                 blocked = any(
                     marker in sample
@@ -265,11 +386,15 @@ def safe_fetch(
                         200,
                     ),
                     "url": final_url,
-                    "content_type": response.headers.get(
-                        "Content-Type",
-                        "",
-                    ),
-                    "text": "" if blocked else text,
+                    "content_type":
+                        response.headers.get(
+                            "Content-Type",
+                            "",
+                        ),
+                    "text":
+                        ""
+                        if blocked
+                        else text,
                     "error": (
                         "waf_or_block_page"
                         if blocked
@@ -278,6 +403,7 @@ def safe_fetch(
                 }
 
         except HTTPError as exc:
+
             return {
                 "ok": False,
                 "status": exc.code,
@@ -316,6 +442,7 @@ def safe_fetch(
             redirects += 1
 
             if redirects > MAX_REDIRECTS:
+
                 return {
                     "ok": False,
                     "status": 0,
@@ -611,11 +738,14 @@ SCHEMA = {
 
 
 def db():
+
     conn = sqlite3.connect(
         DB_PATH,
         check_same_thread=False,
     )
+
     conn.row_factory = sqlite3.Row
+
     return conn
 
 
@@ -628,11 +758,8 @@ def init_db():
         try:
 
             for sql in SCHEMA.values():
-                conn.execute(sql)
 
-            # -------------------------
-            # Additive migrations
-            # -------------------------
+                conn.execute(sql)
 
             mission_cols = {
                 row["name"]
@@ -652,6 +779,7 @@ def init_db():
             for name, typ, default in migrations:
 
                 if name not in mission_cols:
+
                     conn.execute(
                         f"""
                         ALTER TABLE missions
@@ -677,6 +805,7 @@ def init_db():
             for name, typ, default in action_migrations:
 
                 if name not in action_cols:
+
                     conn.execute(
                         f"""
                         ALTER TABLE action_log
@@ -697,6 +826,7 @@ def init_db():
                         "self_modification": True,
                         "provider_quorum": True,
                         "safe_action_gateway": True,
+                        "real_world_command_execution": True,
                     }),
                     time.time(),
                 ),
@@ -785,6 +915,7 @@ def init_db():
             conn.commit()
 
         finally:
+
             conn.close()
 
 
@@ -811,11 +942,17 @@ def q(
             rows = cur.fetchall()
 
             if one:
-                return rows[0] if rows else None
+
+                return (
+                    rows[0]
+                    if rows
+                    else None
+                )
 
             return rows
 
         finally:
+
             conn.close()
 
 
@@ -838,6 +975,7 @@ def write(
             conn.commit()
 
         finally:
+
             conn.close()
 
 
@@ -898,6 +1036,7 @@ class ActionRequest(BaseModel):
 class SafeActionRequest(BaseModel):
 
     action_type: str
+
     target: str = ""
 
     payload: Dict[str, Any] = {}
@@ -909,19 +1048,44 @@ class SafeActionRequest(BaseModel):
     mission_id: Optional[str] = None
 
 
+class RealWorldCommandRequest(BaseModel):
+
+    target: str
+
+    method: str = "POST"
+
+    body: Dict[str, Any] = {}
+
+    headers: Dict[str, str] = {}
+
+    idempotency_key: Optional[str] = None
+
+    mission_id: Optional[str] = None
+
+
 # ============================================================
 # UTILITIES
 # ============================================================
 
 def now() -> float:
+
     return time.time()
 
 
-def make_id(prefix: str) -> str:
-    return f"{prefix}-{uuid.uuid4().hex[:12]}"
+def make_id(
+    prefix: str,
+) -> str:
+
+    return (
+        f"{prefix}-"
+        f"{uuid.uuid4().hex[:12]}"
+    )
 
 
-def normalize_text(value: str) -> str:
+def normalize_text(
+    value: str,
+) -> str:
+
     return re.sub(
         r"\s+",
         " ",
@@ -929,7 +1093,9 @@ def normalize_text(value: str) -> str:
     )
 
 
-def fingerprint(*parts) -> str:
+def fingerprint(
+    *parts,
+) -> str:
 
     raw = "|".join(
         str(x)
@@ -1008,6 +1174,7 @@ def policy() -> Dict[str, Any]:
     )
 
     if not row:
+
         return {
             "version": 1,
             "adaptive_recovery": True,
@@ -1023,12 +1190,17 @@ def policy() -> Dict[str, Any]:
     return data
 
 
-def adaptive_upgrade(reason: str) -> int:
+def adaptive_upgrade(
+    reason: str,
+) -> int:
 
     current = policy()
 
     version = int(
-        current.get("version", 1)
+        current.get(
+            "version",
+            1,
+        )
     ) + 1
 
     current["version"] = version
@@ -1081,7 +1253,9 @@ def remember(
     )
 
 
-def memory_items(limit: int = 50):
+def memory_items(
+    limit: int = 50,
+):
 
     return [
         dict(row)
@@ -1108,7 +1282,9 @@ SAFE_ACTIONS = {
 }
 
 
-def _circuit(action: str):
+def _circuit(
+    action: str,
+):
 
     row = q(
         """
@@ -1151,12 +1327,19 @@ def _circuit(action: str):
     return dict(row)
 
 
-def _circuit_failure(action: str):
+def _circuit_failure(
+    action: str,
+):
 
-    current = _circuit(action)
+    current = _circuit(
+        action
+    )
 
     failures = int(
-        current.get("failures", 0)
+        current.get(
+            "failures",
+            0,
+        )
     ) + 1
 
     state = (
@@ -1177,14 +1360,20 @@ def _circuit_failure(action: str):
         (
             failures,
             state,
-            now() if state == "open" else current.get("opened_at"),
+            now()
+            if state == "open"
+            else current.get(
+                "opened_at"
+            ),
             now(),
             action,
         ),
     )
 
 
-def _circuit_success(action: str):
+def _circuit_success(
+    action: str,
+):
 
     write(
         """
@@ -1202,19 +1391,28 @@ def _circuit_success(action: str):
     )
 
 
-def _action_allowed(action: str) -> bool:
+def _action_allowed(
+    action: str,
+) -> bool:
 
     return (
         action in SAFE_ACTIONS
-        and _circuit(action).get("state")
+        and _circuit(action).get(
+            "state"
+        )
         != "open"
     )
 
 
-def _safe_math_eval(node):
+def _safe_math_eval(
+    node,
+):
 
     if (
-        isinstance(node, ast.Constant)
+        isinstance(
+            node,
+            ast.Constant,
+        )
         and isinstance(
             node.value,
             (int, float),
@@ -1224,6 +1422,7 @@ def _safe_math_eval(node):
             bool,
         )
     ):
+
         return node.value
 
     if isinstance(
@@ -1231,7 +1430,10 @@ def _safe_math_eval(node):
         ast.UnaryOp,
     ) and isinstance(
         node.op,
-        (ast.USub, ast.UAdd),
+        (
+            ast.USub,
+            ast.UAdd,
+        ),
     ):
 
         value = _safe_math_eval(
@@ -1242,6 +1444,7 @@ def _safe_math_eval(node):
             node.op,
             ast.USub,
         ):
+
             return -value
 
         return value
@@ -1263,37 +1466,55 @@ def _safe_math_eval(node):
             node.op,
             ast.Add,
         ):
-            return left + right
+
+            return (
+                left + right
+            )
 
         if isinstance(
             node.op,
             ast.Sub,
         ):
-            return left - right
+
+            return (
+                left - right
+            )
 
         if isinstance(
             node.op,
             ast.Mult,
         ):
-            return left * right
+
+            return (
+                left * right
+            )
 
         if isinstance(
             node.op,
             ast.Div,
         ):
-            return left / right
+
+            return (
+                left / right
+            )
 
         if isinstance(
             node.op,
             ast.FloorDiv,
         ):
-            return left // right
+
+            return (
+                left // right
+            )
 
         if isinstance(
             node.op,
             ast.Mod,
         ):
-            return left % right
+
+            return (
+                left % right
+            )
 
         if isinstance(
             node.op,
@@ -1304,11 +1525,14 @@ def _safe_math_eval(node):
                 abs(right) > 12
                 or abs(left) > 1_000_000
             ):
+
                 raise ValueError(
                     "power_bounds_exceeded"
                 )
 
-            return left ** right
+            return (
+                left ** right
+            )
 
     raise ValueError(
         "unsupported_expression"
@@ -1358,15 +1582,18 @@ def _registered_execute(
             )
             for node in ast.walk(tree)
         ):
+
             raise ValueError(
                 "unsafe_expression"
             )
 
         return {
-            "expression": expression,
-            "value": _safe_math_eval(
-                tree.body
-            ),
+            "expression":
+                expression,
+            "value":
+                _safe_math_eval(
+                    tree.body
+                ),
         }
 
     if action == "hash_text":
@@ -1379,11 +1606,16 @@ def _registered_execute(
         )
 
         return {
-            "algorithm": "sha256",
-            "hash": hashlib.sha256(
-                value.encode("utf-8")
-            ).hexdigest(),
-            "length": len(value),
+            "algorithm":
+                "sha256",
+            "hash":
+                hashlib.sha256(
+                    value.encode(
+                        "utf-8"
+                    )
+                ).hexdigest(),
+            "length":
+                len(value),
         }
 
     if action == "validate_python":
@@ -1396,6 +1628,7 @@ def _registered_execute(
         )
 
         if len(source) > 50_000:
+
             raise ValueError(
                 "source_too_large"
             )
@@ -1407,7 +1640,9 @@ def _registered_execute(
 
         forbidden = []
 
-        for node in ast.walk(tree):
+        for node in ast.walk(
+            tree
+        ):
 
             if isinstance(
                 node,
@@ -1417,6 +1652,7 @@ def _registered_execute(
                     ast.ImportFrom,
                 ),
             ):
+
                 forbidden.append(
                     type(node).__name__
                 )
@@ -1435,18 +1671,25 @@ def _registered_execute(
                     "check_call",
                 }
             ):
+
                 forbidden.append(
                     "forbidden_attribute"
                 )
 
         return {
-            "valid_syntax": True,
-            "node_count": sum(
-                1
-                for _ in ast.walk(tree)
-            ),
-            "execution_performed": False,
-            "unsafe_constructs_detected": forbidden[:20],
+            "valid_syntax":
+                True,
+            "node_count":
+                sum(
+                    1
+                    for _ in ast.walk(
+                        tree
+                    )
+                ),
+            "execution_performed":
+                False,
+            "unsafe_constructs_detected":
+                forbidden[:20],
         }
 
     raise ValueError(
@@ -1454,13 +1697,25 @@ def _registered_execute(
     )
 
 
-def _transaction_result(row):
-    if not row or not row["result_json"]:
+def _transaction_result(
+    row,
+):
+
+    if (
+        not row
+        or not row["result_json"]
+    ):
+
         return None
 
     try:
-        return json.loads(row["result_json"])
+
+        return json.loads(
+            row["result_json"]
+        )
+
     except Exception:
+
         return None
 
 
@@ -1470,14 +1725,24 @@ def _transaction_replay(
     key,
     reclaimed=False,
 ):
+
     return {
-        "status": row["status"],
-        "transaction_id": row["id"],
-        "action": action,
-        "idempotency_key": key,
-        "idempotent_replay": not reclaimed,
-        "stale_running_reclaimed": reclaimed,
-        "result": _transaction_result(row),
+        "status":
+            row["status"],
+        "transaction_id":
+            row["id"],
+        "action":
+            action,
+        "idempotency_key":
+            key,
+        "idempotent_replay":
+            not reclaimed,
+        "stale_running_reclaimed":
+            reclaimed,
+        "result":
+            _transaction_result(
+                row
+            ),
     }
 
 
@@ -1487,7 +1752,9 @@ def _begin_action_transaction(
     key,
     input_json,
     snapshot,
+    allow_stale_reclaim=True,
 ):
+
     existing = q(
         """
         SELECT *
@@ -1511,11 +1778,98 @@ def _begin_action_transaction(
         )
 
         if (
-            existing["status"] == "running"
+            existing["status"]
+            == "running"
             and age >= ACTION_STALE_SECONDS
         ):
 
             txid = existing["id"]
+
+            if not allow_stale_reclaim:
+
+                result = {
+                    "status":
+                        "failed_closed",
+                    "transaction_id":
+                        txid,
+                    "outcome":
+                        "unknown_remote_outcome",
+                    "replay_blocked":
+                        True,
+                    "reason":
+                        "stale_external_transaction_closed_without_replay",
+                }
+
+                write(
+                    """
+                    UPDATE action_transactions
+                    SET status='failed_closed',
+                        result_json=?,
+                        error=?,
+                        updated_at=?
+                    WHERE id=?
+                      AND status='running'
+                    """,
+                    (
+                        json.dumps(
+                            result,
+                            ensure_ascii=False,
+                        ),
+                        "stale external transaction outcome unknown",
+                        now(),
+                        txid,
+                    ),
+                )
+
+                refreshed = q(
+                    """
+                    SELECT *
+                    FROM action_transactions
+                    WHERE id=?
+                    """,
+                    (txid,),
+                    one=True,
+                )
+
+                write(
+                    """
+                    INSERT INTO action_snapshots(
+                        transaction_id,
+                        snapshot_json,
+                        created_at
+                    )
+                    VALUES(?,?,?)
+                    """,
+                    (
+                        txid,
+                        json.dumps(
+                            {
+                                **snapshot,
+                                "recovery":
+                                    "stale_external_transaction_closed_without_replay",
+                                "previous_status":
+                                    "running",
+                                "stale_age_seconds":
+                                    age,
+                                "external_side_effects":
+                                    True,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        now(),
+                    ),
+                )
+
+                return {
+                    "mode":
+                        "stale_closed",
+                    "transaction_id":
+                        txid,
+                    "row":
+                        refreshed,
+                    "stale_age_seconds":
+                        age,
+                }
 
             write(
                 """
@@ -1547,7 +1901,8 @@ def _begin_action_transaction(
 
             if (
                 refreshed
-                and refreshed["status"] == "running"
+                and refreshed["status"]
+                == "running"
             ):
 
                 write(
@@ -1580,19 +1935,28 @@ def _begin_action_transaction(
                 )
 
                 return {
-                    "mode": "reclaimed",
-                    "transaction_id": txid,
-                    "row": refreshed,
-                    "stale_age_seconds": age,
+                    "mode":
+                        "reclaimed",
+                    "transaction_id":
+                        txid,
+                    "row":
+                        refreshed,
+                    "stale_age_seconds":
+                        age,
                 }
 
         return {
-            "mode": "replay",
-            "transaction_id": existing["id"],
-            "row": existing,
+            "mode":
+                "replay",
+            "transaction_id":
+                existing["id"],
+            "row":
+                existing,
         }
 
-    txid = make_id("tx")
+    txid = make_id(
+        "tx"
+    )
 
     try:
 
@@ -1635,10 +1999,14 @@ def _begin_action_transaction(
         )
 
         if existing:
+
             return {
-                "mode": "replay",
-                "transaction_id": existing["id"],
-                "row": existing,
+                "mode":
+                    "replay",
+                "transaction_id":
+                    existing["id"],
+                "row":
+                    existing,
             }
 
         raise
@@ -1663,17 +2031,20 @@ def _begin_action_transaction(
     )
 
     return {
-        "mode": "new",
-        "transaction_id": txid,
-        "row": q(
-            """
-            SELECT *
-            FROM action_transactions
-            WHERE id=?
-            """,
-            (txid,),
-            one=True,
-        ),
+        "mode":
+            "new",
+        "transaction_id":
+            txid,
+        "row":
+            q(
+                """
+                SELECT *
+                FROM action_transactions
+                WHERE id=?
+                """,
+                (txid,),
+                one=True,
+            ),
     }
 
 
@@ -1682,29 +2053,48 @@ def execute_action_fabric(
 ):
 
     action = request.action.strip()
-    args = dict(request.args or {})
+
+    args = dict(
+        request.args or {}
+    )
 
     if action not in SAFE_ACTIONS:
+
         return {
-            "status": "blocked",
-            "reason": "action_not_registered",
-            "approval_required": True,
-            "external_side_effects": False,
+            "status":
+                "blocked",
+            "reason":
+                "action_not_registered",
+            "approval_required":
+                True,
+            "external_side_effects":
+                False,
         }
 
-    if not _action_allowed(action):
+    if not _action_allowed(
+        action
+    ):
+
         return {
-            "status": "blocked",
-            "reason": "circuit_open",
-            "action": action,
+            "status":
+                "blocked",
+            "reason":
+                "circuit_open",
+            "action":
+                action,
         }
 
     if request.require_approval:
+
         return {
-            "status": "awaiting_approval",
-            "action": action,
-            "approval_required": True,
-            "external_side_effects": False,
+            "status":
+                "awaiting_approval",
+            "action":
+                action,
+            "approval_required":
+                True,
+            "external_side_effects":
+                False,
         }
 
     idem = (
@@ -1727,13 +2117,17 @@ def execute_action_fabric(
             ensure_ascii=False,
         ),
         {
-            "action": action,
-            "args": args,
-            "side_effects": False,
+            "action":
+                action,
+            "args":
+                args,
+            "side_effects":
+                False,
         },
     )
 
     if tx["mode"] == "replay":
+
         return _transaction_replay(
             tx["row"],
             action,
@@ -1741,7 +2135,10 @@ def execute_action_fabric(
             False,
         )
 
-    txid = tx["transaction_id"]
+    txid = tx[
+        "transaction_id"
+    ]
+
     attempts = []
 
     for attempt in range(
@@ -1759,18 +2156,27 @@ def execute_action_fabric(
             )
 
             attempts.append({
-                "attempt": attempt,
-                "status": "verified",
-                "latency_ms": int(
-                    (now() - started) * 1000
-                ),
+                "attempt":
+                    attempt,
+                "status":
+                    "verified",
+                "latency_ms":
+                    int(
+                        (
+                            now()
+                            - started
+                        ) * 1000
+                    ),
             })
 
-            _circuit_success(action)
+            _circuit_success(
+                action
+            )
 
             result = {
                 **result,
-                "attempts": attempts,
+                "attempts":
+                    attempts,
             }
 
             write(
@@ -1793,34 +2199,51 @@ def execute_action_fabric(
             )
 
             return {
-                "status": "committed",
-                "transaction_id": txid,
-                "action": action,
-                "result": result,
-                "idempotency_key": idem,
+                "status":
+                    "committed",
+                "transaction_id":
+                    txid,
+                "action":
+                    action,
+                "result":
+                    result,
+                "idempotency_key":
+                    idem,
                 "stale_running_reclaimed":
-                    tx["mode"] == "reclaimed",
+                    tx["mode"]
+                    == "reclaimed",
                 "safety": {
-                    "registered_action_only": True,
-                    "external_side_effects": False,
-                    "spending": False,
-                    "arbitrary_code_execution": False,
+                    "registered_action_only":
+                        True,
+                    "external_side_effects":
+                        False,
+                    "spending":
+                        False,
+                    "arbitrary_code_execution":
+                        False,
                 },
             }
 
         except Exception as exc:
 
             attempts.append({
-                "attempt": attempt,
-                "status": "failed",
-                "error": str(exc)[:500],
+                "attempt":
+                    attempt,
+                "status":
+                    "failed",
+                "error":
+                    str(exc)[:500],
             })
 
-            _circuit_failure(action)
+            _circuit_failure(
+                action
+            )
 
             if attempt >= ACTION_MAX_ATTEMPTS:
 
-                error = str(exc)[:500]
+                error = str(exc)[
+                    :500
+                ]
 
                 write(
                     """
@@ -1839,14 +2262,21 @@ def execute_action_fabric(
                 )
 
                 return {
-                    "status": "failed_closed",
-                    "transaction_id": txid,
-                    "action": action,
-                    "attempts": attempts,
-                    "idempotency_key": idem,
+                    "status":
+                        "failed_closed",
+                    "transaction_id":
+                        txid,
+                    "action":
+                        action,
+                    "attempts":
+                        attempts,
+                    "idempotency_key":
+                        idem,
                     "stale_running_reclaimed":
-                        tx["mode"] == "reclaimed",
-                    "external_side_effects": False,
+                        tx["mode"]
+                        == "reclaimed",
+                    "external_side_effects":
+                        False,
                 }
 
     raise RuntimeError(
@@ -1860,12 +2290,24 @@ def execute_action_fabric(
 
 SAFE_ACTION_ALLOWLIST = {
     "public_http_get": {
-        "side_effects": False,
-        "requires_approval": False,
+        "side_effects":
+            False,
+        "requires_approval":
+            False,
+    },
+    "public_http_request": {
+        "side_effects":
+            True,
+        "requires_approval":
+            True,
+        "host_allowlist_required":
+            True,
     },
     "save_result": {
-        "side_effects": False,
-        "requires_approval": False,
+        "side_effects":
+            False,
+        "requires_approval":
+            False,
     },
 }
 
@@ -1878,56 +2320,473 @@ def _action_fingerprint(
 
     raw = json.dumps(
         {
-            "action_type": action_type,
-            "target": target,
-            "payload": payload or {},
+            "action_type":
+                action_type,
+            "target":
+                target,
+            "payload":
+                payload or {},
         },
         sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
+        separators=(
+            ",",
+            ":",
+        ),
+    ).encode(
+        "utf-8"
+    )
 
-    return hashlib.sha256(raw).hexdigest()
+    return hashlib.sha256(
+        raw
+    ).hexdigest()
 
 
 def _validate_public_target(
     target: str,
 ) -> str:
 
-    parsed = urlparse(target)
+    parsed = urlparse(
+        target
+    )
 
     if parsed.scheme not in {
         "http",
         "https",
     }:
+
         raise HTTPException(
             status_code=400,
-            detail="Only http/https public targets are allowed",
+            detail=(
+                "Only http/https "
+                "public targets are allowed"
+            ),
         )
 
     if not parsed.hostname:
+
         raise HTTPException(
             status_code=400,
-            detail="Target hostname is required",
+            detail=(
+                "Target hostname "
+                "is required"
+            ),
         )
 
     if (
         parsed.username
         or parsed.password
     ):
+
         raise HTTPException(
             status_code=400,
-            detail="Credential-bearing targets are blocked",
+            detail=(
+                "Credential-bearing "
+                "targets are blocked"
+            ),
         )
 
     if _host_is_private(
         parsed.hostname
     ):
+
         raise HTTPException(
             status_code=403,
-            detail="Private/local target blocked",
+            detail=(
+                "Private/local "
+                "target blocked"
+            ),
         )
 
     return target
+
+
+class NoRedirectHandler(
+    HTTPRedirectHandler
+):
+
+    def redirect_request(
+        self,
+        req,
+        fp,
+        code,
+        msg,
+        headers,
+        newurl,
+    ):
+
+        return None
+
+
+def _action_host_allowed(
+    target: str,
+) -> bool:
+
+    host = (
+        urlparse(
+            target
+        ).hostname
+        or ""
+    ).lower().rstrip(".")
+
+    if not ACTION_HOST_ALLOWLIST:
+
+        return False
+
+    return any(
+        host == allowed
+        or host.endswith(
+            "." + allowed
+        )
+        for allowed
+        in ACTION_HOST_ALLOWLIST
+    )
+
+
+def _validated_action_headers(
+    headers: Optional[dict],
+) -> dict:
+
+    source = (
+        headers
+        if isinstance(
+            headers,
+            dict,
+        )
+        else {}
+    )
+
+    output = {}
+
+    for key, value in source.items():
+
+        name = str(
+            key
+        ).strip()
+
+        if not name:
+            continue
+
+        if (
+            name.lower()
+            in SENSITIVE_ACTION_HEADERS
+        ):
+
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "credential_or_cookie_"
+                    "header_blocked"
+                ),
+            )
+
+        if len(name) > 128:
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "header_name_too_long"
+                ),
+            )
+
+        text_value = str(
+            value
+        )
+
+        if len(text_value) > 8192:
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "header_value_too_long"
+                ),
+            )
+
+        output[
+            name
+        ] = text_value
+
+    return output
+
+
+def _external_request(
+    method: str,
+    target: str,
+    payload: Optional[dict] = None,
+) -> dict:
+
+    url = _validate_public_target(
+        target
+    )
+
+    if not _action_host_allowed(
+        url
+    ):
+
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "target_host_not_allowlisted"
+            ),
+        )
+
+    method = (
+        str(
+            method
+            or "POST"
+        )
+        .upper()
+        .strip()
+    )
+
+    allowed_methods = {
+        "GET",
+        "HEAD",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+    }
+
+    if method not in allowed_methods:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "unsupported_http_method"
+            ),
+        )
+
+    data = (
+        payload
+        if isinstance(
+            payload,
+            dict,
+        )
+        else {}
+    )
+
+    headers = _validated_action_headers(
+        data.get(
+            "headers"
+        )
+    )
+
+    headers.setdefault(
+        "User-Agent",
+        "AI-Infinity/2050.99",
+    )
+
+    headers.setdefault(
+        "Accept",
+        "application/json,"
+        "text/plain,*/*",
+    )
+
+    body = None
+
+    if method in {
+        "POST",
+        "PUT",
+        "PATCH",
+    }:
+
+        body_value = data.get(
+            "body",
+            {},
+        )
+
+        body = json.dumps(
+            body_value,
+            ensure_ascii=False,
+        ).encode(
+            "utf-8"
+        )
+
+        if len(body) > ACTION_MAX_BYTES:
+
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    "action_payload_too_large"
+                ),
+            )
+
+        headers.setdefault(
+            "Content-Type",
+            "application/json",
+        )
+
+    request = Request(
+        url,
+        data=body,
+        headers=headers,
+        method=method,
+    )
+
+    opener = build_opener(
+        NoRedirectHandler(),
+        HTTPSHandler(
+            context=ssl.create_default_context()
+        ),
+    )
+
+    try:
+
+        with opener.open(
+            request,
+            timeout=REQUEST_TIMEOUT,
+        ) as response:
+
+            status_code = int(
+                getattr(
+                    response,
+                    "status",
+                    200,
+                )
+            )
+
+            response_url = validate_url(
+                response.geturl()
+            )
+
+            body_bytes = response.read(
+                ACTION_MAX_RESPONSE_BYTES
+                + 1
+            )
+
+            truncated = (
+                len(body_bytes)
+                > ACTION_MAX_RESPONSE_BYTES
+            )
+
+            body_bytes = body_bytes[
+                :ACTION_MAX_RESPONSE_BYTES
+            ]
+
+            return {
+                "ok":
+                    200
+                    <= status_code
+                    < 300,
+                "method":
+                    method,
+                "target":
+                    response_url,
+                "status_code":
+                    status_code,
+                "content_type":
+                    response.headers.get(
+                        "Content-Type",
+                        "",
+                    ),
+                "bytes":
+                    len(body_bytes),
+                "truncated":
+                    truncated,
+                "response_preview":
+                    body_bytes.decode(
+                        "utf-8",
+                        errors="replace",
+                    )[:12000],
+                "outcome":
+                    (
+                        "confirmed"
+                        if (
+                            200
+                            <= status_code
+                            < 300
+                        )
+                        else
+                        "remote_response_non_2xx"
+                    ),
+            }
+
+    except HTTPError as exc:
+
+        code = int(
+            exc.code
+        )
+
+        if (
+            300
+            <= code
+            < 400
+        ):
+
+            return {
+                "ok": False,
+                "method":
+                    method,
+                "target":
+                    url,
+                "status_code":
+                    code,
+                "error":
+                    (
+                        "redirect_not_followed_"
+                        "for_side_effect"
+                    ),
+                "outcome":
+                    "not_executed",
+            }
+
+        data_bytes = exc.read(
+            ACTION_MAX_RESPONSE_BYTES
+        )
+
+        outcome = (
+            "remote_rejected"
+            if (
+                400
+                <= code
+                < 500
+            )
+            else
+            "unknown_remote_outcome"
+        )
+
+        return {
+            "ok": False,
+            "method":
+                method,
+            "target":
+                url,
+            "status_code":
+                code,
+            "error":
+                "http_error",
+            "response_preview":
+                data_bytes.decode(
+                    "utf-8",
+                    errors="replace",
+                )[:4000],
+            "outcome":
+                outcome,
+            "replay_blocked":
+                code >= 500,
+        }
+
+    except (
+        URLError,
+        TimeoutError,
+        OSError,
+    ) as exc:
+
+        return {
+            "ok": False,
+            "method":
+                method,
+            "target":
+                url,
+            "status_code":
+                0,
+            "error":
+                str(exc)[:500],
+            "outcome":
+                "unknown_remote_outcome",
+            "replay_blocked":
+                True,
+        }
 
 
 def _execute_safe_action(
@@ -1940,7 +2799,10 @@ def _execute_safe_action(
 
         raise HTTPException(
             status_code=403,
-            detail="Action type is not registered",
+            detail=(
+                "Action type "
+                "is not registered"
+            ),
         )
 
     if action_type == "public_http_get":
@@ -1954,7 +2816,9 @@ def _execute_safe_action(
             timeout=8,
         )
 
-        if result.get("ok"):
+        if result.get(
+            "ok"
+        ):
 
             text = result.get(
                 "text",
@@ -1962,51 +2826,88 @@ def _execute_safe_action(
             )
 
             return {
-                "ok": True,
-                "action_type": action_type,
-                "target": result.get(
-                    "url",
-                    url,
-                ),
-                "status_code": result.get(
-                    "status",
-                    200,
-                ),
-                "bytes": len(
-                    text.encode(
-                        "utf-8",
-                        errors="ignore",
-                    )
-                ),
-                "content_type": result.get(
-                    "content_type",
-                    "",
-                ),
-                "result_preview": text[:4000],
+                "ok":
+                    True,
+                "action_type":
+                    action_type,
+                "target":
+                    result.get(
+                        "url",
+                        url,
+                    ),
+                "status_code":
+                    result.get(
+                        "status",
+                        200,
+                    ),
+                "bytes":
+                    len(
+                        text.encode(
+                            "utf-8",
+                            errors="ignore",
+                        )
+                    ),
+                "content_type":
+                    result.get(
+                        "content_type",
+                        "",
+                    ),
+                "result_preview":
+                    text[
+                        :4000
+                    ],
             }
 
         return {
-            "ok": False,
-            "action_type": action_type,
-            "target": result.get(
-                "url",
-                url,
-            ),
-            "status_code": result.get(
-                "status",
-                0,
-            ),
-            "error": result.get(
-                "error",
-                "request_failed",
-            ),
+            "ok":
+                False,
+            "action_type":
+                action_type,
+            "target":
+                result.get(
+                    "url",
+                    url,
+                ),
+            "status_code":
+                result.get(
+                    "status",
+                    0,
+                ),
+            "error":
+                result.get(
+                    "error",
+                    "request_failed",
+                ),
         }
+
+    if action_type == "public_http_request":
+
+        request_payload = (
+            payload
+            if isinstance(
+                payload,
+                dict,
+            )
+            else {}
+        )
+
+        return _external_request(
+            request_payload.get(
+                "method",
+                "POST",
+            ),
+            target,
+            request_payload,
+        )
 
     if action_type == "save_result":
 
         safe_payload = (
             payload
-            if isinstance(payload, dict)
+            if isinstance(
+                payload,
+                dict,
+            )
             else {}
         )
 
@@ -2016,33 +2917,68 @@ def _execute_safe_action(
         )
 
         size = len(
-            raw.encode("utf-8")
+            raw.encode(
+                "utf-8"
+            )
         )
 
         if size > 128 * 1024:
 
             raise HTTPException(
                 status_code=413,
-                detail="Saved result too large",
+                detail=(
+                    "Saved result too large"
+                ),
             )
 
         return {
-            "ok": True,
-            "action_type": action_type,
-            "target": target,
-            "saved": True,
-            "bytes": size,
+            "ok":
+                True,
+            "action_type":
+                action_type,
+            "target":
+                target,
+            "saved":
+                True,
+            "bytes":
+                size,
         }
 
     raise HTTPException(
         status_code=403,
-        detail="Action type not implemented",
+        detail=(
+            "Action type "
+            "not implemented"
+        ),
     )
 
 
 def execute_safe_gateway(
     request: SafeActionRequest,
 ):
+
+    if (
+        request.action_type
+        not in SAFE_ACTION_ALLOWLIST
+    ):
+
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Action type "
+                "is not registered"
+            ),
+        )
+
+    action_policy = SAFE_ACTION_ALLOWLIST[
+        request.action_type
+    ]
+
+    side_effecting = bool(
+        action_policy.get(
+            "side_effects"
+        )
+    )
 
     key = (
         request.idempotency_key
@@ -2053,14 +2989,24 @@ def execute_safe_gateway(
         )
     )
 
-    if request.require_approval:
+    if (
+        request.require_approval
+        and not side_effecting
+    ):
+
         return {
-            "status": "approval_required",
-            "approved": False,
-            "idempotency": True,
-            "idempotency_key": key,
-            "action_type": request.action_type,
-            "target": request.target,
+            "status":
+                "approval_required",
+            "approved":
+                False,
+            "idempotency":
+                True,
+            "idempotency_key":
+                key,
+            "action_type":
+                request.action_type,
+            "target":
+                request.target,
         }
 
     tx = _begin_action_transaction(
@@ -2069,37 +3015,145 @@ def execute_safe_gateway(
         key,
         json.dumps(
             {
-                "target": request.target,
-                "payload": request.payload,
+                "target":
+                    request.target,
+                "payload":
+                    request.payload,
             },
             ensure_ascii=False,
         ),
         {
-            "action_type": request.action_type,
-            "target": request.target,
-            "payload": request.payload,
-            "external_side_effects": False,
+            "action_type":
+                request.action_type,
+            "target":
+                request.target,
+            "payload":
+                request.payload,
+            "external_side_effects":
+                side_effecting,
         },
+        allow_stale_reclaim=(
+            not side_effecting
+        ),
     )
 
-    if tx["mode"] == "replay":
+    if tx["mode"] in {
+        "replay",
+        "stale_closed",
+    }:
+
+        row = tx[
+            "row"
+        ]
 
         return {
-            "status": (
-                "replayed"
-                if tx["row"]["status"] != "running"
-                else "running"
-            ),
-            "idempotency": True,
-            "idempotency_key": key,
-            "transaction_id": tx["transaction_id"],
-            "stale_running_reclaimed": False,
-            "action": _transaction_result(
-                tx["row"]
-            ),
+            "status":
+                row["status"],
+            "idempotency":
+                True,
+            "idempotency_key":
+                key,
+            "transaction_id":
+                tx["transaction_id"],
+            "stale_running_reclaimed":
+                False,
+            "approval_required":
+                row["status"]
+                == "awaiting_approval",
+            "external_side_effects":
+                side_effecting,
+            "action":
+                _transaction_result(
+                    row
+                ),
         }
 
-    txid = tx["transaction_id"]
+    txid = tx[
+        "transaction_id"
+    ]
+
+    if side_effecting:
+
+        write(
+            """
+            UPDATE action_transactions
+            SET status='awaiting_approval',
+                updated_at=?
+            WHERE id=?
+              AND status='running'
+            """,
+            (
+                now(),
+                txid,
+            ),
+        )
+
+        write(
+            """
+            INSERT INTO action_log(
+                mission_id,
+                action,
+                status,
+                details_json,
+                ts,
+                action_type,
+                target,
+                idempotency_key
+            )
+            VALUES(?,?,?,?,?,?,?,?)
+            """,
+            (
+                request.mission_id,
+                "external_action",
+                "awaiting_approval",
+                json.dumps(
+                    request.model_dump(),
+                    ensure_ascii=False,
+                ),
+                now(),
+                request.action_type,
+                request.target,
+                key,
+            ),
+        )
+
+        return {
+            "status":
+                "awaiting_approval",
+            "approved":
+                False,
+            "approval_required":
+                True,
+            "external_side_effects":
+                True,
+            "idempotency":
+                True,
+            "idempotency_key":
+                key,
+            "transaction_id":
+                txid,
+            "stale_running_reclaimed":
+                False,
+        }
+
+    if request.require_approval:
+
+        return {
+            "status":
+                "approval_required",
+            "approved":
+                False,
+            "idempotency":
+                True,
+            "idempotency_key":
+                key,
+            "transaction_id":
+                txid,
+            "action_type":
+                request.action_type,
+            "target":
+                request.target,
+        }
 
     try:
 
@@ -2115,10 +3169,19 @@ def execute_safe_gateway(
             else "failed_closed"
         )
 
-        result["transaction_id"] = txid
-        result["idempotency_key"] = key
-        result["stale_running_reclaimed"] = (
-            tx["mode"] == "reclaimed"
+        result[
+            "transaction_id"
+        ] = txid
+
+        result[
+            "idempotency_key"
+        ] = key
+
+        result[
+            "stale_running_reclaimed"
+        ] = (
+            tx["mode"]
+            == "reclaimed"
         )
 
         write(
@@ -2142,35 +3205,56 @@ def execute_safe_gateway(
         )
 
         return {
-            "status": (
-                "completed"
-                if result.get("ok")
-                else "failed"
-            ),
-            "action_requested": True,
-            "action_executed": bool(
-                result.get("ok")
-            ),
-            "action_verified": bool(
-                result.get("ok")
-            ),
-            "idempotency": True,
-            "idempotency_key": key,
-            "provenance_recorded": True,
+            "status":
+                (
+                    "completed"
+                    if result.get(
+                        "ok"
+                    )
+                    else
+                    "failed"
+                ),
+            "action_requested":
+                True,
+            "action_executed":
+                bool(
+                    result.get(
+                        "ok"
+                    )
+                ),
+            "action_verified":
+                bool(
+                    result.get(
+                        "ok"
+                    )
+                ),
+            "idempotency":
+                True,
+            "idempotency_key":
+                key,
+            "provenance_recorded":
+                True,
             "recovery_tested":
-                tx["mode"] == "reclaimed",
+                tx["mode"]
+                == "reclaimed",
             "stale_running_reclaimed":
-                tx["mode"] == "reclaimed",
-            "transaction_id": txid,
-            "result": result,
+                tx["mode"]
+                == "reclaimed",
+            "transaction_id":
+                txid,
+            "result":
+                result,
         }
 
     except HTTPException:
+
         raise
 
     except Exception as exc:
 
-        error = str(exc)[:500]
+        error = str(
+            exc
+        )[:500]
 
         write(
             """
@@ -2188,19 +3272,518 @@ def execute_safe_gateway(
         )
 
         return {
-            "status": "failed",
-            "action_requested": True,
-            "action_executed": False,
-            "action_verified": False,
-            "idempotency": True,
-            "idempotency_key": key,
-            "provenance_recorded": True,
-            "recovery_tested": True,
+            "status":
+                "failed",
+            "action_requested":
+                True,
+            "action_executed":
+                False,
+            "action_verified":
+                False,
+            "idempotency":
+                True,
+            "idempotency_key":
+                key,
+            "provenance_recorded":
+                True,
+            "recovery_tested":
+                tx["mode"]
+                == "reclaimed",
             "stale_running_reclaimed":
-                tx["mode"] == "reclaimed",
-            "transaction_id": txid,
-            "error": error,
+                tx["mode"]
+                == "reclaimed",
+            "transaction_id":
+                txid,
+            "error":
+                error,
         }
+
+
+@app.post(
+    "/real-world-command"
+)
+def real_world_command(
+    request: RealWorldCommandRequest,
+):
+
+    gateway_request = SafeActionRequest(
+        action_type=
+            "public_http_request",
+        target=request.target,
+        payload={
+            "method":
+                request.method,
+            "body":
+                request.body,
+            "headers":
+                request.headers,
+        },
+        idempotency_key=
+            request.idempotency_key,
+        require_approval=False,
+        mission_id=
+            request.mission_id,
+    )
+
+    return execute_safe_gateway(
+        gateway_request
+    )
+
+
+@app.post(
+    "/action-transaction/{transaction_id}/approve"
+)
+def approve_action_transaction(
+    transaction_id: str,
+):
+
+    row = q(
+        """
+        SELECT *
+        FROM action_transactions
+        WHERE id=?
+        """,
+        (
+            transaction_id,
+        ),
+        one=True,
+    )
+
+    if not row:
+
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "action transaction "
+                "not found"
+            ),
+        )
+
+    if row["status"] != "awaiting_approval":
+
+        return {
+            "status":
+                row["status"],
+            "transaction_id":
+                transaction_id,
+            "already_terminal":
+                row["status"]
+                in {
+                    "committed",
+                    "failed_closed",
+                    "rejected",
+                },
+            "result":
+                _transaction_result(
+                    row
+                ),
+        }
+
+    saved = json.loads(
+        row["input_json"]
+        or "{}"
+    )
+
+    action_type = str(
+        row["action"]
+    )
+
+    if action_type not in SAFE_ACTION_ALLOWLIST:
+
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Action type "
+                "is not registered"
+            ),
+        )
+
+    if not SAFE_ACTION_ALLOWLIST[
+        action_type
+    ].get("side_effects"):
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Only external "
+                "side-effect transactions "
+                "use this approval path"
+            ),
+        )
+
+    write(
+        """
+        UPDATE action_transactions
+        SET status='running',
+            updated_at=?
+        WHERE id=?
+          AND status='awaiting_approval'
+        """,
+        (
+            now(),
+            transaction_id,
+        ),
+    )
+
+    row = q(
+        """
+        SELECT *
+        FROM action_transactions
+        WHERE id=?
+        """,
+        (
+            transaction_id,
+        ),
+        one=True,
+    )
+
+    if not row:
+
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "action transaction "
+                "not found"
+            ),
+        )
+
+    if row["status"] != "running":
+
+        return {
+            "status":
+                row["status"],
+            "transaction_id":
+                transaction_id,
+            "result":
+                _transaction_result(
+                    row
+                ),
+        }
+
+    try:
+
+        result = _execute_safe_action(
+            action_type,
+            saved.get(
+                "target",
+                "",
+            ),
+            saved.get(
+                "payload",
+                {},
+            ),
+        )
+
+        status = (
+            "committed"
+            if result.get(
+                "ok"
+            )
+            else
+            "failed_closed"
+        )
+
+        result[
+            "transaction_id"
+        ] = transaction_id
+
+        result[
+            "idempotency_key"
+        ] = row[
+            "idempotency_key"
+        ]
+
+        result[
+            "approval_used"
+        ] = True
+
+        write(
+            """
+            UPDATE action_transactions
+            SET status=?,
+                result_json=?,
+                error=?,
+                updated_at=?
+            WHERE id=?
+              AND status='running'
+            """,
+            (
+                status,
+                json.dumps(
+                    result,
+                    ensure_ascii=False,
+                ),
+                None
+                if status == "committed"
+                else result.get(
+                    "error"
+                ),
+                now(),
+                transaction_id,
+            ),
+        )
+
+        write(
+            """
+            INSERT INTO action_log(
+                mission_id,
+                action,
+                status,
+                details_json,
+                ts,
+                action_type,
+                target,
+                idempotency_key,
+                result_json
+            )
+            VALUES(?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                row["mission_id"],
+                "external_action",
+                status,
+                json.dumps(
+                    {
+                        "approved":
+                            True,
+                        "outcome":
+                            result.get(
+                                "outcome"
+                            ),
+                    },
+                    ensure_ascii=False,
+                ),
+                now(),
+                action_type,
+                saved.get(
+                    "target",
+                    "",
+                ),
+                row[
+                    "idempotency_key"
+                ],
+                json.dumps(
+                    result,
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+
+        return {
+            "status":
+                (
+                    "completed"
+                    if result.get(
+                        "ok"
+                    )
+                    else
+                    "failed"
+                ),
+            "approved":
+                True,
+            "action_executed":
+                bool(
+                    result.get(
+                        "ok"
+                    )
+                ),
+            "action_verified":
+                bool(
+                    result.get(
+                        "ok"
+                    )
+                ),
+            "transaction_id":
+                transaction_id,
+            "idempotency_key":
+                row[
+                    "idempotency_key"
+                ],
+            "external_side_effects":
+                True,
+            "outcome":
+                result.get(
+                    "outcome"
+                ),
+            "result":
+                result,
+        }
+
+    except HTTPException:
+
+        raise
+
+    except Exception as exc:
+
+        error = str(
+            exc
+        )[:500]
+
+        write(
+            """
+            UPDATE action_transactions
+            SET status='failed_closed',
+                error=?,
+                updated_at=?
+            WHERE id=?
+              AND status='running'
+            """,
+            (
+                error,
+                now(),
+                transaction_id,
+            ),
+        )
+
+        return {
+            "status":
+                "failed",
+            "approved":
+                True,
+            "action_executed":
+                False,
+            "transaction_id":
+                transaction_id,
+            "error":
+                error,
+        }
+
+
+@app.post(
+    "/action-transaction/{transaction_id}/reject"
+)
+def reject_action_transaction(
+    transaction_id: str,
+):
+
+    row = q(
+        """
+        SELECT *
+        FROM action_transactions
+        WHERE id=?
+        """,
+        (
+            transaction_id,
+        ),
+        one=True,
+    )
+
+    if not row:
+
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "action transaction "
+                "not found"
+            ),
+        )
+
+    if row["status"] != "awaiting_approval":
+
+        return {
+            "status":
+                row["status"],
+            "transaction_id":
+                transaction_id,
+            "already_terminal":
+                row["status"]
+                in {
+                    "committed",
+                    "failed_closed",
+                    "rejected",
+                },
+        }
+
+    result = {
+        "status":
+            "rejected",
+        "transaction_id":
+            transaction_id,
+        "approval_used":
+            False,
+        "external_side_effects":
+            False,
+        "replay_blocked":
+            True,
+    }
+
+    write(
+        """
+        UPDATE action_transactions
+        SET status='rejected',
+            result_json=?,
+            error=NULL,
+            updated_at=?
+        WHERE id=?
+          AND status='awaiting_approval'
+        """,
+        (
+            json.dumps(
+                result,
+                ensure_ascii=False,
+            ),
+            now(),
+            transaction_id,
+        ),
+    )
+
+    write(
+        """
+        INSERT INTO action_log(
+            mission_id,
+            action,
+            status,
+            details_json,
+            ts,
+            action_type,
+            target,
+            idempotency_key,
+            result_json
+        )
+        VALUES(?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            row["mission_id"],
+            "external_action",
+            "rejected",
+            json.dumps(
+                {
+                    "approved":
+                        False,
+                    "reason":
+                        "manual_rejection",
+                },
+                ensure_ascii=False,
+            ),
+            now(),
+            row["action"],
+            json.loads(
+                row["input_json"]
+                or "{}"
+            ).get(
+                "target",
+                "",
+            ),
+            row[
+                "idempotency_key"
+            ],
+            json.dumps(
+                result,
+                ensure_ascii=False,
+            ),
+        ),
+    )
+
+    return {
+        "status":
+            "rejected",
+        "transaction_id":
+            transaction_id,
+        "replay_blocked":
+            True,
+        "external_side_effects":
+            False,
+    }
 
 
 # ============================================================
@@ -2377,25 +3960,32 @@ def parse_provider(
             )
 
             output.append({
-                "title": item.get(
-                    "title"
-                )
-                or "",
-                "abstract": abstract,
-                "url": (
-                    location.get(
-                        "landing_page_url"
+                "title":
+                    item.get(
+                        "title"
                     )
-                    or item.get("id")
-                    or ""
-                ),
-                "publisher": source.get(
-                    "display_name"
-                )
-                or "",
-                "year": item.get(
-                    "publication_year"
-                ),
+                    or "",
+                "abstract":
+                    abstract,
+                "url":
+                    (
+                        location.get(
+                            "landing_page_url"
+                        )
+                        or item.get(
+                            "id"
+                        )
+                        or ""
+                    ),
+                "publisher":
+                    source.get(
+                        "display_name"
+                    )
+                    or "",
+                "year":
+                    item.get(
+                        "publication_year"
+                    ),
             })
 
     elif provider.startswith(
@@ -2436,27 +4026,33 @@ def parse_provider(
 
             year = (
                 parts[0][0]
-                if parts and parts[0]
+                if parts
+                and parts[0]
                 else None
             )
 
             output.append({
-                "title": title,
-                "abstract": strip_xml(
+                "title":
+                    title,
+                "abstract":
+                    strip_xml(
+                        item.get(
+                            "abstract"
+                        )
+                        or ""
+                    ),
+                "url":
                     item.get(
-                        "abstract"
+                        "URL"
                     )
-                    or ""
-                ),
-                "url": item.get(
-                    "URL"
-                )
-                or "",
-                "publisher": item.get(
-                    "publisher"
-                )
-                or "",
-                "year": year,
+                    or "",
+                "publisher":
+                    item.get(
+                        "publisher"
+                    )
+                    or "",
+                "year":
+                    year,
             })
 
     elif provider == "semantic_scholar":
@@ -2467,25 +4063,30 @@ def parse_provider(
         ):
 
             output.append({
-                "title": item.get(
-                    "title"
-                )
-                or "",
-                "abstract": item.get(
-                    "abstract"
-                )
-                or "",
-                "url": item.get(
-                    "url"
-                )
-                or "",
-                "publisher": item.get(
-                    "venue"
-                )
-                or "",
-                "year": item.get(
-                    "year"
-                ),
+                "title":
+                    item.get(
+                        "title"
+                    )
+                    or "",
+                "abstract":
+                    item.get(
+                        "abstract"
+                    )
+                    or "",
+                "url":
+                    item.get(
+                        "url"
+                    )
+                    or "",
+                "publisher":
+                    item.get(
+                        "venue"
+                    )
+                    or "",
+                "year":
+                    item.get(
+                        "year"
+                    ),
             })
 
     elif provider == "wikipedia":
@@ -2500,29 +4101,37 @@ def parse_provider(
             )
         ):
 
-            title = item.get(
-                "title"
-            ) or ""
+            title = (
+                item.get(
+                    "title"
+                )
+                or ""
+            )
 
             output.append({
-                "title": title,
-                "abstract": strip_xml(
-                    item.get(
-                        "snippet"
-                    )
-                    or ""
-                ),
-                "url": (
-                    "https://en.wikipedia.org/wiki/"
-                    + quote_plus(
-                        title.replace(
-                            " ",
-                            "_",
+                "title":
+                    title,
+                "abstract":
+                    strip_xml(
+                        item.get(
+                            "snippet"
                         )
-                    )
-                ),
-                "publisher": "Wikipedia",
-                "year": None,
+                        or ""
+                    ),
+                "url":
+                    (
+                        "https://en.wikipedia.org/wiki/"
+                        + quote_plus(
+                            title.replace(
+                                " ",
+                                "_",
+                            )
+                        )
+                    ),
+                "publisher":
+                    "Wikipedia",
+                "year":
+                    None,
             })
 
     elif provider == "arxiv":
@@ -2557,27 +4166,34 @@ def parse_provider(
             )
 
             output.append({
-                "title": strip_xml(
-                    title.group(1)
-                    if title
-                    else ""
-                ),
-                "abstract": strip_xml(
-                    summary.group(1)
-                    if summary
-                    else ""
-                ),
-                "url": (
-                    link.group(1)
-                    if link
-                    else ""
-                ),
-                "publisher": "arXiv",
-                "year": (
-                    int(pub.group(1))
-                    if pub
-                    else None
-                ),
+                "title":
+                    strip_xml(
+                        title.group(1)
+                        if title
+                        else ""
+                    ),
+                "abstract":
+                    strip_xml(
+                        summary.group(1)
+                        if summary
+                        else ""
+                    ),
+                "url":
+                    (
+                        link.group(1)
+                        if link
+                        else ""
+                    ),
+                "publisher":
+                    "arXiv",
+                "year":
+                    (
+                        int(
+                            pub.group(1)
+                        )
+                        if pub
+                        else None
+                    ),
             })
 
     return output
@@ -2604,6 +4220,7 @@ def relevant(
     ).lower()
 
     if not terms:
+
         return True
 
     hits = sum(
@@ -2661,10 +4278,16 @@ def quality_score(
 
     score = 0.35
 
-    if item.get("publisher"):
+    if item.get(
+        "publisher"
+    ):
+
         score += 0.15
 
-    if item.get("year"):
+    if item.get(
+        "year"
+    ):
+
         score += 0.10
 
     if len(
@@ -2673,12 +4296,19 @@ def quality_score(
         )
         or ""
     ) > 200:
+
         score += 0.15
 
-    if item.get("empirical"):
+    if item.get(
+        "empirical"
+    ):
+
         score += 0.20
 
-    if item.get("url"):
+    if item.get(
+        "url"
+    ):
+
         score += 0.05
 
     return round(
@@ -2700,10 +4330,14 @@ def query_provider(
     )
 
     url = template.format(
-        q=quote_plus(query)
+        q=quote_plus(
+            query
+        )
     )
 
-    result = safe_fetch(url)
+    result = safe_fetch(
+        url
+    )
 
     if not result["ok"]:
 
@@ -2718,12 +4352,16 @@ def query_provider(
         )
 
         return {
-            "provider": provider,
-            "family": family,
-            "ok": False,
-            "error": result.get(
-                "error"
-            ),
+            "provider":
+                provider,
+            "family":
+                family,
+            "ok":
+                False,
+            "error":
+                result.get(
+                    "error"
+                ),
         }
 
     raw = result.get(
@@ -2753,10 +4391,14 @@ def query_provider(
         )
 
         return {
-            "provider": provider,
-            "family": family,
-            "ok": True,
-            "items": items,
+            "provider":
+                provider,
+            "family":
+                family,
+            "ok":
+                True,
+            "items":
+                items,
         }
 
     except Exception as exc:
@@ -2769,10 +4411,14 @@ def query_provider(
         )
 
         return {
-            "provider": provider,
-            "family": family,
-            "ok": False,
-            "error": str(exc),
+            "provider":
+                provider,
+            "family":
+                family,
+            "ok":
+                False,
+            "error":
+                str(exc),
         }
 
 
@@ -2783,10 +4429,16 @@ def research_mission(
 
     queries = [
         objective,
-        objective
-        + " empirical evaluation benchmark task success",
-        objective
-        + " failures limitations independent study",
+        (
+            objective
+            + " empirical evaluation "
+            + "benchmark task success"
+        ),
+        (
+            objective
+            + " failures limitations "
+            + "independent study"
+        ),
     ]
 
     collected = []
@@ -2821,8 +4473,10 @@ def research_mission(
             except Exception as exc:
 
                 results.append({
-                    "ok": False,
-                    "error": str(exc),
+                    "ok":
+                        False,
+                    "error":
+                        str(exc),
                 })
 
     preliminary = sum(
@@ -2833,7 +4487,9 @@ def research_mission(
             )
         )
         for result in results
-        if result.get("ok")
+        if result.get(
+            "ok"
+        )
     )
 
     if preliminary < 8:
@@ -2843,7 +4499,8 @@ def research_mission(
             "recovery",
             "provider_recovery_round",
             {
-                "preliminary": preliminary,
+                "preliminary":
+                    preliminary,
             },
         )
 
@@ -2872,7 +4529,10 @@ def research_mission(
             "unknown",
         )
 
-        if not result.get("ok"):
+        if not result.get(
+            "ok"
+        ):
+
             continue
 
         for item in result.get(
@@ -2904,10 +4564,16 @@ def research_mission(
                 url,
             )
 
-            if not title or key in seen:
+            if (
+                not title
+                or key in seen
+            ):
+
                 continue
 
-            seen.add(key)
+            seen.add(
+                key
+            )
 
             rel = relevant(
                 title,
@@ -2922,16 +4588,20 @@ def research_mission(
 
             normalized = {
                 **item,
-                "provider": provider,
-                "family": family,
-                "relevant": rel,
-                "empirical": empirical,
+                "provider":
+                    provider,
+                "family":
+                    family,
+                "relevant":
+                    rel,
+                "empirical":
+                    empirical,
             }
 
-            normalized["quality"] = (
-                quality_score(
-                    normalized
-                )
+            normalized[
+                "quality"
+            ] = quality_score(
+                normalized
             )
 
             collected.append(
@@ -2977,8 +4647,12 @@ def research_mission(
                     item.get(
                         "year"
                     ),
-                    int(empirical),
-                    int(rel),
+                    int(
+                        empirical
+                    ),
+                    int(
+                        rel
+                    ),
                     normalized[
                         "quality"
                     ],
@@ -3045,11 +4719,12 @@ def research_mission(
             )
 
     return {
-        "sources": collected,
-        "provider_results": results,
-        "total_sources": len(
-            collected
-        ),
+        "sources":
+            collected,
+        "provider_results":
+            results,
+        "total_sources":
+            len(collected),
     }
 
 
@@ -3092,17 +4767,21 @@ def claim_polarity(
     )
 
     positive = len(
-        words & POSITIVE
+        words
+        & POSITIVE
     )
 
     negative = len(
-        words & NEGATIVE
+        words
+        & NEGATIVE
     )
 
     if positive > negative:
+
         return "positive"
 
     if negative > positive:
+
         return "negative"
 
     return "neutral"
@@ -3133,10 +4812,12 @@ def extract_claims(
         )
 
         if not title:
+
             continue
 
         text = (
-            abstract or title
+            abstract
+            or title
         )[:450]
 
         claim_id = make_id(
@@ -3154,8 +4835,7 @@ def extract_claims(
                 + source.get(
                     "quality",
                     0,
-                )
-                * 0.45
+                ) * 0.45
                 + (
                     0.10
                     if source.get(
@@ -3216,7 +4896,9 @@ def extract_claims(
         if evidence_row:
 
             evidence_id = (
-                evidence_row["id"]
+                evidence_row[
+                    "id"
+                ]
             )
 
             write(
@@ -3239,11 +4921,16 @@ def extract_claims(
             )
 
         claims.append({
-            "id": claim_id,
-            "text": claim_text,
-            "polarity": polarity,
-            "confidence": confidence,
-            "evidence_id": evidence_id,
+            "id":
+                claim_id,
+            "text":
+                claim_text,
+            "polarity":
+                polarity,
+            "confidence":
+                confidence,
+            "evidence_id":
+                evidence_id,
         })
 
     return claims
@@ -3375,9 +5062,13 @@ def contradiction_screen(
 
             pair = {
                 "positive_claim":
-                    positive_claim.get("id"),
+                    positive_claim.get(
+                        "id"
+                    ),
                 "negative_claim":
-                    negative_claim.get("id"),
+                    negative_claim.get(
+                        "id"
+                    ),
                 "topic_overlap":
                     round(
                         overlap,
@@ -3439,11 +5130,15 @@ def contradiction_screen(
                 resolved.append({
                     **pair,
                     "resolution":
-                        "polarity_screen_not_semantic_contradiction",
+                        (
+                            "polarity_screen_"
+                            "not_semantic_contradiction"
+                        ),
                 })
 
     return {
-        "screened": True,
+        "screened":
+            True,
         "conflict_detected":
             bool(
                 positive
@@ -3509,15 +5204,23 @@ def verify_evidence(
     ]
 
     publishers = {
-        source.get("publisher")
+        source.get(
+            "publisher"
+        )
         for source in usable
-        if source.get("publisher")
+        if source.get(
+            "publisher"
+        )
     }
 
     families = {
-        source.get("family")
+        source.get(
+            "family"
+        )
         for source in usable
-        if source.get("family")
+        if source.get(
+            "family"
+        )
     }
 
     contradiction = (
@@ -3539,22 +5242,16 @@ def verify_evidence(
     requirements = {
         "relevant_sources":
             len(usable) >= 3,
-
         "high_quality_sources":
             len(high_quality) >= 2,
-
         "empirical_sources":
             len(empirical) >= 3,
-
         "independent_publishers":
             len(publishers) >= 2,
-
         "independent_provider_families":
             len(families) >= 2,
-
         "claims":
             len(claims) >= 2,
-
         "clean_contradiction_screen":
             contradiction_clear,
     }
@@ -3565,7 +5262,8 @@ def verify_evidence(
 
     passed = sum(
         1
-        for value in requirements.values()
+        for value
+        in requirements.values()
         if value
     )
 
@@ -3583,20 +5281,25 @@ def verify_evidence(
         )
         == "scope_resolved"
     ):
+
         confidence = min(
             0.99,
             confidence + 0.08,
         )
 
     return {
-        "verified": verified,
-        "confidence": round(
-            confidence,
-            3,
-        ),
-        "requirements": requirements,
+        "verified":
+            verified,
+        "confidence":
+            round(
+                confidence,
+                3,
+            ),
+        "requirements":
+            requirements,
         "counts": {
-            "relevant": len(usable),
+            "relevant":
+                len(usable),
             "high_quality":
                 len(high_quality),
             "empirical":
@@ -3611,7 +5314,12 @@ def verify_evidence(
         "contradiction_screen":
             contradiction,
         "note":
-            "Verification is an evidence-quorum screen with semantic contradiction candidate resolution; it is not mathematical proof.",
+            (
+                "Verification is an "
+                "evidence-quorum screen with "
+                "semantic contradiction candidate "
+                "resolution; it is not mathematical proof."
+            ),
     }
 
 
@@ -3635,6 +5343,7 @@ def classify(
             "investigate",
         )
     ):
+
         return "verification"
 
     if any(
@@ -3645,6 +5354,7 @@ def classify(
             "save",
         )
     ):
+
         return "memory"
 
     if any(
@@ -3658,6 +5368,7 @@ def classify(
             "change",
         )
     ):
+
         return "action"
 
     return "general"
@@ -3693,11 +5404,13 @@ def plan(
         ])
 
     if request.remember:
+
         steps.append(
             "remember"
         )
 
     if request.execute:
+
         steps.append(
             "action_boundary"
         )
@@ -3720,12 +5433,16 @@ def update_world_model(
         "last_mission":
             mission_id,
         "last_status":
-            result.get("status"),
+            result.get(
+                "status"
+            ),
         "last_verified":
             result.get(
                 "verification",
                 {},
-            ).get("verified"),
+            ).get(
+                "verified"
+            ),
         "last_updated":
             now(),
     }
@@ -3790,7 +5507,10 @@ def detect_opportunities(
                 "Increase provider diversity",
                 json.dumps({
                     "reason":
-                        "evidence quorum lacks provider-family independence",
+                        (
+                            "evidence quorum lacks "
+                            "provider-family independence"
+                        ),
                 }),
                 now(),
             ),
@@ -3821,7 +5541,10 @@ def detect_opportunities(
                 "Improve failing provider path",
                 json.dumps({
                     "reason":
-                        "provider recovery was required",
+                        (
+                            "provider recovery "
+                            "was required"
+                        ),
                 }),
                 now(),
             ),
@@ -3908,7 +5631,9 @@ def create_mission(
             timestamp,
             0,
             0,
-            int(approved),
+            int(
+                approved
+            ),
             int(
                 current_policy[
                     "version"
@@ -3924,7 +5649,8 @@ def create_mission(
         "create",
         "mission_created",
         {
-            "route": route,
+            "route":
+                route,
             "request":
                 request.model_dump(),
             "policy_version":
@@ -3952,12 +5678,15 @@ def load_request(
     )
 
     if not row:
+
         raise KeyError(
             mission_id
         )
 
     return MissionRequest.model_validate_json(
-        row["request_json"]
+        row[
+            "request_json"
+        ]
     )
 
 
@@ -3976,6 +5705,7 @@ def run_mission(
     )
 
     if not row:
+
         return
 
     try:
@@ -4051,13 +5781,16 @@ def run_mission(
             "plan",
             "plan_created",
             {
-                "steps": steps,
+                "steps":
+                    steps,
             },
         )
 
         research_result = {
-            "sources": [],
-            "total_sources": 0,
+            "sources":
+                [],
+            "total_sources":
+                0,
         }
 
         recovery_attempts = 0
@@ -4090,7 +5823,10 @@ def run_mission(
                 recovery_attempts += 1
 
                 version = adaptive_upgrade(
-                    "insufficient evidence after primary research"
+                    (
+                        "insufficient evidence "
+                        "after primary research"
+                    )
                 )
 
                 emit(
@@ -4107,7 +5843,8 @@ def run_mission(
                     research_mission(
                         mission_id,
                         request.objective
-                        + " independent empirical evaluation",
+                        + " independent "
+                        + "empirical evaluation",
                     )
                 )
 
@@ -4135,8 +5872,10 @@ def run_mission(
         else:
 
             verification = {
-                "verified": False,
-                "confidence": 0,
+                "verified":
+                    False,
+                "confidence":
+                    0,
                 "note":
                     "verification disabled",
             }
@@ -4166,11 +5905,22 @@ def run_mission(
             "approval_required":
                 request.require_approval,
             "external_side_effects":
-                False,
+                True
+                if request.execute
+                else False,
             "status":
-                "not_connected",
+                (
+                    "approval_bounded_gateway"
+                    if request.execute
+                    else "not_connected"
+                ),
             "message":
-                "No arbitrary external side effect is performed by the core.",
+                (
+                    "External side effects are "
+                    "available only through the "
+                    "approval-gated real-world "
+                    "command gateway."
+                ),
         }
 
         if request.execute:
@@ -4193,7 +5943,8 @@ def run_mission(
                     "external_action",
                     "proposed",
                     json.dumps(
-                        action_boundary
+                        action_boundary,
+                        ensure_ascii=False,
                     ),
                     now(),
                     "external_action",
@@ -4209,26 +5960,36 @@ def run_mission(
             )
 
         result = {
-            "status": "completed",
-            "version": APP_VERSION,
-            "build": BUILD,
-            "mission_id": mission_id,
+            "status":
+                "completed",
+            "version":
+                APP_VERSION,
+            "build":
+                BUILD,
+            "mission_id":
+                mission_id,
             "objective":
                 request.objective,
             "route":
                 classify(
                     request.objective
                 ),
-            "steps": steps,
+            "steps":
+                steps,
             "evidence_summary": {
                 "sources":
-                    len(sources),
+                    len(
+                        sources
+                    ),
                 "claims":
-                    len(claims),
+                    len(
+                        claims
+                    ),
                 "empirical_sources":
                     sum(
                         1
-                        for source in sources
+                        for source
+                        in sources
                         if source.get(
                             "empirical"
                         )
@@ -4238,7 +5999,8 @@ def run_mission(
                         source.get(
                             "family"
                         )
-                        for source in sources
+                        for source
+                        in sources
                         if source.get(
                             "family"
                         )
@@ -4248,7 +6010,8 @@ def run_mission(
                         source.get(
                             "publisher"
                         )
-                        for source in sources
+                        for source
+                        in sources
                         if source.get(
                             "publisher"
                         )
@@ -4278,6 +6041,11 @@ def run_mission(
                     else "memory_available"
                 ),
                 "safe_action_boundary",
+                (
+                    "real_world_command_gateway"
+                    if request.execute
+                    else "real_world_command_available"
+                ),
             ],
         }
 
@@ -4349,13 +6117,17 @@ def run_mission(
                         "verified"
                     ),
                 "sources":
-                    len(sources),
+                    len(
+                        sources
+                    ),
             },
         )
 
     except Exception as exc:
 
-        error = str(exc)[:2000]
+        error = str(
+            exc
+        )[:2000]
 
         write(
             """
@@ -4377,7 +6149,8 @@ def run_mission(
             "error",
             "mission_failed",
             {
-                "error": error,
+                "error":
+                    error,
             },
         )
 
@@ -4385,7 +6158,8 @@ def run_mission(
             mission_id,
             "failed",
             {
-                "error": error,
+                "error":
+                    error,
             },
         )
 
@@ -4408,14 +6182,26 @@ app = FastAPI(
 def root():
 
     return {
-        "name": "AI Infinity",
-        "status": "online",
-        "version": APP_VERSION,
-        "build": BUILD,
-        "docs": "/docs",
-        "health": "/health",
-        "run": "/run",
-        "interface": "/interface",
+        "name":
+            "AI Infinity",
+        "status":
+            "online",
+        "version":
+            APP_VERSION,
+        "build":
+            BUILD,
+        "docs":
+            "/docs",
+        "health":
+            "/health",
+        "run":
+            "/run",
+        "interface":
+            "/interface",
+        "real_world_command":
+            "/real-world-command",
+        "real_world_command_status":
+            "/real-world-command-status",
     }
 
 
@@ -4434,8 +6220,10 @@ def post_memory(
     )
 
     return {
-        "status": "stored",
-        "key": request.key,
+        "status":
+            "stored",
+        "key":
+            request.key,
     }
 
 
@@ -4445,8 +6233,10 @@ def get_memory():
     items = memory_items()
 
     return {
-        "count": len(items),
-        "items": items,
+        "count":
+            len(items),
+        "items":
+            items,
     }
 
 
@@ -4459,7 +6249,8 @@ def memory_count():
     )
 
     return {
-        "count": row["n"],
+        "count":
+            row["n"],
     }
 
 
@@ -4469,14 +6260,22 @@ def legacy_memory(
 ):
 
     key = str(
-        body.get("key")
-        or body.get("kind")
+        body.get(
+            "key"
+        )
+        or body.get(
+            "kind"
+        )
         or "general"
     )
 
     value = str(
-        body.get("value")
-        or body.get("content")
+        body.get(
+            "value"
+        )
+        or body.get(
+            "content"
+        )
         or ""
     )
 
@@ -4486,8 +6285,10 @@ def legacy_memory(
     )
 
     return {
-        "stored": True,
-        "key": key,
+        "stored":
+            True,
+        "key":
+            key,
     }
 
 
@@ -4496,7 +6297,9 @@ def legacy_memories(
     qstr: str = "",
 ):
 
-    items = memory_items(50)
+    items = memory_items(
+        50
+    )
 
     if qstr:
 
@@ -4519,7 +6322,8 @@ def legacy_memories(
         ]
 
     return {
-        "memories": items,
+        "memories":
+            items,
     }
 
 
@@ -4531,12 +6335,22 @@ def legacy_memories(
 def legacy_security_policy():
 
     return {
-        "default_deny_consequential_actions": True,
-        "automatic_spending": False,
-        "credential_exfiltration": False,
-        "uncontrolled_self_modification": False,
-        "audit": True,
-        "arbitrary_code_execution": False,
+        "default_deny_consequential_actions":
+            True,
+        "automatic_spending":
+            False,
+        "credential_exfiltration":
+            False,
+        "uncontrolled_self_modification":
+            False,
+        "audit":
+            True,
+        "arbitrary_code_execution":
+            False,
+        "external_side_effect_approval":
+            True,
+        "host_allowlist":
+            True,
     }
 
 
@@ -4544,7 +6358,8 @@ def legacy_security_policy():
 def action_policy():
 
     return {
-        "version": APP_VERSION,
+        "version":
+            APP_VERSION,
         "safe_actions":
             sorted(
                 SAFE_ACTION_ALLOWLIST
@@ -4556,9 +6371,19 @@ def action_policy():
         "private_network_access":
             False,
         "external_side_effects":
+            True,
+        "external_http_requests":
+            True,
+        "approval_bounded":
+            True,
+        "host_allowlist_required":
+            True,
+        "credential_headers_blocked":
+            True,
+        "automatic_side_effect_retry":
             False,
         "status":
-            "bounded-safe-gateway",
+            "approval-bounded-real-world-gateway",
     }
 
 
@@ -4566,30 +6391,68 @@ def action_policy():
 def command_capabilities():
 
     return {
-        "version": APP_VERSION,
-        "build": BUILD,
-        "status": "ready",
+        "version":
+            APP_VERSION,
+        "build":
+            BUILD,
+        "status":
+            "ready",
         "command_boundary": {
-            "planning": True,
-            "policy": True,
-            "registered_actions": True,
-            "execution": True,
-            "observation": True,
-            "verification": True,
-            "recovery": True,
-            "audit": True,
-            "idempotency": True,
+            "planning":
+                True,
+            "policy":
+                True,
+            "registered_actions":
+                True,
+            "execution":
+                True,
+            "observation":
+                True,
+            "verification":
+                True,
+            "recovery":
+                True,
+            "audit":
+                True,
+            "idempotency":
+                True,
+            "external_side_effects":
+                True,
+            "approval_transactions":
+                True,
         },
         "safe_actions":
             sorted(
                 SAFE_ACTION_ALLOWLIST
             ),
-        "transactional_actions": True,
-        "approval_gate": True,
-        "arbitrary_code_execution": False,
-        "private_network_access": False,
-        "unrestricted_network_access": False,
-        "spending": False,
+        "transactional_actions":
+            True,
+        "approval_gate":
+            True,
+        "arbitrary_code_execution":
+            False,
+        "private_network_access":
+            False,
+        "unrestricted_network_access":
+            False,
+        "spending":
+            False,
+        "external_http_methods": [
+            "GET",
+            "HEAD",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
+        ],
+        "external_side_effects":
+            True,
+        "approval_required_for_side_effects":
+            True,
+        "host_allowlist_required":
+            True,
+        "automatic_side_effect_retry":
+            False,
     }
 
 
@@ -4597,7 +6460,6 @@ def command_capabilities():
 # ACTIONS
 # ============================================================
 
-# ONE authoritative /action route.
 @app.post("/action")
 def action_endpoint(
     request: ActionRequest,
@@ -4608,7 +6470,6 @@ def action_endpoint(
     )
 
 
-# Safe real-world gateway.
 @app.post("/safe-action")
 def safe_action_endpoint(
     request: SafeActionRequest,
@@ -4619,7 +6480,6 @@ def safe_action_endpoint(
     )
 
 
-# Backwards-compatible v1 safe gateway.
 @app.post("/v1/safe-action")
 def legacy_safe_action(
     request: SafeActionRequest,
@@ -4630,7 +6490,6 @@ def legacy_safe_action(
     )
 
 
-# Previous v1 action-fabric API remains.
 @app.post("/v1/action")
 def legacy_action(
     request: ActionRequest,
@@ -4641,11 +6500,121 @@ def legacy_action(
     )
 
 
-@app.get("/action-fabric")
+@app.get(
+    "/real-world-command-status"
+)
+def real_world_command_status():
+
+    return {
+        "version":
+            APP_VERSION,
+        "build":
+            BUILD,
+        "status":
+            "ready",
+        "execution": {
+            "external_http":
+                True,
+            "methods": [
+                "GET",
+                "HEAD",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE",
+            ],
+            "side_effects":
+                True,
+        },
+        "safety": {
+            "approval_required":
+                True,
+            "host_allowlist_required":
+                True,
+            "allowlist_configured":
+                bool(
+                    ACTION_HOST_ALLOWLIST
+                ),
+            "allowed_hosts":
+                sorted(
+                    ACTION_HOST_ALLOWLIST
+                ),
+            "credential_headers_blocked":
+                True,
+            "redirects_for_side_effects":
+                "blocked",
+            "private_network_access":
+                False,
+            "arbitrary_code_execution":
+                False,
+        },
+        "reliability": {
+            "transactional":
+                True,
+            "idempotent":
+                True,
+            "stale_recovery":
+                True,
+            "automatic_side_effect_retry":
+                False,
+            "unknown_transport_outcome_not_replayed":
+                True,
+        },
+    }
+
+
+@app.get(
+    "/test-real-world-command"
+)
+def test_real_world_command():
+
+    return {
+        "version":
+            APP_VERSION,
+        "status":
+            "passed"
+            if ACTION_HOST_ALLOWLIST
+            else "configuration_required",
+        "real_world_command_gateway":
+            True,
+        "side_effects_available":
+            True,
+        "approval_required":
+            True,
+        "host_allowlist_required":
+            True,
+        "allowlist_configured":
+            bool(
+                ACTION_HOST_ALLOWLIST
+            ),
+        "allowed_hosts":
+            sorted(
+                ACTION_HOST_ALLOWLIST
+            ),
+        "automatic_side_effect_retry":
+            False,
+        "next_action":
+            (
+                "POST /real-world-command"
+                if ACTION_HOST_ALLOWLIST
+                else (
+                    "Set "
+                    "AI_INFINITY_ACTION_HOST_ALLOWLIST "
+                    "before executing an external "
+                    "side-effect command."
+                )
+            ),
+    }
+
+
+@app.get(
+    "/action-fabric"
+)
 def action_fabric_status():
 
     return {
-        "status": "ready",
+        "status":
+            "ready",
         "registered_actions":
             sorted(
                 SAFE_ACTIONS
@@ -4665,6 +6634,14 @@ def action_fabric_status():
         "bounded_recovery":
             True,
         "external_side_effects":
+            True,
+        "external_http_requests":
+            True,
+        "approval_required":
+            True,
+        "host_allowlist_required":
+            True,
+        "automatic_side_effect_retry":
             False,
         "arbitrary_code_execution":
             False,
@@ -4695,7 +6672,8 @@ def action_history(
     )
 
     return {
-        "count": len(rows),
+        "count":
+            len(rows),
         "transactions": [
             dict(row)
             for row in rows
@@ -4748,10 +6726,13 @@ def command_audit(
     )
 
     return {
-        "version": APP_VERSION,
-        "status": "ready",
+        "version":
+            APP_VERSION,
+        "status":
+            "ready",
         "transaction_counts": {
-            row["status"]: row["n"]
+            row["status"]:
+                row["n"]
             for row in counts
         },
         "transactions": [
@@ -4763,27 +6744,44 @@ def command_audit(
             for row in logs
         ],
         "integrity": {
-            "transactions_persisted": True,
-            "idempotency_keys_persisted": True,
-            "action_log_persisted": True,
-            "recovery_boundary": "failed_closed",
-            "arbitrary_code_execution": False,
+            "transactions_persisted":
+                True,
+            "idempotency_keys_persisted":
+                True,
+            "action_log_persisted":
+                True,
+            "recovery_boundary":
+                "failed_closed",
+            "external_side_effect_transactions":
+                True,
+            "unknown_external_outcome_not_replayed":
+                True,
+            "arbitrary_code_execution":
+                False,
         },
     }
 
 
-@app.get("/command-audit")
+@app.get(
+    "/command-audit"
+)
 def command_audit_endpoint(
     limit: int = 25,
 ):
 
-    return command_audit(limit)
+    return command_audit(
+        limit
+    )
 
 
-@app.get("/test-command-audit")
+@app.get(
+    "/test-command-audit"
+)
 def test_command_audit():
 
-    audit = command_audit(10)
+    audit = command_audit(
+        10
+    )
 
     required = {
         "transaction_counts",
@@ -4797,12 +6795,16 @@ def test_command_audit():
     )
 
     return {
-        "version": APP_VERSION,
+        "version":
+            APP_VERSION,
         "status":
-            "passed"
-            if passed
-            else "failed",
-        "audit_verified": passed,
+            (
+                "passed"
+                if passed
+                else "failed"
+            ),
+        "audit_verified":
+            passed,
         "integrity":
             audit["integrity"],
         "transaction_count":
@@ -4824,11 +6826,19 @@ def test_command_audit():
 # ACTION TRANSACTION RECOVERY TEST
 # ============================================================
 
-@app.get("/test-action-recovery")
+@app.get(
+    "/test-action-recovery"
+)
 def test_action_recovery():
 
-    key = "test-stale-recovery-" + make_id("k")
-    txid = make_id("tx")
+    key = (
+        "test-stale-recovery-"
+        + make_id("k")
+    )
+
+    txid = make_id(
+        "tx"
+    )
 
     old = now() - max(
         ACTION_STALE_SECONDS + 5,
@@ -4858,8 +6868,13 @@ def test_action_recovery():
             "running",
             key,
             json.dumps({
-                "target": "self-test",
-                "payload": {"ok": True},
+                "target":
+                    "self-test",
+                "payload":
+                    {
+                        "ok":
+                            True
+                    },
             }),
             None,
             None,
@@ -4869,11 +6884,18 @@ def test_action_recovery():
     )
 
     request = SafeActionRequest(
-        action_type="save_result",
-        target="self-test",
-        payload={"ok": True},
-        idempotency_key=key,
-        require_approval=False,
+        action_type=
+            "save_result",
+        target=
+            "self-test",
+        payload={
+            "ok":
+                True
+        },
+        idempotency_key=
+            key,
+        require_approval=
+            False,
     )
 
     result = execute_safe_gateway(
@@ -4906,19 +6928,25 @@ def test_action_recovery():
     )
 
     return {
-        "version": APP_VERSION,
+        "version":
+            APP_VERSION,
         "status":
-            "passed"
-            if reclaimed and terminal
-            else "failed",
+            (
+                "passed"
+                if reclaimed
+                and terminal
+                else "failed"
+            ),
         "stale_running_reclaimed":
             reclaimed,
         "terminal_status":
             row["status"]
             if row
             else None,
-        "transaction_id": txid,
-        "bounded_recovery": True,
+        "transaction_id":
+            txid,
+        "bounded_recovery":
+            True,
         "expected_terminal_states": [
             "committed",
             "failed_closed",
@@ -4930,7 +6958,9 @@ def test_action_recovery():
 # LEGACY VERIFY
 # ============================================================
 
-@app.post("/v1/verify")
+@app.post(
+    "/v1/verify"
+)
 def legacy_verify(
     body: Dict[str, Any],
 ):
@@ -4964,7 +6994,9 @@ def legacy_verify(
                 item,
                 dict,
             )
-            and item.get("source")
+            and item.get(
+                "source"
+            )
         )
     ]
 
@@ -4974,8 +7006,10 @@ def legacy_verify(
     )
 
     return {
-        "claim": claim,
-        "verified": verified,
+        "claim":
+            claim,
+        "verified":
+            verified,
         "issues": (
             []
             if verified
@@ -4988,7 +7022,10 @@ def legacy_verify(
         "provenance":
             provenance,
         "note":
-            "Evidence state is reported; proof is not manufactured.",
+            (
+                "Evidence state is reported; "
+                "proof is not manufactured."
+            ),
     }
 
 
@@ -4996,7 +7033,9 @@ def legacy_verify(
 # MISSIONS
 # ============================================================
 
-@app.post("/execute")
+@app.post(
+    "/execute"
+)
 def execute(
     request: MissionRequest,
     background_tasks: BackgroundTasks,
@@ -5006,12 +7045,14 @@ def execute(
 
         raise HTTPException(
             status_code=400,
-            detail="objective is required",
+            detail=
+                "objective is required",
         )
 
     mission_id = create_mission(
         request,
-        approved=not request.require_approval,
+        approved=
+            not request.require_approval,
     )
 
     if request.require_approval:
@@ -5056,7 +7097,9 @@ def execute(
     }
 
 
-@app.post("/run")
+@app.post(
+    "/run"
+)
 def run(
     request: MissionRequest,
     background_tasks: BackgroundTasks,
@@ -5066,12 +7109,14 @@ def run(
 
         raise HTTPException(
             status_code=400,
-            detail="objective is required",
+            detail=
+                "objective is required",
         )
 
     mission_id = create_mission(
         request,
-        approved=not request.require_approval,
+        approved=
+            not request.require_approval,
     )
 
     if request.require_approval:
@@ -5114,7 +7159,9 @@ def run(
     }
 
 
-@app.post("/task")
+@app.post(
+    "/task"
+)
 def task(
     request: TaskRequest,
     background_tasks: BackgroundTasks,
@@ -5126,20 +7173,29 @@ def task(
     )
 
 
-@app.post("/command")
+@app.post(
+    "/command"
+)
 def command(
     request: CommandRequest,
     background_tasks: BackgroundTasks,
 ):
 
     mission_request = MissionRequest(
-        objective=request.objective,
-        research=request.research,
-        verify=request.verify,
-        remember=request.remember,
-        external_access=request.external_access,
-        execute=request.execute,
-        require_approval=request.require_approval,
+        objective=
+            request.objective,
+        research=
+            request.research,
+        verify=
+            request.verify,
+        remember=
+            request.remember,
+        external_access=
+            request.external_access,
+        execute=
+            request.execute,
+        require_approval=
+            request.require_approval,
     )
 
     mission_id = create_mission(
@@ -5228,7 +7284,9 @@ def command(
     }
 
 
-@app.post("/mission/{mission_id}/approve")
+@app.post(
+    "/mission/{mission_id}/approve"
+)
 def approve(
     mission_id: str,
     background_tasks: BackgroundTasks,
@@ -5240,7 +7298,9 @@ def approve(
         FROM missions
         WHERE id=?
         """,
-        (mission_id,),
+        (
+            mission_id,
+        ),
         one=True,
     )
 
@@ -5248,7 +7308,8 @@ def approve(
 
         raise HTTPException(
             status_code=404,
-            detail="mission not found",
+            detail=
+                "mission not found",
         )
 
     write(
@@ -5286,7 +7347,9 @@ def approve(
     }
 
 
-@app.get("/mission/{mission_id}")
+@app.get(
+    "/mission/{mission_id}"
+)
 def mission(
     mission_id: str,
 ):
@@ -5297,7 +7360,9 @@ def mission(
         FROM missions
         WHERE id=?
         """,
-        (mission_id,),
+        (
+            mission_id,
+        ),
         one=True,
     )
 
@@ -5305,10 +7370,13 @@ def mission(
 
         raise HTTPException(
             status_code=404,
-            detail="mission not found",
+            detail=
+                "mission not found",
         )
 
-    output = dict(row)
+    output = dict(
+        row
+    )
 
     output["request"] = json.loads(
         output.pop(
@@ -5327,7 +7395,9 @@ def mission(
     return output
 
 
-@app.get("/mission/{mission_id}/events")
+@app.get(
+    "/mission/{mission_id}/events"
+)
 def mission_events(
     mission_id: str,
 ):
@@ -5339,7 +7409,9 @@ def mission_events(
         WHERE mission_id=?
         ORDER BY id
         """,
-        (mission_id,),
+        (
+            mission_id,
+        ),
     )
 
     return {
@@ -5353,7 +7425,9 @@ def mission_events(
     }
 
 
-@app.get("/mission/{mission_id}/checkpoints")
+@app.get(
+    "/mission/{mission_id}/checkpoints"
+)
 def mission_checkpoints(
     mission_id: str,
 ):
@@ -5365,24 +7439,27 @@ def mission_checkpoints(
         WHERE mission_id=?
         ORDER BY id
         """,
-        (mission_id,),
+        (
+            mission_id,
+        ),
     )
 
     return {
         "mission_id":
             mission_id,
-        "checkpoints": [
-            {
-                **dict(row),
-                "state":
-                    json.loads(
-                        row[
-                            "state_json"
-                        ]
-                    ),
-            }
-            for row in rows
-        ],
+        "checkpoints":
+            [
+                {
+                    **dict(row),
+                    "state":
+                        json.loads(
+                            row[
+                                "state_json"
+                            ]
+                        ),
+                }
+                for row in rows
+            ],
     }
 
 
@@ -5390,55 +7467,110 @@ def mission_checkpoints(
 # SYSTEM STATUS
 # ============================================================
 
-@app.get("/health")
+@app.get(
+    "/health"
+)
 def health():
 
     current_policy = policy()
 
     return {
-        "status": "healthy",
-        "service": "AI Infinity",
-        "version": APP_VERSION,
-        "build": BUILD,
+        "status":
+            "healthy",
+        "service":
+            "AI Infinity",
+        "version":
+            APP_VERSION,
+        "build":
+            BUILD,
 
         "core": {
-            "mission_engine": True,
-            "adaptive_recovery": True,
-            "provider_independence": True,
-            "empirical_evidence": True,
-            "claim_analysis": True,
-            "contradiction_screening": True,
-            "semantic_contradiction_resolution": True,
-            "command_approval": True,
-            "persistent_mission_requests": True,
-            "checkpoints": True,
-            "learning_loop": True,
-            "world_model": True,
-            "opportunity_detection": True,
-            "action_fabric": True,
-            "transactional_actions": True,
-            "idempotency": True,
-            "circuit_breakers": True,
-            "bounded_safe_actions": True,
-            "safe_action_gateway": True,
-            "action_provenance": True,
-            "action_idempotency": True,
-            "stale_running_transaction_recovery": True,
+            "mission_engine":
+                True,
+            "adaptive_recovery":
+                True,
+            "provider_independence":
+                True,
+            "empirical_evidence":
+                True,
+            "claim_analysis":
+                True,
+            "contradiction_screening":
+                True,
+            "semantic_contradiction_resolution":
+                True,
+            "command_approval":
+                True,
+            "persistent_mission_requests":
+                True,
+            "checkpoints":
+                True,
+            "learning_loop":
+                True,
+            "world_model":
+                True,
+            "opportunity_detection":
+                True,
+            "action_fabric":
+                True,
+            "transactional_actions":
+                True,
+            "idempotency":
+                True,
+            "circuit_breakers":
+                True,
+            "bounded_safe_actions":
+                True,
+            "safe_action_gateway":
+                True,
+            "action_provenance":
+                True,
+            "action_idempotency":
+                True,
+            "stale_running_transaction_recovery":
+                True,
+            "real_world_command_execution":
+                True,
+            "external_side_effect_transactions":
+                True,
         },
 
         "security": {
-            "ssrf_protection": True,
-            "redirect_destination_validation": True,
-            "waf_rejection": True,
-            "arbitrary_code_execution": False,
-            "permission_bypass": False,
+            "ssrf_protection":
+                True,
+            "redirect_destination_validation":
+                True,
+            "waf_rejection":
+                True,
+            "arbitrary_code_execution":
+                False,
+            "permission_bypass":
+                False,
+            "credential_headers_blocked":
+                True,
+            "external_action_approval_required":
+                True,
         },
 
         "action_boundary": {
-            "external_action_gateway": True,
-            "real_world_side_effects": False,
-            "registered_actions_only": True,
-            "status": "bounded",
+            "external_action_gateway":
+                True,
+            "real_world_side_effects":
+                True,
+            "registered_actions_only":
+                True,
+            "approval_required":
+                True,
+            "host_allowlist_required":
+                True,
+            "host_allowlist_configured":
+                bool(
+                    ACTION_HOST_ALLOWLIST
+                ),
+            "automatic_side_effect_retry":
+                False,
+            "status":
+                "approval-bounded",
         },
 
         "policy_version":
@@ -5460,19 +7592,30 @@ def health():
     }
 
 
-@app.get("/health-88")
+@app.get(
+    "/health-88"
+)
 def health_88():
 
     return {
-        "status": "healthy",
-        "version": APP_VERSION,
-        "provider_quorum": True,
-        "empirical_evidence": True,
-        "provider_family_aliasing": True,
+        "status":
+            "healthy",
+        "version":
+            APP_VERSION,
+        "provider_quorum":
+            True,
+        "empirical_evidence":
+            True,
+        "provider_family_aliasing":
+            True,
+        "real_world_command_execution":
+            True,
     }
 
 
-@app.get("/status")
+@app.get(
+    "/status"
+)
 def status():
 
     rows = q(
@@ -5485,17 +7628,22 @@ def status():
     )
 
     return {
-        "status": "online",
-        "version": APP_VERSION,
-        "missions": {
-            row["status"]:
-                row["n"]
-            for row in rows
-        },
+        "status":
+            "online",
+        "version":
+            APP_VERSION,
+        "missions":
+            {
+                row["status"]:
+                    row["n"]
+                for row in rows
+            },
     }
 
 
-@app.get("/version")
+@app.get(
+    "/version"
+)
 def version():
 
     return {
@@ -5506,7 +7654,9 @@ def version():
     }
 
 
-@app.get("/version-88")
+@app.get(
+    "/version-88"
+)
 def version_88():
 
     return {
@@ -5519,11 +7669,14 @@ def version_88():
     }
 
 
-@app.get("/capabilities")
+@app.get(
+    "/capabilities"
+)
 def capabilities():
 
     return {
-        "version": APP_VERSION,
+        "version":
+            APP_VERSION,
         "capabilities": [
             "intent-routing",
             "mission-planning",
@@ -5556,6 +7709,11 @@ def capabilities():
             "action-approval",
             "safe-http-access",
             "safe-action-gateway",
+            "real-world-command-execution",
+            "external-http-side-effects",
+            "approval-transactions",
+            "host-allowlisted-execution",
+            "no-automatic-side-effect-replay",
             "video-boundary",
             "interface",
             "execute",
@@ -5566,7 +7724,9 @@ def capabilities():
     }
 
 
-@app.get("/tools")
+@app.get(
+    "/tools"
+)
 def tools():
 
     return {
@@ -5609,6 +7769,12 @@ def tools():
             },
             {
                 "name":
+                    "real_world_command_gateway",
+                "enabled":
+                    True,
+            },
+            {
+                "name":
                     "world_model",
                 "enabled":
                     True,
@@ -5625,7 +7791,9 @@ def tools():
     }
 
 
-@app.get("/connectors")
+@app.get(
+    "/connectors"
+)
 def connectors():
 
     return {
@@ -5642,7 +7810,9 @@ def connectors():
     }
 
 
-@app.get("/world-model")
+@app.get(
+    "/world-model"
+)
 def world_model():
 
     return {
@@ -5659,7 +7829,9 @@ def world_model():
     }
 
 
-@app.get("/opportunities")
+@app.get(
+    "/opportunities"
+)
 def opportunities():
 
     return {
@@ -5677,7 +7849,9 @@ def opportunities():
     }
 
 
-@app.get("/provider-quorum")
+@app.get(
+    "/provider-quorum"
+)
 def provider_quorum():
 
     rows = q(
@@ -5712,67 +7886,131 @@ def provider_quorum():
     }
 
 
-@app.get("/evidence-policy")
+@app.get(
+    "/evidence-policy"
+)
 def evidence_policy():
 
     return {
-        "minimum_relevant_sources": 3,
-        "minimum_high_quality_sources": 2,
-        "minimum_empirical_sources": 3,
-        "minimum_publishers": 2,
-        "minimum_provider_families": 2,
-        "minimum_claims": 2,
-        "semantic_contradiction_proof": False,
+        "minimum_relevant_sources":
+            3,
+        "minimum_high_quality_sources":
+            2,
+        "minimum_empirical_sources":
+            3,
+        "minimum_publishers":
+            2,
+        "minimum_provider_families":
+            2,
+        "minimum_claims":
+            2,
+        "semantic_contradiction_proof":
+            False,
     }
 
 
-@app.get("/resilience-policy")
+@app.get(
+    "/resilience-policy"
+)
 def resilience_policy():
 
     return {
-        "adaptive_recovery": True,
-        "provider_recovery": True,
-        "runtime_policy_adaptation": True,
-        "max_mission_attempts": 2,
-        "safe_retry": True,
+        "adaptive_recovery":
+            True,
+        "provider_recovery":
+            True,
+        "runtime_policy_adaptation":
+            True,
+        "max_mission_attempts":
+            2,
+        "safe_retry":
+            True,
         "action_retry_limit":
             ACTION_MAX_ATTEMPTS,
-        "action_circuit_breaker": True,
-        "stale_running_transaction_recovery": True,
-        "action_stale_seconds": ACTION_STALE_SECONDS,
+        "action_circuit_breaker":
+            True,
+        "stale_running_transaction_recovery":
+            True,
+        "action_stale_seconds":
+            ACTION_STALE_SECONDS,
+        "external_side_effect_transactions":
+            True,
+        "external_side_effect_approval":
+            True,
+        "automatic_side_effect_retry":
+            False,
+        "unknown_external_outcome_replay":
+            False,
+        "action_host_allowlist_configured":
+            bool(
+                ACTION_HOST_ALLOWLIST
+            ),
     }
 
 
-@app.get("/interface-status")
+@app.get(
+    "/interface-status"
+)
 def interface_status():
 
     return {
-        "status": "ready",
-        "version": APP_VERSION,
-        "ui": "/interface",
-        "api": "/docs",
+        "status":
+            "ready",
+        "version":
+            APP_VERSION,
+        "ui":
+            "/interface",
+        "api":
+            "/docs",
+        "real_world_command":
+            "/real-world-command",
+        "real_world_command_status":
+            "/real-world-command-status",
     }
 
 
-@app.get("/run_help")
+@app.get(
+    "/run_help"
+)
 def run_help():
 
     return {
-        "method": "POST",
-        "path": "/run",
+        "method":
+            "POST",
+        "path":
+            "/run",
         "body": {
-            "objective": "string",
-            "research": True,
-            "verify": True,
-            "remember": False,
-            "external_access": True,
-            "execute": False,
-            "require_approval": False,
+            "objective":
+                "string",
+            "research":
+                True,
+            "verify":
+                True,
+            "remember":
+                False,
+            "external_access":
+                True,
+            "execute":
+                False,
+            "require_approval":
+                False,
+        },
+        "real_world_command": {
+            "method":
+                "POST",
+            "path":
+                "/real-world-command",
+            "approval_required":
+                True,
+            "host_allowlist_required":
+                True,
         },
     }
 
 
-@app.get("/version-history")
+@app.get(
+    "/version-history"
+)
 def version_history():
 
     versions = [
@@ -5811,6 +8049,7 @@ def version_history():
         "2050.96",
         "2050.97",
         "2050.98",
+        "2050.99",
     ]
 
     return {
@@ -5825,15 +8064,21 @@ def version_history():
 # ROUTER TEST
 # ============================================================
 
-@app.get("/router-test")
-@app.get("/test-router")
+@app.get(
+    "/router-test"
+)
+@app.get(
+    "/test-router"
+)
 def router_test(
     background_tasks: BackgroundTasks,
 ):
 
     request = MissionRequest(
-        objective=
-            "Test AI Infinity adaptive verification routing",
+        objective=(
+            "Test AI Infinity "
+            "adaptive verification routing"
+        ),
         research=True,
         verify=True,
         remember=False,
@@ -5865,6 +8110,7 @@ def router_test(
             "research",
             "verification",
             "recovery",
+            "real_world_command_boundary",
         ],
     }
 
@@ -5925,11 +8171,20 @@ textarea {{
     box-sizing: border-box;
 }}
 
+input {{
+    width: 100%;
+    padding: 12px;
+    box-sizing: border-box;
+    border-radius: 10px;
+    margin: 6px 0;
+}}
+
 button {{
     padding: 12px 18px;
     border-radius: 9px;
     border: 0;
     cursor: pointer;
+    margin-right: 6px;
 }}
 
 pre {{
@@ -5944,6 +8199,11 @@ pre {{
     padding: 18px;
     border-radius: 14px;
     margin: 12px 0;
+}}
+
+.small {{
+    opacity: 0.8;
+    font-size: 0.92rem;
 }}
 
 </style>
@@ -5962,6 +8222,11 @@ pre {{
 {escape(APP_VERSION)}
 ·
 {escape(BUILD)}
+</p>
+
+<p class="small">
+Mission engine + research + verification +
+approval-gated real-world command execution.
 </p>
 
 </div>
@@ -5984,6 +8249,42 @@ Run Mission
 
 <div class="card">
 
+<h3>Real-World Command</h3>
+
+<input
+ id="target"
+ placeholder="https://example.com/webhook"
+/>
+
+<input
+ id="method"
+ value="POST"
+ placeholder="POST"
+/>
+
+<textarea
+ id="body"
+ placeholder='{"message":"hello"}'
+></textarea>
+
+<br>
+
+<button onclick="stageRealWorldCommand()">
+Stage External Command
+</button>
+
+<button onclick="approveExternalCommand()">
+Approve Transaction
+</button>
+
+<pre id="actionOut">
+No external command staged.
+</pre>
+
+</div>
+
+<div class="card">
+
 <h3>Mission</h3>
 
 <pre id="out">
@@ -5993,6 +8294,8 @@ Ready.
 </div>
 
 <script>
+
+let pendingTransactionId = null;
 
 async function runMission() {{
 
@@ -6078,6 +8381,112 @@ async function pollMission(id) {{
     }}
 }}
 
+
+async function stageRealWorldCommand() {{
+
+    const target =
+        document.getElementById(
+            "target"
+        ).value.trim();
+
+    const method =
+        document.getElementById(
+            "method"
+        ).value.trim()
+        || "POST";
+
+    let body = {{}};
+
+    const rawBody =
+        document.getElementById(
+            "body"
+        ).value.trim();
+
+    if (rawBody) {{
+        try {{
+            body = JSON.parse(
+                rawBody
+            );
+        }} catch (e) {{
+            document.getElementById(
+                "actionOut"
+            ).textContent =
+                "Invalid JSON body.";
+            return;
+        }}
+    }}
+
+    const response =
+        await fetch(
+            "/real-world-command",
+            {{
+                method:
+                    "POST",
+                headers: {{
+                    "Content-Type":
+                        "application/json"
+                }},
+                body:
+                    JSON.stringify({{
+                        target,
+                        method,
+                        body
+                    }})
+            }}
+        );
+
+    const data =
+        await response.json();
+
+    pendingTransactionId =
+        data.transaction_id
+        || null;
+
+    document.getElementById(
+        "actionOut"
+    ).textContent =
+        JSON.stringify(
+            data,
+            null,
+            2
+        );
+}}
+
+
+async function approveExternalCommand() {{
+
+    if (!pendingTransactionId) {{
+        document.getElementById(
+            "actionOut"
+        ).textContent =
+            "No pending transaction.";
+        return;
+    }}
+
+    const response =
+        await fetch(
+            "/action-transaction/"
+            + pendingTransactionId
+            + "/approve",
+            {{
+                method:
+                    "POST"
+            }}
+        );
+
+    const data =
+        await response.json();
+
+    document.getElementById(
+        "actionOut"
+    ).textContent =
+        JSON.stringify(
+            data,
+            null,
+            2
+        );
+}}
+
 </script>
 
 </main>
@@ -6093,7 +8502,9 @@ async function pollMission(id) {{
 # DOCS
 # ============================================================
 
-@app.get("/docs-link")
+@app.get(
+    "/docs-link"
+)
 def docs_link():
 
     return {
@@ -6106,7 +8517,9 @@ def docs_link():
 # ERROR NORMALIZATION
 # ============================================================
 
-@app.exception_handler(Exception)
+@app.exception_handler(
+    Exception
+)
 async def unhandled(
     request: FastAPIRequest,
     exc: Exception,
@@ -6115,7 +8528,8 @@ async def unhandled(
     return JSONResponse(
         status_code=500,
         content={
-            "status": "error",
+            "status":
+                "error",
             "version":
                 APP_VERSION,
             "build":
