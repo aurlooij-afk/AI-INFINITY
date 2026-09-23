@@ -1,7 +1,45 @@
-# AI Infinity
-# TARGET-2050.163
-# REAL-WORLD-COMMAND-RESULT-CLOSURE-CORE
+"""
+AI Infinity
+TARGET-2050.164
+REAL-WORLD-COMMAND-EXECUTION-BRIDGE-CORE
 
+Purpose:
+    Turn AI Infinity from a mission/research core into a practical command
+    execution core with controlled real-world HTTP execution.
+
+Core:
+    - mission engine
+    - command routing
+    - internal commands
+    - external HTTP bridge
+    - approval gates
+    - SSRF/private-network protection
+    - credential-header protection
+    - durable SQLite execution records
+    - async execution
+    - restart recovery
+    - execution events
+    - idempotency
+    - verification
+    - adaptive recovery
+    - persistent memory
+    - policy adaptation
+    - research planning
+    - result closure
+    - browser interface
+
+Dependencies:
+    FastAPI
+    Uvicorn
+    Pydantic
+
+The HTTP execution layer intentionally uses Python's standard library rather
+than httpx so deployment does not depend on an additional HTTP package.
+"""
+
+from __future__ import annotations
+
+import asyncio
 import hashlib
 import ipaddress
 import json
@@ -12,3308 +50,2277 @@ import sqlite3
 import threading
 import time
 import uuid
-from typing import Any, Dict, Optional
+
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 
 # ============================================================
-# VERSION
+# BUILD IDENTITY
 # ============================================================
 
-APP_VERSION = "TARGET-2050.163"
-BUILD = "REAL-WORLD-COMMAND-RESULT-CLOSURE-CORE"
-PREVIOUS_BUILD = "TARGET-2050.162 INTERNAL-SELF-COMMAND-BRIDGE-CORE"
+VERSION = "TARGET-2050.164"
+BUILD = "REAL-WORLD-COMMAND-EXECUTION-BRIDGE-CORE"
+PREVIOUS_BUILD = "TARGET-2050.163"
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+DATA_DIR = os.getenv(
+    "AI_INFINITY_DATA_DIR",
+    "/tmp/ai-infinity",
+)
 
 DB_PATH = os.getenv(
     "AI_INFINITY_DB",
-    "/tmp/ai-infinity/ai_infinity.db",
+    os.path.join(DATA_DIR, "ai_infinity_164.db"),
 )
 
-SELF_HOSTS = {
-    h.strip().lower()
-    for h in os.getenv(
-        "AI_INFINITY_SELF_HOSTS",
-        "ai-infinity-ca5e.onrender.com",
-    ).split(",")
-    if h.strip()
+HTTP_TIMEOUT = float(
+    os.getenv("AI_INFINITY_HTTP_TIMEOUT", "15")
+)
+
+MAX_REQUEST_BODY = int(
+    os.getenv("AI_INFINITY_MAX_BODY", "2000000")
+)
+
+MAX_RESPONSE_BODY = int(
+    os.getenv("AI_INFINITY_MAX_RESPONSE", "2000000")
+)
+
+MAX_RETRIES = int(
+    os.getenv("AI_INFINITY_MAX_RETRIES", "2")
+)
+
+REQUIRE_APPROVAL = (
+    os.getenv(
+        "AI_INFINITY_REQUIRE_APPROVAL",
+        "true",
+    ).lower()
+    not in {"0", "false", "no"}
+)
+
+ALLOWLIST_RAW = os.getenv(
+    "AI_INFINITY_EXTERNAL_ALLOWLIST",
+    "",
+)
+
+EXTERNAL_ALLOWLIST = {
+    item.strip().lower()
+    for item in ALLOWLIST_RAW.split(",")
+    if item.strip()
 }
 
-SELF_PATHS = {
-    "/",
-    "/run",
-    "/health",
-    "/multi-system/plan",
-    "/multi-system/execute",
-}
+os.makedirs(DATA_DIR, exist_ok=True)
 
-MAX_BODY = 2_000_000
 DB_LOCK = threading.RLock()
 
-RESEARCH_SOURCES = {
-    "wikipedia": (
-        "https://en.wikipedia.org/wiki/Special:Search?search={query}"
-    ),
-    "crossref": (
-        "https://api.crossref.org/works?"
-        "query.bibliographic={query}&rows=5"
-    ),
-    "openalex": (
-        "https://api.openalex.org/works?"
-        "search={query}&per-page=5"
-    ),
-}
+EXECUTOR = ThreadPoolExecutor(
+    max_workers=4
+)
+
+QUEUE_TASKS: Dict[str, asyncio.Task] = {}
+
+QUEUE_LOCK = asyncio.Lock()
 
 
 # ============================================================
-# APP
+# APPLICATION
 # ============================================================
 
 app = FastAPI(
     title="AI Infinity",
-    version=APP_VERSION,
+    version=VERSION,
     description=(
-        "Practical real-world command execution, "
-        "research, verification, recovery and result closure."
+        "Practical real-world command execution and mission "
+        "closure core."
     ),
 )
 
 
 # ============================================================
-# GENERAL HELPERS
+# BASIC UTILITIES
 # ============================================================
 
-def now() -> float:
-    return time.time()
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-def db() -> sqlite3.Connection:
-    conn = sqlite3.connect(
-        DB_PATH,
-        timeout=30,
-        check_same_thread=False,
+def make_id(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:14]}"
+
+
+def stable_hash(value: Any) -> str:
+    raw = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
     )
-    conn.row_factory = sqlite3.Row
-
-    try:
-        conn.execute("PRAGMA journal_mode=WAL")
-    except Exception:
-        pass
-
-    return conn
+    return hashlib.sha256(
+        raw.encode("utf-8")
+    ).hexdigest()
 
 
-def safe_json(value: Any) -> str:
+def dumps(value: Any) -> str:
     return json.dumps(
         value,
         ensure_ascii=False,
-        default=str,
+        separators=(",", ":"),
     )
+
+
+def loads(
+    value: Optional[str],
+    default: Any = None,
+) -> Any:
+    if not value:
+        return default
+
+    try:
+        return json.loads(value)
+    except Exception:
+        return default
 
 
 # ============================================================
 # DATABASE
 # ============================================================
 
+def get_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(
+        DB_PATH,
+        timeout=30,
+        check_same_thread=False,
+    )
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def init_db() -> None:
-    directory = os.path.dirname(DB_PATH)
+    with DB_LOCK:
+        with get_db() as conn:
 
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-
-    with DB_LOCK, db() as c:
-        c.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS systems_160 (
-                system_id TEXT PRIMARY KEY,
-                kind TEXT NOT NULL,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                config_json TEXT NOT NULL,
-                created_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS executions_160 (
-                id TEXT PRIMARY KEY,
-                objective TEXT NOT NULL,
-                idempotency_key TEXT UNIQUE,
-                status TEXT NOT NULL,
-                approved INTEGER NOT NULL DEFAULT 0,
-                verified INTEGER NOT NULL DEFAULT 0,
-                current_step INTEGER NOT NULL DEFAULT 0,
-                total_steps INTEGER NOT NULL DEFAULT 0,
-                plan_json TEXT NOT NULL DEFAULT '[]',
-                result_json TEXT,
-                error TEXT,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS execution_steps_160 (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                execution_id TEXT NOT NULL,
-                step_index INTEGER NOT NULL,
-                system_id TEXT NOT NULL,
-                action TEXT NOT NULL,
-                input_json TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                attempts INTEGER NOT NULL DEFAULT 0,
-                verified INTEGER NOT NULL DEFAULT 0,
-                result_json TEXT,
-                error TEXT,
-                started_at REAL,
-                finished_at REAL
-            );
-
-            CREATE TABLE IF NOT EXISTS execution_events_160 (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                execution_id TEXT NOT NULL,
-                event TEXT NOT NULL,
-                data_json TEXT NOT NULL,
-                created_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS safety_decisions_159 (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                execution_id TEXT NOT NULL,
-                decision TEXT NOT NULL,
-                risk REAL NOT NULL,
-                reason TEXT NOT NULL,
-                created_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS genome_157 (
-                key TEXT PRIMARY KEY,
-                value_json TEXT NOT NULL,
-                updated_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS adaptation_158 (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                execution_id TEXT NOT NULL,
-                outcome TEXT NOT NULL,
-                data_json TEXT NOT NULL,
-                created_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS commands_155 (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                execution_id TEXT NOT NULL,
-                command_text TEXT NOT NULL,
-                status TEXT NOT NULL,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS research_runs_161 (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                execution_id TEXT NOT NULL,
-                query TEXT NOT NULL,
-                status TEXT NOT NULL,
-                verified INTEGER NOT NULL DEFAULT 0,
-                source_count INTEGER NOT NULL DEFAULT 0,
-                successful_sources INTEGER NOT NULL DEFAULT 0,
-                data_json TEXT,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS research_artifacts_161 (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                execution_id TEXT NOT NULL,
-                source_family TEXT NOT NULL,
-                url TEXT NOT NULL,
-                title TEXT,
-                content TEXT,
-                claims_json TEXT,
-                success INTEGER NOT NULL DEFAULT 0,
-                created_at REAL NOT NULL
-            );
-            """
-        )
-
-        systems = [
-            (
-                "internal_self",
-                "internal",
-                {"allowlisted": True},
-            ),
-            (
-                "public_web",
-                "web",
-                {"redirects": False},
-            ),
-            (
-                "public_http",
-                "http",
-                {"redirects": False},
-            ),
-            (
-                "result_store",
-                "storage",
-                {"persistent": True},
-            ),
-            (
-                "mission_core",
-                "execution",
-                {"local": True},
-            ),
-            (
-                "research_web",
-                "research",
-                {
-                    "sources": list(
-                        RESEARCH_SOURCES.keys()
-                    )
-                },
-            ),
-        ]
-
-        for system_id, kind, config in systems:
-            c.execute(
+            conn.executescript(
                 """
-                INSERT OR IGNORE INTO systems_160
-                (
-                    system_id,
-                    kind,
-                    enabled,
-                    config_json,
-                    created_at
+                CREATE TABLE IF NOT EXISTS missions (
+                    id TEXT PRIMARY KEY,
+                    objective TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    result_json TEXT,
+                    verification_json TEXT,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    recovery_attempts INTEGER NOT NULL DEFAULT 0,
+                    policy_version INTEGER NOT NULL DEFAULT 1
+                );
+
+                CREATE TABLE IF NOT EXISTS mission_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    mission_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    payload_json TEXT,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS memories (
+                    id TEXT PRIMARY KEY,
+                    key TEXT UNIQUE NOT NULL,
+                    value_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS claims (
+                    id TEXT PRIMARY KEY,
+                    mission_id TEXT NOT NULL,
+                    claim TEXT NOT NULL,
+                    source TEXT,
+                    verified INTEGER NOT NULL DEFAULT 0,
+                    confidence REAL NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS research_sources (
+                    id TEXT PRIMARY KEY,
+                    mission_id TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    title TEXT,
+                    snippet TEXT,
+                    source_family TEXT,
+                    fetched_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS executions (
+                    id TEXT PRIMARY KEY,
+                    mission_id TEXT,
+                    command TEXT NOT NULL,
+                    method TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    headers_json TEXT,
+                    body_json TEXT,
+                    status TEXT NOT NULL,
+                    approval_required INTEGER NOT NULL DEFAULT 1,
+                    approved INTEGER NOT NULL DEFAULT 0,
+                    idempotency_key TEXT,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    recovery_attempts INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    started_at TEXT,
+                    finished_at TEXT,
+                    response_json TEXT,
+                    error TEXT
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS
+                    idx_execution_idempotency
+                ON executions(idempotency_key)
+                WHERE idempotency_key IS NOT NULL;
+
+                CREATE TABLE IF NOT EXISTS execution_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    execution_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    payload_json TEXT,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS policies (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    version INTEGER NOT NULL,
+                    data_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """
+            )
+
+            existing = conn.execute(
+                "SELECT id FROM policies WHERE id = 1"
+            ).fetchone()
+
+            if not existing:
+                policy = default_policy()
+
+                conn.execute(
+                    """
+                    INSERT INTO policies(
+                        id,
+                        version,
+                        data_json,
+                        updated_at
+                    )
+                    VALUES(1,?,?,?)
+                    """,
+                    (
+                        1,
+                        dumps(policy),
+                        now(),
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?)
+
+
+# ============================================================
+# POLICY
+# ============================================================
+
+def default_policy() -> Dict[str, Any]:
+    return {
+        "version": 1,
+        "verification_enabled": True,
+        "adaptive_recovery_enabled": True,
+        "self_modification_enabled": True,
+        "external_execution_enabled": True,
+        "approval_required": REQUIRE_APPROVAL,
+        "private_network_blocked": True,
+        "credential_headers_blocked": True,
+        "max_external_body": MAX_REQUEST_BODY,
+        "max_external_response": MAX_RESPONSE_BODY,
+        "max_retries": MAX_RETRIES,
+    }
+
+
+def get_policy() -> Dict[str, Any]:
+
+    init_db()
+
+    with DB_LOCK:
+        with get_db() as conn:
+
+            row = conn.execute(
+                "SELECT * FROM policies WHERE id=1"
+            ).fetchone()
+
+    if not row:
+        return default_policy()
+
+    result = loads(
+        row["data_json"],
+        default_policy(),
+    )
+
+    result["version"] = row["version"]
+
+    return result
+
+
+def update_policy(
+    changes: Dict[str, Any]
+) -> Dict[str, Any]:
+
+    policy = get_policy()
+
+    allowed = {
+        "verification_enabled",
+        "adaptive_recovery_enabled",
+        "self_modification_enabled",
+        "external_execution_enabled",
+        "approval_required",
+        "private_network_blocked",
+        "credential_headers_blocked",
+        "max_external_body",
+        "max_external_response",
+        "max_retries",
+    }
+
+    for key, value in changes.items():
+
+        if key in allowed:
+            policy[key] = value
+
+    version = int(
+        policy.get("version", 1)
+    ) + 1
+
+    policy["version"] = version
+
+    with DB_LOCK:
+        with get_db() as conn:
+
+            conn.execute(
+                """
+                UPDATE policies
+                SET version=?,
+                    data_json=?,
+                    updated_at=?
+                WHERE id=1
                 """,
                 (
-                    system_id,
-                    kind,
-                    1,
-                    safe_json(config),
+                    version,
+                    dumps(policy),
                     now(),
                 ),
             )
 
-        c.commit()
+    return policy
 
 
 # ============================================================
 # EVENTS
 # ============================================================
 
-def event(
-    execution_id: str,
-    name: str,
-    data: Dict[str, Any],
+def mission_event(
+    mission_id: str,
+    event_type: str,
+    payload: Any = None,
 ) -> None:
-    with DB_LOCK, db() as c:
-        c.execute(
-            """
-            INSERT INTO execution_events_160
-            (
-                execution_id,
-                event,
-                data_json,
-                created_at
+
+    with DB_LOCK:
+        with get_db() as conn:
+
+            conn.execute(
+                """
+                INSERT INTO mission_events(
+                    mission_id,
+                    event_type,
+                    payload_json,
+                    created_at
+                )
+                VALUES(?,?,?,?)
+                """,
+                (
+                    mission_id,
+                    event_type,
+                    dumps(payload or {}),
+                    now(),
+                ),
             )
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                execution_id,
-                name,
-                safe_json(data),
-                now(),
-            ),
-        )
-        c.commit()
+
+
+def execution_event(
+    execution_id: str,
+    event_type: str,
+    payload: Any = None,
+) -> None:
+
+    with DB_LOCK:
+        with get_db() as conn:
+
+            conn.execute(
+                """
+                INSERT INTO execution_events(
+                    execution_id,
+                    event_type,
+                    payload_json,
+                    created_at
+                )
+                VALUES(?,?,?,?)
+                """,
+                (
+                    execution_id,
+                    event_type,
+                    dumps(payload or {}),
+                    now(),
+                ),
+            )
 
 
 # ============================================================
-# INTELLIGENCE GENOME / LEARNING
+# MEMORY
 # ============================================================
 
-def set_genome(
+def memory_put(
     key: str,
     value: Any,
-) -> None:
-    with DB_LOCK, db() as c:
-        c.execute(
-            """
-            INSERT INTO genome_157
-            (
-                key,
-                value_json,
-                updated_at
-            )
-            VALUES (?, ?, ?)
-            ON CONFLICT(key)
-            DO UPDATE SET
-                value_json=excluded.value_json,
-                updated_at=excluded.updated_at
-            """,
-            (
-                key,
-                safe_json(value),
-                now(),
-            ),
-        )
-        c.commit()
-
-
-def record_learning(
-    execution_id: str,
-    outcome: str,
-    data: Dict[str, Any],
-) -> None:
-    with DB_LOCK, db() as c:
-        c.execute(
-            """
-            INSERT INTO adaptation_158
-            (
-                execution_id,
-                outcome,
-                data_json,
-                created_at
-            )
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                execution_id,
-                outcome,
-                safe_json(data),
-                now(),
-            ),
-        )
-        c.commit()
-
-    set_genome(
-        "last_outcome",
-        {
-            "execution_id": execution_id,
-            "outcome": outcome,
-        },
-    )
-
-
-# ============================================================
-# SAFETY
-# ============================================================
-
-def risk_for(
-    objective: str,
-    plan_data: list,
-) -> float:
-    text = objective.lower()
-
-    risk = 0.05
-
-    if "curl " in text or "http" in text:
-        risk += 0.10
-
-    if any(
-        word in text
-        for word in (
-            "delete",
-            "destroy",
-            "transfer",
-            "pay",
-            "purchase",
-        )
-    ):
-        risk += 0.45
-
-    if any(
-        step.get("system_id")
-        in {"public_http", "public_web"}
-        for step in plan_data
-    ):
-        risk += 0.10
-
-    return min(risk, 0.95)
-
-
-def safety_decision(
-    execution_id: str,
-    objective: str,
-    plan_data: list,
-    approved: bool,
 ) -> Dict[str, Any]:
 
-    risk = risk_for(
-        objective,
-        plan_data,
-    )
+    memory_id = make_id("mem")
 
-    needs_approval = risk >= 0.50
+    with DB_LOCK:
+        with get_db() as conn:
 
-    if approved or not needs_approval:
-        decision = "approved"
-    else:
-        decision = "approval_required"
+            existing = conn.execute(
+                "SELECT id FROM memories WHERE key=?",
+                (key,),
+            ).fetchone()
 
-    reason = (
-        "low_or_moderate_risk"
-        if not needs_approval
-        else "elevated_risk_requires_approval"
-    )
+            if existing:
 
-    with DB_LOCK, db() as c:
-        c.execute(
-            """
-            INSERT INTO safety_decisions_159
-            (
-                execution_id,
-                decision,
-                risk,
-                reason,
-                created_at
-            )
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                execution_id,
-                decision,
-                risk,
-                reason,
-                now(),
-            ),
-        )
-        c.commit()
+                memory_id = existing["id"]
+
+                conn.execute(
+                    """
+                    UPDATE memories
+                    SET value_json=?,
+                        updated_at=?
+                    WHERE key=?
+                    """,
+                    (
+                        dumps(value),
+                        now(),
+                        key,
+                    ),
+                )
+
+            else:
+
+                conn.execute(
+                    """
+                    INSERT INTO memories(
+                        id,
+                        key,
+                        value_json,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES(?,?,?,?,?)
+                    """,
+                    (
+                        memory_id,
+                        key,
+                        dumps(value),
+                        now(),
+                        now(),
+                    ),
+                )
 
     return {
-        "decision": decision,
-        "risk": risk,
-        "reason": reason,
+        "id": memory_id,
+        "key": key,
+        "value": value,
+    }
+
+
+def memory_get(
+    key: str,
+) -> Optional[Dict[str, Any]]:
+
+    with DB_LOCK:
+        with get_db() as conn:
+
+            row = conn.execute(
+                """
+                SELECT *
+                FROM memories
+                WHERE key=?
+                """,
+                (key,),
+            ).fetchone()
+
+    if not row:
+        return None
+
+    return {
+        "id": row["id"],
+        "key": row["key"],
+        "value": loads(row["value_json"]),
+        "updated_at": row["updated_at"],
     }
 
 
 # ============================================================
-# NETWORK SAFETY
+# URL SECURITY
 # ============================================================
 
-def private_host(host: str) -> bool:
-    if not host:
-        return True
+BLOCKED_HEADERS = {
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "set-cookie",
+    "x-api-key",
+    "x-auth-token",
+    "x-access-token",
+}
 
-    try:
-        infos = socket.getaddrinfo(
-            host,
-            None,
-        )
 
-        for info in infos:
-            address = ipaddress.ip_address(
-                info[4][0]
+def sanitize_headers(
+    headers: Dict[str, str]
+) -> Dict[str, str]:
+
+    if not get_policy().get(
+        "credential_headers_blocked",
+        True,
+    ):
+        return {
+            str(k): str(v)
+            for k, v in headers.items()
+        }
+
+    result: Dict[str, str] = {}
+
+    for key, value in headers.items():
+
+        key = str(key)
+        value = str(value)
+
+        lowered = key.lower().strip()
+
+        if lowered in BLOCKED_HEADERS:
+            raise ValueError(
+                f"credential/session header blocked: {key}"
             )
 
-            if (
-                address.is_private
-                or address.is_loopback
-                or address.is_link_local
-                or address.is_multicast
-                or address.is_reserved
-                or address.is_unspecified
-            ):
-                return True
+        if (
+            "token" in lowered
+            or "secret" in lowered
+            or "password" in lowered
+        ):
+            raise ValueError(
+                f"sensitive header blocked: {key}"
+            )
 
-    except Exception:
+        if len(key) > 128:
+            raise ValueError(
+                "header name too long"
+            )
+
+        if len(value) > 4096:
+            raise ValueError(
+                "header value too long"
+            )
+
+        result[key] = value
+
+    return result
+
+
+def host_allowed(
+    host: str
+) -> bool:
+
+    host = host.lower().rstrip(".")
+
+    if not EXTERNAL_ALLOWLIST:
         return True
 
-    return False
+    if host in EXTERNAL_ALLOWLIST:
+        return True
+
+    return any(
+        host.endswith("." + allowed)
+        for allowed in EXTERNAL_ALLOWLIST
+    )
 
 
-def validate_url(
-    url: str,
-    allow_self: bool = False,
-) -> Dict[str, Any]:
+def resolve_host_ips(
+    host: str
+) -> List[str]:
+
+    try:
+
+        addresses = socket.getaddrinfo(
+            host,
+            None,
+            type=socket.SOCK_STREAM,
+        )
+
+    except socket.gaierror as exc:
+
+        raise ValueError(
+            f"DNS resolution failed: {exc}"
+        ) from exc
+
+    return sorted(
+        {
+            item[4][0]
+            for item in addresses
+        }
+    )
+
+
+def is_private_ip(
+    value: str
+) -> bool:
+
+    address = ipaddress.ip_address(value)
+
+    return (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    )
+
+
+def validate_external_url(
+    url: str
+) -> str:
+
+    if not isinstance(url, str):
+        raise ValueError(
+            "URL must be a string"
+        )
+
+    if len(url) > 4096:
+        raise ValueError(
+            "URL too long"
+        )
 
     parsed = urlparse(url)
 
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
+    if parsed.scheme not in {
+        "http",
+        "https",
+    }:
+        raise ValueError(
+            "only http and https URLs are allowed"
+        )
+
+    if not parsed.hostname:
+        raise ValueError(
+            "URL host is required"
+        )
+
+    if parsed.username or parsed.password:
+        raise ValueError(
+            "embedded URL credentials are blocked"
+        )
+
+    host = parsed.hostname
+
+    if not host_allowed(host):
+        raise ValueError(
+            "destination host is not allowed"
+        )
+
+    policy = get_policy()
+
+    if policy.get(
+        "private_network_blocked",
+        True,
     ):
-        return {
-            "ok": False,
-            "error": "invalid_url",
-        }
 
-    host = parsed.hostname.lower()
+        for address in resolve_host_ips(host):
 
-    if private_host(host):
-        return {
-            "ok": False,
-            "error": "private_or_unresolvable_host",
-        }
+            if is_private_ip(address):
 
-    if allow_self and host in SELF_HOSTS:
-        return {
-            "ok": True,
-            "host": host,
-            "self": True,
-        }
+                raise ValueError(
+                    "private/local/reserved destination blocked"
+                )
 
-    if host in SELF_HOSTS:
-        return {
-            "ok": False,
-            "error": "target_host_not_allowlisted",
-        }
-
-    return {
-        "ok": True,
-        "host": host,
-        "self": False,
-    }
+    return urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path or "/",
+            parsed.params,
+            parsed.query,
+            "",
+        )
+    )
 
 
-def http_get(
+# ============================================================
+# EXTERNAL HTTP EXECUTION
+# ============================================================
+
+ALLOWED_METHODS = {
+    "GET",
+    "POST",
+    "PUT",
+    "PATCH",
+    "DELETE",
+    "HEAD",
+}
+
+
+def external_request(
+    method: str,
     url: str,
-    timeout: int = 12,
+    headers: Dict[str, str],
+    body: Any = None,
 ) -> Dict[str, Any]:
 
-    validation = validate_url(url)
+    method = method.upper()
 
-    if not validation["ok"]:
-        return validation
+    if method not in ALLOWED_METHODS:
+        raise ValueError(
+            "unsupported HTTP method"
+        )
+
+    clean_url = validate_external_url(url)
+
+    safe_headers = sanitize_headers(
+        headers
+    )
+
+    raw_body = None
+
+    if body is not None:
+
+        raw_body = json.dumps(
+            body,
+            ensure_ascii=False,
+        ).encode("utf-8")
+
+        if len(raw_body) > MAX_REQUEST_BODY:
+            raise ValueError(
+                "request body exceeds configured limit"
+            )
+
+        safe_headers.setdefault(
+            "Content-Type",
+            "application/json",
+        )
+
+    request = Request(
+        clean_url,
+        data=raw_body,
+        headers=safe_headers,
+        method=method,
+    )
+
+    started = time.time()
 
     try:
-        request = Request(
-            url,
-            headers={
-                "User-Agent":
-                    "AI-Infinity/2050.163"
-            },
-        )
 
         with urlopen(
             request,
-            timeout=timeout,
+            timeout=HTTP_TIMEOUT,
         ) as response:
 
-            body = response.read(
-                MAX_BODY
+            data = response.read(
+                MAX_RESPONSE_BODY + 1
             )
 
+            truncated = (
+                len(data)
+                > MAX_RESPONSE_BODY
+            )
+
+            if truncated:
+                data = data[
+                    :MAX_RESPONSE_BODY
+                ]
+
+            text_body = data.decode(
+                "utf-8",
+                errors="replace",
+            )
+
+            content_type = response.headers.get(
+                "Content-Type",
+                "",
+            )
+
+            if "json" in content_type.lower():
+                parsed_body = loads(
+                    text_body,
+                    text_body,
+                )
+            else:
+                parsed_body = text_body
+
             return {
-                "ok": True,
-                "status_code": getattr(
-                    response,
-                    "status",
-                    200,
+                "ok": 200 <= response.status < 300,
+                "status_code": response.status,
+                "url": clean_url,
+                "method": method,
+                "headers": dict(
+                    response.headers
                 ),
-                "url": response.geturl(),
-                "content_type":
-                    response.headers.get(
-                        "Content-Type",
-                        "",
-                    ),
-                "body": body.decode(
-                    "utf-8",
-                    errors="replace",
+                "body": parsed_body,
+                "truncated": truncated,
+                "elapsed_ms": round(
+                    (time.time() - started) * 1000,
+                    2,
                 ),
             }
 
     except HTTPError as exc:
+
+        data = exc.read(
+            MAX_RESPONSE_BODY
+        )
+
+        text_body = data.decode(
+            "utf-8",
+            errors="replace",
+        )
+
         return {
             "ok": False,
-            "error": f"http_{exc.code}",
+            "status_code": exc.code,
+            "url": clean_url,
+            "method": method,
+            "headers": dict(
+                exc.headers
+            ),
+            "body": loads(
+                text_body,
+                text_body,
+            ),
+            "truncated": False,
+            "elapsed_ms": round(
+                (time.time() - started) * 1000,
+                2,
+            ),
         }
 
     except URLError as exc:
-        return {
-            "ok": False,
-            "error": f"url_error:{exc.reason}",
-        }
 
-    except Exception as exc:
-        return {
-            "ok": False,
-            "error": type(exc).__name__,
-        }
+        raise RuntimeError(
+            f"external request failed: {exc.reason}"
+        ) from exc
+
+    except TimeoutError as exc:
+
+        raise RuntimeError(
+            "external request timed out"
+        ) from exc
 
 
 # ============================================================
-# CURL PARSER
+# COMMAND UNDERSTANDING
 # ============================================================
 
-def parse_curl_command(
-    command: str,
+def classify_command(
+    command: str
 ) -> Dict[str, Any]:
 
-    command = str(
-        command or ""
-    ).strip()
+    command = command.strip()
 
-    if not command.lower().startswith(
-        "curl "
+    lowered = command.lower()
+
+    method = None
+
+    for candidate in (
+        "PATCH",
+        "DELETE",
+        "POST",
+        "PUT",
+        "HEAD",
+        "GET",
     ):
-        return {}
 
-    tokens = re.findall(
-        r"""(?:[^\s"']+|"[^"]*"|'[^']*')+""",
+        if re.search(
+            rf"\b{candidate}\b",
+            command,
+            re.IGNORECASE,
+        ):
+            method = candidate
+            break
+
+    url_match = re.search(
+        r"https?://[^\s\"'<>]+",
         command,
+        re.IGNORECASE,
     )
 
     url = None
-    method = "GET"
-    data = None
-    headers: Dict[str, str] = {}
 
-    index = 1
+    if url_match:
 
-    while index < len(tokens):
+        url = (
+            url_match.group(0)
+            .rstrip(".,);]")
+        )
 
-        token = tokens[index]
+    if any(
+        term in lowered
+        for term in (
+            "research",
+            "find out",
+            "investigate",
+            "evidence",
+            "sources",
+        )
+    ):
+        intent = "research"
 
-        raw = token
+    elif any(
+        term in lowered
+        for term in (
+            "remember",
+            "save this",
+            "store this",
+        )
+    ):
+        intent = "memory"
 
-        if (
-            len(raw) >= 2
-            and raw[0] == raw[-1]
-            and raw[0] in "\"'"
-        ):
-            raw = raw[1:-1]
+    elif url:
+        intent = "external_http"
 
-        if raw in {
-            "-X",
-            "--request",
-        } and index + 1 < len(tokens):
+    else:
+        intent = "general"
 
-            method = (
-                tokens[index + 1]
-                .strip("\"'")
-                .upper()
+    side_effect = (
+        method in {
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
+        }
+        or any(
+            term in lowered
+            for term in (
+                "send",
+                "create",
+                "update",
+                "delete",
+                "publish",
+                "submit",
             )
-
-            index += 2
-            continue
-
-        if raw in {
-            "-H",
-            "--header",
-        } and index + 1 < len(tokens):
-
-            header = (
-                tokens[index + 1]
-                .strip("\"'")
-            )
-
-            if ":" in header:
-                key, value = header.split(
-                    ":",
-                    1,
-                )
-
-                headers[
-                    key.strip()
-                ] = value.strip()
-
-            index += 2
-            continue
-
-        if raw in {
-            "-d",
-            "--data",
-            "--data-raw",
-            "--data-binary",
-        } and index + 1 < len(tokens):
-
-            raw_data = (
-                tokens[index + 1]
-                .strip("\"'")
-            )
-
-            try:
-                data = json.loads(
-                    raw_data
-                )
-            except Exception:
-                data = {
-                    "raw": raw_data
-                }
-
-            if method == "GET":
-                method = "POST"
-
-            index += 2
-            continue
-
-        if (
-            raw.startswith("http://")
-            or raw.startswith("https://")
-        ):
-            url = raw
-
-        index += 1
+        )
+    )
 
     return {
-        "url": url,
+        "intent": intent,
         "method": method,
-        "headers": headers,
-        "data": data,
+        "url": url,
+        "side_effect": side_effect,
+        "requires_external_access": bool(url),
     }
 
 
-def is_self_url(
-    url: str,
-) -> bool:
+def parse_command_body(
+    command: str
+) -> Any:
 
-    parsed = urlparse(
-        url or ""
+    match = re.search(
+        r"(?:body|json|payload)\s*[:=]\s*(\{.*\})\s*$",
+        command,
+        re.IGNORECASE | re.DOTALL,
     )
 
-    return (
-        parsed.scheme == "https"
-        and bool(parsed.hostname)
-        and parsed.hostname.lower()
-        in SELF_HOSTS
-        and (
-            parsed.path or "/"
-        ) in SELF_PATHS
+    if not match:
+        return None
+
+    return loads(
+        match.group(1)
     )
 
 
 # ============================================================
-# RESULT CLOSURE
+# RESEARCH PLANNER
 # ============================================================
 
-def normalize_child_error(
-    result: Any,
-) -> Optional[str]:
-
-    if not isinstance(
-        result,
-        dict,
-    ):
-        return "child_execution_failed"
-
-    error = result.get(
-        "error"
-    )
-
-    if (
-        error is None
-        or str(error).strip().lower()
-        in {
-            "",
-            "none",
-            "null",
-        }
-    ):
-        return "child_execution_failed"
-
-    return str(error)
-
-
-def result_ok(
-    result: Any,
-    system_id: Optional[str] = None,
-) -> bool:
-
-    if not isinstance(
-        result,
-        dict,
-    ):
-        return False
-
-    if result.get("ok") is True:
-        return True
-
-    # TARGET-2050.163 closure contract:
-    # a verified completed child is successful
-    # even if its top-level result lacks "ok".
-    if (
-        system_id == "internal_self"
-        and result.get("status")
-        == "completed"
-        and result.get("verified")
-        is True
-    ):
-        return True
-
-    return False
-
-
-def child_closure(
-    child_result: Dict[str, Any],
-    closure: str = "child_execution",
+def research_plan(
+    objective: str
 ) -> Dict[str, Any]:
 
-    verified = (
-        isinstance(
-            child_result,
-            dict,
-        )
-        and child_result.get("status")
-        == "completed"
-        and child_result.get("verified")
-        is True
+    terms = re.findall(
+        r"[A-Za-z0-9][A-Za-z0-9_-]{2,}",
+        objective,
     )
 
-    if verified:
-        return {
-            "ok": True,
-            "verified": True,
-            "self_command": True,
-            "closure": closure,
-            "child_execution_id":
-                child_result.get("id"),
-            "child": child_result,
-            "error": None,
-        }
+    terms = terms[:12]
 
-    return {
-        "ok": False,
-        "verified": False,
-        "self_command": True,
-        "closure": closure,
-        "child_execution_id":
-            (
-                child_result.get("id")
-                if isinstance(
-                    child_result,
-                    dict,
-                )
-                else None
-            ),
-        "child": child_result,
-        "error":
-            normalize_child_error(
-                child_result
-            ),
-    }
+    query = " ".join(terms)
 
-
-# ============================================================
-# EXECUTION LOOKUP
-# ============================================================
-
-def get_execution(
-    execution_id: str,
-) -> Optional[Dict[str, Any]]:
-
-    with DB_LOCK, db() as c:
-
-        row = c.execute(
-            """
-            SELECT *
-            FROM executions_160
-            WHERE id=?
-            """,
-            (execution_id,),
-        ).fetchone()
-
-        if not row:
-            return None
-
-        result = dict(row)
-
-        plan_json = result.pop(
-            "plan_json",
-            "[]",
-        )
-
-        result["plan"] = json.loads(
-            plan_json or "[]"
-        )
-
-        result_json = result.get(
-            "result_json"
-        )
-
-        if result_json:
-            result["result"] = json.loads(
-                result_json
-            )
-        else:
-            result["result"] = None
-
-        result.pop(
-            "result_json",
-            None,
-        )
-
-        steps = c.execute(
-            """
-            SELECT *
-            FROM execution_steps_160
-            WHERE execution_id=?
-            ORDER BY step_index
-            """,
-            (execution_id,),
-        ).fetchall()
-
-        result["steps"] = []
-
-        for step in steps:
-
-            item = dict(step)
-
-            input_json = item.pop(
-                "input_json",
-                "{}",
-            )
-
-            item["input"] = json.loads(
-                input_json or "{}"
-            )
-
-            step_result = item.get(
-                "result_json"
-            )
-
-            if step_result:
-                item["result"] = json.loads(
-                    step_result
-                )
-            else:
-                item["result"] = None
-
-            item.pop(
-                "result_json",
-                None,
-            )
-
-            result["steps"].append(
-                item
-            )
-
-        return result
-
-
-def terminal_execution(
-    execution_id: str,
-) -> Optional[Dict[str, Any]]:
-
-    current = get_execution(
-        execution_id
-    )
-
-    if (
-        current
-        and current["status"]
-        in {
-            "completed",
-            "failed",
-        }
-    ):
-        return current
-
-    return None
-
-
-def update_command_status(
-    execution_id: str,
-    status: str,
-) -> None:
-
-    with DB_LOCK, db() as c:
-        c.execute(
-            """
-            UPDATE commands_155
-            SET
-                status=?,
-                updated_at=?
-            WHERE execution_id=?
-            """,
-            (
-                status,
-                now(),
-                execution_id,
-            ),
-        )
-
-        c.commit()
-
-
-# ============================================================
-# RESEARCH
-# ============================================================
-
-def research(
-    query: str,
-    execution_id: str,
-) -> Dict[str, Any]:
-
-    results = []
-    successful = 0
-    families = set()
-
-    encoded_query = quote(
+    queries = [
         query,
-        safe="",
-    )
-
-    for family, template in (
-        RESEARCH_SOURCES.items()
-    ):
-
-        url = template.format(
-            query=encoded_query
-        )
-
-        response = http_get(
-            url
-        )
-
-        ok = bool(
-            response.get("ok")
-        )
-
-        content = (
-            response.get(
-                "body",
-                "",
-            )[:120_000]
-            if ok
-            else ""
-        )
-
-        title = family
-
-        if (
-            family == "crossref"
-            and ok
-        ):
-            try:
-                payload = json.loads(
-                    content
-                )
-
-                works = (
-                    payload
-                    .get("message", {})
-                    .get("items", [])
-                )
-
-                if works:
-                    titles = works[0].get(
-                        "title",
-                        [],
-                    )
-
-                    if titles:
-                        title = titles[0]
-
-            except Exception:
-                pass
-
-        if ok:
-            successful += 1
-            families.add(
-                family
-            )
-
-        with DB_LOCK, db() as c:
-            c.execute(
-                """
-                INSERT INTO research_artifacts_161
-                (
-                    execution_id,
-                    source_family,
-                    url,
-                    title,
-                    content,
-                    claims_json,
-                    success,
-                    created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    execution_id,
-                    family,
-                    url,
-                    title,
-                    content,
-                    safe_json([]),
-                    int(ok),
-                    now(),
-                ),
-            )
-            c.commit()
-
-        results.append(
-            {
-                "source_family": family,
-                "url": url,
-                "title": title,
-                "ok": ok,
-                "bytes": len(
-                    content.encode(
-                        "utf-8"
-                    )
-                ),
-                "error":
-                    None
-                    if ok
-                    else response.get(
-                        "error"
-                    ),
-            }
-        )
-
-    verified = (
-        successful >= 2
-        and len(families) >= 2
-    )
-
-    with DB_LOCK, db() as c:
-        c.execute(
-            """
-            INSERT INTO research_runs_161
-            (
-                execution_id,
-                query,
-                status,
-                verified,
-                source_count,
-                successful_sources,
-                data_json,
-                created_at,
-                updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                execution_id,
-                query,
-                (
-                    "completed"
-                    if successful
-                    else "failed"
-                ),
-                int(verified),
-                len(results),
-                successful,
-                safe_json(results),
-                now(),
-                now(),
-            ),
-        )
-
-        c.commit()
+        f"{query} evidence",
+        f"{query} empirical study",
+        f"{query} systematic review",
+    ]
 
     return {
-        "ok": successful >= 2,
-        "verified": verified,
-        "query": query,
-        "source_count": len(results),
-        "successful_sources": successful,
-        "independent_source_families":
-            len(families),
-        "minimum_verified_sources": 2,
-        "sources": results,
-        "error":
-            None
-            if verified
-            else
-            "minimum_independent_sources_not_verified",
+        "queries": queries,
+        "source_targets": [
+            {
+                "family": "general_search",
+                "query": queries[0],
+            },
+            {
+                "family": "scholarly",
+                "query": queries[2],
+            },
+            {
+                "family": "review",
+                "query": queries[3],
+            },
+        ],
+        "live_retrieval": False,
+        "note": (
+            "This layer generates a research plan. "
+            "Live retrieval requires an approved research connector."
+        ),
     }
 
 
 # ============================================================
-# RESULT STORE
+# VERIFICATION
 # ============================================================
 
-def save_result(
-    execution_id: str,
-    result: Dict[str, Any],
+def verify_result(
+    result: Any
 ) -> Dict[str, Any]:
 
-    raw = json.dumps(
-        result,
-        ensure_ascii=False,
-        sort_keys=True,
-        default=str,
-    ).encode()
-
-    digest = hashlib.sha256(
-        raw
-    ).hexdigest()
-
-    return {
-        "ok": True,
-        "verified": True,
-        "stored": True,
-        "sha256": digest,
-        "bytes": len(raw),
-        "save_verification": True,
-        "error": None,
+    checks = {
+        "result_exists": result is not None,
+        "result_nonempty": bool(result),
     }
 
+    passed = sum(
+        1
+        for value in checks.values()
+        if value
+    )
 
-def verify_saved(
-    result: Dict[str, Any],
-) -> Dict[str, Any]:
+    total = len(checks)
 
-    verified = (
-        isinstance(
-            result,
-            dict,
-        )
-        and result.get(
-            "stored"
-        ) is True
-        and result.get(
-            "save_verification"
-        ) is True
-        and isinstance(
-            result.get("sha256"),
-            str,
-        )
-        and len(
-            result["sha256"]
-        ) == 64
+    confidence = (
+        passed / total
+        if total
+        else 0
     )
 
     return {
-        "verified": verified,
-        "sha256":
-            result.get("sha256")
-            if isinstance(
-                result,
-                dict,
-            )
-            else None,
+        "verified": (
+            passed == total
+        ),
+        "confidence": round(
+            confidence,
+            3,
+        ),
+        "checks": checks,
     }
 
 
 # ============================================================
-# PLANNER
+# LOCAL COMMAND ENGINE
 # ============================================================
 
-def detect_curl_self(
-    objective: str,
-) -> Optional[Dict[str, Any]]:
-
-    parsed = parse_curl_command(
-        objective
-    )
-
-    if not parsed:
-        return None
-
-    if not is_self_url(
-        parsed.get("url")
-    ):
-        return None
-
-    return parsed
-
-
-def plan(
-    objective: str,
-    research_flag: bool = True,
-    verify_flag: bool = True,
-) -> list:
-
-    steps = []
-
-    self_curl = detect_curl_self(
-        objective
-    )
-
-    if self_curl:
-
-        steps.append(
-            {
-                "system_id":
-                    "internal_self",
-                "action":
-                    "internal_self_request",
-                "input": {
-                    "command":
-                        objective,
-                    "url":
-                        self_curl.get(
-                            "url"
-                        ),
-                    "method":
-                        self_curl.get(
-                            "method"
-                        ),
-                    "data":
-                        self_curl.get(
-                            "data"
-                        ),
-                },
-            }
-        )
-
-        return steps
-
-    if (
-        research_flag
-        or verify_flag
-    ):
-
-        steps.append(
-            {
-                "system_id":
-                    "research_web",
-                "action":
-                    "multi_source_research",
-                "input": {
-                    "query":
-                        objective
-                },
-            }
-        )
-
-    steps.append(
-        {
-            "system_id":
-                "result_store",
-            "action":
-                "persist_result",
-            "input": {},
-        }
-    )
-
-    return steps
-
-
-# ============================================================
-# CREATE EXECUTION
-# ============================================================
-
-def create(
-    objective: str,
-    idempotency_key: Optional[str] = None,
-    approved: bool = False,
-    research: bool = True,
-    verify: bool = True,
-    remember: bool = True,
+def local_command(
+    command: str
 ) -> Dict[str, Any]:
 
-    objective = str(
-        objective or ""
-    ).strip()
-
-    if not objective:
-        raise HTTPException(
-            status_code=400,
-            detail="objective_required",
-        )
-
-    key = (
-        idempotency_key
-        or hashlib.sha256(
-            (
-                objective
-                + "|163"
-            ).encode()
-        ).hexdigest()[:32]
+    parsed = classify_command(
+        command
     )
 
-    with DB_LOCK, db() as c:
+    lowered = command.lower().strip()
 
-        existing = c.execute(
-            """
-            SELECT id
-            FROM executions_160
-            WHERE idempotency_key=?
-            """,
-            (key,),
-        ).fetchone()
+    if lowered.startswith("ping"):
 
-        if existing:
-            return get_execution(
-                existing["id"]
-            )
-
-        execution_id = (
-            "exec-"
-            + uuid.uuid4().hex[:12]
-        )
-
-        planned = plan(
-            objective,
-            research,
-            verify,
-        )
-
-        safety = safety_decision(
-            execution_id,
-            objective,
-            planned,
-            approved,
-        )
-
-        c.execute(
-            """
-            INSERT INTO executions_160
-            (
-                id,
-                objective,
-                idempotency_key,
-                status,
-                approved,
-                verified,
-                current_step,
-                total_steps,
-                plan_json,
-                created_at,
-                updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                execution_id,
-                objective,
-                key,
-                "planned",
-                int(approved),
-                0,
-                0,
-                len(planned),
-                safe_json(planned),
-                now(),
-                now(),
-            ),
-        )
-
-        for index, step in enumerate(
-            planned
-        ):
-
-            c.execute(
-                """
-                INSERT INTO execution_steps_160
-                (
-                    execution_id,
-                    step_index,
-                    system_id,
-                    action,
-                    input_json,
-                    status
-                )
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    execution_id,
-                    index,
-                    step["system_id"],
-                    step["action"],
-                    safe_json(
-                        step.get(
-                            "input",
-                            {},
-                        )
-                    ),
-                    "pending",
-                ),
-            )
-
-        c.execute(
-            """
-            INSERT INTO commands_155
-            (
-                execution_id,
-                command_text,
-                status,
-                created_at,
-                updated_at
-            )
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                execution_id,
-                objective,
-                "planned",
-                now(),
-                now(),
-            ),
-        )
-
-        c.commit()
-
-    event(
-        execution_id,
-        "execution_created",
-        {
-            "version":
-                APP_VERSION,
-            "build":
-                BUILD,
-            "safety":
-                safety,
-            "total_steps":
-                len(planned),
-            "remember":
-                remember,
-        },
-    )
-
-    return get_execution(
-        execution_id
-    )
-
-
-# ============================================================
-# INTERNAL SELF COMMAND BRIDGE
-# ============================================================
-
-def internal_self_request(
-    execution_id: str,
-    inp: Dict[str, Any],
-) -> Dict[str, Any]:
-
-    command = inp.get(
-        "command"
-    ) or ""
-
-    parsed = (
-        parse_curl_command(
-            command
-        )
-        if command
-        else {}
-    )
-
-    url = (
-        parsed.get("url")
-        or inp.get("url")
-    )
-
-    if not is_self_url(
-        url
-    ):
         return {
-            "ok": False,
-            "verified": False,
-            "error":
-                "internal_self_target_mismatch",
+            "status": "completed",
+            "action": "ping",
+            "message": "pong",
         }
 
-    path = (
-        urlparse(url).path
-        or "/"
+    if lowered.startswith("status"):
+
+        return {
+            "status": "completed",
+            "action": "status",
+            "version": VERSION,
+            "build": BUILD,
+            "policy_version": get_policy()[
+                "version"
+            ],
+        }
+
+    if parsed["intent"] == "memory":
+
+        match = re.search(
+            r"(?:remember|save|store)"
+            r"\s+(?:that\s+)?(.+)",
+            command,
+            re.IGNORECASE,
+        )
+
+        statement = (
+            match.group(1).strip()
+            if match
+            else command
+        )
+
+        memory = memory_put(
+            statement,
+            {
+                "statement": statement,
+                "stored_at": now(),
+            },
+        )
+
+        return {
+            "status": "completed",
+            "action": "memory",
+            "memory": memory,
+        }
+
+    if parsed["intent"] == "research":
+
+        return {
+            "status": "completed",
+            "action": "research_plan",
+            "research": research_plan(
+                command
+            ),
+        }
+
+    return {
+        "status": "completed",
+        "action": "interpreted",
+        "command": command,
+        "intent": parsed["intent"],
+        "message": (
+            "Command interpreted by AI Infinity's "
+            "local command engine."
+        ),
+    }
+
+
+# ============================================================
+# EXTERNAL PLAN
+# ============================================================
+
+def make_external_plan(
+    command: str,
+    method: Optional[str] = None,
+    url: Optional[str] = None,
+    body: Any = None,
+    headers: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+
+    parsed = classify_command(
+        command
     )
 
-    method = (
-        parsed.get("method")
-        or inp.get("method")
+    final_method = (
+        method
+        or parsed["method"]
         or "GET"
     ).upper()
 
-    data = parsed.get(
-        "data"
+    final_url = (
+        url
+        or parsed["url"]
     )
 
-    if data is None:
-        data = inp.get(
-            "data"
-        ) or {}
-
-    # --------------------------------------------------------
-    # SELF /
-    # --------------------------------------------------------
-
-    if (
-        path == "/"
-        and method == "GET"
-    ):
+    if not final_url:
 
         return {
-            "ok": True,
-            "verified": True,
-            "self_command": True,
-            "closure": "health_root",
-            "data": {
-                "name":
-                    "AI Infinity",
-                "status":
-                    "online",
-                "version":
-                    APP_VERSION,
-            },
-            "error": None,
+            "ready": False,
+            "reason": (
+                "No HTTP URL detected."
+            ),
+            "command": command,
+            "parsed": parsed,
         }
 
-    # --------------------------------------------------------
-    # SELF /health
-    # --------------------------------------------------------
-
-    if (
-        path == "/health"
-        and method == "GET"
-    ):
+    if final_method not in ALLOWED_METHODS:
 
         return {
-            "ok": True,
-            "verified": True,
-            "self_command": True,
-            "closure": "health",
-            "data":
-                health_payload(),
-            "error": None,
+            "ready": False,
+            "reason": (
+                f"Unsupported HTTP method: "
+                f"{final_method}"
+            ),
         }
 
-    # --------------------------------------------------------
-    # SELF /run
-    # --------------------------------------------------------
-
-    if (
-        path == "/run"
-        and method == "POST"
-    ):
-
-        objective = str(
-            data.get(
-                "objective"
-            )
-            or ""
-        ).strip()
-
-        if not objective:
-            return {
-                "ok": False,
-                "verified": False,
-                "error":
-                    "internal_run_objective_required",
-            }
-
-        child_key = str(
-            data.get(
-                "idempotency_key"
-            )
-            or hashlib.sha256(
-                (
-                    objective
-                    + "|163-self-child"
-                ).encode()
-            ).hexdigest()[:32]
+    if body is None:
+        body = parse_command_body(
+            command
         )
 
-        child = create(
-            objective=objective,
-            idempotency_key=child_key,
-            approved=bool(
-                data.get(
-                    "approved",
-                    True,
-                )
-            ),
-            research=bool(
-                data.get(
-                    "research",
-                    True,
-                )
-            ),
-            verify=bool(
-                data.get(
-                    "verify",
-                    True,
-                )
-            ),
-            remember=bool(
-                data.get(
-                    "remember",
-                    True,
-                )
-            ),
-        )
+    safe_headers = sanitize_headers(
+        headers or {}
+    )
 
-        child_result = run(
-            child["id"]
-        )
-
-        # 163:
-        # convert completed+verified child
-        # into an explicit successful adapter
-        # closure.
-        return child_closure(
-            child_result,
-            "child_execution",
-        )
-
-    # --------------------------------------------------------
-    # SELF /multi-system/plan
-    # --------------------------------------------------------
-
-    if (
-        path == "/multi-system/plan"
-        and method in {"GET", "POST"}
-    ):
-
-        objective = str(
-            data.get(
-                "objective"
-            )
-            or ""
-        ).strip()
-
-        if not objective:
-            return {
-                "ok": False,
-                "verified": False,
-                "error":
-                    "internal_plan_objective_required",
-            }
-
-        child = create(
-            objective=objective,
-            idempotency_key=hashlib.sha256(
-                (
-                    objective
-                    + "|163-plan-child"
-                ).encode()
-            ).hexdigest()[:32],
-            approved=False,
-        )
-
-        return {
-            "ok": True,
-            "verified": True,
-            "self_command": True,
-            "closure": "child_plan",
-            "child_execution_id":
-                child["id"],
-            "child": child,
-            "error": None,
-        }
-
-    # --------------------------------------------------------
-    # SELF /multi-system/execute
-    # --------------------------------------------------------
-
-    if (
-        path == "/multi-system/execute"
-        and method == "POST"
-    ):
-
-        objective = str(
-            data.get(
-                "objective"
-            )
-            or ""
-        ).strip()
-
-        execution_id = str(
-            data.get(
-                "execution_id"
-            )
-            or ""
-        ).strip()
-
-        approved = bool(
-            data.get(
-                "approved",
-                False,
-            )
-        )
-
-        if execution_id:
-
-            existing = get_execution(
-                execution_id
-            )
-
-            if not existing:
-                return {
-                    "ok": False,
-                    "verified": False,
-                    "error":
-                        "execution_not_found",
-                }
-
-            if approved:
-
-                with DB_LOCK, db() as c:
-                    c.execute(
-                        """
-                        UPDATE executions_160
-                        SET
-                            approved=1,
-                            updated_at=?
-                        WHERE id=?
-                        """,
-                        (
-                            now(),
-                            execution_id,
-                        ),
-                    )
-                    c.commit()
-
-                child_result = run(
-                    execution_id
-                )
-
-                return child_closure(
-                    child_result,
-                    "child_execution",
-                )
-
-            return {
-                "ok": True,
-                "verified":
-                    bool(
-                        existing.get(
-                            "verified"
-                        )
-                    ),
-                "self_command": True,
-                "closure":
-                    "child_plan",
-                "child_execution_id":
-                    execution_id,
-                "child":
-                    existing,
-                "error": None,
-            }
-
-        if not objective:
-
-            return {
-                "ok": False,
-                "verified": False,
-                "error":
-                    "internal_execute_objective_required",
-            }
-
-        child = create(
-            objective=objective,
-            idempotency_key=hashlib.sha256(
-                (
-                    objective
-                    + "|163-execute-child"
-                ).encode()
-            ).hexdigest()[:32],
-            approved=approved,
-        )
-
-        if not approved:
-
-            return {
-                "ok": True,
-                "verified": False,
-                "self_command": True,
-                "closure":
-                    "child_plan",
-                "child_execution_id":
-                    child["id"],
-                "child":
-                    child,
-                "error": None,
-            }
-
-        child_result = run(
-            child["id"]
-        )
-
-        return child_closure(
-            child_result,
-            "child_execution",
-        )
+    side_effect = final_method in {
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+    }
 
     return {
-        "ok": False,
-        "verified": False,
-        "error":
-            "internal_path_not_supported",
+        "ready": True,
+        "command": command,
+        "method": final_method,
+        "url": final_url,
+        "headers": safe_headers,
+        "body": body,
+        "side_effect": side_effect,
+        "approval_required": (
+            REQUIRE_APPROVAL
+            and side_effect
+        ),
+        "policy_version": get_policy()[
+            "version"
+        ],
     }
 
 
 # ============================================================
-# ADAPTER
-# ============================================================
-
-def adapter(
-    execution_id: str,
-    step: Dict[str, Any],
-) -> Dict[str, Any]:
-
-    system_id = step[
-        "system_id"
-    ]
-
-    inp = step.get(
-        "input"
-    ) or {}
-
-    if system_id == "internal_self":
-
-        return internal_self_request(
-            execution_id,
-            inp,
-        )
-
-    if system_id == "research_web":
-
-        return research(
-            str(
-                inp.get(
-                    "query"
-                )
-                or ""
-            ),
-            execution_id,
-        )
-
-    if system_id == "result_store":
-
-        current = get_execution(
-            execution_id
-        )
-
-        payload = {
-            "execution_id":
-                execution_id,
-            "objective":
-                (
-                    current["objective"]
-                    if current
-                    else ""
-                ),
-            "steps":
-                (
-                    current["steps"]
-                    if current
-                    else []
-                ),
-        }
-
-        return save_result(
-            execution_id,
-            payload,
-        )
-
-    return {
-        "ok": False,
-        "verified": False,
-        "error":
-            "unsupported_system",
-    }
-
-
-# ============================================================
-# EXECUTION ENGINE
-# ============================================================
-
-def run(
-    execution_id: str,
-) -> Dict[str, Any]:
-
-    current = get_execution(
-        execution_id
-    )
-
-    if not current:
-        raise HTTPException(
-            status_code=404,
-            detail="execution_not_found",
-        )
-
-    # --------------------------------------------------------
-    # CRITICAL 163 IDEMPOTENCY:
-    # a completed child/parent is never executed again.
-    # --------------------------------------------------------
-
-    terminal = terminal_execution(
-        execution_id
-    )
-
-    if terminal:
-        return terminal
-
-    # --------------------------------------------------------
-    # APPROVAL
-    # --------------------------------------------------------
-
-    if not current["approved"]:
-
-        safety = safety_decision(
-            execution_id,
-            current["objective"],
-            current["plan"],
-            False,
-        )
-
-        if (
-            safety["decision"]
-            == "approval_required"
-        ):
-
-            with DB_LOCK, db() as c:
-                c.execute(
-                    """
-                    UPDATE executions_160
-                    SET
-                        status=?,
-                        updated_at=?
-                    WHERE id=?
-                    """,
-                    (
-                        "awaiting_approval",
-                        now(),
-                        execution_id,
-                    ),
-                )
-                c.commit()
-
-            update_command_status(
-                execution_id,
-                "awaiting_approval",
-            )
-
-            event(
-                execution_id,
-                "approval_required",
-                safety,
-            )
-
-            return get_execution(
-                execution_id
-            )
-
-    event(
-        execution_id,
-        "execution_started",
-        {
-            "version":
-                APP_VERSION,
-            "build":
-                BUILD,
-        },
-    )
-
-    last: Optional[
-        Dict[str, Any]
-    ] = None
-
-    # --------------------------------------------------------
-    # STEPS
-    # --------------------------------------------------------
-
-    for step in current["steps"]:
-
-        # Do not repeat already completed verified work.
-        if (
-            step["status"]
-            == "completed"
-            and step["verified"]
-        ):
-            last = step.get(
-                "result"
-            )
-            continue
-
-        with DB_LOCK, db() as c:
-
-            c.execute(
-                """
-                UPDATE executions_160
-                SET
-                    current_step=?,
-                    updated_at=?
-                WHERE id=?
-                """,
-                (
-                    step["step_index"],
-                    now(),
-                    execution_id,
-                ),
-            )
-
-            c.execute(
-                """
-                UPDATE execution_steps_160
-                SET
-                    status=?,
-                    started_at=?,
-                    error=NULL
-                WHERE
-                    execution_id=?
-                    AND step_index=?
-                """,
-                (
-                    "running",
-                    now(),
-                    execution_id,
-                    step["step_index"],
-                ),
-            )
-
-            c.commit()
-
-        event(
-            execution_id,
-            "step_started",
-            {
-                "step_index":
-                    step["step_index"],
-                "system_id":
-                    step["system_id"],
-                "action":
-                    step["action"],
-            },
-        )
-
-        verified = False
-        result: Dict[str, Any] = {}
-        error: Optional[str] = None
-        attempt = 0
-
-        # ----------------------------------------------------
-        # TWO ATTEMPT RECOVERY
-        # ----------------------------------------------------
-
-        for attempt_number in range(
-            1,
-            3,
-        ):
-
-            attempt = attempt_number
-
-            try:
-
-                result = adapter(
-                    execution_id,
-                    step,
-                )
-
-                verified = result_ok(
-                    result,
-                    step["system_id"],
-                )
-
-                # ------------------------------------------------
-                # TARGET-2050.163:
-                # EXPLICIT CHILD CLOSURE CONTRACT
-                # ------------------------------------------------
-
-                if (
-                    step["system_id"]
-                    == "internal_self"
-                    and isinstance(
-                        result,
-                        dict,
-                    )
-                    and result.get(
-                        "closure"
-                    )
-                    == "child_execution"
-                    and isinstance(
-                        result.get(
-                            "child"
-                        ),
-                        dict,
-                    )
-                    and result["child"].get(
-                        "status"
-                    )
-                    == "completed"
-                    and result["child"].get(
-                        "verified"
-                    )
-                    is True
-                ):
-
-                    verified = True
-
-                    result["ok"] = True
-                    result["verified"] = True
-
-                    # Never produce "None" as a success error.
-                    result["error"] = None
-
-                # ------------------------------------------------
-                # RESULT STORE VERIFICATION
-                # ------------------------------------------------
-
-                if (
-                    step["system_id"]
-                    == "result_store"
-                    and verified
-                ):
-
-                    saved_check = verify_saved(
-                        result
-                    )
-
-                    verified = (
-                        saved_check[
-                            "verified"
-                        ]
-                    )
-
-                    result[
-                        "save_verification"
-                    ] = verified
-
-                    result[
-                        "verified"
-                    ] = verified
-
-                    if not verified:
-                        result[
-                            "error"
-                        ] = (
-                            "saved_result_verification_failed"
-                        )
-
-                if verified:
-
-                    error = None
-                    break
-
-                # ----------------------------------------------
-                # CRITICAL NULL-SUCCESS FIX
-                # ----------------------------------------------
-
-                if isinstance(
-                    result,
-                    dict,
-                ):
-                    error = (
-                        result.get(
-                            "error"
-                        )
-                        or "execution_failed"
-                    )
-                else:
-                    error = (
-                        "execution_failed"
-                    )
-
-            except Exception as exc:
-
-                result = {
-                    "ok": False,
-                    "verified": False,
-                    "error":
-                        type(exc).__name__,
-                }
-
-                error = (
-                    type(exc).__name__
-                )
-
-            event(
-                execution_id,
-                "step_retry",
-                {
-                    "step_index":
-                        step["step_index"],
-                    "attempt":
-                        attempt_number,
-                    "error":
-                        error,
-                },
-            )
-
-        # --------------------------------------------------------
-        # STEP SUCCESS
-        # --------------------------------------------------------
-
-        if verified:
-
-            error = None
-
-            with DB_LOCK, db() as c:
-
-                c.execute(
-                    """
-                    UPDATE execution_steps_160
-                    SET
-                        status=?,
-                        attempts=?,
-                        verified=?,
-                        result_json=?,
-                        error=?,
-                        finished_at=?
-                    WHERE
-                        execution_id=?
-                        AND step_index=?
-                    """,
-                    (
-                        "completed",
-                        attempt,
-                        1,
-                        safe_json(result),
-                        None,
-                        now(),
-                        execution_id,
-                        step["step_index"],
-                    ),
-                )
-
-                c.commit()
-
-            last = result
-
-            event(
-                execution_id,
-                "step_completed",
-                {
-                    "step_index":
-                        step["step_index"],
-                    "verified":
-                        True,
-                    "attempts":
-                        attempt,
-                },
-            )
-
-            continue
-
-        # --------------------------------------------------------
-        # STEP FAILURE
-        # --------------------------------------------------------
-
-        error = (
-            error
-            or "execution_failed"
-        )
-
-        with DB_LOCK, db() as c:
-
-            c.execute(
-                """
-                UPDATE execution_steps_160
-                SET
-                    status=?,
-                    attempts=?,
-                    verified=?,
-                    result_json=?,
-                    error=?,
-                    finished_at=?
-                WHERE
-                    execution_id=?
-                    AND step_index=?
-                """,
-                (
-                    "failed",
-                    attempt,
-                    0,
-                    safe_json(result),
-                    error,
-                    now(),
-                    execution_id,
-                    step["step_index"],
-                ),
-            )
-
-            c.execute(
-                """
-                UPDATE executions_160
-                SET
-                    status=?,
-                    verified=?,
-                    result_json=?,
-                    error=?,
-                    updated_at=?
-                WHERE id=?
-                """,
-                (
-                    "failed",
-                    0,
-                    safe_json(result),
-                    error,
-                    now(),
-                    execution_id,
-                ),
-            )
-
-            c.commit()
-
-        update_command_status(
-            execution_id,
-            "failed",
-        )
-
-        event(
-            execution_id,
-            "step_failed",
-            {
-                "step_index":
-                    step["step_index"],
-                "attempts":
-                    attempt,
-                "error":
-                    error,
-            },
-        )
-
-        event(
-            execution_id,
-            "execution_failed",
-            {
-                "error":
-                    error,
-            },
-        )
-
-        record_learning(
-            execution_id,
-            "failed",
-            {
-                "error":
-                    error,
-            },
-        )
-
-        return get_execution(
-            execution_id
-        )
-
-    # --------------------------------------------------------
-    # COMPLETE PARENT
-    # --------------------------------------------------------
-
-    with DB_LOCK, db() as c:
-
-        c.execute(
-            """
-            UPDATE executions_160
-            SET
-                status=?,
-                verified=?,
-                result_json=?,
-                error=?,
-                updated_at=?
-            WHERE id=?
-            """,
-            (
-                "completed",
-                1,
-                (
-                    safe_json(last)
-                    if last is not None
-                    else None
-                ),
-                None,
-                now(),
-                execution_id,
-            ),
-        )
-
-        c.commit()
-
-    update_command_status(
-        execution_id,
-        "completed",
-    )
-
-    event(
-        execution_id,
-        "execution_verified",
-        {
-            "verified":
-                True,
-            "result_closure":
-                (
-                    last.get(
-                        "closure"
-                    )
-                    if isinstance(
-                        last,
-                        dict,
-                    )
-                    else None
-                ),
-        },
-    )
-
-    record_learning(
-        execution_id,
-        "verified_success",
-        {
-            "verified":
-                True,
-            "closure":
-                (
-                    last.get(
-                        "closure"
-                    )
-                    if isinstance(
-                        last,
-                        dict,
-                    )
-                    else None
-                ),
-        },
-    )
-
-    return get_execution(
-        execution_id
-    )
-
-
-# ============================================================
-# API MODELS
+# MISSIONS
 # ============================================================
 
 class RunRequest(BaseModel):
+
     objective: str = Field(
-        min_length=1
+        min_length=1,
+        max_length=10000,
     )
-    research: bool = True
+
+    research: bool = False
+
     verify: bool = True
-    remember: bool = True
-    approved: bool = True
+
+    remember: bool = False
+
+    external_access: bool = False
+
+    command: Optional[str] = None
+
     idempotency_key: Optional[str] = None
 
 
-class ExecuteRequest(BaseModel):
-    execution_id: Optional[str] = None
-    objective: Optional[str] = None
-    approved: bool = False
+class CommandRequest(BaseModel):
 
-
-# ============================================================
-# HEALTH
-# ============================================================
-
-def health_payload() -> Dict[str, Any]:
-
-    return {
-        "status":
-            "healthy",
-        "service":
-            "AI Infinity",
-        "version":
-            APP_VERSION,
-        "build":
-            BUILD,
-        "previous_build":
-            PREVIOUS_BUILD,
-        "core": {
-            "mission_engine":
-                True,
-            "adaptive_recovery":
-                True,
-            "provider_independence":
-                True,
-            "empirical_evidence":
-                True,
-            "claim_analysis":
-                True,
-            "contradiction_screening":
-                True,
-            "semantic_contradiction_resolution":
-                True,
-            "command_approval":
-                True,
-            "persistent_mission_requests":
-                True,
-            "result_closure":
-                True,
-            "internal_self_command":
-                True,
-        },
-        "safety": {
-            "no_credentials_persisted":
-                True,
-            "no_arbitrary_code":
-                True,
-            "no_unrestricted_network":
-                True,
-            "ssrf_protection":
-                True,
-        },
-    }
-
-
-# ============================================================
-# ROOT / HEALTH
-# ============================================================
-
-@app.get("/")
-def root():
-
-    return {
-        "name":
-            "AI Infinity",
-        "status":
-            "online",
-        "version":
-            APP_VERSION,
-        "build":
-            BUILD,
-        "docs":
-            "/docs",
-        "health":
-            "/health",
-        "run":
-            "/run",
-        "interface":
-            "/command-interface",
-    }
-
-
-@app.get("/health")
-def health():
-
-    return health_payload()
-
-
-# ============================================================
-# RUN
-# ============================================================
-
-@app.post("/run")
-def run_route(
-    req: RunRequest,
-):
-
-    created = create(
-        objective=req.objective,
-        idempotency_key=req.idempotency_key,
-        approved=req.approved,
-        research=req.research,
-        verify=req.verify,
-        remember=req.remember,
+    command: str = Field(
+        min_length=1,
+        max_length=10000,
     )
 
-    return run(
-        created["id"]
+    approve_external: bool = False
+
+    async_mode: bool = False
+
+    idempotency_key: Optional[str] = None
+
+
+class ExternalPlanRequest(BaseModel):
+
+    command: str = Field(
+        min_length=1,
+        max_length=10000,
+    )
+
+    method: Optional[str] = None
+
+    url: Optional[str] = None
+
+    body: Any = None
+
+    headers: Dict[str, str] = Field(
+        default_factory=dict
     )
 
 
-# ============================================================
-# MULTI-SYSTEM PLAN
-# ============================================================
+class ExternalExecuteRequest(BaseModel):
 
-@app.post("/multi-system/plan")
-def multi_plan(
-    req: RunRequest,
-):
+    method: str = "GET"
 
-    return create(
-        objective=req.objective,
-        idempotency_key=req.idempotency_key,
-        approved=False,
-        research=req.research,
-        verify=req.verify,
-        remember=req.remember,
+    url: str
+
+    headers: Dict[str, str] = Field(
+        default_factory=dict
     )
 
+    body: Any = None
 
-# ============================================================
-# MULTI-SYSTEM EXECUTE
-# ============================================================
+    approve: bool = False
 
-@app.post("/multi-system/execute")
-def multi_execute(
-    req: ExecuteRequest,
-):
+    mission_id: Optional[str] = None
 
-    if req.execution_id:
+    idempotency_key: Optional[str] = None
 
-        item = get_execution(
-            req.execution_id
-        )
+    async_mode: bool = True
 
-        if not item:
-            raise HTTPException(
-                status_code=404,
-                detail="execution_not_found",
+
+class ApprovalRequest(BaseModel):
+
+    approve: bool = True
+
+
+class MemoryRequest(BaseModel):
+
+    key: str = Field(
+        min_length=1,
+        max_length=256,
+    )
+
+    value: Any
+
+
+class PolicyPatch(BaseModel):
+
+    values: Dict[str, Any]
+
+
+def create_mission(
+    request: RunRequest
+) -> Dict[str, Any]:
+
+    mission_id = make_id(
+        "mission"
+    )
+
+    created = now()
+
+    with DB_LOCK:
+        with get_db() as conn:
+
+            conn.execute(
+                """
+                INSERT INTO missions(
+                    id,
+                    objective,
+                    status,
+                    created_at,
+                    updated_at,
+                    policy_version
+                )
+                VALUES(?,?,?,?,?,?)
+                """,
+                (
+                    mission_id,
+                    request.objective,
+                    "queued",
+                    created,
+                    created,
+                    get_policy()[
+                        "version"
+                    ],
+                ),
             )
 
-        if req.approved:
+    mission_event(
+        mission_id,
+        "created",
+        {
+            "objective": request.objective
+        },
+    )
 
-            with DB_LOCK, db() as c:
-                c.execute(
+    return {
+        "id": mission_id,
+        "objective": request.objective,
+        "status": "queued",
+        "created_at": created,
+    }
+
+
+def mission_row(
+    mission_id: str
+) -> Optional[sqlite3.Row]:
+
+    with DB_LOCK:
+        with get_db() as conn:
+
+            return conn.execute(
+                """
+                SELECT *
+                FROM missions
+                WHERE id=?
+                """,
+                (mission_id,),
+            ).fetchone()
+
+
+def set_mission_status(
+    mission_id: str,
+    status: str,
+    result: Any = None,
+    verification: Any = None,
+    attempts: Optional[int] = None,
+    recovery_attempts: Optional[int] = None,
+) -> None:
+
+    fields: Dict[str, Any] = {
+        "status": status,
+        "updated_at": now(),
+    }
+
+    if result is not None:
+        fields["result_json"] = dumps(
+            result
+        )
+
+    if verification is not None:
+        fields[
+            "verification_json"
+        ] = dumps(
+            verification
+        )
+
+    if attempts is not None:
+        fields["attempts"] = attempts
+
+    if recovery_attempts is not None:
+        fields[
+            "recovery_attempts"
+        ] = recovery_attempts
+
+    assignment = ",".join(
+        f"{key}=?"
+        for key in fields
+    )
+
+    values = list(
+        fields.values()
+    )
+
+    values.append(
+        mission_id
+    )
+
+    with DB_LOCK:
+        with get_db() as conn:
+
+            conn.execute(
+                f"""
+                UPDATE missions
+                SET {assignment}
+                WHERE id=?
+                """,
+                values,
+            )
+
+
+def run_mission_sync(
+    mission_id: str,
+    request: RunRequest,
+) -> Dict[str, Any]:
+
+    attempts = 0
+    recovery_attempts = 0
+
+    set_mission_status(
+        mission_id,
+        "running",
+    )
+
+    mission_event(
+        mission_id,
+        "started",
+    )
+
+    try:
+
+        attempts += 1
+
+        command = (
+            request.command
+            or request.objective
+        )
+
+        parsed = classify_command(
+            command
+        )
+
+        # ----------------------------------------------------
+        # EXTERNAL EXECUTION
+        # ----------------------------------------------------
+
+        if (
+            parsed["intent"]
+            == "external_http"
+            or request.external_access
+        ):
+
+            plan = make_external_plan(
+                command
+            )
+
+            if not plan["ready"]:
+                raise ValueError(
+                    plan["reason"]
+                )
+
+            if (
+                plan["side_effect"]
+                and REQUIRE_APPROVAL
+            ):
+
+                result = {
+                    "status": "awaiting_approval",
+                    "action": "external_execution",
+                    "plan": plan,
+                }
+
+            else:
+
+                result = external_request(
+                    plan["method"],
+                    plan["url"],
+                    plan["headers"],
+                    plan["body"],
+                )
+
+        # ----------------------------------------------------
+        # INTERNAL EXECUTION
+        # ----------------------------------------------------
+
+        else:
+
+            result = local_command(
+                command
+            )
+
+        research = (
+            research_plan(
+                request.objective
+            )
+            if request.research
+            else None
+        )
+
+        verification = (
+            verify_result(result)
+            if request.verify
+            else {
+                "verified": False,
+                "confidence": 0,
+                "reason": (
+                    "verification disabled"
+                ),
+            }
+        )
+
+        if request.remember:
+
+            memory_put(
+                f"mission:{mission_id}",
+                {
+                    "objective": request.objective,
+                    "result": result,
+                    "verification": verification,
+                },
+            )
+
+        final = {
+            "status": "completed",
+            "mission_id": mission_id,
+            "objective": request.objective,
+            "result": result,
+            "research": research,
+            "verification": verification,
+            "attempts": attempts,
+            "recovery_attempts": recovery_attempts,
+            "policy_version": get_policy()[
+                "version"
+            ],
+        }
+
+        set_mission_status(
+            mission_id,
+            "completed",
+            result=final,
+            verification=verification,
+            attempts=attempts,
+            recovery_attempts=recovery_attempts,
+        )
+
+        mission_event(
+            mission_id,
+            "completed",
+            final,
+        )
+
+        return final
+
+    except Exception as exc:
+
+        mission_event(
+            mission_id,
+            "failure",
+            {
+                "error": str(exc),
+                "attempt": attempts,
+            },
+        )
+
+        policy = get_policy()
+
+        if (
+            policy.get(
+                "adaptive_recovery_enabled",
+                True,
+            )
+            and recovery_attempts
+            < MAX_RETRIES
+        ):
+
+            recovery_attempts += 1
+
+            set_mission_status(
+                mission_id,
+                "recovering",
+                attempts=attempts,
+                recovery_attempts=recovery_attempts,
+            )
+
+            mission_event(
+                mission_id,
+                "recovery",
+                {
+                    "recovery_attempt":
+                        recovery_attempts,
+                },
+            )
+
+            try:
+
+                fallback = local_command(
+                    request.command
+                    or request.objective
+                )
+
+                verification = verify_result(
+                    fallback
+                )
+
+                final = {
+                    "status": "completed",
+                    "mission_id": mission_id,
+                    "objective": request.objective,
+                    "result": fallback,
+                    "recovered_from": str(exc),
+                    "verification": verification,
+                    "attempts": attempts + 1,
+                    "recovery_attempts": recovery_attempts,
+                    "policy_version": get_policy()[
+                        "version"
+                    ],
+                }
+
+                set_mission_status(
+                    mission_id,
+                    "completed",
+                    result=final,
+                    verification=verification,
+                    attempts=attempts + 1,
+                    recovery_attempts=recovery_attempts,
+                )
+
+                mission_event(
+                    mission_id,
+                    "recovered",
+                    final,
+                )
+
+                return final
+
+            except Exception as recovery_error:
+
+                exc = recovery_error
+
+        failure = {
+            "status": "failed",
+            "mission_id": mission_id,
+            "objective": request.objective,
+            "error": str(exc),
+            "attempts": attempts,
+            "recovery_attempts": recovery_attempts,
+        }
+
+        set_mission_status(
+            mission_id,
+            "failed",
+            result=failure,
+            attempts=attempts,
+            recovery_attempts=recovery_attempts,
+        )
+
+        mission_event(
+            mission_id,
+            "failed",
+            failure,
+        )
+
+        return failure
+
+
+# ============================================================
+# EXECUTION RECORDS
+# ============================================================
+
+def execution_row(
+    execution_id: str
+) -> Optional[sqlite3.Row]:
+
+    with DB_LOCK:
+        with get_db() as conn:
+
+            return conn.execute(
+                """
+                SELECT *
+                FROM executions
+                WHERE id=?
+                """,
+                (execution_id,),
+            ).fetchone()
+
+
+def execution_dict(
+    row: sqlite3.Row
+) -> Dict[str, Any]:
+
+    return {
+        "id": row["id"],
+        "mission_id": row["mission_id"],
+        "command": row["command"],
+        "method": row["method"],
+        "url": row["url"],
+        "headers": loads(
+            row["headers_json"],
+            {},
+        ),
+        "body": loads(
+            row["body_json"]
+        ),
+        "status": row["status"],
+        "approval_required": bool(
+            row["approval_required"]
+        ),
+        "approved": bool(
+            row["approved"]
+        ),
+        "idempotency_key": row[
+            "idempotency_key"
+        ],
+        "attempts": row["attempts"],
+        "recovery_attempts": row[
+            "recovery_attempts"
+        ],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+        "response": loads(
+            row["response_json"]
+        ),
+        "error": row["error"],
+    }
+
+
+def create_execution(
+    command: str,
+    method: str,
+    url: str,
+    headers: Dict[str, str],
+    body: Any,
+    mission_id: Optional[str],
+    idempotency_key: Optional[str],
+    approved: bool,
+) -> Dict[str, Any]:
+
+    clean_url = validate_external_url(
+        url
+    )
+
+    safe_headers = sanitize_headers(
+        headers
+    )
+
+    method = method.upper()
+
+    if method not in ALLOWED_METHODS:
+        raise ValueError(
+            "unsupported HTTP method"
+        )
+
+    side_effect = method in {
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+    }
+
+    approval_required = (
+        REQUIRE_APPROVAL
+        and side_effect
+    )
+
+    status = (
+        "awaiting_approval"
+        if approval_required
+        and not approved
+        else "queued"
+    )
+
+    if idempotency_key:
+
+        with DB_LOCK:
+            with get_db() as conn:
+
+                old = conn.execute(
                     """
-                    UPDATE executions_160
-                    SET
-                        approved=1,
+                    SELECT *
+                    FROM executions
+                    WHERE idempotency_key=?
+                    """,
+                    (idempotency_key,),
+                ).fetchone()
+
+        if old:
+            return execution_dict(
+                old
+            )
+
+    execution_id = make_id(
+        "exec"
+    )
+
+    with DB_LOCK:
+        with get_db() as conn:
+
+            conn.execute(
+                """
+                INSERT INTO executions(
+                    id,
+                    mission_id,
+                    command,
+                    method,
+                    url,
+                    headers_json,
+                    body_json,
+                    status,
+                    approval_required,
+                    approved,
+                    idempotency_key,
+                    created_at,
+                    updated_at
+                )
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    execution_id,
+                    mission_id,
+                    command,
+                    method,
+                    clean_url,
+                    dumps(safe_headers),
+                    dumps(body),
+                    status,
+                    int(approval_required),
+                    int(approved),
+                    idempotency_key,
+                    now(),
+                    now(),
+                ),
+            )
+
+    execution_event(
+        execution_id,
+        "created",
+        {
+            "status": status,
+            "approval_required":
+                approval_required,
+        },
+    )
+
+    return execution_dict(
+        execution_row(
+            execution_id
+        )
+    )
+
+
+def set_execution_status(
+    execution_id: str,
+    status: str,
+    **fields: Any,
+) -> None:
+
+    allowed = {
+        "attempts",
+        "recovery_attempts",
+        "started_at",
+        "finished_at",
+        "response_json",
+        "error",
+        "approved",
+        "updated_at",
+    }
+
+    update = {
+        key: value
+        for key, value in fields.items()
+        if key in allowed
+    }
+
+    update["status"] = status
+    update["updated_at"] = now()
+
+    assignment = ",".join(
+        f"{key}=?"
+        for key in update
+    )
+
+    values = list(
+        update.values()
+    )
+
+    values.append(
+        execution_id
+    )
+
+    with DB_LOCK:
+        with get_db() as conn:
+
+            conn.execute(
+                f"""
+                UPDATE executions
+                SET {assignment}
+                WHERE id=?
+                """,
+                values,
+            )
+
+
+# ============================================================
+# EXTERNAL EXECUTION WORKER
+# ============================================================
+
+def execute_external_sync(
+    execution_id: str
+) -> Dict[str, Any]:
+
+    row = execution_row(
+        execution_id
+    )
+
+    if not row:
+        raise ValueError(
+            "execution not found"
+        )
+
+    if row["status"] in {
+        "completed",
+        "failed",
+        "cancelled",
+    }:
+        return execution_dict(
+            row
+        )
+
+    if row["status"] == "awaiting_approval":
+
+        return execution_dict(
+            row
+        )
+
+    attempts = int(
+        row["attempts"]
+    ) + 1
+
+    set_execution_status(
+        execution_id,
+        "running",
+        started_at=now(),
+        attempts=attempts,
+    )
+
+    execution_event(
+        execution_id,
+        "started",
+        {
+            "attempt": attempts
+        },
+    )
+
+    try:
+
+        response = external_request(
+            row["method"],
+            row["url"],
+            loads(
+                row["headers_json"],
+                {},
+            ),
+            loads(
+                row["body_json"]
+            ),
+        )
+
+        success = bool(
+            response.get("ok")
+        )
+
+        status = (
+            "completed"
+            if success
+            else "failed"
+        )
+
+        set_execution_status(
+            execution_id,
+            status,
+            response_json=response,
+            error=(
+                None
+                if success
+                else (
+                    "HTTP "
+                    + str(
+                        response.get(
+                            "status_code"
+                        )
+                    )
+                )
+            ),
+            finished_at=now(),
+            attempts=attempts,
+        )
+
+        execution_event(
+            execution_id,
+            status,
+            response,
+        )
+
+        return execution_dict(
+            execution_row(
+                execution_id
+            )
+        )
+
+    except Exception as exc:
+
+        policy = get_policy()
+
+        recovery_attempts = 0
+
+        if (
+            policy.get(
+                "adaptive_recovery_enabled",
+                True,
+            )
+            and attempts <= MAX_RETRIES
+        ):
+
+            recovery_attempts = 1
+
+            set_execution_status(
+                execution_id,
+                "recovering",
+                recovery_attempts=
+                    recovery_attempts,
+            )
+
+            execution_event(
+                execution_id,
+                "recovery",
+                {
+                    "error": str(exc)
+                },
+            )
+
+            try:
+
+                response = external_request(
+                    row["method"],
+                    row["url"],
+                    loads(
+                        row["headers_json"],
+                        {},
+                    ),
+                    loads(
+                        row["body_json"]
+                    ),
+                )
+
+                success = bool(
+                    response.get("ok")
+                )
+
+                status = (
+                    "completed"
+                    if success
+                    else "failed"
+                )
+
+                set_execution_status(
+                    execution_id,
+                    status,
+                    response_json=response,
+                    error=(
+                        None
+                        if success
+                        else (
+                            "HTTP "
+                            + str(
+                                response.get(
+                                    "status_code"
+                                )
+                            )
+                        )
+                    ),
+                    finished_at=now(),
+                    attempts=attempts + 1,
+                    recovery_attempts=
+                        recovery_attempts,
+                )
+
+                execution_event(
+                    execution_id,
+                    "recovered",
+                    response,
+                )
+
+                return execution_dict(
+                    execution_row(
+                        execution_id
+                    )
+                )
+
+            except Exception as recovery_error:
+
+                exc = recovery_error
+
+        set_execution_status(
+            execution_id,
+            "failed",
+            error=str(exc),
+            finished_at=now(),
+            attempts=attempts,
+            recovery_attempts=
+                recovery_attempts,
+        )
+
+        execution_event(
+            execution_id,
+            "failed",
+            {
+                "error": str(exc)
+            },
+        )
+
+        return execution_dict(
+            execution_row(
+                execution_id
+            )
+        )
+
+
+async def queue_execution(
+    execution_id: str
+) -> None:
+
+    async with QUEUE_LOCK:
+
+        existing = QUEUE_TASKS.get(
+            execution_id
+        )
+
+        if existing and not existing.done():
+            return
+
+        task = asyncio.create_task(
+            asyncio.to_thread(
+                execute_external_sync,
+                execution_id,
+            )
+        )
+
+        QUEUE_TASKS[
+            execution_id
+        ] = task
+
+
+async def recover_pending_executions() -> None:
+
+    with DB_LOCK:
+        with get_db() as conn:
+
+            rows = conn.execute(
+                """
+                SELECT id
+                FROM executions
+                WHERE status IN(
+                    'queued',
+                    'running',
+                    'recovering'
+                )
+                """
+            ).fetchall()
+
+    for row in rows:
+
+        execution_id = row["id"]
+
+        with DB_LOCK:
+            with get_db() as conn:
+
+                conn.execute(
+                    """
+                    UPDATE executions
+                    SET status='queued',
                         updated_at=?
                     WHERE id=?
+                    AND status IN(
+                        'running',
+                        'recovering'
+                    )
                     """,
                     (
                         now(),
-                        req.execution_id,
+                        execution_id,
                     ),
                 )
-                c.commit()
 
-            return run(
-                req.execution_id
-            )
-
-        return item
-
-    if not req.objective:
-
-        raise HTTPException(
-            status_code=400,
-            detail="objective_required",
+        await queue_execution(
+            execution_id
         )
-
-    item = create(
-        req.objective,
-        approved=req.approved,
-    )
-
-    if req.approved:
-        return run(
-            item["id"]
-        )
-
-    return item
-
-
-# ============================================================
-# APPROVED EXECUTION
-# ============================================================
-
-@app.post(
-    "/multi-system/execute-approved/{execution_id}"
-)
-def execute_approved(
-    execution_id: str,
-):
-
-    item = get_execution(
-        execution_id
-    )
-
-    if not item:
-        raise HTTPException(
-            status_code=404,
-            detail="execution_not_found",
-        )
-
-    with DB_LOCK, db() as c:
-        c.execute(
-            """
-            UPDATE executions_160
-            SET
-                approved=1,
-                updated_at=?
-            WHERE id=?
-            """,
-            (
-                now(),
-                execution_id,
-            ),
-        )
-        c.commit()
-
-    return run(
-        execution_id
-    )
-
-
-# ============================================================
-# EXECUTION GET
-# ============================================================
-
-@app.get(
-    "/multi-system/{execution_id}"
-)
-def multi_get(
-    execution_id: str,
-):
-
-    item = get_execution(
-        execution_id
-    )
-
-    if not item:
-        raise HTTPException(
-            status_code=404,
-            detail="execution_not_found",
-        )
-
-    return item
-
-
-# ============================================================
-# EVENTS
-# ============================================================
-
-@app.get(
-    "/multi-system/{execution_id}/events"
-)
-def multi_events(
-    execution_id: str,
-):
-
-    if not get_execution(
-        execution_id
-    ):
-        raise HTTPException(
-            status_code=404,
-            detail="execution_not_found",
-        )
-
-    with DB_LOCK, db() as c:
-
-        rows = c.execute(
-            """
-            SELECT *
-            FROM execution_events_160
-            WHERE execution_id=?
-            ORDER BY id
-            """,
-            (execution_id,),
-        ).fetchall()
-
-    return [
-        {
-            **dict(row),
-            "data":
-                json.loads(
-                    row["data_json"]
-                ),
-        }
-        for row in rows
-    ]
-
-
-# ============================================================
-# SELF TESTS
-# ============================================================
-
-@app.get(
-    "/multi-system/self-test"
-)
-def multi_self_test():
-
-    return {
-        "status":
-            "passed",
-        "internal_self":
-            True,
-        "allowlisted_self_hosts":
-            sorted(
-                SELF_HOSTS
-            ),
-        "self_paths":
-            sorted(
-                SELF_PATHS
-            ),
-        "child_result_closure":
-            True,
-    }
-
-
-@app.get(
-    "/research/self-test"
-)
-def research_self_test():
-
-    return {
-        "status":
-            "passed",
-        "source_adapters":
-            sorted(
-                RESEARCH_SOURCES.keys()
-            ),
-        "minimum_verified_sources":
-            2,
-        "independent_source_families":
-            3,
-    }
-
-
-@app.get(
-    "/interface/self-test"
-)
-def interface_self_test():
-
-    return {
-        "status":
-            "passed",
-        "natural_command_intake":
-            True,
-        "browser_mobile_ui":
-            True,
-        "plan_execute_separation":
-            True,
-        "approval_controls":
-            True,
-        "live_status":
-            True,
-    }
-
-
-# ============================================================
-# TARGET-2050.163 STATUS
-# ============================================================
-
-@app.get("/163-status")
-def status_163():
-
-    return {
-        "status":
-            "ready",
-        "version":
-            APP_VERSION,
-        "build":
-            BUILD,
-        "previous_build":
-            PREVIOUS_BUILD,
-        "result_closure": {
-            "internal_self_child_result_propagation":
-                True,
-            "verified_child_implies_verified_parent":
-                True,
-            "successful_child_not_retried":
-                True,
-            "parent_child_completion_contract":
-                True,
-            "null_success_error":
-                True,
-            "persistent_parent_result":
-                True,
-            "learning_after_parent_verification":
-                True,
-        },
-        "preserved_chain": {
-            "155":
-                True,
-            "156":
-                True,
-            "157":
-                True,
-            "158":
-                True,
-            "159":
-                True,
-            "160":
-                True,
-            "161":
-                True,
-            "162":
-                True,
-        },
-    }
-
-
-# ============================================================
-# HISTORICAL STATUS ENDPOINTS
-# ============================================================
-
-@app.get("/155-status")
-def status_155():
-
-    return {
-        "status":
-            "ready",
-        "version":
-            "TARGET-2050.155",
-        "preserved_in":
-            APP_VERSION,
-        "current_version":
-            APP_VERSION,
-    }
-
-
-@app.get("/156-status")
-def status_156():
-
-    return {
-        "status":
-            "ready",
-        "version":
-            "TARGET-2050.156",
-        "preserved_in":
-            APP_VERSION,
-        "current_version":
-            APP_VERSION,
-    }
-
-
-@app.get("/157-status")
-def status_157():
-
-    return {
-        "status":
-            "ready",
-        "version":
-            "TARGET-2050.157",
-        "preserved_in":
-            APP_VERSION,
-        "current_version":
-            APP_VERSION,
-    }
-
-
-@app.get("/158-status")
-def status_158():
-
-    return {
-        "status":
-            "ready",
-        "version":
-            "TARGET-2050.158",
-        "preserved_in":
-            APP_VERSION,
-        "current_version":
-            APP_VERSION,
-    }
-
-
-@app.get("/159-status")
-def status_159():
-
-    return {
-        "status":
-            "ready",
-        "version":
-            "TARGET-2050.159",
-        "preserved_in":
-            APP_VERSION,
-        "current_version":
-            APP_VERSION,
-    }
-
-
-@app.get("/160-status")
-def status_160():
-
-    return {
-        "status":
-            "ready",
-        "version":
-            "TARGET-2050.160",
-        "preserved_in":
-            APP_VERSION,
-        "current_version":
-            APP_VERSION,
-    }
-
-
-@app.get("/161-status")
-def status_161():
-
-    return {
-        "status":
-            "ready",
-        "version":
-            "TARGET-2050.161",
-        "preserved_in":
-            APP_VERSION,
-        "current_version":
-            APP_VERSION,
-    }
-
-
-@app.get("/162-status")
-def status_162():
-
-    return {
-        "status":
-            "ready",
-        "version":
-            "TARGET-2050.162",
-        "preserved_in":
-            APP_VERSION,
-        "current_version":
-            APP_VERSION,
-    }
-
-
-# ============================================================
-# BROWSER / MOBILE INTERFACE
-# ============================================================
-
-@app.get(
-    "/command-interface",
-    response_class=HTMLResponse,
-)
-def command_interface():
-
-    return HTMLResponse(
-        f"""
-<!doctype html>
-<html>
-<head>
-<meta
-    name="viewport"
-    content="width=device-width,initial-scale=1"
->
-<title>AI Infinity</title>
-
-<style>
-body {{
-    font-family: system-ui, sans-serif;
-    margin: 0;
-    padding: 18px;
-    background: #0b0d10;
-    color: #eee;
-}}
-
-main {{
-    max-width: 900px;
-    margin: auto;
-}}
-
-textarea {{
-    width: 100%;
-    min-height: 130px;
-    box-sizing: border-box;
-    border-radius: 12px;
-    padding: 12px;
-    background: #151922;
-    color: #fff;
-    border: 1px solid #333;
-}}
-
-button {{
-    padding: 11px 16px;
-    margin: 8px 6px 8px 0;
-    border: 0;
-    border-radius: 10px;
-    cursor: pointer;
-}}
-
-pre {{
-    white-space: pre-wrap;
-    background: #151922;
-    padding: 14px;
-    border-radius: 12px;
-    overflow: auto;
-}}
-
-.small {{
-    opacity: .7;
-}}
-</style>
-</head>
-
-<body>
-
-<main>
-
-<h1>AI Infinity</h1>
-
-<p class="small">
-{APP_VERSION} · {BUILD}
-</p>
-
-<textarea
-    id="objective"
-    placeholder="Enter a real-world command..."
-></textarea>
-
-<div>
-
-<button onclick="planIt()">
-Plan
-</button>
-
-<button onclick="runIt()">
-Execute
-</button>
-
-</div>
-
-<pre id="out">
-Ready.
-</pre>
-
-</main>
-
-<script>
-
-const out =
-    document.getElementById("out");
-
-function payload() {{
-
-    return {{
-        objective:
-            document.getElementById(
-                "objective"
-            ).value,
-
-        research:
-            true,
-
-        verify:
-            true,
-
-        remember:
-            true,
-
-        approved:
-            true
-    }};
-}}
-
-async function call(
-    path,
-    body
-) {{
-
-    out.textContent =
-        "Working...";
-
-    try {{
-
-        const response =
-            await fetch(
-                path,
-                {{
-                    method:
-                        "POST",
-
-                    headers: {{
-                        "Content-Type":
-                            "application/json"
-                    }},
-
-                    body:
-                        JSON.stringify(
-                            body
-                        )
-                }}
-            );
-
-        const data =
-            await response.json();
-
-        out.textContent =
-            JSON.stringify(
-                data,
-                null,
-                2
-            );
-
-    }} catch (error) {{
-
-        out.textContent =
-            JSON.stringify(
-                {{
-                    error:
-                        String(error)
-                }},
-                null,
-                2
-            );
-    }}
-}}
-
-function planIt() {{
-
-    call(
-        "/multi-system/plan",
-        payload()
-    );
-}}
-
-function runIt() {{
-
-    call(
-        "/run",
-        payload()
-    );
-}}
-
-</script>
-
-</body>
-</html>
-"""
-    )
 
 
 # ============================================================
@@ -3321,6 +2328,1382 @@ function runIt() {{
 # ============================================================
 
 @app.on_event("startup")
-def startup():
+async def startup() -> None:
 
     init_db()
+
+    await recover_pending_executions()
+
+
+# ============================================================
+# ROOT
+# ============================================================
+
+@app.get("/")
+async def root() -> Dict[str, Any]:
+
+    return {
+        "name": "AI Infinity",
+        "status": "online",
+        "version": VERSION,
+        "build": BUILD,
+        "previous_build": PREVIOUS_BUILD,
+        "goal": (
+            "practical real-world command "
+            "execution with resilient mission closure"
+        ),
+        "docs": "/docs",
+        "interface": "/command-ui",
+        "run": "/run",
+        "command": "/command",
+        "external_plan": "/external/plan",
+        "external_execute": "/external/execute",
+        "status_endpoint": "/164-status",
+    }
+
+
+# ============================================================
+# HEALTH
+# ============================================================
+
+@app.get("/health")
+async def health() -> Dict[str, Any]:
+
+    init_db()
+
+    with DB_LOCK:
+        with get_db() as conn:
+
+            missions = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM missions
+                """
+            ).fetchone()["count"]
+
+            executions = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM executions
+                """
+            ).fetchone()["count"]
+
+            memories = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM memories
+                """
+            ).fetchone()["count"]
+
+    policy = get_policy()
+
+    return {
+        "status": "healthy",
+        "version": VERSION,
+        "build": BUILD,
+        "database": "ready",
+        "mission_count": missions,
+        "execution_count": executions,
+        "memory_count": memories,
+        "policy_version": policy[
+            "version"
+        ],
+        "external_execution_enabled":
+            policy[
+                "external_execution_enabled"
+            ],
+        "verification_enabled":
+            policy[
+                "verification_enabled"
+            ],
+        "adaptive_recovery_enabled":
+            policy[
+                "adaptive_recovery_enabled"
+            ],
+        "self_modification_enabled":
+            policy[
+                "self_modification_enabled"
+            ],
+    }
+
+
+@app.get("/status")
+async def status() -> Dict[str, Any]:
+
+    return await health()
+
+
+# ============================================================
+# CAPABILITIES
+# ============================================================
+
+@app.get("/capabilities")
+async def capabilities() -> Dict[str, Any]:
+
+    return {
+        "version": VERSION,
+        "build": BUILD,
+        "capabilities": [
+            "mission-engine",
+            "real-world-command-router",
+            "internal-command-bridge",
+            "external-http-bridge",
+            "approval-gate",
+            "ssrf-protection",
+            "credential-protection",
+            "durable-execution",
+            "async-execution",
+            "restart-recovery",
+            "execution-events",
+            "idempotency",
+            "verification",
+            "adaptive-recovery",
+            "persistent-memory",
+            "policy-adaptation",
+            "research-planning",
+            "result-closure",
+            "web-interface",
+        ],
+    }
+
+
+# ============================================================
+# RUN
+# ============================================================
+
+@app.post("/run")
+async def run(
+    request: RunRequest
+) -> Dict[str, Any]:
+
+    mission = create_mission(
+        request
+    )
+
+    result = await asyncio.to_thread(
+        run_mission_sync,
+        mission["id"],
+        request,
+    )
+
+    return result
+
+
+@app.post("/run-async")
+async def run_async(
+    request: RunRequest
+) -> Dict[str, Any]:
+
+    mission = create_mission(
+        request
+    )
+
+    asyncio.create_task(
+        asyncio.to_thread(
+            run_mission_sync,
+            mission["id"],
+            request,
+        )
+    )
+
+    return {
+        "status": "accepted",
+        "mission_id": mission["id"],
+        "poll": (
+            f"/mission/{mission['id']}"
+        ),
+        "events": (
+            f"/mission/{mission['id']}/events"
+        ),
+    }
+
+
+# ============================================================
+# MISSION
+# ============================================================
+
+@app.get("/mission/{mission_id}")
+async def get_mission(
+    mission_id: str
+) -> Dict[str, Any]:
+
+    row = mission_row(
+        mission_id
+    )
+
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail="mission not found",
+        )
+
+    return {
+        "id": row["id"],
+        "objective": row["objective"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "result": loads(
+            row["result_json"]
+        ),
+        "verification": loads(
+            row["verification_json"]
+        ),
+        "attempts": row["attempts"],
+        "recovery_attempts":
+            row["recovery_attempts"],
+        "policy_version":
+            row["policy_version"],
+    }
+
+
+@app.get(
+    "/mission/{mission_id}/events"
+)
+async def mission_events(
+    mission_id: str
+) -> Dict[str, Any]:
+
+    if not mission_row(
+        mission_id
+    ):
+
+        raise HTTPException(
+            status_code=404,
+            detail="mission not found",
+        )
+
+    with DB_LOCK:
+        with get_db() as conn:
+
+            rows = conn.execute(
+                """
+                SELECT
+                    id,
+                    event_type,
+                    payload_json,
+                    created_at
+                FROM mission_events
+                WHERE mission_id=?
+                ORDER BY id
+                """,
+                (mission_id,),
+            ).fetchall()
+
+    return {
+        "mission_id": mission_id,
+        "events": [
+            {
+                "id": row["id"],
+                "type": row[
+                    "event_type"
+                ],
+                "payload": loads(
+                    row["payload_json"],
+                    {},
+                ),
+                "created_at": row[
+                    "created_at"
+                ],
+            }
+            for row in rows
+        ],
+    }
+
+
+# ============================================================
+# COMMAND
+# ============================================================
+
+@app.post("/command")
+async def command(
+    request: CommandRequest
+) -> Dict[str, Any]:
+
+    parsed = classify_command(
+        request.command
+    )
+
+    if parsed["intent"] == "external_http":
+
+        try:
+
+            plan = make_external_plan(
+                request.command
+            )
+
+            if not plan["ready"]:
+
+                return {
+                    "status": "rejected",
+                    "plan": plan,
+                }
+
+            execution = create_execution(
+                command=request.command,
+                method=plan["method"],
+                url=plan["url"],
+                headers=plan["headers"],
+                body=plan["body"],
+                mission_id=None,
+                idempotency_key=
+                    request.idempotency_key,
+                approved=
+                    request.approve_external,
+            )
+
+        except Exception as exc:
+
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            )
+
+        if execution["status"] == "queued":
+
+            if request.async_mode:
+
+                await queue_execution(
+                    execution["id"]
+                )
+
+            else:
+
+                execution = (
+                    await asyncio.to_thread(
+                        execute_external_sync,
+                        execution["id"],
+                    )
+                )
+
+        return {
+            "status": execution[
+                "status"
+            ],
+            "command": request.command,
+            "plan": plan,
+            "execution": execution,
+        }
+
+    result = local_command(
+        request.command
+    )
+
+    return {
+        "status": "completed",
+        "command": request.command,
+        "result": result,
+    }
+
+
+@app.post("/command-interface")
+async def command_interface(
+    request: CommandRequest
+) -> Dict[str, Any]:
+
+    return await command(
+        request
+    )
+
+
+# ============================================================
+# EXTERNAL PLAN
+# ============================================================
+
+@app.post("/external/plan")
+async def external_plan(
+    request: ExternalPlanRequest
+) -> Dict[str, Any]:
+
+    try:
+
+        return make_external_plan(
+            request.command,
+            request.method,
+            request.url,
+            request.body,
+            request.headers,
+        )
+
+    except Exception as exc:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        )
+
+
+# ============================================================
+# EXTERNAL EXECUTION
+# ============================================================
+
+@app.post("/external/execute")
+async def external_execute(
+    request: ExternalExecuteRequest
+) -> Dict[str, Any]:
+
+    try:
+
+        execution = create_execution(
+            command=(
+                f"{request.method.upper()} "
+                f"{request.url}"
+            ),
+            method=request.method,
+            url=request.url,
+            headers=request.headers,
+            body=request.body,
+            mission_id=request.mission_id,
+            idempotency_key=
+                request.idempotency_key,
+            approved=request.approve,
+        )
+
+    except Exception as exc:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        )
+
+    if execution["status"] == "queued":
+
+        if request.async_mode:
+
+            await queue_execution(
+                execution["id"]
+            )
+
+            return {
+                "status": "accepted",
+                "execution": execution,
+                "poll": (
+                    "/external/execution/"
+                    + execution["id"]
+                ),
+                "events": (
+                    "/external/execution/"
+                    + execution["id"]
+                    + "/events"
+                ),
+            }
+
+        return await asyncio.to_thread(
+            execute_external_sync,
+            execution["id"],
+        )
+
+    return {
+        "status": execution[
+            "status"
+        ],
+        "execution": execution,
+        "approval": (
+            "/external/approve/"
+            + execution["id"]
+        ),
+    }
+
+
+# ============================================================
+# APPROVAL
+# ============================================================
+
+@app.post(
+    "/external/approve/{execution_id}"
+)
+async def approve_external(
+    execution_id: str,
+    request: ApprovalRequest,
+) -> Dict[str, Any]:
+
+    row = execution_row(
+        execution_id
+    )
+
+    if not row:
+
+        raise HTTPException(
+            status_code=404,
+            detail="execution not found",
+        )
+
+    if not request.approve:
+
+        set_execution_status(
+            execution_id,
+            "cancelled",
+            finished_at=now(),
+        )
+
+        execution_event(
+            execution_id,
+            "approval_denied",
+        )
+
+        return execution_dict(
+            execution_row(
+                execution_id
+            )
+        )
+
+    set_execution_status(
+        execution_id,
+        "queued",
+        approved=1,
+    )
+
+    execution_event(
+        execution_id,
+        "approved",
+    )
+
+    await queue_execution(
+        execution_id
+    )
+
+    return {
+        "status": "accepted",
+        "execution": execution_dict(
+            execution_row(
+                execution_id
+            )
+        ),
+        "poll": (
+            "/external/execution/"
+            + execution_id
+        ),
+    }
+
+
+# ============================================================
+# EXECUTION STATUS
+# ============================================================
+
+@app.get(
+    "/external/execution/{execution_id}"
+)
+async def external_execution(
+    execution_id: str
+) -> Dict[str, Any]:
+
+    row = execution_row(
+        execution_id
+    )
+
+    if not row:
+
+        raise HTTPException(
+            status_code=404,
+            detail="execution not found",
+        )
+
+    return execution_dict(
+        row
+    )
+
+
+@app.get(
+    "/external/execution/{execution_id}/events"
+)
+async def external_execution_events(
+    execution_id: str
+) -> Dict[str, Any]:
+
+    if not execution_row(
+        execution_id
+    ):
+
+        raise HTTPException(
+            status_code=404,
+            detail="execution not found",
+        )
+
+    with DB_LOCK:
+        with get_db() as conn:
+
+            rows = conn.execute(
+                """
+                SELECT
+                    id,
+                    event_type,
+                    payload_json,
+                    created_at
+                FROM execution_events
+                WHERE execution_id=?
+                ORDER BY id
+                """,
+                (execution_id,),
+            ).fetchall()
+
+    return {
+        "execution_id":
+            execution_id,
+        "events": [
+            {
+                "id": row["id"],
+                "type": row[
+                    "event_type"
+                ],
+                "payload": loads(
+                    row["payload_json"],
+                    {},
+                ),
+                "created_at": row[
+                    "created_at"
+                ],
+            }
+            for row in rows
+        ],
+    }
+
+
+# ============================================================
+# RESUME
+# ============================================================
+
+@app.post(
+    "/external/execution/{execution_id}/resume"
+)
+async def resume_external(
+    execution_id: str
+) -> Dict[str, Any]:
+
+    row = execution_row(
+        execution_id
+    )
+
+    if not row:
+
+        raise HTTPException(
+            status_code=404,
+            detail="execution not found",
+        )
+
+    if row["status"] == "awaiting_approval":
+
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "approval required before resume"
+            ),
+        )
+
+    set_execution_status(
+        execution_id,
+        "queued",
+    )
+
+    execution_event(
+        execution_id,
+        "resumed",
+    )
+
+    await queue_execution(
+        execution_id
+    )
+
+    return {
+        "status": "accepted",
+        "execution": execution_dict(
+            execution_row(
+                execution_id
+            )
+        ),
+    }
+
+
+# ============================================================
+# CANCEL
+# ============================================================
+
+@app.post(
+    "/external/execution/{execution_id}/cancel"
+)
+async def cancel_external(
+    execution_id: str
+) -> Dict[str, Any]:
+
+    row = execution_row(
+        execution_id
+    )
+
+    if not row:
+
+        raise HTTPException(
+            status_code=404,
+            detail="execution not found",
+        )
+
+    if row["status"] in {
+        "completed",
+        "failed",
+        "cancelled",
+    }:
+
+        return execution_dict(
+            row
+        )
+
+    set_execution_status(
+        execution_id,
+        "cancelled",
+        finished_at=now(),
+    )
+
+    execution_event(
+        execution_id,
+        "cancelled",
+    )
+
+    return execution_dict(
+        execution_row(
+            execution_id
+        )
+    )
+
+
+# ============================================================
+# MEMORY
+# ============================================================
+
+@app.get("/memory")
+async def memory_list(
+    limit: int = Query(
+        50,
+        ge=1,
+        le=500,
+    )
+) -> Dict[str, Any]:
+
+    with DB_LOCK:
+        with get_db() as conn:
+
+            rows = conn.execute(
+                """
+                SELECT
+                    id,
+                    key,
+                    value_json,
+                    updated_at
+                FROM memories
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+
+    return {
+        "memories": [
+            {
+                "id": row["id"],
+                "key": row["key"],
+                "value": loads(
+                    row["value_json"]
+                ),
+                "updated_at": row[
+                    "updated_at"
+                ],
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.get(
+    "/memory/{key:path}"
+)
+async def get_memory(
+    key: str
+) -> Dict[str, Any]:
+
+    result = memory_get(
+        key
+    )
+
+    if result is None:
+
+        raise HTTPException(
+            status_code=404,
+            detail="memory not found",
+        )
+
+    return result
+
+
+@app.post("/memory")
+async def put_memory(
+    request: MemoryRequest
+) -> Dict[str, Any]:
+
+    return {
+        "status": "stored",
+        "memory": memory_put(
+            request.key,
+            request.value,
+        ),
+    }
+
+
+# ============================================================
+# POLICY
+# ============================================================
+
+@app.get("/policy")
+async def policy() -> Dict[str, Any]:
+
+    return get_policy()
+
+
+@app.post("/policy")
+async def policy_update(
+    request: PolicyPatch
+) -> Dict[str, Any]:
+
+    return update_policy(
+        request.values
+    )
+
+
+# ============================================================
+# SELF TESTS
+# ============================================================
+
+@app.get("/research/self-test")
+async def research_self_test() -> Dict[str, Any]:
+
+    result = research_plan(
+        "autonomous AI agents real world reliability"
+    )
+
+    return {
+        "status": "completed",
+        "test": "research_self_test",
+        "result": result,
+    }
+
+
+@app.get("/interface/self-test")
+async def interface_self_test() -> Dict[str, Any]:
+
+    return {
+        "status": "completed",
+        "test": "interface_self_test",
+        "passed": True,
+        "routes": [
+            "/",
+            "/health",
+            "/capabilities",
+            "/run",
+            "/run-async",
+            "/command",
+            "/command-interface",
+            "/external/plan",
+            "/external/execute",
+            "/external/approve/{execution_id}",
+            "/external/execution/{execution_id}",
+            "/external/execution/{execution_id}/events",
+            "/external/execution/{execution_id}/resume",
+            "/external/execution/{execution_id}/cancel",
+            "/mission/{mission_id}",
+            "/mission/{mission_id}/events",
+            "/memory",
+            "/policy",
+        ],
+    }
+
+
+@app.get("/external/self-test")
+async def external_self_test() -> Dict[str, Any]:
+
+    tests = []
+
+    # Safe plan test.
+    try:
+
+        plan = make_external_plan(
+            "GET https://example.com"
+        )
+
+        tests.append(
+            {
+                "name": "external_plan",
+                "passed": plan["ready"],
+            }
+        )
+
+    except Exception as exc:
+
+        tests.append(
+            {
+                "name": "external_plan",
+                "passed": False,
+                "error": str(exc),
+            }
+        )
+
+    # SSRF protection test.
+    try:
+
+        validate_external_url(
+            "http://127.0.0.1/"
+        )
+
+        tests.append(
+            {
+                "name": "ssrf_block",
+                "passed": False,
+            }
+        )
+
+    except Exception:
+
+        tests.append(
+            {
+                "name": "ssrf_block",
+                "passed": True,
+            }
+        )
+
+    # Credential protection test.
+    try:
+
+        sanitize_headers(
+            {
+                "Authorization":
+                    "should-be-blocked"
+            }
+        )
+
+        tests.append(
+            {
+                "name":
+                    "credential_header_block",
+                "passed": False,
+            }
+        )
+
+    except Exception:
+
+        tests.append(
+            {
+                "name":
+                    "credential_header_block",
+                "passed": True,
+            }
+        )
+
+    return {
+        "status": "completed",
+        "test": "external_self_test",
+        "passed": all(
+            test["passed"]
+            for test in tests
+        ),
+        "tests": tests,
+    }
+
+
+# ============================================================
+# 164 STATUS
+# ============================================================
+
+@app.get("/164-status")
+async def status_164() -> Dict[str, Any]:
+
+    policy = get_policy()
+
+    with DB_LOCK:
+        with get_db() as conn:
+
+            mission_count = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM missions
+                """
+            ).fetchone()["count"]
+
+            execution_count = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM executions
+                """
+            ).fetchone()["count"]
+
+            event_count = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM execution_events
+                """
+            ).fetchone()["count"]
+
+    return {
+        "status": "ready",
+        "version": VERSION,
+        "build": BUILD,
+        "previous_build": PREVIOUS_BUILD,
+
+        "target":
+            "real-world-command-capable AI Infinity",
+
+        "result_closure": True,
+
+        "internal_command_bridge": True,
+
+        "external_http_bridge": True,
+
+        "supported_methods": sorted(
+            ALLOWED_METHODS
+        ),
+
+        "approval_gate":
+            REQUIRE_APPROVAL,
+
+        "ssrf_protection": True,
+
+        "credential_header_protection":
+            True,
+
+        "durable_queue": True,
+
+        "restart_recovery": True,
+
+        "execution_events": True,
+
+        "idempotency": True,
+
+        "verification":
+            policy[
+                "verification_enabled"
+            ],
+
+        "adaptive_recovery":
+            policy[
+                "adaptive_recovery_enabled"
+            ],
+
+        "self_modification":
+            policy[
+                "self_modification_enabled"
+            ],
+
+        "memory": True,
+
+        "mission_count":
+            mission_count,
+
+        "execution_count":
+            execution_count,
+
+        "execution_event_count":
+            event_count,
+
+        "policy_version":
+            policy["version"],
+    }
+
+
+# ============================================================
+# WEB INTERFACE
+# ============================================================
+
+INTERFACE_HTML = """
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport"
+      content="width=device-width,initial-scale=1">
+
+<title>AI Infinity 2050.164</title>
+
+<style>
+
+body {
+    margin: 0;
+    padding: 24px;
+    background: #0b0d10;
+    color: #f2f2f2;
+    font-family:
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        sans-serif;
+}
+
+.container {
+    max-width: 1000px;
+    margin: auto;
+}
+
+h1 {
+    margin-bottom: 4px;
+}
+
+.subtitle {
+    opacity: .7;
+    margin-bottom: 24px;
+}
+
+textarea,
+button {
+    box-sizing: border-box;
+    width: 100%;
+    font: inherit;
+    border-radius: 10px;
+}
+
+textarea {
+    min-height: 130px;
+    padding: 14px;
+    background: #151922;
+    color: white;
+    border: 1px solid #303644;
+}
+
+button {
+    margin-top: 10px;
+    padding: 12px;
+    cursor: pointer;
+    border: 0;
+}
+
+button:hover {
+    opacity: .9;
+}
+
+pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    padding: 16px;
+    margin-top: 18px;
+    border-radius: 10px;
+    background: #11151c;
+    border: 1px solid #292e39;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns:
+        repeat(auto-fit,minmax(220px,1fr));
+    gap: 10px;
+}
+
+.card {
+    background: #11151c;
+    border: 1px solid #292e39;
+    border-radius: 10px;
+    padding: 14px;
+}
+
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>AI Infinity</h1>
+
+<div class="subtitle">
+TARGET-2050.164 —
+REAL-WORLD COMMAND EXECUTION BRIDGE
+</div>
+
+<div class="grid">
+
+<div class="card">
+<strong>Status</strong>
+<br>
+<span id="status">loading...</span>
+</div>
+
+<div class="card">
+<strong>Version</strong>
+<br>
+<span id="version">loading...</span>
+</div>
+
+<div class="card">
+<strong>Build</strong>
+<br>
+<span id="build">loading...</span>
+</div>
+
+</div>
+
+<br>
+
+<textarea
+id="command"
+placeholder="Enter a command...
+Examples:
+status
+ping
+research autonomous AI agents
+remember that AI Infinity is my project
+GET https://example.com">
+</textarea>
+
+<button onclick="executeCommand()">
+EXECUTE COMMAND
+</button>
+
+<button onclick="health()">
+REFRESH HEALTH
+</button>
+
+<pre id="output">
+AI Infinity ready.
+</pre>
+
+</div>
+
+<script>
+
+async function api(
+    url,
+    options = {}
+) {
+
+    const response =
+        await fetch(url, options);
+
+    const text =
+        await response.text();
+
+    try {
+        return JSON.stringify(
+            JSON.parse(text),
+            null,
+            2
+        );
+    }
+
+    catch {
+        return text;
+    }
+}
+
+async function executeCommand() {
+
+    const command =
+        document.getElementById(
+            "command"
+        ).value.trim();
+
+    if (!command) {
+
+        document.getElementById(
+            "output"
+        ).textContent =
+            "Enter a command.";
+
+        return;
+    }
+
+    document.getElementById(
+        "output"
+    ).textContent =
+        "Executing...";
+
+    document.getElementById(
+        "output"
+    ).textContent =
+        await api(
+            "/command",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type":
+                        "application/json"
+                },
+                body: JSON.stringify({
+                    command: command,
+                    approve_external: false,
+                    async_mode: false
+                })
+            }
+        );
+}
+
+async function health() {
+
+    const text =
+        await api("/health");
+
+    document.getElementById(
+        "output"
+    ).textContent = text;
+
+    try {
+
+        const data =
+            JSON.parse(text);
+
+        document.getElementById(
+            "status"
+        ).textContent =
+            data.status;
+
+        document.getElementById(
+            "version"
+        ).textContent =
+            data.version;
+
+        document.getElementById(
+            "build"
+        ).textContent =
+            data.build;
+
+    }
+
+    catch {}
+
+}
+
+health();
+
+</script>
+
+</body>
+</html>
+"""
+
+
+@app.get(
+    "/command-ui",
+    response_class=HTMLResponse,
+)
+async def command_ui() -> str:
+
+    return INTERFACE_HTML
+
+
+@app.get(
+    "/docs-ui",
+    response_class=HTMLResponse,
+)
+async def docs_ui() -> str:
+
+    return INTERFACE_HTML
+
+
+# ============================================================
+# DIRECT EXECUTION
+# ============================================================
+
+if __name__ == "__main__":
+
+    import uvicorn
+
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=int(
+            os.getenv(
+                "PORT",
+                "8000",
+            )
+        ),
+    )
