@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: ai-infinity
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: AI_INFINITY_OPERATOR_TOKEN
+        sync: false
+      - key: AI_INFINITY_DATA_DIR
+        value: /tmp/ai-infinity
+      - key: AI_INFINITY_WORKSPACE
+        value: /tmp/ai-infinity/workspace
