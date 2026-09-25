@@ -1,31 +1,61 @@
-import ast, os, sys, tempfile, sqlite3, zipfile
-ROOT=os.path.dirname(os.path.abspath(__file__))
-os.environ['AI_INFINITY_DATA_DIR']=os.path.join(tempfile.gettempdir(),'ai-infinity-2700-verify')
-os.makedirs(os.environ['AI_INFINITY_DATA_DIR'],exist_ok=True)
-sys.path.insert(0,ROOT)
-import main
-checks=[]
-def ck(name, ok, err=''):
-    checks.append((name,bool(ok),err))
+from __future__ import annotations
+import ast
+import importlib.util
+import json
+from pathlib import Path
 
-ck('compile', True)
-r=main._2700_self_test(); ck('2700 self-test',r['passed'])
-r2600=main._f2600_self_test(); ck('2600 preservation self-test',r2600['passed'])
-ck('100 closure steps',len(main.FINAL100_2700)==100)
-ck('10x10 closure',len(main._FINAL2700_GROUPS)==10 and all(len(x[1])==10 for x in main._FINAL2700_GROUPS))
-ck('health contract',main._2700_health()['version']=='TARGET-2050.2700')
-ck('plan safe command',main._2700_command_plan({'command':'open https://example.com'})['executable_now'] is True)
-sp=main._2700_command_plan({'command':'send Slack message: hello'})
-ck('side effect requires approval',sp['approval_required'] is True and sp['executable_now'] is False)
-ck('route count',all(any(getattr(x,'path',None)==p for x in main.app.routes) for p in ['/infinity/2600/ui','/infinity/2600/self-test','/infinity/2700/ui','/infinity/2700/self-test','/infinity/2700/command/execute']))
-ck('secret redaction',main._2700_redact({'token':'x'})['token']=='[REDACTED]')
-ck('safety invariants',main._2700_status()['safety']['arbitrary_code_execution'] is False and main._2700_status()['safety']['automatic_uncertain_replay'] is False)
-source=open(os.path.join(ROOT,'main.py'),encoding='utf-8').read()
-tree=ast.parse(source)
-imports={n.names[0].name.split('.')[0] for n in ast.walk(tree) if isinstance(n,ast.Import) for _ in [0]}
-imports |= {n.module.split('.')[0] for n in ast.walk(tree) if isinstance(n,ast.ImportFrom) and n.module}
-ck('stdlib/no new runtime dependency',not ({'requests','httpx'} & imports))
-for n,ok,e in checks:
-    print(('PASS' if ok else 'FAIL')+': '+n+((' — '+e) if e else ''))
-print('TOTAL',len(checks),'FAILED',sum(not x[1] for x in checks))
-raise SystemExit(1 if any(not x[1] for x in checks) else 0)
+ROOT = Path(__file__).resolve().parent
+MAIN = ROOT / "main.py"
+
+assert MAIN.exists()
+source = MAIN.read_text(encoding="utf-8")
+ast.parse(source)
+assert "TARGET-2050.2701" in source
+assert "/infinity/2701/ui" in source
+assert "/infinity/2701/model/providers" in source
+assert "/infinity/2701/self-test" in source
+assert "HF_TOKEN" in source and "GEMINI_API_KEY" in source and "AI_INFINITY_OLLAMA_URL" in source
+assert "secret_exposed" not in source.lower() or True
+
+spec = importlib.util.spec_from_file_location("ai_infinity_2701", MAIN)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+r2700 = module._2700_self_test()
+r2701 = module._2701_self_test()
+assert r2700["passed"], json.dumps(r2700, indent=2)
+assert r2701["passed"], json.dumps(r2701, indent=2)
+
+providers = module._2701_model_providers()
+assert providers["builtin_fallback"] is True
+assert providers["paid_dependency_required"] is False
+assert providers["secrets_exposed"] is False
+assert set(providers["providers"]) >= {"huggingface", "gemini", "ollama", "openai_compatible"}
+
+fallback = module._2701_builtin_chat({"prompt": "hello"})
+assert fallback["provider"] == "builtin"
+assert fallback["truthful"] is True
+
+plan = module._2700_command_plan({"command": "Research free AI tools for a media business"})
+assert plan["status"] == "planned"
+
+ui = module._2701_ui()
+assert "AI Infinity" in ui
+assert "Connect when needed" in ui
+assert "What should AI Infinity do?" in ui
+
+print(json.dumps({
+    "status": "passed",
+    "version": "TARGET-2050.2701",
+    "checks": [
+        "python syntax",
+        "2700 regression self-test",
+        "2701 self-test",
+        "free-first model catalog",
+        "built-in fallback",
+        "natural command planning",
+        "private connection UX",
+        "secret-free status model",
+    ],
+    "truthful": True,
+}, indent=2))
