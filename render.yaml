@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: ai-infinity
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: AI_INFINITY_OWNER_EMAIL
+        value: aurlooij@gmail.com
+      - key: AI_INFINITY_OWNER_NAME
+        value: AI Infinity Owner
+      - key: AI_INFINITY_DATA_DIR
+        value: /tmp/ai-infinity
