@@ -5,7 +5,7 @@ services:
     plan: free
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    healthCheckPath: /infinity/health
+    healthCheckPath: /health
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
