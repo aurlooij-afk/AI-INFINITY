@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: ai-infinity
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /infinity/3000/health
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PYTHONDONTWRITEBYTECODE
+        value: "1"
+      - key: PORT
+        value: "10000"
+      - key: AI_INFINITY_DATA_DIR
+        value: /tmp/ai-infinity
