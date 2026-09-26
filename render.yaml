@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: ai-infinity
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: AI_INFINITY_DATA_DIR
+        value: /tmp/ai-infinity
+      - key: AI_INFINITY_PUBLIC_ORIGIN
+        value: https://ai-infinity-ca5e.onrender.com
+      - key: AI_INFINITY_HF_MODEL
+        value: openai/gpt-oss-120b:fastest
+      - key: AI_INFINITY_OPERATOR_TOKEN
+        sync: false
+      - key: AI_INFINITY_WALLET_KEY
+        sync: false
+      - key: HF_TOKEN
+        sync: false
+      - key: AI_INFINITY_OPPORTUNITY_FEEDS
+        value: ""
+      - key: AI_INFINITY_ACTION_HOST_ALLOWLIST
+        value: ""
