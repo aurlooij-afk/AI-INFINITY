@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: ai-infinity
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    healthCheckPath: /infinity/3601/health
+    envVars:
+      - key: AI_INFINITY_DATA_DIR
+        value: /tmp/ai-infinity
+      - key: AI_INFINITY_3601_BACKGROUND
+        value: "true"
