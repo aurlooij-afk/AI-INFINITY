@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: ai-infinity
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    healthCheckPath: /infinity/2902/health
