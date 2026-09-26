@@ -1,61 +1,112 @@
 from __future__ import annotations
-import ast
+
 import importlib.util
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 MAIN = ROOT / "main.py"
 
-assert MAIN.exists()
-source = MAIN.read_text(encoding="utf-8")
-ast.parse(source)
-assert "TARGET-2050.2701" in source
-assert "/infinity/2701/ui" in source
-assert "/infinity/2701/model/providers" in source
-assert "/infinity/2701/self-test" in source
-assert "HF_TOKEN" in source and "GEMINI_API_KEY" in source and "AI_INFINITY_OLLAMA_URL" in source
-assert "secret_exposed" not in source.lower() or True
 
-spec = importlib.util.spec_from_file_location("ai_infinity_2701", MAIN)
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
+def fail(message: str) -> None:
+    raise SystemExit(f"VERIFY FAILED: {message}")
 
-r2700 = module._2700_self_test()
-r2701 = module._2701_self_test()
-assert r2700["passed"], json.dumps(r2700, indent=2)
-assert r2701["passed"], json.dumps(r2701, indent=2)
 
-providers = module._2701_model_providers()
-assert providers["builtin_fallback"] is True
-assert providers["paid_dependency_required"] is False
-assert providers["secrets_exposed"] is False
-assert set(providers["providers"]) >= {"huggingface", "gemini", "ollama", "openai_compatible"}
+def main() -> int:
+    subprocess.run([sys.executable, "-m", "py_compile", str(MAIN)], check=True)
 
-fallback = module._2701_builtin_chat({"prompt": "hello"})
-assert fallback["provider"] == "builtin"
-assert fallback["truthful"] is True
+    spec = importlib.util.spec_from_file_location("ai_infinity_2800_verify", MAIN)
+    if spec is None or spec.loader is None:
+        fail("could not load main.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
 
-plan = module._2700_command_plan({"command": "Research free AI tools for a media business"})
-assert plan["status"] == "planned"
+    checks: list[str] = []
 
-ui = module._2701_ui()
-assert "AI Infinity" in ui
-assert "Connect when needed" in ui
-assert "What should AI Infinity do?" in ui
+    r2700 = module._2700_self_test()
+    if not r2700.get("passed"):
+        fail("2700 regression self-test failed")
+    checks.append("2700 regression self-test")
 
-print(json.dumps({
-    "status": "passed",
-    "version": "TARGET-2050.2701",
-    "checks": [
-        "python syntax",
-        "2700 regression self-test",
-        "2701 self-test",
-        "free-first model catalog",
-        "built-in fallback",
-        "natural command planning",
-        "private connection UX",
-        "secret-free status model",
-    ],
-    "truthful": True,
-}, indent=2))
+    r2701 = module._2701_self_test()
+    if not r2701.get("passed"):
+        fail("2701 regression self-test failed")
+    checks.append("2701 regression self-test")
+
+    r2800 = module.final_2800_self_test()
+    if not r2800.get("passed"):
+        fail("2800 self-test failed: " + json.dumps(r2800, ensure_ascii=False))
+    checks.append("2800 self-test")
+
+    health = module.final_health()
+    if health.get("version") != "TARGET-2050.2800":
+        fail("final health version mismatch")
+    if health.get("truthful") is not True:
+        fail("final health is not truthful")
+    if not health.get("interface", {}).get("desktop") or not health.get("interface", {}).get("mobile"):
+        fail("responsive interface flags missing")
+    checks.append("final health")
+
+    ui = module.FINAL_INFINITY_UI
+    required_ui = [
+        "Home", "Chat", "Command", "Plans", "Missions", "Work", "Create",
+        "Memory", "Connections", "Settings", "SpeechRecognition", "speechSynthesis",
+        "Media Studio", "openMore()", "loadActivity", "#F8F8F5", "/infinity/2800/health",
+    ]
+    missing = [x for x in required_ui if x not in ui]
+    if missing:
+        fail("UI missing: " + ", ".join(missing))
+    if "sessionStorage.setItem('aiInfinityToken'" in ui or 'sessionStorage.setItem("aiInfinityToken"' in ui:
+        fail("operator token is persisted in browser storage")
+    checks.append("desktop/mobile workspace UI")
+
+    chat = module.final_chat(module.FinalChatRequest(message="Hello AI Infinity"))
+    if chat.get("status") != "completed" or chat.get("truthful") is not True:
+        fail("built-in chat fallback failed")
+    if not chat.get("message"):
+        fail("chat returned empty response")
+    checks.append("chat fallback")
+
+    mem = module.final_memory_add(module.FinalMemoryRequest(text="TARGET-2050.2800 verification"))
+    if mem.get("status") != "stored":
+        fail("memory store failed")
+    checks.append("persistent memory")
+
+    conn = module.final_connections()
+    if conn.get("truthful") is not True:
+        fail("connection response not marked truthful")
+    if "aiInfinityToken" in json.dumps(conn, ensure_ascii=False):
+        fail("connection payload contains browser token")
+    checks.append("secret-safe connections")
+
+    paths = {getattr(route, "path", "") for route in module.app.routes}
+    for path in [
+        "/infinity/2800/health",
+        "/infinity/2800/self-test",
+        "/infinity/final/ui",
+        "/infinity/final/chat",
+        "/infinity/final/command/plan",
+        "/infinity/final/command/execute",
+        "/infinity/final/mission/start",
+        "/infinity/final/media",
+        "/infinity/final/connections",
+    ]:
+        if path not in paths:
+            fail(f"missing route {path}")
+    checks.append("route catalog")
+
+    print(json.dumps({
+        "status": "passed",
+        "version": module.FINAL_INFINITY_VERSION,
+        "build": module.FINAL_INFINITY_BUILD,
+        "checks": checks,
+        "truthful": True,
+    }, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
