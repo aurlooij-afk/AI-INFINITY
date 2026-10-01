@@ -13,6 +13,6 @@ ENV PYTHONUNBUFFERED=1 \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py ./
-COPY ai_infinity_bridge.py ./
+
 EXPOSE 10000
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000} --workers 1"]
