@@ -1,0 +1,8 @@
+fastapi>=0.128,<1
+uvicorn[standard]>=0.48,<1
+pydantic>=2.13,<3
+cryptography>=46,<47
+pytest>=8,<9
+Pillow>=11,<13
+edge-tts>=7,<8
+huggingface_hub>=0.35,<1
