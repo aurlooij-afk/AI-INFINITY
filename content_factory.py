@@ -183,7 +183,9 @@ def _assemble(visuals, narration, music, captions, out, duration):
     if not visuals: raise RuntimeError('No real motion-video source was available. Configure PEXELS_API_KEY/PIXABAY_API_KEY or allow Wikimedia Commons video retrieval.')
     # Use narration as the timing authority; trim visuals to its duration and burn captions.
     filt='[1:a]volume=1.0[vo];[2:a]volume=0.14[m];[vo][m]amix=inputs=2:duration=first:dropout_transition=2[a]'
-    _ffmpeg('-i',visuals,'-i',narration,'-i',music,'-filter_complex',filt,'-map','0:v:0','-map','[a]','-vf',f"subtitles={str(captions).replace('\\','/').replace(':','\\:')}",'-t',duration,'-c:v','libx264','-preset','medium','-crf','19','-c:a','aac','-b:a','192k','-movflags','+faststart',out,timeout=600)
+    subtitle_path=str(captions).replace('\\','/').replace(':','\\:')
+    subtitle_filter=f"subtitles={subtitle_path}"
+    _ffmpeg('-i',visuals,'-i',narration,'-i',music,'-filter_complex',filt,'-map','0:v:0','-map','[a]','-vf',subtitle_filter,'-t',duration,'-c:v','libx264','-preset','medium','-crf','19','-c:a','aac','-b:a','192k','-movflags','+faststart',out,timeout=600)
 
 def create_project(req: dict, model_fn=None):
     fmt=str(req.get('format','long')).lower(); fmt='short' if fmt in {'short','reel','tiktok','shorts'} else 'long'
