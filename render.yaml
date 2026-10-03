@@ -1,0 +1,77 @@
+services:
+  - type: web
+    name: ai-infinity
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /infinity/studio/health
+    envVars:
+      - key: AI_INFINITY_DATA_DIR
+        value: /tmp/ai-infinity
+      - key: AI_INFINITY_OWNER_EMAIL
+        value: aurlooijlooij@gmail.com
+      - key: AI_INFINITY_OWNER_NAME
+        value: AI Infinity Owner
+      - key: AI_INFINITY_OPERATOR_TOKEN
+        sync: false
+      - key: AI_INFINITY_SESSION_SECRET
+        generateValue: true
+      - key: AI_INFINITY_VAULT_KEY
+        generateValue: true
+      - key: AI_INFINITY_AUTO_APPLY
+        value: "false"
+      - key: AI_INFINITY_3601_BACKGROUND
+        value: "true"
+      - key: AI_INFINITY_PUBLIC_URL
+        value: https://ai-infinity-ca5e.onrender.com
+      - key: AI_INFINITY_PAYMENT_WEBHOOK_SECRET
+        sync: false
+      - key: AI_INFINITY_PAYOUT_SUBMIT_URL
+        sync: false
+      - key: AI_INFINITY_PAYOUT_API_KEY
+        sync: false
+      - key: AI_INFINITY_CRON_TOKEN
+        sync: false
+      - key: AI_INFINITY_GITHUB_TOKEN
+        sync: false
+      - key: AI_INFINITY_GITHUB_REPO
+        sync: false
+      - key: AI_INFINITY_GITHUB_PATH
+        value: ai-infinity-state.json
+      - key: AI_INFINITY_GITHUB_BRANCH
+        value: main
+      - key: HF_TOKEN
+        sync: false
+      - key: HUGGINGFACEHUB_API_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: AI_INFINITY_MODEL_API_KEY
+        sync: false
+      - key: AI_INFINITY_MODEL_BASE_URL
+        sync: false
+      - key: AI_INFINITY_HF_MODEL
+        sync: false
+      - key: AI_INFINITY_LLM_BASE_URL
+        sync: false
+      - key: AI_INFINITY_OLLAMA_URL
+        sync: false
+      - key: AI_INFINITY_FAST_MODE
+        value: "1"
+      - key: AI_INFINITY_EDGE_TTS_TIMEOUT
+        value: "2"
+      - key: AI_INFINITY_AI_VIDEO
+        value: "0"
+      - key: AI_INFINITY_AI_VIDEO_SCENES
+        value: "2"
+      - key: AI_INFINITY_VIDEO_MODEL
+        value: Wan-AI/Wan2.1-T2V-1.3B
+      - key: AI_INFINITY_BURN_CAPTIONS
+        value: "0"
+      - key: PEXELS_API_KEY
+        sync: false
+      - key: PIXABAY_API_KEY
+        sync: false
