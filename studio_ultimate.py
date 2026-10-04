@@ -3477,10 +3477,64 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         tool=next((x for x in MULTIMODAL_TOOLS_3621 if x["id"]==tool_id),None)
         if not tool: raise HTTPException(404,"tool not found")
         objective=str(payload.get("objective") or payload.get("title") or "").strip()
-        if not objective: raise HTTPException(422,"objective is required")
+        if not objective and tool_id not in {"repurpose"}:
+            raise HTTPException(422,"objective is required")
+
+        # Never advertise a proprietary integration as live when its provider is
+        # not configured. The user gets a precise readiness state instead.
+        if tool.get("status") in {"adapter-dependent","extensible"}:
+            return {
+                "tool":tool,
+                "status":"provider_required" if tool.get("status")=="adapter-dependent" else "extension_required",
+                "message":"This capability is exposed in the workspace but its external renderer/provider is not configured.",
+                "configuration_route":"/infinity/studio/connections",
+                "truthful":True
+            }
+
+        # Repurpose is a real operation over a completed project master.
+        if tool_id=="repurpose":
+            base_id=str(payload.get("project_id") or "").strip()
+            if base_id:
+                p=_get_project(base_id)
+            else:
+                p=next((x for x in _project_list(user_id,100) if x.get("status") in {"completed","completed_with_qc_warnings"}),None)
+                base_id=str(p.get("project_id") or "") if p else ""
+            if not p or p.get("user_id")!=user_id:
+                raise HTTPException(404,"completed source project not found")
+            if p.get("status") not in {"completed","completed_with_qc_warnings"}:
+                raise HTTPException(409,"source project is not finished")
+            master=_project_dir(base_id)/"final.mp4"
+            if not master.exists():
+                raise HTTPException(404,"source master video not found")
+            result=p.get("result_json") if isinstance(p.get("result_json"),dict) else json.loads(p.get("result_json") or "{}")
+            blueprint=p.get("blueprint_json") if isinstance(p.get("blueprint_json"),dict) else {}
+            if not blueprint:
+                try: blueprint=json.loads(p.get("blueprint_json") or "{}")
+                except Exception: blueprint={}
+            chapters=((blueprint.get("chapters") if isinstance(blueprint,dict) else None) or
+                      (blueprint.get("plan",{}).get("chapters") if isinstance(blueprint,dict) and isinstance(blueprint.get("plan"),dict) else None) or [])
+            title=str(result.get("title") or p.get("title") or "AI Infinity")
+            variants=make_variants(master,_project_dir(base_id),chapters,title)
+            saved=[]
+            for v in variants:
+                vp=Path(v["path"])
+                if vp.exists():
+                    _save_asset(base_id,"short",vp,"video/mp4",v)
+                    register_artifact(base_id,vp,"video/mp4")
+                    saved.append({"title":v.get("title"),"format":v.get("format") or "9:16","duration":v.get("duration"),"download_url":f"/infinity/studio/project/{base_id}/asset/{vp.name}"})
+            audit_event(base_id,"repurpose_completed",{"variant_count":len(saved)})
+            return {"tool":tool,"status":"completed","project_id":base_id,"source_master":f"/infinity/studio/project/{base_id}/asset/final.mp4","variants":saved,"truthful":True}
+
+        if tool_id in {"web-to-video","document-to-show"}:
+            urls=re.findall(r'https?://[^\s<>"\'()]+',objective)
+            if urls:
+                req_urls=list(dict.fromkeys(urls))[:12]
+                payload=dict(payload); payload["reference_urls"]=list(dict.fromkeys((payload.get("reference_urls") or [])+req_urls))[:12]
+
         if tool_id=="text": ct="article"
+        elif tool_id=="document-to-show": ct="podcast"
         else: ct="video"
-        req=dict(payload); req["content_type"]=ct; req.setdefault("title",objective); req.setdefault("objective",objective); req.setdefault("topic",objective)
+        req=dict(payload); req["content_type"]=ct; req.setdefault("title",objective or "Repurposed content"); req.setdefault("objective",objective or "Repurpose the latest completed project"); req.setdefault("topic",objective or "AI Infinity content")
         return {"tool":tool,"result":enqueue(req,user_id,model_fn),"truthful":True}
 
     @app.get("/infinity/studio/production-flow")
