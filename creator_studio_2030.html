@@ -3,203 +3,277 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#07100d">
-<title>AI Infinity — Creator Command Center</title>
+<meta name="theme-color" content="#06080c">
+<meta name="description" content="AI Infinity — a free-first professional creator operating system.">
+<title>AI Infinity — Creator OS</title>
 <style>
 :root{
-  --bg:#050806;--surface:#0a100d;--surface2:#0e1713;--surface3:#121d18;
-  --line:#1c2a23;--line2:#2a3b31;--text:#f4f8f5;--muted:#a4b1a9;--dim:#6e7d74;
-  --accent:#baf58d;--accent2:#84f0c0;--blue:#9cc4ff;--warn:#f2d07d;--bad:#ff98a8;
-  --r:20px;--shadow:0 28px 90px rgba(0,0,0,.45)
+ --bg:#05070b;--panel:#0b0f15;--panel2:#0e131b;--panel3:#111824;--line:#202938;--line2:#2c394c;
+ --text:#f5f7fb;--muted:#9ba8ba;--dim:#667386;--green:#a8f46e;--mint:#76e5c2;--blue:#8eb8ff;--amber:#f4cb70;--red:#ff8498;
+ --shadow:0 26px 90px rgba(0,0,0,.38);--radius:20px;--rail:74px
 }
-*{box-sizing:border-box}html,body{margin:0;background:
-radial-gradient(circle at 15% -5%,rgba(132,240,192,.09),transparent 30%),
-radial-gradient(circle at 86% 3%,rgba(156,196,255,.08),transparent 28%),
-linear-gradient(180deg,#06100a,#040604 70%);color:var(--text);
-font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:
+ radial-gradient(circle at 18% -8%,rgba(118,229,194,.09),transparent 30%),
+ radial-gradient(circle at 86% 0,rgba(142,184,255,.09),transparent 26%),
+ linear-gradient(180deg,#070a10 0,#05070b 55%,#040509 100%);
+ color:var(--text);font:14px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 button,input,textarea,select{font:inherit}button{cursor:pointer}a{color:inherit}
-.shell{min-height:100vh}.top{position:sticky;top:0;z-index:50;height:70px;
-display:flex;align-items:center;justify-content:space-between;gap:14px;padding:0 22px;
-background:rgba(5,9,7,.9);backdrop-filter:blur(24px);border-bottom:1px solid var(--line)}
-.brand{display:flex;align-items:center;gap:12px}.logo{width:38px;height:38px;border-radius:13px;display:grid;place-items:center;
-background:linear-gradient(145deg,#18271f,#0b110d);border:1px solid #34463b;font-weight:950;font-size:21px}
-.brandName{font-size:15px;font-weight:950}.brandSub{font-size:10px;color:var(--dim);margin-top:1px}
-.topRight{display:flex;align-items:center;gap:8px}.live{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:11px}
-.live i{width:8px;height:8px;border-radius:50%;background:#7de6ad;box-shadow:0 0 0 4px rgba(125,230,173,.08),0 0 18px rgba(125,230,173,.25)}
-.pill{border:1px solid var(--line2);background:#0b130f;color:#c9d6cf;border-radius:999px;padding:7px 10px;font-size:10px}
-.pill.free{color:var(--accent2);border-color:#29493c}.btn{border:1px solid #2b3b32;background:#111a15;color:#edf4ef;
-border-radius:12px;padding:10px 13px}.btn:hover{background:#16221b;border-color:#42574a}.btn.primary{background:var(--accent);color:#071007;border-color:#d9ffc0;font-weight:950}
-.btn.ghost{background:transparent}.btn.warn{color:var(--warn)}.btn.danger{color:var(--bad)}
-.wrap{max-width:1540px;margin:0 auto;padding:24px}.hero{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(310px,.75fr);gap:16px}
-.commandCard{border:1px solid #2d4b3d;border-radius:26px;padding:22px;background:
-linear-gradient(145deg,rgba(18,33,26,.96),rgba(8,13,10,.97) 65%);box-shadow:var(--shadow)}
-.eyebrow{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:#8b9b91;font-weight:950}
-h1{font-size:clamp(38px,5.8vw,72px);line-height:.95;letter-spacing:-.06em;margin:9px 0 13px;max-width:1000px}
-h2,h3{letter-spacing:-.03em}.lead{color:#bac6bf;max-width:820px;font-size:15px}
-.command{width:100%;min-height:180px;resize:vertical;border:1px solid #33473b;border-radius:17px;background:#060a08;color:#f7fbf8;
-padding:17px;outline:none;font-size:15px;line-height:1.6}.command:focus{border-color:#718c7c;box-shadow:0 0 0 4px rgba(132,240,192,.06)}
-.examples{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}.example{border:1px solid #24362c;background:#0b130f;color:#aebdb4;border-radius:999px;
-padding:7px 10px;font-size:10px}.example:hover{color:#fff;border-color:#405647}
-.controls{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-top:11px}.field,.select{width:100%;padding:10px 11px;border:1px solid var(--line);background:#09100c;color:#eef5f0;border-radius:11px;outline:none}
-.field:focus,.select:focus{border-color:#5b7365}.label{display:grid;gap:5px}.label span{font-size:9px;color:var(--dim);font-weight:800;text-transform:uppercase;letter-spacing:.08em}
-.actionRow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}.hint{font-size:10px;color:var(--dim)}
-.rightStack{display:grid;gap:12px}.card{background:linear-gradient(180deg,rgba(14,22,18,.95),rgba(8,12,10,.96));border:1px solid var(--line);border-radius:var(--r);box-shadow:0 18px 55px rgba(0,0,0,.24)}
-.cardPad{padding:16px}.statRow{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.stat{padding:13px;border:1px solid var(--line);border-radius:14px;background:#08100b}
-.stat span{font-size:9px;color:var(--dim);display:block}.stat b{font-size:20px;display:block;margin-top:3px}
-.freeBox{padding:14px;border-radius:15px;background:linear-gradient(145deg,#0d1912,#09100c);border:1px solid #2b4639}
-.freeBox b{display:block;font-size:13px}.freeBox p{margin:5px 0 0;color:#91a097;font-size:11px}
-.quickGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.quick{padding:11px;border:1px solid var(--line);background:#0a120d;border-radius:13px;text-align:left;color:#d7e1db}
-.quick b{display:block;font-size:11px}.quick span{display:block;color:var(--dim);font-size:9px;margin-top:2px}
-.workspace{margin-top:16px;display:grid;grid-template-columns:minmax(0,1.55fr) minmax(300px,.75fr);gap:16px}
-.sectionTitle{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}.sectionTitle h2,.sectionTitle h3{margin:0}
-.projectHead{display:flex;align-items:center;justify-content:space-between;gap:10px}.meta{font-size:10px;color:var(--dim)}
-.stageRail{display:grid;grid-template-columns:repeat(8,minmax(72px,1fr));gap:6px;margin:13px 0}
-.stage{padding:10px;border:1px solid var(--line);background:#09110c;border-radius:12px;min-width:0}.stage b{display:block;font-size:10px}.stage small{display:block;color:var(--dim);font-size:8px;margin-top:2px}
-.stage.done{border-color:#29473a;background:#0b1510}.stage.live{border-color:#5d785e;background:#101910}.stage.live small{color:var(--accent2)}
-.preview{aspect-ratio:16/9;background:#020302;border:1px solid var(--line);border-radius:16px;overflow:hidden;display:grid;place-items:center}
-.preview video{width:100%;height:100%;display:block}.emptyPreview{padding:30px;text-align:center;color:#77877d}
-.progress{height:7px;background:#111b15;border-radius:999px;overflow:hidden}.progress i{height:100%;display:block;width:0;background:linear-gradient(90deg,#8bcf92,#baf58d)}
-.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}.kpi{padding:11px;border:1px solid var(--line);border-radius:12px;background:#08100b}.kpi span{display:block;font-size:9px;color:var(--dim)}.kpi b{display:block;font-size:16px;margin-top:2px}
-.assetGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.asset{padding:10px;border:1px solid var(--line);border-radius:12px;background:#09100c}.asset b{font-size:10px;display:block}.asset a{display:inline-block;margin-top:5px;color:#a9cdfd;text-decoration:none;font-size:9px}
-.feed{display:grid;gap:7px}.item{padding:11px;border:1px solid var(--line);background:#09110c;border-radius:12px}.item:hover{border-color:#34483b}
-.row{display:flex;align-items:center;justify-content:space-between;gap:8px}.status{padding:4px 8px;border:1px solid #314239;border-radius:999px;font-size:9px;color:#b8c8bf}.status.good{color:var(--accent2);border-color:#315345}.status.warn{color:var(--warn);border-color:#50472c}.status.bad{color:var(--bad);border-color:#54323d}.status.blue{color:var(--blue);border-color:#30445c}
-.tiny{font-size:9px;color:var(--dim)}.small{font-size:11px;color:var(--muted)}
-.toolsGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.toolBtn{padding:12px;border:1px solid var(--line);border-radius:13px;background:#09110c;text-align:left;color:#dfe8e2}.toolBtn:hover{border-color:#3e5647;background:#0d1711}.toolBtn b{display:block;font-size:11px}.toolBtn span{display:block;color:var(--dim);font-size:9px;margin-top:2px}
-.overlay{position:fixed;inset:0;background:rgba(0,0,0,.67);backdrop-filter:blur(7px);z-index:100;display:none;padding:24px;align-items:center;justify-content:center}
-.overlay.open{display:flex}.drawer{width:min(1120px,100%);max-height:min(88vh,900px);overflow:auto;background:#07100b;border:1px solid #2a4034;
-border-radius:24px;box-shadow:0 40px 120px rgba(0,0,0,.62)}.drawerHead{position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;
-padding:15px 17px;background:rgba(7,16,11,.94);backdrop-filter:blur(18px);border-bottom:1px solid var(--line)}
-.drawerHead h2{margin:0;font-size:17px}.drawerBody{padding:17px}.tabs{display:flex;gap:6px;overflow:auto;padding-bottom:10px}.tab{white-space:nowrap;padding:8px 10px;border:1px solid var(--line);background:#09110c;color:#9eada4;border-radius:999px;font-size:10px}.tab.active{color:#061007;background:var(--accent);border-color:#d9ffc0;font-weight:950}
-.cols2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.list{display:grid;gap:7px}.formGrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.full{grid-column:1/-1}
-.notice{padding:11px;border:1px solid var(--line);border-radius:11px;background:#09110c;color:#becac2;font-size:11px}.notice.good{border-color:#315345;color:#a8efd0}.notice.warn{border-color:#51482e;color:#ebd99e}.notice.bad{border-color:#5a3540;color:#ffb4c0}
-.tableWrap{overflow:auto;border:1px solid var(--line);border-radius:13px}.table{width:100%;border-collapse:collapse;min-width:680px}.table th,.table td{padding:9px;border-bottom:1px solid #17231c;text-align:left;font-size:9px}.table th{color:#728078}
-.search{width:100%}.mono{font:10px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;color:#899990}
-.featureGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.feature{padding:9px;border:1px solid var(--line);border-radius:11px;background:#09110c}.feature strong{display:block;font-size:10px}.feature small{display:block;font-size:8px;color:var(--dim);margin-top:2px}
-.toast{position:fixed;right:16px;bottom:16px;z-index:150;max-width:380px;padding:12px 14px;border:1px solid #3b4d43;border-radius:13px;background:#0d1711;color:#e5eee8;box-shadow:var(--shadow);display:none}
-@media(max-width:1050px){.hero,.workspace{grid-template-columns:1fr}.controls{grid-template-columns:repeat(3,1fr)}}
-@media(max-width:760px){.top{padding:0 12px;height:62px}.topRight .pill.free{display:none}.wrap{padding:13px}.commandCard{padding:16px;border-radius:21px}
-h1{font-size:43px}.controls{grid-template-columns:1fr 1fr}.stageRail{grid-template-columns:repeat(4,1fr)}.kpis{grid-template-columns:repeat(2,1fr)}.assetGrid{grid-template-columns:repeat(2,1fr)}
-.overlay{padding:10px}.drawer{max-height:94vh;border-radius:19px}.cols2,.formGrid{grid-template-columns:1fr}.full{grid-column:auto}.featureGrid{grid-template-columns:1fr 1fr}.quickGrid{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:460px){.controls{grid-template-columns:1fr}.featureGrid{grid-template-columns:1fr}.assetGrid{grid-template-columns:1fr 1fr}.topRight .btn{padding:8px 9px;font-size:10px}.brandSub{display:none}}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;background:linear-gradient(transparent 96%,rgba(255,255,255,.012) 100%);background-size:100% 4px;opacity:.12}
+.app{min-height:100vh;display:grid;grid-template-columns:var(--rail) minmax(0,1fr)}
+.rail{position:sticky;top:0;height:100vh;z-index:40;display:flex;flex-direction:column;align-items:center;padding:14px 10px;
+ border-right:1px solid var(--line);background:rgba(7,10,15,.88);backdrop-filter:blur(24px)}
+.infty{width:44px;height:44px;border:1px solid #324153;border-radius:15px;display:grid;place-items:center;font-size:24px;font-weight:950;
+ background:radial-gradient(circle at 35% 25%,#273542,#0b1017 68%);box-shadow:0 10px 30px rgba(0,0,0,.3)}
+.railGroup{display:grid;gap:8px;width:100%;margin-top:28px}
+.railBtn{width:100%;aspect-ratio:1/1;border:1px solid transparent;border-radius:14px;background:transparent;color:#718093;display:grid;place-items:center;position:relative}
+.railBtn svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8}
+.railBtn:hover,.railBtn.active{color:#eef4f1;background:#111722;border-color:#283446}
+.railBtn.active:after{content:"";position:absolute;left:-11px;width:3px;height:20px;border-radius:0 4px 4px 0;background:var(--green);box-shadow:0 0 16px rgba(168,244,110,.45)}
+.railBottom{margin-top:auto;display:grid;gap:8px;width:100%}
+.main{min-width:0}
+.top{height:72px;position:sticky;top:0;z-index:35;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 24px;
+ border-bottom:1px solid var(--line);background:rgba(6,9,14,.82);backdrop-filter:blur(26px)}
+.topLeft,.topRight,.brandLine,.topMeta,.commandTools{display:flex;align-items:center;gap:10px}
+.productName{font-size:15px;font-weight:950;letter-spacing:-.02em}.productSub{font-size:10px;color:var(--dim)}
+.live{font-size:10px;color:var(--muted);display:flex;align-items:center;gap:7px}.live i{width:7px;height:7px;border-radius:50%;background:#7ef0b7;box-shadow:0 0 0 4px rgba(126,240,183,.07),0 0 18px rgba(126,240,183,.4)}
+.topSearch{min-width:min(420px,42vw);height:38px;border:1px solid var(--line2);border-radius:12px;background:#0b1018;color:#8f9daf;display:flex;align-items:center;padding:0 11px;gap:8px}
+.topSearch kbd{margin-left:auto;padding:3px 6px;border:1px solid #334054;border-radius:7px;color:#667386;font-size:9px;background:#0a0e15}
+.pill{border:1px solid #283548;background:#0b1018;border-radius:999px;padding:7px 10px;color:#bac7d6;font-size:9px}
+.pill.free{color:var(--mint);border-color:#25483e}
+.user{width:31px;height:31px;border-radius:50%;display:grid;place-items:center;background:#18222d;border:1px solid #304054;color:#cbd4df;font-size:10px;font-weight:900}
+.canvas{max-width:1680px;margin:0 auto;padding:26px 28px 70px}
+.heroRow{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(320px,.65fr);gap:16px}
+.hero{border:1px solid #26384a;border-radius:28px;padding:27px;background:
+ linear-gradient(145deg,rgba(18,25,35,.96),rgba(8,11,16,.98) 58%),
+ radial-gradient(circle at 80% 5%,rgba(168,244,110,.08),transparent 38%);box-shadow:var(--shadow);position:relative;overflow:hidden}
+.hero:after{content:"";position:absolute;inset:auto -12% -56% 26%;height:230px;background:radial-gradient(circle,rgba(118,229,194,.12),transparent 64%);filter:blur(8px);pointer-events:none}
+.eyebrow{color:#7d8999;font-size:9px;font-weight:900;letter-spacing:.18em;text-transform:uppercase}
+h1{font-size:clamp(40px,5.2vw,78px);line-height:.91;letter-spacing:-.065em;max-width:920px;margin:10px 0 16px}
+.lead{font-size:14px;color:#aab5c3;max-width:780px}
+.commandShell{margin-top:22px;border:1px solid #33445a;border-radius:19px;background:#070a10;box-shadow:inset 0 1px rgba(255,255,255,.02)}
+.command{width:100%;min-height:156px;resize:vertical;border:0;outline:0;background:transparent;color:#fbfdff;padding:18px 18px 10px;font-size:15px;line-height:1.6}
+.command::placeholder{color:#536174}
+.commandFoot{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px 11px;border-top:1px solid #18202c}
+.commandTools{flex-wrap:wrap}.iconBtn{height:34px;border:1px solid var(--line2);background:#0c1119;color:#9ca9ba;border-radius:10px;padding:0 9px;font-size:10px}
+.iconBtn:hover{border-color:#41516a;color:#fff}
+.examples{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}.example{border:1px solid #283443;background:#0b1018;color:#8f9bad;border-radius:999px;padding:7px 10px;font-size:9px}
+.example:hover{border-color:#45576d;color:#fff}
+.controls{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-top:12px}.label{display:grid;gap:5px}.label span{font-size:8px;text-transform:uppercase;letter-spacing:.09em;color:#667386;font-weight:850}
+.field,.select{width:100%;height:39px;padding:0 10px;border:1px solid var(--line);background:#0a0f16;color:#edf2f7;border-radius:10px;outline:none}
+.field:focus,.select:focus{border-color:#58708d;box-shadow:0 0 0 3px rgba(142,184,255,.06)}
+.actionRow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}.btn{border:1px solid #2c394b;background:#111722;color:#e9eff6;border-radius:11px;padding:10px 13px}
+.btn:hover{background:#151d29;border-color:#43536b}.btn.primary{background:linear-gradient(135deg,#b6f47e,#8fe3bb);border-color:#d9ffbd;color:#07100a;font-weight:950}.btn.ghost{background:transparent}.btn.small{padding:7px 9px;font-size:10px}
+.hint{font-size:9px;color:#667386}.notice{padding:11px;border:1px solid var(--line);border-radius:11px;background:#0a0f16;color:#b8c2cf;font-size:10px}.notice.good{border-color:#2e5745;color:#a7efd0}.notice.warn{border-color:#51482d;color:#f1d690}.notice.bad{border-color:#5b3340;color:#ffafbb}
+.heroSide{display:grid;gap:12px}.panel{border:1px solid var(--line);border-radius:20px;background:linear-gradient(180deg,rgba(14,19,28,.96),rgba(8,11,16,.97));box-shadow:0 18px 55px rgba(0,0,0,.24)}
+.pad{padding:17px}.panelHead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}.panelHead h2,.panelHead h3{margin:0;font-size:13px;letter-spacing:-.025em}
+.metricGrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.metric{padding:13px;border:1px solid #202b3a;border-radius:14px;background:#090e15}.metric span{display:block;color:#627084;font-size:8px;text-transform:uppercase;letter-spacing:.09em}.metric strong{display:block;font-size:25px;letter-spacing:-.04em;margin-top:5px}
+.systemCard{display:grid;gap:10px}.systemLine{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 10px;border:1px solid #1e2836;border-radius:12px;background:#090e15}.systemLine span{font-size:9px;color:#7f8da0}.systemLine b{font-size:9px;color:#b8c4d1}
+.workspace{display:grid;grid-template-columns:minmax(0,1.34fr) minmax(320px,.66fr);gap:16px;margin-top:16px}
+.production{border:1px solid #263243;border-radius:22px;background:linear-gradient(180deg,#0e141d,#090d13);overflow:hidden}
+.productionTop{padding:17px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px}
+.projectIdentity{display:flex;gap:12px;align-items:center;min-width:0}.projectMark{width:42px;height:42px;border:1px solid #314153;border-radius:14px;background:linear-gradient(145deg,#172432,#0b1018);display:grid;place-items:center;font-weight:950;color:#a8f46e;flex:0 0 auto}
+.projectIdentity h2{margin:0;font-size:16px;letter-spacing:-.03em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.meta{margin-top:2px;color:#6f7d90;font-size:9px}
+.status{padding:5px 8px;border:1px solid #2b394a;border-radius:999px;font-size:8px;color:#aab6c5;white-space:nowrap}.status.good{color:var(--mint);border-color:#2d5747}.status.blue{color:var(--blue);border-color:#304765}.status.warn{color:var(--amber);border-color:#55492e}.status.bad{color:var(--red);border-color:#5a3541}
+.stageRail{display:grid;grid-template-columns:repeat(8,minmax(72px,1fr));gap:6px;padding:13px 17px 10px;border-bottom:1px solid var(--line)}
+.stage{padding:9px;border:1px solid #1d2734;border-radius:12px;background:#090e15}.stage b{display:block;font-size:9px}.stage small{display:block;color:#566376;font-size:8px;margin-top:3px}.stage.done{border-color:#28483b;background:#0b1510}.stage.done b{color:#b9e9cf}.stage.live{border-color:#5d7f62;background:#111a12}.stage.live small{color:#b8f6c6}
+.progressWrap{padding:10px 17px 0}.progress{height:6px;background:#111824;border-radius:99px;overflow:hidden}.progress i{display:block;height:100%;width:0;background:linear-gradient(90deg,#72dbc1,#b6f47e);box-shadow:0 0 14px rgba(168,244,110,.18)}
+.productionGrid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(240px,.65fr);gap:12px;padding:12px 17px 17px}
+.preview{min-height:330px;aspect-ratio:16/9;background:#020305;border:1px solid #202a39;border-radius:17px;overflow:hidden;display:grid;place-items:center}
+.preview video{width:100%;height:100%;display:block;object-fit:contain;background:#020305}.emptyPreview{text-align:center;color:#617084;font-size:11px;padding:35px}.emptyPreview strong{display:block;color:#93a0b1;font-size:13px;margin-bottom:5px}
+.sideInfo{display:grid;gap:8px;align-content:start}.kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.kpi{padding:11px;border:1px solid #202b3a;border-radius:12px;background:#090e15}.kpi span{display:block;color:#647185;font-size:8px}.kpi b{display:block;margin-top:4px;font-size:16px}
+.miniPanel{border:1px solid #202b3a;border-radius:14px;padding:12px;background:#090e15}.miniTitle{font-size:9px;text-transform:uppercase;letter-spacing:.12em;color:#6f7d90;font-weight:900;margin-bottom:9px}
+.deliverableList{display:grid;gap:6px}.deliverable{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 9px;border:1px solid #1d2835;border-radius:10px;background:#080d14}.deliverable span{font-size:9px;color:#9aa7b8}.deliverable a{font-size:8px;color:#9ec0f6;text-decoration:none}
+.feed{display:grid;gap:7px}.workCard{padding:12px;border:1px solid #202b38;border-radius:14px;background:#090e15}.workCard:hover{border-color:#36465a}.workCard .title{font-size:11px;font-weight:850}.tiny{font-size:8px;color:#657388}.small{font-size:10px;color:#9eabbc}
+.workMeta{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px}.bar{height:5px;background:#121925;border-radius:99px;overflow:hidden;margin-top:8px}.bar i{display:block;height:100%;background:linear-gradient(90deg,#7be0c4,#a8f46e)}
+.insightGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:16px}.insight{min-height:112px;padding:14px;border:1px solid #202b38;border-radius:16px;background:linear-gradient(180deg,#0d131c,#090d13)}.insight .eyebrow{font-size:8px}.insight h3{margin:7px 0 4px;font-size:12px}.insight p{margin:0;color:#78869a;font-size:9px}
+.teamGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}.agent{padding:10px;border:1px solid #202b38;border-radius:13px;background:#090e15}.agent b{font-size:9px}.agent span{display:block;color:#657286;font-size:8px;margin-top:3px}
+.toolGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.toolBtn{padding:11px;border:1px solid #202b38;border-radius:13px;background:#090e15;color:#e4ebf3;text-align:left}.toolBtn:hover{border-color:#41536b;background:#0d131d}.toolBtn b{font-size:10px;display:block}.toolBtn span{display:block;color:#647185;font-size:8px;margin-top:3px}
+.bottomNav{display:none}
+.overlay{position:fixed;inset:0;background:rgba(2,4,7,.72);backdrop-filter:blur(12px);z-index:100;padding:22px;align-items:center;justify-content:center;display:none}.overlay.open{display:flex}
+.drawer{width:min(1180px,100%);max-height:min(90vh,930px);overflow:auto;background:#080d14;border:1px solid #2a394c;border-radius:22px;box-shadow:0 40px 120px rgba(0,0,0,.65)}
+.drawerHead{position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line);background:rgba(8,13,20,.94);backdrop-filter:blur(18px)}.drawerHead h2{margin:0;font-size:15px}.drawerBody{padding:16px}
+.tabs{display:flex;gap:6px;overflow:auto;padding-bottom:10px}.tab{white-space:nowrap;border:1px solid var(--line2);background:#0a0f16;color:#8794a6;border-radius:999px;padding:7px 9px;font-size:8px}.tab.active{background:var(--green);border-color:#d7ffc0;color:#071006;font-weight:950}
+.cols2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.formGrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.full{grid-column:1/-1}.list{display:grid;gap:7px}
+.freeBox{padding:13px;border:1px solid #29483b;border-radius:14px;background:linear-gradient(145deg,#0d1812,#090f15)}.freeBox b{font-size:11px;display:block}.freeBox p{margin:5px 0 0;color:#738296;font-size:9px}
+.tableWrap{overflow:auto;border:1px solid #202b38;border-radius:13px}.table{width:100%;border-collapse:collapse;min-width:700px}.table th,.table td{padding:9px;border-bottom:1px solid #17202c;text-align:left;font-size:8px}.table th{color:#68768a;text-transform:uppercase;letter-spacing:.07em}
+.mono{font:9px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;color:#8593a5}
+.featureGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.feature{padding:9px;border:1px solid #202b38;border-radius:11px;background:#090e15}.feature strong{display:block;font-size:9px}.feature small{display:block;color:#647185;font-size:7px;margin-top:2px}
+.toast{position:fixed;right:18px;bottom:18px;z-index:160;max-width:420px;padding:12px 14px;border:1px solid #344054;border-radius:13px;background:#111823;color:#edf3f8;box-shadow:var(--shadow);display:none;font-size:10px}
+@media(max-width:1200px){.heroRow,.workspace{grid-template-columns:1fr}.heroSide{grid-template-columns:repeat(3,1fr)}.controls{grid-template-columns:repeat(3,1fr)}.productionGrid{grid-template-columns:1fr 320px}}
+@media(max-width:900px){:root{--rail:0px}.app{display:block}.rail{display:none}.top{padding:0 14px}.topSearch{display:none}.heroSide{grid-template-columns:1fr}.canvas{padding:16px}.teamGrid{grid-template-columns:repeat(2,1fr)}.insightGrid{grid-template-columns:1fr}.bottomNav{position:fixed;display:flex;left:10px;right:10px;bottom:10px;height:54px;background:rgba(10,14,20,.94);border:1px solid #283445;border-radius:17px;z-index:60;backdrop-filter:blur(20px);padding:5px;justify-content:space-around}.bottomNav button{flex:1;background:transparent;border:0;color:#748196;font-size:8px;border-radius:12px}.bottomNav button:focus,.bottomNav button:hover{color:#fff;background:#141c27}.bottomNav svg{width:16px;height:16px;display:block;margin:0 auto 2px}.productionGrid{grid-template-columns:1fr}.preview{min-height:220px}.stageRail{grid-template-columns:repeat(4,1fr)}}
+@media(max-width:620px){.canvas{padding:11px 10px 80px}.top{height:62px}.topRight .pill{display:none}.hero{padding:18px;border-radius:21px}h1{font-size:42px}.command{min-height:140px}.commandFoot{align-items:flex-start;flex-direction:column}.controls{grid-template-columns:1fr 1fr}.productionTop{padding:14px}.projectIdentity h2{font-size:14px}.stageRail{padding:10px 12px}.productionGrid{padding:10px 12px 12px}.kpis{grid-template-columns:repeat(2,1fr)}.teamGrid{grid-template-columns:1fr 1fr}.cols2,.formGrid{grid-template-columns:1fr}.full{grid-column:auto}.featureGrid{grid-template-columns:1fr 1fr}.overlay{padding:8px}.drawer{max-height:94vh;border-radius:18px}}
+@media(max-width:410px){.controls{grid-template-columns:1fr}.teamGrid,.featureGrid{grid-template-columns:1fr}.btn.primary{width:100%}}
 </style>
 </head>
 <body>
-<div class="shell">
-<header class="top">
-  <div class="brand"><div class="logo">∞</div><div><div class="brandName">AI Infinity</div><div class="brandSub">Creator Command Center</div></div></div>
-  <div class="topRight">
-    <div class="live"><i></i><span id="liveText">Connecting</span></div>
-    <span class="pill free">$0 · Core unlocked</span>
-    <button class="btn ghost" onclick="openDrawer('workspace')">Workspace</button>
-  </div>
-</header>
-
-<main class="wrap">
-  <section class="hero">
-    <div class="commandCard">
-      <div class="eyebrow">ONE INTERFACE · ONE COMMAND</div>
-      <h1>Tell AI Infinity what you want to publish.</h1>
-      <p class="lead">AI Infinity turns one natural-language brief into a real production: research, direction, script, visuals, voice, music, editing, captions, QC, thumbnail, Shorts, SEO, social copy and a delivery package.</p>
-      <textarea id="cmd" class="command" placeholder="Example: Create a polished 6-minute YouTube documentary about how solar power is changing cities. Research current evidence, make it cinematic and beginner-friendly, narrate naturally, add music and SFX, captions, thumbnail, 3 Shorts, SEO and a publish-ready package."></textarea>
-      <div class="examples">
-        <button class="example" onclick="fillExample(0)">YouTube documentary</button>
-        <button class="example" onclick="fillExample(1)">Short-form campaign</button>
-        <button class="example" onclick="fillExample(2)">Podcast episode</button>
-        <button class="example" onclick="fillExample(3)">Article + social</button>
-      </div>
-      <div class="controls">
-        <label class="label"><span>Type</span><select id="ctype" class="select"><option value="video">Video</option><option value="podcast">Podcast</option><option value="article">Article</option><option value="social">Social</option></select></label>
-        <label class="label"><span>Length</span><select id="format" class="select"><option value="long">Long form</option><option value="short">Short form</option></select></label>
-        <label class="label"><span>Duration</span><input id="duration" class="field" type="number" min="20" max="3600" value="360"></label>
-        <label class="label"><span>Quality</span><select id="quality" class="select"><option value="balanced">Balanced</option><option value="high">High</option><option value="fast">Fast</option><option value="draft">Draft</option></select></label>
-        <label class="label"><span>Ratio</span><select id="ratio" class="select"><option>16:9</option><option>9:16</option><option>1:1</option><option>4:5</option></select></label>
-        <label class="label"><span>Language</span><input id="language" class="field" value="English"></label>
-      </div>
-      <div class="actionRow">
-        <button class="btn primary" onclick="createNow()">Create with AI Infinity</button>
-        <button class="btn" onclick="planNow()">Plan first</button>
-        <button class="btn ghost" onclick="openDrawer('capabilities')">100 creator capabilities</button>
-        <span class="hint">No in-app paywall. Free core + local/public fallbacks.</span>
-      </div>
-      <div id="commandNotice" style="margin-top:10px"></div>
+<div class="app">
+  <aside class="rail">
+    <div class="infty">∞</div>
+    <div class="railGroup">
+      <button class="railBtn active" title="Command" onclick="focusCommand()" aria-label="Command"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h10M4 17h16"/></svg></button>
+      <button class="railBtn" title="Projects" onclick="openDrawer('projects')" aria-label="Projects"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/></svg></button>
+      <button class="railBtn" title="Research" onclick="openDrawer('research')" aria-label="Research"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg></button>
+      <button class="railBtn" title="Library" onclick="openDrawer('library')" aria-label="Library"><svg viewBox="0 0 24 24"><path d="M5 5h9a2 2 0 0 1 2 2v12H7a2 2 0 0 0-2 2z"/><path d="M16 7h3v12a2 2 0 0 1-2 2h-2"/></svg></button>
+      <button class="railBtn" title="Brand" onclick="openDrawer('brand')" aria-label="Brand"><svg viewBox="0 0 24 24"><path d="M12 3 20 7v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="m9 12 2 2 4-4"/></svg></button>
+      <button class="railBtn" title="Publish" onclick="openDrawer('publish')" aria-label="Publish"><svg viewBox="0 0 24 24"><path d="M4 12h12"/><path d="m12 6 6 6-6 6"/><path d="M4 5v14"/></svg></button>
+      <button class="railBtn" title="Analytics" onclick="openDrawer('analytics')" aria-label="Analytics"><svg viewBox="0 0 24 24"><path d="M5 19V9M12 19V5M19 19v-7"/></svg></button>
     </div>
+    <div class="railBottom">
+      <button class="railBtn" title="Capabilities" onclick="openDrawer('capabilities')" aria-label="Capabilities"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="8"/></svg></button>
+      <button class="railBtn" title="Workspace" onclick="openDrawer('workspace')" aria-label="Workspace"><svg viewBox="0 0 24 24"><path d="M4 6h16v14H4z"/><path d="M8 6V4h8v2"/></svg></button>
+    </div>
+  </aside>
 
-    <aside class="rightStack">
-      <div class="card cardPad">
-        <div class="sectionTitle"><h3>Studio at a glance</h3><span id="version" class="tiny">—</span></div>
-        <div class="statRow">
-          <div class="stat"><span>Projects</span><b id="projectsCount">0</b></div>
-          <div class="stat"><span>Completed</span><b id="doneCount">0</b></div>
-          <div class="stat"><span>Active</span><b id="activeCount">0</b></div>
-          <div class="stat"><span>Capabilities</span><b id="featureCount">100</b></div>
+  <section class="main">
+    <header class="top">
+      <div class="topLeft">
+        <div class="brandLine"><div class="productName">AI Infinity</div><div class="productSub">Creator OS</div></div>
+        <div class="topSearch" onclick="focusCommand()">Ask Infinity anything <kbd>⌘ K</kbd></div>
+      </div>
+      <div class="topRight">
+        <div class="live"><i></i><span id="liveText">Connecting</span></div>
+        <span class="pill free">$0 · Free core</span>
+        <button class="iconBtn" onclick="openDrawer('workspace')">Workspace</button>
+        <div class="user" id="userChip">∞</div>
+      </div>
+    </header>
+
+    <main class="canvas">
+      <section class="heroRow">
+        <div class="hero">
+          <div class="eyebrow">DIRECTOR MODE · ONE COMMAND</div>
+          <h1>Make the idea.<br>Ship the work.</h1>
+          <p class="lead">One brief becomes a professional production graph: research, strategy, story, script, visuals, voice, music, edit, captions, QC, repurposing, SEO and delivery.</p>
+
+          <div class="commandShell">
+            <textarea id="cmd" class="command" placeholder="Tell AI Infinity what to make…  Example: create a polished 60-second vertical video about 5 practical ways AI can save a small business owner time. Research current information, make the hook strong, use natural narration, visuals, captions, music, thumbnail, SEO and social copy."></textarea>
+            <div class="commandFoot">
+              <div class="commandTools">
+                <button class="iconBtn" onclick="planNow()">✦ Plan</button>
+                <button class="iconBtn" onclick="openDrawer('research')">⌕ Research</button>
+                <button class="iconBtn" onclick="openDrawer('brand')">◈ Brand</button>
+                <button class="iconBtn" onclick="openDrawer('tools')">＋ Tool</button>
+              </div>
+              <div class="hint">Natural language is authoritative · Ctrl/Cmd + K focuses this command</div>
+            </div>
+          </div>
+          <div class="examples">
+            <button class="example" onclick="fillExample(0)">YouTube documentary</button>
+            <button class="example" onclick="fillExample(1)">Short campaign</button>
+            <button class="example" onclick="fillExample(2)">Podcast episode</button>
+            <button class="example" onclick="fillExample(3)">Article + social</button>
+          </div>
+
+          <div class="controls">
+            <label class="label"><span>Type</span><select id="ctype" class="select"><option value="video">Video</option><option value="podcast">Podcast</option><option value="article">Article</option><option value="social">Social</option></select></label>
+            <label class="label"><span>Length</span><select id="format" class="select"><option value="long">Long form</option><option value="short">Short form</option></select></label>
+            <label class="label"><span>Duration</span><input id="duration" class="field" type="number" min="20" max="3600" value="60"></label>
+            <label class="label"><span>Quality</span><select id="quality" class="select"><option value="balanced">Balanced</option><option value="high">High</option><option value="fast">Fast</option><option value="draft">Draft</option></select></label>
+            <label class="label"><span>Ratio</span><select id="ratio" class="select"><option>16:9</option><option selected>9:16</option><option>1:1</option><option>4:5</option></select></label>
+            <label class="label"><span>Language</span><input id="language" class="field" value="English"></label>
+          </div>
+          <div class="actionRow">
+            <button class="btn primary" onclick="createNow()">Create production</button>
+            <button class="btn" onclick="planNow()">Plan first</button>
+            <button class="btn ghost" onclick="openDrawer('capabilities')">Explore 100 capabilities</button>
+          </div>
+          <div id="commandNotice" style="margin-top:10px"></div>
         </div>
-      </div>
-      <div class="freeBox">
-        <b>Free-first production</b>
-        <p>AI Infinity keeps its application core unlocked at $0. Built-in rendering, local voice, public research and fallback production work without a paid provider. External connected services remain optional.</p>
-      </div>
-      <div class="card cardPad">
-        <div class="sectionTitle"><h3>Everything, without leaving this screen</h3><button class="btn ghost" onclick="openDrawer('workspace')">Open</button></div>
-        <div class="quickGrid">
-          <button class="quick" onclick="openDrawer('projects')"><b>Projects</b><span>history & progress</span></button>
-          <button class="quick" onclick="openDrawer('research')"><b>Research</b><span>sources & evidence</span></button>
-          <button class="quick" onclick="openDrawer('brand')"><b>Brand</b><span>voice & visual memory</span></button>
-          <button class="quick" onclick="openDrawer('library')"><b>Library</b><span>real deliverables</span></button>
-          <button class="quick" onclick="openDrawer('publish')"><b>Publish</b><span>connected channels</span></button>
-          <button class="quick" onclick="openDrawer('analytics')"><b>Analytics</b><span>workspace learning</span></button>
+
+        <aside class="heroSide">
+          <div class="panel pad">
+            <div class="panelHead"><h3>Workspace pulse</h3><span id="version" class="tiny">—</span></div>
+            <div class="metricGrid">
+              <div class="metric"><span>Projects</span><strong id="projectsCount">0</strong></div>
+              <div class="metric"><span>Completed</span><strong id="doneCount">0</strong></div>
+              <div class="metric"><span>Active</span><strong id="activeCount">0</strong></div>
+              <div class="metric"><span>Capabilities</span><strong id="featureCount">100</strong></div>
+            </div>
+          </div>
+
+          <div class="panel pad systemCard">
+            <div class="panelHead"><h3>Free-first core</h3><span class="status good">UNLOCKED</span></div>
+            <div class="systemLine"><span>Local render engine</span><b>READY</b></div>
+            <div class="systemLine"><span>Public research / media</span><b>FREE-FIRST</b></div>
+            <div class="systemLine"><span>External publishing</span><b>AUTH-GATED</b></div>
+            <div class="systemLine"><span>Paid provider required?</span><b>NO</b></div>
+          </div>
+
+          <div class="panel pad">
+            <div class="panelHead"><h3>Command shortcuts</h3><span class="tiny">single interface</span></div>
+            <div class="toolGrid" id="toolsMini"></div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="workspace">
+        <section class="production">
+          <div class="productionTop">
+            <div class="projectIdentity">
+              <div class="projectMark">∞</div>
+              <div><div class="eyebrow">LIVE PRODUCTION</div><h2 id="projectTitle">No production selected</h2><div id="projectMeta" class="meta">Your next command will become a tracked production.</div></div>
+            </div>
+            <div class="topMeta"><span id="projectStatus" class="status">idle</span><button id="projectAction" class="btn small" style="display:none"></button></div>
+          </div>
+          <div id="stageRail" class="stageRail"></div>
+          <div class="progressWrap"><div class="progress"><i id="progressBar"></i></div></div>
+          <div class="productionGrid">
+            <div class="preview" id="preview"><div class="emptyPreview"><strong>Your production canvas</strong>Only a generated project asset appears here—no fake preview.</div></div>
+            <aside class="sideInfo">
+              <div class="kpis">
+                <div class="kpi"><span>Progress</span><b id="pProgress">0%</b></div>
+                <div class="kpi"><span>Duration</span><b id="pDuration">—</b></div>
+                <div class="kpi"><span>QC</span><b id="pQc">—</b></div>
+                <div class="kpi"><span>Sources</span><b id="pSources">0</b></div>
+              </div>
+              <div class="miniPanel"><div class="miniTitle">Deliverables</div><div id="delivery"><div class="notice">Assets appear here as production closes.</div></div></div>
+              <div class="miniPanel"><div class="miniTitle">Production team</div><div id="agentsMini" class="list"><div class="notice">Loading team…</div></div></div>
+            </aside>
+          </div>
+        </section>
+
+        <aside class="heroSide">
+          <div class="panel pad">
+            <div class="panelHead"><h3>Latest work</h3><button class="btn small" onclick="openDrawer('projects')">View all</button></div>
+            <div id="recent" class="feed"><div class="notice">Loading projects…</div></div>
+          </div>
+          <div class="panel pad">
+            <div class="panelHead"><h3>Director’s desk</h3><span class="status blue">LIVE GRAPH</span></div>
+            <div class="insight"><div class="eyebrow">HOW IT WORKS</div><h3>Brief → production graph → verified package</h3><p>Every project moves through named stages with checkpoints, evidence, assets and truthful external-service boundaries.</p></div>
+            <div class="actionRow"><button class="btn small" onclick="openDrawer('review')">Review desk</button><button class="btn small" onclick="openDrawer('release')">Release plan</button><button class="btn small" onclick="openDrawer('analytics')">Learning</button></div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="workspace">
+        <div class="panel pad">
+          <div class="panelHead"><h3>AI production team</h3><button class="btn small" onclick="openDrawer('team')">Meet the team</button></div>
+          <div id="teamSurface" class="teamGrid"></div>
         </div>
-      </div>
-    </aside>
-  </section>
-
-  <section class="workspace">
-    <div class="card cardPad">
-      <div class="projectHead">
-        <div><div class="eyebrow">LIVE PRODUCTION</div><h2 id="projectTitle" style="margin:5px 0 2px">No production selected</h2><div id="projectMeta" class="meta">Start a command to build something real.</div></div>
-        <div class="row"><span id="projectStatus" class="status">idle</span><button id="projectAction" class="btn" style="display:none"></button></div>
-      </div>
-      <div id="stageRail" class="stageRail"></div>
-      <div class="progress"><i id="progressBar"></i></div>
-      <div class="preview" id="preview"><div class="emptyPreview">Your finished video will appear here.<br><span class="tiny">No fake preview — only the generated project asset.</span></div></div>
-      <div class="kpis" style="margin-top:9px">
-        <div class="kpi"><span>Progress</span><b id="pProgress">0%</b></div>
-        <div class="kpi"><span>Duration</span><b id="pDuration">—</b></div>
-        <div class="kpi"><span>QC</span><b id="pQc">—</b></div>
-        <div class="kpi"><span>Sources</span><b id="pSources">0</b></div>
-      </div>
-      <div id="delivery" style="margin-top:11px"></div>
-    </div>
-
-    <div class="rightStack">
-      <div class="card cardPad">
-        <div class="sectionTitle"><h3>Production team</h3><span class="status good">AI Infinity</span></div>
-        <div id="agentsMini" class="list"><div class="notice">Loading specialist team…</div></div>
-      </div>
-      <div class="card cardPad">
-        <div class="sectionTitle"><h3>Creative tools</h3><button class="btn ghost" onclick="openDrawer('tools')">All tools</button></div>
-        <div id="toolsMini" class="toolsGrid"></div>
-      </div>
-      <div class="card cardPad">
-        <div class="sectionTitle"><h3>Latest work</h3><button class="btn ghost" onclick="openDrawer('projects')">All</button></div>
-        <div id="recent" class="feed"><div class="notice">Loading projects…</div></div>
-      </div>
-    </div>
-  </section>
-</main>
-</div>
-
-<div id="overlay" class="overlay" onclick="overlayClick(event)">
-  <section class="drawer">
-    <div class="drawerHead"><h2 id="drawerTitle">Workspace</h2><button class="btn" onclick="closeDrawer()">Close</button></div>
-    <div class="drawerBody" id="drawerBody"></div>
+        <div class="panel pad">
+          <div class="panelHead"><h3>Creator control</h3><button class="btn small" onclick="openDrawer('workspace')">Open workspace</button></div>
+          <div class="feed">
+            <div class="workCard"><div class="title">Brand memory</div><div class="small">Keep voice, audience and visual direction reusable.</div></div>
+            <div class="workCard"><div class="title">Evidence trail</div><div class="small">Research and provenance stay attached to finished work.</div></div>
+            <div class="workCard"><div class="title">Publish gate</div><div class="small">Connected destinations require authorization; downloads stay available.</div></div>
+          </div>
+        </div>
+      </section>
+    </main>
   </section>
 </div>
-<div id="modal" class="overlay" style="z-index:120" onclick="modalClick(event)">
-  <section class="drawer" style="max-width:620px">
-    <div class="drawerHead"><h2 id="modalTitle">AI Infinity</h2><button class="btn" onclick="closeModal()">Close</button></div>
-    <div class="drawerBody" id="modalBody"></div>
-  </section>
-</div>
+
+<nav class="bottomNav">
+  <button onclick="focusCommand()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 12h10M4 17h16"/></svg>Command</button>
+  <button onclick="openDrawer('projects')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/></svg>Projects</button>
+  <button onclick="openDrawer('research')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>Research</button>
+  <button onclick="openDrawer('library')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 5h9a2 2 0 0 1 2 2v12H7a2 2 0 0 0-2 2z"/><path d="M16 7h3v12a2 2 0 0 1-2 2h-2"/></svg>Library</button>
+  <button onclick="openDrawer('workspace')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16v14H4z"/><path d="M8 6V4h8v2"/></svg>Workspace</button>
+</nav>
+
+<div id="overlay" class="overlay" onclick="overlayClick(event)"><section class="drawer"><div class="drawerHead"><h2 id="drawerTitle">Workspace</h2><button class="btn small" onclick="closeDrawer()">Close</button></div><div class="drawerBody" id="drawerBody"></div></section></div>
+<div id="modal" class="overlay" style="z-index:120" onclick="modalClick(event)"><section class="drawer" style="max-width:700px"><div class="drawerHead"><h2 id="modalTitle">AI Infinity</h2><button class="btn small" onclick="closeModal()">Close</button></div><div class="drawerBody" id="modalBody"></div></section></div>
 <div id="toast" class="toast"></div>
 
 <script>
@@ -359,6 +433,20 @@ async function connectWebhook(){try{const x=await api("/infinity/studio/connect/
 async function settingsDrawer(){const x=await api("/infinity/studio/settings"),s=x.settings||{};$("drawerBody").innerHTML='<div class="notice">Defaults are reused by future one-command productions.</div><div class="formGrid" style="margin-top:10px"><label class="label"><span>Language</span><input id="slang" class="field" value="'+esc(s.language||"English")+'"></label><label class="label"><span>Quality</span><select id="squal" class="select"><option>balanced</option><option>high</option><option>fast</option><option>draft</option></select></label><label class="label full"><span>Platforms</span><input id="splats" class="field" value="'+esc((s.platforms||[]).join(", "))+'"></label><label class="label full"><span>Visual style</span><input id="svisual" class="field" value="'+esc(s.visual_style||"premium editorial")+'"></label></div><div class="actionRow"><button class="btn primary" onclick="saveSettings()">Save defaults</button></div><div id="settingsOut"></div>';$("squal").value=s.quality_preset||"balanced"}
 async function saveSettings(){try{await api("/infinity/studio/settings",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({language:$("slang").value,platforms:$("splats").value.split(",").map(x=>x.trim()).filter(Boolean),quality_preset:$("squal").value,visual_style:$("svisual").value})});setNotice("settingsOut","Defaults saved.","good")}catch(e){setNotice("settingsOut",e.message,"bad")}}
 document.addEventListener("keydown",e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="k"){e.preventDefault();$("cmd").focus()}if(e.key==="Escape"){closeDrawer();closeModal()}})
+function focusCommand(){const el=$("cmd");if(el){el.focus();el.scrollIntoView({behavior:"smooth",block:"center")}}
+function renderHome(){
+  const ps=state.projects||[];
+  const done=ps.filter(p=>["completed","completed_with_qc_warnings"].includes(p.status)).length;
+  const active=ps.filter(p=>!["completed","completed_with_qc_warnings","failed","cancelled"].includes(p.status)).length;
+  $("projectsCount").textContent=ps.length;$("doneCount").textContent=done;$("activeCount").textContent=active;
+  $("recent").innerHTML=ps.slice(0,4).map(p=>'<div class="workCard"><div class="workMeta"><div class="title">'+esc(p.title||p.project_id)+'</div><span class="status '+statusClass(p.status)+'">'+esc(p.status||"queued")+'</span></div><div class="tiny" style="margin-top:4px">'+esc(p.stage||"queued")+' · '+Math.round(p.progress||0)+'%</div><div class="bar"><i style="width:'+Math.round(p.progress||0)+'%"></i></div><div class="actionRow"><button class="btn small" onclick="selectProject(\''+esc(p.project_id)+'\')">Open production</button></div></div>').join("")||'<div class="notice">No productions yet. Start with one natural-language command.</div>';
+}
+function renderMini(){
+  $("agentsMini").innerHTML=(state.agents||[]).slice(0,4).map(a=>'<div class="agent"><b>'+esc(a.name||"Specialist")+'</b><span>'+esc(a.description||a.mode||"Production specialist")+'</span></div>').join("")||'<div class="notice">Team is loading.</div>';
+  $("teamSurface").innerHTML=(state.agents||[]).slice(0,8).map(a=>'<div class="agent"><b>'+esc(a.name||"Agent")+'</b><span>'+esc(a.description||"Production specialist")+'</span></div>').join("")||'<div class="notice">No specialist data.</div>';
+  $("toolsMini").innerHTML=(state.tools&&state.tools.length?state.tools:state.agents||[]).slice(0,4).map(t=>'<button class="toolBtn" onclick="quickTool(\''+esc(t.id)+'\',\''+esc(t.name||"Tool")+'\')"><b>'+esc(t.name||"Capability")+'</b><span>'+esc(t.description||"Run this capability")+'</span></button>').join("");
+}
+document.addEventListener("keydown",e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="k"){e.preventDefault();focusCommand()}});
 boot();
 </script>
 </body>
