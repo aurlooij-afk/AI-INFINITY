@@ -63,8 +63,10 @@ services:
         value: "1"
       - key: AI_INFINITY_EDGE_TTS_TIMEOUT
         value: "15"
+      - key: AI_INFINITY_RESEARCH_TIMEOUT
+        value: "6"
       - key: AI_INFINITY_AI_VIDEO
-        value: "0"
+        value: "auto"
       - key: AI_INFINITY_AI_VIDEO_SCENES
         value: "2"
       - key: AI_INFINITY_VIDEO_MODEL
