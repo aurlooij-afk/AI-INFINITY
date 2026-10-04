@@ -2301,7 +2301,9 @@ h1{font-size:clamp(30px,4vw,56px);line-height:1.02;letter-spacing:-.04em;margin:
     <button id="n-projects" onclick="go('projects')">▣ <span>Projects</span></button>
     <button id="n-assets" onclick="go('assets')">▤ <span>Assets</span></button>
     <button id="n-brand" onclick="go('brand')">◌ <span>Brand</span></button>
-    <button id="n-agents" onclick="go('agents')">◈ <span>Agents</span></button>\n    <button id="n-research" onclick="go('research')">⌕ <span>Research</span></button>\n    <button id="n-schedule" onclick="go('schedule')">◷ <span>Schedule</span></button>
+    <button id="n-agents" onclick="go('agents')">◈ <span>Agents</span></button>
+    <button id="n-timeline" onclick="go('timeline')">▤ <span>Timeline</span></button>
+    <button id="n-reviews" onclick="go('reviews')">✓ <span>Review</span></button>\n    <button id="n-research" onclick="go('research')">⌕ <span>Research</span></button>\n    <button id="n-schedule" onclick="go('schedule')">◷ <span>Schedule</span></button>
     <button id="n-analytics" onclick="go('analytics')">⌁ <span>Analytics</span></button>
     <button id="n-publish" onclick="go('publish')">↗ <span>Publish</span></button>
   </div>
@@ -2344,8 +2346,8 @@ function stages(x){
 }
 function renderError(e){return "<div class='card cardPad'><div class='notice bad'><b>"+esc(e.message)+"</b></div></div>"}
 function go(id){
-  current=id;nav();$("pageTitle").textContent={home:"Home",create:"Create",projects:"Projects",assets:"Assets",brand:"Brand",agents:"Agents",analytics:"Analytics",publish:"Publish",connections:"Connections",settings:"Settings",research:"Research",schedule:"Schedule"}[id]||"Workspace";
-  var f={home:home,create:create,projects:projects,assets:assets,brand:brand,agents:agents,analytics:analytics,publish:publish,connections:connections,settings:settings,research:research,schedule:schedule}[id];
+  current=id;nav();$("pageTitle").textContent={home:"Home",create:"Create",projects:"Projects",assets:"Assets",brand:"Brand",agents:"Agents",analytics:"Analytics",publish:"Publish",connections:"Connections",settings:"Settings",research:"Research",schedule:"Schedule",timeline:"Timeline",reviews:"Review"}[id]||"Workspace";
+  var f={home:home,create:create,projects:projects,assets:assets,brand:brand,agents:agents,analytics:analytics,publish:publish,connections:connections,settings:settings,research:research,schedule:schedule,timeline:timeline,reviews:reviews}[id];
   if(f)f().catch(function(e){$("content").innerHTML=renderError(e)});
 }
 async function session(){
@@ -2378,7 +2380,7 @@ async function create(){
 }
 async function submitCommand(id){
   var objective=$(id).value.trim();if(objective.length<8){alert("Describe what you want to make.");return}
-  var payload={title:objective.slice(0,140),objective:objective,topic:objective,format:current==="home"?"long":($("fmt")?$("fmt").value:"long"),duration:Number(($("duration")&&$("duration").value)||300),content_type:($("ctype")&&$("ctype").value)||"video",audience:($("audience")&&$("audience").value)||"general audience",tone:"professional, cinematic, useful",language:($("language")&&$("language").value)||"English",platforms:(($("platforms")&&$("platforms").value)||"").split(",").map(function(x){return x.trim()}).filter(Boolean),voice:($("voice")&&$("voice").value)||"en-US-AriaNeural",quality_preset:($("quality")&&$("quality").value)||"balanced",aspect_ratio:($("ratio")&&$("ratio").value)||"16:9",idempotency_key:"command-"+btoa(unescape(encodeURIComponent(objective))).slice(0,70)};
+  var payload={title:objective.slice(0,140),objective:objective,topic:objective,format:current==="home"?"long":($("fmt")?$("fmt").value:"long"),duration:Number(($("duration")&&$("duration").value)||300),content_type:($("ctype")&&$("ctype").value)||"video",audience:($("audience")&&$("audience").value)||"general audience",tone:"professional, cinematic, useful",language:($("language")&&$("language").value)||"English",platforms:(($("platforms")&&$("platforms").value)||"").split(",").map(function(x){return x.trim()}).filter(Boolean),voice:($("voice")&&$("voice").value)||"en-US-AriaNeural",quality_preset:($("quality")&&$("quality").value)||"balanced",aspect_ratio:($("ratio")&&$("ratio").value)||"16:9",};
   var out=current==="home"?null:$("createOut");if(out)out.innerHTML="<div class='notice'>Queueing durable production job…</div>";
   try{var r=await api("/infinity/studio/project",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)});latestProject=r.project_id;localStorage.setItem("aii_latest_project",r.project_id);if(out)out.innerHTML="<div class='notice good'><b>Production started.</b><div class='tiny'>"+esc(r.project_id)+"</div></div>";go("projects");setTimeout(function(){openProject(r.project_id)},180)}
   catch(e){if(out)out.innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>";else alert(e.message)}
@@ -2428,6 +2430,21 @@ async function retryProject(id){try{await api("/infinity/studio/project/"+encode
 async function assets(){
   var x=await api("/infinity/studio/library?limit=200"), rows=x.assets||[];
   $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>ASSET SPACE</div><h1 style='font-size:40px'>Every deliverable, indexed.</h1><p class='heroLead'>Masters, shorts, scripts, captions, thumbnails, provenance and package files remain tied to their project.</p></div><div class='table'><table><thead><tr><th>Type</th><th>File</th><th>Project</th><th>Size</th><th>Open</th></tr></thead><tbody>"+rows.map(function(a){return "<tr><td>"+esc(a.kind)+"</td><td>"+esc(a.name||a.path||"")+"</td><td class='mono'>"+esc(a.project_id)+"</td><td>"+esc(a.size_bytes||"")+"</td><td><a class='btn' href='/infinity/studio/project/"+encodeURIComponent(a.project_id)+"/asset/"+encodeURIComponent(a.name||"")+"' target='_blank'>Open</a></td></tr>"}).join("")+"</tbody></table></div>";
+}
+async function timeline(){
+  var id=latestProject||localStorage.getItem("aii_latest_project")||"";
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>TIMELINE</div><h1 style='font-size:40px'>See the production graph, not a fake progress animation.</h1><p class='heroLead'>Choose a project and inspect the real recorded stages, checkpoints and events.</p></div><div class='card cardPad'><div class='toolbar'><input id='tlProject' class='field grow' placeholder='Project ID' value='"+esc(id)+"'><button class='btn primary' onclick='loadTimeline()'>Load timeline</button></div><div id='tlOut' style='margin-top:10px'></div></div>";
+}
+async function loadTimeline(){
+  var id=$("tlProject").value.trim();if(!id){$("tlOut").innerHTML="<div class='notice warn'>Enter a project ID.</div>";return}
+  try{var r=await api("/infinity/studio/project/"+encodeURIComponent(id)+"/timeline");var rows=r.timeline||[];$("tlOut").innerHTML="<div class='list'>"+(rows.map(function(e){return "<div class='item'><div class='row'><b>"+esc(e.event||"event")+"</b><span class='tiny'>"+esc(e.time||"")+"</span></div><pre class='mono' style='margin:8px 0 0'>"+esc(JSON.stringify(e.payload||{},null,2))+"</pre></div>"}).join("")||"<div class='notice'>No recorded events yet.</div>")+"</div>"}catch(e){$("tlOut").innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>"}
+}
+async function reviews(){
+  var x=await api("/infinity/studio/reviews");
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>REVIEW DESK</div><h1 style='font-size:40px'>Human judgement where it belongs.</h1><p class='heroLead'>Record approval, change requests or rejection against a real project. The publication boundary stays explicit.</p></div><div class='card cardPad'><div class='grid cols3'><input id='rvProject' class='field' placeholder='Project ID' value='"+esc(latestProject||localStorage.getItem("aii_latest_project")||"")'><select id='rvDecision' class='select'><option value='approved'>Approved</option><option value='changes_requested'>Changes requested</option><option value='rejected'>Rejected</option></select><input id='rvComment' class='field' placeholder='Reviewer note'></div><button class='btn primary' style='margin-top:10px' onclick='recordReview()'>Record decision</button><div id='rvOut' style='margin-top:10px'></div></div><div class='list' style='margin-top:12px'>"+((x.reviews||[]).map(function(v){return "<div class='item'><div class='row'><b>"+esc(v.project_id)+"</b><span class='status'>"+esc(v.decision||v.status||"open")+"</span></div><div class='tiny' style='margin-top:5px'>"+esc(v.comment||"")+"</div></div>"}).join("")||"<div class='notice'>No reviews recorded.</div>")+"</div>";
+}
+async function recordReview(){
+  try{var r=await api("/infinity/studio/review",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({project_id:$("rvProject").value.trim(),decision:$("rvDecision").value,status:"recorded",comment:$("rvComment").value})});$("rvOut").innerHTML="<div class='notice good'>Decision recorded: "+esc(r.review_id)+"</div>";setTimeout(reviews,250)}catch(e){$("rvOut").innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>"}
 }
 async function research(){
   $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>RESEARCH DESK</div><h1 style='font-size:40px'>Ask for evidence before you ask for polish.</h1><p class='heroLead'>Run the real research agent and keep the resulting sources attached to the production brief.</p></div><div class='card cardPad'><textarea id='researchCmd' class='command' style='min-height:120px' placeholder='Research the latest evidence and useful angles for this topic…'></textarea><div class='toolbar' style='margin-top:10px'><button class='btn primary' onclick='runResearch()'>Research</button></div><div id='researchOut' style='margin-top:10px'></div></div>";
