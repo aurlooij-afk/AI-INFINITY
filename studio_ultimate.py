@@ -1168,7 +1168,7 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
     checks = {
         "file_present": master.exists() and master.stat().st_size > 10000,
         "duration_nonzero": duration > 2,
-        "full_hd": int(v.get("width") or 0) >= 1280 and int(v.get("height") or 0) >= 720,
+        "full_hd": max(int(v.get("width") or 0), int(v.get("height") or 0)) >= 1080 and min(int(v.get("width") or 0), int(v.get("height") or 0)) >= 720,
         "h264_video": str(v.get("codec_name") or "") == "h264",
         "audio_present": bool(a),
         "aac_audio": str(a.get("codec_name") or "") in {"aac", "mp3"},
@@ -1743,6 +1743,16 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         _stage(project_id, "assembly", 65, current_scene=len(scene_paths))
         master = outdir / "master.mp4"
         concat_segments(scene_paths, master)
+        requested_ratio = str(req.get("aspect_ratio") or "16:9").strip()
+        ratio_targets = {"16:9": (1920,1080), "9:16": (1080,1920), "1:1": (1080,1080), "4:5": (1080,1350)}
+        master_for_delivery = master
+        ratio_dims = ratio_targets.get(requested_ratio, ratio_targets["16:9"])
+        if requested_ratio != "16:9":
+            ratio_master = outdir / "master_delivery.mp4"
+            rw, rh = ratio_dims
+            ffmpeg("-i", master, "-vf", f"scale={rw}:{rh}:force_original_aspect_ratio=increase,crop={rw}:{rh}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", ratio_master, timeout=max(120, int(probe_duration(master)*5)))
+            if ratio_master.exists() and ratio_master.stat().st_size > 10000:
+                master_for_delivery = ratio_master
         captions = outdir / "captions.srt"
         write_srt(chapters, captions)
         checkpoint(project_id, "master_complete", {"path": str(master), "sha256": file_sha256(master) if master.exists() else None})
@@ -1753,9 +1763,9 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             sub = str(captions).replace("\\", "/").replace(":", "\\:")
             preset = os.getenv("AI_INFINITY_FINAL_PRESET", "ultrafast" if FAST_MODE else "medium")
             crf = "24" if FAST_MODE else "18"
-            ffmpeg("-i", master, "-vf", f"subtitles={sub}:force_style='FontName=DejaVu Sans,FontSize=18,Outline=2,Shadow=1,MarginV=45,Alignment=2'", "-c:v", "libx264", "-preset", preset, "-crf", crf, "-c:a", "aac", "-b:a", "128k" if FAST_MODE else "192k", "-movflags", "+faststart", captioned, timeout=max(180, int(probe_duration(master) * 5)))
+            ffmpeg("-i", master_for_delivery, "-vf", f"subtitles={sub}:force_style='FontName=DejaVu Sans,FontSize=18,Outline=2,Shadow=1,MarginV=45,Alignment=2'", "-c:v", "libx264", "-preset", preset, "-crf", crf, "-c:a", "aac", "-b:a", "128k" if FAST_MODE else "192k", "-movflags", "+faststart", captioned, timeout=max(180, int(probe_duration(master) * 5)))
         else:
-            ffmpeg("-i", master, "-i", captions, "-map", "0:v:0", "-map", "0:a:0", "-map", "1:0", "-c:v", "copy", "-c:a", "copy", "-c:s", "mov_text", "-metadata:s:s:0", "language=eng", "-disposition:s:0", "default", "-movflags", "+faststart", captioned, timeout=max(60, int(probe_duration(master) * 2)))
+            ffmpeg("-i", master_for_delivery, "-i", captions, "-map", "0:v:0", "-map", "0:a:0", "-map", "1:0", "-c:v", "copy", "-c:a", "copy", "-c:s", "mov_text", "-metadata:s:s:0", "language=eng", "-disposition:s:0", "default", "-movflags", "+faststart", captioned, timeout=max(60, int(probe_duration(master) * 2)))
         script = outdir / "script.md"
         lines = [f"# {plan.get('title') or topic}", "", f"Hook: {plan.get('hook') or ''}", ""]
         for ch in chapters:
@@ -2409,7 +2419,7 @@ function openProject(id){
     $("content").innerHTML="<div class='toolbar' style='margin-bottom:12px'><button class='btn' onclick='go(\"projects\")'>← Projects</button><button class='btn' onclick='openProject(\""+esc(id)+"\")'>Refresh</button><button class='btn' onclick='verifyProject(\""+esc(id)+"\")'>Verify</button></div>"+
     "<div class='grid cols2'><div class='card cardPad'>"+
     "<div class='eyebrow'>PROJECT</div><h2 style='margin:6px 0 4px'>"+esc(x.title||id)+"</h2><div class='chips'><span class='status "+statusClass(x.status)+"'>"+esc(x.status)+"</span><span class='chip'>"+Math.round(x.progress||0)+"%</span><span class='chip'>Attempt "+esc(x.attempt||1)+"</span></div><div style='margin-top:14px'>"+stages(x)+"</div><div style='margin-top:14px' class='progress'><i style='width:"+Math.round(x.progress||0)+"%'></i></div>"+
-    (done&&result.asset_urls?"<div class='video' style='margin-top:14px'><video controls playsinline src='/infinity/studio/project/"+encodeURIComponent(id)+"/asset/final.mp4'></video></div>":"<div class='notice' style='margin-top:14px'>"+esc(x.status==="failed"?(x.error||"Production failed. Open retry to run again."):"The workspace is producing real artifacts. Refresh is safe.")+"</div>")+
+    (done?"<div class='video' style='margin-top:14px'><video controls playsinline src='/infinity/studio/project/"+encodeURIComponent(id)+"/asset/final.mp4'></video></div>":"<div class='notice' style='margin-top:14px'>"+esc(x.status==="failed"?(x.error||"Production failed. Open retry to run again."):"The workspace is producing real artifacts. Refresh is safe.")+"</div>")+
     "<div class='toolbar' style='margin-top:12px'><button class='btn warn' onclick='cancelProject(\""+esc(id)+"\")'>Cancel</button><button class='btn' onclick='retryProject(\""+esc(id)+"\")'>Retry</button></div>"+
     "</div><div class='card cardPad'><div class='sectionHead'><h3>Production details</h3><span class='status "+statusClass(x.status)+"'>"+esc(x.stage||"")+"</span></div><div class='notice'>"+(x.status==="completed"||x.status==="completed_with_qc_warnings"?"Finalization complete. Artifacts below are addressable from the persistent project store.":"This status comes from the production database, not UI animation.")+"</div><div class='artifacts' style='margin-top:10px'>"+cardLinks+"</div><div id='verifyOut' style='margin-top:10px'></div></div></div>";
     if(pollTimer)clearInterval(pollTimer);
@@ -2459,7 +2469,7 @@ async function runResearch(){
 }
 async function schedule(){
   var x=await api("/infinity/studio/calendar");
-  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>SCHEDULE</div><h1 style='font-size:40px'>Plan delivery without losing production state.</h1><p class='heroLead'>Scheduling records intent. External publishing still requires an authorized destination.</p></div><div class='grid cols2'><div class='card cardPad'><h3>Plan a release</h3><input id='schProject' class='field' placeholder='Project ID' style='margin-top:10px'><input id='schProvider' class='field' value='youtube' placeholder='Destination' style='margin-top:8px'><input id='schAt' class='field' type='datetime-local' style='margin-top:8px'><button class='btn primary' style='margin-top:10px' onclick='saveSchedule()'>Schedule</button><div id='schOut' style='margin-top:10px'></div></div><div class='card cardPad'><h3>Upcoming</h3><div class='list' style='margin-top:10px'>"+((x.items||[]).map(function(i){return "<div class='item'><div class='row'><b>"+esc(i.project_id||"Project")+"</b><span class='status'>"+esc(i.status||"planned")+"</span></div><div class='tiny'>"+esc(i.provider||i.channel||"destination")+" · "+esc(i.publish_at||"")+"</div></div>"}).join("")||"<div class='notice'>Nothing scheduled.</div>")+"</div></div></div>";
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>SCHEDULE</div><h1 style='font-size:40px'>Plan delivery without losing production state.</h1><p class='heroLead'>Scheduling records intent. External publishing still requires an authorized destination.</p></div><div class='grid cols2'><div class='card cardPad'><h3>Plan a release</h3><input id='schProject' class='field' placeholder='Project ID' style='margin-top:10px'><input id='schProvider' class='field' value='youtube' placeholder='Destination' style='margin-top:8px'><input id='schAt' class='field' type='datetime-local' style='margin-top:8px'><button class='btn primary' style='margin-top:10px' onclick='saveSchedule()'>Schedule</button><div id='schOut' style='margin-top:10px'></div></div><div class='card cardPad'><h3>Upcoming</h3><div class='list' style='margin-top:10px'>"+((x.events||[]).map(function(i){return "<div class='item'><div class='row'><b>"+esc(i.project_id||"Project")+"</b><span class='status'>"+esc(i.status||"planned")+"</span></div><div class='tiny'>"+esc(i.provider||i.channel||"destination")+" · "+esc(i.publish_at||"")+"</div></div>"}).join("")||"<div class='notice'>Nothing scheduled.</div>")+"</div></div></div>";
 }
 async function saveSchedule(){
   try{var v=$("schAt").value;var iso=v?new Date(v).toISOString():"";var r=await api("/infinity/studio/calendar",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({project_id:$("schProject").value,provider:$("schProvider").value,publish_at:iso})});$("schOut").innerHTML="<div class='notice good'>"+esc(r.status||"planned")+"</div>";setTimeout(schedule,250)}catch(e){$("schOut").innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>"}
