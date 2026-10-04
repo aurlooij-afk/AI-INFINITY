@@ -1937,6 +1937,21 @@ def enqueue(req: Dict[str, Any], user_id: str, model_fn: Optional[Callable]) -> 
     req["title"] = title
     req["content_type"] = str(req.get("content_type") or "video").lower()
     if req["content_type"] not in {"video", "podcast", "article", "social"}: req["content_type"] = "video"
+    # One-command ergonomics: infer short-form from an explicitly vertical/short
+    # brief when the generic UI default is still "long".
+    requested_format = str(req.get("format") or "long").strip().lower()
+    command_text = " ".join([str(req.get("objective") or ""), str(req.get("title") or ""), str(req.get("topic") or "")]).lower()
+    try:
+        requested_duration = int(req.get("duration") or 0)
+    except Exception:
+        requested_duration = 0
+    if (
+        requested_format == "long"
+        and requested_duration and requested_duration <= 90
+        and str(req.get("aspect_ratio") or "16:9").strip() in {"9:16", "1:1", "4:5"}
+        and re.search(r"\b(vertical|short|shorts|reel|reels|tiktok)\b", command_text)
+    ):
+        req["format"] = "short"
     idem=str(req.get("idempotency_key") or "").strip()[:120]
     if idem:
         with DB_LOCK, _connect() as c:
