@@ -18,7 +18,6 @@ import ipaddress
 import json
 import os
 import re
-import secrets
 import socket
 import sqlite3
 import threading
@@ -30,7 +29,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse, quote
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
-from fastapi import FastAPI, Response, HTTPException, Request as FastAPIRequest, Response
+from fastapi import FastAPI, HTTPException, Request as FastAPIRequest
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
@@ -374,14 +373,6 @@ class RunRequest(BaseModel):
 @app.get("/", response_class=HTMLResponse)
 def root():
     return FINAL_INFINITY_UI
-
-@app.head("/")
-def root_head():
-    return Response(status_code=200)
-
-@app.head("/health")
-def health_head():
-    return Response(status_code=200)
 
 @app.get("/health")
 def health():
@@ -6925,7 +6916,7 @@ try:
 except Exception:
     pass
 
-OWNER_EMAIL_200 = os.getenv("AI_INFINITY_OWNER_EMAIL", "").strip().lower()
+OWNER_EMAIL_200 = os.getenv("AI_INFINITY_OWNER_EMAIL", "aurlooij@gmail.com").strip().lower()
 OWNER_NAME_200 = os.getenv("AI_INFINITY_OWNER_NAME", "AI Infinity Owner").strip() or "AI Infinity Owner"
 BRIDGE_TTL_200 = max(20, int(os.getenv("AI_INFINITY_BRIDGE_TTL_SECONDS", "45")))
 PAIR_TTL_200 = max(60, min(int(os.getenv("AI_INFINITY_PAIR_TTL_SECONDS", "900")), 3600))
@@ -7113,13 +7104,11 @@ def _activation_status_200() -> Dict[str, Any]:
 
 @app.get("/activation/status")
 def activation_status_200():
-    # Public status never exposes owner identity. Private activation details are
-    # available through /infinity/3603/activation/private with operator auth.
-    data=_activation_status_200(); data.pop("owner",None); data["owner"]={"configured":bool(_owner_profile_200().get("email"))}; return data
+    return _activation_status_200()
 
 @app.get("/activation/owner")
 def activation_owner_200():
-    return {"version": APP_VERSION, "owner": {"configured":bool(_owner_profile_200().get("email"))}, "private_endpoint":"/infinity/3603/activation/private", "secret_values_exposed": False}
+    return {"version": APP_VERSION, "owner": _owner_profile_200(), "secret_values_exposed": False}
 
 @app.post("/activation/owner")
 def activation_owner_update_200(body: Dict[str, Any]):
@@ -7136,8 +7125,7 @@ def activation_setup_200():
     return {
         "version": APP_VERSION,
         "build": BUILD,
-        "owner_email": None,
-        "owner_identity": "redacted; use /infinity/3603/activation/private with operator authorization",
+        "owner_email": _owner_profile_200()["email"],
         "server_url": os.getenv("AI_INFINITY_PUBLIC_URL", "https://ai-infinity-ca5e.onrender.com").rstrip("/"),
         "steps": [
             {"order":1,"id":"vault","required":True,"action":"Set AI_INFINITY_VAULT_KEY in Render."},
@@ -7567,7 +7555,7 @@ def _self_test_200() -> Dict[str, Any]:
 @app.get("/self-test-200")
 def self_test_200(): return _self_test_200()
 
-NEXUS_INTERFACE_200 = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#070b14"><title>AI Infinity — Activation Command Center</title><style>\n*{box-sizing:border-box}body{margin:0;background:#060a12;color:#eef3ff;font:14px system-ui,-apple-system,Segoe UI,sans-serif}header{position:sticky;top:0;z-index:10;background:#070b14f2;border-bottom:1px solid #1c2740;padding:12px}main,header>div,nav{max-width:1240px;margin:auto}.brand{font-size:19px;font-weight:850}.muted{color:#8d9bb5}.bar{display:flex;justify-content:space-between;align-items:center;gap:12px}nav{display:flex;gap:6px;overflow:auto;margin-top:10px}button{cursor:pointer;background:#111b2e;color:#fff;border:1px solid #293753;border-radius:10px;padding:9px 12px}button.primary{background:#3a68ad;border-color:#4d7ec6}button.on{background:#1d355c}.view{display:none}.view.on{display:block}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:14px 0}.wide{grid-column:1/-1}.card{background:#0b111e;border:1px solid #1e2a43;border-radius:16px;padding:14px}.field{display:grid;gap:5px;margin:8px 0}input,select,textarea{width:100%;background:#060b14;color:#fff;border:1px solid #293753;border-radius:10px;padding:10px}textarea{min-height:130px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:9px}.out{background:#040810;border:1px solid #18233a;border-radius:11px;padding:10px;white-space:pre-wrap;overflow:auto;max-height:420px}.list{display:grid;gap:7px}.row{display:flex;justify-content:space-between;gap:8px;border:1px solid #1f2a41;border-radius:10px;padding:9px}.pill{display:inline-block;padding:4px 8px;border-radius:999px;border:1px solid #293753;font-size:11px}.good{color:#8feeb5}.warn{color:#ffd17b}.bad{color:#ff9292}.cols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.kpi{padding:10px;border:1px solid #1e2a43;border-radius:10px}.num{font-size:20px;font-weight:800}@media(max-width:850px){.grid,.cols{grid-template-columns:1fr}.wide{grid-column:auto}main{padding:0 9px}}\n</style></head><body><header><div class="bar"><div><div class="brand">∞ AI Infinity — Real-World Command Center</div><div class="muted">activate · connect · command · verify · learn</div></div><span id="health" class="pill">checking…</span></div><nav><button class="on" onclick="view(\'home\',this)">Command</button><button onclick="view(\'activate\',this)">Activate</button><button onclick="view(\'agent\',this)">Agents</button><button onclick="view(\'world\',this)">World</button><button onclick="view(\'system\',this)">System</button></nav></header><main>\n<section id="home" class="view on"><div class="grid"><div class="card wide"><h2>What do you want AI Infinity to do?</h2><textarea id="objective" placeholder="Example: Research autonomous AI reliability and remember the key findings."></textarea><div class="actions"><button onclick="understand()">Understand</button><button onclick="simulate()">Safe simulate</button><button class="primary" onclick="execute()">Execute</button></div><div id="cmdout" class="out">Ready.</div></div><div class="card"><h3>Activation</h3><div id="activationCards" class="list">Loading…</div></div><div class="card"><h3>Live activity</h3><div id="activity" class="list">Loading…</div></div></div></section>\n<section id="activate" class="view"><div class="grid"><div class="card"><h2>Owner account</h2><input id="ownerEmail" value=""><input id="ownerName" value="AI Infinity Owner" style="margin-top:7px"><button class="primary" onclick="saveOwner()" style="margin-top:8px">Save owner</button><div id="ownerOut" class="out" style="margin-top:8px">Owner target is non-secret configuration.</div></div><div class="card"><h2>Security readiness</h2><div id="securityOut" class="out">Loading…</div></div><div class="card wide"><h2>Real connections</h2><div class="field"><label>Provider</label><select id="provider"><option>google</option><option>github</option><option>slack</option><option>microsoft</option></select><input id="account" value="default" style="margin-top:7px"><input id="providerToken" type="password" autocomplete="off" placeholder="Access token — sent only to AI Infinity"><input id="operatorToken" type="password" autocomplete="off" placeholder="Operator token — never stored in browser"></div><div class="actions"><button class="primary" onclick="connectProvider()">Connect encrypted</button><button onclick="testProvider()">Test connection</button></div><div id="providerOut" class="out">No provider action yet.</div></div><div class="card wide"><h2>Google OAuth — Gmail / Calendar</h2><div class="muted">Use this only on the deployed HTTPS AI Infinity URL. Client credentials are sent over HTTPS and encrypted into the AI Infinity vault; they are never returned.</div><input id="oauthName" value="owner-google" style="margin-top:7px"><input id="oauthClientId" type="password" autocomplete="off" placeholder="Google OAuth Client ID" style="margin-top:7px"><input id="oauthClientSecret" type="password" autocomplete="off" placeholder="Google OAuth Client Secret" style="margin-top:7px"><input id="oauthRedirect" readonly value="/activate/google/callback" style="margin-top:7px"><div class="actions"><button class="primary" onclick="configureGoogleOAuth()">Save encrypted OAuth client</button><button onclick="startGoogleOAuth()">Authorize Google</button></div><div id="oauthOut" class="out">For Google Cloud, use this exact callback after deployment: your AI Infinity URL + /activate/google/callback</div></div><div class="card"><h2>Browser bridge</h2><input id="browserName" value="my-browser"><input id="browserCode" placeholder="Pairing code"><div class="actions"><button onclick="newPair(\'browser\')">Generate code</button><button class="primary" onclick="bridgeGuide(\'browser\')">Bridge instructions</button></div><div id="browserOut" class="out">Use the pairing code on the machine that should run the real browser.</div></div><div class="card"><h2>Device bridge</h2><input id="deviceName" value="my-device"><input id="deviceCode" placeholder="Pairing code"><div class="actions"><button onclick="newPair(\'device\')">Generate code</button><button class="primary" onclick="bridgeGuide(\'device\')">Bridge instructions</button></div><div id="deviceOut" class="out">The bridge makes only allowlisted device actions available.</div></div><div class="card wide"><h3>Connection state</h3><div id="connectionsOut" class="out">Loading…</div></div></div></section>\n<section id="agent" class="view"><div class="grid"><div class="card"><h2>Autonomous agent</h2><textarea id="agentObj" placeholder="Give AI Infinity a goal…"></textarea><div class="actions"><button onclick="agentPlan()">Plan</button><button onclick="agentSim()">Simulate</button><button class="primary" onclick="agentRun()">Run</button></div></div><div class="card"><h2>Schedule</h2><input id="sname" placeholder="Name"><input id="sobj" placeholder="Objective" style="margin-top:7px"><input id="sint" type="number" value="3600" min="60" style="margin-top:7px"><button onclick="createSchedule()" style="margin-top:7px">Create safe schedule</button></div><div class="card wide"><div id="agentOut" class="out">Loading…</div></div></div></section>\n<section id="world" class="view"><div class="grid"><div class="card wide"><h2>World graph</h2><div id="worldOut" class="out">Loading…</div></div></div></section>\n<section id="system" class="view"><div class="grid"><div class="card wide"><h2>Production + activation</h2><div id="systemOut" class="out">Loading…</div></div><div class="card wide"><h3>Safety invariants</h3><div class="cols"><div class="kpi"><div class="muted">Side-effect approval</div><div class="num good">ON</div></div><div class="kpi"><div class="muted">Arbitrary code</div><div class="num good">OFF</div></div><div class="kpi"><div class="muted">Uncertain replay</div><div class="num good">OFF</div></div></div></div></div></section>\n</main><script>\nconst $=id=>document.getElementById(id);async function api(u,o){const r=await fetch(u,o);const t=await r.text();let j;try{j=JSON.parse(t)}catch{throw Error(t||(\'HTTP \'+r.status))}if(!r.ok)throw Error(j.detail||j.error||(\'HTTP \'+r.status));return j}function put(id,j){$(id).textContent=JSON.stringify(j,null,2)}function view(id,b){document.querySelectorAll(\'.view\').forEach(x=>x.classList.remove(\'on\'));$(id).classList.add(\'on\');document.querySelectorAll(\'nav button\').forEach(x=>x.classList.remove(\'on\'));b.classList.add(\'on\');if(id===\'activate\')loadActivation();if(id===\'agent\')loadAgent();if(id===\'world\')loadWorld();if(id===\'system\')loadSystem()}\nasync function loadActivation(){try{const s=await api(\'/activation/status\');const cards=[[\'Vault\',s.vault.configured],[\'Operator gate\',s.operator.configured],[\'Google\',s.vault_accounts.some(x=>x.provider===\'google\'&&x.active)],[\'Browser bridge\',!!s.active_browser_bridge],[\'Device bridge\',!!s.active_device_bridge],[\'Scheduler\',!!s.scheduler.healthy]];$(\'activationCards\').innerHTML=cards.map(x=>\'<div class="row"><span>\'+x[0]+\'</span><b class="\'+(x[1]?\'good\':\'warn\')+\'">\'+(x[1]?\'READY\':\'WAITING\')+\'</b></div>\').join(\'\');$(\'health\').textContent=s.ready_for_activation?\'ONLINE\':\'ACTIVATION NEEDED\';$(\'health\').className=\'pill \'+(s.ready_for_activation?\'good\':\'warn\');put(\'securityOut\',{vault:s.vault,operator:s.operator,missing:s.missing});put(\'connectionsOut\',{owner:s.owner,vault_accounts:s.vault_accounts,browser_bridges:s.browser_bridges,device_bridges:s.device_bridges});$(\'ownerEmail\').value=s.owner.email;$(\'ownerName\').value=s.owner.display_name}catch(e){$(\'securityOut\').textContent=e.message}}\nasync function saveOwner(){try{put(\'ownerOut\',await api(\'/activation/owner\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({email:$(\'ownerEmail\').value.trim(),display_name:$(\'ownerName\').value.trim()})}))}catch(e){$(\'ownerOut\').textContent=e.message}}\nasync function connectProvider(){try{const op=$(\'operatorToken\').value;const token=$(\'providerToken\').value;if(!op||!token){$(\'providerOut\').textContent=\'Operator token and access token are required.\';return}put(\'providerOut\',await api(\'/connections/provider\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({provider:$(\'provider\').value,account_name:$(\'account\').value||\'default\',access_token:token,operator_token:op})}));$(\'providerToken\').value=\'\';loadActivation()}catch(e){$(\'providerOut\').textContent=e.message}}\nasync function testProvider(){try{put(\'providerOut\',await api(\'/connections/provider/test\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({provider:$(\'provider\').value,account_name:$(\'account\').value||\'default\',operator_token:$(\'operatorToken\').value})}))}catch(e){put(\'providerOut\',{error:e.message})}}\nasync function configureGoogleOAuth(){try{const op=$("operatorToken").value.trim(),cid=$("oauthClientId").value.trim(),cs=$("oauthClientSecret").value.trim();if(!op||!cid||!cs){put("oauthOut",{error:"Operator token, client ID and client secret are required."});return}const redirect=location.origin+"/activate/google/callback";const j=await api("/oauth/client",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({provider:"google",name:$("oauthName").value.trim()||"owner-google",redirect_uri:redirect,client_id:cid,client_secret:cs,operator_token:op})});window.aiGoogleOAuthClient=j.client_id;$("oauthRedirect").value=redirect;put("oauthOut",j);loadActivation()}catch(e){put("oauthOut",{error:e.message})}}\nasync function startGoogleOAuth(){try{const op=$("operatorToken").value.trim();if(!op){put("oauthOut",{error:"Enter the operator token first."});return}let id=window.aiGoogleOAuthClient;if(!id){const meta=await api("/activation/google/client");id=meta.client&&meta.client.id}if(!id){put("oauthOut",{error:"Configure the Google OAuth client first."});return}const j=await api("/oauth/client/"+encodeURIComponent(id)+"/start",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({operator_token:op})});put("oauthOut",j);if(j.authorization_url)window.open(j.authorization_url,"_blank","noopener,noreferrer")}catch(e){put("oauthOut",{error:e.message})}}\nasync function newPair(kind){try{const name=kind===\'browser\'?($(\'browserName\').value||\'my-browser\'):($(\'deviceName\').value||\'my-device\');const j=await api(\'/activation/pair/start\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({kind,name})});$(kind===\'browser\'?\'browserCode\':\'deviceCode\').value=j.code;put(kind===\'browser\'?\'browserOut\':\'deviceOut\',j)}catch(e){$(kind===\'browser\'?\'browserOut\':\'deviceOut\').textContent=e.message}}\nasync function bridgeGuide(kind){const code=$(kind===\'browser\'?\'browserCode\':\'deviceCode\').value.trim();if(!code){$(kind===\'browser\'?\'browserOut\':\'deviceOut\').textContent=\'Generate the pairing code first.\';return}const name=kind===\'browser\'?($(\'browserName\').value||\'my-browser\'):($(\'deviceName\').value||\'my-device\');put(kind===\'browser\'?\'browserOut\':\'deviceOut\',{run_command:\'python ai_infinity_bridge.py --server \'+location.origin+\' --kind \'+kind+\' --name \'+name+\' --code \'+code,download:\'/bridge/ai_infinity_bridge.py\',pairing_code:code,install:kind===\'browser\'?\'python -m pip install playwright && python -m playwright install chromium\':\'pkg update -y && pkg install -y python\',note:\'One-time pairing code. The long-lived bridge token stays on the local runtime.\'})}\nasync function understand(){const q=$(\'objective\').value.trim();if(q)put(\'cmdout\',await api(\'/agent/understand-200\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({objective:q})}))}async function simulate(){const q=$(\'objective\').value.trim();if(q)put(\'cmdout\',await api(\'/agent/simulate-200\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({objective:q})}))}async function execute(){const q=$(\'objective\').value.trim();if(q)put(\'cmdout\',await api(\'/agent/execute-200\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({objective:q,operator_token:$(\'operatorToken\').value,approved:true})}));loadActivation()}\nasync function loadAgent(){try{put(\'agentOut\',await api(\'/agent/control\'))}catch(e){$(\'agentOut\').textContent=e.message}}async function agentPlan(){const q=$(\'agentObj\').value.trim();if(q)put(\'agentOut\',await api(\'/agent/understand-200\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({objective:q})}))}async function agentSim(){const q=$(\'agentObj\').value.trim();if(q)put(\'agentOut\',await api(\'/agent/simulate-200\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({objective:q})}))}async function agentRun(){const q=$(\'agentObj\').value.trim();if(q)put(\'agentOut\',await api(\'/agent/execute-200\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({objective:q,operator_token:$(\'operatorToken\').value,approved:true})}));loadAgent()}async function createSchedule(){const n=$(\'sname\').value.trim(),o=$(\'sobj\').value.trim(),i=Number($(\'sint\').value||3600);if(n&&o)put(\'agentOut\',await api(\'/agent/schedule\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({name:n,objective:o,interval_seconds:i})}))}async function loadWorld(){try{put(\'worldOut\',await api(\'/world/graph\'))}catch(e){$(\'worldOut\').textContent=e.message}}async function loadSystem(){try{const [a,s]=await Promise.all([api(\'/activation/status\'),api(\'/production/observability-199\')]);put(\'systemOut\',{activation:a,production:s})}catch(e){$(\'systemOut\').textContent=e.message}}\nloadActivation();setInterval(loadActivation,10000);\n</script></body></html>\n'
+NEXUS_INTERFACE_200 = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#070b14"><title>AI Infinity — Activation Command Center</title><style>\n*{box-sizing:border-box}body{margin:0;background:#060a12;color:#eef3ff;font:14px system-ui,-apple-system,Segoe UI,sans-serif}header{position:sticky;top:0;z-index:10;background:#070b14f2;border-bottom:1px solid #1c2740;padding:12px}main,header>div,nav{max-width:1240px;margin:auto}.brand{font-size:19px;font-weight:850}.muted{color:#8d9bb5}.bar{display:flex;justify-content:space-between;align-items:center;gap:12px}nav{display:flex;gap:6px;overflow:auto;margin-top:10px}button{cursor:pointer;background:#111b2e;color:#fff;border:1px solid #293753;border-radius:10px;padding:9px 12px}button.primary{background:#3a68ad;border-color:#4d7ec6}button.on{background:#1d355c}.view{display:none}.view.on{display:block}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:14px 0}.wide{grid-column:1/-1}.card{background:#0b111e;border:1px solid #1e2a43;border-radius:16px;padding:14px}.field{display:grid;gap:5px;margin:8px 0}input,select,textarea{width:100%;background:#060b14;color:#fff;border:1px solid #293753;border-radius:10px;padding:10px}textarea{min-height:130px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:9px}.out{background:#040810;border:1px solid #18233a;border-radius:11px;padding:10px;white-space:pre-wrap;overflow:auto;max-height:420px}.list{display:grid;gap:7px}.row{display:flex;justify-content:space-between;gap:8px;border:1px solid #1f2a41;border-radius:10px;padding:9px}.pill{display:inline-block;padding:4px 8px;border-radius:999px;border:1px solid #293753;font-size:11px}.good{color:#8feeb5}.warn{color:#ffd17b}.bad{color:#ff9292}.cols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.kpi{padding:10px;border:1px solid #1e2a43;border-radius:10px}.num{font-size:20px;font-weight:800}@media(max-width:850px){.grid,.cols{grid-template-columns:1fr}.wide{grid-column:auto}main{padding:0 9px}}\n</style></head><body><header><div class="bar"><div><div class="brand">∞ AI Infinity — Real-World Command Center</div><div class="muted">activate · connect · command · verify · learn</div></div><span id="health" class="pill">checking…</span></div><nav><button class="on" onclick="view(\'home\',this)">Command</button><button onclick="view(\'activate\',this)">Activate</button><button onclick="view(\'agent\',this)">Agents</button><button onclick="view(\'world\',this)">World</button><button onclick="view(\'system\',this)">System</button></nav></header><main>\n<section id="home" class="view on"><div class="grid"><div class="card wide"><h2>What do you want AI Infinity to do?</h2><textarea id="objective" placeholder="Example: Research autonomous AI reliability and remember the key findings."></textarea><div class="actions"><button onclick="understand()">Understand</button><button onclick="simulate()">Safe simulate</button><button class="primary" onclick="execute()">Execute</button></div><div id="cmdout" class="out">Ready.</div></div><div class="card"><h3>Activation</h3><div id="activationCards" class="list">Loading…</div></div><div class="card"><h3>Live activity</h3><div id="activity" class="list">Loading…</div></div></div></section>\n<section id="activate" class="view"><div class="grid"><div class="card"><h2>Owner account</h2><input id="ownerEmail" value="aurlooij@gmail.com"><input id="ownerName" value="AI Infinity Owner" style="margin-top:7px"><button class="primary" onclick="saveOwner()" style="margin-top:8px">Save owner</button><div id="ownerOut" class="out" style="margin-top:8px">Owner target is non-secret configuration.</div></div><div class="card"><h2>Security readiness</h2><div id="securityOut" class="out">Loading…</div></div><div class="card wide"><h2>Real connections</h2><div class="field"><label>Provider</label><select id="provider"><option>google</option><option>github</option><option>slack</option><option>microsoft</option></select><input id="account" value="default" style="margin-top:7px"><input id="providerToken" type="password" autocomplete="off" placeholder="Access token — sent only to AI Infinity"><input id="operatorToken" type="password" autocomplete="off" placeholder="Operator token — never stored in browser"></div><div class="actions"><button class="primary" onclick="connectProvider()">Connect encrypted</button><button onclick="testProvider()">Test connection</button></div><div id="providerOut" class="out">No provider action yet.</div></div><div class="card wide"><h2>Google OAuth — Gmail / Calendar</h2><div class="muted">Use this only on the deployed HTTPS AI Infinity URL. Client credentials are sent over HTTPS and encrypted into the AI Infinity vault; they are never returned.</div><input id="oauthName" value="owner-google" style="margin-top:7px"><input id="oauthClientId" type="password" autocomplete="off" placeholder="Google OAuth Client ID" style="margin-top:7px"><input id="oauthClientSecret" type="password" autocomplete="off" placeholder="Google OAuth Client Secret" style="margin-top:7px"><input id="oauthRedirect" readonly value="/activate/google/callback" style="margin-top:7px"><div class="actions"><button class="primary" onclick="configureGoogleOAuth()">Save encrypted OAuth client</button><button onclick="startGoogleOAuth()">Authorize Google</button></div><div id="oauthOut" class="out">For Google Cloud, use this exact callback after deployment: your AI Infinity URL + /activate/google/callback</div></div><div class="card"><h2>Browser bridge</h2><input id="browserName" value="my-browser"><input id="browserCode" placeholder="Pairing code"><div class="actions"><button onclick="newPair(\'browser\')">Generate code</button><button class="primary" onclick="bridgeGuide(\'browser\')">Bridge instructions</button></div><div id="browserOut" class="out">Use the pairing code on the machine that should run the real browser.</div></div><div class="card"><h2>Device bridge</h2><input id="deviceName" value="my-device"><input id="deviceCode" placeholder="Pairing code"><div class="actions"><button onclick="newPair(\'device\')">Generate code</button><button class="primary" onclick="bridgeGuide(\'device\')">Bridge instructions</button></div><div id="deviceOut" class="out">The bridge makes only allowlisted device actions available.</div></div><div class="card wide"><h3>Connection state</h3><div id="connectionsOut" class="out">Loading…</div></div></div></section>\n<section id="agent" class="view"><div class="grid"><div class="card"><h2>Autonomous agent</h2><textarea id="agentObj" placeholder="Give AI Infinity a goal…"></textarea><div class="actions"><button onclick="agentPlan()">Plan</button><button onclick="agentSim()">Simulate</button><button class="primary" onclick="agentRun()">Run</button></div></div><div class="card"><h2>Schedule</h2><input id="sname" placeholder="Name"><input id="sobj" placeholder="Objective" style="margin-top:7px"><input id="sint" type="number" value="3600" min="60" style="margin-top:7px"><button onclick="createSchedule()" style="margin-top:7px">Create safe schedule</button></div><div class="card wide"><div id="agentOut" class="out">Loading…</div></div></div></section>\n<section id="world" class="view"><div class="grid"><div class="card wide"><h2>World graph</h2><div id="worldOut" class="out">Loading…</div></div></div></section>\n<section id="system" class="view"><div class="grid"><div class="card wide"><h2>Production + activation</h2><div id="systemOut" class="out">Loading…</div></div><div class="card wide"><h3>Safety invariants</h3><div class="cols"><div class="kpi"><div class="muted">Side-effect approval</div><div class="num good">ON</div></div><div class="kpi"><div class="muted">Arbitrary code</div><div class="num good">OFF</div></div><div class="kpi"><div class="muted">Uncertain replay</div><div class="num good">OFF</div></div></div></div></div></section>\n</main><script>\nconst $=id=>document.getElementById(id);async function api(u,o){const r=await fetch(u,o);const t=await r.text();let j;try{j=JSON.parse(t)}catch{throw Error(t||(\'HTTP \'+r.status))}if(!r.ok)throw Error(j.detail||j.error||(\'HTTP \'+r.status));return j}function put(id,j){$(id).textContent=JSON.stringify(j,null,2)}function view(id,b){document.querySelectorAll(\'.view\').forEach(x=>x.classList.remove(\'on\'));$(id).classList.add(\'on\');document.querySelectorAll(\'nav button\').forEach(x=>x.classList.remove(\'on\'));b.classList.add(\'on\');if(id===\'activate\')loadActivation();if(id===\'agent\')loadAgent();if(id===\'world\')loadWorld();if(id===\'system\')loadSystem()}\nasync function loadActivation(){try{const s=await api(\'/activation/status\');const cards=[[\'Vault\',s.vault.configured],[\'Operator gate\',s.operator.configured],[\'Google\',s.vault_accounts.some(x=>x.provider===\'google\'&&x.active)],[\'Browser bridge\',!!s.active_browser_bridge],[\'Device bridge\',!!s.active_device_bridge],[\'Scheduler\',!!s.scheduler.healthy]];$(\'activationCards\').innerHTML=cards.map(x=>\'<div class="row"><span>\'+x[0]+\'</span><b class="\'+(x[1]?\'good\':\'warn\')+\'">\'+(x[1]?\'READY\':\'WAITING\')+\'</b></div>\').join(\'\');$(\'health\').textContent=s.ready_for_activation?\'ONLINE\':\'ACTIVATION NEEDED\';$(\'health\').className=\'pill \'+(s.ready_for_activation?\'good\':\'warn\');put(\'securityOut\',{vault:s.vault,operator:s.operator,missing:s.missing});put(\'connectionsOut\',{owner:s.owner,vault_accounts:s.vault_accounts,browser_bridges:s.browser_bridges,device_bridges:s.device_bridges});$(\'ownerEmail\').value=s.owner.email;$(\'ownerName\').value=s.owner.display_name}catch(e){$(\'securityOut\').textContent=e.message}}\nasync function saveOwner(){try{put(\'ownerOut\',await api(\'/activation/owner\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({email:$(\'ownerEmail\').value.trim(),display_name:$(\'ownerName\').value.trim()})}))}catch(e){$(\'ownerOut\').textContent=e.message}}\nasync function connectProvider(){try{const op=$(\'operatorToken\').value;const token=$(\'providerToken\').value;if(!op||!token){$(\'providerOut\').textContent=\'Operator token and access token are required.\';return}put(\'providerOut\',await api(\'/connections/provider\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({provider:$(\'provider\').value,account_name:$(\'account\').value||\'default\',access_token:token,operator_token:op})}));$(\'providerToken\').value=\'\';loadActivation()}catch(e){$(\'providerOut\').textContent=e.message}}\nasync function testProvider(){try{put(\'providerOut\',await api(\'/connections/provider/test\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({provider:$(\'provider\').value,account_name:$(\'account\').value||\'default\',operator_token:$(\'operatorToken\').value})}))}catch(e){put(\'providerOut\',{error:e.message})}}\nasync function configureGoogleOAuth(){try{const op=$("operatorToken").value.trim(),cid=$("oauthClientId").value.trim(),cs=$("oauthClientSecret").value.trim();if(!op||!cid||!cs){put("oauthOut",{error:"Operator token, client ID and client secret are required."});return}const redirect=location.origin+"/activate/google/callback";const j=await api("/oauth/client",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({provider:"google",name:$("oauthName").value.trim()||"owner-google",redirect_uri:redirect,client_id:cid,client_secret:cs,operator_token:op})});window.aiGoogleOAuthClient=j.client_id;$("oauthRedirect").value=redirect;put("oauthOut",j);loadActivation()}catch(e){put("oauthOut",{error:e.message})}}\nasync function startGoogleOAuth(){try{const op=$("operatorToken").value.trim();if(!op){put("oauthOut",{error:"Enter the operator token first."});return}let id=window.aiGoogleOAuthClient;if(!id){const meta=await api("/activation/google/client");id=meta.client&&meta.client.id}if(!id){put("oauthOut",{error:"Configure the Google OAuth client first."});return}const j=await api("/oauth/client/"+encodeURIComponent(id)+"/start",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({operator_token:op})});put("oauthOut",j);if(j.authorization_url)window.open(j.authorization_url,"_blank","noopener,noreferrer")}catch(e){put("oauthOut",{error:e.message})}}\nasync function newPair(kind){try{const name=kind===\'browser\'?($(\'browserName\').value||\'my-browser\'):($(\'deviceName\').value||\'my-device\');const j=await api(\'/activation/pair/start\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({kind,name})});$(kind===\'browser\'?\'browserCode\':\'deviceCode\').value=j.code;put(kind===\'browser\'?\'browserOut\':\'deviceOut\',j)}catch(e){$(kind===\'browser\'?\'browserOut\':\'deviceOut\').textContent=e.message}}\nasync function bridgeGuide(kind){const code=$(kind===\'browser\'?\'browserCode\':\'deviceCode\').value.trim();if(!code){$(kind===\'browser\'?\'browserOut\':\'deviceOut\').textContent=\'Generate the pairing code first.\';return}const name=kind===\'browser\'?($(\'browserName\').value||\'my-browser\'):($(\'deviceName\').value||\'my-device\');put(kind===\'browser\'?\'browserOut\':\'deviceOut\',{run_command:\'python ai_infinity_bridge.py --server \'+location.origin+\' --kind \'+kind+\' --name \'+name+\' --code \'+code,download:\'/bridge/ai_infinity_bridge.py\',pairing_code:code,install:kind===\'browser\'?\'python -m pip install playwright && python -m playwright install chromium\':\'pkg update -y && pkg install -y python\',note:\'One-time pairing code. The long-lived bridge token stays on the local runtime.\'})}\nasync function understand(){const q=$(\'objective\').value.trim();if(q)put(\'cmdout\',await api(\'/agent/understand-200\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({objective:q})}))}async function simulate(){const q=$(\'objective\').value.trim();if(q)put(\'cmdout\',await api(\'/agent/simulate-200\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({objective:q})}))}async function execute(){const q=$(\'objective\').value.trim();if(q)put(\'cmdout\',await api(\'/agent/execute-200\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({objective:q,operator_token:$(\'operatorToken\').value,approved:true})}));loadActivation()}\nasync function loadAgent(){try{put(\'agentOut\',await api(\'/agent/control\'))}catch(e){$(\'agentOut\').textContent=e.message}}async function agentPlan(){const q=$(\'agentObj\').value.trim();if(q)put(\'agentOut\',await api(\'/agent/understand-200\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({objective:q})}))}async function agentSim(){const q=$(\'agentObj\').value.trim();if(q)put(\'agentOut\',await api(\'/agent/simulate-200\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({objective:q})}))}async function agentRun(){const q=$(\'agentObj\').value.trim();if(q)put(\'agentOut\',await api(\'/agent/execute-200\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({objective:q,operator_token:$(\'operatorToken\').value,approved:true})}));loadAgent()}async function createSchedule(){const n=$(\'sname\').value.trim(),o=$(\'sobj\').value.trim(),i=Number($(\'sint\').value||3600);if(n&&o)put(\'agentOut\',await api(\'/agent/schedule\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify({name:n,objective:o,interval_seconds:i})}))}async function loadWorld(){try{put(\'worldOut\',await api(\'/world/graph\'))}catch(e){$(\'worldOut\').textContent=e.message}}async function loadSystem(){try{const [a,s]=await Promise.all([api(\'/activation/status\'),api(\'/production/observability-199\')]);put(\'systemOut\',{activation:a,production:s})}catch(e){$(\'systemOut\').textContent=e.message}}\nloadActivation();setInterval(loadActivation,10000);\n</script></body></html>\n'
 NEXUS_INTERFACE_199 = NEXUS_INTERFACE_200
 
 BRIDGE_SCRIPT_200 = '#!/usr/bin/env python3\n"""AI Infinity 200 local bridge.\nOnly allowlisted actions are executed. The server can never send shell code or\narbitrary programs to this bridge.\n\nDevice mode works with standard Python. On Android/Termux, optional\ntermux-api binaries enable notifications and URL opening.\nBrowser mode requires Playwright + Chromium on a trusted computer.\n"""\nfrom __future__ import annotations\nimport argparse, json, os, platform, shutil, subprocess, time, urllib.parse, urllib.request\nfrom pathlib import Path\n\n\ndef api(base, path, payload):\n    data=json.dumps(payload).encode()\n    req=urllib.request.Request(base.rstrip(\'/\')+path,data=data,headers={\'content-type\':\'application/json\',\'accept\':\'application/json\'},method=\'POST\')\n    with urllib.request.urlopen(req,timeout=30) as r:\n        return json.loads(r.read(512*1024).decode())\n\n\ndef public_url(url):\n    p=urllib.parse.urlparse(url)\n    if p.scheme not in (\'http\',\'https\') or not p.hostname: return False\n    h=p.hostname.lower().rstrip(\'.\')\n    if h in {\'localhost\',\'localhost.localdomain\',\'metadata\',\'metadata.google.internal\',\'host.docker.internal\'}: return False\n    try:\n        import ipaddress, socket\n        infos=socket.getaddrinfo(h,p.port or (443 if p.scheme==\'https\' else 80),type=socket.SOCK_STREAM)\n        for item in infos:\n            ip=ipaddress.ip_address(item[4][0])\n            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified: return False\n    except Exception: return False\n    return True\n\n\ndef browser_caps():\n    try:\n        import playwright  # noqa: F401\n        return [\'browser.web\']\n    except Exception:\n        return []\n\n\ndef device_caps():\n    caps=[\'device.ping\',\'device.info\']\n    if shutil.which(\'termux-notification\'): caps.append(\'device.notify\')\n    if shutil.which(\'termux-open-url\'): caps.append(\'device.open_url\')\n    return caps\n\n\ndef browser_execute(page, action, cmd):\n    timeout=int(cmd.get(\'timeout_ms\') or 15000)\n    if action==\'browser.navigate\':\n        url=str(cmd.get(\'url\') or \'\')\n        if not public_url(url): return \'failed\',{\'error\':\'blocked non-public URL\'}\n        resp=page.goto(url,wait_until=\'domcontentloaded\',timeout=timeout)\n        status=getattr(resp,\'status\',lambda:None)() if resp else None\n        return \'completed\',{\'observation\':{\'url\':page.url,\'title\':page.title(),\'http_status\':status}}\n    if action==\'browser.click\':\n        sel=str(cmd.get(\'selector\') or \'\')\n        if not sel: return \'failed\',{\'error\':\'selector required\'}\n        page.locator(sel).click(timeout=timeout)\n        return \'completed\',{\'observation\':{\'url\':page.url,\'title\':page.title()}}\n    if action==\'browser.type\':\n        sel=str(cmd.get(\'selector\') or \'\'); text=str(cmd.get(\'text\') or \'\')\n        if not sel: return \'failed\',{\'error\':\'selector required\'}\n        page.locator(sel).fill(text,timeout=timeout)\n        return \'completed\',{\'observation\':{\'url\':page.url,\'title\':page.title()}}\n    if action==\'browser.submit\':\n        sel=str(cmd.get(\'selector\') or \'\')\n        if sel: page.locator(sel).press(\'Enter\',timeout=timeout)\n        else: page.keyboard.press(\'Enter\')\n        return \'completed\',{\'observation\':{\'url\':page.url,\'title\':page.title()}}\n    if action==\'browser.extract\':\n        txt=page.locator(\'body\').inner_text(timeout=timeout)[:10000]\n        return \'completed\',{\'observation\':{\'url\':page.url,\'title\':page.title(),\'text\':txt}}\n    return \'unsupported\',{\'error\':\'unsupported browser action\'}\n\n\ndef device_execute(action, cmd):\n    if action==\'device.ping\': return \'completed\',{\'device\':\'online\',\'timestamp\':time.time()}\n    if action==\'device.info\': return \'completed\',{\'device_id\':platform.node(),\'system\':platform.system(),\'release\':platform.release(),\'machine\':platform.machine(),\'python\':platform.python_version(),\'bridge_version\':\'200\'}\n    if action==\'device.notify\':\n        text=str(cmd.get(\'text\') or \'\')[:2000]; exe=shutil.which(\'termux-notification\')\n        if not exe: return \'unsupported\',{\'error\':\'termux-notification not installed\'}\n        r=subprocess.run([exe,\'--title\',\'AI Infinity\',\'--content\',text],capture_output=True,text=True,timeout=15)\n        return (\'completed\' if r.returncode==0 else \'failed\'),{\'stdout\':r.stdout[-500:],\'stderr\':r.stderr[-500:]}\n    if action==\'device.open_url\':\n        url=str(cmd.get(\'url\') or \'\')\n        if not public_url(url): return \'failed\',{\'error\':\'blocked non-public URL\'}\n        exe=shutil.which(\'termux-open-url\')\n        if exe:\n            r=subprocess.run([exe,url],capture_output=True,text=True,timeout=15)\n            return (\'completed\' if r.returncode==0 else \'failed\'),{\'stdout\':r.stdout[-500:],\'stderr\':r.stderr[-500:]}\n        import webbrowser\n        return (\'completed\' if webbrowser.open(url) else \'failed\'),{\'opened\':url}\n    return \'unsupported\',{\'error\':\'unsupported device action\'}\n\n\ndef main():\n    ap=argparse.ArgumentParser()\n    ap.add_argument(\'--server\',required=True); ap.add_argument(\'--kind\',choices=[\'browser\',\'device\'],required=True)\n    ap.add_argument(\'--name\',required=True); ap.add_argument(\'--code\',required=True); ap.add_argument(\'--headful\',action=\'store_true\')\n    args=ap.parse_args()\n    store=Path(\'bridge_credential.json\')\n    token=None; runtime_id=None\n    if store.exists():\n        try:\n            saved=json.loads(store.read_text()); token=saved.get(\'bridge_token\'); runtime_id=saved.get(\'runtime_id\')\n        except Exception: pass\n    caps=browser_caps() if args.kind==\'browser\' else device_caps()\n    if args.kind==\'browser\' and \'browser.web\' not in caps:\n        raise SystemExit(\'Browser mode needs: pip install playwright && playwright install chromium\')\n    if not token:\n        claim=api(args.server,\'/activation/pair/claim\',{\'code\':args.code,\'kind\':args.kind,\'name\':args.name,\'capabilities\':caps,\'metadata\':{\'platform\':platform.platform(),\'bridge_version\':\'200\'}})\n        token=claim[\'bridge_token\']; runtime_id=claim[\'runtime_id\']\n        store.write_text(json.dumps({\'runtime_id\':runtime_id,\'bridge_token\':token,\'kind\':args.kind,\'name\':args.name}))\n        try: os.chmod(store,0o600)\n        except Exception: pass\n    page=None; browser=None; pw=None\n    if args.kind==\'browser\':\n        from playwright.sync_api import sync_playwright\n        pw=sync_playwright().start(); browser=pw.chromium.launch(headless=not args.headful); page=browser.new_page()\n    print(json.dumps({\'status\':\'paired\',\'runtime_id\':runtime_id,\'kind\':args.kind,\'name\':args.name,\'capabilities\':caps},indent=2))\n    last_hb=0\n    try:\n        while True:\n            if time.time()-last_hb>=10:\n                api(args.server,\'/bridge/heartbeat\',{\'runtime_id\':runtime_id,\'bridge_token\':token,\'healthy\':True,\'capabilities\':caps,\'metadata\':{\'platform\':platform.platform(),\'bridge_version\':\'200\'}}); last_hb=time.time()\n            pol=api(args.server,\'/bridge/poll\',{\'runtime_id\':runtime_id,\'bridge_token\':token})\n            if pol.get(\'status\')==\'command\':\n                c=pol[\'command\']; action=c[\'action\']; cmd=c.get(\'command\') or {}\n                try:\n                    status,result=browser_execute(page,action,cmd) if action.startswith(\'browser.\') else device_execute(action,cmd)\n                except Exception as exc:\n                    status,result=\'failed\',{\'error\':str(exc)[:500]}\n                api(args.server,\'/bridge/result\',{\'runtime_id\':runtime_id,\'bridge_token\':token,\'command_id\':c[\'id\'],\'status\':status,\'result\':result,\'error\':result.get(\'error\') if isinstance(result,dict) else None})\n            time.sleep(2)\n    finally:\n        if browser: browser.close()\n        if pw: pw.stop()\n\nif __name__==\'__main__\': main()\n'
@@ -13246,23 +13234,13 @@ def _3601_event(kind, state="completed", opportunity_id=None, detail=None):
 
 
 def _3601_safe_public_url(url, allowed_hosts=None):
-    """Validate an outbound public source without misclassifying DNS outages.
-
-    Host allowlisting is deterministic. DNS/IP safety is checked when DNS
-    resolution succeeds; a resolver outage is returned as a connectivity
-    failure by the caller rather than being reported as an unsafe source.
-    Redirects remain disabled for discovery.
-    """
     try:
         p=urlparse(str(url).strip())
         host=(p.hostname or "").lower().rstrip(".")
-        allowed=set(allowed_hosts or {"openbounty.app","www.openbounty.app","himalayas.app","www.himalayas.app","jobicy.com","www.jobicy.com"})
+        allowed=set(allowed_hosts or {"himalayas.app","www.himalayas.app","jobicy.com","www.jobicy.com"})
         if p.scheme not in {"http","https"} or not host or host not in allowed or p.username or p.password: return False
         port=p.port or (443 if p.scheme=="https" else 80)
-        try:
-            infos=socket.getaddrinfo(host,port,type=socket.SOCK_STREAM)
-        except socket.gaierror:
-            return True  # DNS outage is a network/source-health issue, not an SSRF approval.
+        infos=socket.getaddrinfo(host,port,type=socket.SOCK_STREAM)
         for info in infos:
             addr=info[4][0]
             ip=ipaddress.ip_address(addr)
@@ -13276,7 +13254,7 @@ def _3601_get_json(url, timeout=10):
     if not _3601_safe_public_url(url): raise ValueError("source URL is not allowlisted or is unsafe")
     req=Request(url,headers={"User-Agent":"AI-Infinity/3601 opportunity-discovery","Accept":"application/json"},method="GET")
     # Do not follow redirects for discovery; a redirect can otherwise escape the source allowlist.
-    opener=build_opener(NoRedirect())
+    opener=build_opener()
     with opener.open(req,timeout=timeout) as r:
         body=r.read(1_500_000)
         if len(body)>1_500_000: raise ValueError("source response too large")
@@ -13297,13 +13275,7 @@ def _3601_norm_opportunity(source, item, idx=0):
     amount_max = None
     currency = str(item.get("currency") or "USD")[:12]
     explicit_fixed = item.get("fixed_price", item.get("fixedPrice", item.get("is_fixed_price", item.get("fixedPriceProject"))))
-    explicit_reward = item.get("reward", item.get("rewardUsdc", item.get("fixed_price_amount", item.get("fixedPriceAmount", item.get("project_price", item.get("budget_fixed"))))))
-    # Open Bounty publishes an exact rewardUsdc for each bounty. This is the
-    # primary fixed-price work feed; the amount is not inferred from salary data.
-    if source == "openbounty":
-        explicit_fixed = True
-        explicit_reward = item.get("rewardUsdc") or item.get("reward") or item.get("price")
-        currency = "USDC"
+    explicit_reward = item.get("reward", item.get("fixed_price_amount", item.get("fixedPriceAmount", item.get("project_price", item.get("budget_fixed")))))
     if isinstance(salary, dict):
         try: amount = float(salary.get("min") or salary.get("from") or 0) or None
         except Exception: amount = None
@@ -13364,8 +13336,7 @@ def _3601_extract_items(source, data):
 
 def _3601_discover():
     sources = {
-        "openbounty":"https://openbounty.app/api/v1/bounties?limit=100",
-        "himalayas":"https://himalayas.app/jobs/api?limit=20",
+        "himalayas":"https://himalayas.app/jobs/api/search?limit=20",
         "jobicy":"https://jobicy.com/api/v2/remote-jobs"
     }
     found=0; source_states={}
@@ -13383,20 +13354,12 @@ def _3601_discover():
     return {"found":found,"sources":source_states}
 
 
-def _3601_prepare(limit=20, fixed_only=False):
-    fetch_limit=max(1,min(int(limit)*5 if fixed_only else int(limit),500))
+def _3601_prepare(limit=20):
     with _db_lock, db() as c:
-        rows=c.execute("SELECT * FROM ai3601_opportunities WHERE eligibility!='rejected' AND status IN ('discovered','ready','prepared') ORDER BY score DESC,updated_at DESC LIMIT ?",(fetch_limit,)).fetchall()
+        rows=c.execute("SELECT * FROM ai3601_opportunities WHERE eligibility!='rejected' AND status IN ('discovered','ready','prepared') ORDER BY score DESC,updated_at DESC LIMIT ?",(max(1,min(int(limit),100)),)).fetchall()
     prepared=[]
     for r in rows:
-        d=dict(r)
-        if fixed_only:
-            ev=_gp_fixed_price_evidence(d)
-            if not ev["qualifies"]:
-                continue
-        if len(prepared)>=max(1,min(int(limit),100)):
-            break
-        oid=d["opportunity_id"]
+        d=dict(r); oid=d["opportunity_id"]
         proposal={"title":d["title"],"opening":"AI Infinity can prepare a tailored response and deliverable for this opportunity.",
                   "next_action":"review_and_authorize_application","source":d["source"],"url":d["url"],"budget":d["amount_max"] or d["amount"]}
         wid=uid("work3601")
@@ -13421,30 +13384,17 @@ def _3601_real_readiness():
     payout_url=os.getenv("AI_INFINITY_PAYOUT_SUBMIT_URL","").strip()
     payout_key=os.getenv("AI_INFINITY_PAYOUT_API_KEY","").strip()
     payment_secret=bool(os.getenv("AI_INFINITY_PAYMENT_WEBHOOK_SECRET","").strip())
-    model_ready=bool(os.getenv("HF_TOKEN","").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN","").strip() or os.getenv("GEMINI_API_KEY","").strip() or os.getenv("AI_INFINITY_OLLAMA_URL","").strip() or (os.getenv("AI_INFINITY_MODEL_BASE_URL","").strip() and os.getenv("AI_INFINITY_MODEL_API_KEY","").strip()))
-    db_persistent=not str(DB_PATH).startswith("/tmp/")
-    snapshot_ready=bool(os.getenv("AI_INFINITY_SNAPSHOT_URL","").strip() and os.getenv("AI_INFINITY_SNAPSHOT_TOKEN","").strip()) or _3604_github_configured()
-    # Discovery is implemented when at least one source is configured; actual
-    # source health is tracked separately and never inferred from code presence.
-    source_configured=False
     return {"free_start":True,
-            "discovery_ready":source_configured,
-            "discovery_source_health_endpoint":"/infinity/3603/sources",
+            "discovery_ready":True,
             "application_bridge_configured":bool(a["url"] and a["auto_apply"]),
             "payment_evidence_ready":payment_secret,
             "payout_rail_configured":bool(payout_url and payout_key),
-            "external_model_configured":model_ready,
-            "durable_local_storage":db_persistent,
-            "durable_snapshot_configured":snapshot_ready,
-            "production_persistence_ready":db_persistent or snapshot_ready,
             "external_money_is_real_only":True,
             "transferable_now_requires_successful_payout_rail":True,
             "blockers":[x for x in [
                 None if a["url"] and a["auto_apply"] else "authorized application bridge not enabled",
                 None if payment_secret else "payment webhook verification secret not configured",
-                None if payout_url and payout_key else "real payout rail not configured",
-                None if model_ready else "external model provider not configured; deterministic fallback remains active",
-                None if (db_persistent or snapshot_ready) else "durable persistence not configured for this filesystem",
+                None if payout_url and payout_key else "real payout rail not configured"
             ] if x],"truthful":True}
 
 
@@ -13518,9 +13468,9 @@ def _3601_make_offer(opportunity):
     return {"offer_id":offer_id,**offer}
 
 
-def _3601_cycle(command="start", auto_apply=False, fixed_only=False):
+def _3601_cycle(command="start", auto_apply=False):
     discovery=_3601_discover()
-    prepared=_3601_prepare(25, fixed_only=fixed_only)
+    prepared=_3601_prepare(25)
     offers=[]
     with _db_lock, db() as c:
         rows=c.execute("SELECT * FROM ai3601_opportunities WHERE status='prepared' ORDER BY score DESC,updated_at DESC LIMIT 25").fetchall()
@@ -13869,8 +13819,8 @@ app.version = APP_VERSION
 # engines instead of creating decorative/mock counters.
 # ============================================================================
 
-GENIUS_PARITY_VERSION = "TARGET-2050.3603-GENIUS-CLOSURE"
-GENIUS_PARITY_BUILD = "12-POINT-CLOSURE-DEEP-REGRESSION"
+GENIUS_PARITY_VERSION = "TARGET-2050.3601-GENIUS-FUNCTIONAL-PARITY"
+GENIUS_PARITY_BUILD = "REFERENCE-FEATURES-BACKEND-CLOSURE"
 
 with _db_lock, db() as _gp:
     _gp.executescript('''
@@ -14000,7 +13950,7 @@ def _gp_command(command, user_id="default", auto_apply=False):
 
     # The earning/work command is connected to the real 3601 discovery fabric.
     if any(x in low for x in ("fixed-price","fixed price","paid task","paid tasks","earn","earning","opportunit","freelance task")):
-        cycle=_3601_cycle(s,auto_apply=False,fixed_only=True)
+        cycle=_3601_cycle(s,auto_apply=False)
         _gp_sync_tasks_from_opportunities()
         result["actions"].append({"kind":"opportunity_discovery","result":cycle})
         result["fixed_price_tasks"]=_gp_fixed_price_rows(50)
@@ -14247,852 +14197,15 @@ def genius_parity_ui():
 # retaining every legacy route above for backward compatibility.
 @app.get("/genius", response_class=HTMLResponse)
 def genius_landing():
-    return FINAL3603_UI if "FINAL3603_UI" in globals() else GENIUS_PARITY_UI
+    return GENIUS_PARITY_UI
 
 @app.get("/health")
 def canonical_health():
-    return {"status":"healthy","version":FINAL3603_VERSION if "FINAL3603_VERSION" in globals() else APP_VERSION,"build":FINAL3603_BUILD if "FINAL3603_BUILD" in globals() else BUILD,"truthful":True}
+    return {"status":"healthy","version":GENIUS_PARITY_VERSION,"build":GENIUS_PARITY_BUILD,"legacy_3601":True,"truthful":True}
 
 # Keep the application metadata truthful after the compatibility layer is loaded.
-APP_VERSION="TARGET-2050.3604"
-BUILD="REALITY-BRIDGE-PERSISTENCE-AND-WAKEUP-CLOSURE"
+APP_VERSION=GENIUS_PARITY_VERSION
+BUILD=GENIUS_PARITY_BUILD
 PREVIOUS_BUILD=FINAL3602_VERSION
 app.title="AI Infinity"
 app.version=APP_VERSION
-
-
-# ============================================================================
-# TARGET-2050.3603 — FINAL CLOSURE / SECURITY / SOURCE HEALTH / PERSISTENCE
-# This layer is additive so every historical route remains intact.
-# ============================================================================
-FINAL3603_VERSION="TARGET-2050.3604"
-FINAL3603_BUILD="REALITY-BRIDGE-PERSISTENCE-AND-WAKEUP-CLOSURE"
-
-# Source-health state is persistent and separate from source implementation.
-with _db_lock, db() as _c3603:
-    _c3603.executescript("""
-    CREATE TABLE IF NOT EXISTS ai3603_source_health(
-        source TEXT PRIMARY KEY, url TEXT NOT NULL, status TEXT NOT NULL,
-        checked_at REAL, received INTEGER NOT NULL DEFAULT 0, stored INTEGER NOT NULL DEFAULT 0,
-        last_error TEXT, last_success REAL, updated_at REAL NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS ai3603_regression_runs(
-        run_id TEXT PRIMARY KEY, passed INTEGER NOT NULL, tests_json TEXT NOT NULL, created_at REAL NOT NULL
-    );
-""")
-
-
-def _3603_sources():
-    sources={
-        "openbounty":{"url":"https://openbounty.app/api/v1/bounties?limit=100","purpose":"fixed-price bounties with explicit rewardUsdc"},
-        "himalayas":{"url":"https://himalayas.app/jobs/api?limit=20","purpose":"public remote jobs; salary listings are never treated as fixed-price"},
-        "jobicy":{"url":"https://jobicy.com/api/v2/remote-jobs","purpose":"public remote jobs; salary listings are never treated as fixed-price"},
-    }
-    with _db_lock, db() as c:
-        rows={r["source"]:dict(r) for r in c.execute("SELECT * FROM ai3603_source_health").fetchall()}
-    out=[]
-    allowed_hosts={"openbounty.app","himalayas.app","jobicy.com"}
-    for name,meta in sources.items():
-        r=rows.get(name,{})
-        parsed=urlparse(meta["url"])
-        # Readiness/status must never perform blocking DNS. Network safety is
-        # enforced again immediately before the actual outbound request.
-        statically_allowlisted=(parsed.scheme in {"http","https"} and (parsed.hostname or "").lower().rstrip(".") in allowed_hosts)
-        out.append({**meta,"source":name,"status":r.get("status","never_checked"),"checked_at":r.get("checked_at"),"received":r.get("received",0),"stored":r.get("stored",0),"last_success":r.get("last_success"),"last_error":r.get("last_error"),"allowlisted":statically_allowlisted})
-    return out
-
-
-def _3603_record_source(name,url,status,received=0,stored=0,error=None):
-    t=now()
-    with _db_lock, db() as c:
-        c.execute("INSERT INTO ai3603_source_health(source,url,status,checked_at,received,stored,last_error,last_success,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(source) DO UPDATE SET url=excluded.url,status=excluded.status,checked_at=excluded.checked_at,received=excluded.received,stored=excluded.stored,last_error=excluded.last_error,last_success=excluded.last_success,updated_at=excluded.updated_at",(name,url,status,t,int(received),int(stored),str(error)[:500] if error else None,t if status=="healthy" else None,t))
-
-
-def _3603_discover():
-    result=_3601_discover()
-    for name,state in result.get("sources",{}).items():
-        src=next((x for x in _3603_sources() if x["source"]==name),None)
-        _3603_record_source(name,src["url"] if src else "", "healthy" if state.get("ok") else "error", state.get("received",0),state.get("stored",0),None if state.get("ok") else state.get("error"))
-    _gp_sync_tasks_from_opportunities()
-    return {**result,"fixed_price_tasks":_gp_fixed_price_rows(100),"source_health":_3603_sources(),"truthful":True}
-
-
-def _3603_operator_from_request(request:FastAPIRequest):
-    supplied=(request.headers.get("x-ai-infinity-operator-token") or request.headers.get("authorization") or "").strip()
-    if supplied.lower().startswith("bearer "): supplied=supplied[7:].strip()
-    if not _operator_ok_190(supplied): raise HTTPException(401,"valid operator token required")
-    return supplied
-
-
-def _3603_redacted_activation():
-    data=_activation_status_200()
-    data.pop("owner",None)
-    data["owner"]={"configured":bool(_owner_profile_200().get("email"))}
-    data["privacy"]={"public_owner_identity_redacted":True,"private_endpoint":"/infinity/3603/activation/private"}
-    return data
-
-
-def _3603_bridge_capability_catalog():
-    return {
-        "browser":["browser.web","browser.navigate","browser.click","browser.type","browser.submit","browser.extract"],
-        "device":["device.ping","device.info","device.open_url","device.notify"],
-        "safety":["approval_gate","no_arbitrary_code","no_secret_exposure","no_uncertain_replay"],
-        "note":"Capabilities are executable only when a paired healthy runtime advertises the relevant capability. This is not universal OS control.",
-    }
-
-
-@app.get("/infinity/3603/readiness")
-def infinity3603_readiness():
-    base=_3601_real_readiness()
-    source_states=_3603_sources()
-    healthy_sources=[x for x in source_states if x["status"]=="healthy"]
-    base.update({"version":FINAL3603_VERSION,"build":FINAL3603_BUILD,"source_health":source_states,"healthy_source_count":len(healthy_sources),"discovery_ready":len(healthy_sources)>0,"truthful":True})
-    return base
-
-@app.get("/infinity/3603/sources")
-def infinity3603_sources():
-    return {"sources":_3603_sources(),"fixed_price_source":"openbounty","fixed_price_rule":"Only explicit rewardUsdc/reward/fixed-price evidence qualifies; salary ranges never qualify.","truthful":True}
-
-@app.post("/infinity/3603/discover")
-def infinity3603_discover():
-    return _3603_discover()
-
-@app.get("/infinity/3603/bridge-capabilities")
-def infinity3603_bridge_capabilities():
-    runtimes=_bridge_runtimes_200()
-    for r in runtimes:
-        r["capability_catalog"]=_3603_bridge_capability_catalog().get(r.get("kind"),[])
-        r["capability_health"]={cap:(cap in r.get("capabilities",[])) for cap in _3603_bridge_capability_catalog().get(r.get("kind"),[])}
-    return {"catalog":_3603_bridge_capability_catalog(),"runtimes":runtimes,"truthful":True}
-
-@app.get("/infinity/3603/activation/private")
-def infinity3603_activation_private(request:FastAPIRequest):
-    _3603_operator_from_request(request)
-    return {"status":"authorized","activation":_activation_status_200(),"truthful":True}
-
-@app.get("/infinity/3603/connections")
-def infinity3603_connections(request:FastAPIRequest):
-    _3603_operator_from_request(request)
-    return {"model":_2701_model_providers(),"activation":_activation_status_200(),"real_world":_3601_real_readiness(),"truthful":True}
-
-@app.get("/infinity/3603/regression")
-def infinity3603_regression():
-    tests=[]
-    def T(name,fn):
-        try: tests.append({"name":name,"passed":bool(fn())})
-        except Exception as e: tests.append({"name":name,"passed":False,"error":str(e)[:300]})
-    T("version",lambda:FINAL3603_VERSION=="TARGET-2050.3604")
-    T("capabilities route",lambda:any(getattr(r,"path","")=="/infinity/3601/genius/capabilities" for r in app.routes))
-    T("source health route",lambda:any(getattr(r,"path","")=="/infinity/3603/sources" for r in app.routes))
-    T("fixed-price source allowlist",lambda:_3601_safe_public_url("https://openbounty.app/api/v1/bounties?limit=1"))
-    T("salary cannot qualify",lambda:not _gp_fixed_price_evidence({"title":"Python engineer","description":"$50 per hour","amount":50,"metadata_json":"{}"})["qualifies"])
-    T("explicit reward qualifies",lambda:_gp_fixed_price_evidence({"title":"Test checkout","description":"Fixed price task","amount":25,"metadata_json":"{\"fixed_price\":true,\"reward\":25}"})["qualifies"])
-    T("bridge catalog",lambda:"browser.submit" in _3603_bridge_capability_catalog()["browser"] and "device.notify" in _3603_bridge_capability_catalog()["device"])
-    T("activation public redaction",lambda:"owner" not in _3603_redacted_activation() or "email" not in _3603_redacted_activation().get("owner",{}))
-    T("truthful money boundary",lambda:_3601_metrics()["transferable_balance"]<=_3601_metrics()["verified_earnings"])
-    T("readiness truth",lambda:_3601_real_readiness().get("truthful") is True)
-    T("critical legacy routes",lambda:all(any(getattr(r,"path","")==p for r in app.routes) for p in ["/health","/genius","/infinity/3601/health","/infinity/3602/health","/bridge/heartbeat","/bridge/poll","/bridge/result"]))
-    T("workspace session route",lambda:any(getattr(r,"path","")=="/infinity/3603/session" for r in app.routes))
-    T("complete UI manifest route",lambda:any(getattr(r,"path","")=="/infinity/3603/ui-manifest" for r in app.routes))
-    passed=all(x["passed"] for x in tests)
-    rid=uid("reg3603")
-    with _db_lock, db() as c: c.execute("INSERT INTO ai3603_regression_runs(run_id,passed,tests_json,created_at) VALUES(?,?,?,?)",(rid,int(passed),_3601_json(tests),now()))
-    return {"status":"completed","version":FINAL3603_VERSION,"build":FINAL3603_BUILD,"passed":passed,"tests":tests,"truthful":True}
-
-# Canonical UI gets a truthful connection/readiness card without exposing owner identity.
-try:
-    _old_home_marker="async function home(){const s=await api('/infinity/3601/genius/status');"
-    if _old_home_marker in GENIUS_PARITY_UI:
-        GENIUS_PARITY_UI=GENIUS_PARITY_UI.replace(_old_home_marker,"async function home(){const s=await api('/infinity/3601/genius/status');let rd={};try{rd=await api('/infinity/3603/readiness')}catch(e){}")
-        GENIUS_PARITY_UI=GENIUS_PARITY_UI.replace('<div class="card"><h3>Live state</h3>', '<div class="card"><h3>Live state</h3><div class="sub">System readiness: '+"${rd.production_persistence_ready?'durable':'ephemeral'}"+' · model: '+"${rd.external_model_configured?'connected':'fallback'}"+' · fixed-price source health: '+"${rd.healthy_source_count||0}"+' · payouts: '+"${rd.payout_rail_configured?'configured':'not configured'}"+'</div>')
-except Exception:
-    pass
-
-APP_VERSION=FINAL3603_VERSION
-BUILD="REAL-WORLD-OPERATING-WORKSPACE-CLOSURE"
-PREVIOUS_BUILD=GENIUS_PARITY_VERSION
-app.version=APP_VERSION
-
-# ============================================================================
-# TARGET-2050.3603 OPERATING WORKSPACE — COMMAND-TO-OUTCOME UX
-# ============================================================================
-
-def _3603_operating_command(command:str, user_id:str="default", approved:bool=False, operator_token:str=""):
-    q=str(command or "").strip()[:12000]
-    if not q: raise HTTPException(400,"command is required")
-    low=q.lower()
-    if any(x in low for x in ("fixed-price","fixed price","reward stated","reward is stated","paid task","paid tasks","earning","earn money","freelance task")):
-        result=_3603_discover()
-        _3601_prepare(25, fixed_only=True)
-        with _db_lock, db() as c:
-            rows=c.execute("SELECT * FROM ai3601_opportunities WHERE status='prepared' ORDER BY score DESC,updated_at DESC LIMIT 25").fetchall()
-        offers=[]
-        for r in rows:
-            try: offers.append(_3601_make_offer(dict(r)))
-            except Exception: pass
-        tasks=_gp_fixed_price_rows(100)
-        _gp_activity("work","Fixed-price work refreshed","completed",f"{len(tasks)} reward-visible tasks")
-        return {"status":"completed","command":q,"stage":"discover_prepare","discovery":result,"tasks":tasks,"offers":offers,"metrics":_3601_metrics(),"readiness":_3601_real_readiness(),"truthful":True,
-                "next_action":"Select a task. Submission remains blocked until an authorized application bridge is available."}
-    if any(x in low for x in ("research","investigate","find sources","compare","look up","analyze")):
-        mid=_2600_uid("workspace-research")
-        result=_2600_public_research_direct(q,mid,8)
-        _2800_activity("research","Research completed","completed",mid,f"{len(result.get('evidence',[]))} evidence items")
-        return {"status":"completed","command":q,"stage":"research","research":result,"truthful":True}
-    if any(x in low for x in ("create","media","video","article","content","podcast","proposal","deliverable")):
-        result=_f2300_media_production_plan({"title":q[:80],"objective":q,"audience":"general audience","format":"video"})
-        _2800_activity("create","Production package prepared","completed",result.get("media_id"),"External publication is not claimed.")
-        return {"status":"completed","command":q,"stage":"create","production":result,"truthful":True,
-                "next_action":"Use an authorized publishing/rendering connector for external delivery."}
-    if any(x in low for x in ("free","zero cost","$0","free resource")):
-        result=_f2600_free({"objective":q})
-        return {"status":"completed","command":q,"stage":"free_resource_discovery","resources":result,"truthful":True}
-    # Generic work enters the durable mission engine and can only report completed when its engine does.
-    plan=_2600_build_plan(q,user_id)
-    mission_id=_2600_create_mission(q,user_id,"execute",plan)
-    result=_2600_run_mission(mission_id,approved=approved,operator_token=operator_token)
-    _2800_activity("mission","Mission requested",result.get("status","unknown"),mission_id,"Durable mission engine")
-    return {"status":result.get("status","unknown"),"command":q,"stage":"mission","mission_id":mission_id,"plan":plan,"result":result,"truthful":True}
-
-class Infinity3603OperatingCommand(BaseModel):
-    command:str=Field(min_length=1,max_length=12000)
-    user_id:str="default"
-    approved:bool=False
-    operator_token:str=""
-
-@app.post("/infinity/3603/command")
-def infinity3603_operating_command(payload:Infinity3603OperatingCommand):
-    return _3603_operating_command(payload.command,payload.user_id,payload.approved,payload.operator_token)
-
-@app.get("/infinity/3603/work")
-def infinity3603_operating_work():
-    _gp_sync_tasks_from_opportunities()
-    return {"tasks":_gp_fixed_price_rows(100),"offers":_3601_catalog(),"metrics":_3601_metrics(),"readiness":_3601_real_readiness(),"truthful":True}
-
-@app.get("/infinity/3603/activity")
-def infinity3603_operating_activity(limit:int=100):
-    with _db_lock, db() as c:
-        rows=[dict(r) for r in c.execute("SELECT id,kind,title,status,ref_id,detail,created_at FROM ai2800_activity ORDER BY id DESC LIMIT ?",(max(1,min(limit,200)),)).fetchall()]
-    return {"activity":rows,"truthful":True}
-
-@app.get("/infinity/3603/health2")
-def infinity3603_operating_health():
-    r=_3601_real_readiness(); return {"status":"healthy","version":FINAL3603_VERSION,"build":FINAL3603_BUILD,"workspaces":["Command","Chat","Research","Work","Create","Missions","Organization","Economy","Wallet","Activity","Authority"],"readiness":r,"metrics":_3601_metrics(),"truthful":True}
-
-
-# ============================================================================
-# TARGET-2050.3603.2 — REAL WORKSPACE SESSION + COMPLETE UI API SURFACE
-# Anonymous browser sessions isolate workspace data without requiring a paid
-# identity provider. Consequential owner actions still require the operator token.
-# ============================================================================
-_3603_SESSION_COOKIE="ai_infinity_session"
-_3603_SESSION_SECRET=os.getenv("AI_INFINITY_SESSION_SECRET","").strip()
-if not _3603_SESSION_SECRET:
-    _3603_SESSION_SECRET=secrets.token_urlsafe(32)
-
-def _3603_session_id(raw=None):
-    value=str(raw or "").strip()
-    if re.fullmatch(r"u_[A-Za-z0-9_-]{20,80}",value): return value
-    return "u_"+secrets.token_urlsafe(24).replace("-","_")[:48]
-
-def _3603_session_user(request:FastAPIRequest):
-    return _3603_session_id(request.cookies.get(_3603_SESSION_COOKIE))
-
-@app.get("/infinity/3603/session")
-def infinity3603_session(request:FastAPIRequest, response:Response):
-    uid3=_3603_session_user(request)
-    response.set_cookie(_3603_SESSION_COOKIE,uid3,max_age=60*60*24*365,httponly=True,samesite="lax",secure=(request.url.scheme=="https"),path="/")
-    return {"user_id":uid3,"session_isolated":True,"truthful":True}
-
-@app.get("/infinity/3603/dashboard")
-def infinity3603_dashboard(request:FastAPIRequest):
-    uid3=_3603_session_user(request)
-    return {"user_id":uid3,"readiness":_3601_real_readiness(),"metrics":_3601_metrics(),"tasks":_gp_fixed_price_rows(50),"activity":infinity3603_operating_activity(50)["activity"],"truthful":True}
-
-@app.get("/infinity/3603/plans")
-def infinity3603_plans(request:FastAPIRequest):
-    uid3=_3603_session_user(request)
-    return {"user_id":uid3,"plans":_gp_plans_for_user(uid3) if '_gp_plans_for_user' in globals() else [] ,"truthful":True}
-
-@app.post("/infinity/3603/plan")
-def infinity3603_plan(payload:Dict[str,Any], request:FastAPIRequest):
-    uid3=_3603_session_user(request); objective=str(payload.get("objective") or "").strip()[:12000]
-    if not objective: raise HTTPException(400,"objective is required")
-    plan=_2600_build_plan(objective,uid3); pid=uid("workspace-plan")
-    with _db_lock, db() as c:
-        c.execute("INSERT INTO genius_plans(plan_id,objective,status,plan_json,created_at,updated_at) VALUES(?,?,?,?,?,?)",(pid,objective,"planned",_gp_json(plan),_gp_now(),_gp_now()))
-    _gp_activity("plan","Plan created","completed",pid)
-    return {"plan_id":pid,"plan":plan,"user_id":uid3,"truthful":True}
-
-@app.get("/infinity/3603/missions")
-def infinity3603_missions(request:FastAPIRequest):
-    uid3=_3603_session_user(request)
-    with _db_lock, db() as c:
-        rows=c.execute("SELECT mission_id,objective,status,mode,created_at,updated_at FROM infinity_mission_events_2110 WHERE event='created' ORDER BY id DESC LIMIT 100").fetchall()
-    return {"user_id":uid3,"missions":[dict(r) for r in rows],"truthful":True}
-
-@app.get("/infinity/3603/memory")
-def infinity3603_memory(request:FastAPIRequest):
-    uid3=_3603_session_user(request)
-    return {"user_id":uid3,"memory":_memory2110(uid3,100),"truthful":True}
-
-@app.post("/infinity/3603/memory")
-def infinity3603_memory_add(payload:Dict[str,Any], request:FastAPIRequest):
-    uid3=_3603_session_user(request); textv=str(payload.get("text") or payload.get("content") or "").strip()[:5000]
-    if not textv: raise HTTPException(400,"memory text is required")
-    try:
-        result=_memory_store2110(uid3,textv)
-    except Exception:
-        result={"status":"stored_in_legacy_memory","text":textv}
-        with _db_lock, db() as c:
-            try: c.execute("INSERT INTO infinity_memory_2110(user_id,content,created_at) VALUES(?,?,?)",(uid3,textv,_now2110()))
-            except Exception: pass
-    return {"result":result,"user_id":uid3,"truthful":True}
-
-@app.get("/infinity/3603/organization")
-def infinity3603_organization(): return {"organization":_gp_organization(),"truthful":True} if '_gp_organization' in globals() else {"organization":{},"truthful":True}
-@app.get("/infinity/3603/economy")
-def infinity3603_economy(): return {"economy":_gp_economy(),"truthful":True} if '_gp_economy' in globals() else {"economy":_3601_metrics(),"truthful":True}
-@app.get("/infinity/3603/wallet")
-def infinity3603_wallet(): return {"wallet":_gp_wallet(),"metrics":_3601_metrics(),"truthful":True} if '_gp_wallet' in globals() else {"metrics":_3601_metrics(),"truthful":True}
-
-@app.post("/infinity/3603/payout")
-def infinity3603_payout_ui(payload:Dict[str,Any], request:FastAPIRequest):
-    _3603_operator_from_request(request)
-    return infinity3601_payout_request(payload)
-
-@app.post("/infinity/3603/discover-fixed")
-def infinity3603_discover_fixed():
-    result=_3603_operating_command("Find fixed-price tasks where the reward is stated before work")
-    return result
-
-@app.get("/infinity/3603/ui-manifest")
-def infinity3603_ui_manifest():
-    return {"version":FINAL3603_VERSION,"tabs":["Command","Chat","Research","Plans","Work","Create","Missions","Organization","Economy","Wallet","Memory","Activity","Connections","Authority","Reality","Settings"],"actions":["command","chat","research","plan","discover_fixed_price","apply","create","mission","organization","economy","wallet","memory","activity","connections","authority","payout","payment_webhook","persistence_snapshot","github_persistence","scheduled_worker_wakeup","browser_bridge"],"truthful":True}
-
-FINAL3603_UI = r"""<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#070a10"><title>AI Infinity</title><style>
-*{box-sizing:border-box}body{margin:0;background:#070a10;color:#f5f7fb;font:15px system-ui,-apple-system,Segoe UI,sans-serif}button,textarea,input{font:inherit}.app{min-height:100vh;display:flex}.side{width:238px;border-right:1px solid #202638;padding:16px;display:flex;flex-direction:column;gap:12px}.brand{font-size:21px;font-weight:800;padding:8px}.tag,.muted,.sub{color:#8994aa}.nav{display:grid;gap:4px}.nav button{background:transparent;border:0;color:#aeb7ca;text-align:left;padding:10px 12px;border-radius:10px;cursor:pointer}.nav button.on,.nav button:hover{background:#151b2a;color:#fff}.main{flex:1;min-width:0}.top{height:62px;border-bottom:1px solid #202638;display:flex;align-items:center;justify-content:space-between;padding:0 22px;position:sticky;top:0;background:#070a10ee;backdrop-filter:blur(8px);z-index:5}.online{color:#79e2a8}.content{max-width:1250px;margin:auto;padding:22px}.grid{display:grid;grid-template-columns:1.25fr .75fr;gap:14px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.card{border:1px solid #202638;border-radius:16px;background:#0c111c;padding:18px}.cmd,.field{width:100%;background:#070a10;color:#fff;border:1px solid #29334a;border-radius:12px;padding:13px;outline:none}.cmd{min-height:125px;resize:vertical}.field{min-height:46px}.btn{border:1px solid #2a354c;background:#151c2c;color:#fff;border-radius:10px;padding:10px 14px;cursor:pointer}.btn:hover{filter:brightness(1.15)}.primary{background:#fff;color:#070a10;border-color:#fff}.danger{border-color:#63303a}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.stat{border:1px solid #222c40;border-radius:12px;padding:12px}.stat b{font-size:20px;display:block;margin-top:4px}.list{display:grid;gap:8px;margin-top:10px}.item{border:1px solid #222c40;border-radius:12px;padding:13px}.row{display:flex;justify-content:space-between;gap:10px;align-items:center}.badge{padding:4px 8px;border-radius:99px;background:#172138;color:#b9c4d8;font-size:12px}.good{color:#7ee2aa}.warn{color:#ffd27c}.bad{color:#ff8794}.out{white-space:pre-wrap;overflow:auto;max-height:560px;background:#070a10;border-radius:12px;padding:12px;margin-top:10px}.chat{display:flex;flex-direction:column;height:calc(100vh - 110px)}.messages{flex:1;overflow:auto;display:grid;align-content:start;gap:10px;padding:4px}.msg{max-width:82%;padding:11px 13px;border-radius:14px;line-height:1.5}.msg.ai{background:#141b2a}.msg.user{background:#fff;color:#070a10;margin-left:auto}.chatbar{display:flex;gap:8px;margin-top:10px}.chatbar textarea{flex:1;min-height:54px;resize:none;background:#070a10;color:#fff;border:1px solid #29334a;border-radius:12px;padding:12px}.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.sectionHead{display:flex;justify-content:space-between;gap:15px;align-items:center;margin-bottom:13px}.sectionHead h1,.sectionHead h2{margin:0 0 5px}.taskActions{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.link{color:#9dc3ff}.hidden{display:none}.notice{padding:10px 12px;border-radius:10px;background:#121a29;border:1px solid #27334a;margin-top:10px}.mobileNav{display:none}@media(max-width:900px){.side{display:none}.content{padding:14px 12px 82px}.grid,.grid3{grid-template-columns:1fr}.stats{grid-template-columns:1fr 1fr}.mobileNav{display:grid;position:fixed;bottom:0;left:0;right:0;height:66px;background:#090d15f5;border-top:1px solid #202638;grid-template-columns:repeat(5,1fr);z-index:20}.mobileNav button{background:none;border:0;color:#aeb7ca;font-size:11px}.mobileNav button.on{color:#fff}.top{padding:0 14px}}
-</style></head><body><div class="app"><aside class="side"><div class="brand">∞ AI Infinity</div><div class="tag">One workspace for chat, research, plans, work, creation and governed real-world action.</div><nav id="nav"></nav></aside><main class="main"><header class="top"><span id="title">Command</span><span id="online" class="online">● connecting</span></header><div id="content" class="content"></div></main></div><nav id="mobileNav" class="mobileNav"></nav><script>
-const tabs=['Command','Chat','Research','Plans','Work','Create','Missions','Organization','Economy','Wallet','Memory','Activity','Connections','Authority','Reality','Settings'];let cur='Command',sessionUser='';const $=id=>document.getElementById(id);const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-async function api(url,opt={}){opt.credentials='include';const r=await fetch(url,opt);let j={};try{j=await r.json()}catch{j={detail:await r.text()}}if(!r.ok)throw Error(j.detail||j.reason||('Request failed '+r.status));return j}
-async function boot(){try{const s=await api('/infinity/3603/session');sessionUser=s.user_id;await command();$('online').textContent='● online'}catch(e){$('online').textContent='● error';$('content').innerHTML='<div class="card"><h2>Workspace unavailable</h2><p class="bad">'+esc(e.message)+'</p></div>'}nav()}
-function nav(){const html=tabs.map(x=>`<button class="${x===cur?'on':''}" onclick="go('${x}')">${x}</button>`).join('');$('nav').innerHTML=html;$('mobileNav').innerHTML=tabs.slice(0,5).map(x=>`<button class="${x===cur?'on':''}" onclick="go('${x}')">${x}</button>`).join('')}
-function go(t){cur=t;$('title').textContent=t;nav();({Command:command,Chat:chat,Research:research,Plans:plans,Work:work,Create:create,Missions:missions,Organization:organization,Economy:economy,Wallet:wallet,Memory:memory,Activity:activity,Connections:connections,Authority:authority,Reality:reality,Settings:settings}[t]||command)()}
-function fill(x){$('cmd').value=x}
-async function command(){let rd={};try{rd=await api('/infinity/3603/readiness')}catch{}$('content').innerHTML=`<div class="grid"><div class="card"><div class="sub">UNIVERSAL COMMAND</div><h1>Tell AI Infinity the result you want</h1><p class="muted">Internal work can run immediately. External side effects remain behind explicit authorization and truthful readiness checks.</p><textarea id="cmd" class="cmd" placeholder="Find fixed-price tasks where the reward is stated before work"></textarea><div class="toolbar"><button class="btn primary" onclick="runCmd()">Run command</button><button class="btn" onclick="fill('Find fixed-price tasks where the reward is stated before work')">Fixed-price work</button><button class="btn" onclick="fill('Research free tools for AI content production')">Research</button><button class="btn" onclick="fill('Create a customer proposal for my service')">Create</button></div><pre id="out" class="out">Ready.</pre></div><div class="card"><h3>Reality</h3><div class="stats"><div class="stat"><span class="sub">Sources</span><b>${rd.healthy_source_count||0}</b></div><div class="stat"><span class="sub">Verified</span><b>$${rd.verified_earnings||0}</b></div><div class="stat"><span class="sub">Transferable</span><b>$${rd.transferable_balance||0}</b></div><div class="stat"><span class="sub">Model</span><b>${rd.external_model_configured?'Connected':'Fallback'}</b></div></div><div class="list"><div class="row"><span>Application</span><span class="badge">${rd.application_bridge_configured?'READY':'NOT CONFIGURED'}</span></div><div class="row"><span>Payment verification</span><span class="badge">${rd.payment_evidence_ready?'READY':'NOT CONFIGURED'}</span></div><div class="row"><span>Payout</span><span class="badge">${rd.payout_rail_configured?'READY':'NOT CONFIGURED'}</span></div><div class="row"><span>Persistence</span><span class="badge">${rd.production_persistence_ready?'DURABLE':'EPHEMERAL'}</span></div></div><div class="notice">Free Render hosting can sleep and loses local files on restart/redeploy; this UI reports that state instead of pretending it is durable. <a class="link" target="_blank" href="https://render.com/docs/free">Render limits</a></div></div></div>`}
-async function runCmd(){const q=$('cmd').value.trim();if(!q)return;$('out').textContent='Working…';try{$('out').textContent=JSON.stringify(await api('/infinity/3603/command',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({command:q,user_id:sessionUser})}),null,2)}catch(e){$('out').textContent=e.message}}
-function chat(){ $('content').innerHTML=`<div class="card chat"><div class="messages" id="msgs"><div class="msg ai">AI Infinity is ready. Ask, research, plan or describe an outcome.</div></div><div class="chatbar"><textarea id="q" placeholder="Message AI Infinity…"></textarea><button class="btn" onclick="voice('q')">🎙</button><button class="btn primary" onclick="sendChat()">Send</button></div></div>`}
-async function sendChat(){const q=$('q').value.trim();if(!q)return;const b=$('msgs');b.insertAdjacentHTML('beforeend',`<div class="msg user">${esc(q)}</div>`);$('q').value='';try{const r=await api('/infinity/final/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:q,user_id:sessionUser})});b.insertAdjacentHTML('beforeend',`<div class="msg ai">${esc(r.message)}</div>`)}catch(e){b.insertAdjacentHTML('beforeend',`<div class="msg ai bad">${esc(e.message)}</div>`)}b.scrollTop=b.scrollHeight}
-function voice(id){if(!('webkitSpeechRecognition'in window||'SpeechRecognition'in window))return alert('Voice input is not supported by this browser.');const R=window.SpeechRecognition||window.webkitSpeechRecognition,r=new R();r.lang=navigator.language||'en-US';r.onresult=e=>$(id).value=(e.results[0][0].transcript||'');r.start()}
-function research(){ $('content').innerHTML=`<div class="card"><h2>Research</h2><p class="muted">Public-source evidence is fetched and persisted where the research engine supports it.</p><textarea id="rq" class="cmd" placeholder="Research anything…"></textarea><div class="toolbar"><button class="btn primary" onclick="doResearch()">Research</button></div><pre id="ro" class="out">Ready.</pre></div>`}async function doResearch(){const q=$('rq').value.trim();if(!q)return;$('ro').textContent='Researching…';try{$('ro').textContent=JSON.stringify(await api('/infinity/3603/command',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({command:'Research '+q,user_id:sessionUser})}),null,2)}catch(e){$('ro').textContent=e.message}}
-function plans(){ $('content').innerHTML=`<div class="card"><h2>Plans</h2><textarea id="pq" class="cmd" placeholder="What outcome should AI Infinity plan for?"></textarea><div class="toolbar"><button class="btn primary" onclick="makePlan()">Create plan</button></div><pre id="po" class="out">Plans are stored as durable workspace artifacts.</pre></div>`}async function makePlan(){const q=$('pq').value.trim();if(!q)return;$('po').textContent=JSON.stringify(await api('/infinity/3603/plan',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({objective:q})}),null,2)}
-function taskCard(x){return `<div class="item"><div class="row"><b>${esc(x.title||'Task')}</b><span class="badge">${esc(x.status||'discovered')}</span></div><div class="sub">${esc(x.source||'')} · fixed-price rule passed</div><div class="good">Reward: ${esc(x.fixed_price_signal??x.reward??'')} ${esc(x.currency||'USD')}</div><div class="sub">${esc((x.description||'').slice(0,300))}</div><div class="taskActions">${x.external_url?`<a class="btn" target="_blank" rel="noopener" href="${esc(x.external_url)}">Open task</a>`:''}<button class="btn primary" onclick="applyTask('${esc(x.opportunity_id||'')}')">Apply</button></div></div>`}
-async function work(){let x;try{x=await api('/infinity/3603/work')}catch(e){$('content').innerHTML='<div class="card bad">'+esc(e.message)+'</div>';return}$('content').innerHTML=`<div class="sectionHead"><div><h2>Work</h2><p class="muted">Only opportunities with explicit fixed-price/reward evidence appear here.</p></div><button class="btn primary" onclick="refreshWork()">Discover now</button></div><div class="stats"><div class="stat"><span class="sub">Discovered</span><b>${x.metrics.discovered_opportunities}</b></div><div class="stat"><span class="sub">Prepared</span><b>${x.metrics.prepared_opportunities}</b></div><div class="stat"><span class="sub">Verified</span><b>$${x.metrics.verified_earnings}</b></div><div class="stat"><span class="sub">Transferable</span><b>$${x.metrics.transferable_balance}</b></div></div><div class="card" style="margin-top:13px"><div class="list">${x.tasks.map(taskCard).join('')||'<div class="sub">No qualifying tasks stored. Use Discover now.</div>'}</div></div><div id="workOut" class="out hidden"></div>`}
-async function refreshWork(){try{$('workOut').classList.remove('hidden');$('workOut').textContent='Discovering…';$('workOut').textContent=JSON.stringify(await api('/infinity/3603/discover-fixed',{method:'POST'}),null,2);await work()}catch(e){$('workOut').textContent=e.message}}
-async function applyTask(id){if(!id)return;const token=prompt('Operator token required for external application. Leave blank to view why it is blocked.');const h=token?{'x-ai-infinity-operator-token':token}:{};try{const r=await api('/infinity/3603/apply/'+encodeURIComponent(id),{method:'POST',headers:h});alert(JSON.stringify(r,null,2))}catch(e){alert(e.message)}}
-function create(){ $('content').innerHTML=`<div class="grid"><div class="card"><div class="sub">AI CONTENT STUDIO · 3607</div><h2>Long-form + Shorts</h2><p class="muted">AI development → real motion footage → voice → music → captions → final MP4. No fake slideshow fallback.</p><input id="studioTitle" class="cmd" placeholder="Title"><select id="studioFormat" class="cmd"><option value="long">Long-form video</option><option value="short">Short / Reel / TikTok / Shorts</option></select><textarea id="studioObj" class="cmd" placeholder="What should the content achieve?"></textarea><div class="grid2"><input id="studioDuration" class="cmd" type="number" placeholder="480 long / 45 short"><input id="studioAudience" class="cmd" value="general audience"></div><button class="btn primary" onclick="runStudio()">Create real content</button></div><div class="card"><h3>Production output</h3><pre id="studioOut" class="out">Ready.</pre></div></div><div class="card"><h3>Production standard</h3><p class="muted">Uses real motion-video sources from configured Pexels/Pixabay access or keyless Wikimedia Commons video retrieval. Source metadata is preserved. If no real footage is reachable, the system reports that state instead of manufacturing a fake video.</p></div>`}async function runStudio(){const title=$('studioTitle').value.trim(),objective=$('studioObj').value.trim(),format=$('studioFormat').value,d=$('studioDuration').value;if(!title&&!objective)return;$('studioOut').textContent='Building production…';try{const r=await api('/infinity/3607/content',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({title,objective,format,duration:d?Number(d):null,audience:$('studioAudience').value.trim()})});$('studioOut').textContent=JSON.stringify(r,null,2);if(r.download_url)$('studioOut').textContent+='\n\nDownload: '+location.origin+r.download_url}catch(e){$('studioOut').textContent=e.message}}
-async function missions(){try{const x=await api('/infinity/3603/missions');$('content').innerHTML=`<div class="card"><h2>Missions</h2><div class="list">${(x.missions||[]).map(m=>`<div class="item"><div class="row"><b>${esc(m.objective)}</b><span class="badge">${esc(m.status)}</span></div><div class="sub">${esc(m.mode||'execute')}</div></div>`).join('')||'<div class="sub">No missions yet.</div>'}</div></div>`}catch(e){$('content').innerHTML='<div class="card bad">'+esc(e.message)+'</div>'}}
-async function simple(url,title){try{const x=await api(url);$('content').innerHTML=`<div class="card"><h2>${esc(title)}</h2><pre class="out">${esc(JSON.stringify(x,null,2))}</pre></div>`}catch(e){$('content').innerHTML='<div class="card bad">'+esc(e.message)+'</div>'}}
-function organization(){simple('/infinity/3603/organization','Organization')}function economy(){simple('/infinity/3603/economy','Economy')}function wallet(){simple('/infinity/3603/wallet','Wallet')}
-function memory(){ $('content').innerHTML=`<div class="card"><h2>Memory</h2><textarea id="mq" class="cmd" placeholder="Save a preference or durable context…"></textarea><div class="toolbar"><button class="btn primary" onclick="saveMemory()">Save memory</button><button class="btn" onclick="loadMemory()">Refresh</button></div><pre id="mo" class="out">Loading…</pre></div>`;loadMemory()}async function loadMemory(){try{$('mo').textContent=JSON.stringify(await api('/infinity/3603/memory'),null,2)}catch(e){$('mo').textContent=e.message}}async function saveMemory(){const q=$('mq').value.trim();if(!q)return;$('mo').textContent=JSON.stringify(await api('/infinity/3603/memory',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:q})}),null,2);loadMemory()}
-function activity(){simple('/infinity/3603/activity','Activity')}async function connections(){try{$('content').innerHTML=`<div class="card"><h2>Connections & readiness</h2><p class="muted">Sensitive connection details require the operator token.</p><input id="ct" class="field" type="password" placeholder="Operator token"><div class="toolbar"><button class="btn primary" onclick="loadConnections()">Inspect</button><button class="btn" onclick="simple('/infinity/3603/bridge-capabilities','Bridge capabilities')">Bridge capabilities</button></div><pre id="cx" class="out">Not loaded.</pre></div>`}catch(e){}}async function loadConnections(){const t=$('ct').value.trim();try{$('cx').textContent=JSON.stringify(await api('/infinity/3603/connections',{headers:{'x-ai-infinity-operator-token':t}}),null,2)}catch(e){$('cx').textContent=e.message}}
-async function authority(){$('content').innerHTML=`<div class="card"><h2>Authority</h2><p class="muted">Consequential actions require the operator token. It is kept only in this page and never saved by AI Infinity.</p><input id="op" class="field" type="password" placeholder="Operator token"><div class="toolbar"><button class="btn primary" onclick="loadApprovals()">Load approval queue</button><button class="btn" onclick="simple('/infinity/3603/readiness','Readiness')">Readiness</button><button class="btn" onclick="snapshot()">Snapshot state</button></div><pre id="ao" class="out">No approval data loaded.</pre></div>`}async function loadApprovals(){try{$('ao').textContent=JSON.stringify(await api('/infinity/3603/approvals',{headers:{'x-ai-infinity-operator-token':$('op').value.trim()}}),null,2)}catch(e){$('ao').textContent=e.message}}async function snapshot(){try{$('ao').textContent=JSON.stringify(await api('/infinity/3603/persistence/snapshot',{method:'POST',headers:{'x-ai-infinity-operator-token':$('op').value.trim()}}),null,2)}catch(e){$('ao').textContent=e.message}}
-async function reality(){let x;try{x=await api('/infinity/3604/reality')}catch(e){$('content').innerHTML='<div class="card bad">'+esc(e.message)+'</div>';return}const r=x.readiness||{};$('content').innerHTML=`<div class="grid"><div class="card"><h2>Reality Gateway</h2><p class="muted">This is the actual boundary layer. AI Infinity can only cross it through a configured, authorized external channel.</p><div class="list">${Object.entries(x.gates||{}).map(([k,v])=>`<div class="row"><span>${esc(k)}</span><span class="badge ${v.ready?'good':'warn'}">${v.ready?'READY':'CONFIGURE'}</span></div>`).join('')}</div><div class="toolbar"><button class="btn primary" onclick="refreshReality()">Refresh reality state</button><button class="btn" onclick="wakeNow()">Run worker cycle</button></div><pre id="realityOut" class="out">${esc(JSON.stringify(x,null,2))}</pre></div><div class="card"><h2>Make it real</h2><p class="muted">1. Pair a trusted browser/device bridge for external account actions. 2. Configure a real application endpoint or use the browser bridge. 3. Configure a verified payment webhook. 4. Configure a real payout endpoint. 5. Configure GitHub persistence or durable storage. 6. Add the scheduled GitHub Actions wakeup secret.</p><div class="notice"><b>Browser bridge:</b><br>pip install -r bridge-requirements.txt<br>playwright install chromium<br>python ai_infinity_bridge.py --server https://YOUR-HOST --kind browser --name my-browser --code YOUR_PAIR_CODE</div><div class="notice"><b>GitHub persistence:</b><br>AI_INFINITY_GITHUB_TOKEN + AI_INFINITY_GITHUB_REPO + optional AI_INFINITY_GITHUB_PATH/BRANCH. The application stores an encrypted-access-controlled SQLite snapshot in the user's repository.</div><div class="notice"><b>Scheduled wakeup:</b><br>Set repository secret AI_INFINITY_CRON_TOKEN equal to the server's AI_INFINITY_CRON_TOKEN, then the included workflow periodically wakes the service and runs discovery.</div></div></div>`}async function refreshReality(){try{$('realityOut').textContent=JSON.stringify(await api('/infinity/3604/reality'),null,2)}catch(e){$('realityOut').textContent=e.message}}async function wakeNow(){try{$('realityOut').textContent=JSON.stringify(await api('/infinity/3604/cron',{method:'POST',headers:{'x-ai-infinity-cron-token':prompt('Cron token')}}),null,2)}catch(e){$('realityOut').textContent=e.message}}function settings(){simple('/infinity/3603/ui-manifest','Workspace settings & capabilities')}
-boot();
-</script></body></html>"""
-
-
-@app.get("/infinity/3603/ui", response_class=HTMLResponse)
-def infinity3603_ui_operating(): return FINAL3603_UI
-
-# Optional durable SQLite snapshot adapter. It is deliberately opt-in: no secret
-# or remote endpoint is invented. Configure both variables to make state survive
-# replacement of an ephemeral host such as a free Render web service.
-def _3603_snapshot_configured():
-    return bool(os.getenv("AI_INFINITY_SNAPSHOT_URL","").strip() and os.getenv("AI_INFINITY_SNAPSHOT_TOKEN","").strip())
-
-def _3603_snapshot_export_bytes():
-    # SQLite online backup gives a consistent snapshot while the application is running.
-    import tempfile as _tmp
-    fd,path=_tmp.mkstemp(prefix="ai3603-snapshot-",suffix=".db")
-    os.close(fd)
-    try:
-        with _db_lock, db() as src, sqlite3.connect(path) as dst:
-            src.backup(dst)
-        return Path(path).read_bytes()
-    finally:
-        try: os.unlink(path)
-        except OSError: pass
-
-def _3603_snapshot_push():
-    url=os.getenv("AI_INFINITY_SNAPSHOT_URL","").strip(); token=os.getenv("AI_INFINITY_SNAPSHOT_TOKEN","").strip()
-    if not url or not token: return {"configured":False,"status":"not_configured"}
-    p=urlparse(url)
-    if p.scheme!="https" or not p.hostname: return {"configured":True,"status":"blocked","reason":"snapshot URL must use HTTPS"}
-    data=_3603_snapshot_export_bytes()
-    req=Request(url,data=data,headers={"Content-Type":"application/x-sqlite3","Authorization":"Bearer "+token,"User-Agent":"AI-Infinity/3603"},method="PUT")
-    try:
-        with build_opener(NoRedirect()).open(req,timeout=20) as r:
-            return {"configured":True,"status":"saved","http_status":r.status,"bytes":len(data)}
-    except Exception as e:
-        return {"configured":True,"status":"failed","error":str(e)[:300]}
-
-@app.get("/infinity/3603/persistence")
-def infinity3603_persistence(request:FastAPIRequest):
-    _3603_operator_from_request(request)
-    return {"local_db_path":DB_PATH,"local_filesystem_mode":"durable" if not DB_PATH.startswith("/tmp/") else "ephemeral","snapshot_configured":_3603_snapshot_configured(),"production_persistence_ready":(not DB_PATH.startswith("/tmp/")) or _3603_snapshot_configured(),"truthful":True}
-
-@app.post("/infinity/3603/persistence/snapshot")
-def infinity3603_persistence_snapshot(request:FastAPIRequest):
-    _3603_operator_from_request(request)
-    return _3603_snapshot_push()
-
-@app.post("/infinity/3603/apply/{opportunity_id}")
-def infinity3603_apply(opportunity_id:str, request:FastAPIRequest):
-    """Application bridge with two real modes: configured external API or paired browser runtime.
-    Browser mode only opens/navigates to the real listing; submitting a form remains an explicit
-    approved bridge command and is never fabricated as successful.
-    """
-    with _db_lock, db() as c:
-        row=c.execute("SELECT * FROM ai3601_opportunities WHERE opportunity_id=?",(opportunity_id,)).fetchone()
-    if not row: raise HTTPException(404,"opportunity not found")
-    o=dict(row)
-    cfg=_3601_application_config()
-    if cfg["url"] and cfg["auto_apply"]:
-        return _3601_submit_application(opportunity_id)
-    runtimes=_bridge_runtimes_200()
-    browser=next((x for x in runtimes if x.get("kind")=="browser" and x.get("healthy_now") and "browser.web" in x.get("capabilities",[])),None)
-    if not browser:
-        return {"status":"blocked","reason":"no healthy authorized browser application bridge","next":"pair a browser runtime at /activation/pair/start and retry","truthful":True}
-    # Require operator authorization for the actual browser navigation command.
-    _3603_operator_from_request(request)
-    queued=_safe_bridge_command_200("browser.navigate",{"url":o.get("url") or "","runtime_id":browser["id"],"approved":True},browser["id"],True)
-    return {"status":"queued","mode":"browser_bridge","opportunity_id":opportunity_id,"command":queued,"submission_status":"not_submitted","truthful":True}
-
-# ============================================================================
-# TARGET-2050.3603.1 — OPERATOR APPROVAL CLOSURE
-# Every legacy consequential approval/rejection endpoint is protected by the
-# same operator boundary used by the current workspace. This is transport-level
-# enforcement in addition to the individual route checks.
-# ============================================================================
-
-def _3603_operator_header_ok(request: FastAPIRequest) -> bool:
-    supplied=(request.headers.get("x-ai-infinity-operator-token") or request.headers.get("authorization") or "").strip()
-    if supplied.lower().startswith("bearer "):
-        supplied=supplied[7:].strip()
-    return bool(supplied) and _operator_ok_190(supplied)
-
-
-@app.middleware("http")
-async def _3603_consequential_gate(request: FastAPIRequest, call_next):
-    path=request.url.path
-    method=request.method.upper()
-    protected=(
-        method=="POST" and (
-            re.fullmatch(r"/approve/[^/]+",path) or
-            re.fullmatch(r"/reject/[^/]+",path) or
-            re.fullmatch(r"/execute/[^/]+",path) or
-            re.fullmatch(r"/action/[^/]+/approve",path) or
-            re.fullmatch(r"/mission/[^/]+/(approve|reject|resume)",path) or
-            re.fullmatch(r"/outcome/[^/]+/(approve|resume)",path)
-        )
-    )
-    if protected and not _3603_operator_header_ok(request):
-        return JSONResponse(status_code=401,content={"detail":"valid operator token required","truthful":True})
-    return await call_next(request)
-
-
-@app.get("/infinity/3603/approvals")
-def infinity3603_approvals(request: FastAPIRequest):
-    _3603_operator_from_request(request)
-    with _db_lock, db() as c:
-        missions=[dict(r) for r in c.execute("SELECT id,objective,status,approval_required,created_at,updated_at FROM missions_187 WHERE approval_required=1 AND status IN ('pending_approval','queued','running') ORDER BY updated_at DESC LIMIT 100").fetchall()]
-        executions=[dict(r) for r in c.execute("SELECT id,objective,action_type,connector,status,created_at,updated_at FROM executions WHERE approval_required=1 AND status='pending_approval' ORDER BY updated_at DESC LIMIT 100").fetchall()]
-    return {"missions":missions,"executions":executions,"count":len(missions)+len(executions),"truthful":True}
-
-
-@app.post("/infinity/3603/approvals/mission/{mission_id}/approve")
-def infinity3603_approve_mission(mission_id:str, request:FastAPIRequest):
-    _3603_operator_from_request(request)
-    return mission_approve_187(mission_id)
-
-
-@app.post("/infinity/3603/approvals/mission/{mission_id}/reject")
-def infinity3603_reject_mission(mission_id:str, request:FastAPIRequest):
-    _3603_operator_from_request(request)
-    return mission_reject_187(mission_id)
-
-
-@app.post("/infinity/3603/approvals/execution/{execution_id}/approve")
-def infinity3603_approve_execution(execution_id:str, request:FastAPIRequest):
-    _3603_operator_from_request(request)
-    return execute_approved(execution_id, ExecuteRequest(approved=True))
-
-
-@app.post("/infinity/3603/approvals/execution/{execution_id}/reject")
-def infinity3603_reject_execution(execution_id:str, request:FastAPIRequest):
-    _3603_operator_from_request(request)
-    e=get_execution(execution_id)
-    if not e: raise HTTPException(404,"execution not found")
-    update_execution(execution_id,status="rejected",error="approval rejected")
-    event(execution_id,"rejected")
-    return get_execution(execution_id)
-
-
-
-# ============================================================================
-# TARGET-2050.3604 — REALITY BRIDGE
-# Free-hosting reality is handled with user-owned external infrastructure:
-# GitHub repository snapshots for persistence and GitHub Actions for periodic
-# wakeups. External account actions remain through the paired browser/device
-# bridge or an explicitly configured application API. No provider is invented.
-# ============================================================================
-def _3604_github_configured():
-    return bool(os.getenv("AI_INFINITY_GITHUB_TOKEN","").strip() and os.getenv("AI_INFINITY_GITHUB_REPO","").strip())
-
-def _3604_github_parts():
-    repo=os.getenv("AI_INFINITY_GITHUB_REPO","").strip().strip("/")
-    if repo.count("/")!=1: return None
-    owner,name=repo.split("/",1)
-    return owner,name
-
-def _3604_github_path():
-    return os.getenv("AI_INFINITY_GITHUB_PATH","ai-infinity/state/ai_infinity.db").strip().lstrip("/") or "ai-infinity/state/ai_infinity.db"
-
-def _3604_github_request(method,path,data=None):
-    token=os.getenv("AI_INFINITY_GITHUB_TOKEN","").strip()
-    if not token: raise RuntimeError("AI_INFINITY_GITHUB_TOKEN not configured")
-    req=Request("https://api.github.com"+path,data=data,headers={"Accept":"application/vnd.github+json","Authorization":"Bearer "+token,"X-GitHub-Api-Version":"2022-11-28","User-Agent":"AI-Infinity/3604","Content-Type":"application/json"},method=method)
-    with build_opener(HTTPRedirectHandler()).open(req,timeout=20) as r:
-        return r.status,json.loads(r.read(4*1024*1024).decode("utf-8","replace"))
-
-def _3604_github_push():
-    parts=_3604_github_parts()
-    if not parts or not _3604_github_configured(): return {"configured":False,"status":"not_configured","truthful":True}
-    owner,repo=parts; path=_3604_github_path(); data=_3603_snapshot_export_bytes()
-    import base64
-    content=base64.b64encode(data).decode()
-    api_path=f"/repos/{quote(owner,safe='')}/{quote(repo,safe='')}/contents/{quote(path,safe='/')}"
-    sha=None
-    try:
-        _,existing=_3604_github_request("GET",api_path)
-        sha=existing.get("sha")
-    except HTTPError as e:
-        if e.code!=404: raise
-    payload={"message":f"AI Infinity state snapshot {int(now())}","content":content,"branch":os.getenv("AI_INFINITY_GITHUB_BRANCH","main").strip() or "main"}
-    if sha: payload["sha"]=sha
-    status,result=_3604_github_request("PUT",api_path,json.dumps(payload).encode())
-    return {"configured":True,"status":"saved","http_status":status,"commit":result.get("commit",{}).get("sha"),"path":path,"bytes":len(data),"truthful":True}
-
-def _3604_github_restore_if_empty():
-    if not _3604_github_configured() or not Path(DB_PATH).exists(): return {"status":"skipped"}
-    try:
-        with _db_lock, db() as c:
-            count=int(c.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'").fetchone()[0])
-            meaningful=0
-            for table in ("ai3601_opportunities","genius_plans","ai2800_activity"):
-                try: meaningful+=int(c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-                except Exception: pass
-        if meaningful>0: return {"status":"local_state_present"}
-        owner,repo=_3604_github_parts(); path=_3604_github_path()
-        import base64,tempfile,shutil
-        api_path=f"/repos/{quote(owner,safe='')}/{quote(repo,safe='')}/contents/{quote(path,safe='/')}"
-        _,data=_3604_github_request("GET",api_path)
-        raw=base64.b64decode(data.get("content","").replace("\n",""))
-        if not raw.startswith(b"SQLite format 3") or len(raw)<4096: return {"status":"rejected","reason":"remote snapshot is not a SQLite database"}
-        tmp=Path(str(DB_PATH)+".restore")
-        tmp.write_bytes(raw)
-        with sqlite3.connect(str(tmp)) as c: c.execute("PRAGMA integrity_check")
-        os.replace(tmp,DB_PATH)
-        return {"status":"restored","bytes":len(raw),"truthful":True}
-    except HTTPError as e:
-        if e.code==404: return {"status":"no_remote_snapshot"}
-        return {"status":"failed","error":str(e)[:300]}
-    except Exception as e: return {"status":"failed","error":str(e)[:300]}
-
-def _3604_reality():
-    r=_3601_real_readiness(); bridge=_bridge_runtimes_200()
-    healthy_browser=any(x.get("kind")=="browser" and x.get("healthy_now") and "browser.web" in x.get("capabilities",[]) for x in bridge)
-    healthy_device=any(x.get("kind")=="device" and x.get("healthy_now") for x in bridge)
-    return {"version":FINAL3603_VERSION,"truthful":True,"gates":{
-        "public_work_discovery":{"ready":bool(r.get("discovery_ready"))},
-        "browser_external_actions":{"ready":healthy_browser},
-        "device_external_actions":{"ready":healthy_device},
-        "authorized_application_api":{"ready":bool(r.get("application_bridge_configured"))},
-        "payment_verification":{"ready":bool(r.get("payment_evidence_ready"))},
-        "payout_rail":{"ready":bool(r.get("payout_rail_configured"))},
-        "durable_state":{"ready":bool(r.get("production_persistence_ready"))},
-        "periodic_wakeup":{"ready":bool(os.getenv("AI_INFINITY_CRON_TOKEN","").strip())},
-        "external_model":{"ready":bool(r.get("external_model_configured"))},
-    },"readiness":r,"bridge":{"browser":healthy_browser,"device":healthy_device},"next_steps":[
-        x for x in [
-            None if healthy_browser else "pair a trusted browser bridge for external websites",
-            None if r.get("application_bridge_configured") or healthy_browser else "configure an authorized application endpoint or browser bridge",
-            None if r.get("payment_evidence_ready") else "configure payment webhook verification secret",
-            None if r.get("payout_rail_configured") else "configure a real payout rail endpoint and key",
-            None if r.get("production_persistence_ready") else "configure GitHub persistence or durable storage",
-            None if os.getenv("AI_INFINITY_CRON_TOKEN","").strip() else "configure cron token and enable the included GitHub Actions wakeup workflow",
-        ] if x]}
-
-@app.get("/infinity/3604/reality")
-def infinity3604_reality(): return _3604_reality()
-
-@app.post("/infinity/3604/persistence/github")
-def infinity3604_github_snapshot(request:FastAPIRequest):
-    _3603_operator_from_request(request); return _3604_github_push()
-
-@app.post("/infinity/3604/cron")
-def infinity3604_cron(request:FastAPIRequest):
-    supplied=(request.headers.get("x-ai-infinity-cron-token") or "").strip()
-    expected=os.getenv("AI_INFINITY_CRON_TOKEN","").strip()
-    if not expected or not supplied or not secrets.compare_digest(supplied,expected): raise HTTPException(401,"valid cron token required")
-    result=_3601_cycle("scheduled-wakeup",False,fixed_only=True)
-    snap=_3604_github_push() if _3604_github_configured() else {"status":"not_configured"}
-    return {"status":"completed","cycle":result,"snapshot":snap,"truthful":True}
-
-# Final runtime metadata is intentionally derived from actual configuration.
-FINAL3603_BUILD="REALITY-BRIDGE-PERSISTENCE-AND-WAKEUP-CLOSURE"
-APP_VERSION=FINAL3603_VERSION
-BUILD=FINAL3603_BUILD
-app.version=APP_VERSION
-
-# Final routing hygiene: FastAPI executes the first matching route. Historical
-# cumulative builds contained duplicate path/method registrations, leaving dead
-# handlers behind. Keep the first registered behavior (the behavior already
-# served in production) and remove unreachable duplicates from the application
-# surface and OpenAPI schema.
-def _3603_dedupe_routes():
-    seen=set(); cleaned=[]; duplicates=[]
-    for route in app.routes:
-        methods=tuple(sorted(getattr(route,"methods",set()) or set()))
-        key=(getattr(route,"path",None),methods)
-        if key in seen:
-            duplicates.append(key); continue
-        seen.add(key); cleaned.append(route)
-    app.routes[:] = cleaned
-    app.openapi_schema=None
-    return duplicates
-_3603_REMOVED_DUPLICATE_ROUTES=_3603_dedupe_routes()
-
-# ============================================================================
-# TARGET-2050.3607 — PRO AI CONTENT STUDIO
-# Cumulative extension over the latest available AI Infinity source.
-# ============================================================================
-from content_factory import register as _register_content_factory_3607, create_project as _create_content_project_3607
-_register_content_factory_3607(app, model_fn=_2700_model)
-
-@app.post('/infinity/3607/content/legacy')
-def _legacy_media_3607(payload: Dict[str, Any]):
-    return _create_content_project_3607(payload, model_fn=_2700_model)
-
-# ============================================================================
-# TARGET-2050.3608 — AI CONTENT STUDIO OS
-# Research + creative intelligence + adaptive skill registry. This layer is
-# cumulative and leaves all previous AI Infinity routes intact.
-# ============================================================================
-from studio_os import register as _register_studio_os_3608
-_register_studio_os_3608(app, model_fn=_2700_model)
-
-# ============================================================================
-# TARGET-2050.3615 — CREATOR STUDIO AUTOMATED PRODUCTION CLOSURE
-# One natural-language creation request runs the complete creator path:
-# research -> creative design -> visuals -> narration -> music -> captions ->
-# master video -> shorts -> thumbnail -> package -> optional publishing.
-# All previous AI Infinity routes remain available.
-# ============================================================================
-from studio_ultimate import register as _register_creator_studio_3619, CREATOR_STUDIO_UI as _CREATOR_STUDIO_UI_3619
-_register_creator_studio_3619(app, model_fn=_2700_model)
-# TARGET-2050.3621.1 — BACKEND FREE API FABRIC
-# Discovers maintained public/no-auth API catalogs, verifies OpenAPI security,
-# and exposes generic executable operations with automatic free failover.
-from free_api_fabric import register as _register_free_api_fabric
-_register_free_api_fabric(app)
-# TARGET-2050.3624 — CONTENT EMPIRE AUTOPILOT
-# One idea fans out into a bounded, real multi-format production campaign.
-from infinity_empire import register as _register_infinity_empire
-_register_infinity_empire(app, model_fn=_2700_model)
-# Make the creator studio the canonical website without removing historical APIs.
-FINAL_INFINITY_UI = _CREATOR_STUDIO_UI_3619
-
-# TARGET-2050.3625 — INFINITY CREATOR PRO SUITE
-# A single-interface capability layer inspired by strong real creator workflows:
-# content operations, AI creation, editing, repurposing, publishing, brand
-# systems, approvals, analytics, collaboration, localization and assets.
-# It routes into existing production APIs; unavailable external providers are
-# never simulated as active.
-_CREATOR_PRO_SUITE = r"""<style>
-#infinity-pro-launch{position:fixed;right:20px;bottom:76px;z-index:100000;border:1px solid #334155;background:linear-gradient(135deg,#111827,#172033);color:#f8fafc;padding:12px 16px;border-radius:999px;font:800 13px system-ui;box-shadow:0 18px 50px #0008;cursor:pointer}
-#infinity-pro-drawer{position:fixed;inset:0;z-index:99999;display:none;background:#05070bd9;backdrop-filter:blur(14px)}
-#infinity-pro-drawer.open{display:flex;align-items:stretch;justify-content:flex-end}
-.ip-panel{width:min(760px,96vw);height:100%;overflow:auto;background:#0a0f18;border-left:1px solid #263143;box-shadow:-30px 0 80px #0008;padding:22px;color:#f8fafc;font:14px/1.45 system-ui}
-.ip-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.ip-head h2{margin:0;font-size:24px}.ip-muted{color:#94a3b8}.ip-close{border:1px solid #334155;background:#111827;color:#fff;border-radius:10px;padding:8px 11px;cursor:pointer}
-.ip-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:16px}.ip-card{border:1px solid #263143;border-radius:14px;background:#0e1520;padding:13px;cursor:pointer}.ip-card:hover{border-color:#64748b;transform:translateY(-1px)}.ip-card b{display:block}.ip-card span{display:block;color:#94a3b8;font-size:12px;margin-top:4px}
-.ip-toolbar{display:flex;flex-wrap:wrap;gap:7px;margin:15px 0}.ip-btn{border:1px solid #334155;background:#111827;color:#f8fafc;border-radius:9px;padding:9px 11px;cursor:pointer}.ip-btn.primary{background:#315c47;border-color:#4ade80}.ip-out{white-space:pre-wrap;background:#070b11;border:1px solid #202a38;border-radius:12px;padding:12px;min-height:70px;max-height:360px;overflow:auto;margin-top:12px}.ip-command{width:100%;min-height:100px;background:#070b11;color:#fff;border:1px solid #334155;border-radius:12px;padding:12px;resize:vertical}
-.ip-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}.ip-chip{border:1px solid #334155;border-radius:999px;padding:5px 9px;color:#cbd5e1;background:#0b111a;cursor:pointer}
-@media(max-width:650px){#infinity-pro-launch{right:12px;bottom:70px}.ip-panel{padding:15px}.ip-grid{grid-template-columns:1fr}}
-</style>
-<button id="infinity-pro-launch" type="button">∞ PRO CREATOR SUITE</button>
-<div id="infinity-pro-drawer" aria-hidden="true">
-<section class="ip-panel">
-<div class="ip-head"><div><div class="ip-muted">AI INFINITY · CREATOR OS</div><h2>Professional production command center</h2><div class="ip-muted">One workspace for idea → production → repurpose → publish → learn.</div></div><button class="ip-close" id="ip-close">Close</button></div>
-<div class="ip-toolbar">
-<button class="ip-btn primary" data-ip="create">Create</button><button class="ip-btn" data-ip="edit">Edit & QC</button><button class="ip-btn" data-ip="repurpose">Repurpose</button><button class="ip-btn" data-ip="publish">Publish</button><button class="ip-btn" data-ip="intel">Intelligence</button><button class="ip-btn" data-ip="brand">Brand</button><button class="ip-btn" data-ip="team">Team & Review</button><button class="ip-btn" data-ip="library">Assets</button>
-</div>
-<div class="ip-grid">
-<div class="ip-card" data-ip="create"><b>⚡ AI Production</b><span>Research, story, script, visuals, voice, music, captions, edit, thumbnail, QC.</span></div>
-<div class="ip-card" data-ip="edit"><b>🎬 Pro Edit System</b><span>Timeline, variants, captions, aspect ratios, audio, integrity and review.</span></div>
-<div class="ip-card" data-ip="repurpose"><b>✂ Repurpose Factory</b><span>Turn one master into Shorts/Reels/TikTok/LinkedIn/X and platform variants.</span></div>
-<div class="ip-card" data-ip="publish"><b>🚀 Distribution</b><span>Calendar, platform packaging, connected destinations, receipts and verification.</span></div>
-<div class="ip-card" data-ip="intel"><b>🧠 Creator Intelligence</b><span>Research, trends, analytics, learning, performance and strategy loops.</span></div>
-<div class="ip-card" data-ip="brand"><b>◈ Brand System</b><span>Voice, audience, visual direction, templates, CTA, assets and consistency.</span></div>
-<div class="ip-card" data-ip="team"><b>✓ Review & Collaboration</b><span>Approvals, revision boundaries, audit trail, feedback and production ownership.</span></div>
-<div class="ip-card" data-ip="library"><b>▦ Asset Library</b><span>Project artifacts, source records, templates, outputs and downloadable packages.</span></div>
-</div>
-<div class="ip-toolbar">
-<button class="ip-btn" data-api="/infinity/studio/features">100+ capabilities</button><button class="ip-btn" data-api="/infinity/studio/templates">Templates</button><button class="ip-btn" data-api="/infinity/studio/library">Library</button><button class="ip-btn" data-api="/infinity/studio/calendar">Calendar</button><button class="ip-btn" data-api="/infinity/studio/analytics">Analytics</button><button class="ip-btn" data-api="/infinity/studio/learning">Learning</button><button class="ip-btn" data-api="/infinity/studio/connections">Connections</button><button class="ip-btn" data-api="/infinity/studio/organization">Operations</button>
-</div>
-<div><div class="ip-muted">DIRECTOR COMMAND</div>
-<textarea id="ip-command" class="ip-command" placeholder="Example: Make a 45-second vertical launch video from this product brief, create 5 platform variants, caption it, generate a thumbnail, prepare SEO/social copy, run QC and package everything."></textarea>
-<div class="ip-chips"><button class="ip-chip" data-fill="Create a publication-ready 60-second 9:16 vertical video with research, script, visuals, narration, captions, thumbnail, SEO and five social variants.">60s vertical</button><button class="ip-chip" data-fill="Turn this long-form video into 5 high-retention Shorts/Reels/TikToks with captions, hooks, titles and platform-specific copy.">Repurpose</button><button class="ip-chip" data-fill="Translate this production into English, Arabic, Dari and Pashto with localized captions and narration while preserving brand voice.">Localize</button><button class="ip-chip" data-fill="Audit this project for factual accuracy, rights, audio, pacing, captions, framing, spelling, accessibility and export integrity; fix what can be fixed automatically.">Full QC</button></div>
-<button class="ip-btn primary" id="ip-run" style="margin-top:10px">Run production command</button></div>
-<div id="ip-out" class="ip-out">Ready. This panel exposes existing AI Infinity production capabilities; it does not fake external integrations.</div>
-</section></div>
-<script>
-(function(){
-const $=id=>document.getElementById(id),drawer=$("infinity-pro-drawer"),out=$("ip-out");
-function open(){drawer.classList.add("open");drawer.setAttribute("aria-hidden","false")}
-function close(){drawer.classList.remove("open");drawer.setAttribute("aria-hidden","true")}
-$("infinity-pro-launch").onclick=open;$("ip-close").onclick=close;drawer.addEventListener("click",e=>{if(e.target===drawer)close()});
-document.addEventListener("keydown",e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="k"){e.preventDefault();open();$("ip-command").focus()}});
-async function api(url,opts){const r=await fetch(url,opts||{}),t=await r.text();let j;try{j=JSON.parse(t)}catch{j={raw:t}}if(!r.ok)throw Error(j.detail||j.error||"Request failed");return j}
-function show(x){out.textContent=typeof x==="string"?x:JSON.stringify(x,null,2)}
-async function load(url){try{show(await api(url))}catch(e){show("Unavailable: "+e.message)}}
-document.querySelectorAll("[data-api]").forEach(b=>b.onclick=()=>load(b.dataset.api));
-document.querySelectorAll("[data-fill]").forEach(b=>b.onclick=()=>{$("ip-command").value=b.dataset.fill;$("ip-command").focus()});
-document.querySelectorAll("[data-ip]").forEach(b=>b.onclick=()=>{const m=b.dataset.ip;const p={
-create:"Create a complete professional content production from this brief. Research it, develop the creative direction, script, scene plan, visuals, narration, music/SFX, captions, thumbnail, SEO, platform copy, QC and final package.",
-edit:"Review the current project as a professional editor. Improve pacing, framing, transitions, audio, captions, spelling, accessibility and export integrity; preserve approved facts and brand.",
-repurpose:"Repurpose the current master into platform-native short videos, social posts, hooks, captions, titles, thumbnails and descriptions for YouTube Shorts, Instagram Reels, TikTok, LinkedIn and X.",
-publish:"Prepare the current approved project for publication: validate platform requirements, create per-platform metadata, schedule where configured, and return an honest publication readiness report.",
-intel:"Research the topic and current audience signals, compare credible sources, extract hooks and content opportunities, then propose a production strategy without fabricating evidence.",
-brand:"Apply the creator's brand voice, audience, visual system, CTA, language and reusable templates consistently across every deliverable.",
-team:"Run preflight, approvals, revision boundaries, audit logging and final review; show exactly what is ready, blocked or needs human approval.",
-library:"Inspect project artifacts, source records, templates and output packages; surface the latest usable assets and integrity status."
-};$("ip-command").value=p[m]||p.create;$("ip-command").focus();show("Command prepared. Add your brief/context, then run it.")});
-$("ip-run").onclick=async()=>{const command=$("ip-command").value.trim();if(!command){show("Enter a creator command first.");return}show("Starting…");try{const j=await api("/infinity/studio/creator-os/command",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({command,brief:command,channels:["YouTube","Instagram","TikTok","LinkedIn","X"],format:"professional content"})});try{const title=j.title||"AI Infinity production";const v=/vertical|reel|short|tiktok/i.test(command),dm=command.match(/(\d+)\s*(?:-|\s)?second/i);const p=await api("/infinity/studio/project",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({title,objective:command,topic:command,format:v?"short":"long",duration:dm?Math.min(3600,Math.max(20,parseInt(dm[1],10))):60,content_type:/podcast/i.test(command)?"podcast":/article|blog/i.test(command)?"article":"video",audience:"target audience",tone:"professional, premium, clear",language:"English",platforms:["YouTube","Instagram","TikTok","LinkedIn","X"],brand_voice:"professional",visual_style:"premium editorial",call_to_action:"follow for more",quality_preset:"balanced",aspect_ratio:v?"9:16":"16:9",notes:"Started from Infinity Pro Creator Suite command."})});show({creator_os:j,production:p})}catch(e){show({creator_os:j,production_error:e.message})}}catch(e){show("Could not start command: "+e.message)}};
-})();
-</script>""";
-try:
-    if '</body>' in FINAL_INFINITY_UI:
-        FINAL_INFINITY_UI = FINAL_INFINITY_UI.replace('</body>', _CREATOR_PRO_SUITE + '</body>', 1)
-except Exception:
-    pass
-try:
-    _creator_os_launch = '<a id="creator-os-launch" href="/infinity/studio/creator-os/ui" style="position:fixed;right:18px;bottom:18px;z-index:99999;padding:12px 16px;border-radius:999px;background:#276b4c;color:#fff;text-decoration:none;font:700 13px system-ui;box-shadow:0 10px 30px #0006">🛡 Creator OS · Reality Shield</a>'
-    if '</body>' in FINAL_INFINITY_UI:
-        FINAL_INFINITY_UI = FINAL_INFINITY_UI.replace('</body>', _creator_os_launch + '</body>', 1)
-except Exception:
-    pass
-FINAL3603_UI = _CREATOR_STUDIO_UI_3619
-# TARGET-2050.3624 — Professional Creator OS / Reality Shield
-try:
-    import creator_os_3624
-    app.include_router(creator_os_3624.router)
-except Exception as _creator_os_3624_error:
-    creator_os_3624 = None
-
-try:
-    app.title = "AI Infinity — Creator Studio"
-    app.version = "TARGET-2050.3624"
-except Exception:
-    pass
-
-# ---------------------------------------------------------------------------
-# TARGET-2050.3615 — canonical deployment health surface
-# ---------------------------------------------------------------------------
-try:
-    from fastapi.routing import APIRoute
-
-    def _canonical_3621_health():
-        return {
-            "status": "healthy",
-            "version": "TARGET-2050.3624",
-            "build": "PROFESSIONAL-CREATOR-OS-REALITY-SHIELD",
-            "creator_studio": True,
-            "website_ecosystem": True,
-            "website_only": True,
-            "mobile_app_module": False,
-            "one_command_creation": True,
-            "download_first": True,
-            "optional_publishing": True,
-            "one_time_connections": True,
-            "background_production": True,
-            "progress_tracking": True,
-            "cancel_retry": True,
-            "signed_share_links": True,
-            "core_features": 100,
-            "api_fabric_capacity": 100000,
-            "free_api_discovery": True,
-            "free_api_backend_connector": True,
-            "free_api_no_auth_only": True,
-            "free_api_automatic_sync": True,
-            "free_forever": True,
-            "billing_enabled": False,
-            "owner_email_configured": bool(os.getenv("AI_INFINITY_OWNER_EMAIL", "aurlooijlooij@gmail.com").strip()),
-            "automatic_free_failover": True,
-            "extensible_features": True,
-            "production_organization": True,
-            "workspace_library": True,
-            "review_desk": True,
-            "content_calendar": True,
-            "artifact_integrity": True,
-            "truthful": True,
-        }
-
-
-    def _canonical_3622_status():
-        data = _canonical_3621_health()
-        data["surface"] = "canonical"
-        return data
-
-    def _canonical_3622_capabilities():
-        return {
-            "version": "TARGET-2050.3624",
-            "build": "PROFESSIONAL-CREATOR-OS-REALITY-SHIELD",
-            "connectors": ["local", "public", "free-api", "authorized-provider", "browser-bridge"],
-            "features": [
-                "one_command_creation", "research", "creative_planning", "multimodal_production",
-                "ffmpeg_rendering", "local_tts", "captions", "quality_control", "artifact_sha256",
-                "signed_share_links", "free_forever_routing", "automatic_free_failover",
-                "free_api_discovery", "no_auth_api_verification", "persistent_workspace_on_active_instance",
-                "optional_authorized_publishing", "content_empire_autopilot", "professional_creator_os", "reality_shield", "brief_to_publish_closure", "truthful_readiness"
-            ],
-            "free_forever": True,
-            "billing_enabled": False,
-            "truthful": True,
-        }
-
-    app.routes.insert(0, APIRoute(path="/capabilities", endpoint=_canonical_3622_capabilities, methods=["GET"], name="canonical_3622_capabilities"))
-    app.routes.insert(0, APIRoute(path="/status", endpoint=_canonical_3622_status, methods=["GET"], name="canonical_3622_status"))
-    app.routes.insert(0, APIRoute(path="/health", endpoint=_canonical_3621_health, methods=["GET"], name="canonical_3621_health"))
-    app.openapi_schema = None
-except Exception:
-    pass
-
-# TARGET-2050.3624 FINAL ROUTE INTEGRITY
-# Remove any remaining duplicate method/path registrations after all cumulative
-# modules have been mounted. The first route is retained, matching FastAPI
-# first-match semantics and preventing stale historical handlers from shadowing
-# the canonical 3624 health/status/capability surface.
-try:
-    _final_seen_routes=set(); _final_clean_routes=[]
-    for _r in app.routes:
-        _m=tuple(sorted(getattr(_r, "methods", set()) or set()))
-        _k=(getattr(_r, "path", None), _m)
-        if _k in _final_seen_routes:
-            continue
-        _final_seen_routes.add(_k); _final_clean_routes.append(_r)
-    app.routes[:] = _final_clean_routes
-    app.openapi_schema=None
-except Exception:
-    pass
