@@ -111,7 +111,9 @@ const BENCHMARKS=[
 {p:"Descript Underlord",d:"Transcript-first editing, visual understanding, clip finding, show notes, templates, dubbing and agentic edits.",u:"https://www.descript.com/underlord"},
 {p:"HeyGen Video Agent",d:"Prompt-native video with script, visuals, voiceover, pacing, captions and avatar workflows.",u:"https://www.heygen.com/academy/video-agent"},
 {p:"YouTube Ask Studio",d:"Creator ideation, channel insight, performance analysis, saved ideas, image context and support-aware workflow.",u:"https://support.google.com/youtube/answer/16291691"},
-{p:"Meta Creator Assistant",d:"Personalized recommendations from creator style, performance and community signals, plus trend-based ideation.",u:"https://about.fb.com/news/2026/06/creator-assistant-more-languages-for-ai-translations-on-facebook/"}
+{p:"Meta Creator Assistant",d:"Personalized recommendations from creator style, performance and community signals, plus trend-based ideation.",u:"https://about.fb.com/news/2026/06/creator-assistant-more-languages-for-ai-translations-on-facebook/"},
+{p:"Adobe Firefly",d:"Multi-model image/video/audio creation, prompt editing, Boards, speech, music and commercially safe creative workflows.",u:"https://www.adobe.com/products/firefly.html"},
+{p:"Runway",d:"Agentic video production, reference media, timeline editing, in-context video edits, upscaling, model routing and reusable skills.",u:"https://runway.com/changelog"}
 ];
 function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,x=>({"&":"&amp;","<":"&lt;",">":"&gt;",""":"&quot;","'":"&#39;"}[x]))}
 function fmtDate(ts){if(!ts)return"—";try{return new Date(Number(ts)*1000).toLocaleString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}catch{return"—"}}
