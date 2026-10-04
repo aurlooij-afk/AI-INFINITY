@@ -14224,3 +14224,9 @@ app.version=APP_VERSION
 # ============================================================================
 from studio_ultimate import register as _register_creator_studio
 _register_creator_studio(app, model_fn=globals().get('_2700_model'))
+
+
+# Creator Pro: advanced local editing, storyboard/transcript workflow,
+# open-source/local provider discovery and interactive export.
+from creator_pro_os import register_pro as _register_creator_pro
+_register_creator_pro(app)
