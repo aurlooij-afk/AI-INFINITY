@@ -2377,6 +2377,8 @@ CREATOR_BENCHMARK_SOURCES_2026 = [
     {"platform":"HeyGen Video Agent","source":"https://www.heygen.com/en-ca/academy/video-agent","benchmarks":["prompt-native video","automatic script","visuals","voiceover","pacing","captions"]},
     {"platform":"HeyGen July 2026","source":"https://www-redesign.heygen.com/blog/heygen-july-2026-release","benchmarks":["website-to-video","Figma-to-video","Video Podcast","storyboarding","media library","long talking-avatar video"]},
     {"platform":"YouTube creator AI transparency","source":"https://blog.youtube/news-and-events/improving-ai-labels-viewers-creators/","benchmarks":["AI disclosure","provenance-aware publishing"]},
+    {"platform":"Adobe Firefly","source":"https://www.adobe.com/products/firefly.html","benchmarks":["multi-model routing","image/video/audio generation","prompt editing","boards","speech","music","commercial-safety posture"]},
+    {"platform":"Runway","source":"https://runway.com/changelog","benchmarks":["agentic video production","timeline editing","reference media","video editing","keyframes","upscale","frame-rate conversion","model routing","brand kits","custom skills"]},
 ]
 
 TREND_PLATFORMS_3624 = {
