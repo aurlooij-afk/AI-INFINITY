@@ -146,7 +146,47 @@ jobs:
           board = client.get("/infinity/studio/project/" + project_id + "/storyboard")
           if board.status_code != 200 or not (board.json().get("scenes") or []):
               raise SystemExit("Storyboard was not generated from the real project")
-          print("End-to-end creator smoke production passed:", project_id)
+
+          pro = client.get("/infinity/studio/creator-pro")
+          if pro.status_code != 200 or not pro.json().get("editor",{}).get("color"):
+              raise SystemExit("Creator Pro capability surface is unavailable")
+
+          edit = client.post("/infinity/studio/project/" + project_id + "/edit/advanced", json={
+              "trim_start": 0, "trim_end": 0, "speed": 1, "aspect_ratio": "9:16",
+              "brightness": 0, "contrast": 1, "saturation": 1, "sharpness": 0
+          })
+          if edit.status_code != 200:
+              raise SystemExit(f"Advanced video edit failed: HTTP {edit.status_code}: {edit.text[:1200]}")
+
+          clip = client.post("/infinity/studio/project/" + project_id + "/transcript/clip", json={
+              "start": 0.2, "end": 1.5
+          })
+          if clip.status_code != 200:
+              raise SystemExit(f"Transcript clip failed: HTTP {clip.status_code}: {clip.text[:1200]}")
+
+          interactive = client.post("/infinity/studio/project/" + project_id + "/interactive", json={
+              "title": "CI interactive", "headline": "Renewable energy", "body": "A self-contained creator experience."
+          })
+          if interactive.status_code != 200:
+              raise SystemExit(f"Interactive export failed: HTTP {interactive.status_code}: {interactive.text[:1200]}")
+
+          image = client.post("/infinity/studio/project/" + project_id + "/image/edit", json={
+              "source_asset_name": "thumbnail.jpg", "scale": 1, "brightness": 1.05,
+              "contrast": 1.05, "saturation": 1.05, "sharpness": 1.1
+          })
+          if image.status_code != 200:
+              raise SystemExit(f"Image Lab failed: HTTP {image.status_code}: {image.text[:1200]}")
+
+          matrix = client.post("/infinity/studio/project/" + project_id + "/variant-matrix", json={"ratios":["9:16"]})
+          if matrix.status_code != 200 or not (matrix.json().get("variants") or []):
+              raise SystemExit(f"Variant build failed: HTTP {matrix.status_code}: {matrix.text[:1200]}")
+
+          scenes = board.json().get("scenes") or []
+          saved = client.put("/infinity/studio/project/" + project_id + "/storyboard", json={"title":"CI storyboard","scenes":scenes})
+          if saved.status_code != 200:
+              raise SystemExit(f"Storyboard save failed: HTTP {saved.status_code}: {saved.text[:1000]}")
+
+          print("End-to-end creator + Creator Pro smoke production passed:", project_id)
           print("Production main:app + creator dispatcher smoke test passed.")
           PY
 
