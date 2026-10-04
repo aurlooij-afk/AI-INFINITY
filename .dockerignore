@@ -1,0 +1,102 @@
+# Git
+.git
+.gitignore
+.github
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Python environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs / temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.old
+
+# Local databases and runtime state
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+
+# AI Infinity runtime directories
+ai-infinity/
+infinity-data/
+runtime/
+workspace/
+artifacts/
+outputs/
+media/
+uploads/
+downloads/
+
+# Large generated media
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.webm
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+
+# Generated images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+
+# Archives / build output
+*.zip
+*.tar
+*.tar.gz
+dist/
+build/
+*.egg-info/
+
+# Node / frontend leftovers
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Secrets / local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
