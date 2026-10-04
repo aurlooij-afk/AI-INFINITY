@@ -35,7 +35,7 @@ jobs:
       - name: Compile all runtime Python modules
         run: |
           set -euo pipefail
-          python -m py_compile main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py
+          python -m py_compile main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py
           echo "Python syntax checks passed."
       - name: Parse Creator Studio browser JavaScript
         run: |
