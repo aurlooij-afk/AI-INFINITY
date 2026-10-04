@@ -41,6 +41,7 @@ COPY main.py \
      infinity_empire.py \
      creator_os_3624.py \
      ai_infinity_bridge.py \
+     creator_studio_2030.html \
      ./
 
 # Fail the image build immediately if a required Python source is broken.
