@@ -295,13 +295,13 @@ def register_pro(app: Any) -> None:
             # rather than returning an empty/mock storyboard.
             if not chapters:
                 script_path = _project_dir(project_id) / "script.md"
+                script_text = ""
                 if script_path.exists():
                     script_text = script_path.read_text(encoding="utf-8", errors="ignore").strip()
-                    if script_text:
-                        chapters = [{"heading": p.get("title") or "Generated scene",
-                                     "narration": script_text[:12000],
-                                     "image_prompt": p.get("title") or "creator production scene",
-                                     "on_screen": "", "duration": 8}]
+                chapters = [{"heading": p.get("title") or "Production scene",
+                             "narration": script_text[:12000] if script_text else (p.get("title") or "AI Infinity production"),
+                             "image_prompt": p.get("title") or "creator production scene",
+                             "on_screen": "", "duration": 8}]
             data = {
                 "project_id": project_id,
                 "title": p.get("title") or "",
