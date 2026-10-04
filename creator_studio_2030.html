@@ -127,7 +127,7 @@ const BENCHMARKS=[
 {p:"Adobe Firefly",d:"Multi-model image/video/audio creation, prompt editing, Boards, speech, music and commercially safe creative workflows.",u:"https://www.adobe.com/products/firefly.html"},
 {p:"Runway",d:"Agentic video production, reference media, timeline editing, in-context video edits, upscaling, model routing and reusable skills.",u:"https://runway.com/changelog"}
 ];
-function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,x=>({"&":"&amp;","<":"&lt;",">":"&gt;",""":"&quot;","'":"&#39;"}[x]))}
+function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,x=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[x]))}
 function fmtDate(ts){if(!ts)return"—";try{return new Date(Number(ts)*1000).toLocaleString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}catch{return"—"}}
 function toast(msg){$("toast").textContent=msg;$("toast").style.display="block";clearTimeout(toast.t);toast.t=setTimeout(()=>{$("toast").style.display="none"},3800)}
 async function api(url,opts={}){const res=await fetch(url,Object.assign({credentials:"same-origin",headers:{}},opts));let data;try{data=await res.json()}catch{data={detail:await res.text()}}if(!res.ok)throw new Error(typeof data.detail==="string"?data.detail:(data.message||("HTTP "+res.status)));return data}
