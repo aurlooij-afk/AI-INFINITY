@@ -57,7 +57,7 @@ jobs:
           AI_INFINITY_FAST_MODE: "1"
         run: |
           set -euo pipefail
-          python - <<'PY
+          python - <<'PY'
           import main
           import creator_entrypoint
           from fastapi.testclient import TestClient
