@@ -281,10 +281,19 @@ function renderDelivery(x){
 }
 async function createNow(){
   const objective=$("cmd").value.trim();if(objective.length<8){toast("Describe what you want to create.","bad");return}
-  setNotice("commandNotice","Creating a durable production job…"); 
+  setNotice("commandNotice","Interpreting your brief and creating a durable production job…"); 
   try{
-    const payload={title:objective.slice(0,140),objective,topic:objective,content_type:$("ctype").value,format:$("format").value,duration:Number($("duration").value||300),
-      quality_preset:$("quality").value,aspect_ratio:$("ratio").value,language:$("language").value,platforms:[]};
+    const commandText=objective.toLowerCase();
+    const dm=commandText.match(/\b(\d{1,4})\s*(seconds?|secs?|s|minutes?|mins?|m)\b/);
+    let commandDuration=Number($("duration").value||300);
+    if(dm){const n=Number(dm[1]);const secs=/^m/i.test(dm[2])?n*60:n;if(secs>=20&&secs<=3600)commandDuration=secs}
+    const vertical=/\b(vertical|short|shorts|reel|reels|tiktok|portrait)\b/.test(commandText);
+    const commandFormat=vertical?"short":$("format").value;
+    const commandRatio=vertical?"9:16":$("ratio").value;
+    // The creator's natural-language command outranks generic UI defaults.
+    $("format").value=commandFormat;$("ratio").value=commandRatio;$("duration").value=commandDuration;
+    const payload={title:objective.slice(0,140),objective,topic:objective,content_type:$("ctype").value,format:commandFormat,duration:commandDuration,
+      quality_preset:$("quality").value,aspect_ratio:commandRatio,language:$("language").value,platforms:[]};
     const x=await api("/infinity/studio/project",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)});
     state.latest=x.project_id;localStorage.setItem("aii_latest_project",state.latest);toast("Production started.","good");setNotice("commandNotice","Your command is now a real tracked production job.","good");await refreshProjects();await loadProject(state.latest);
   }catch(e){setNotice("commandNotice",e.message,"bad")}
