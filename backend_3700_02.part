@@ -1,0 +1,134 @@
+oject created: {name}", "completed", pid)
+    except Exception:
+        pass
+    return {"status": "created", "project": _3700_projects(uid3, 1)[0], "truthful": True}
+
+
+@app.get("/infinity/3700/projects/{project_id}")
+def infinity3700_project_get(project_id: str, request: FastAPIRequest):
+    uid3 = _3700_user(request)
+    with _db_lock, db() as c:
+        row = c.execute("SELECT * FROM ai3700_projects WHERE project_id=? AND user_id=?", (project_id, uid3)).fetchone()
+    if not row:
+        raise HTTPException(404, "project not found")
+    return {"project": _3700_project_row(row), "truthful": True}
+
+
+@app.post("/infinity/3700/projects/{project_id}/stage")
+def infinity3700_project_stage(project_id: str, payload: Dict[str, Any], request: FastAPIRequest):
+    uid3 = _3700_user(request)
+    stage = str(payload.get("stage") or "").strip().lower()
+    if stage not in {"idea", "planning", "production", "review", "published", "archived"}:
+        raise HTTPException(400, "invalid project stage")
+    with _db_lock, db() as c:
+        row = c.execute("SELECT * FROM ai3700_projects WHERE project_id=? AND user_id=?", (project_id, uid3)).fetchone()
+        if not row:
+            raise HTTPException(404, "project not found")
+        status = "archived" if stage == "archived" else "active"
+        c.execute("UPDATE ai3700_projects SET stage=?,status=?,updated_at=? WHERE project_id=? AND user_id=?", (stage, status, now(), project_id, uid3))
+        row = c.execute("SELECT * FROM ai3700_projects WHERE project_id=? AND user_id=?", (project_id, uid3)).fetchone()
+    return {"status": "updated", "project": _3700_project_row(row), "truthful": True}
+
+
+@app.get("/infinity/3700/brand")
+def infinity3700_brand(request: FastAPIRequest):
+    return {"brand": _3700_brand_get(_3700_user(request)), "truthful": True}
+
+
+@app.post("/infinity/3700/brand")
+def infinity3700_brand_save(payload: Dict[str, Any], request: FastAPIRequest):
+    uid3 = _3700_user(request)
+    fields = {
+        "brand_name": str(payload.get("brand_name") or "").strip()[:160],
+        "voice": str(payload.get("voice") or "").strip()[:700],
+        "audience": str(payload.get("audience") or "").strip()[:700],
+        "positioning": str(payload.get("positioning") or "").strip()[:1200],
+        "visual_notes": str(payload.get("visual_notes") or "").strip()[:1200],
+    }
+    current = _3700_brand_get(uid3)
+    for key, value in fields.items():
+        if not value:
+            fields[key] = current.get(key, "")
+    with _db_lock, db() as c:
+        c.execute(
+            "INSERT INTO ai3700_brand(user_id,brand_name,voice,audience,positioning,visual_notes,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET brand_name=excluded.brand_name,voice=excluded.voice,audience=excluded.audience,positioning=excluded.positioning,visual_notes=excluded.visual_notes,updated_at=excluded.updated_at",
+            (uid3, fields["brand_name"], fields["voice"], fields["audience"], fields["positioning"], fields["visual_notes"], now()),
+        )
+    try:
+        _gp_activity("brand", "Brand profile updated", "completed", uid3)
+    except Exception:
+        pass
+    return {"status": "saved", "brand": _3700_brand_get(uid3), "truthful": True}
+
+
+@app.post("/infinity/3700/production")
+def infinity3700_production(payload: Dict[str, Any], request: FastAPIRequest):
+    uid3 = _3700_user(request)
+    objective = str(payload.get("objective") or "").strip()[:6000]
+    title = str(payload.get("title") or "Infinity Production").strip()[:180]
+    if not objective:
+        raise HTTPException(400, "objective is required")
+    result = _f2300_media_production_plan(payload)
+    pid = uid("project")
+    t = now()
+    metadata = {
+        "media_id": result.get("media_id"),
+        "production_status": result.get("status"),
+        "asset_groups": result.get("asset_groups", {}),
+    }
+    with _db_lock, db() as c:
+        c.execute(
+            "INSERT INTO ai3700_projects(project_id,user_id,name,objective,stage,status,metadata_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (pid, uid3, title, objective, "production", "active", _3700_json(metadata), t, t),
+        )
+    return {"status": "production_ready", "project_id": pid, "project": _3700_project_row(c.execute("SELECT * FROM ai3700_projects WHERE project_id=?", (pid,)).fetchone()), "production": result, "truthful": True}
+
+
+@app.get("/infinity/3700/publish")
+def infinity3700_publish_list(request: FastAPIRequest):
+    uid3 = _3700_user(request)
+    with _db_lock, db() as c:
+        rows = c.execute("SELECT * FROM ai3700_publish_queue WHERE user_id=? ORDER BY updated_at DESC LIMIT 100", (uid3,)).fetchall()
+    out = []
+    for row in rows:
+        d = dict(row)
+        try:
+            d["payload"] = json.loads(d.pop("payload_json", "{}") or "{}")
+        except Exception:
+            d["payload"] = {}
+        out.append(d)
+    return {"user_id": uid3, "items": out, "truthful": True}
+
+
+@app.post("/infinity/3700/publish")
+def infinity3700_publish_enqueue(payload: Dict[str, Any], request: FastAPIRequest):
+    uid3 = _3700_user(request)
+    title = str(payload.get("title") or "Untitled publication").strip()[:240]
+    target = str(payload.get("target") or "draft").strip()[:120]
+    project_id = str(payload.get("project_id") or "").strip()[:120] or None
+    body = payload.get("payload") if isinstance(payload.get("payload"), dict) else {"body": str(payload.get("body") or "").strip()[:12000]}
+    pub_id = uid("publish")
+    t = now()
+    with _db_lock, db() as c:
+        c.execute(
+            "INSERT INTO ai3700_publish_queue(publish_id,user_id,project_id,title,target,status,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (pub_id, uid3, project_id, title, target, "draft_ready", _3700_json(body), t, t),
+        )
+    try:
+        _gp_activity("publish", f"Publication draft prepared: {title}", "completed", pub_id)
+    except Exception:
+        pass
+    return {
+        "status": "draft_ready",
+        "publish_id": pub_id,
+        "message": "Prepared locally. No external publication was claimed.",
+        "truthful": True,
+    }
+
+
+@app.get("/infinity/3700/analytics")
+def infinity3700_analytics(request: FastAPIRequest):
+    uid3 = _3700_user(request)
+    with _db_lock, db() as c:
+        total_projects = c.execute("SELECT COUNT(*) FROM ai3700_projects WHERE user_id=?", (uid3,)).fetchone()[0]
+        active_projects = c.execute("SELECT COUNT(*) FROM ai3700_projects WHERE user_id=? AND status='active'", (uid3,)).fetchone()[0]
