@@ -39,11 +39,13 @@ class AIInfinityApplication:
             await foundation_app(scope, receive, send)
             return
 
-        # The professional Creator Studio owns these paths. Keeping the routing
-        # boundary here means old /run, /command, wallet, execution, health and
-        # other foundation APIs stay untouched.
+        # AI Infinity has one public website interface: the Creator Studio.
+        # Historical foundation APIs remain available as backend routes, but the
+        # website itself stays unified on desktop and mobile.
         if scope_type == "http" and (
-            path == "/studio"
+            path == "/"
+            or path == "/home"
+            or path == "/studio"
             or path.startswith("/studio/")
             or path == "/infinity/studio"
             or path.startswith("/infinity/studio/")
