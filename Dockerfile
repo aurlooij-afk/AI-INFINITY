@@ -57,7 +57,7 @@ RUN python -m py_compile \
         infinity_empire.py \
         creator_os_3624.py \
         ai_infinity_bridge.py \
-        creator_entrypoint.py
+        creator_entrypoint.py \
         creator_pro_os.py
 
 RUN mkdir -p /tmp/ai-infinity
