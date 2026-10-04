@@ -14213,3 +14213,14 @@ BUILD=GENIUS_PARITY_BUILD
 PREVIOUS_BUILD=FINAL3602_VERSION
 app.title="AI Infinity"
 app.version=APP_VERSION
+
+
+# ============================================================================
+# UNIFIED CREATOR STUDIO RUNTIME
+# Render's configured service command historically starts main:app. Keep
+# the canonical foundation application and register the same production
+# Creator Studio backend directly into it, so the public website and all
+# /infinity/studio/* actions execute in one process.
+# ============================================================================
+from studio_ultimate import register as _register_creator_studio
+_register_creator_studio(app, model_fn=globals().get('_2700_model'))
