@@ -115,6 +115,7 @@ def register_pro(app: Any) -> None:
                 "transcript_first_context": True,
                 "storyboard_rebuild": True,
                 "transcript_clip_extraction": True,
+                "image_lab": True,
                 "interactive_html_export": True,
                 "variant_matrix": True,
                 "open_source_connectors": True
@@ -523,6 +524,107 @@ def register_pro(app: Any) -> None:
         _save_asset(project_id,"pro_edit",out,"video/mp4",meta)
         art=register_artifact(project_id,out,"video/mp4",meta)
         audit_event(project_id,"creator_pro_edit_completed",{"asset":out.name,"sha256":art.get("sha256")})
+        return {"status":"completed","project_id":project_id,"asset_name":out.name,"download_url":f"/infinity/studio/project/{project_id}/asset/{out.name}","metadata":meta,"truthful":True}
+
+
+    @app.post("/infinity/studio/project/{project_id}/image/edit")
+    async def image_edit(project_id: str, request: Request, response: Any):
+        uid, p = owned_project(project_id, request, response)
+        payload = await request.json()
+        source_name = safe_text(payload.get("source_asset_name"), 220)
+        if not source_name:
+            raise HTTPException(422, "source_asset_name is required")
+        rows = _asset_rows(project_id)
+        found = next((x for x in rows if Path(str(x.get("path") or "")).name == Path(source_name).name or str(x.get("metadata",{}).get("filename") or "") == Path(source_name).name), None)
+        if not found:
+            raise HTTPException(404, "image asset is not registered in this project")
+        source = Path(str(found.get("path") or ""))
+        if not source.exists() or source.suffix.lower() not in {".png",".jpg",".jpeg",".webp"}:
+            raise HTTPException(422, "selected asset is not a supported image")
+        try:
+            from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageDraw, ImageFont
+            im = Image.open(source).convert("RGBA")
+            # Crop first, with pixel bounds clamped to the actual image.
+            crop = payload.get("crop")
+            if isinstance(crop, dict):
+                try:
+                    x=max(0,int(float(crop.get("x",0))))
+                    y=max(0,int(float(crop.get("y",0))))
+                    w=max(1,int(float(crop.get("width",im.width-x))))
+                    h=max(1,int(float(crop.get("height",im.height-y))))
+                    x=min(x,im.width-1); y=min(y,im.height-1)
+                    im=im.crop((x,y,min(im.width,x+w),min(im.height,y+h)))
+                except Exception:
+                    pass
+            try: rotate=float(payload.get("rotate") or 0)
+            except Exception: rotate=0
+            if abs(rotate)>0.001:
+                im=im.rotate(max(-180,min(180,rotate)),expand=True,resample=Image.Resampling.BICUBIC)
+            try: scale=float(payload.get("scale") or 1)
+            except Exception: scale=1
+            scale=max(0.25,min(4.0,scale))
+            max_dim=4096
+            if scale != 1:
+                nw=max(1,min(max_dim,int(im.width*scale)))
+                nh=max(1,min(max_dim,int(im.height*scale)))
+                im=im.resize((nw,nh),Image.Resampling.LANCZOS)
+            try:
+                brightness=float(payload.get("brightness") if payload.get("brightness") is not None else 1)
+            except Exception: brightness=1
+            try:
+                contrast=float(payload.get("contrast") if payload.get("contrast") is not None else 1)
+            except Exception: contrast=1
+            try:
+                saturation=float(payload.get("saturation") if payload.get("saturation") is not None else 1)
+            except Exception: saturation=1
+            brightness=max(0,min(3,brightness)); contrast=max(0,min(3,contrast)); saturation=max(0,min(3,saturation))
+            if brightness != 1: im=ImageEnhance.Brightness(im).enhance(brightness)
+            if contrast != 1: im=ImageEnhance.Contrast(im).enhance(contrast)
+            if saturation != 1: im=ImageEnhance.Color(im).enhance(saturation)
+            try: sharp=float(payload.get("sharpness") if payload.get("sharpness") is not None else 1)
+            except Exception: sharp=1
+            sharp=max(0,min(5,sharp))
+            if sharp > 1: im=ImageEnhance.Sharpness(im).enhance(sharp)
+            if bool(payload.get("grayscale")):
+                gray=ImageOps.grayscale(im)
+                im=Image.merge("RGBA",(gray,gray,gray,im.getchannel("A")))
+            text_overlay=safe_text(payload.get("text"),500)
+            if text_overlay:
+                draw=ImageDraw.Draw(im)
+                try:
+                    font_path="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+                    font=ImageFont.truetype(font_path,max(14,min(180,int(im.width*0.045))))
+                except Exception:
+                    font=ImageFont.load_default()
+                try: alpha=float(payload.get("text_opacity") if payload.get("text_opacity") is not None else 0.9)
+                except Exception: alpha=0.9
+                alpha=max(0,min(1,alpha))
+                bbox=draw.textbbox((0,0),text_overlay,font=font,stroke_width=2)
+                tw=bbox[2]-bbox[0]; th=bbox[3]-bbox[1]
+                pos=str(payload.get("text_position") or "bottom")
+                margin=max(12,int(im.width*0.035))
+                tx=(im.width-tw)//2
+                ty=margin if pos=="top" else (im.height-th)//2 if pos=="center" else im.height-th-margin
+                draw.rounded_rectangle((tx-18,ty-10,tx+tw+18,ty+th+10),radius=14,fill=(0,0,0,int(150*alpha)))
+                draw.text((tx,ty),text_overlay,font=font,fill=(255,255,255,int(255*alpha)),stroke_width=2,stroke_fill=(0,0,0,int(170*alpha)))
+            out=_project_dir(project_id)/f"image_edit_{int(time.time())}_{uuid.uuid4().hex[:8]}.png"
+            im.save(out,format="PNG",optimize=True)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(500,"image edit failed: "+str(exc)[:400])
+        meta={
+            "source":source.name,
+            "editor":"AI Infinity Creator Pro Image Lab",
+            "width":im.width,
+            "height":im.height,
+            "options":{k:payload.get(k) for k in ["crop","rotate","scale","brightness","contrast","saturation","sharpness","grayscale","text","text_opacity","text_position"]},
+            "sha256":file_sha256(out),
+            "truthful":True,
+        }
+        _save_asset(project_id,"image_edit",out,"image/png",meta)
+        art=register_artifact(project_id,out,"image/png",meta)
+        audit_event(project_id,"image_edit_completed",{"user_id":uid,"asset":out.name,"sha256":art.get("sha256")})
         return {"status":"completed","project_id":project_id,"asset_name":out.name,"download_url":f"/infinity/studio/project/{project_id}/asset/{out.name}","metadata":meta,"truthful":True}
 
     @app.post("/infinity/studio/project/{project_id}/interactive")
