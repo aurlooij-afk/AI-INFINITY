@@ -105,7 +105,7 @@ FAST_MODE = os.getenv("AI_INFINITY_FAST_MODE", "1").strip().lower() in {"1", "tr
 PROCESS_REGISTRY: Dict[str, subprocess.Popen] = {}
 PROCESS_LOCK = threading.RLock()
 ACTIVE_PROJECT = threading.local()
-QUEUE_LEASE_SECONDS = max(60, int(os.getenv("AI_INFINITY_QUEUE_LEASE_SECONDS", "1800")))
+QUEUE_LEASE_SECONDS = max(120, int(os.getenv("AI_INFINITY_QUEUE_LEASE_SECONDS", "300")))
 MAX_RETRIES = max(0, min(5, int(os.getenv("AI_INFINITY_MAX_RETRIES", "2"))))
 
 
@@ -733,7 +733,7 @@ def _pexels(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
             if not f:
                 continue
             p = outdir / f"pexels_{v.get('id','x')}.mp4"
-            download(f["link"], p, timeout=90)
+            download(f["link"], p, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 90), max_bytes=(24_000_000 if FAST_MODE else 40_000_000))
             out.append({"kind": "video", "path": str(p), "source": "Pexels", "source_url": v.get("url"), "creator": (v.get("user") or {}).get("name"), "license": "Pexels license", "width": f.get("width"), "height": f.get("height")})
         return out
     except Exception:
@@ -752,7 +752,7 @@ def _pixabay(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
             if not f or not f.get("url"):
                 continue
             p = outdir / f"pixabay_{v.get('id','x')}.mp4"
-            download(f["url"], p, timeout=90)
+            download(f["url"], p, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 90), max_bytes=(24_000_000 if FAST_MODE else 40_000_000))
             out.append({"kind": "video", "path": str(p), "source": "Pixabay", "source_url": v.get("pageURL"), "creator": v.get("user"), "license": "Pixabay Content License", "width": f.get("width"), "height": f.get("height")})
         return out
     except Exception:
@@ -845,7 +845,7 @@ def _hf_image(prompt: str, outdir: Path, index: int) -> Optional[Dict[str, Any]]
     for endpoint in urls:
         try:
             req = URLRequest(endpoint, data=json.dumps({"inputs": prompt}).encode("utf-8"), headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Accept": "image/png"}, method="POST")
-            with urlopen(req, timeout=90) as r:
+            with urlopen(req, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 90)) as r:
                 content_type = str(r.headers.get("content-type") or "")
                 raw = r.read(12_000_000)
             if content_type.startswith("image/") or raw.startswith(b"\x89PNG") or raw.startswith(b"\xff\xd8"):
