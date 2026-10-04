@@ -3,20 +3,23 @@ name: AI Infinity Free Wakeup
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "*/10 * * * *"
 
 jobs:
   wake:
     runs-on: ubuntu-latest
     steps:
-      - name: Wake AI Infinity and run safe worker cycle
+      - name: Wake AI Infinity with the canonical health endpoint
         env:
-          AI_INFINITY_PUBLIC_URL: ${{ secrets.AI_INFINITY_PUBLIC_URL }}
-          AI_INFINITY_CRON_TOKEN: ${{ secrets.AI_INFINITY_CRON_TOKEN }}
+          AI_INFINITY_PUBLIC_URL: https://ai-infinity-ca5e.onrender.com
         run: |
           set -eu
-          test -n "$AI_INFINITY_PUBLIC_URL"
-          test -n "$AI_INFINITY_CRON_TOKEN"
-          curl --fail --silent --show-error --retry 3 --max-time 45 \
-            -H "x-ai-infinity-cron-token: $AI_INFINITY_CRON_TOKEN" \
-            -X POST "$AI_INFINITY_PUBLIC_URL/infinity/3603/cron"
+          curl --fail --silent --show-error --retry 3 --max-time 45             -H "Cache-Control: no-cache"             "$AI_INFINITY_PUBLIC_URL/health" >/tmp/aii-health.json
+          python - <<'PY'
+          import json
+          with open("/tmp/aii-health.json","r",encoding="utf-8") as f:
+              data=json.load(f)
+          if data.get("status") != "healthy":
+              raise SystemExit("AI Infinity health check did not report healthy")
+          print("AI Infinity healthy:", data.get("version"), data.get("build"))
+          PY
