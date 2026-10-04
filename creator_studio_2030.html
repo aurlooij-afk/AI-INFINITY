@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07080c">
+<title>AI Infinity — Creator OS</title>
+<style>
+:root{
+  --bg:#06070b;--panel:#0b0f16;--panel2:#0f1520;--panel3:#121927;
+  --line:#202938;--line2:#2a3444;--text:#f7f9fc;--muted:#98a4b5;--dim:#5f6c7d;
+  --mint:#d9f99d;--mint2:#a7f3d0;--blue:#8ab8ff;--violet:#c4b5fd;--amber:#f7d77d;--red:#ff9bad;
+  --shadow:0 24px 80px rgba(0,0,0,.38);--r:18px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:
+radial-gradient(circle at 16% -5%,rgba(167,243,208,.08),transparent 28%),
+radial-gradient(circle at 86% 4%,rgba(137,183,255,.10),transparent 30%),
+linear-gradient(180deg,#07090d 0%,#050609 100%);color:var(--text);
+font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+button,input,textarea,select{font:inherit}button{cursor:pointer}
+a{color:inherit}
+.app{display:grid;grid-template-columns:250px minmax(0,1fr);min-height:100vh}
+.side{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;padding:18px 13px;
+border-right:1px solid var(--line);background:rgba(5,7,11,.82);backdrop-filter:blur(22px);z-index:50}
+.brand{display:flex;align-items:center;gap:11px;padding:5px 9px 19px}
+.logo{width:36px;height:36px;display:grid;place-items:center;border-radius:12px;border:1px solid #344153;
+background:linear-gradient(140deg,#18212e,#0c1118);font-size:20px;font-weight:950;box-shadow:0 0 28px rgba(137,183,255,.08)}
+.brandTitle{font-size:15px;font-weight:900;letter-spacing:.2px}.brandSub{font-size:10px;color:var(--dim);margin-top:1px}
+.navLabel{padding:11px 10px 6px;color:var(--dim);font-size:9px;font-weight:850;letter-spacing:.16em;text-transform:uppercase}
+.nav{display:grid;gap:3px}
+.nav button{width:100%;display:flex;align-items:center;gap:11px;border:1px solid transparent;background:transparent;color:#bac4d1;
+text-align:left;padding:10px 11px;border-radius:12px}
+.nav button:hover{background:#0d131c;border-color:#1d2735;color:#fff}
+.nav button.active{background:linear-gradient(180deg,#131b27,#0e141d);border-color:#2b394a;color:#fff;box-shadow:inset 0 1px rgba(255,255,255,.04)}
+.nav button strong{margin-left:auto;font-size:9px;color:var(--dim);font-weight:700}
+.sideSpacer{flex:1}
+.sideFoot{margin:10px 5px 0;padding:11px;border-top:1px solid var(--line);color:#667386;font-size:10px}
+.main{min-width:0}.top{height:68px;display:flex;align-items:center;justify-content:space-between;gap:12px;
+padding:0 22px;border-bottom:1px solid var(--line);background:rgba(7,9,13,.72);backdrop-filter:blur(18px);
+position:sticky;top:0;z-index:40}
+.topLeft{display:flex;align-items:center;gap:12px;min-width:0}.topTitle{font-weight:820;white-space:nowrap}
+.crumb{font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.topRight{display:flex;align-items:center;gap:8px}.sys{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:#77e1aa;box-shadow:0 0 0 4px rgba(119,225,170,.08),0 0 18px rgba(119,225,170,.28)}
+.hotkey{padding:5px 8px;border:1px solid var(--line);border-radius:8px;color:var(--dim);font-size:10px}
+.page{max-width:1520px;margin:0 auto;padding:24px}
+.eyebrow{font-size:9px;letter-spacing:.18em;font-weight:900;color:#8997aa;text-transform:uppercase}
+h1{font-size:clamp(34px,5vw,64px);line-height:.98;letter-spacing:-.052em;margin:10px 0 14px;max-width:1000px}
+h2{letter-spacing:-.025em}h3{letter-spacing:-.018em}.lead{font-size:15px;color:#b6c0cf;max-width:860px}
+.grid{display:grid;gap:14px}.c2{grid-template-columns:minmax(0,1.55fr) minmax(280px,.75fr)}
+.c3{grid-template-columns:repeat(3,minmax(0,1fr))}.c4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.card{background:linear-gradient(180deg,rgba(15,21,31,.92),rgba(9,13,19,.95));border:1px solid var(--line);
+border-radius:var(--r);box-shadow:var(--shadow)}
+.pad{padding:18px}.pad24{padding:24px}
+.commandWrap{position:relative;padding:1px;border-radius:20px;background:linear-gradient(135deg,#304154,#16212c 48%,#2d3b4f)}
+.commandCard{border-radius:19px;background:linear-gradient(180deg,#0b1017,#080c12);padding:20px}
+.command{width:100%;min-height:178px;resize:vertical;background:#070a0f;color:#f7f9fc;border:1px solid #243044;
+border-radius:15px;padding:16px;outline:0;font-size:15px;line-height:1.55}
+.command:focus,.field:focus,.select:focus{border-color:#587086;box-shadow:0 0 0 3px rgba(137,183,255,.07)}
+.field,.select{width:100%;padding:10px 11px;border-radius:11px;border:1px solid var(--line);background:#0a0f16;color:var(--text);outline:0}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px}.rowStart{display:flex;align-items:center;gap:9px}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.toolbar .grow{flex:1}
+.btn{padding:10px 13px;border:1px solid #2b3747;background:#111822;color:#e8edf4;border-radius:11px}
+.btn:hover{border-color:#49596d;background:#17202c}.btn.primary{border-color:#dcf7ae;background:var(--mint);color:#0a0d0d;font-weight:900}
+.btn.ghost{background:transparent}.btn.warn{color:var(--amber)}.btn.danger{color:var(--red)}
+.muted{color:var(--muted)}.dim{color:var(--dim)}.tiny{font-size:10px;color:var(--dim)}.small{font-size:12px;color:var(--muted)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}.chip{padding:6px 9px;border-radius:999px;background:#0a1018;border:1px solid #253140;color:#bdc8d6;font-size:10px}
+.chip.mint{color:var(--mint2);border-color:#30493e}.chip.blue{color:var(--blue);border-color:#31445c}.chip.amber{color:var(--amber);border-color:#4d442e}
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}.kpi{padding:13px 14px;border:1px solid var(--line);border-radius:13px;background:#090e15}
+.kpi span{display:block;font-size:10px;color:var(--dim)}.kpi b{display:block;font-size:20px;margin-top:4px}
+.section{margin-top:17px}.sectionHead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+.sectionHead h2,.sectionHead h3{margin:0}
+.stageRail{display:grid;grid-template-columns:repeat(8,minmax(80px,1fr));gap:7px}.stage{padding:11px;border-radius:13px;border:1px solid var(--line);background:#090e15;min-width:0}
+.stageNum{font-size:8px;color:var(--dim)}.stageName{font-size:11px;font-weight:830;margin-top:4px}.stageState{font-size:9px;color:var(--dim);margin-top:2px}
+.stage.live{border-color:#40563c;background:#10170f}.stage.live .stageState{color:var(--mint2)}.stage.done{background:#0b1410;border-color:#294239}
+.progress{height:7px;background:#131b26;border-radius:99px;overflow:hidden}.progress i{height:100%;display:block;width:0;
+background:linear-gradient(90deg,#8dc38f,#d9f99d)}
+.producer{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(280px,.9fr);gap:14px}
+.preview{aspect-ratio:16/9;background:#030508;border:1px solid var(--line);border-radius:16px;overflow:hidden}.preview video{width:100%;height:100%;display:block}
+.artifacts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.artifact{padding:12px;border:1px solid var(--line);border-radius:12px;background:#090e15}
+.artifact b{display:block;font-size:11px}.artifact a{display:inline-block;margin-top:7px;color:#a9cdfd;text-decoration:none;font-size:10px}
+.list{display:grid;gap:8px}.item{padding:12px;border:1px solid var(--line);border-radius:12px;background:#090e15}
+.item:hover{border-color:#303d4d}
+.status{padding:4px 8px;border-radius:999px;border:1px solid #304050;color:#bac7d6;font-size:9px}
+.status.completed,.status.complete{color:var(--mint2);border-color:#315041}.status.running,.status.producing{color:var(--blue);border-color:#2e4661}.status.failed{color:var(--red);border-color:#5a3541}.status.queued{color:var(--amber);border-color:#4e452f}
+.notice{padding:11px 12px;border-radius:11px;background:#090e15;border:1px solid var(--line);color:#c8d0dc}
+.notice.good{border-color:#315045;color:#a8efd0}.notice.warn{border-color:#51482e;color:#e9d99c}.notice.bad{border-color:#5b3440;color:#ffb3c2}
+.table{overflow:auto;border:1px solid var(--line);border-radius:13px}.table table{width:100%;border-collapse:collapse;min-width:760px}
+.table th,.table td{padding:10px;border-bottom:1px solid #192230;text-align:left;font-size:10px}.table th{color:#748296}
+.fieldGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.fieldLabel{display:grid;gap:5px}
+.featureGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.feature{padding:10px;border:1px solid var(--line);border-radius:12px;background:#090e15}
+.feature input{accent-color:#d9f99d}.feature label{display:flex;gap:8px;align-items:flex-start}.feature strong{font-size:11px}.feature small{display:block;color:var(--dim);font-size:9px;margin-top:3px}
+.timeline{display:grid;gap:8px}.event{position:relative;padding:11px 12px 11px 17px;border:1px solid var(--line);border-radius:12px;background:#090e15}
+.event:before{content:"";position:absolute;left:8px;top:15px;width:4px;height:4px;border-radius:50%;background:#95b6ff}
+.event b{font-size:11px}.event pre{white-space:pre-wrap;margin:6px 0 0;color:#8290a4}
+.search{position:relative}.search input{padding-left:34px}.search:before{content:"⌕";position:absolute;left:12px;top:9px;color:var(--dim)}
+.heroActions{display:flex;gap:7px;flex-wrap:wrap;margin-top:15px}
+.blueprint{display:grid;gap:8px}.scene{padding:11px 12px;border-left:2px solid #35475e;background:#09101a;border-radius:0 12px 12px 0}
+.scene b{font-size:11px}.scene p{font-size:10px;color:var(--muted);margin:4px 0 0}
+.mediaBadge{display:inline-flex;align-items:center;gap:5px;font-size:9px;color:#aeb9c8}.mediaBadge i{width:6px;height:6px;border-radius:50%;background:#79d9a5}
+.empty{padding:30px;text-align:center;border:1px dashed #283545;border-radius:14px;color:#707f92;background:#080d13}
+.toast{position:fixed;right:18px;bottom:18px;max-width:360px;padding:12px 14px;border:1px solid #314153;border-radius:12px;background:#0d141d;box-shadow:var(--shadow);z-index:100;color:#dce4ee}
+.mobileNav{display:none}
+@media(max-width:1100px){
+  .app{grid-template-columns:82px minmax(0,1fr)}.side{width:82px}.brandTitle,.brandSub,.navLabel,.nav button span,.sideFoot{display:none}.brand{justify-content:center}
+  .nav button{justify-content:center}.c4{grid-template-columns:repeat(2,minmax(0,1fr))}.c3,.featureGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.stageRail{grid-template-columns:repeat(4,minmax(80px,1fr))}
+}
+@media(max-width:760px){
+  .app{grid-template-columns:1fr}.side{display:none}.main{padding-bottom:72px}.top{padding:0 13px;height:60px}.crumb{display:none}.page{padding:14px}
+  .mobileNav{display:grid;position:fixed;left:0;right:0;bottom:0;height:66px;padding:7px 6px;grid-template-columns:repeat(5,1fr);gap:4px;
+  background:rgba(6,8,12,.96);border-top:1px solid var(--line);backdrop-filter:blur(20px);z-index:60}
+  .mobileNav button{border:1px solid transparent;border-radius:10px;background:transparent;color:#90a0b3;font-size:10px}.mobileNav button.active{color:#fff;background:#101721;border-color:#2b3849}
+  .c2,.producer{grid-template-columns:1fr}.c3,.c4,.featureGrid,.fieldGrid{grid-template-columns:1fr 1fr}.artifacts{grid-template-columns:1fr 1fr}
+  .stageRail{grid-template-columns:1fr 1fr}.topRight .hotkey{display:none}h1{font-size:40px}.lead{font-size:13px}.command{min-height:160px}
+}
+@media(max-width:460px){.c3,.c4,.fieldGrid,.featureGrid{grid-template-columns:1fr}.artifacts{grid-template-columns:1fr}.kpis{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="app">
+<aside class="side">
+  <div class="brand"><div class="logo">∞</div><div><div class="brandTitle">AI Infinity</div><div class="brandSub">Creator OS</div></div></div>
+  <div class="navLabel">Studio</div>
+  <div class="nav">
+    <button id="n-home" onclick="go('home')">⌂ <span>Overview</span></button>
+    <button id="n-create" onclick="go('create')">✦ <span>Director</span></button>
+    <button id="n-projects" onclick="go('projects')">▣ <span>Projects</span></button>
+    <button id="n-assets" onclick="go('assets')">◇ <span>Assets</span></button>
+    <button id="n-timeline" onclick="go('timeline')">◫ <span>Timeline</span></button>
+    <button id="n-research" onclick="go('research')">⌕ <span>Research</span></button>
+    <button id="n-brand" onclick="go('brand')">◌ <span>Brand Brain</span></button>
+    <button id="n-agents" onclick="go('agents')">◈ <span>Agents</span></button>
+    <button id="n-reviews" onclick="go('reviews')">✓ <span>Review</span></button>
+  </div>
+  <div class="navLabel">Distribution</div>
+  <div class="nav">
+    <button id="n-publish" onclick="go('publish')">↗ <span>Publish</span></button>
+    <button id="n-schedule" onclick="go('schedule')">◷ <span>Release plan</span></button>
+    <button id="n-analytics" onclick="go('analytics')">⌁ <span>Analytics</span></button>
+  </div>
+  <div class="navLabel">System</div>
+  <div class="nav">
+    <button id="n-connections" onclick="go('connections')">◎ <span>Connections</span></button>
+    <button id="n-settings" onclick="go('settings')">⚙ <span>Settings</span></button>
+  </div>
+  <div class="sideSpacer"></div>
+  <div class="sideFoot">Director-first. Real production state. No fake provider access.</div>
+</aside>
+
+<main class="main">
+  <header class="top">
+    <div class="topLeft"><div class="topTitle" id="pageTitle">Overview</div><div class="crumb" id="crumb">AI Infinity / Creator OS</div></div>
+    <div class="topRight"><button class="btn" onclick="go('create')">New creation</button><div class="sys"><i class="dot"></i><span id="statusText">Studio online</span></div><span class="hotkey">⌘ K</span></div>
+  </header>
+  <section class="page" id="content"></section>
+</main>
+</div>
+
+<nav class="mobileNav">
+  <button id="m-home" onclick="go('home')">⌂<br>Home</button>
+  <button id="m-create" onclick="go('create')">✦<br>Create</button>
+  <button id="m-projects" onclick="go('projects')">▣<br>Projects</button>
+  <button id="m-assets" onclick="go('assets')">◇<br>Assets</button>
+  <button id="m-more" onclick="openMore()">•••<br>More</button>
+</nav>
+
+<div id="toast" class="toast" style="display:none"></div>
+
+<script>
+var current="home";
+var latestProject=localStorage.getItem("aii_latest_project")||"";
+var pollTimer=null;
+var bootstrapState=null;
+var featureCatalog=[];
+
+function $(id){return document.getElementById(id)}
+function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;","'":"&#39;"}[c]})}
+async function api(url,opts){
+  var r=await fetch(url,Object.assign({credentials:"same-origin",headers:{}},opts||{}));
+  var txt=await r.text(), j=null;
+  try{j=JSON.parse(txt)}catch(e){}
+  if(!r.ok) throw new Error(j&&j.detail?j.detail:(txt||("HTTP "+r.status)));
+  return j;
+}
+function toast(msg,kind){
+  var t=$("toast");t.textContent=msg;t.style.display="block";
+  t.style.borderColor=kind==="bad"?"#5b3440":kind==="good"?"#315045":"#314153";
+  clearTimeout(toast._t);toast._t=setTimeout(function(){t.style.display="none"},3600);
+}
+function nav(){
+  document.querySelectorAll(".nav button").forEach(function(b){b.classList.remove("active")});
+  var b=$("n-"+current);if(b)b.classList.add("active");
+  ["home","create","projects","assets"].forEach(function(k){var m=$("m-"+k);if(m)m.classList.toggle("active",k===current)});
+}
+function statusClass(s){
+  s=String(s||"").toLowerCase();
+  if(s.indexOf("fail")>=0)return "failed";
+  if(s.indexOf("complete")>=0)return "completed";
+  if(s.indexOf("run")>=0||s.indexOf("produc")>=0||s.indexOf("assembl")>=0)return "running";
+  if(s.indexOf("queue")>=0)return "queued";
+  return "";
+}
+function go(id){
+  current=id;nav();
+  var titles={home:"Overview",create:"Director",projects:"Projects",assets:"Assets",timeline:"Timeline",research:"Research",brand:"Brand Brain",agents:"Agents",reviews:"Review",publish:"Publish",schedule:"Release plan",analytics:"Analytics",connections:"Connections",settings:"Settings"};
+  $("pageTitle").textContent=titles[id]||"Creator OS";
+  $("crumb").textContent="AI Infinity / Creator OS / "+(titles[id]||id);
+  var fn={home:home,create:create,projects:projects,assets:assets,timeline:timeline,research:research,brand:brand,agents:agents,reviews:reviews,publish:publish,schedule:schedule,analytics:analytics,connections:connections,settings:settings}[id];
+  if(fn)fn().catch(function(e){$("content").innerHTML=errorView(e)});
+}
+function errorView(e){return "<div class='card pad'><div class='notice bad'><b>Workspace error</b><div class='small' style='margin-top:5px'>"+esc(e.message)+"</div></div></div>"}
+function stages(x){
+  var s=String(x.stage||x.status||"queued").toLowerCase();
+  var names=["Research","Direction","Script","Visuals","Audio","Edit","QC","Delivery"];
+  var keys=["research","direction","plan","visual","voice","assembly","quality","complete"];
+  var idx=0;
+  keys.forEach(function(k,i){if(s.indexOf(k)>=0)idx=Math.max(idx,i)});
+  if(s==="queued")idx=0;
+  var html="";
+  names.forEach(function(n,i){
+    var cls="stage";
+    if(i<idx)cls+=" done";if(i===idx)cls+=" live";
+    html+="<div class='"+cls+"'><div class='stageNum'>0"+(i+1)+"</div><div class='stageName'>"+n+"</div><div class='stageState'>"+(i<idx?"Completed":i===idx?esc(x.stage||x.status||"Working"):"Waiting")+"</div></div>";
+  });
+  return "<div class='stageRail'>"+html+"</div>";
+}
+async function session(){
+  try{var x=await api("/infinity/studio/session");$("statusText").textContent="Studio online · "+String(x.user_id||"").slice(0,13)}
+  catch(e){$("statusText").textContent="Studio unavailable"}
+}
+async function home(){
+  var r=await Promise.all([api("/infinity/studio/bootstrap"),api("/infinity/studio/system/performance"),api("/infinity/studio/analytics"),api("/infinity/studio/health")]);
+  bootstrapState=r[0];var perf=r[1], analyticsData=r[2], h=r[3], ps=bootstrapState.projects||[];
+  var active=ps.filter(function(p){return ["completed","completed_with_qc_warnings","failed","cancelled"].indexOf(p.status)<0}).slice(0,4);
+  var recent=ps.slice(0,5);
+  $("content").innerHTML=
+  "<div class='commandHero'><div class='eyebrow'>AI-NATIVE CREATOR OPERATING SYSTEM</div>"+
+  "<h1>Direct the work.<br>AI Infinity builds the piece.</h1>"+
+  "<p class='lead'>One natural-language command can drive research, creative direction, script, visuals, voice, music, edit, captions, quality control, platform packaging and delivery — as one persistent production job.</p>"+
+  "<div class='heroActions'><button class='btn primary' onclick='go(\"create\")'>Start a production</button><button class='btn' onclick='latestProject?openProject(latestProject):go(\"projects\")'>Resume latest</button></div></div>"+
+  "<div class='section'>"+
+  "<div class='commandWrap'><div class='commandCard'><div class='sectionHead'><div><div class='eyebrow'>DIRECTOR COMMAND</div><h2 style='margin:6px 0 0'>What should exist when you're finished?</h2></div><span class='chip mint'>ONE COMMAND</span></div>"+
+  "<textarea id='homeCmd' class='command' placeholder='Create a 7-minute cinematic documentary about AI agents for beginners. Research it, write a strong narrative, produce the video with natural narration, original music, captions, thumbnail, three Shorts, SEO, social copy and a publish-ready package.'></textarea>"+
+  "<div class='toolbar' style='margin-top:10px'><button class='btn primary' onclick='submitFrom(\"homeCmd\")'>Build it</button><button class='btn' onclick='useExample()'>Use an example</button><span class='tiny'>The command becomes a real durable project.</span></div></div></div></div>"+
+  "<div class='section'><div class='kpis'><div class='kpi'><span>Projects</span><b>"+esc(ps.length)+"</b></div><div class='kpi'><span>Productions active</span><b>"+esc(perf.queued||0)+"</b></div><div class='kpi'><span>Completed</span><b>"+esc(perf.completed||0)+"</b></div><div class='kpi'><span>Success rate</span><b>"+Math.round((perf.success_rate||0)*100)+"%</b></div></div></div>"+
+  "<div class='section grid c2'><div class='card pad'><div class='sectionHead'><div><div class='eyebrow'>LIVE PRODUCTION</div><h3 style='margin-top:5px'>Work in motion</h3></div><button class='btn' onclick='go(\"projects\")'>All projects</button></div>"+(active.length?active.map(projectMini).join(""):"<div class='empty'>No active productions. Your next command starts here.</div>")+"</div>"+
+  "<div class='card pad'><div class='sectionHead'><div><div class='eyebrow'>STUDIO BRAIN</div><h3 style='margin-top:5px'>Reality-aware pipeline</h3></div><span class='status completed'>"+esc(h.status||"healthy")+"</span></div><div class='list'>"+
+  "<div class='item'><div class='row'><b>Research</b><span class='chip mint'>Integrated</span></div><div class='tiny'>Public-source retrieval + claim evidence package.</div></div>"+
+  "<div class='item'><div class='row'><b>Media production</b><span class='chip mint'>Integrated</span></div><div class='tiny'>Public footage, configured AI media, or explicit synthetic fallback.</div></div>"+
+  "<div class='item'><div class='row'><b>Voice & sound</b><span class='chip mint'>Integrated</span></div><div class='tiny'>Natural neural voice when reachable, local voice fallback, music and SFX.</div></div>"+
+  "<div class='item'><div class='row'><b>External publishing</b><span class='chip amber'>Authorized</span></div><div class='tiny'>Only connected destinations are allowed to publish.</div></div></div></div></div>"+
+  "<div class='section card pad'><div class='sectionHead'><div><div class='eyebrow'>PRODUCTION GRAPH</div><h3 style='margin-top:5px'>From intent to release</h3></div><span class='tiny'>The interface never marks a stage complete unless the runtime recorded it.</span></div>"+stages({stage:"research",status:"ready"})+"</div>"+
+  "<div class='section grid c3'>"+
+  "<div class='card pad'><div class='eyebrow'>RESEARCH DESK</div><h3 style='margin:7px 0'>Evidence before polish.</h3><div class='small'>Investigate a topic, capture sources and carry the evidence into production.</div><button class='btn' style='margin-top:12px' onclick='go(\"research\")'>Open research</button></div>"+
+  "<div class='card pad'><div class='eyebrow'>REVIEW DESK</div><h3 style='margin:7px 0'>Human judgement at the right moment.</h3><div class='small'>Approve, request changes or reject a finished piece.</div><button class='btn' style='margin-top:12px' onclick='go(\"reviews\")'>Open review</button></div>"+
+  "<div class='card pad'><div class='eyebrow'>DISTRIBUTION</div><h3 style='margin:7px 0'>One production, many outputs.</h3><div class='small'>Master, Shorts, thumbnail, captions, SEO, social copy and package travel together.</div><button class='btn' style='margin-top:12px' onclick='go(\"publish\")'>Open delivery</button></div></div>"+
+  "<div class='section'><div class='sectionHead'><h3>Recent productions</h3><button class='btn' onclick='go(\"projects\")'>View all</button></div><div class='list'>"+(recent.map(projectRow).join("")||"<div class='empty'>No projects yet.</div>")+"</div></div>";
+}
+function projectMini(p){
+  return "<div class='item' style='margin-bottom:8px'><div class='row'><div><b>"+esc(p.title||p.project_id)+"</b><div class='tiny'>"+esc(p.project_id)+" · "+esc(p.stage||p.status||"queued")+"</div></div><span class='status "+statusClass(p.status)+"'>"+esc(p.status||"queued")+"</span></div><div class='progress' style='margin-top:9px'><i style='width:"+Math.round(p.progress||0)+"%'></i></div><div class='tiny' style='margin-top:6px'>"+Math.round(p.progress||0)+"% · click to open</div></div>";
+}
+function projectRow(p){
+  return "<div class='item'><div class='row'><div><b>"+esc(p.title||p.project_id)+"</b><div class='tiny'>"+esc(p.project_id)+" · "+esc(p.stage||p.status||"queued")+"</div></div><button class='btn' onclick='openProject(\""+esc(p.project_id)+"\")'>Open</button></div><div class='progress' style='margin-top:8px'><i style='width:"+Math.round(p.progress||0)+"%'></i></div></div>";
+}
+function useExample(){$("homeCmd").value="Create a premium 5-minute YouTube explainer about a difficult topic for ordinary people. Research current evidence, write a strong hook and narrative, create scene direction, natural voice, original music, captions, thumbnail, three Shorts, SEO and a complete publishing package."}
+async function create(){
+  var s=await api("/infinity/studio/settings"), d=s.settings||{};
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>DIRECTOR CONSOLE</div><h1>Give the studio the outcome, not a checklist.</h1><p class='lead'>Advanced controls are here when you want them. The normal workflow is still one command.</p></div>"+
+  "<div class='grid c2'><div class='commandWrap'><div class='commandCard'><div class='sectionHead'><div><div class='eyebrow'>PRIMARY COMMAND</div><h2 style='margin:6px 0'>Your production brief</h2></div><span class='chip mint'>DURABLE JOB</span></div>"+
+  "<textarea id='createCmd' class='command' placeholder='Create a complete professional content piece…'></textarea>"+
+  "<div class='fieldGrid' style='margin-top:10px'><label class='fieldLabel'><span class='tiny'>Content type</span><select id='ctype' class='select'><option value='video'>Video</option><option value='podcast'>Podcast</option><option value='article'>Article</option><option value='social'>Social campaign</option></select></label>"+
+  "<label class='fieldLabel'><span class='tiny'>Format</span><select id='fmt' class='select'><option value='long'>Long form</option><option value='short'>Short form</option></select></label>"+
+  "<label class='fieldLabel'><span class='tiny'>Quality</span><select id='quality' class='select'><option value='balanced'>Balanced</option><option value='fast'>Fast</option><option value='high'>High</option><option value='draft'>Draft</option></select></label></div>"+
+  "<div class='fieldGrid' style='margin-top:8px'><label class='fieldLabel'><span class='tiny'>Duration (sec)</span><input id='duration' class='field' type='number' min='20' max='3600' value='300'></label>"+
+  "<label class='fieldLabel'><span class='tiny'>Audience</span><input id='audience' class='field' value='general audience'></label>"+
+  "<label class='fieldLabel'><span class='tiny'>Language</span><input id='language' class='field' value='"+esc(d.language||"English")+"'></label></div>"+
+  "<div class='fieldGrid' style='margin-top:8px'><label class='fieldLabel'><span class='tiny'>Platforms</span><input id='platforms' class='field' placeholder='YouTube, Instagram, TikTok'></label>"+
+  "<label class='fieldLabel'><span class='tiny'>Aspect ratio</span><select id='ratio' class='select'><option>16:9</option><option>9:16</option><option>1:1</option><option>4:5</option></select></label>"+
+  "<label class='fieldLabel'><span class='tiny'>Voice</span><input id='voice' class='field' value='en-US-AriaNeural'></label></div>"+
+  "<div class='toolbar' style='margin-top:11px'><button class='btn primary' onclick='submitFrom(\"createCmd\")'>Start production</button><button class='btn' onclick='previewPlan()'>Plan first</button><button class='btn ghost' onclick='useCreatorExample()'>Example brief</button></div><div id='createOut' style='margin-top:10px'></div></div></div>"+
+  "<div class='card pad'><div class='eyebrow'>CREATOR CONTRACT</div><h3 style='margin:7px 0 12px'>What this workspace guarantees</h3><div class='list'>"+
+  "<div class='item'><b>One command</b><div class='tiny'>The complete request is persisted as one production job.</div></div>"+
+  "<div class='item'><b>Real status</b><div class='tiny'>Progress comes from the production engine and checkpoints.</div></div>"+
+  "<div class='item'><b>No fake access</b><div class='tiny'>A missing provider never becomes a green success badge.</div></div>"+
+  "<div class='item'><b>Deliverable closure</b><div class='tiny'>Artifacts are hashed, addressable and packaged.</div></div>"+
+  "<div class='item'><b>Publishing control</b><div class='tiny'>Connected external destinations remain explicit.</div></div></div></div></div>"+
+  "<div class='section card pad'><div class='sectionHead'><div><div class='eyebrow'>FEATURE MATRIX</div><h3>Choose the production behaviors you care about</h3></div><button class='btn' onclick='loadFeatures()'>Refresh</button></div><div id='featureOut'><div class='notice'>Loading the creator feature matrix…</div></div></div>";
+  await loadFeatures();
+}
+function useCreatorExample(){$("createCmd").value="Create a cinematic 8-minute documentary about how AI agents are changing everyday work. Research current evidence, write a compelling beginner-friendly narrative, create scene direction, natural narration, original music and SFX, captions, thumbnail, three Shorts, SEO metadata, social copy, accessibility and a complete delivery package."}
+async function loadFeatures(){
+  var x=await api("/infinity/studio/features");featureCatalog=x.features||[];
+  var grouped={};featureCatalog.forEach(function(f){var k=f.category||"Other";(grouped[k]||(grouped[k]=[])).push(f)});
+  var keys=Object.keys(grouped),out="";
+  keys.forEach(function(k){out+="<div style='margin:12px 0 7px' class='eyebrow'>"+esc(k)+"</div><div class='featureGrid'>"+grouped[k].slice(0,90).map(function(f){return "<div class='feature'><label><input type='checkbox' class='featBox' value='"+esc(f.id)+"' checked><span><strong>"+esc(f.name)+"</strong><small>"+esc(f.capability||"")+"</small></span></label></div>"}).join("")+"</div>"});
+  $("featureOut").innerHTML=out||"<div class='empty'>No feature catalog returned.</div>";
+}
+function selectedFeatures(){return Array.prototype.slice.call(document.querySelectorAll(".featBox:checked")).map(function(x){return x.value})}
+async function submitFrom(id){
+  var objective=$(id).value.trim();if(objective.length<8){toast("Describe the result you want to create.","bad");return}
+  var payload={
+    title:objective.slice(0,140),objective:objective,topic:objective,
+    format:($("fmt")&&$("fmt").value)||"long",duration:Number(($("duration")&&$("duration").value)||300),
+    content_type:($("ctype")&&$("ctype").value)||"video",audience:($("audience")&&$("audience").value)||"general audience",
+    tone:"professional, cinematic, useful",language:($("language")&&$("language").value)||"English",
+    platforms:(($("platforms")&&$("platforms").value)||"").split(",").map(function(x){return x.trim()}).filter(Boolean),
+    voice:($("voice")&&$("voice").value)||"en-US-AriaNeural",quality_preset:($("quality")&&$("quality").value)||"balanced",
+    aspect_ratio:($("ratio")&&$("ratio").value)||"16:9",features:selectedFeatures()
+  };
+  var out=$("createOut");if(out)out.innerHTML="<div class='notice'>Creating durable production job…</div>";
+  try{
+    var r=await api("/infinity/studio/project",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)});
+    latestProject=r.project_id;localStorage.setItem("aii_latest_project",latestProject);toast("Production started: "+latestProject,"good");
+    openProject(latestProject);
+  }catch(e){if(out)out.innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>";else toast(e.message,"bad")}
+}
+async function previewPlan(){
+  var o=$("createCmd").value.trim();if(o.length<8){toast("Describe the content first.","bad");return}
+  $("createOut").innerHTML="<div class='notice'>Building creative direction…</div>";
+  try{
+    var r=await api("/infinity/studio/agents/run",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({
+      agent_id:"strategy",objective:o,title:o,duration:Number($("duration").value||300),format:$("fmt").value,
+      audience:$("audience").value||"general audience",language:$("language").value||"English"
+    })});
+    var b=r.blueprint||r.result||{};
+    $("createOut").innerHTML="<div class='notice good'><b>"+esc(r.provider||"creator engine")+"</b> · creative direction ready</div>"+
+      "<div class='card pad' style='margin-top:8px'><h3>"+esc(b.title||o.slice(0,90))+"</h3><div class='small'>"+esc(b.hook||b.premise||"")+"</div>"+
+      "<div class='blueprint' style='margin-top:10px'>"+(b.chapters||[]).map(function(ch,i){return "<div class='scene'><b>0"+(i+1)+" · "+esc(ch.heading||ch.title||"Scene")+"</b><p>"+esc(ch.narration||ch.purpose||"")+"</p></div>"}).join("")+"</div></div>";
+  }catch(e){$("createOut").innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>"}
+}
+async function projects(){
+  var x=await api("/infinity/studio/projects?limit=100"), rows=x.projects||[];
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>PROJECT MEMORY</div><h1>Your productions, still there after the command.</h1><p class='lead'>Every production has a persistent ID, status, stage, checkpoints and artifacts.</p></div>"+
+  "<div class='toolbar' style='margin-bottom:12px'><button class='btn primary' onclick='go(\"create\")'>New production</button><button class='btn' onclick='projects()'>Refresh</button><div class='search grow'><input id='projectSearch' class='field' placeholder='Find a project…' oninput='filterProjects()'></div></div>"+
+  "<div id='projectList' class='list'>"+(rows.map(projectRow).join("")||"<div class='empty'>No productions yet.</div>")+"</div>";
+}
+function filterProjects(){
+  var q=String($("projectSearch").value||"").toLowerCase();
+  document.querySelectorAll("#projectList .item").forEach(function(el){el.style.display=el.textContent.toLowerCase().indexOf(q)>=0?"":"none"})
+}
+function openProject(id){
+  latestProject=id;localStorage.setItem("aii_latest_project",id);
+  if(pollTimer)clearInterval(pollTimer);
+  renderProjectLoading(id);
+  loadProject(id);
+}
+function renderProjectLoading(id){
+  $("content").innerHTML="<div class='toolbar'><button class='btn' onclick='go(\"projects\")'>← Projects</button><button class='btn' onclick='loadProject(\""+esc(id)+"\")'>Refresh</button></div><div class='card pad' style='margin-top:12px'><div class='notice'>Opening production cockpit…</div></div>";
+}
+async function loadProject(id){
+  try{
+    var x=await api("/infinity/studio/project/"+encodeURIComponent(id)), result=x.result||{}, done=["completed","completed_with_qc_warnings"].indexOf(x.status)>=0;
+    var q=result.quality||{}, downloads=result.downloads||{}, assets=x.assets||[];
+    var links=[["Final video","final.mp4"],["Package","package.zip"],["Script","script.md"],["Captions","captions.srt"],["Thumbnail","thumbnail.jpg"],["Sources","sources.json"],["SEO","seo.json"],["Social","social_campaign.json"],["Fact check","fact_check.json"],["Provenance","provenance.json"],["Accessibility","accessibility.json"],["Platform manifest","platform_manifest.json"]];
+    var cardLinks=links.map(function(a){return "<div class='artifact'><b>"+a[0]+"</b><a href='/infinity/studio/project/"+encodeURIComponent(id)+"/asset/"+encodeURIComponent(a[1])+"' target='_blank'>Open artifact</a></div>"}).join("");
+    $("content").innerHTML=
+      "<div class='toolbar'><button class='btn' onclick='go(\"projects\")'>← Projects</button><button class='btn' onclick='loadProject(\""+esc(id)+"\")'>Refresh</button><button class='btn' onclick='verifyProject(\""+esc(id)+"\")'>Run QC again</button><button class='btn primary' onclick='go(\"publish\")'>Delivery desk</button></div>"+
+      "<div class='section'><div class='row'><div><div class='eyebrow'>PRODUCTION COCKPIT</div><h2 style='margin:6px 0 3px'>"+esc(x.title||id)+"</h2><div class='tiny mono'>"+esc(id)+"</div></div><div class='rowStart'><span class='status "+statusClass(x.status)+"'>"+esc(x.status||"queued")+"</span><span class='chip'>"+Math.round(x.progress||0)+"%</span></div></div></div>"+
+      "<div class='section card pad'>"+stages(x)+"<div class='progress' style='margin-top:10px'><i style='width:"+Math.round(x.progress||0)+"%'></i></div><div class='row' style='margin-top:8px'><span class='tiny'>"+esc(x.stage||x.status||"")+"</span><span class='tiny'>Attempt "+esc(x.attempt||1)+"</span></div></div>"+
+      "<div class='section producer'><div class='card pad'><div class='sectionHead'><div><div class='eyebrow'>MASTER PREVIEW</div><h3 style='margin-top:5px'>"+(done?"Final render":"Production render")+"</h3></div><span class='mediaBadge'><i></i>"+(done?"Actual artifact":"Live project state")+"</span></div>"+
+      (done?"<div class='preview'><video controls playsinline preload='metadata' src='/infinity/studio/project/"+encodeURIComponent(id)+"/asset/final.mp4'></video></div>":"<div class='empty'>The production engine is working on real artifacts. You can refresh or leave this screen; the project ID remains durable.</div>")+
+      "<div class='toolbar' style='margin-top:10px'><button class='btn warn' onclick='cancelProject(\""+esc(id)+"\")'>Cancel</button><button class='btn' onclick='retryProject(\""+esc(id)+"\")'>Retry</button><button class='btn' onclick='go(\"timeline\")'>Timeline</button><button class='btn' onclick='go(\"reviews\")'>Review</button></div></div>"+
+      "<div class='card pad'><div class='eyebrow'>RUNTIME QUALITY</div><h3 style='margin:7px 0'>What the engine actually recorded</h3><div class='kpis' style='grid-template-columns:1fr 1fr'><div class='kpi'><span>Duration</span><b>"+esc(result.duration_seconds||0)+"s</b></div><div class='kpi'><span>Sources</span><b>"+esc((result.research&&result.research.source_count)||0)+"</b></div><div class='kpi'><span>QC</span><b>"+(q.passed?"PASS":"REVIEW")+"</b></div><div class='kpi'><span>Assets</span><b>"+assets.length+"</b></div></div><div class='notice "+(q.passed?"good":"warn")+"' style='margin-top:10px'><b>"+(q.passed?"Quality gates passed":"Quality review required")+"</b><div class='tiny' style='margin-top:4px'>"+esc(q.passed?"The engine found no failed QC checks.":"Open QC verification for the recorded checks and evidence.")+"</div></div><div id='verifyOut' style='margin-top:8px'></div></div></div>"+
+      "<div class='section card pad'><div class='sectionHead'><div><div class='eyebrow'>DELIVERABLE STACK</div><h3 style='margin-top:5px'>Everything the production produced</h3></div><span class='tiny'>Open/download from the real artifact store</span></div><div class='artifacts'>"+cardLinks+"</div></div>"+
+      "<div class='section card pad'><div class='sectionHead'><div><div class='eyebrow'>PROJECT ACTIONS</div><h3 style='margin-top:5px'>Close the loop</h3></div></div><div class='grid c3'><button class='btn' onclick='go(\"research\")'>Research</button><button class='btn' onclick='go(\"timeline\")'>Inspect timeline</button><button class='btn' onclick='go(\"reviews\")'>Record review</button><button class='btn' onclick='go(\"publish\")'>Publish</button><button class='btn' onclick='go(\"schedule\")'>Schedule</button><button class='btn' onclick='go(\"analytics\")'>View learning</button></div></div>";
+    if(!done && !["failed","cancelled"].includes(x.status)){pollTimer=setInterval(function(){loadProject(id)},1800)}
+  }catch(e){$("content").innerHTML=errorView(e)}
+}
+async function verifyProject(id){
+  try{$("verifyOut").innerHTML="<div class='notice'>Running evidence checks…</div>";var r=await api("/infinity/studio/project/"+encodeURIComponent(id)+"/verify");$("verifyOut").innerHTML="<div class='notice "+(r.quality&&r.quality.passed?"good":"warn")+"'><b>"+(r.quality&&r.quality.passed?"QC passed":"Review required")+"</b></div><pre class='mono'>"+esc(JSON.stringify(r,null,2))+"</pre>"}catch(e){$("verifyOut").innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>"}
+}
+async function cancelProject(id){try{await api("/infinity/studio/project/"+encodeURIComponent(id)+"/cancel",{method:"POST"});toast("Production cancelled.","good");loadProject(id)}catch(e){toast(e.message,"bad")}}
+async function retryProject(id){try{await api("/infinity/studio/project/"+encodeURIComponent(id)+"/retry",{method:"POST"});toast("Production re-queued.","good");loadProject(id)}catch(e){toast(e.message,"bad")}}
+
+async function assets(){
+  var x=await api("/infinity/studio/library?limit=300"), rows=x.assets||[];
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>ASSET SPACE</div><h1>One library for the whole production.</h1><p class='lead'>Finals, shorts, scripts, captions, thumbnails, audio, provenance and delivery metadata stay attached to their source project.</p></div>"+
+  "<div class='toolbar'><div class='search grow'><input id='assetSearch' class='field' placeholder='Search asset type, project or filename…' oninput='filterAssets()'></div><button class='btn' onclick='assets()'>Refresh</button></div>"+
+  "<div class='section table'><table><thead><tr><th>Type</th><th>Asset</th><th>Project</th><th>Status</th><th>Open</th></tr></thead><tbody id='assetBody'>"+
+  rows.map(function(a){var name=a.asset_name||a.name||"asset";return "<tr><td>"+esc(a.kind)+"</td><td class='mono'>"+esc(name)+"</td><td>"+esc(a.project_id)+"</td><td>"+esc(a.status||"stored")+"</td><td><a class='btn' href='/infinity/studio/project/"+encodeURIComponent(a.project_id)+"/asset/"+encodeURIComponent(name)+"' target='_blank'>Open</a></td></tr>"}).join("")+
+  "</tbody></table></div>";
+}
+function filterAssets(){var q=String($("assetSearch").value||"").toLowerCase();document.querySelectorAll("#assetBody tr").forEach(function(r){r.style.display=r.textContent.toLowerCase().indexOf(q)>=0?"":"none"})}
+
+async function timeline(){
+  var id=latestProject||localStorage.getItem("aii_latest_project")||"";
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>TIMELINE</div><h1>See the actual production graph.</h1><p class='lead'>No animation is treated as truth. Events shown here were recorded by the production runtime.</p></div>"+
+  "<div class='card pad'><div class='toolbar'><input id='tlProject' class='field grow' placeholder='Project ID' value='"+esc(id)+"'><button class='btn primary' onclick='loadTimeline()'>Load</button></div><div id='tlOut' style='margin-top:10px'></div></div>";
+  if(id)loadTimeline();
+}
+async function loadTimeline(){
+  var id=$("tlProject").value.trim();if(!id)return;
+  try{var r=await api("/infinity/studio/project/"+encodeURIComponent(id)+"/timeline");var rows=r.timeline||[];
+  $("tlOut").innerHTML="<div class='timeline'>"+(rows.map(function(e){return "<div class='event'><div class='row'><b>"+esc(e.event||"event")+"</b><span class='tiny'>"+esc(e.time||"")+"</span></div><pre class='mono'>"+esc(JSON.stringify(e.payload||{},null,2))+"</pre></div>"}).join("")||"<div class='empty'>No events recorded yet.</div>")+"</div>"
+  }catch(e){$("tlOut").innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>"}
+}
+
+async function research(){
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>RESEARCH DESK</div><h1>Investigate first. Create second.</h1><p class='lead'>Run the real research agent and keep the evidence close to the creative workflow.</p></div>"+
+  "<div class='card pad'><textarea id='researchCmd' class='command' style='min-height:140px' placeholder='Research the topic, key debates, reliable sources and practical angles…'></textarea><div class='toolbar' style='margin-top:10px'><button class='btn primary' onclick='runResearch()'>Research now</button></div><div id='researchOut' style='margin-top:10px'></div></div>";
+}
+async function runResearch(){
+  var o=$("researchCmd").value.trim();if(o.length<4){toast("Enter a topic.","bad");return}
+  $("researchOut").innerHTML="<div class='notice'>Researching public sources…</div>";
+  try{var r=await api("/infinity/studio/agents/run",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({agent_id:"research",objective:o})});
+    var sources=(r.result&&r.result.sources)||r.sources||[];
+    $("researchOut").innerHTML="<div class='notice good'>"+sources.length+" source records returned.</div><div class='list' style='margin-top:10px'>"+
+    sources.map(function(x){return "<div class='item'><div class='row'><b>"+esc(x.title||x.source||"Source")+"</b><span class='tiny'>"+esc(x.source||"")+"</span></div><div class='small' style='margin-top:4px'>"+esc(x.snippet||x.summary||"")+"</div>"+(x.url?"<a href='"+esc(x.url)+"' target='_blank' style='display:inline-block;margin-top:7px;color:#a9cdfd;font-size:10px'>Open source ↗</a>":"")+"</div>"}).join("")+"</div>";
+  }catch(e){$("researchOut").innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>"}
+}
+
+async function brand(){
+  var x=await api("/infinity/studio/profile"),p=x.profile||{};
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>BRAND BRAIN</div><h1>Teach the studio your voice once.</h1><p class='lead'>Brand decisions saved here flow back into future production commands.</p></div>"+
+  "<div class='card pad'><div class='fieldGrid'><label class='fieldLabel'><span class='tiny'>Brand name</span><input id='bname' class='field' value='"+esc(p.brand_name||"")'></label><label class='fieldLabel'><span class='tiny'>Audience</span><input id='baud' class='field' value='"+esc(p.audience||"")'></label><label class='fieldLabel'><span class='tiny'>Default CTA</span><input id='bcta' class='field' value='"+esc(p.default_cta||"")'></label></div>"+
+  "<div class='fieldGrid' style='margin-top:8px'><label class='fieldLabel'><span class='tiny'>Brand voice</span><input id='bvoice' class='field' value='"+esc(p.brand_voice||"")'></label><label class='fieldLabel'><span class='tiny'>Visual style</span><input id='bstyle' class='field' value='"+esc(p.visual_style||"premium editorial")+"'></label><label class='fieldLabel'><span class='tiny'>Logo URL</span><input id='blogo' class='field' value='"+esc(p.logo_url||"")'></label></div>"+
+  "<div class='toolbar' style='margin-top:11px'><button class='btn primary' onclick='saveBrand()'>Save brand brain</button></div><div id='brandOut' style='margin-top:10px'></div></div>"+
+  "<div class='section card pad'><div class='eyebrow'>BRAND PRINCIPLE</div><h3 style='margin:7px 0'>Consistency without losing the director.</h3><div class='small'>The profile provides defaults; your command can still override the creative intent for a specific project.</div></div>";
+}
+async function saveBrand(){
+  try{await api("/infinity/studio/profile",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({brand_name:$("bname").value,audience:$("baud").value,default_cta:$("bcta").value,brand_voice:$("bvoice").value,visual_style:$("bstyle").value,logo_url:$("blogo").value})});$("brandOut").innerHTML="<div class='notice good'>Brand brain saved.</div>"}catch(e){$("brandOut").innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>"}
+}
+
+async function agents(){
+  var x=await api("/infinity/studio/agents");
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>AGENT TEAM</div><h1>A production department behind one interface.</h1><p class='lead'>Use the complete command for end-to-end work, or steer a specialist when you need a different angle.</p></div>"+
+  "<div class='grid c3'>"+(x.agents||[]).map(function(a){return "<div class='card pad'><div class='sectionHead'><h3>"+esc(a.name)+"</h3><span class='chip'>"+esc(a.mode||"specialist")+"</span></div><div class='small'>"+esc(a.description||"")+"</div><div class='chips' style='margin-top:9px'>"+(a.capabilities||[]).slice(0,6).map(function(c){return "<span class='chip'>"+esc(c)+"</span>"}).join("")+"</div><button class='btn primary' style='width:100%;margin-top:12px' onclick='runAgent(\""+esc(a.id)+"\")'>Run specialist</button></div>"}).join("")+"</div><div id='agentOut' class='section'></div>";
+}
+async function runAgent(id){
+  var objective=prompt("What should this specialist do?");if(!objective)return;
+  try{var r=await api("/infinity/studio/agents/run",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({agent_id:id,objective:objective,title:objective})});$("agentOut").innerHTML="<div class='card pad'><div class='sectionHead'><h3>"+esc((r.agent&&r.agent.name)||id)+"</h3><span class='chip mint'>"+esc(r.provider||"engine")+"</span></div><pre class='mono' style='white-space:pre-wrap'>"+esc(JSON.stringify(r.result||r.blueprint||r,null,2))+"</pre></div>"}catch(e){$("agentOut").innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>"}
+}
+
+async function reviews(){
+  var x=await api("/infinity/studio/reviews");
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>REVIEW DESK</div><h1>The human stays the director.</h1><p class='lead'>Record approval, requested changes or rejection against a project. The publishing boundary remains explicit.</p></div>"+
+  "<div class='card pad'><div class='fieldGrid'><label class='fieldLabel'><span class='tiny'>Project ID</span><input id='rvProject' class='field' value='"+esc(latestProject)+"'></label><label class='fieldLabel'><span class='tiny'>Decision</span><select id='rvDecision' class='select'><option value='approved'>Approved</option><option value='changes_requested'>Changes requested</option><option value='rejected'>Rejected</option></select></label><label class='fieldLabel'><span class='tiny'>Reviewer note</span><input id='rvComment' class='field' placeholder='What should the team know?'></label></div><button class='btn primary' style='margin-top:11px' onclick='recordReview()'>Record decision</button><div id='rvOut' style='margin-top:9px'></div></div>"+
+  "<div class='section'><div class='sectionHead'><h3>Review history</h3></div><div class='list'>"+((x.reviews||[]).map(function(v){return "<div class='item'><div class='row'><div><b>"+esc(v.project_id)+"</b><div class='tiny'>"+esc(v.updated_at||v.created_at||"")+"</div></div><span class='status'>"+esc(v.decision||v.status||"open")+"</span></div><div class='small' style='margin-top:5px'>"+esc(v.comment||"")+"</div></div>"}).join("")||"<div class='empty'>No review decisions recorded yet.</div>")+"</div></div>";
+}
+async function recordReview(){
+  try{var r=await api("/infinity/studio/review",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({project_id:$("rvProject").value.trim(),decision:$("rvDecision").value,status:"recorded",comment:$("rvComment").value})});toast("Review "+r.review_id+" recorded.","good");reviews()}catch(e){$("rvOut").innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>"}
+}
+
+async function publish(){
+  var x=await api("/infinity/studio/publishers");
+  var finished=(x.projects||[]).filter(function(p){return ["completed","completed_with_qc_warnings"].indexOf(p.status)>=0});
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>DELIVERY DESK</div><h1>Publish only what the workspace actually finished.</h1><p class='lead'>Destination access is real and explicit. AI Infinity does not manufacture connections.</p></div>"+
+  "<div class='grid c2'><div class='card pad'><div class='sectionHead'><div><div class='eyebrow'>DESTINATIONS</div><h3 style='margin-top:5px'>Connected channels</h3></div></div><div class='list'>"+((x.connections||[]).map(function(c){return "<div class='item'><div class='row'><div><b>"+esc(c.label||c.provider)+"</b><div class='tiny'>"+esc(c.provider)+"</div></div><span class='status "+statusClass(c.status)+"'>"+esc(c.status||"")+"</span></div></div>"}).join("")||"<div class='empty'>No external destination connected.</div>")+"</div></div>"+
+  "<div class='card pad'><div class='eyebrow'>PUBLISH FINISHED WORK</div><h3 style='margin:7px 0 10px'>Choose a real project</h3><select id='pubProject' class='select'>"+(finished.map(function(p){return "<option value='"+esc(p.project_id)+"'>"+esc(p.title||p.project_id)+"</option>"}).join("")||"<option value=''>No completed project</option>")+"</select><select id='pubProvider' class='select' style='margin-top:8px'><option value='youtube'>YouTube</option><option value='webhook'>Connected destination</option></select><select id='pubPrivacy' class='select' style='margin-top:8px'><option value='private'>Private</option><option value='unlisted'>Unlisted</option><option value='public'>Public</option></select><button class='btn primary' style='margin-top:10px;width:100%' onclick='publishNow()'>Publish now</button><div id='pubOut' style='margin-top:9px'></div></div></div>";
+}
+async function publishNow(){
+  try{var r=await api("/infinity/studio/publish",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({project_id:$("pubProject").value,provider:$("pubProvider").value,asset:"final.mp4",privacy_status:$("pubPrivacy").value})});$("pubOut").innerHTML="<div class='notice "+(String(r.status).indexOf("failed")>=0?"bad":"good")+"'>"+esc(r.status||"Publish request completed")+"</div><pre class='mono' style='margin-top:8px'>"+esc(JSON.stringify(r,null,2))+"</pre>"}catch(e){$("pubOut").innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>"}
+}
+
+async function schedule(){
+  var x=await api("/infinity/studio/calendar");
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>RELEASE PLAN</div><h1>Plan the release while production stays intact.</h1><p class='lead'>Scheduling records delivery intent. It does not pretend a destination is connected.</p></div>"+
+  "<div class='grid c2'><div class='card pad'><div class='fieldLabel'><span class='tiny'>Project ID</span><input id='schProject' class='field' value='"+esc(latestProject)+"'></div><div class='fieldGrid' style='margin-top:8px'><label class='fieldLabel'><span class='tiny'>Destination</span><input id='schProvider' class='field' value='youtube'></label><label class='fieldLabel'><span class='tiny'>Release time</span><input id='schAt' class='field' type='datetime-local'></label></div><button class='btn primary' style='margin-top:11px' onclick='saveSchedule()'>Plan release</button><div id='schOut' style='margin-top:9px'></div></div>"+
+  "<div class='card pad'><div class='sectionHead'><h3>Upcoming</h3><button class='btn' onclick='schedule()'>Refresh</button></div><div class='list'>"+((x.events||[]).map(function(i){return "<div class='item'><div class='row'><b>"+esc(i.project_id||"Project")+"</b><span class='status'>"+esc(i.status||"planned")+"</span></div><div class='tiny' style='margin-top:5px'>"+esc(i.provider||"destination")+" · "+esc(i.publish_at||"")+"</div></div>"}).join("")||"<div class='empty'>Nothing scheduled.</div>")+"</div></div></div>";
+}
+async function saveSchedule(){
+  try{var v=$("schAt").value;if(!v){toast("Choose a release time.","bad");return}var r=await api("/infinity/studio/calendar",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({project_id:$("schProject").value.trim(),provider:$("schProvider").value.trim(),publish_at:new Date(v).toISOString()})});$("schOut").innerHTML="<div class='notice good'>Release plan "+esc(r.schedule_id)+" recorded.</div>";setTimeout(schedule,300)}catch(e){$("schOut").innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>"}
+}
+
+async function analytics(){
+  var x=await api("/infinity/studio/analytics"),a=x.analytics||{};
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>LEARNING LOOP</div><h1>Improve the production system from real feedback.</h1><p class='lead'>Workspace metrics are shown as workspace metrics. External audience performance only appears when the destination actually provides it.</p></div>"+
+  "<div class='kpis'><div class='kpi'><span>Total projects</span><b>"+esc(a.total_projects||0)+"</b></div><div class='kpi'><span>Completed</span><b>"+esc(a.completed||0)+"</b></div><div class='kpi'><span>Running</span><b>"+esc(a.running||0)+"</b></div><div class='kpi'><span>Failed</span><b>"+esc(a.failed||0)+"</b></div></div>"+
+  "<div class='section card pad'><div class='notice'>Future production recipes are updated from recorded feedback, QC and review signals. Platform audience analytics require a connected/imported source.</div><pre class='mono' style='white-space:pre-wrap;margin-top:12px'>"+esc(JSON.stringify(x,null,2))+"</pre></div>";
+}
+
+async function connections(){
+  var x=await api("/infinity/studio/connections");
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>CONNECTIONS</div><h1>Your accounts, your authorization.</h1><p class='lead'>External provider status is read from the actual connection store. Secrets never render back into the browser.</p></div>"+
+  "<div class='list'>"+((x.connections||[]).map(function(c){return "<div class='item'><div class='row'><div><b>"+esc(c.label||c.provider)+"</b><div class='tiny'>"+esc(c.provider)+"</div></div><span class='status "+statusClass(c.status)+"'>"+esc(c.status||"")+"</span></div></div>"}).join("")||"<div class='empty'>No configured connections.</div>")+"</div>"+
+  "<div class='section notice warn'>Publishing and cloud generation are external systems. AI Infinity shows their state honestly rather than inventing access.</div>";
+}
+
+async function settings(){
+  var x=await api("/infinity/studio/settings"),s=x.settings||{};
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>WORKSPACE DEFAULTS</div><h1>Set the studio once. Reuse it everywhere.</h1></div>"+
+  "<div class='card pad'><div class='fieldGrid'><label class='fieldLabel'><span class='tiny'>Language</span><input id='slang' class='field' value='"+esc(s.language||"English")+"'></label><label class='fieldLabel'><span class='tiny'>Platforms</span><input id='splats' class='field' value='"+esc((s.platforms||[]).join(", "))+"'></label><label class='fieldLabel'><span class='tiny'>Quality</span><select id='squality' class='select'><option>balanced</option><option>fast</option><option>high</option><option>draft</option></select></label></div><div class='fieldGrid' style='margin-top:8px'><label class='fieldLabel'><span class='tiny'>Visual style</span><input id='svisual' class='field' value='"+esc(s.visual_style||"premium editorial")+"'></label><div></div><div></div></div><div class='toolbar' style='margin-top:11px'><button class='btn primary' onclick='saveSettings()'>Save defaults</button></div><div id='settingsOut' style='margin-top:9px'></div></div>";
+  $("squality").value=s.quality_preset||"balanced";
+}
+async function saveSettings(){
+  try{await api("/infinity/studio/settings",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({language:$("slang").value,platforms:$("splats").value.split(",").map(function(x){return x.trim()}).filter(Boolean),quality_preset:$("squality").value,visual_style:$("svisual").value})});$("settingsOut").innerHTML="<div class='notice good'>Defaults saved.</div>"}catch(e){$("settingsOut").innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>"}
+}
+function openMore(){
+  var pick=prompt("Open: brand / research / agents / review / publish / schedule / analytics / connections / settings");
+  if(!pick)return;
+  var map={"brand":"brand","research":"research","agents":"agents","review":"reviews","publish":"publish","schedule":"schedule","analytics":"analytics","connections":"connections","settings":"settings"};
+  if(map[pick.toLowerCase()])go(map[pick.toLowerCase()]);
+}
+document.addEventListener("keydown",function(e){
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="k"){e.preventDefault();go("create");setTimeout(function(){var x=$("createCmd");if(x)x.focus()},50)}
+});
+async function boot(){await session();go(current);setInterval(function(){if(current==="projects")projects()},15000)}
+boot();
+</script>
+</body>
+</html>
