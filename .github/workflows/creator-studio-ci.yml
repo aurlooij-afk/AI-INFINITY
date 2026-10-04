@@ -8,6 +8,7 @@ on:
       - "Dockerfile"
       - "requirements.txt"
       - "bridge-requirements.txt"
+      - "creator_studio_2030.html"
       - ".github/workflows/creator-studio-ci.yml"
   pull_request:
     paths:
