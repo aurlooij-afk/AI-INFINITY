@@ -30,7 +30,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse, quote
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
-from fastapi import FastAPI, HTTPException, Request as FastAPIRequest, Response
+from fastapi import FastAPI, Response, HTTPException, Request as FastAPIRequest, Response
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
@@ -374,6 +374,14 @@ class RunRequest(BaseModel):
 @app.get("/", response_class=HTMLResponse)
 def root():
     return FINAL_INFINITY_UI
+
+@app.head("/")
+def root_head():
+    return Response(status_code=200)
+
+@app.head("/health")
+def health_head():
+    return Response(status_code=200)
 
 @app.get("/health")
 def health():
