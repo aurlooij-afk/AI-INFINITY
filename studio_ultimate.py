@@ -1308,6 +1308,59 @@ def build_claim_review(chapters: List[Dict[str, Any]], research: Dict[str, Any],
     return {"policy":"conservative_claim_review","claim_count":len(claims),"claims":claims,"reference_urls":[str(x) for x in reference_urls[:12]],"auto_publish_safe":not any(x["status"]=="review_required" for x in claims),"truthful":True}
 
 
+def build_creator_experiments(outdir: Path, plan: Dict[str, Any], chapters: List[Dict[str, Any]], title: str, req: Dict[str, Any]) -> Path:
+    hook=str(plan.get("hook") or title).strip()
+    base_title=str(plan.get("title") or title).strip()
+    cta=str(plan.get("cta") or req.get("call_to_action") or "Learn more").strip()
+    first_heading=str((chapters[0] if chapters else {}).get("heading") or "The key idea").strip()
+    variants={
+        "hooks":[
+            hook[:180],
+            f"What most people miss about {base_title} — and why it matters.",
+            f"Before you scroll, here is the useful part of {base_title}.",
+            f"The simplest way to understand {base_title} in under a minute.",
+            f"One idea can change how you approach {base_title}.",
+        ],
+        "titles":[
+            base_title[:110],
+            f"{base_title}: What Actually Matters"[:110],
+            f"The Practical Guide to {base_title}"[:110],
+            f"{base_title} Explained Simply"[:110],
+            f"What Nobody Tells You About {base_title}"[:110],
+        ],
+        "ctas":[
+            cta[:120],
+            "Save this for later.",
+            "Follow for the next practical breakdown.",
+            "Share this with someone building in this space.",
+            "See the full workflow and source notes.",
+        ],
+        "thumbnail_concepts":[
+            {"concept":"single clear subject + 3-5 word promise","text":base_title[:45]},
+            {"concept":"contrast frame + curiosity phrase","text":"WHAT CHANGES?"},
+            {"concept":"human outcome + visual proof cue","text":"SEE THE DIFFERENCE"},
+            {"concept":"before/after or problem/solution split","text":"FROM IDEA → RESULT"},
+            {"concept":"source/evidence motif + short headline","text":"THE EVIDENCE"},
+        ],
+        "opening_visuals":[
+            "Immediate outcome visual with large readable headline",
+            "Close detail that creates a question before narration",
+            f"Fast visual proof of: {first_heading}",
+            "Human-centered scene establishing stakes",
+            "Clean diagram or before/after comparison",
+        ],
+    }
+    for p in ["TikTok","Instagram Reels","YouTube Shorts","YouTube","LinkedIn","X","Facebook"]:
+        variants.setdefault("platform_notes",{})[p]={
+            "native_goal":"Optimize the same story for the platform's consumption pattern.",
+            "adaptation":"Change hook, pacing, caption density, framing and CTA; do not assume a cross-post will perform identically.",
+        }
+    variants["method"]="creative_variants_not_predicted_performance"
+    variants["truthful"]=True
+    out=outdir/"creator_experiments.json"
+    out.write_text(jdump(variants),encoding="utf-8")
+    return out
+
 def build_editorial_packages(project_id: str, outdir: Path, plan: Dict[str, Any], chapters: List[Dict[str, Any]], req: Dict[str, Any], research: Dict[str, Any], title: str) -> Dict[str, Any]:
     """Create native text packages instead of one generic social markdown file."""
     desc = str(plan.get("hook") or title).strip()
@@ -1880,6 +1933,9 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             social.write_text("# Social Campaign\n\n" + "\n".join([f"- {ch.get('heading')}: {ch.get('narration','')}" for ch in chapters]) + "\n", encoding="utf-8")
 
         editorial = build_editorial_packages(project_id, outdir, plan, chapters, req, research, str(plan.get("title") or topic))
+        experiments = build_creator_experiments(outdir, plan, chapters, str(plan.get("title") or topic), req)
+        editorial["creator_experiments"] = experiments
+        register_artifact(project_id, experiments, "application/json", {"kind":"creative_experiments","truthful":True})
         if audio_master and audio_master.exists():
             editorial["podcast_rss"] = podcast_package(outdir, str(plan.get("title") or topic), str(plan.get("hook") or topic), audio_master, probe_duration(audio_master))
         sources = outdir / "sources.json"
@@ -1903,7 +1959,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         }
         manifest.write_text(jdump(metadata), encoding="utf-8")
         package = outdir / f"{safe_name(plan.get('title') or topic)}-AI-Infinity-creator-package.zip"
-        bundle: List[Optional[Path]] = [captioned, script, captions, sources, manifest, outdir / "feature_execution.json", shared_music, thumb if thumb and thumb.exists() else None, audio_master, article, social, outdir / "fact_check.json"]
+        bundle: List[Optional[Path]] = [captioned, script, captions, sources, manifest, outdir / "feature_execution.json", outdir / "creator_experiments.json", shared_music, thumb if thumb and thumb.exists() else None, audio_master, article, social, outdir / "fact_check.json"]
         bundle += [x for x in editorial.values() if x]
         bundle += [Path(x["path"]) for x in shorts if Path(x["path"]).exists()]
         bundle += [p for p in outdir.glob("narration_*.mp3") if p.exists()]
