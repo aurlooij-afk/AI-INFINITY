@@ -1814,7 +1814,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
     attempt = int(project.get("attempt") or 0) + 1
     _update_project(project_id, status="running", error=None, attempt=attempt)
     try:
-        topic = str(req.get("title") or req.get("topic") or req.get("objective") or "AI content")
+        topic = str(req.get("objective") or req.get("topic") or req.get("title") or "AI content")
         autopilot_caps=["research","script","image","voice","music","sfx","captions","video_master","shorts","seo","accessibility","provenance","package"]
         autopilot_plan=_record_autopilot(project_id, autopilot_caps)
         checkpoint(project_id, "autopilot_ready", {"selected": [x.get("selected",{}).get("id") if x.get("selected") else None for x in autopilot_plan["plan"]], "automatic_failover": True, "free_first": True})
