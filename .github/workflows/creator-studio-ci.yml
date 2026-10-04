@@ -27,11 +27,39 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
       - name: Compile all runtime Python modules
         run: |
           set -euo pipefail
-          python -m py_compile             main.py             studio_ultimate.py             studio_os.py             content_factory.py             free_api_fabric.py             infinity_empire.py             creator_os_3624.py             ai_infinity_bridge.py             creator_entrypoint.py
+          python -m py_compile main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py
           echo "Python syntax checks passed."
+      - name: Instantiate and smoke-test the unified app
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import creator_entrypoint
+          from fastapi.testclient import TestClient
+
+          app = creator_entrypoint.creator_app
+          paths = {getattr(route, "path", "") for route in app.routes}
+          required = {"/", "/home", "/studio", "/infinity/studio", "/infinity/studio/health", "/infinity/studio/bootstrap"}
+          missing = sorted(required - paths)
+          if missing:
+              raise SystemExit("Missing creator routes: " + ", ".join(missing))
+
+          client = TestClient(creator_entrypoint.application)
+          for path in ("/", "/studio", "/infinity/studio", "/infinity/studio/health", "/infinity/studio/bootstrap"):
+              response = client.get(path)
+              if response.status_code >= 500:
+                  raise SystemExit(f"{path} returned HTTP {response.status_code}: {response.text[:500]}")
+          root = client.get("/")
+          if "AI Infinity" not in root.text:
+              raise SystemExit("Unified root page does not contain AI Infinity")
+          print("Unified AI Infinity application smoke test passed.")
+          PY
 
   docker-build:
     name: Docker image guard
