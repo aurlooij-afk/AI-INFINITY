@@ -1,0 +1,128 @@
+_id=? AND status='active'", (uid3,)).fetchone()[0]
+        published = c.execute("SELECT COUNT(*) FROM ai3700_projects WHERE user_id=? AND stage='published'", (uid3,)).fetchone()[0]
+        publish_drafts = c.execute("SELECT COUNT(*) FROM ai3700_publish_queue WHERE user_id=? AND status='draft_ready'", (uid3,)).fetchone()[0]
+    metrics = _3601_metrics()
+    return {
+        "user_id": uid3,
+        "projects": {"total": int(total_projects), "active": int(active_projects), "published": int(published)},
+        "publishing": {"drafts": int(publish_drafts)},
+        "execution": {
+            "verified_earnings": metrics.get("verified_earnings", 0),
+            "pending_verified_funds": metrics.get("pending_verified_funds", 0),
+            "transferable_balance": metrics.get("transferable_balance", 0),
+            "active_opportunities": metrics.get("active_opportunities", 0),
+        },
+        "truthful": True,
+    }
+
+
+@app.get("/infinity/3700/agents")
+def infinity3700_agents():
+    caps = {}
+    try:
+        caps = _gp_organization()
+    except Exception:
+        caps = {}
+    return {
+        "version": FINAL3700_VERSION,
+        "agents": [
+            {"id": "director", "name": "Director", "role": "orchestration", "status": "ready", "function": "turn a natural-language objective into a coordinated run"},
+            {"id": "researcher", "name": "Research", "role": "evidence", "status": "ready", "function": "discover, structure and verify source-backed information"},
+            {"id": "producer", "name": "Producer", "role": "creation", "status": "ready", "function": "build production packages, assets and publication drafts"},
+            {"id": "operator", "name": "Operator", "role": "execution", "status": "gated", "function": "perform real external actions only through configured authority"},
+            {"id": "verifier", "name": "Verifier", "role": "quality", "status": "ready", "function": "hash, validate and reconcile outcomes"},
+            {"id": "economic", "name": "Economy", "role": "work + finance", "status": "ready", "function": "track fixed-price opportunities and verified funds"},
+        ],
+        "organization": caps,
+        "truthful": True,
+    }
+
+
+@app.get("/infinity/3700/operations")
+def infinity3700_operations():
+    readiness = _3601_real_readiness()
+    try:
+        reality = _3604_reality()
+    except Exception:
+        reality = {"gates": {}, "readiness": readiness, "truthful": True}
+    return {
+        "version": FINAL3700_VERSION,
+        "mode": "single-command operating workspace",
+        "emergency_stop_available": True,
+        "external_side_effects_require_authority": True,
+        "automatic_uncertain_external_replay": False,
+        "readiness": readiness,
+        "reality": reality,
+        "truthful": True,
+    }
+
+
+@app.post("/infinity/3700/command")
+def infinity3700_command(payload: Dict[str, Any], request: FastAPIRequest):
+    uid3 = _3700_user(request)
+    command = str(payload.get("command") or "").strip()[:12000]
+    if not command:
+        raise HTTPException(400, "command is required")
+    approved = bool(payload.get("approved", False))
+    result = _3603_operating_command(command, user_id=uid3, approved=approved)
+    result["platform_version"] = FINAL3700_VERSION
+    result["truthful"] = True
+    return result
+
+
+@app.get("/infinity/3700/quality")
+def infinity3700_quality():
+    try:
+        regression = infinity3603_regression()
+    except Exception as e:
+        regression = {"status": "failed", "passed": False, "error": str(e)[:400]}
+    return {
+        "version": FINAL3700_VERSION,
+        "regression": regression,
+        "truthful": True,
+    }
+
+
+@app.get("/infinity/3700/system")
+def infinity3700_system():
+    return {
+        "version": FINAL3700_VERSION,
+        "build": FINAL3700_BUILD,
+        "previous": FINAL3700_PREVIOUS,
+        "app_routes": len(app.routes),
+        "database": {"engine": "sqlite", "durable_with_configured_persistence": bool(os.getenv("AI_INFINITY_DB_PATH") or os.getenv("AI_INFINITY_PERSISTENCE_REPOSITORY"))},
+        "free_first": True,
+        "arbitrary_code_execution": False,
+        "sensitive_header_forwarding": False,
+        "automatic_uncertain_external_replay": False,
+        "truthful": True,
+    }
+
+
+@app.get("/infinity/3700/ui-manifest")
+def infinity3700_ui_manifest():
+    return {
+        "version": FINAL3700_VERSION,
+        "name": "AI Infinity Creator Operating System",
+        "navigation": ["Home", "Create", "Production", "Projects", "Intelligence", "Assets", "Brand", "Publish", "Analytics", "Agents", "Operations", "Quality & Gaps", "System", "Chat"],
+        "principles": ["one command", "real backend state", "truthful status", "free-first", "verified outcomes", "responsive workspace"],
+        "endpoints": [
+            "/infinity/3700/dashboard", "/infinity/3700/command", "/infinity/3700/projects", "/infinity/3700/production", "/infinity/3700/brand", "/infinity/3700/publish", "/infinity/3700/analytics", "/infinity/3700/agents", "/infinity/3700/operations", "/infinity/3700/quality", "/infinity/3700/system",
+        ],
+        "truthful": True,
+    }
+
+
+@app.get("/infinity/3700/ui", response_class=HTMLResponse)
+def infinity3700_ui():
+    return FINAL3700_UI
+
+
+# Canonicalize all user-facing historical UI globals to the same final shell.
+FINAL3603_UI = FINAL3700_UI
+FINAL_INFINITY_UI = FINAL3700_UI
+FINAL3603_BUILD = FINAL3700_BUILD
+APP_VERSION = FINAL3700_VERSION
+BUILD = FINAL3700_BUILD
+PREVIOUS_BUILD = FINAL3700_PREVIOUS
+app.version = APP_VERSION
