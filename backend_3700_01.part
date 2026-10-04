@@ -165,7 +165,4 @@ def infinity3700_project_create(payload: Dict[str, Any], request: FastAPIRequest
             (pid, uid3, name, objective, stage, "active", _3700_json(metadata), t, t),
         )
     try:
-        _gp_activity("project", f"Project created: {name}", "completed", pid)
-    except Exception:
-        pass
-    return {"status": "created", "project": _3700_projects(uid3, 1)[0], "truthful": True}
+        _gp_activity("project", f"Pr
