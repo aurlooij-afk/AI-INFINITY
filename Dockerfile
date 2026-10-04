@@ -19,6 +19,7 @@ RUN apt-get update \
         libsm6 \
         libxext6 \
         libxrender1 \
+        poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
