@@ -562,7 +562,7 @@ def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
                 "action": "query", "format": "json", "generator": "search", "gsrsearch": topic,
                 "gsrlimit": min(limit, 10), "prop": "extracts|info", "exintro": 1, "explaintext": 1, "inprop": "url"
             })
-            data = http_json(url, timeout=2)
+            data = http_json(url, timeout=max(3, int(os.getenv("AI_INFINITY_RESEARCH_TIMEOUT", "6"))))
             for p in (data.get("query", {}).get("pages", {}) or {}).values():
                 out.append({"source": "Wikipedia", "title": p.get("title"), "url": p.get("fullurl"), "summary": (p.get("extract") or "")[:5000]})
         except Exception as e:
@@ -573,7 +573,7 @@ def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
         out: List[Dict[str, Any]] = []
         try:
             q = quote_plus(topic)
-            raw = http_get(f"https://html.duckduckgo.com/html/?q={q}", timeout=2, max_bytes=3_000_000).decode("utf-8", "replace")
+            raw = http_get(f"https://html.duckduckgo.com/html/?q={q}", timeout=max(3, int(os.getenv("AI_INFINITY_RESEARCH_TIMEOUT", "6"))), max_bytes=3_000_000).decode("utf-8", "replace")
             blocks = re.findall(r"<div[^>]+class=\"result__body\"[^>]*>(.*?)</div>\s*</div>", raw, re.S | re.I)
             for block in blocks[:limit]:
                 hm = re.search(r'href=\"([^\"]+)\"[^>]*class=\"result__a\"[^>]*>(.*?)</a>', block, re.S | re.I)
@@ -890,11 +890,11 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             if images:
                 return images[0]
 
-    # Connected AI image generation is the next-quality path when fast mode is off.
-    if not FAST_MODE:
-        ai = _hf_image(ai_prompt, outdir, index)
-        if ai:
-            return ai
+    # Connected AI image generation is a quality path whenever a provider is configured.
+    # Public real footage still wins first, so free mode remains fast and grounded.
+    ai = _hf_image(ai_prompt, outdir, index)
+    if ai:
+        return ai
 
     # Explicit synthetic fallback. The UI/manifest can distinguish this from footage.
     procedural = _procedural_image(
@@ -1703,7 +1703,9 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         # Shared music bed avoids repeatedly generating the same soundtrack.
         music_seconds = max(12.0, min(600.0, float(target) + 12.0))
         shared_music = make_music(outdir, music_seconds)
-        max_ai_video_scenes = 0 if FAST_MODE else max(0, int(os.getenv("AI_INFINITY_AI_VIDEO_SCENES", "2")))
+        ai_video_enabled = os.getenv("AI_INFINITY_AI_VIDEO", "0").strip().lower() in {"1","true","yes","auto"}
+        requested_ai_video_scenes = max(0, int(os.getenv("AI_INFINITY_AI_VIDEO_SCENES", "2")))
+        max_ai_video_scenes = min(requested_ai_video_scenes, 1 if FAST_MODE else 4) if ai_video_enabled else 0
         shared_sfx = make_sfx(outdir, 1.0, 0)
 
         for i, ch in enumerate(chapters, 1):
