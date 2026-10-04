@@ -68,4 +68,4 @@ EXPOSE 10000
 # The canonical process is main:app. main.py registers the complete Creator
 # Studio backend directly, matching the Render dashboard command and eliminating
 # the production/dev entrypoint split.
-CMD ["sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000}"]
+CMD ["sh", "-c", "exec uvicorn creator_entrypoint:application --host 0.0.0.0 --port ${PORT:-10000}"]
