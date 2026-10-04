@@ -902,10 +902,9 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         videos = [x for x in items if x.get("kind") == "video"]
         if videos:
             return videos[0]
-        if not FAST_MODE:
-            images = [x for x in items if x.get("kind") == "image"]
-            if images:
-                return images[0]
+        images = [x for x in items if x.get("kind") == "image"]
+        if images:
+            return images[0]
 
     # Connected AI image generation is a quality path whenever a provider is configured.
     # Public real footage still wins first, so free mode remains fast and grounded.
@@ -1007,6 +1006,14 @@ def tts(text: str, outdir: Path, index: int, voice: str) -> Tuple[Path, str, flo
     subprocess.run([exe, "-s", "155", "-w", str(wav), plain], check=True, timeout=45)
     ffmpeg("-i", wav, "-codec:a", "libmp3lame", "-q:a", "2", out, timeout=180)
     return out, "local-espeak" + ("-fast-fallback" if FAST_MODE else ""), probe_duration(out)
+
+
+def _make_silent_voice(outdir: Path, index: int, seconds: float = 6.0) -> Tuple[Path, str, float]:
+    """Guaranteed local audio fallback so remote TTS cannot stall or kill a job."""
+    out = outdir / f"narration_{index:02d}.mp3"
+    duration = max(4.0, min(30.0, float(seconds)))
+    ffmpeg("-f", "lavfi", "-i", f"anullsrc=r=48000:cl=stereo", "-t", duration, "-c:a", "libmp3lame", "-q:a", "6", out, timeout=45)
+    return out, "silent-local-fallback", probe_duration(out)
 
 
 def make_music(outdir: Path, seconds: float) -> Path:
@@ -1770,11 +1777,26 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             _stage(project_id, "visuals_and_voice", 22 + (i-1) / max(1, len(chapters) * 2) * 36, current_scene=i)
             audit_event(project_id, "scene_started", {"scene": i, "total_scenes": len(chapters)})
             # Voice is measured first so every visual and caption is tied to real speech duration.
-            voice, provider, voice_duration = tts(str(ch.get("narration") or ""), outdir, i, str(req.get("voice") or "en-US-AriaNeural"))
+            # Every scene is fail-soft: remote/public media or neural TTS may fail,
+            # but one failed provider must never block the production pipeline.
+            try:
+                voice, provider, voice_duration = tts(str(ch.get("narration") or ""), outdir, i, str(req.get("voice") or "en-US-AriaNeural"))
+            except Exception as voice_exc:
+                audit_event(project_id, "voice_fallback", {"scene": i, "error": str(voice_exc)[:500]})
+                voice, provider, voice_duration = _make_silent_voice(outdir, i, 6.0)
             voice_provider = voice_provider or provider
             ch["actual_duration"] = max(4.0, min(90.0, voice_duration))
             actual_total += ch["actual_duration"]
-            asset = acquire_scene_asset(ch, outdir, i, prefer_motion=(i <= max_ai_video_scenes), duration=ch["actual_duration"])
+            try:
+                asset = acquire_scene_asset(ch, outdir, i, prefer_motion=(i <= max_ai_video_scenes), duration=ch["actual_duration"])
+            except Exception as asset_exc:
+                audit_event(project_id, "visual_fallback", {"scene": i, "error": str(asset_exc)[:500]})
+                asset = _procedural_image(
+                    str(ch.get("image_prompt") or ch.get("heading") or topic),
+                    outdir, i, width=1280 if FAST_MODE else 1920, height=720 if FAST_MODE else 1080
+                )
+                if not asset:
+                    raise RuntimeError(f"scene {i}: no visual fallback available")
             assets_meta.append(redact({k: v for k, v in asset.items() if k != "path"}))
             _save_asset(project_id, "visual", Path(asset["path"]), "video/mp4" if asset.get("kind") == "video" else "image/png", asset)
             sfx = shared_sfx if FAST_MODE else make_sfx(outdir, ch["actual_duration"], i)
