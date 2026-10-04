@@ -981,7 +981,10 @@ def tts(text: str, outdir: Path, index: int, voice: str) -> Tuple[Path, str, flo
     exe = shutil.which("espeak-ng") or shutil.which("espeak")
 
     # Prefer a natural neural voice when the free public service is reachable.
-    # Fall back deterministically to the local engine when unavailable/slow.
+    # Fast mode enforces a hard upper bound even if an older environment variable
+    # contains a larger value; local speech remains the deterministic fallback.
+    configured_edge_timeout = float(os.getenv("AI_INFINITY_EDGE_TTS_TIMEOUT", "15"))
+    edge_timeout = min(configured_edge_timeout, 5.0) if FAST_MODE else min(configured_edge_timeout, 15.0)
     try:
         import asyncio
         import edge_tts
@@ -989,7 +992,7 @@ def tts(text: str, outdir: Path, index: int, voice: str) -> Tuple[Path, str, flo
         async def run() -> None:
             await asyncio.wait_for(
                 edge_tts.Communicate(plain, voice).save(str(out)),
-                timeout=float(os.getenv("AI_INFINITY_EDGE_TTS_TIMEOUT", "5" if FAST_MODE else "15"))
+                timeout=edge_timeout
             )
 
         asyncio.run(run())
