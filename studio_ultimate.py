@@ -1855,6 +1855,32 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         checkpoint(project_id, "plan_complete", {"digest": digest(plan), "provider": ai_provider})
 
         chapters = list(plan.get("chapters") or [])
+        # A creator storyboard revision is a real production input, not merely
+        # a saved note. The editable storyboard can replace the generated scene
+        # plan for the next render while preserving the original project.
+        override = req.get("storyboard_override") if isinstance(req.get("storyboard_override"), dict) else {}
+        override_scenes = override.get("scenes") if isinstance(override.get("scenes"), list) else []
+        if override_scenes:
+            normalized=[]
+            for raw in override_scenes[:40]:
+                if not isinstance(raw, dict):
+                    continue
+                try:
+                    dur=float(raw.get("duration") or 6)
+                except Exception:
+                    dur=6
+                normalized.append({
+                    "heading": str(raw.get("heading") or "Scene").strip()[:240],
+                    "narration": re.sub(r"\\s+"," ",str(raw.get("narration") or "")).strip()[:6000],
+                    "image_prompt": str(raw.get("image_prompt") or raw.get("heading") or "cinematic documentary scene").strip()[:900],
+                    "on_screen": str(raw.get("on_screen") or raw.get("heading") or "").strip()[:500],
+                    "duration": max(1.0,min(600.0,dur)),
+                })
+            if normalized:
+                chapters = normalized
+                plan["chapters"] = normalized
+                plan["storyboard_override_applied"] = True
+                audit_event(project_id, "storyboard_override_applied", {"source_project":override.get("source_project"),"scene_count":len(normalized)})
         if not chapters:
             raise RuntimeError("creative engine returned no chapters")
         fmt = str(req.get("format", "long")).lower()
