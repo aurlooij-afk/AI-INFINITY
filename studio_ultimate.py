@@ -1723,6 +1723,20 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                     reference_sources.append({"url":str(ref),"title":"Creator reference","snippet":body,"source":"user reference","retrieved_at":utc_iso()})
             except Exception:
                 continue
+        # Uploaded source material becomes first-class research context. Files are
+        # resolved only inside the current user's upload sandbox; arbitrary server
+        # paths are never accepted from the request.
+        upload_root=(ROOT / "uploads" / safe_name(project["user_id"])).resolve()
+        for fname in (req.get("source_file_names") or [])[:12]:
+            try:
+                safe=_safe_upload_name(str(fname))
+                candidate=(upload_root / safe).resolve()
+                if not candidate.is_file() or upload_root not in candidate.parents:
+                    continue
+                body=_extract_source_text(candidate)
+                reference_sources.append({"url":"","title":safe,"snippet":body[:5000],"source":"user upload","retrieved_at":utc_iso(),"size_bytes":candidate.stat().st_size,"text_extracted":bool(body)})
+            except Exception:
+                continue
         if reference_sources:
             research.setdefault("sources",[]).extend(reference_sources)
             research["source_count"]=len(research.get("sources") or [])
@@ -2312,6 +2326,23 @@ def _custom_features(user_id: str) -> List[Dict[str, Any]]:
 
 def _feature_catalog(user_id: str) -> List[Dict[str, Any]]:
     return [dict(x, custom=False) for x in CREATOR_100_FEATURES] + _custom_features(user_id)
+
+def _truthful_feature_catalog(user_id: str) -> List[Dict[str, Any]]:
+    connections=_connections(user_id)
+    youtube_active=any(x.get("provider")=="youtube" and x.get("active") for x in connections)
+    image_provider=bool(os.getenv("HF_TOKEN","").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN","").strip())
+    out=[]
+    for raw in _feature_catalog(user_id):
+        f=dict(raw); name=str(f.get("name") or "").lower()
+        status=str(f.get("status") or "ready")
+        if "ai image path" in name: status="provider_ready" if image_provider else "adapter_ready"
+        elif "ai video path" in name: status="provider_ready" if image_provider else "adapter_ready"
+        elif "youtube delivery" in name: status="connected" if youtube_active else "connection_required"
+        elif "publication verification" in name: status="verification_ready"
+        elif "layered" in name or "interactive" in name or "avatar" in name or "dubbing" in name: status="adapter_ready"
+        f["runtime_status"]=status
+        out.append(f)
+    return out
 
 def _feature_ids(user_id: str) -> set:
     return {str(x["id"]) for x in _feature_catalog(user_id)}
@@ -3160,7 +3191,7 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
             except Exception: pass
             raise HTTPException(500,str(exc)[:300])
         extracted=_extract_source_text(target)
-        payload={"status":"uploaded","filename":name,"size_bytes":total,"extension":ext,"project_id":project_id or None,"text_extracted":bool(extracted),"text_preview":extracted[:4000],"download_url":f"/infinity/studio/project/{project_id}/asset/{quote(name)}" if project_id else None,"truthful":True}
+        payload={"status":"uploaded","filename":name,"source_file_name":name,"size_bytes":total,"extension":ext,"project_id":project_id or None,"text_extracted":bool(extracted),"text_preview":extracted[:4000],"download_url":f"/infinity/studio/project/{project_id}/asset/{quote(name)}" if project_id else None,"truthful":True}
         if project_id:
             _save_asset(project_id,"source",target,"application/octet-stream",{"filename":name,"size_bytes":total,"text_extracted":bool(extracted),"source_type":"creator_upload"})
             register_artifact(project_id,target,"application/octet-stream",{"source_type":"creator_upload","text_extracted":bool(extracted)})
@@ -3639,7 +3670,7 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
     @app.get("/infinity/studio/features")
     def creator_features(request: Request, response: Response):
         user_id = _get_user_id(request); _set_session(response, request, user_id)
-        features=_feature_catalog(user_id)
+        features=_truthful_feature_catalog(user_id)
         return {"version":VERSION,"core_count":len(CREATOR_100_FEATURES),"custom_count":len(features)-len(CREATOR_100_FEATURES),"count":len(features),"features":features,"benchmarks_2026":CREATOR_2026_BENCHMARKS,"selected_by_default":[x["id"] for x in CREATOR_100_FEATURES],"extensible":True,"truthful":True}
 
     @app.get("/infinity/studio/features/{feature_id}")
