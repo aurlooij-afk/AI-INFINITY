@@ -72,13 +72,24 @@ def register_pro(app: Any) -> None:
         return str(value or "").replace("\x00", "").strip()[:limit]
 
     def run_local_http_probe(url: str, timeout: float = 4.0) -> Dict[str, Any]:
-        # Intentionally use the standard library. No new runtime dependency is
-        # required for local/open-source integrations.
+        # HTTP is permitted only for an explicitly local engine by default.
+        # Public HTTP and arbitrary private-network probing are rejected.
         from urllib.request import Request as URequest, urlopen
-        if not url.startswith("http://") and not url.startswith("https://"):
-            return {"ok": False, "error": "endpoint must be http(s)"}
-        if url.startswith("https://") and not url_host_safe(url):
-            return {"ok": False, "error": "endpoint rejected by SSRF policy"}
+        from urllib.parse import urlparse
+        try:
+            parsed = urlparse(str(url).strip())
+            host = (parsed.hostname or "").lower().rstrip(".")
+            if parsed.scheme not in {"http", "https"} or not host:
+                return {"ok": False, "error": "endpoint must be http(s)"}
+            if parsed.scheme == "https":
+                if not url_host_safe(url):
+                    return {"ok": False, "error": "endpoint rejected by SSRF policy"}
+            else:
+                local_hosts = {"localhost", "localhost.localdomain", "127.0.0.1", "::1"}
+                if host not in local_hosts:
+                    return {"ok": False, "error": "plain HTTP is restricted to localhost/local loopback"}
+        except Exception as exc:
+            return {"ok": False, "error": "invalid endpoint: " + str(exc)[:200]}
         try:
             req = URequest(url, headers={"User-Agent": "AI-Infinity/Creator-Pro"}, method="GET")
             with urlopen(req, timeout=timeout) as r:
@@ -102,6 +113,8 @@ def register_pro(app: Any) -> None:
             "workflow": {
                 "storyboard_editing": True,
                 "transcript_first_context": True,
+                "storyboard_rebuild": True,
+                "transcript_clip_extraction": True,
                 "interactive_html_export": True,
                 "variant_matrix": True,
                 "open_source_connectors": True
@@ -109,6 +122,44 @@ def register_pro(app: Any) -> None:
             "free_first": True,
             "truthful": True
         }
+
+
+    def local_engine_url(provider: str) -> str:
+        key = str(provider or "").strip().lower()
+        defaults = {
+            "ollama": "http://127.0.0.1:11434",
+            "comfyui": "http://127.0.0.1:8188",
+        }
+        env_key = {"ollama":"OLLAMA_BASE_URL","comfyui":"COMFYUI_URL"}.get(key)
+        if not env_key:
+            raise HTTPException(400, "unsupported local engine")
+        return str(os.getenv(env_key, defaults[key])).strip().rstrip("/")
+
+    def local_engine_post(provider: str, path: str, payload: Dict[str, Any], timeout: float = 60.0) -> Dict[str, Any]:
+        from urllib.request import Request as URequest, urlopen
+        from urllib.parse import urlparse
+        base = local_engine_url(provider)
+        parsed = urlparse(base)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if parsed.scheme == "http" and host not in {"localhost","localhost.localdomain","127.0.0.1","::1"}:
+            raise HTTPException(400, "local engine HTTP endpoint must be loopback")
+        if parsed.scheme == "https" and not url_host_safe(base):
+            raise HTTPException(400, "local engine HTTPS endpoint rejected by SSRF policy")
+        if parsed.scheme not in {"http","https"}:
+            raise HTTPException(400, "local engine endpoint must be http(s)")
+        url = base + path
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = URequest(url, data=body, headers={"Content-Type":"application/json","Accept":"application/json","User-Agent":"AI-Infinity/Creator-Pro"}, method="POST")
+        try:
+            with urlopen(req, timeout=max(5.0,min(float(timeout),180.0))) as resp:
+                raw = resp.read(8_000_000).decode("utf-8","replace")
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    data = {"raw": raw[:4000]}
+                return {"ok": True, "status": int(getattr(resp,"status",200)), "data": data, "endpoint": url}
+        except Exception as exc:
+            raise HTTPException(502, f"{provider} request failed: {str(exc)[:500]}")
 
     @app.get("/infinity/studio/open-source")
     def open_source_status(request: Request, response: Any):
@@ -143,6 +194,33 @@ def register_pro(app: Any) -> None:
             ],
             "truthful": True
         }
+
+
+    @app.post("/infinity/studio/open-source/ollama/chat")
+    async def ollama_chat(request: Request, response: Any):
+        uid = _get_user_id(request); _set_session(response, request, uid)
+        payload = await request.json()
+        model = safe_text(payload.get("model") or os.getenv("OLLAMA_MODEL") or "llama3.2", 120)
+        prompt = safe_text(payload.get("prompt"), 12000)
+        if not prompt:
+            raise HTTPException(422, "prompt is required")
+        result = local_engine_post("ollama","/api/chat",{
+            "model": model,
+            "messages": [{"role":"user","content":prompt}],
+            "stream": False,
+        }, timeout=120)
+        return {"provider":"ollama","model":model,"result":result["data"],"free_first":True,"truthful":True}
+
+    @app.post("/infinity/studio/open-source/comfyui/queue")
+    async def comfyui_queue(request: Request, response: Any):
+        uid = _get_user_id(request); _set_session(response, request, uid)
+        payload = await request.json()
+        workflow = payload.get("prompt")
+        if not isinstance(workflow, dict) or not workflow:
+            raise HTTPException(422, "prompt must be a non-empty ComfyUI workflow object")
+        client_id = safe_text(payload.get("client_id") or ("ai-infinity-"+uuid.uuid4().hex[:16]), 120)
+        result = local_engine_post("comfyui","/prompt",{"prompt":workflow,"client_id":client_id}, timeout=60)
+        return {"provider":"comfyui","client_id":client_id,"result":result["data"],"free_first":True,"truthful":True}
 
     @app.post("/infinity/studio/open-source/test")
     async def open_source_test(request: Request, response: Any):
@@ -227,6 +305,46 @@ def register_pro(app: Any) -> None:
         audit_event(project_id,"storyboard_updated",{"user_id":uid,"scene_count":len(clean)})
         return {"status":"saved","project_id":project_id,"storyboard":data,"truthful":True}
 
+
+    @app.post("/infinity/studio/project/{project_id}/storyboard/apply")
+    async def storyboard_apply(project_id: str, request: Request, response: Any):
+        uid, p = owned_project(project_id, request, response)
+        current = await storyboard_get(project_id, request, response)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        scenes = payload.get("scenes") if isinstance(payload, dict) and isinstance(payload.get("scenes"), list) else current.get("scenes") or []
+        if not scenes:
+            raise HTTPException(422, "storyboard has no scenes")
+        clean = []
+        for i, raw in enumerate(scenes[:40], 1):
+            if not isinstance(raw, dict):
+                continue
+            try:
+                dur = float(raw.get("duration") or 6)
+            except Exception:
+                dur = 6
+            clean.append({
+                "index": i,
+                "heading": safe_text(raw.get("heading"), 240),
+                "narration": safe_text(raw.get("narration"), 4000),
+                "image_prompt": safe_text(raw.get("image_prompt"), 700),
+                "on_screen": safe_text(raw.get("on_screen"), 350),
+                "duration": max(1.0, min(600.0, dur)),
+            })
+        if not clean:
+            raise HTTPException(422, "storyboard contains no valid scenes")
+        req = dict(p.get("request_json") or {})
+        req["title"] = safe_text(payload.get("title") if isinstance(payload, dict) else None, 200) or safe_text((p.get("title") or "") + " — storyboard revision", 200)
+        req["objective"] = req.get("objective") or req.get("topic") or p.get("title") or ""
+        req["topic"] = req.get("topic") or p.get("title") or ""
+        req["storyboard_override"] = {"title": req["title"], "scenes": clean, "source_project": project_id}
+        req["notes"] = (str(req.get("notes") or "") + "\nRebuilt from editable storyboard of " + project_id).strip()[:2000]
+        result = enqueue(req, uid, None)
+        audit_event(project_id, "storyboard_revision_queued", {"child_project_id":result.get("project_id"),"scene_count":len(clean)})
+        return {"status":"queued","source_project_id":project_id,"project_id":result.get("project_id"),"scene_count":len(clean),"truthful":True}
+
     @app.get("/infinity/studio/project/{project_id}/transcript")
     def transcript_context(project_id: str, request: Request, response: Any):
         uid, p = owned_project(project_id, request, response)
@@ -264,6 +382,61 @@ def register_pro(app: Any) -> None:
             "note":"This endpoint exposes the project's real generated transcript/context. Word-level local transcription becomes available when faster-whisper is installed/configured.",
             "truthful":True
         }
+
+
+    @app.post("/infinity/studio/project/{project_id}/transcript/clip")
+    async def transcript_clip(project_id: str, request: Request, response: Any):
+        uid, p = owned_project(project_id, request, response)
+        if p.get("status") not in {"completed","completed_with_qc_warnings"}:
+            raise HTTPException(409, "project master is not ready")
+        master = _project_dir(project_id) / "final.mp4"
+        if not master.exists():
+            raise HTTPException(404, "final master not found")
+        payload = await request.json()
+        start = payload.get("start")
+        end = payload.get("end")
+        if start is None or end is None:
+            transcript = await transcript_context(project_id, request, response)
+            try:
+                idx = int(payload.get("segment_index"))
+            except Exception:
+                raise HTTPException(422, "segment_index is required when start/end are omitted")
+            segs = transcript.get("segments") or []
+            if idx < 0 or idx >= len(segs):
+                raise HTTPException(422, "segment_index is outside transcript range")
+            def clock(v: str) -> float:
+                h,m,s = v.split(":")
+                sec,ms = s.split(",")
+                return int(h)*3600 + int(m)*60 + int(sec) + int(ms)/1000.0
+            try:
+                start = clock(str(segs[idx]["start"]))
+                end = clock(str(segs[idx]["end"]))
+            except Exception:
+                raise HTTPException(422, "selected transcript segment has no usable timestamps")
+        try:
+            start = max(0.0, float(start)); end = max(0.0, float(end))
+        except Exception:
+            raise HTTPException(422, "start/end must be numbers")
+        duration = probe_duration(master)
+        end = min(end, duration)
+        if end <= start + 0.2:
+            raise HTTPException(422, "clip window is empty")
+        out = _project_dir(project_id) / f"transcript_clip_{int(time.time())}_{uuid.uuid4().hex[:8]}.mp4"
+        import studio_ultimate as _studio
+        _studio.ACTIVE_PROJECT.project_id = project_id
+        try:
+            ffmpeg("-ss",start,"-i",master,"-t",end-start,"-c:v","libx264","-preset","veryfast","-crf","19","-pix_fmt","yuv420p","-c:a","aac","-b:a","160k","-movflags","+faststart",out,timeout=600)
+        except Exception as exc:
+            out.unlink(missing_ok=True)
+            audit_event(project_id,"transcript_clip_failed",{"error":str(exc)[:500]})
+            raise HTTPException(500,"transcript clip failed: "+str(exc)[:300])
+        finally:
+            _studio.ACTIVE_PROJECT.project_id = None
+        meta={"source":"final.mp4","start":start,"end":end,"duration":probe_duration(out),"transcript_segment":payload.get("segment_index"),"truthful":True}
+        _save_asset(project_id,"transcript_clip",out,"video/mp4",meta)
+        art=register_artifact(project_id,out,"video/mp4",meta)
+        audit_event(project_id,"transcript_clip_completed",{"asset":out.name,"sha256":art.get("sha256")})
+        return {"status":"completed","project_id":project_id,"asset_name":out.name,"download_url":f"/infinity/studio/project/{project_id}/asset/{out.name}","metadata":meta,"truthful":True}
 
     @app.post("/infinity/studio/project/{project_id}/edit/advanced")
     async def advanced_edit(project_id: str, request: Request, response: Any):
