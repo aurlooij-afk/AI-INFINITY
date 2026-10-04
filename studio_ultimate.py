@@ -3336,6 +3336,10 @@ def _marketplace_seed_3621() -> List[Dict[str,Any]]:
     ]
 
 def register(app: Any, model_fn: Optional[Callable] = None) -> None:
+    # Mount the real Creator Pro layer: editable storyboard, transcript-first clipping,
+    # advanced FFmpeg controls, image lab, interactive export, variant matrix and
+    # local/open-source provider probes. These are backend capabilities, not mock UI.
+    from creator_pro_os import register_pro
     from fastapi import HTTPException, File, UploadFile
     from fastapi.responses import FileResponse, RedirectResponse
     from pydantic import BaseModel, Field
@@ -4296,6 +4300,8 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
 
     # Aliases make the new creator studio the primary visible product while
     # preserving all historical 3607/3608 routes untouched.
+    register_pro(app)
+
     app.state.creator_studio_version = VERSION
     app.state.creator_studio_ui = CREATOR_STUDIO_UI
     _ensure_worker(model_fn)
