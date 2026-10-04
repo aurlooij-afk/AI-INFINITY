@@ -1,4 +1,4 @@
-# Canonical production gate: every push validates main:app and real media execution.
+# Canonical production gate: every push validates the deployed creator_entrypoint and real media execution.
 name: Creator Studio Build Guard
 
 on:
@@ -65,30 +65,25 @@ jobs:
           import creator_entrypoint
           from fastapi.testclient import TestClient
 
-          # Render currently invokes main:app. That exact application must expose
-          # the creator backend; testing only creator_entrypoint would miss a
-          # production misconfiguration.
-          main_paths = {getattr(route, "path", "") for route in main.app.routes}
+          # Render production uses creator_entrypoint:application, exactly as Docker CMD.
+          import creator_entrypoint
+          from fastapi.testclient import TestClient
+
+          production_paths = {getattr(route, "path", "") for route in creator_entrypoint.creator_app.routes}
           required = {
-              "/",
-              "/health",
-              "/infinity/studio",
-              "/infinity/studio/health",
-              "/infinity/studio/bootstrap",
-              "/infinity/studio/tools",
-              "/infinity/studio/projects",
-              "/infinity/studio/workspace/export",
-              "/infinity/studio/workspace/backup",
-              "/infinity/studio/creator-pro",
+              "/", "/health", "/infinity/studio", "/infinity/studio/health",
+              "/infinity/studio/bootstrap", "/infinity/studio/tools",
+              "/infinity/studio/projects", "/infinity/studio/workspace/export",
+              "/infinity/studio/workspace/backup", "/infinity/studio/creator-pro",
               "/infinity/studio/open-source",
               "/infinity/studio/project/{project_id}/storyboard/apply",
               "/infinity/studio/project/{project_id}/transcript/clip",
           }
-          missing = sorted(required - main_paths)
+          missing = sorted(required - production_paths)
           if missing:
-              raise SystemExit("Production main:app is missing creator routes: " + ", ".join(missing))
+              raise SystemExit("Production creator app is missing routes: " + ", ".join(missing))
 
-          client = TestClient(main.app)
+          client = TestClient(creator_entrypoint.application)
           for path in ("/", "/health", "/infinity/studio", "/infinity/studio/health",
                        "/infinity/studio/bootstrap", "/infinity/studio/tools",
                        "/infinity/studio/projects", "/infinity/studio/workspace/export",
@@ -97,17 +92,12 @@ jobs:
               if response.status_code >= 500:
                   raise SystemExit(f"{path} returned HTTP {response.status_code}: {response.text[:500]}")
               if path != "/" and response.status_code == 404:
-                  raise SystemExit(f"{path} is unexpectedly 404 in production main:app")
+                  raise SystemExit(f"{path} is unexpectedly 404 in production creator app")
 
           root = client.get("/")
           if "AI Infinity" not in root.text:
               raise SystemExit("Unified root page does not contain AI Infinity")
 
-          creator_client = TestClient(creator_entrypoint.application)
-          for path in ("/", "/studio", "/infinity/studio", "/infinity/studio/health"):
-              response = creator_client.get(path)
-              if response.status_code >= 500:
-                  raise SystemExit(f"creator_entrypoint {path} returned HTTP {response.status_code}: {response.text[:500]}")
           import time
 
           smoke = client.post("/infinity/studio/project", json={
