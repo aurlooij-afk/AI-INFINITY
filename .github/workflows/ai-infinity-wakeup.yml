@@ -20,21 +20,55 @@ jobs:
     env:
       AI_INFINITY_PUBLIC_URL: https://ai-infinity-ca5e.onrender.com
     steps:
-      - name: Wake and verify
+      - name: Wake and verify foundation
         shell: bash
         run: |
           set -euo pipefail
-          BASE_URL="${AI_INFINITY_PUBLIC_URL%/}"
-          curl --fail --silent --show-error --location --retry 4 --retry-delay 5 --retry-all-errors --connect-timeout 15 --max-time 90 "${BASE_URL}/health" -o /tmp/health.json
+          BASE_URL="\${AI_INFINITY_PUBLIC_URL%/}"
+          curl --fail --silent --show-error --location --retry 4 --retry-delay 5 --retry-all-errors --connect-timeout 15 --max-time 90 "\${BASE_URL}/health" -o /tmp/health.json
           test -s /tmp/health.json
           python - <<'PY'
           import json
           with open("/tmp/health.json","r",encoding="utf-8") as f:
               data=json.load(f)
           if data.get("status") != "healthy":
-              raise SystemExit("AI Infinity health is not healthy")
-          print("AI Infinity healthy:", data.get("version"), data.get("build"))
+              raise SystemExit("AI Infinity foundation health is not healthy")
+          print("Foundation healthy:", data.get("version"), data.get("build"))
           PY
-          curl --fail --silent --show-error --location --retry 3 --retry-delay 3 --retry-all-errors --connect-timeout 15 --max-time 60 "${BASE_URL}/infinity/studio" -o /tmp/studio.html
+
+      - name: Verify Creator Studio backend and UI
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_URL="\${AI_INFINITY_PUBLIC_URL%/}"
+          curl --fail --silent --show-error --location --retry 4 --retry-delay 5 --retry-all-errors --connect-timeout 15 --max-time 90 "\${BASE_URL}/infinity/studio/health" -o /tmp/studio-health.json
+          test -s /tmp/studio-health.json
+          python - <<'PY'
+          import json
+          with open("/tmp/studio-health.json","r",encoding="utf-8") as f:
+              data=json.load(f)
+          if data.get("status") != "healthy":
+              raise SystemExit("Creator Studio health is not healthy")
+          required = {
+              "universal_creator_workspace": True,
+              "one_command_creation": True,
+              "persistent_projects": True,
+              "queued_workers": True,
+              "progress_tracking": True,
+              "download_without_publishing": True,
+              "feature_count": 100,
+          }
+          missing = [k for k,v in required.items() if data.get(k) != v]
+          if missing:
+              raise SystemExit("Creator Studio capability regression: " + ", ".join(missing))
+          print("Creator Studio healthy:", data.get("version"), data.get("build"))
+          PY
+          curl --fail --silent --show-error --location --retry 3 --retry-delay 3 --retry-all-errors --connect-timeout 15 --max-time 60 "\${BASE_URL}/infinity/studio/bootstrap" -o /tmp/studio-bootstrap.json
+          test -s /tmp/studio-bootstrap.json
+          curl --fail --silent --show-error --location --retry 3 --retry-delay 3 --retry-all-errors --connect-timeout 15 --max-time 60 "\${BASE_URL}/infinity/studio/features" -o /tmp/studio-features.json
+          test -s /tmp/studio-features.json
+          curl --fail --silent --show-error --location --retry 3 --retry-delay 3 --retry-all-errors --connect-timeout 15 --max-time 60 "\${BASE_URL}/infinity/studio" -o /tmp/studio.html
           test -s /tmp/studio.html
-          echo "Creator Studio reachable."
+          grep -q "AI Infinity" /tmp/studio.html
+          grep -q "Create production" /tmp/studio.html
+          echo "Creator Studio backend, capability catalog and UI are reachable."
