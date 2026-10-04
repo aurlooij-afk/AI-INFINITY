@@ -44,6 +44,7 @@ COPY main.py \
      ai_infinity_bridge.py \
      creator_studio_2030.html \
      creator_entrypoint.py \
+     creator_pro_os.py \
      ./
 
 # Fail the image build immediately if a required Python source is broken.
@@ -57,6 +58,7 @@ RUN python -m py_compile \
         creator_os_3624.py \
         ai_infinity_bridge.py \
         creator_entrypoint.py
+        creator_pro_os.py
 
 RUN mkdir -p /tmp/ai-infinity
 
