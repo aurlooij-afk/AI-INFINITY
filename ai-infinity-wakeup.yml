@@ -1,0 +1,22 @@
+name: AI Infinity Free Wakeup
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/30 * * * *"
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake AI Infinity and run safe worker cycle
+        env:
+          AI_INFINITY_PUBLIC_URL: ${{ secrets.AI_INFINITY_PUBLIC_URL }}
+          AI_INFINITY_CRON_TOKEN: ${{ secrets.AI_INFINITY_CRON_TOKEN }}
+        run: |
+          set -eu
+          test -n "$AI_INFINITY_PUBLIC_URL"
+          test -n "$AI_INFINITY_CRON_TOKEN"
+          curl --fail --silent --show-error --retry 3 --max-time 45 \
+            -H "x-ai-infinity-cron-token: $AI_INFINITY_CRON_TOKEN" \
+            -X POST "$AI_INFINITY_PUBLIC_URL/infinity/3603/cron"
