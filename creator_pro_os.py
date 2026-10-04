@@ -290,6 +290,18 @@ def register_pro(app: Any) -> None:
                         chapters = value
                 if chapters:
                     break
+            # Last-resort real-project fallback: the production engine always
+            # writes script.md. Convert its generated content into an editable scene
+            # rather than returning an empty/mock storyboard.
+            if not chapters:
+                script_path = _project_dir(project_id) / "script.md"
+                if script_path.exists():
+                    script_text = script_path.read_text(encoding="utf-8", errors="ignore").strip()
+                    if script_text:
+                        chapters = [{"heading": p.get("title") or "Generated scene",
+                                     "narration": script_text[:12000],
+                                     "image_prompt": p.get("title") or "creator production scene",
+                                     "on_screen": "", "duration": 8}]
             data = {
                 "project_id": project_id,
                 "title": p.get("title") or "",
