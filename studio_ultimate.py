@@ -33,8 +33,11 @@ try:
 except Exception:  # pragma: no cover
     Image = ImageDraw = ImageFont = ImageFilter = None
 
-VERSION = "TARGET-2050.3622"
-BUILD = "AI-INFINITY-FINAL-FREE-FOREVER-CREATOR-WEBSITE-TURBO"
+VERSION = "TARGET-2050.3623"
+BUILD = "AI-INFINITY-FINAL-FREE-FOREVER-CREATOR-WORKBENCH"
+# Free Render has a small CPU budget. Bound all free-mode remote work so a
+# production cannot sit indefinitely on a public download or remote TTS call.
+FAST_REMOTE_TIMEOUT = max(3, min(10, int(os.getenv("AI_INFINITY_FAST_REMOTE_TIMEOUT", "6")))
 PRODUCT_SURFACE = "Professional Creator OS"
 # The application has no paid tier or in-app billing. External hosting/provider
 # charges are outside the application and can never be guaranteed by source code.
@@ -757,32 +760,46 @@ def _pixabay(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
 
 
 def _commons_media(query: str, outdir: Path, limit: int = 6) -> List[Dict[str, Any]]:
+    # Fast mode deliberately avoids downloading large public video files. A
+    # lightweight Commons thumbnail is still genuine source-backed media and
+    # can be animated locally with zoom/pan to produce a moving scene.
+    timeout = FAST_REMOTE_TIMEOUT if FAST_MODE else 20
+    image_timeout = FAST_REMOTE_TIMEOUT if FAST_MODE else 60
     try:
-        data = http_json("https://commons.wikimedia.org/w/api.php?" + urlencode({
+        params = {
             "action": "query", "format": "json", "generator": "search", "gsrsearch": query,
-            "gsrnamespace": 6, "gsrlimit": min(limit, 10), "prop": "imageinfo", "iiprop": "url|mime|extmetadata"
-        }))
+            "gsrnamespace": 6, "gsrlimit": min(limit, 10), "prop": "imageinfo",
+            "iiprop": "url|mime|extmetadata"
+        }
+        if FAST_MODE:
+            params["iiurlwidth"] = 1280
+        data = http_json("https://commons.wikimedia.org/w/api.php?" + urlencode(params), timeout=timeout)
         out = []
         for pge in (data.get("query", {}).get("pages", {}) or {}).values():
             info = (pge.get("imageinfo") or [{}])[0]
-            u = info.get("url")
+            original = info.get("url")
             mime = str(info.get("mime") or "")
-            if not u:
+            if not original:
                 continue
             meta = info.get("extmetadata") or {}
             lic = (meta.get("LicenseShortName") or {}).get("value")
             creator = (meta.get("Artist") or {}).get("value")
-            if "video" in mime or re.search(r"\.(webm|ogv|mp4)(\?|$)", u, re.I):
+            is_video = "video" in mime or re.search(r"\.(webm|ogv|mp4)(\?|$)", original, re.I)
+            if is_video:
+                if FAST_MODE:
+                    continue
                 p = outdir / f"commons_{pge.get('pageid','x')}.media"
                 try:
-                    download(u, p, timeout=90)
+                    download(original, p, timeout=90)
                     out.append({"kind": "video", "path": str(p), "source": "Wikimedia Commons", "source_url": pge.get("canonicalurl") or "https://commons.wikimedia.org", "creator": creator, "license": lic or "Wikimedia Commons stated license", "title": pge.get("title")})
                 except Exception:
                     continue
-            elif re.search(r"\.(jpe?g|png|webp)(\?|$)", u, re.I):
+                continue
+            if re.search(r"\.(jpe?g|png|webp)(\?|$)", original, re.I):
+                u = info.get("thumburl") or original
                 p = outdir / f"commons_{pge.get('pageid','x')}.img"
                 try:
-                    download(u, p, timeout=60)
+                    download(u, p, timeout=image_timeout, max_bytes=12_000_000 if FAST_MODE else 40_000_000)
                     out.append({"kind": "image", "path": str(p), "source": "Wikimedia Commons", "source_url": pge.get("canonicalurl") or "https://commons.wikimedia.org", "creator": creator, "license": lic or "Wikimedia Commons stated license", "title": pge.get("title")})
                 except Exception:
                     continue
@@ -972,7 +989,7 @@ def tts(text: str, outdir: Path, index: int, voice: str) -> Tuple[Path, str, flo
         async def run() -> None:
             await asyncio.wait_for(
                 edge_tts.Communicate(plain, voice).save(str(out)),
-                timeout=float(os.getenv("AI_INFINITY_EDGE_TTS_TIMEOUT", "15"))
+                timeout=float(os.getenv("AI_INFINITY_EDGE_TTS_TIMEOUT", "5" if FAST_MODE else "15"))
             )
 
         asyncio.run(run())
@@ -1052,20 +1069,46 @@ def _video_scene(asset: Dict[str, Any], duration: float, out: Path, title: str) 
     ffmpeg("-loop", "1", "-i", src, "-t", duration, "-vf", vf, "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", out, timeout=240)
 
 
-def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, duration: float, out: Path, title: str) -> None:
-    """Render one genuinely moving scene while keeping the fast path CPU-light."""
+def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, duration: float, out: Path, title: str, aspect_ratio: str = "16:9") -> None:
+    """Render one moving scene with a predictable CPU cost on the free worker."""
     duration = max(0.5, float(duration))
     title_escaped = str(title).replace("\\", "\\\\").replace("'", "\\'")[:70]
     if FAST_MODE:
-        width, height, fps, font = 1280, 720, 15, 30
-        work_w, work_h = 640, 360
+        ratio_dims = {
+            "16:9": (1280, 720),
+            "9:16": (720, 1280),
+            "1:1": (720, 720),
+            "4:5": (720, 900)
+        }
+        width, height = ratio_dims.get(str(aspect_ratio or "16:9"), ratio_dims["16:9"])
+        work_w, work_h = max(320, width // 2), max(180, height // 2)
+        fps, font = 15, 30
         src = asset["path"]
+        box_x = max(16, int(width * 0.025))
+        box_w = max(1, width - box_x * 2)
+        box_h = max(92, int(height * 0.155))
+        box_y = max(0, height - box_h)
+        text_x = max(24, int(width * 0.04))
+        text_y = box_y + max(22, int(height * 0.04))
         if asset.get("kind") == "video":
-            vf = f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},eq=contrast=1.02:saturation=1.03,scale={width}:{height}:flags=fast_bilinear,fps=24,drawbox=x=32:y=570:w=1216:h=112:color=black@0.33:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':x=52:y=608:fontsize={font}:fontcolor=white"
+            vf = (
+                f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
+                f"eq=contrast=1.02:saturation=1.03,scale={width}:{height}:flags=fast_bilinear,fps=24,"
+                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color=black@0.33:t=fill,"
+                f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
+                f"x={text_x}:y={text_y}:fontsize={font}:fontcolor=white"
+            )
             visual_args = ["-stream_loop", "-1", "-i", src]
         else:
             frames = max(1, int(round(duration * fps)))
-            vf = f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},zoompan=z='min(zoom+0.0015,1.12)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={work_w}x{work_h}:fps={fps},scale={width}:{height}:flags=fast_bilinear,fps=24,drawbox=x=32:y=570:w=1216:h=112:color=black@0.33:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':x=52:y=608:fontsize={font}:fontcolor=white"
+            vf = (
+                f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
+                f"zoompan=z='min(zoom+0.0015,1.12)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                f"d={frames}:s={work_w}x{work_h}:fps={fps},scale={width}:{height}:flags=fast_bilinear,fps=24,"
+                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color=black@0.33:t=fill,"
+                f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
+                f"x={text_x}:y={text_y}:fontsize={font}:fontcolor=white"
+            )
             visual_args = ["-loop", "1", "-i", src]
         audio_filter = "[1:a]volume=0.95[vo];[2:a]volume=0.06[m];[3:a]adelay=80|80,volume=0.06[s];[vo][m][s]amix=inputs=3:duration=first:dropout_transition=1[a]"
         preset, crf, ab = "ultrafast", "24", "128k"
@@ -1077,14 +1120,14 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
             visual_args = ["-stream_loop", "-1", "-i", src]
         else:
             frames = max(1, int(round(duration * fps)))
-            vf = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},zoompan=z='min(zoom+0.0008,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={width}x{height}:fps={fps},drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':x=75:y=915:fontsize={font}:fontcolor=white"
+            vf = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},zoompan=z='min(zoom+0.0008,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2):d={frames}:s={width}x{height}:fps={fps},drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':x=75:y=915:fontsize={font}:fontcolor=white"
             visual_args = ["-loop", "1", "-i", src]
         audio_filter = "[1:a]loudnorm=I=-18:TP=-1.5:LRA=7[vo];[2:a]volume=0.10[m];[3:a]adelay=80|80,volume=0.10[s];[vo][m][s]amix=inputs=3:duration=first:dropout_transition=2[a]"
         preset, crf, ab = os.getenv("AI_INFINITY_VIDEO_PRESET", "veryfast"), "18", "192k"
     args: List[Any] = visual_args + ["-i", voice, "-stream_loop", "-1", "-i", music, "-i", sfx,
         "-filter_complex", audio_filter, "-map", "0:v:0", "-map", "[a]", "-vf", vf, "-t", duration,
         "-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", ab, "-ar", "48000", "-ac", "2", "-movflags", "+faststart", out]
-    ffmpeg(*args, timeout=max(90, int(duration * (5 if FAST_MODE else 8))))
+    ffmpeg(*args, timeout=max(90, int(duration * (4 if FAST_MODE else 8))))
 
 def _scene_mix(video: Path, voice: Path, music: Path, sfx: Path, duration: float, out: Path, captions: Optional[Path] = None) -> None:
     args: List[Any] = ["-i", video, "-i", voice, "-stream_loop", "-1", "-i", music, "-i", sfx]
@@ -1732,7 +1775,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             _save_asset(project_id, "visual", Path(asset["path"]), "video/mp4" if asset.get("kind") == "video" else "image/png", asset)
             sfx = shared_sfx if FAST_MODE else make_sfx(outdir, ch["actual_duration"], i)
             mixed = outdir / f"scene_{i:02d}.mp4"
-            _render_scene(asset, voice, shared_music, sfx, ch["actual_duration"], mixed, str(ch.get("on_screen") or ch.get("heading") or topic))
+            _render_scene(asset, voice, shared_music, sfx, ch["actual_duration"], mixed, str(ch.get("on_screen") or ch.get("heading") or topic), str(req.get("aspect_ratio") or "16:9"))
             scene_paths.append(mixed)
             checkpoint(project_id, f"scene_{i:04d}", {"scene":i,"path":str(mixed),"sha256":file_sha256(mixed) if mixed.exists() else None,"duration":ch.get("actual_duration"),"voice_provider":provider,"asset":redact({k:v for k,v in asset.items() if k != "path"})})
             _update_project(project_id, current_scene=i)
