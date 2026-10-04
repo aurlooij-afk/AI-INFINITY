@@ -206,7 +206,13 @@ h1{font-size:43px}.controls{grid-template-columns:1fr 1fr}.stageRail{grid-templa
 const state={projects:[],latest:localStorage.getItem("aii_latest_project")||"",features:[],agents:[],tools:[],profile:{},connections:[],analytics:{},resources:[],poll:null,drawer:""};
 const $=id=>document.getElementById(id);
 const esc=v=>String(v==null?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-async function api(url,opts){const r=await fetch(url,Object.assign({credentials:"same-origin",headers:{}},opts||{}));const t=await r.text();let j=null;try{j=JSON.parse(t)}catch(e){}if(!r.ok)throw new Error(j&&j.detail?j.detail:(t||("HTTP "+r.status)));return j}
+async function api(url,opts){
+  const r=await fetch(url,Object.assign({credentials:"same-origin",headers:{}},opts||{}));
+  const t=await r.text();let j=null;try{j=JSON.parse(t)}catch(e){}
+  if(/^\s*<(?:!doctype|html|head|body)\b/i.test(t))throw new Error("Network protection returned an HTML page instead of AI Infinity data. The production state remains on the server; refresh once and continue.");
+  if(!r.ok)throw new Error(j&&j.detail?j.detail:(t||("HTTP "+r.status)));
+  return j
+}
 function toast(msg,kind){const t=$("toast");t.textContent=msg;t.style.display="block";t.style.borderColor=kind==="bad"?"#5a3540":kind==="good"?"#315345":"#3b4d43";clearTimeout(toast._t);toast._t=setTimeout(()=>t.style.display="none",3600)}
 function fillExample(i){const x=[
 "Create a polished 6-minute YouTube documentary about how solar power is changing cities. Research current evidence, make it cinematic and beginner-friendly, narrate naturally, add music and SFX, captions, thumbnail, 3 Shorts, SEO, social copy and a publish-ready package.",
@@ -260,8 +266,10 @@ async function loadProject(id){
     $("projectAction").style.display=(done||failed)?"inline-block":"none";$("projectAction").textContent=failed||x.status==="cancelled"?"Retry":"Verify";$("projectAction").onclick=()=>failed||x.status==="cancelled"?retryProject(id):verifyProject(id);
     if(done&&x.result&&x.result.downloads&&x.result.downloads.video){$("preview").innerHTML='<video controls playsinline preload="metadata" src="'+x.result.downloads.video+'"></video>'}else $("preview").innerHTML='<div class="emptyPreview">'+(running?"Production is running. This view follows the real job state.":failed?"Production failed. Retry from the same project.":"No video asset for this content type.")+'</div>';
     renderDelivery(x);
-    if(running){clearInterval(state.poll);state.poll=setInterval(()=>loadProject(id),1800)}else clearInterval(state.poll);
-    await refreshProjectsSilent();
+    const row=state.projects.find(p=>p.project_id===id);
+    if(row)Object.assign(row,{title:x.title,status:x.status,error:x.error||"",stage:x.stage,progress:x.progress,current_scene:x.current_scene,total_scenes:x.total_scenes,updated_at:x.updated_at});
+    renderHome();
+    if(running){clearInterval(state.poll);state.poll=setInterval(()=>loadProject(id),4500)}else clearInterval(state.poll);
   }catch(e){setNotice("commandNotice",e.message,"bad")}
 }
 async function refreshProjectsSilent(){try{const x=await api("/infinity/studio/projects?limit=100");state.projects=x.projects||[];renderHome()}catch(e){}}
