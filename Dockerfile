@@ -20,10 +20,9 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install -r requirements.txt \
     && if [ -s bridge-requirements.txt ]; then python -m pip install -r bridge-requirements.txt; fi
 
-# Preserve the complete mature foundation; expose runtime_main_3700.py as main.py
-# because the Render service command is fixed to uvicorn main:app.
 COPY main.py foundation.py
 COPY studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_studio_2030.html creator_entrypoint.py creator_pro_os.py ./
+COPY runtime_main_3700.py .
 COPY runtime_main_3700.py main.py
 COPY ui_3700.html backend_3700_01.part backend_3700_02.part backend_3700_03.part ./
 
