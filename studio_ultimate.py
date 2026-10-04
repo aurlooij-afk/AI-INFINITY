@@ -1377,14 +1377,66 @@ def build_editorial_packages(project_id: str, outdir: Path, plan: Dict[str, Any]
         "schema_org": {"@context":"https://schema.org", "@type":"Article", "headline":title[:110], "description":re.sub(r"\s+", " ", desc)[:200]}
     }
     (outdir / "seo.json").write_text(jdump(seo), encoding="utf-8")
-    social = {}
-    limits = {"X":280,"LinkedIn":3000,"Facebook":63206,"Instagram":2200,"TikTok":4000,"Website":100000}
-    for platform, limit in limits.items():
-        body = (desc + "\n\n" + " ".join(str(c.get("narration") or "") for c in chapters[:2])).strip()
-        body = body[:max(1, limit-20)]
-        hashtags = " ".join("#" + x for x in keywords[:5])
-        social[platform] = {"text": (body + "\n\n" + hashtags)[:limit], "character_limit": limit, "asset_requirements": {"landscape":"16:9","vertical":"9:16","square":"1:1"}}
-    (outdir / "social_campaign.json").write_text(jdump(social), encoding="utf-8")
+    # Platform-native copy is generated separately rather than truncating one
+    # generic paragraph into every network's character limit.
+    body=" ".join(str(ch.get("narration") or "") for ch in chapters).strip()
+    hook=desc[:220]
+    hashtags=["#"+x for x in keywords[:6]]
+    social={
+        "TikTok":{
+            "caption":(hook+"\n\n"+" ".join(str(ch.get("narration") or "") for ch in chapters[:1]))[:3900],
+            "hashtags":hashtags,
+            "hook":hook[:80],
+            "on_screen":" ".join(str(ch.get("on_screen") or "") for ch in chapters[:3]),
+            "cta":str(plan.get("cta") or "Follow for the next practical breakdown.")[:120],
+            "format":"9:16",
+            "editing_notes":"Front-load the promise, keep visual changes purposeful, burn readable captions."
+        },
+        "Instagram":{
+            "caption":(hook+"\n\n"+body[:1750])[:2200],
+            "hashtags":hashtags+["#reels"],
+            "alt_text":f"Video about {title}"[:500],
+            "format":"9:16",
+            "editing_notes":"Design the opening frame to work without sound; preserve safe caption margins."
+        },
+        "YouTube":{
+            "title_variants":[title[:100],f"{title}: What Actually Matters"[:100],f"{title} Explained"[:100]],
+            "description":(hook+"\n\n"+body)[:4500],
+            "tags":keywords,
+            "short_description":hook[:160],
+            "thumbnail_text_variants":[title[:45],"WHAT ACTUALLY MATTERS","FROM IDEA → RESULT"],
+            "format":"16:9",
+            "editing_notes":"Pair title promise with a legible thumbnail; keep source/fact notes in description when relevant."
+        },
+        "LinkedIn":{
+            "post":(hook+"\n\n"+body[:2600])[:3000],
+            "hashtags":hashtags[:5],
+            "opening":"Lead with the concrete professional outcome rather than a generic AI claim.",
+            "format":"16:9_or_1:1",
+            "editing_notes":"Favor evidence, useful takeaways and credible context over hype."
+        },
+        "X":{
+            "thread":[x[:270] for x in [hook]+[str(ch.get("narration") or "") for ch in chapters][:8]],
+            "hashtags":hashtags[:3],
+            "format":"16:9_or_9:16",
+            "editing_notes":"One idea per post; make every post understandable when viewed alone."
+        },
+        "Facebook":{
+            "post":(hook+"\n\n"+body[:5000])[:62000],
+            "hashtags":hashtags,
+            "format":"9:16_or_16:9",
+            "editing_notes":"Lead with a human-useful framing and clear share/save value."
+        },
+        "Website":{
+            "headline":title[:110],
+            "intro":hook[:400],
+            "body":body,
+            "slug":slug,
+            "format":"responsive",
+            "editing_notes":"Use semantic headings, source notes and accessible media descriptions."
+        }
+    }
+    social["method"]="platform_native_copy_and_delivery_contracts"
     alt = {"thumbnail": f"Editorial thumbnail for {title}", "video": f"Video explaining {title}"}
     (outdir / "accessibility.json").write_text(jdump({"alt_text":alt,"transcript":"\n".join(str(c.get("narration") or "") for c in chapters),"audio_description":"Visuals are presented with chapter titles and scene context."}), encoding="utf-8")
     sources_out=[]
