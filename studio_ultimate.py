@@ -2153,6 +2153,9 @@ def enqueue(req: Dict[str, Any], user_id: str, model_fn: Optional[Callable]) -> 
     return {"status":"queued","project_id":pid,"title":title,"workspace":"/infinity/studio","priority":meta["priority"],"truthful":True}
 
 
+SCHEDULER_STARTED = False
+SCHEDULER_GUARD = threading.Lock()
+
 def worker_loop(model_fn: Optional[Callable]) -> None:
     # Single-process worker with atomic DB claims. If multiple web instances are
     # ever used, the conditional UPDATE prevents two workers from claiming the same job.
@@ -2188,6 +2191,93 @@ def _ensure_worker(model_fn: Optional[Callable]) -> None:
             return
         WORKER_STARTED = True
         t = threading.Thread(target=worker_loop, args=(model_fn,), name="ai-infinity-creator-studio", daemon=True)
+        t.start()
+
+
+def scheduled_publish_loop() -> None:
+    """Execute explicitly scheduled publisher jobs without UI simulation."""
+    while not STOP.is_set():
+        due=[]
+        with DB_LOCK, _connect() as c:
+            rows=c.execute(
+                "SELECT schedule_id,project_id,user_id,provider,publish_at,payload_json "
+                "FROM studio_calendar_3618 WHERE status='planned' ORDER BY publish_at LIMIT 100"
+            ).fetchall()
+            for row in rows:
+                ts=_parse_schedule_ts(str(row["publish_at"] or ""))
+                if ts is not None and ts <= now():
+                    changed=c.execute(
+                        "UPDATE studio_calendar_3618 SET status='publishing',updated_at=? "
+                        "WHERE schedule_id=? AND status='planned'",
+                        (now(),row["schedule_id"])
+                    ).rowcount
+                    if changed == 1:
+                        due.append(dict(row))
+            c.commit()
+        for row in due:
+            sid=str(row["schedule_id"]); pid=str(row["project_id"]); uid_=str(row["user_id"]); provider=str(row["provider"] or "").lower()
+            try:
+                p=_get_project(pid)
+                if not p or p.get("user_id") != uid_:
+                    raise RuntimeError("scheduled project is unavailable")
+                if p.get("status") not in {"completed","completed_with_qc_warnings"}:
+                    # Keep the schedule alive until the production is finished.
+                    with DB_LOCK, _connect() as c:
+                        c.execute("UPDATE studio_calendar_3618 SET status='planned',updated_at=? WHERE schedule_id=?",(now(),sid))
+                    continue
+                payload={}
+                try: payload=json.loads(row["payload_json"] or "{}")
+                except Exception: payload={}
+                asset_name="final.mp4" if str(payload.get("asset") or "final")=="final" else safe_name(str(payload.get("asset")))
+                if not asset_name.endswith(".mp4"): asset_name += ".mp4"
+                video=_project_dir(pid)/Path(asset_name).name
+                if not video.exists():
+                    raise RuntimeError("scheduled video asset not found")
+                result=p.get("result_json") if isinstance(p.get("result_json"),dict) else json.loads(p.get("result_json") or "{}")
+                meta={
+                    "project_id":pid,
+                    "title":result.get("title") or p.get("title"),
+                    "description":payload.get("description") or result.get("title") or p.get("title"),
+                    "tags":payload.get("tags") or [],
+                    "category_id":payload.get("category_id") or "22",
+                    "privacy_status":payload.get("privacy_status") or "private",
+                }
+                if provider=="youtube":
+                    out=youtube_upload(uid_,video,meta)
+                elif provider=="webhook":
+                    out=webhook_publish(uid_,video,meta)
+                else:
+                    out={"status":"failed","provider":provider,"error":"unsupported publishing destination","truthful":True}
+                status=str(out.get("status") or "failed")
+                pub_id=uid("pub")
+                with DB_LOCK, _connect() as c:
+                    c.execute(
+                        "INSERT INTO studio_publications_3610(publication_id,project_id,user_id,provider,status,external_url,response_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                        (pub_id,pid,uid_,provider,status,out.get("url"),jdump(redact(out)),now(),now())
+                    )
+                    c.execute(
+                        "UPDATE studio_calendar_3618 SET status=?,payload_json=?,updated_at=? WHERE schedule_id=?",
+                        ("published" if status in {"published","submitted"} else "failed",
+                         jdump({"scheduled":True,"result":redact(out),"original":payload}),now(),sid)
+                    )
+                audit_event(pid,"scheduled_publish_completed",{"schedule_id":sid,"provider":provider,"status":status,"publication_id":pub_id})
+            except Exception as exc:
+                with DB_LOCK, _connect() as c:
+                    c.execute(
+                        "UPDATE studio_calendar_3618 SET status='failed',payload_json=?,updated_at=? WHERE schedule_id=?",
+                        (jdump({"scheduled":True,"error":str(exc)[:800]}),now(),sid)
+                    )
+                audit_event(pid,"scheduled_publish_failed",{"schedule_id":sid,"provider":provider,"error":str(exc)[:800]})
+        STOP.wait(2.0)
+
+
+def _ensure_scheduler() -> None:
+    global SCHEDULER_STARTED
+    with SCHEDULER_GUARD:
+        if SCHEDULER_STARTED:
+            return
+        SCHEDULER_STARTED = True
+        t=threading.Thread(target=scheduled_publish_loop,name="ai-infinity-publish-scheduler",daemon=True)
         t.start()
 
 
@@ -4209,6 +4299,7 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
     app.state.creator_studio_version = VERSION
     app.state.creator_studio_ui = CREATOR_STUDIO_UI
     _ensure_worker(model_fn)
+    _ensure_scheduler()
 
 
 def _project_list(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
