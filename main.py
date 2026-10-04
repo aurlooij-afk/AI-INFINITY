@@ -14913,6 +14913,80 @@ from infinity_empire import register as _register_infinity_empire
 _register_infinity_empire(app, model_fn=_2700_model)
 # Make the creator studio the canonical website without removing historical APIs.
 FINAL_INFINITY_UI = _CREATOR_STUDIO_UI_3619
+
+# TARGET-2050.3625 — INFINITY CREATOR PRO SUITE
+# A single-interface capability layer inspired by strong real creator workflows:
+# content operations, AI creation, editing, repurposing, publishing, brand
+# systems, approvals, analytics, collaboration, localization and assets.
+# It routes into existing production APIs; unavailable external providers are
+# never simulated as active.
+_CREATOR_PRO_SUITE = r"""<style>
+#infinity-pro-launch{position:fixed;right:20px;bottom:76px;z-index:100000;border:1px solid #334155;background:linear-gradient(135deg,#111827,#172033);color:#f8fafc;padding:12px 16px;border-radius:999px;font:800 13px system-ui;box-shadow:0 18px 50px #0008;cursor:pointer}
+#infinity-pro-drawer{position:fixed;inset:0;z-index:99999;display:none;background:#05070bd9;backdrop-filter:blur(14px)}
+#infinity-pro-drawer.open{display:flex;align-items:stretch;justify-content:flex-end}
+.ip-panel{width:min(760px,96vw);height:100%;overflow:auto;background:#0a0f18;border-left:1px solid #263143;box-shadow:-30px 0 80px #0008;padding:22px;color:#f8fafc;font:14px/1.45 system-ui}
+.ip-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.ip-head h2{margin:0;font-size:24px}.ip-muted{color:#94a3b8}.ip-close{border:1px solid #334155;background:#111827;color:#fff;border-radius:10px;padding:8px 11px;cursor:pointer}
+.ip-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:16px}.ip-card{border:1px solid #263143;border-radius:14px;background:#0e1520;padding:13px;cursor:pointer}.ip-card:hover{border-color:#64748b;transform:translateY(-1px)}.ip-card b{display:block}.ip-card span{display:block;color:#94a3b8;font-size:12px;margin-top:4px}
+.ip-toolbar{display:flex;flex-wrap:wrap;gap:7px;margin:15px 0}.ip-btn{border:1px solid #334155;background:#111827;color:#f8fafc;border-radius:9px;padding:9px 11px;cursor:pointer}.ip-btn.primary{background:#315c47;border-color:#4ade80}.ip-out{white-space:pre-wrap;background:#070b11;border:1px solid #202a38;border-radius:12px;padding:12px;min-height:70px;max-height:360px;overflow:auto;margin-top:12px}.ip-command{width:100%;min-height:100px;background:#070b11;color:#fff;border:1px solid #334155;border-radius:12px;padding:12px;resize:vertical}
+.ip-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}.ip-chip{border:1px solid #334155;border-radius:999px;padding:5px 9px;color:#cbd5e1;background:#0b111a;cursor:pointer}
+@media(max-width:650px){#infinity-pro-launch{right:12px;bottom:70px}.ip-panel{padding:15px}.ip-grid{grid-template-columns:1fr}}
+</style>
+<button id="infinity-pro-launch" type="button">∞ PRO CREATOR SUITE</button>
+<div id="infinity-pro-drawer" aria-hidden="true">
+<section class="ip-panel">
+<div class="ip-head"><div><div class="ip-muted">AI INFINITY · CREATOR OS</div><h2>Professional production command center</h2><div class="ip-muted">One workspace for idea → production → repurpose → publish → learn.</div></div><button class="ip-close" id="ip-close">Close</button></div>
+<div class="ip-toolbar">
+<button class="ip-btn primary" data-ip="create">Create</button><button class="ip-btn" data-ip="edit">Edit & QC</button><button class="ip-btn" data-ip="repurpose">Repurpose</button><button class="ip-btn" data-ip="publish">Publish</button><button class="ip-btn" data-ip="intel">Intelligence</button><button class="ip-btn" data-ip="brand">Brand</button><button class="ip-btn" data-ip="team">Team & Review</button><button class="ip-btn" data-ip="library">Assets</button>
+</div>
+<div class="ip-grid">
+<div class="ip-card" data-ip="create"><b>⚡ AI Production</b><span>Research, story, script, visuals, voice, music, captions, edit, thumbnail, QC.</span></div>
+<div class="ip-card" data-ip="edit"><b>🎬 Pro Edit System</b><span>Timeline, variants, captions, aspect ratios, audio, integrity and review.</span></div>
+<div class="ip-card" data-ip="repurpose"><b>✂ Repurpose Factory</b><span>Turn one master into Shorts/Reels/TikTok/LinkedIn/X and platform variants.</span></div>
+<div class="ip-card" data-ip="publish"><b>🚀 Distribution</b><span>Calendar, platform packaging, connected destinations, receipts and verification.</span></div>
+<div class="ip-card" data-ip="intel"><b>🧠 Creator Intelligence</b><span>Research, trends, analytics, learning, performance and strategy loops.</span></div>
+<div class="ip-card" data-ip="brand"><b>◈ Brand System</b><span>Voice, audience, visual direction, templates, CTA, assets and consistency.</span></div>
+<div class="ip-card" data-ip="team"><b>✓ Review & Collaboration</b><span>Approvals, revision boundaries, audit trail, feedback and production ownership.</span></div>
+<div class="ip-card" data-ip="library"><b>▦ Asset Library</b><span>Project artifacts, source records, templates, outputs and downloadable packages.</span></div>
+</div>
+<div class="ip-toolbar">
+<button class="ip-btn" data-api="/infinity/studio/features">100+ capabilities</button><button class="ip-btn" data-api="/infinity/studio/templates">Templates</button><button class="ip-btn" data-api="/infinity/studio/library">Library</button><button class="ip-btn" data-api="/infinity/studio/calendar">Calendar</button><button class="ip-btn" data-api="/infinity/studio/analytics">Analytics</button><button class="ip-btn" data-api="/infinity/studio/learning">Learning</button><button class="ip-btn" data-api="/infinity/studio/connections">Connections</button><button class="ip-btn" data-api="/infinity/studio/organization">Operations</button>
+</div>
+<div><div class="ip-muted">DIRECTOR COMMAND</div>
+<textarea id="ip-command" class="ip-command" placeholder="Example: Make a 45-second vertical launch video from this product brief, create 5 platform variants, caption it, generate a thumbnail, prepare SEO/social copy, run QC and package everything."></textarea>
+<div class="ip-chips"><button class="ip-chip" data-fill="Create a publication-ready 60-second 9:16 vertical video with research, script, visuals, narration, captions, thumbnail, SEO and five social variants.">60s vertical</button><button class="ip-chip" data-fill="Turn this long-form video into 5 high-retention Shorts/Reels/TikToks with captions, hooks, titles and platform-specific copy.">Repurpose</button><button class="ip-chip" data-fill="Translate this production into English, Arabic, Dari and Pashto with localized captions and narration while preserving brand voice.">Localize</button><button class="ip-chip" data-fill="Audit this project for factual accuracy, rights, audio, pacing, captions, framing, spelling, accessibility and export integrity; fix what can be fixed automatically.">Full QC</button></div>
+<button class="ip-btn primary" id="ip-run" style="margin-top:10px">Run production command</button></div>
+<div id="ip-out" class="ip-out">Ready. This panel exposes existing AI Infinity production capabilities; it does not fake external integrations.</div>
+</section></div>
+<script>
+(function(){
+const $=id=>document.getElementById(id),drawer=$("infinity-pro-drawer"),out=$("ip-out");
+function open(){drawer.classList.add("open");drawer.setAttribute("aria-hidden","false")}
+function close(){drawer.classList.remove("open");drawer.setAttribute("aria-hidden","true")}
+$("infinity-pro-launch").onclick=open;$("ip-close").onclick=close;drawer.addEventListener("click",e=>{if(e.target===drawer)close()});
+document.addEventListener("keydown",e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="k"){e.preventDefault();open();$("ip-command").focus()}});
+async function api(url,opts){const r=await fetch(url,opts||{}),t=await r.text();let j;try{j=JSON.parse(t)}catch{j={raw:t}}if(!r.ok)throw Error(j.detail||j.error||"Request failed");return j}
+function show(x){out.textContent=typeof x==="string"?x:JSON.stringify(x,null,2)}
+async function load(url){try{show(await api(url))}catch(e){show("Unavailable: "+e.message)}}
+document.querySelectorAll("[data-api]").forEach(b=>b.onclick=()=>load(b.dataset.api));
+document.querySelectorAll("[data-fill]").forEach(b=>b.onclick=()=>{$("ip-command").value=b.dataset.fill;$("ip-command").focus()});
+document.querySelectorAll("[data-ip]").forEach(b=>b.onclick=()=>{const m=b.dataset.ip;const p={
+create:"Create a complete professional content production from this brief. Research it, develop the creative direction, script, scene plan, visuals, narration, music/SFX, captions, thumbnail, SEO, platform copy, QC and final package.",
+edit:"Review the current project as a professional editor. Improve pacing, framing, transitions, audio, captions, spelling, accessibility and export integrity; preserve approved facts and brand.",
+repurpose:"Repurpose the current master into platform-native short videos, social posts, hooks, captions, titles, thumbnails and descriptions for YouTube Shorts, Instagram Reels, TikTok, LinkedIn and X.",
+publish:"Prepare the current approved project for publication: validate platform requirements, create per-platform metadata, schedule where configured, and return an honest publication readiness report.",
+intel:"Research the topic and current audience signals, compare credible sources, extract hooks and content opportunities, then propose a production strategy without fabricating evidence.",
+brand:"Apply the creator's brand voice, audience, visual system, CTA, language and reusable templates consistently across every deliverable.",
+team:"Run preflight, approvals, revision boundaries, audit logging and final review; show exactly what is ready, blocked or needs human approval.",
+library:"Inspect project artifacts, source records, templates and output packages; surface the latest usable assets and integrity status."
+};$("ip-command").value=p[m]||p.create;$("ip-command").focus();show("Command prepared. Add your brief/context, then run it.")});
+$("ip-run").onclick=async()=>{const command=$("ip-command").value.trim();if(!command){show("Enter a creator command first.");return}show("Starting…");try{const j=await api("/infinity/studio/creator-os/command",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({command,brief:command,channels:["YouTube","Instagram","TikTok","LinkedIn","X"],format:"professional content"})});try{const title=j.title||"AI Infinity production";const v=/vertical|reel|short|tiktok/i.test(command),dm=command.match(/(\d+)\s*(?:-|\s)?second/i);const p=await api("/infinity/studio/project",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({title,objective:command,topic:command,format:v?"short":"long",duration:dm?Math.min(3600,Math.max(20,parseInt(dm[1],10))):60,content_type:/podcast/i.test(command)?"podcast":/article|blog/i.test(command)?"article":"video",audience:"target audience",tone:"professional, premium, clear",language:"English",platforms:["YouTube","Instagram","TikTok","LinkedIn","X"],brand_voice:"professional",visual_style:"premium editorial",call_to_action:"follow for more",quality_preset:"balanced",aspect_ratio:v?"9:16":"16:9",notes:"Started from Infinity Pro Creator Suite command."})});show({creator_os:j,production:p})}catch(e){show({creator_os:j,production_error:e.message})}}catch(e){show("Could not start command: "+e.message)}};
+})();
+</script>""";
+try:
+    if '</body>' in FINAL_INFINITY_UI:
+        FINAL_INFINITY_UI = FINAL_INFINITY_UI.replace('</body>', _CREATOR_PRO_SUITE + '</body>', 1)
+except Exception:
+    pass
 try:
     _creator_os_launch = '<a id="creator-os-launch" href="/infinity/studio/creator-os/ui" style="position:fixed;right:18px;bottom:18px;z-index:99999;padding:12px 16px;border-radius:999px;background:#276b4c;color:#fff;text-decoration:none;font:700 13px system-ui;box-shadow:0 10px 30px #0006">🛡 Creator OS · Reality Shield</a>'
     if '</body>' in FINAL_INFINITY_UI:
