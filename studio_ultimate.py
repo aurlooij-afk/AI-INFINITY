@@ -3526,6 +3526,74 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         publication_counts=[dict(r) for r in pubs]
         return {"workspace":"AI Infinity Creator Production Organization","projects":status_counts,"assets":int(assets),"verified_artifacts":int(artifacts),"publications":publication_counts,"capabilities":studio_health(),"truthful":True}
 
+    @app.post("/infinity/studio/project/{project_id}/edit")
+    async def precision_edit(project_id: str, request: Request, response: Response):
+        user_id=_get_user_id(request); _set_session(response,request,user_id)
+        p=_get_project(project_id)
+        if not p or p.get("user_id")!=user_id: raise HTTPException(404,"project not found")
+        if p.get("status") not in {"completed","completed_with_qc_warnings"}: raise HTTPException(409,"project master is not ready")
+        payload=await request.json()
+        master=_project_dir(project_id)/"final.mp4"
+        if not master.exists(): raise HTTPException(404,"final master not found")
+        try: trim_start=max(0.0,float(payload.get("trim_start") or 0))
+        except Exception: trim_start=0.0
+        try: trim_end=max(0.0,float(payload.get("trim_end") or 0))
+        except Exception: trim_end=0.0
+        try: speed=min(2.0,max(0.5,float(payload.get("speed") or 1)))
+        except Exception: speed=1.0
+        ratio=str(payload.get("aspect_ratio") or "original")
+        allowed_ratios={
+            "16:9":(1920,1080),"9:16":(1080,1920),"1:1":(1080,1080),"4:5":(1080,1350)
+        }
+        try: gain=min(3.0,max(0.0,float(payload.get("audio_gain") or 1)))
+        except Exception: gain=1.0
+        mute=bool(payload.get("mute"))
+        burn=bool(payload.get("burn_captions"))
+        duration=probe_duration(master)
+        if trim_start+trim_end>=max(1.0,duration): raise HTTPException(422,"trim range removes the entire master")
+        out=_project_dir(project_id)/(f"edit_{int(now())}_{uuid.uuid4().hex[:6]}.mp4")
+        vf=[]
+        if ratio in allowed_ratios:
+            w,h=allowed_ratios[ratio]
+            vf.append(f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}")
+        if speed!=1.0: vf.append(f"setpts={1.0/speed:.8f}*PTS")
+        if burn:
+            caps=_project_dir(project_id)/"captions.srt"
+            if caps.exists():
+                sub=str(caps).replace("\\","/").replace(":","\\:")
+                vf.append(f"subtitles={sub}:force_style='FontName=DejaVu Sans,FontSize=18,Outline=2,Shadow=1,MarginV=48,Alignment=2'")
+        af=[]
+        if mute or gain!=1.0: af.append(f"volume={0 if mute else gain}")
+        atempo=[]
+        if speed!=1.0:
+            remain=speed
+            # ffmpeg atempo accepts 0.5–2.0 per stage; chain when needed.
+            while remain<0.5: atempo.append("atempo=0.5"); remain/=0.5
+            while remain>2.0: atempo.append("atempo=2.0"); remain/=2.0
+            atempo.append(f"atempo={remain:.8f}")
+        af.extend(atempo)
+        args=[]
+        if trim_start>0: args += ["-ss",trim_start]
+        args += ["-i",master]
+        if trim_start+trim_end<duration:
+            args += ["-t",max(0.1,(duration-trim_start-trim_end)/speed)]
+        if vf: args += ["-vf",",".join(vf)]
+        if af: args += ["-af",",".join(af)]
+        args += ["-map","0:v:0","-map","0:a?","-c:v","libx264","-preset",os.getenv("AI_INFINITY_VIDEO_PRESET","veryfast"),"-crf","19","-pix_fmt","yuv420p","-c:a","aac","-b:a","192k","-movflags","+faststart",out]
+        audit_event(project_id,"precision_edit_started",{"trim_start":trim_start,"trim_end":trim_end,"speed":speed,"aspect_ratio":ratio,"mute":mute,"audio_gain":gain,"burn_captions":burn})
+        try:
+            ffmpeg(*args,timeout=900)
+        except Exception as exc:
+            try: out.unlink(missing_ok=True)
+            except Exception: pass
+            audit_event(project_id,"precision_edit_failed",{"error":str(exc)[:500]})
+            raise HTTPException(500,"edit failed: "+str(exc)[:300])
+        meta={"source":"final.mp4","trim_start":trim_start,"trim_end":trim_end,"speed":speed,"aspect_ratio":ratio,"mute":mute,"audio_gain":gain,"burn_captions":burn}
+        _save_asset(project_id,"edit",out,"video/mp4",meta)
+        art=register_artifact(project_id,out,"video/mp4",meta)
+        audit_event(project_id,"precision_edit_completed",{"asset":out.name,"sha256":art.get("sha256")})
+        return {"status":"completed","project_id":project_id,"asset_name":out.name,"download_url":f"/infinity/studio/project/{project_id}/asset/{quote(out.name)}","metadata":meta,"sha256":art.get("sha256"),"truthful":True}
+
     @app.get("/infinity/studio/project/{project_id}/verify")
     def verify_project(project_id: str, request: Request, response: Response):
         user_id=_get_user_id(request); _set_session(response,request,user_id); p=_get_project(project_id)
