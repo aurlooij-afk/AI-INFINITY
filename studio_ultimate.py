@@ -2521,6 +2521,15 @@ boot();
 
 
 
+# 2030-style Creator OS surface is kept as a separate static artifact so the
+# interface can evolve without destabilizing the production engine.
+_CREATOR_2030_UI_PATH = Path(__file__).with_name("creator_studio_2030.html")
+try:
+    CREATOR_STUDIO_2030_UI = _CREATOR_2030_UI_PATH.read_text(encoding="utf-8")
+except Exception:
+    CREATOR_STUDIO_2030_UI = CREATOR_STUDIO_UI
+
+
 def _creator_profile(user_id: str) -> Dict[str, Any]:
     with DB_LOCK, _connect() as c:
         row = c.execute("SELECT profile_json FROM studio_creator_profiles_3612 WHERE user_id=?", (user_id,)).fetchone()
@@ -2826,11 +2835,11 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
 
     @app.get("/studio", response_class=__import__("fastapi.responses", fromlist=["HTMLResponse"]).HTMLResponse)
     def studio_ui():
-        return CREATOR_STUDIO_UI
+        return CREATOR_STUDIO_2030_UI
 
     @app.get("/infinity/studio", response_class=__import__("fastapi.responses", fromlist=["HTMLResponse"]).HTMLResponse)
     def studio_ui2():
-        return CREATOR_STUDIO_UI
+        return CREATOR_STUDIO_2030_UI
 
     @app.get("/infinity/studio/session")
     def studio_session(request: Request, response: Response):
