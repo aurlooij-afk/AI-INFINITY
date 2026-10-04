@@ -11,4 +11,4 @@ requests>=2.32,<3
 python-multipart>=0.0.20,<1
 pypdf>=6,<7
 python-docx>=1.2,<2
-httpx>=0.28,<1
+httpx2>=2,<3
