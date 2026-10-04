@@ -30,6 +30,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install runtime dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg espeak-ng
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
       - name: Compile all runtime Python modules
