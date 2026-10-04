@@ -2698,12 +2698,36 @@ AGENT_CATALOG_3621 = [
     {"id":"monetization","name":"Monetization Agent","icon":"$","description":"Tracks real opportunities, offers, orders and verified earnings without fabricating income.","capabilities":["offers","opportunities","earnings"],"mode":"truth-first","enabled":True},
 ]
 
+
+CREATOR_2026_BENCHMARKS = [
+    {"id":"2026-agentic-orchestration","name":"Agentic Creative Orchestration","category":"2026 Benchmark","capability":"One natural-language outcome can select and coordinate research, writing, media, editing, packaging and delivery stages.","status":"implemented"},
+    {"id":"2026-web-to-video","name":"Website-to-Video","category":"2026 Benchmark","capability":"Ingest public HTTPS reference URLs as source context and turn them into a tracked production workflow.","status":"implemented"},
+    {"id":"2026-document-to-content","name":"Document-to-Video / Podcast","category":"2026 Benchmark","capability":"Use document or web references as production context for video, article and podcast workflows.","status":"implemented"},
+    {"id":"2026-brand-memory","name":"Persistent Brand Memory","category":"2026 Benchmark","capability":"Reuse creator profile, brand voice, audience, visual direction, CTA and learning context across productions.","status":"implemented"},
+    {"id":"2026-batch-repurpose","name":"Batch Repurpose","category":"2026 Benchmark","capability":"Derive shorts, platform copy, metadata and delivery variants from the same master production.","status":"implemented"},
+    {"id":"2026-transcript-editing","name":"Transcript-First Editing","category":"2026 Benchmark","capability":"Script, narration, captions and scene metadata remain linked so text changes can drive the production graph.","status":"implemented"},
+    {"id":"2026-caption-pipeline","name":"Caption Intelligence","category":"2026 Benchmark","capability":"Generate, time, validate and package captions with accessibility metadata.","status":"implemented"},
+    {"id":"2026-beat-sync","name":"Beat-Sync Production","category":"2026 Benchmark","capability":"Music-aware pacing is represented in the production graph and can be routed to a connected beat-analysis provider.","status":"adapter-ready"},
+    {"id":"2026-multilingual-dubbing","name":"Multilingual Dubbing","category":"2026 Benchmark","capability":"Multilingual narration/caption workflows are supported; performance-preserving external dubbing requires a connected dubbing provider.","status":"adapter-ready"},
+    {"id":"2026-avatar-presenter","name":"Avatar Presenter","category":"2026 Benchmark","capability":"Presenter/avatar productions can be routed through a configured avatar provider without pretending an unavailable provider is active.","status":"adapter-dependent"},
+    {"id":"2026-live-avatar","name":"Live Avatar","category":"2026 Benchmark","capability":"Live conversational avatars require an authorized realtime avatar provider/API.","status":"adapter-dependent"},
+    {"id":"2026-layered-design","name":"Layered Editable Design","category":"2026 Benchmark","capability":"Structured design metadata, templates and reusable assets are first-class; full proprietary layered-canvas generation requires a visual design engine adapter.","status":"adapter-ready"},
+    {"id":"2026-interactive-html","name":"Interactive / HTML Experiences","category":"2026 Benchmark","capability":"Interactive creative experiences can be specified through the creative tooling layer; live hosted execution requires a configured renderer.","status":"extensible"},
+    {"id":"2026-cloud-render","name":"Cloud Render Adapter","category":"2026 Benchmark","capability":"The production graph supports external cloud rendering while retaining the local FFmpeg renderer as the default free-first path.","status":"adapter-ready"},
+]
+
 MULTIMODAL_TOOLS_3621 = [
     {"id":"video","name":"AI Video","icon":"▶","action":"video","description":"Long-form and short-form video production from one command.","status":"ready"},
     {"id":"image","name":"AI Images","icon":"▣","action":"image","description":"Storyboard/thumbnail/visual asset workflow with free-first routing.","status":"ready"},
     {"id":"voice","name":"Voice & TTS","icon":"◌","action":"voice","description":"Narration and voice production using local/public providers.","status":"ready"},
     {"id":"text","name":"AI Writer","icon":"✎","action":"article","description":"Scripts, articles, briefs, social copy and editorial packages.","status":"ready"},
     {"id":"music","name":"Music & Sound","icon":"♫","action":"audio","description":"Music, SFX, mastering and podcast-ready audio layers.","status":"ready"},
+    {"id":"web-to-video","name":"Website → Video","icon":"↗","action":"video","description":"Turn a public web reference into a researched, production-ready video workflow.","status":"ready"},
+    {"id":"document-to-show","name":"Document → Show","icon":"▤","action":"podcast","description":"Turn a public document/reference into a video or podcast package.","status":"ready"},
+    {"id":"repurpose","name":"Repurpose Factory","icon":"✂","action":"variants","description":"Generate platform-native short variants, hooks and campaign copy from a master brief.","status":"ready"},
+    {"id":"dubbing","name":"Dubbing & Localization","icon":"文","action":"dubbing","description":"Multilingual localization workflow with provider adapters for performance-preserving dubbing.","status":"adapter-ready"},
+    {"id":"avatar","name":"Avatar Presenter","icon":"◉","action":"avatar","description":"Presenter/avatar workflow with authorized provider adapters.","status":"adapter-dependent"},
+    {"id":"interactive","name":"Interactive / HTML","icon":"◇","action":"interactive","description":"Interactive creative specification and renderer adapter workflow.","status":"extensible"},
     {"id":"three-d","name":"3D / Motion","icon":"◇","action":"motion","description":"3D/motion workflow planning and extensible provider routing.","status":"extensible"},
     {"id":"code","name":"Code Assistant","icon":"⌘","action":"code","description":"Creative tooling and workflow specifications, without arbitrary server code execution.","status":"extensible"},
 ]
@@ -2773,6 +2797,7 @@ def _site_manifest_3621(user_id: str) -> Dict[str, Any]:
         "production_flow": PRODUCTION_FLOW_3621,
         "monetization_lanes": MONETIZATION_LANES_3621,
         "advanced_features": ADVANCED_FEATURES_3621,
+        "benchmarks_2026": CREATOR_2026_BENCHMARKS,
         "cloud_infrastructure": CLOUD_INFRASTRUCTURE_3621,
         "ecosystem_verticals": ECOSYSTEM_VERTICALS_3621,
         "core_features": len(CREATOR_100_FEATURES),
@@ -2922,7 +2947,8 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
             "website_ecosystem": True, "website_modules": len(SITE_MODULES_3621),
             "ai_agents": len(AGENT_CATALOG_3621), "multimodal_tools": len(MULTIMODAL_TOOLS_3621),
             "production_flow_steps": len(PRODUCTION_FLOW_3621), "marketplace": True, "community_workspace": True,
-            "advanced_creator_features": len(ADVANCED_FEATURES_3621), "ecosystem_verticals": len(ECOSYSTEM_VERTICALS_3621),
+            "advanced_creator_features": len(ADVANCED_FEATURES_3621),
+            "benchmarks_2026": len(CREATOR_2026_BENCHMARKS), "ecosystem_verticals": len(ECOSYSTEM_VERTICALS_3621),
             "cloud_infrastructure_items": len(CLOUD_INFRASTRUCTURE_3621),
             "analytics_workspace": True, "business_monetization_workspace": True, "security_center": True,
             "plans_workspace": True, "mobile_app_module": False,
@@ -3341,7 +3367,7 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
     def creator_features(request: Request, response: Response):
         user_id = _get_user_id(request); _set_session(response, request, user_id)
         features=_feature_catalog(user_id)
-        return {"version":VERSION,"core_count":len(CREATOR_100_FEATURES),"custom_count":len(features)-len(CREATOR_100_FEATURES),"count":len(features),"features":features,"selected_by_default":[x["id"] for x in CREATOR_100_FEATURES],"extensible":True,"truthful":True}
+        return {"version":VERSION,"core_count":len(CREATOR_100_FEATURES),"custom_count":len(features)-len(CREATOR_100_FEATURES),"count":len(features),"features":features,"benchmarks_2026":CREATOR_2026_BENCHMARKS,"selected_by_default":[x["id"] for x in CREATOR_100_FEATURES],"extensible":True,"truthful":True}
 
     @app.get("/infinity/studio/features/{feature_id}")
     def creator_feature(feature_id: str, request: Request, response: Response):
@@ -3381,6 +3407,16 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
     def site_manifest_3621(request: Request, response: Response):
         user_id=_get_user_id(request); _set_session(response,request,user_id)
         return _site_manifest_3621(user_id)
+
+    @app.get("/infinity/studio/benchmarks")
+    def creator_benchmarks_2026(request: Request, response: Response):
+        user_id=_get_user_id(request); _set_session(response,request,user_id)
+        return {
+            "version":VERSION,
+            "benchmarks":CREATOR_2026_BENCHMARKS,
+            "provider_truth":"adapter-dependent capabilities are never marked as live without a configured provider",
+            "truthful":True
+        }
 
     @app.get("/infinity/studio/agents")
     def agents_3621(request: Request, response: Response):
