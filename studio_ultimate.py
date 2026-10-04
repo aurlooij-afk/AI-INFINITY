@@ -1768,6 +1768,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 _stage(project_id, "visuals_and_voice_resume", 22 + (i-1) / max(1, len(chapters) * 2) * 36, current_scene=i)
                 continue
             _stage(project_id, "visuals_and_voice", 22 + (i-1) / max(1, len(chapters) * 2) * 36, current_scene=i)
+            audit_event(project_id, "scene_started", {"scene": i, "total_scenes": len(chapters)})
             # Voice is measured first so every visual and caption is tied to real speech duration.
             voice, provider, voice_duration = tts(str(ch.get("narration") or ""), outdir, i, str(req.get("voice") or "en-US-AriaNeural"))
             voice_provider = voice_provider or provider
@@ -1781,6 +1782,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             _render_scene(asset, voice, shared_music, sfx, ch["actual_duration"], mixed, str(ch.get("on_screen") or ch.get("heading") or topic), str(req.get("aspect_ratio") or "16:9"))
             scene_paths.append(mixed)
             checkpoint(project_id, f"scene_{i:04d}", {"scene":i,"path":str(mixed),"sha256":file_sha256(mixed) if mixed.exists() else None,"duration":ch.get("actual_duration"),"voice_provider":provider,"asset":redact({k:v for k,v in asset.items() if k != "path"})})
+            audit_event(project_id, "scene_completed", {"scene": i, "duration": ch.get("actual_duration"), "asset_source": asset.get("source"), "asset_kind": asset.get("kind")})
             _update_project(project_id, current_scene=i)
 
         if not scene_paths:
