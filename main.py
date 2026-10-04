@@ -372,7 +372,15 @@ class RunRequest(BaseModel):
 
 @app.get("/", response_class=HTMLResponse)
 def root():
-    return FINAL_INFINITY_UI
+    # Render currently invokes the canonical main:app command. Serve the same
+    # professional Creator Studio here so there is exactly one public website
+    # interface regardless of which backend entrypoint is selected.
+    try:
+        from studio_ultimate import CREATOR_STUDIO_2030_UI
+        return CREATOR_STUDIO_2030_UI
+    except Exception:
+        return FINAL_INFINITY_UI
+
 
 @app.get("/health")
 def health():
