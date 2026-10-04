@@ -62,7 +62,7 @@ services:
       - key: AI_INFINITY_FAST_MODE
         value: "1"
       - key: AI_INFINITY_EDGE_TTS_TIMEOUT
-        value: "2"
+        value: "15"
       - key: AI_INFINITY_AI_VIDEO
         value: "0"
       - key: AI_INFINITY_AI_VIDEO_SCENES
