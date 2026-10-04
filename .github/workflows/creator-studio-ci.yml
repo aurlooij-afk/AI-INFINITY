@@ -37,6 +37,19 @@ jobs:
           set -euo pipefail
           python -m py_compile main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py
           echo "Python syntax checks passed."
+      - name: Parse Creator Studio browser JavaScript
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          html=Path("creator_studio_2030.html").read_text(encoding="utf-8")
+          scripts=re.findall(r"<script[^>]*>([\\s\\S]*?)</script>", html, flags=re.I)
+          Path("/tmp/creator-studio.js").write_text("\n".join(scripts),encoding="utf-8")
+          if not scripts:
+              raise SystemExit("No Creator Studio script found")
+          print("Extracted", len(scripts), "browser script block(s).")
+          PY
+          node --check /tmp/creator-studio.js
       - name: Instantiate and smoke-test the unified app
         run: |
           set -euo pipefail
