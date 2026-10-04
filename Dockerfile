@@ -22,11 +22,9 @@ RUN python -m pip install --upgrade pip \
 
 COPY main.py foundation.py
 COPY studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_studio_2030.html creator_entrypoint.py creator_pro_os.py ./
-COPY runtime_main_3700.py .
-COPY runtime_main_3700.py main.py
-COPY ui_3700.html backend_3700_01.part backend_3700_02.part backend_3700_03.part ./
+COPY runtime_main_3700.py overlay_final_3700.py ui_3700.html ./
 
-RUN python -m py_compile foundation.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py runtime_main_3700.py main.py
+RUN python -m py_compile foundation.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py runtime_main_3700.py overlay_final_3700.py main.py
 
 RUN mkdir -p /tmp/ai-infinity
 EXPOSE 10000
