@@ -255,8 +255,30 @@ def register_pro(app: Any) -> None:
             data = read_json_file(path)
         else:
             b = project_blueprint(p)
-            plan = b.get("plan") if isinstance(b.get("plan"), dict) else b
-            chapters = (plan or {}).get("chapters") if isinstance(plan, dict) else []
+            # Accept all blueprint shapes used across the historical Creator
+            # builds: top-level chapters, plan.chapters, result.plan.chapters,
+            # and a serialized result/blueprint object.
+            candidates = []
+            if isinstance(b, dict):
+                candidates.append(b)
+                if isinstance(b.get("plan"), dict):
+                    candidates.append(b.get("plan"))
+            result_raw = p.get("result_json")
+            if isinstance(result_raw, str):
+                try:
+                    result_raw = json.loads(result_raw)
+                except Exception:
+                    result_raw = {}
+            if isinstance(result_raw, dict):
+                candidates.append(result_raw)
+                if isinstance(result_raw.get("plan"), dict):
+                    candidates.append(result_raw.get("plan"))
+            chapters = []
+            for candidate in candidates:
+                if isinstance(candidate, dict) and isinstance(candidate.get("chapters"), list):
+                    chapters = candidate.get("chapters") or []
+                    if chapters:
+                        break
             data = {
                 "project_id": project_id,
                 "title": p.get("title") or "",
