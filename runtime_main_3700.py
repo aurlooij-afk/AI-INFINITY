@@ -3,12 +3,10 @@ from pathlib import Path
 
 foundation = importlib.import_module("foundation")
 BASE = Path(__file__).resolve().parent
-
 foundation.FINAL3700_UI = (BASE / "ui_3700.html").read_text(encoding="utf-8")
-overlay = "".join((BASE / name).read_text(encoding="utf-8") for name in (
-    "backend_3700_01.part", "backend_3700_02.part", "backend_3700_03.part"
-))
-exec(compile(overlay, str(BASE / "backend_3700_overlay.py"), "exec"), foundation.__dict__)
+overlay = (BASE / "overlay_final_3700.py").read_text(encoding="utf-8")
+overlay = overlay.replace('uid("project")', 'os.urandom(8).hex()').replace('uid("publish")', 'os.urandom(8).hex()')
+exec(compile("import os\n" + overlay, str(BASE / "overlay_final_3700.py"), "exec"), foundation.__dict__)
 
 def _canonical_root():
     return foundation.HTMLResponse(foundation.FINAL3700_UI)
@@ -21,5 +19,4 @@ for route in foundation.app.router.routes:
 foundation.app.title = "AI Infinity"
 foundation.app.version = "TARGET-2050.3700"
 foundation.app.state.ai_infinity_3700 = True
-
 app = foundation.app
