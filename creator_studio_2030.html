@@ -175,7 +175,7 @@ var bootstrapState=null;
 var featureCatalog=[];
 
 function $(id){return document.getElementById(id)}
-function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;","'":"&#39;"}[c]})}
+function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 async function api(url,opts){
   var r=await fetch(url,Object.assign({credentials:"same-origin",headers:{}},opts||{}));
   var txt=await r.text(), j=null;
