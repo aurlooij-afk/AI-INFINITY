@@ -1,3 +1,4 @@
+# Canonical production gate: every push validates main:app and real media execution.
 name: Creator Studio Build Guard
 
 on:
