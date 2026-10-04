@@ -3255,6 +3255,12 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
             "api_fabric_capacity": API_FABRIC_CAPACITY, "automatic_free_failover": True,
         }
 
+    @app.get("/")
+    @app.get("/home")
+    def creator_home(request: Request, response: Response):
+        user_id=_get_user_id(request); _set_session(response,request,user_id)
+        return __import__("fastapi.responses", fromlist=["HTMLResponse"]).HTMLResponse(CREATOR_STUDIO_2030_UI)
+
     @app.get("/studio", response_class=__import__("fastapi.responses", fromlist=["HTMLResponse"]).HTMLResponse)
     def studio_ui():
         return CREATOR_STUDIO_2030_UI
