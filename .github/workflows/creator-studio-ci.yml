@@ -51,9 +51,13 @@ jobs:
           PY
           node --check /tmp/creator-studio.js
       - name: Instantiate and smoke-test the unified app
+        env:
+          AI_INFINITY_STUDIO_SMOKE: "1"
+          AI_INFINITY_DATA_DIR: "/tmp/ai-infinity-ci-smoke"
+          AI_INFINITY_FAST_MODE: "1"
         run: |
           set -euo pipefail
-          python - <<'PY'
+          python - <<'PY
           import main
           import creator_entrypoint
           from fastapi.testclient import TestClient
@@ -72,6 +76,10 @@ jobs:
               "/infinity/studio/projects",
               "/infinity/studio/workspace/export",
               "/infinity/studio/workspace/backup",
+              "/infinity/studio/creator-pro",
+              "/infinity/studio/open-source",
+              "/infinity/studio/project/{project_id}/storyboard/apply",
+              "/infinity/studio/project/{project_id}/transcript/clip",
           }
           missing = sorted(required - main_paths)
           if missing:
@@ -97,6 +105,46 @@ jobs:
               response = creator_client.get(path)
               if response.status_code >= 500:
                   raise SystemExit(f"creator_entrypoint {path} returned HTTP {response.status_code}: {response.text[:500]}")
+          import time
+
+          smoke = client.post("/infinity/studio/project", json={
+              "title": "CI Creator Smoke",
+              "objective": "Create a tiny useful explainer about renewable energy.",
+              "topic": "renewable energy",
+              "format": "short",
+              "duration": 20,
+              "content_type": "video",
+              "language": "English",
+              "aspect_ratio": "9:16",
+          })
+          if smoke.status_code not in (200,201):
+              raise SystemExit(f"Create project failed: HTTP {smoke.status_code}: {smoke.text[:1000]}")
+          project_id = (smoke.json() or {}).get("project_id")
+          if not project_id:
+              raise SystemExit("Create project did not return project_id")
+          deadline = time.time() + 150
+          final = None
+          while time.time() < deadline:
+              current = client.get("/infinity/studio/project/" + project_id)
+              if current.status_code >= 500:
+                  raise SystemExit(f"Project status failed: HTTP {current.status_code}: {current.text[:1000]}")
+              final = current.json()
+              if final.get("status") in {"completed","completed_with_qc_warnings","failed","cancelled"}:
+                  break
+              time.sleep(1)
+          if not final:
+              raise SystemExit("No project status returned")
+          if final.get("status") not in {"completed","completed_with_qc_warnings"}:
+              raise SystemExit("Real creator smoke production did not complete: " + str(final)[:4000])
+          required_artifacts = ["final.mp4","captions.srt","script.md","thumbnail.jpg","manifest.json","sources.json","audio_master.mp3"]
+          for name in required_artifacts:
+              check = client.get("/infinity/studio/project/" + project_id + "/asset/" + name)
+              if check.status_code != 200:
+                  raise SystemExit(f"Artifact {name} unavailable: HTTP {check.status_code}: {check.text[:500]}")
+          board = client.get("/infinity/studio/project/" + project_id + "/storyboard")
+          if board.status_code != 200 or not (board.json().get("scenes") or []):
+              raise SystemExit("Storyboard was not generated from the real project")
+          print("End-to-end creator smoke production passed:", project_id)
           print("Production main:app + creator dispatcher smoke test passed.")
           PY
 
