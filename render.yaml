@@ -5,7 +5,7 @@ services:
     plan: free
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    healthCheckPath: /infinity/studio/health
+    healthCheckPath: /health
     envVars:
       - key: AI_INFINITY_DATA_DIR
         value: /tmp/ai-infinity
