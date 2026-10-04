@@ -725,7 +725,7 @@ def _pexels(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
     if not key:
         return []
     try:
-        data = http_json("https://api.pexels.com/videos/search?" + urlencode({"query": query, "per_page": min(limit, 10), "orientation": "landscape"}), {"Authorization": key})
+        data = http_json("https://api.pexels.com/videos/search?" + urlencode({"query": query, "per_page": min(limit, 10), "orientation": "landscape"}), {"Authorization": key}, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 20))
         out = []
         for v in data.get("videos", []):
             files = sorted(v.get("video_files", []), key=lambda x: (x.get("width") or 0), reverse=True)
@@ -745,7 +745,7 @@ def _pixabay(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
     if not key:
         return []
     try:
-        data = http_json("https://pixabay.com/api/videos/?" + urlencode({"key": key, "q": query, "per_page": min(limit, 10)}))
+        data = http_json("https://pixabay.com/api/videos/?" + urlencode({"key": key, "q": query, "per_page": min(limit, 10)}), timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 20))
         out = []
         for v in data.get("hits", []):
             f = (v.get("videos") or {}).get("large") or (v.get("videos") or {}).get("medium") or (v.get("videos") or {}).get("small")
