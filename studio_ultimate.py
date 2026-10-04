@@ -1947,12 +1947,24 @@ def enqueue(req: Dict[str, Any], user_id: str, model_fn: Optional[Callable]) -> 
         requested_duration = int(req.get("duration") or 0)
     except Exception:
         requested_duration = 0
-    if (
-        requested_format == "long"
-        and requested_duration and requested_duration <= 90
-        and str(req.get("aspect_ratio") or "16:9").strip() in {"9:16", "1:1", "4:5"}
-        and re.search(r"\b(vertical|short|shorts|reel|reels|tiktok)\b", command_text)
-    ):
+    # Natural-language command interpretation: extract an explicit duration and
+    # infer short-form/vertical intent before production starts. The command itself
+    # is authoritative; UI defaults must never override what the creator said.
+    duration_match = re.search(r"\b(\d{1,4})\s*(seconds?|secs?|s|minutes?|mins?|m)\b", command_text)
+    if duration_match:
+        try:
+            n = int(duration_match.group(1))
+            unit = duration_match.group(2).lower()
+            parsed_seconds = n * 60 if unit.startswith("m") else n
+            if 20 <= parsed_seconds <= 3600:
+                req["duration"] = parsed_seconds
+                requested_duration = parsed_seconds
+        except Exception:
+            pass
+    vertical_intent = bool(re.search(r"\b(vertical|short|shorts|reel|reels|tiktok|portrait)\b", command_text))
+    if vertical_intent and str(req.get("aspect_ratio") or "16:9").strip() == "16:9":
+        req["aspect_ratio"] = "9:16"
+    if requested_format == "long" and vertical_intent:
         req["format"] = "short"
     idem=str(req.get("idempotency_key") or "").strip()[:120]
     if idem:
