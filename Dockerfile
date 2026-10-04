@@ -42,6 +42,7 @@ COPY main.py \
      creator_os_3624.py \
      ai_infinity_bridge.py \
      creator_studio_2030.html \
+     creator_entrypoint.py \
      ./
 
 # Fail the image build immediately if a required Python source is broken.
@@ -53,11 +54,14 @@ RUN python -m py_compile \
         free_api_fabric.py \
         infinity_empire.py \
         creator_os_3624.py \
-        ai_infinity_bridge.py
+        ai_infinity_bridge.py \
+        creator_entrypoint.py
 
 RUN mkdir -p /tmp/ai-infinity
 
 EXPOSE 10000
 
 # Render supplies PORT; 10000 remains the local/default port.
-CMD ["sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000}"]
+# The entrypoint preserves the existing foundation app and mounts the complete
+# Creator Studio backend on /studio and /infinity/studio.
+CMD ["sh", "-c", "exec uvicorn creator_entrypoint:application --host 0.0.0.0 --port ${PORT:-10000}"]
