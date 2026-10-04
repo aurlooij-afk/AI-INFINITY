@@ -3161,8 +3161,81 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
             raise HTTPException(500,str(exc)[:300])
         extracted=_extract_source_text(target)
         payload={"status":"uploaded","filename":name,"size_bytes":total,"extension":ext,"project_id":project_id or None,"text_extracted":bool(extracted),"text_preview":extracted[:4000],"download_url":f"/infinity/studio/project/{project_id}/asset/{quote(name)}" if project_id else None,"truthful":True}
+        if project_id:
+            _save_asset(project_id,"source",target,"application/octet-stream",{"filename":name,"size_bytes":total,"text_extracted":bool(extracted),"source_type":"creator_upload"})
+            register_artifact(project_id,target,"application/octet-stream",{"source_type":"creator_upload","text_extracted":bool(extracted)})
         audit_event(project_id or None,"source_uploaded",{"user_id":user_id,"filename":name,"size_bytes":total,"text_extracted":bool(extracted)})
         return payload
+
+
+    @app.get("/infinity/studio/benchmark-sources")
+    def benchmark_sources():
+        return {"version":"3624","sources":CREATOR_BENCHMARK_SOURCES_2026,"truthful":True}
+
+    @app.get("/infinity/studio/workspace/export")
+    def export_workspace(request: Request):
+        user_id=_get_user_id(request)
+        projects=_project_list(user_id,500)
+        assets=_library_rows(user_id,500)
+        profile=_creator_profile(user_id)
+        settings={}
+        try:
+            settings=_settings(user_id)
+        except Exception:
+            settings={}
+        snapshot={
+            "schema":"ai-infinity-workspace-v1",
+            "exported_at":utc_iso(),
+            "user_id":user_id,
+            "profile":profile,
+            "settings":settings,
+            "projects":[redact(x) for x in projects],
+            "assets":[redact(x) for x in assets],
+            "connections":[redact(x) for x in _connections(user_id)],
+            "skills":[redact(x) for x in _skills(user_id)],
+            "truthful":True,
+        }
+        return snapshot
+
+    @app.post("/infinity/studio/workspace/backup")
+    def backup_workspace(request: Request):
+        user_id=_get_user_id(request)
+        snapshot={
+            "schema":"ai-infinity-workspace-v1",
+            "backed_up_at":utc_iso(),
+            "user_id":user_id,
+            "profile":_creator_profile(user_id),
+            "projects":[redact(x) for x in _project_list(user_id,500)],
+            "skills":[redact(x) for x in _skills(user_id)],
+            "truthful":True,
+        }
+        token=os.getenv("AI_INFINITY_GITHUB_TOKEN","").strip()
+        repo=os.getenv("AI_INFINITY_GITHUB_REPO","").strip()
+        path=os.getenv("AI_INFINITY_GITHUB_PATH","ai-infinity-state.json").strip().strip("/")
+        branch=os.getenv("AI_INFINITY_GITHUB_BRANCH","main").strip() or "main"
+        if not token or not repo or "/" not in repo:
+            return {"status":"not_configured","message":"Optional GitHub backup is not configured; use Workspace Export to keep a local backup.","snapshot":snapshot,"truthful":True}
+        try:
+            import base64 as _b64
+            raw=json.dumps(snapshot,ensure_ascii=False,sort_keys=True,indent=2).encode("utf-8")
+            api=f"https://api.github.com/repos/{repo}/contents/{quote(path)}"
+            headers={"Authorization":f"Bearer {token}","Accept":"application/vnd.github+json","User-Agent":"AI-Infinity/3624"}
+            sha=None
+            try:
+                rr=URLRequest(api+"?ref="+quote(branch,safe=""),headers=headers,method="GET")
+                with _SAFE_OPENER.open(rr,timeout=15) as resp:
+                    existing=json.loads(resp.read().decode("utf-8","replace"))
+                    sha=existing.get("sha")
+            except Exception:
+                sha=None
+            body={"message":"AI Infinity workspace backup","content":_b64.b64encode(raw).decode("ascii"),"branch":branch}
+            if sha: body["sha"]=sha
+            rr=URLRequest(api,data=json.dumps(body).encode("utf-8"),headers={**headers,"Content-Type":"application/json"},method="PUT")
+            with _SAFE_OPENER.open(rr,timeout=20) as resp:
+                result=json.loads(resp.read().decode("utf-8","replace"))
+            return {"status":"backed_up","repository":repo,"path":path,"branch":branch,"commit":(result.get("commit") or {}).get("sha"),"truthful":True}
+        except Exception as exc:
+            return {"status":"failed","message":str(exc)[:500],"truthful":True}
 
     @app.get("/infinity/studio/session")
     def studio_session(request: Request, response: Response):
