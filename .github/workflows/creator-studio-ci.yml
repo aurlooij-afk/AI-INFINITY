@@ -1,0 +1,44 @@
+name: Creator Studio Build Guard
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "*.py"
+      - "Dockerfile"
+      - "requirements.txt"
+      - "bridge-requirements.txt"
+      - ".github/workflows/creator-studio-ci.yml"
+  pull_request:
+    paths:
+      - "*.py"
+      - "Dockerfile"
+      - "requirements.txt"
+      - "bridge-requirements.txt"
+      - ".github/workflows/creator-studio-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  python-syntax:
+    name: Python syntax guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile all runtime Python modules
+        run: |
+          set -euo pipefail
+          python -m py_compile             main.py             studio_ultimate.py             studio_os.py             content_factory.py             free_api_fabric.py             infinity_empire.py             creator_os_3624.py             ai_infinity_bridge.py             creator_entrypoint.py
+          echo "Python syntax checks passed."
+
+  docker-build:
+    name: Docker image guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: python-syntax
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production image
+        run: docker build --pull --tag ai-infinity:ci .
