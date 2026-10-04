@@ -2301,7 +2301,7 @@ h1{font-size:clamp(30px,4vw,56px);line-height:1.02;letter-spacing:-.04em;margin:
     <button id="n-projects" onclick="go('projects')">▣ <span>Projects</span></button>
     <button id="n-assets" onclick="go('assets')">▤ <span>Assets</span></button>
     <button id="n-brand" onclick="go('brand')">◌ <span>Brand</span></button>
-    <button id="n-agents" onclick="go('agents')">◈ <span>Agents</span></button>
+    <button id="n-agents" onclick="go('agents')">◈ <span>Agents</span></button>\n    <button id="n-research" onclick="go('research')">⌕ <span>Research</span></button>\n    <button id="n-schedule" onclick="go('schedule')">◷ <span>Schedule</span></button>
     <button id="n-analytics" onclick="go('analytics')">⌁ <span>Analytics</span></button>
     <button id="n-publish" onclick="go('publish')">↗ <span>Publish</span></button>
   </div>
@@ -2344,8 +2344,8 @@ function stages(x){
 }
 function renderError(e){return "<div class='card cardPad'><div class='notice bad'><b>"+esc(e.message)+"</b></div></div>"}
 function go(id){
-  current=id;nav();$("pageTitle").textContent={home:"Home",create:"Create",projects:"Projects",assets:"Assets",brand:"Brand",agents:"Agents",analytics:"Analytics",publish:"Publish",connections:"Connections",settings:"Settings"}[id]||"Workspace";
-  var f={home:home,create:create,projects:projects,assets:assets,brand:brand,agents:agents,analytics:analytics,publish:publish,connections:connections,settings:settings}[id];
+  current=id;nav();$("pageTitle").textContent={home:"Home",create:"Create",projects:"Projects",assets:"Assets",brand:"Brand",agents:"Agents",analytics:"Analytics",publish:"Publish",connections:"Connections",settings:"Settings",research:"Research",schedule:"Schedule"}[id]||"Workspace";
+  var f={home:home,create:create,projects:projects,assets:assets,brand:brand,agents:agents,analytics:analytics,publish:publish,connections:connections,settings:settings,research:research,schedule:schedule}[id];
   if(f)f().catch(function(e){$("content").innerHTML=renderError(e)});
 }
 async function session(){
@@ -2428,6 +2428,21 @@ async function retryProject(id){try{await api("/infinity/studio/project/"+encode
 async function assets(){
   var x=await api("/infinity/studio/library?limit=200"), rows=x.assets||[];
   $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>ASSET SPACE</div><h1 style='font-size:40px'>Every deliverable, indexed.</h1><p class='heroLead'>Masters, shorts, scripts, captions, thumbnails, provenance and package files remain tied to their project.</p></div><div class='table'><table><thead><tr><th>Type</th><th>File</th><th>Project</th><th>Size</th><th>Open</th></tr></thead><tbody>"+rows.map(function(a){return "<tr><td>"+esc(a.kind)+"</td><td>"+esc(a.name||a.path||"")+"</td><td class='mono'>"+esc(a.project_id)+"</td><td>"+esc(a.size_bytes||"")+"</td><td><a class='btn' href='/infinity/studio/project/"+encodeURIComponent(a.project_id)+"/asset/"+encodeURIComponent(a.name||"")+"' target='_blank'>Open</a></td></tr>"}).join("")+"</tbody></table></div>";
+}
+async function research(){
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>RESEARCH DESK</div><h1 style='font-size:40px'>Ask for evidence before you ask for polish.</h1><p class='heroLead'>Run the real research agent and keep the resulting sources attached to the production brief.</p></div><div class='card cardPad'><textarea id='researchCmd' class='command' style='min-height:120px' placeholder='Research the latest evidence and useful angles for this topic…'></textarea><div class='toolbar' style='margin-top:10px'><button class='btn primary' onclick='runResearch()'>Research</button></div><div id='researchOut' style='margin-top:10px'></div></div>";
+}
+async function runResearch(){
+  var o=$("researchCmd").value.trim();if(o.length<4){alert("Enter a topic.");return}
+  $("researchOut").innerHTML="<div class='notice'>Researching public sources…</div>";
+  try{var r=await api("/infinity/studio/agents/run",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({agent_id:"research",objective:o})});var rs=(r.result&&r.result.sources)||[];$("researchOut").innerHTML="<div class='notice good'>"+rs.length+" source records returned.</div><div class='list' style='margin-top:10px'>"+rs.map(function(x){return "<div class='item'><b>"+esc(x.title||x.source||"Source")+"</b><div class='tiny'>"+esc(x.snippet||x.summary||"")+"</div>"+(x.url?"<a href='"+esc(x.url)+"' target='_blank' style='display:inline-block;margin-top:6px;color:#b8d9ff;font-size:11px'>Open source</a>":"")+"</div>"}).join("")+"</div>"}catch(e){$("researchOut").innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>"}
+}
+async function schedule(){
+  var x=await api("/infinity/studio/calendar");
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>SCHEDULE</div><h1 style='font-size:40px'>Plan delivery without losing production state.</h1><p class='heroLead'>Scheduling records intent. External publishing still requires an authorized destination.</p></div><div class='grid cols2'><div class='card cardPad'><h3>Plan a release</h3><input id='schProject' class='field' placeholder='Project ID' style='margin-top:10px'><input id='schProvider' class='field' value='youtube' placeholder='Destination' style='margin-top:8px'><input id='schAt' class='field' type='datetime-local' style='margin-top:8px'><button class='btn primary' style='margin-top:10px' onclick='saveSchedule()'>Schedule</button><div id='schOut' style='margin-top:10px'></div></div><div class='card cardPad'><h3>Upcoming</h3><div class='list' style='margin-top:10px'>"+((x.items||[]).map(function(i){return "<div class='item'><div class='row'><b>"+esc(i.project_id||"Project")+"</b><span class='status'>"+esc(i.status||"planned")+"</span></div><div class='tiny'>"+esc(i.provider||i.channel||"destination")+" · "+esc(i.publish_at||"")+"</div></div>"}).join("")||"<div class='notice'>Nothing scheduled.</div>")+"</div></div></div>";
+}
+async function saveSchedule(){
+  try{var v=$("schAt").value;var iso=v?new Date(v).toISOString():"";var r=await api("/infinity/studio/calendar",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({project_id:$("schProject").value,provider:$("schProvider").value,publish_at:iso})});$("schOut").innerHTML="<div class='notice good'>"+esc(r.status||"planned")+"</div>";setTimeout(schedule,250)}catch(e){$("schOut").innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>"}
 }
 async function brand(){
   var x=await api("/infinity/studio/profile"), p=x.profile||{};
