@@ -275,10 +275,21 @@ def register_pro(app: Any) -> None:
                     candidates.append(result_raw.get("plan"))
             chapters = []
             for candidate in candidates:
-                if isinstance(candidate, dict) and isinstance(candidate.get("chapters"), list):
-                    chapters = candidate.get("chapters") or []
-                    if chapters:
+                if not isinstance(candidate, dict):
+                    continue
+                # Different production engines use chapters, scenes, or a nested
+                # storyboard. Normalize all of them into the same editable scene model.
+                for key in ("chapters", "scenes"):
+                    value = candidate.get(key)
+                    if isinstance(value, list) and value:
+                        chapters = value
                         break
+                if not chapters and isinstance(candidate.get("storyboard"), dict):
+                    value = candidate["storyboard"].get("scenes")
+                    if isinstance(value, list) and value:
+                        chapters = value
+                if chapters:
+                    break
             data = {
                 "project_id": project_id,
                 "title": p.get("title") or "",
