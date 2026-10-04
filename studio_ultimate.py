@@ -1120,7 +1120,7 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
             visual_args = ["-stream_loop", "-1", "-i", src]
         else:
             frames = max(1, int(round(duration * fps)))
-            vf = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},zoompan=z='min(zoom+0.0008,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2):d={frames}:s={width}x{height}:fps={fps},drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':x=75:y=915:fontsize={font}:fontcolor=white"
+            vf = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},zoompan=z='min(zoom+0.0008,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={width}x{height}:fps={fps},drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':x=75:y=915:fontsize={font}:fontcolor=white"
             visual_args = ["-loop", "1", "-i", src]
         audio_filter = "[1:a]loudnorm=I=-18:TP=-1.5:LRA=7[vo];[2:a]volume=0.10[m];[3:a]adelay=80|80,volume=0.10[s];[vo][m][s]amix=inputs=3:duration=first:dropout_transition=2[a]"
         preset, crf, ab = os.getenv("AI_INFINITY_VIDEO_PRESET", "veryfast"), "18", "192k"
