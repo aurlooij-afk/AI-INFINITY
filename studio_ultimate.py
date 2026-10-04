@@ -869,40 +869,41 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
     return {"kind": "image", "path": str(p), "source": "AI Infinity motion-design generator", "source_url": None, "creator": "AI Infinity", "license": "Original generated asset", "model": "procedural-editorial-engine"}
 
 
+
 def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_motion: bool = False, duration: float = 6.0) -> Dict[str, Any]:
     query = str(scene.get("visual_query") or scene.get("heading") or "documentary scene")
     ai_prompt = str(scene.get("image_prompt") or f"Premium cinematic documentary visual about {query}; realistic, useful, editorial, no text or logos")
 
-    # AI imagination first when a provider is connected. Use motion generation
-    # selectively because current hosted video models are substantially heavier
-    # than image generation; the remainder of the sequence can mix AI and real
-    # footage without pretending stock is AI-generated.
     if prefer_motion and not FAST_MODE:
         motion = _hf_video(ai_prompt, outdir, index, duration)
         if motion:
             return motion
-    ai = None if FAST_MODE else _hf_image(ai_prompt, outdir, index)
-    if ai:
-        return ai
 
-    # Hosted fast mode must not wait on optional remote media providers.
-    # It creates an original visual immediately and keeps the job deterministic.
-    if FAST_MODE:
-        procedural = _procedural_image(ai_prompt, outdir, index, width=1280, height=720)
-        if procedural:
-            return procedural
-
-    # Real motion footage next; public sources are keyless where available.
+    # Prefer real/public media before synthetic fallback, even in fast mode.
     for getter in (_pexels, _pixabay, _commons_media):
         items = getter(query, outdir, limit=3)
         videos = [x for x in items if x.get("kind") == "video"]
         if videos:
             return videos[0]
-        images = [x for x in items if x.get("kind") == "image"]
-        if images:
-            return images[0]
+        if not FAST_MODE:
+            images = [x for x in items if x.get("kind") == "image"]
+            if images:
+                return images[0]
 
-    procedural = _procedural_image(ai_prompt, outdir, index)
+    # Connected AI image generation is the next-quality path when fast mode is off.
+    if not FAST_MODE:
+        ai = _hf_image(ai_prompt, outdir, index)
+        if ai:
+            return ai
+
+    # Explicit synthetic fallback. The UI/manifest can distinguish this from footage.
+    procedural = _procedural_image(
+        ai_prompt,
+        outdir,
+        index,
+        width=1280 if FAST_MODE else 1920,
+        height=720 if FAST_MODE else 1080
+    )
     if procedural:
         return procedural
     raise RuntimeError("no visual asset could be created")
@@ -961,31 +962,31 @@ def tts(text: str, outdir: Path, index: int, voice: str) -> Tuple[Path, str, flo
     if not plain:
         raise ValueError("empty narration")
     exe = shutil.which("espeak-ng") or shutil.which("espeak")
-    # Render/free-host fast mode prefers the local engine: no network wait and
-    # no provider dependency. Neural TTS remains the normal-quality fallback.
-    if FAST_MODE and exe:
-        wav = outdir / f"narration_{index:02d}.wav"
-        subprocess.run([exe, "-s", "155", "-w", str(wav), plain], check=True, timeout=45)
-        ffmpeg("-i", wav, "-codec:a", "libmp3lame", "-q:a", "2", out, timeout=180)
-        return out, "local-espeak-fast", probe_duration(out)
+
+    # Prefer a natural neural voice when the free public service is reachable.
+    # Fall back deterministically to the local engine when unavailable/slow.
     try:
         import asyncio
         import edge_tts
 
         async def run() -> None:
-            await asyncio.wait_for(edge_tts.Communicate(plain, voice).save(str(out)), timeout=float(os.getenv("AI_INFINITY_EDGE_TTS_TIMEOUT", "5")))
+            await asyncio.wait_for(
+                edge_tts.Communicate(plain, voice).save(str(out)),
+                timeout=float(os.getenv("AI_INFINITY_EDGE_TTS_TIMEOUT", "15"))
+            )
 
         asyncio.run(run())
         if out.exists() and out.stat().st_size > 10000:
             return out, "edge-tts-neural", probe_duration(out)
     except Exception:
         pass
+
     if not exe:
         raise RuntimeError("narration engine unavailable")
     wav = outdir / f"narration_{index:02d}.wav"
     subprocess.run([exe, "-s", "155", "-w", str(wav), plain], check=True, timeout=45)
     ffmpeg("-i", wav, "-codec:a", "libmp3lame", "-q:a", "2", out, timeout=180)
-    return out, "local-espeak", probe_duration(out)
+    return out, "local-espeak" + ("-fast-fallback" if FAST_MODE else ""), probe_duration(out)
 
 
 def make_music(outdir: Path, seconds: float) -> Path:
@@ -1675,7 +1676,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         checkpoint(project_id, "research_complete", {"source_count": research.get("source_count",0), "retrieved_at": research.get("retrieved_at"), "reference_count": len(reference_sources)})
         _stage(project_id, "creative_direction", 15, blueprint_json=jdump({"research": research}))
         learning = _apply_learning(project["user_id"], str(req.get("tone") or ""), str(req.get("audience") or ""), str(req.get("format") or "long"))
-        plan, ai_provider = creative_plan(req, research, None if FAST_MODE else model_fn)
+        plan, ai_provider = creative_plan(req, research, model_fn)
         plan["learning_context"] = learning
         _update_project(project_id, title=plan.get("title") or topic, blueprint_json=jdump(plan), status="producing")
         checkpoint(project_id, "plan_complete", {"digest": digest(plan), "provider": ai_provider})
