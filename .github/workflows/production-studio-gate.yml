@@ -1,0 +1,97 @@
+name: AI Infinity Production Studio Gate
+
+on:
+  push:
+    branches:
+      - main
+      - ai-infinity-final-creator-studio
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  production-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      AI_INFINITY_DATA_DIR: /tmp/ai-infinity-ci
+      AI_INFINITY_EXTERNAL_WORKER: "true"
+      AI_INFINITY_STORAGE_MODE: local
+      AI_INFINITY_PERSISTENCE_MODE: portable-volume
+      AI_INFINITY_FAST_MODE: "false"
+      AI_INFINITY_FFMPEG_THREADS: "1"
+      AI_INFINITY_FFMPEG_FILTER_THREADS: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Compile production surface
+        run: |
+          python -m py_compile \
+            foundation.py \
+            studio_ultimate.py \
+            content_factory.py \
+            studio_os.py \
+            runtime_main_3700.py \
+            production_hardening.py \
+            ai_infinity_portable_fabric.py \
+            production_worker.py \
+            overlay_final_3700.py
+
+      - name: Validate portable fabric contract
+        run: |
+          python - <<'PY'
+          import os, tempfile
+          os.environ["AI_INFINITY_DATA_DIR"] = tempfile.mkdtemp(prefix="ai-infinity-ci-")
+          os.environ["AI_INFINITY_EXTERNAL_WORKER"] = "true"
+          import ai_infinity_portable_fabric as fabric
+          c = fabric.runtime_contract()
+          assert c["portable"] is True
+          assert c["render_required"] is False
+          assert c["external_worker_mode"] is True
+          assert c["worker_contract"]["durable_queue"] is True
+          assert c["worker_contract"]["checkpoint_resume"] is True
+          print("Portable fabric PASS:", c["version"], c["build"])
+          PY
+
+      - name: Validate dedicated worker entrypoint
+        run: |
+          python - <<'PY'
+          import ast
+          ast.parse(open("production_worker.py", "r", encoding="utf-8").read())
+          print("Dedicated worker syntax PASS")
+          PY
+
+      - name: Validate container configuration
+        run: |
+          test -f docker-compose.production.yml
+          test -f .env.production.example
+          grep -q "production_worker.py" Dockerfile
+          grep -q "ai_infinity_portable_fabric.py" Dockerfile
+          grep -q "ai-infinity-final-creator-studio" .github/workflows/production-studio-gate.yml
+
+      - name: Import canonical runtime without starting an in-process worker
+        run: |
+          python - <<'PY'
+          import os, tempfile
+          os.environ["AI_INFINITY_DATA_DIR"] = tempfile.mkdtemp(prefix="ai-infinity-runtime-")
+          os.environ["AI_INFINITY_EXTERNAL_WORKER"] = "true"
+          import runtime_main_3700
+          assert runtime_main_3700.foundation.app.state.ai_infinity_3708 is True
+          assert runtime_main_3700.foundation.app.state.portable_production_fabric["render_required"] is False
+          print("Canonical runtime import PASS")
+          PY
