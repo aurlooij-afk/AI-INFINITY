@@ -7127,7 +7127,7 @@ def activation_setup_200():
         "version": APP_VERSION,
         "build": BUILD,
         "owner_email": _owner_profile_200()["email"],
-        "server_url": os.getenv("AI_INFINITY_PUBLIC_URL", "https://ai-infinity-ca5e.onrender.com").rstrip("/"),
+        "server_url": os.getenv("AI_INFINITY_PUBLIC_URL", "http://localhost:8000").rstrip("/"),
         "steps": [
             {"order":1,"id":"vault","required":True,"action":"Set AI_INFINITY_VAULT_KEY in Render."},
             {"order":2,"id":"operator","required":True,"action":"Set AI_INFINITY_OPERATOR_TOKEN in Render."},
@@ -7151,7 +7151,7 @@ def activation_pair_start_200(body: Dict[str, Any]):
     expires = now() + PAIR_TTL_200
     with _db_lock, db() as c:
         c.execute("INSERT INTO bridge_pairings_200(id,code,kind,name,status,expires_at,created_at) VALUES(?,?,?,?,?,?,?)", (pid, code, kind, name, "pending", expires, now()))
-    return {"status":"pairing_code_created","pairing_id":pid,"kind":kind,"name":name,"code":code,"expires_at":expires,"ttl_seconds":PAIR_TTL_200,"server":os.getenv("AI_INFINITY_PUBLIC_URL", "https://ai-infinity-ca5e.onrender.com").rstrip("/"),"secret_values_exposed":False}
+    return {"status":"pairing_code_created","pairing_id":pid,"kind":kind,"name":name,"code":code,"expires_at":expires,"ttl_seconds":PAIR_TTL_200,"server":os.getenv("AI_INFINITY_PUBLIC_URL", "http://localhost:8000").rstrip("/"),"secret_values_exposed":False}
 
 @app.post("/activation/pair/claim")
 def activation_pair_claim_200(body: Dict[str, Any]):
@@ -7497,7 +7497,7 @@ def activate_google_callback_200(code: str, state: str):
 def activation_google_client_200():
     with _db_lock, db() as c:
         row = c.execute("SELECT id,provider,name,redirect_uri,scopes,status,updated_at FROM oauth_clients_193 WHERE provider='google' ORDER BY updated_at DESC LIMIT 1").fetchone()
-    return {"status":"ready" if row else "needs_configuration","client":dict(row) if row else None,"redirect_uri":os.getenv("AI_INFINITY_PUBLIC_ORIGIN", "https://ai-infinity-ca5e.onrender.com").rstrip('/')+"/activate/google/callback","secret_values_exposed":False}
+    return {"status":"ready" if row else "needs_configuration","client":dict(row) if row else None,"redirect_uri":os.getenv("AI_INFINITY_PUBLIC_ORIGIN", "http://localhost:8000").rstrip('/')+"/activate/google/callback","secret_values_exposed":False}
 
 @app.get("/scheduler/status")
 def scheduler_status_200(limit: int = 20):
