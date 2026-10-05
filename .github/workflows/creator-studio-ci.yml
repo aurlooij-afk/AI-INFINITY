@@ -2,9 +2,6 @@
 name: Creator Studio Build Guard
 
 on:
-  concurrency:
-    group: ai-infinity-creator-studio-main
-    cancel-in-progress: true
   push:
     branches: ["main"]
     paths:
@@ -25,6 +22,10 @@ on:
       - "requirements.txt"
       - "bridge-requirements.txt"
       - ".github/workflows/creator-studio-ci.yml"
+
+concurrency:
+  group: ai-infinity-creator-studio-main
+  cancel-in-progress: true
 
 permissions:
   contents: read
