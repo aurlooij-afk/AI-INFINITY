@@ -16,6 +16,8 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from fastapi import HTTPException, Request, Response
+
 VERSION = "TARGET-2050.3708"
 BUILD = "PORTABLE-PRODUCTION-FABRIC"
 
@@ -284,7 +286,6 @@ def runtime_contract() -> Dict[str, Any]:
 
 
 def register(app: Any) -> None:
-    from fastapi import HTTPException, Request, Response
 
     def _director_request(command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         command = str(command or "").strip()
