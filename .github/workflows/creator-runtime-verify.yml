@@ -1,0 +1,90 @@
+name: AI Infinity Standalone Runtime Verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install OS media dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg espeak-ng libsndfile1 poppler-utils
+          rm -rf ~/.cache
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          if [ -s bridge-requirements.txt ]; then python -m pip install -r bridge-requirements.txt; fi
+
+      - name: Verify standalone source
+        env:
+          AI_INFINITY_DATA_DIR: /tmp/ai-infinity-ci
+          AI_INFINITY_3601_BACKGROUND: "false"
+          AI_INFINITY_FAST_MODE: "1"
+        run: |
+          set -euo pipefail
+          python -m py_compile main.py
+          python - <<'PY'
+          import os
+          os.environ["AI_INFINITY_DATA_DIR"] = "/tmp/ai-infinity-ci"
+          os.environ["AI_INFINITY_3601_BACKGROUND"] = "false"
+          os.environ["AI_INFINITY_FAST_MODE"] = "1"
+          import main
+          from fastapi.testclient import TestClient
+          client = TestClient(main.app)
+          r = client.get("/health")
+          assert r.status_code == 200, r.text
+          assert r.json().get("status") == "healthy", r.text
+          r = client.get("/infinity/3800/health")
+          assert r.status_code == 200, r.text
+          assert r.json().get("version") == "TARGET-2050.3800", r.text
+          r = client.get("/infinity/3800/capabilities")
+          assert r.status_code == 200, r.text
+          r = client.get("/")
+          assert r.status_code == 200, r.text
+          assert "AI Infinity" in r.text
+          print("standalone-runtime-ok")
+          PY
+
+      - name: Build portable image
+        run: docker build --platform linux/amd64 --tag ai-infinity:ci .
+
+      - name: Start image and verify HTTP
+        run: |
+          set -euo pipefail
+          docker run -d --rm --name ai-infinity-ci             --platform linux/amd64             -e AI_INFINITY_3601_BACKGROUND=false             -e AI_INFINITY_FAST_MODE=1             -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity             -p 10000:10000             ai-infinity:ci
+          trap 'docker logs ai-infinity-ci || true; docker stop ai-infinity-ci || true' EXIT
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:10000/health >/tmp/health.json; then
+              cat /tmp/health.json
+              curl -fsS http://127.0.0.1:10000/infinity/3800/health >/tmp/creator-health.json
+              cat /tmp/creator-health.json
+              curl -fsS http://127.0.0.1:10000/ >/tmp/index.html
+              grep -q "AI Infinity" /tmp/index.html
+              echo "container-runtime-ok"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Container did not become ready"
+          exit 1
