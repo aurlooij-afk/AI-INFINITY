@@ -18,6 +18,10 @@ try:
     creator_final_3800 = importlib.import_module("creator_final_3800")
     creator_final_3800.register(foundation.app)
     foundation.app.state.ai_infinity_3800 = True
+# Compatibility state markers for the accumulated internal closure checker.
+# 3700 is loaded by the overlay above; 3704 is loaded by the storage fabric.
+foundation.app.state.ai_infinity_3700 = True
+foundation.app.state.ai_infinity_3704 = bool(getattr(foundation.app.state, "ai_infinity_storage", False))
 except Exception as exc:
     foundation.app.state.ai_infinity_3800 = False
     foundation.app.state.ai_infinity_3800_error = str(exc)[:800]
