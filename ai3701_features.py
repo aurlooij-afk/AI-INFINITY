@@ -152,8 +152,14 @@ def turbo_model(payload):
  plan={"title":title[:200],"hook":"A clear answer to the outcome that matters.","premise":obj[:5000],"audience":"general audience","tone":"cinematic, intelligent, useful","cta":"Save and apply the framework.","language":"English","chapters":turbo_chapters(title,obj,dur)};return {"text":json.dumps(plan,ensure_ascii=False),"provider":"ai-infinity-turbo-local"}
 def turbo_worker(jid,title,obj,dur):
  try:
-  with LOCK,DB() as c:c.execute("UPDATE ai3701_turbo SET status='media',stage='audio-video',progress=.35,updated_at=? WHERE job_id=?",(now(),jid))
-  req={"title":title,"objective":obj,"format":"long","duration":dur,"audience":"general audience","tone":"cinematic, intelligent, useful","language":"English","platforms":["YouTube","Instagram","TikTok","LinkedIn"],"voice":"en-US-AriaNeural"};res=studio.create_project(req,model_fn=turbo_model) if studio else {"status":"package_only","truthful":True}
+  # Never run hour-long media encoding inside the Render web process by default.
+  # The instant package is the fast path; heavyweight rendering is explicit/opt-in.
+  if os.getenv("AI_INFINITY_TURBO_RENDER","0").lower() not in {"1","true","yes","on"}:
+   res={"status":"package_ready","render":"deferred","duration_seconds":dur,"reason":"heavy media rendering is isolated from the web request/runtime","truthful":True}
+  else:
+   with LOCK,DB() as c:c.execute("UPDATE ai3701_turbo SET status='media',stage='audio-video',progress=.35,updated_at=? WHERE job_id=?",(now(),jid))
+   req={"title":title,"objective":obj,"format":"long","duration":dur,"audience":"general audience","tone":"cinematic, intelligent, useful","language":"English","platforms":["YouTube","Instagram","TikTok","LinkedIn"],"voice":"en-US-AriaNeural"}
+   res=studio.create_project(req,model_fn=turbo_model) if studio else {"status":"package_only","truthful":True}
   with LOCK,DB() as c:c.execute("UPDATE ai3701_turbo SET status='completed',stage='done',progress=1,result_json=?,updated_at=?,completed_at=? WHERE job_id=?",(jd(res),now(),now(),jid))
  except Exception as e:
   with LOCK,DB() as c:c.execute("UPDATE ai3701_turbo SET status='failed',stage='error',error=?,updated_at=?,completed_at=? WHERE job_id=?",(str(e)[:2000],now(),now(),jid))
