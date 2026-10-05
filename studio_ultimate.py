@@ -1185,7 +1185,8 @@ def make_thumbnail(master: Path, title: str, outdir: Path) -> Path:
     p = outdir / "thumbnail.jpg"
     frame = outdir / "thumb_frame.jpg"
     try:
-        ffmpeg("-ss", "2", "-i", master, "-frames:v", "1", "-vf", "scale=1280:720", frame, timeout=120)
+        thumb_scale = "960:540" if FAST_MODE else "1280:720"
+        ffmpeg("-ss", "2", "-i", master, "-frames:v", "1", "-vf", f"scale={thumb_scale}", frame, timeout=120)
         if Image is None:
             shutil.copyfile(frame, p)
             return p
@@ -1223,6 +1224,13 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
         "file_present": master.exists() and master.stat().st_size > 10000,
         "duration_nonzero": duration > 2,
         "full_hd": max(int(v.get("width") or 0), int(v.get("height") or 0)) >= 1080 and min(int(v.get("width") or 0), int(v.get("height") or 0)) >= 720,
+        "profile_resolution": (
+            max(int(v.get("width") or 0), int(v.get("height") or 0)) >= 1280
+            and min(int(v.get("width") or 0), int(v.get("height") or 0)) >= 720
+        ) if FAST_MODE else (
+            max(int(v.get("width") or 0), int(v.get("height") or 0)) >= 1920
+            and min(int(v.get("width") or 0), int(v.get("height") or 0)) >= 720
+        ),
         "h264_video": str(v.get("codec_name") or "") == "h264",
         "audio_present": bool(a),
         "aac_audio": str(a.get("codec_name") or "") in {"aac", "mp3"},
@@ -1235,7 +1243,7 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
         "visual_assets_present": len(assets) >= len(chapters),
         "no_fake_slideshow_flag": True,
     }
-    passed = all(bool(x) for x in checks.values())
+    passed = all(bool(x) for k, x in checks.items() if k != "full_hd")
     return {"passed": passed, "checks": checks, "duration_seconds": round(duration, 2), "resolution": [int(v.get("width") or 0), int(v.get("height") or 0)], "video_codec": v.get("codec_name"), "audio_codec": a.get("codec_name"), "file_size_bytes": master.stat().st_size if master.exists() else 0}
 
 
@@ -1478,7 +1486,7 @@ def extended_quality_check(master: Path, chapters: List[Dict[str, Any]], caption
         checks["stereo_or_mono_valid"] = int(a.get("channels") or 0) in {1,2}
     except Exception:
         checks["audio_sample_rate"]=False; checks["stereo_or_mono_valid"]=False
-    q["passed"]=all(bool(v) for v in checks.values())
+    q["passed"]=all(bool(v) for k,v in checks.items() if k != "full_hd")
     q["checks"]=checks
     return q
 
@@ -1960,10 +1968,16 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         master = outdir / "master.mp4"
         concat_segments(scene_paths, master)
         requested_ratio = str(req.get("aspect_ratio") or "16:9").strip()
-        ratio_targets = {"16:9": (1920,1080), "9:16": (1080,1920), "1:1": (1080,1080), "4:5": (1080,1350)}
+        # FAST mode renders scenes directly at their delivery dimensions. A second
+        # 1080x1920 transcode on Render's 512 MiB instance causes avoidable OOM.
+        ratio_targets = (
+            {"16:9": (1280,720), "9:16": (720,1280), "1:1": (720,720), "4:5": (720,900)}
+            if FAST_MODE else
+            {"16:9": (1920,1080), "9:16": (1080,1920), "1:1": (1080,1080), "4:5": (1080,1350)}
+        )
         master_for_delivery = master
         ratio_dims = ratio_targets.get(requested_ratio, ratio_targets["16:9"])
-        if requested_ratio != "16:9":
+        if requested_ratio != "16:9" and not FAST_MODE:
             ratio_master = outdir / "master_delivery.mp4"
             rw, rh = ratio_dims
             ffmpeg("-i", master, "-vf", f"scale={rw}:{rh}:force_original_aspect_ratio=increase,crop={rw}:{rh}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", ratio_master, timeout=max(120, int(probe_duration(master)*5)))
@@ -2021,7 +2035,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         sources.write_text(jdump({"research": research, "visual_assets": assets_meta}), encoding="utf-8")
         thumb = make_thumbnail(captioned, str(plan.get("title") or topic), outdir)
         _stage(project_id, "variants_and_package", 84)
-        shorts = [] if SMOKE else make_variants(captioned, outdir, chapters, str(plan.get("title") or topic))
+        shorts = [] if (SMOKE or FAST_MODE) else make_variants(captioned, outdir, chapters, str(plan.get("title") or topic))
         manifest = outdir / "manifest.json"
         qc = extended_quality_check(captioned, chapters, captions, outdir, assets_meta)
         feature_report = _feature_execution_report(project_id, project["user_id"], [str(x) for x in (req.get("features") or [])], outdir, qc=qc, req=req)
@@ -2029,6 +2043,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "studio_version": VERSION, "build": BUILD, "project_id": project_id, "created_at": now(),
             "title": plan.get("title") or topic, "format": req.get("format", "long"), "content_type": req.get("content_type", "video"),
             "target_duration_seconds": target, "actual_duration_seconds": probe_duration(captioned),
+            "render_profile": "720p-fast" if FAST_MODE else "1080p-production",
             "ai_provider": ai_provider, "voice_provider": voice_provider, "research": research, "quality": qc,
             "assets": assets_meta, "shorts": [{k: v for k, v in x.items() if k != "path"} for x in shorts],
             "self_upgrade": True, "truthful": True,
@@ -2070,7 +2085,9 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "features": [x for x in (req.get("features") or []) if x in _feature_ids(project["user_id"])],
             "feature_count": len([x for x in (req.get("features") or []) if x in _feature_ids(project["user_id"])]),
             "feature_execution": feature_report,
-            "duration_seconds": round(probe_duration(captioned), 2), "quality": qc,
+            "duration_seconds": round(probe_duration(captioned), 2),
+            "render_profile": "720p-fast" if FAST_MODE else "1080p-production",
+            "quality": qc,
             "research": {"source_count": research.get("source_count", 0)},
             "downloads": {
                 "video": f"/infinity/studio/project/{project_id}/asset/final.mp4", "package": f"/infinity/studio/project/{project_id}/asset/package.zip",
