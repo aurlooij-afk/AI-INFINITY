@@ -6,7 +6,7 @@ BASE = Path(__file__).resolve().parent
 foundation.FINAL3700_UI = (BASE / "ui_3700.html").read_text(encoding="utf-8")
 overlay = (BASE / "overlay_final_3700.py").read_text(encoding="utf-8")
 overlay = overlay.replace('uid("project")', 'os.urandom(8).hex()').replace('uid("publish")', 'os.urandom(8).hex()')
-exec(compile("import os\\n" + overlay, str(BASE / "overlay_final_3700.py"), "exec"), foundation.__dict__)
+exec(compile("import os\n" + overlay, str(BASE / "overlay_final_3700.py"), "exec"), foundation.__dict__)
 
 # Final production hardening is applied after all creator modules are loaded, so
 # both the canonical studio and legacy media entrypoints share the same guards.
