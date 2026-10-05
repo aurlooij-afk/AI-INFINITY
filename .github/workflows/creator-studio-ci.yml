@@ -38,8 +38,21 @@ jobs:
       - name: Compile all runtime Python modules
         run: |
           set -euo pipefail
-          python -m py_compile main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py
+          python -m py_compile main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py overlay_final_3700.py runtime_main_3700.py
           echo "Python syntax checks passed."
+      - name: Parse AI Infinity platform browser JavaScript
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          html=Path("ui_3700.html").read_text(encoding="utf-8")
+          scripts=re.findall(r"<script[^>]*>([\\s\\S]*?)</script>", html, flags=re.I)
+          Path("/tmp/ai-infinity-ui.js").write_text("\n".join(scripts),encoding="utf-8")
+          if not scripts:
+              raise SystemExit("No AI Infinity UI script found")
+          print("Extracted", len(scripts), "AI Infinity script block(s).")
+          PY
+          node --check /tmp/ai-infinity-ui.js
       - name: Parse Creator Studio browser JavaScript
         run: |
           python - <<'PY'
@@ -176,6 +189,35 @@ jobs:
 
           print("End-to-end creator + Creator Pro smoke production passed:", project_id)
           print("Production main:app + creator dispatcher smoke test passed.")
+          PY
+
+      - name: Smoke-test the canonical runtime wrapper and final closure
+        env:
+          AI_INFINITY_DATA_DIR: "/tmp/ai-infinity-wrapper-smoke"
+        run: |
+          set -euo pipefail
+          cp main.py foundation.py
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          import runtime_main_3700
+          app=runtime_main_3700.app
+          client=TestClient(app)
+          for path in ("/","/health","/infinity/3705/health","/infinity/3705/readiness","/infinity/3705/connections","/infinity/3705/self-test"):
+              r=client.get(path)
+              if r.status_code >= 500:
+                  raise SystemExit(f"{path} returned HTTP {r.status_code}: {r.text[:1000]}")
+              if r.status_code == 404:
+                  raise SystemExit(f"{path} unexpectedly returned 404")
+          root=client.get("/")
+          if "AI Infinity" not in root.text:
+              raise SystemExit("Canonical root does not contain AI Infinity")
+          closure=client.get("/infinity/3705/readiness").json()
+          if closure.get("software_closure") is not True or closure.get("truthful") is not True:
+              raise SystemExit("Final closure readiness contract failed")
+          selftest=client.get("/infinity/3705/self-test").json()
+          if selftest.get("passed") is not True:
+              raise SystemExit("Final closure self-test failed: "+str(selftest)[:4000])
+          print("Canonical runtime wrapper + final closure smoke passed.")
           PY
 
   docker-build:
