@@ -60,10 +60,9 @@ REQUIRED_EXACT_ROUTES = [
     "/infinity/storage/v1/upload", "/infinity/storage/v1/local",
 ]
 UI_REQUIRED_LABELS = [
-    "Home", "Create", "Production", "Projects", "Intelligence", "Assets",
-    "Brand", "Publish", "Analytics", "Agents", "Operations",
-    "Quality & Gaps", "System", "Chat", "Notebook", "Engineering",
-    "Knowledge", "Automation", "Storage", "Connections",
+    "Home", "Create", "Studio", "DNA", "Worlds", "Projects", "Mind", "Analytics", "Power", "System",
+    "Knowledge", "Automation", "Assets", "Storage", "Brand", "Publish", "Agents", "Operations",
+    "Connections", "Engineering", "Chat", "Quality", "FREE / NO CREDITS",
 ]
 LOCAL_FEATURES = [
     "creator workspace", "real local media production",
@@ -89,14 +88,14 @@ def _module_checks() -> list[dict[str, Any]]:
     return out
 
 def _ui_checks() -> list[dict[str, Any]]:
-    p = BASE / "ui_3700.html"
+    p = BASE / "ui_3800.html"
     if not p.exists():
         return [{"name": "ui_3700.html", "passed": False}]
     text = p.read_text(encoding="utf-8", errors="replace")
-    out = [{"name": "ui_3700.html", "passed": True}]
+    out = [{"name": "ui_3800.html", "passed": True}]
     for label in UI_REQUIRED_LABELS:
         out.append({"name": "UI navigation: " + label, "passed": label in text})
-    for fn in ["go(", "render(", "knowledge()", "storage()", "connections()", "engineering()"]:
+    for fn in ["nav()", "refreshAll()", "createFromCommand()", "powerKnowledge()", "powerAutomation()", "powerAssets()", "powerStorage()", "powerPublish", "powerChatCommand()", "powerQuality()"]:
         out.append({"name": "UI function: " + fn, "passed": fn in text})
     return out
 
