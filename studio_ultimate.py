@@ -2048,6 +2048,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "assets": assets_meta, "shorts": [{k: v for k, v in x.items() if k != "path"} for x in shorts],
             "self_upgrade": True, "truthful": True,
             "production_profile": _project_meta(project_id),
+            "timeline": timeline_payload,
             "generated_at": utc_iso(), "platform_packages": {k: Path(v).name for k,v in editorial.items() if v},
             "storage": {"data_dir": str(DATA_DIR), "persistent_configured": str(DATA_DIR) not in {"/tmp", "/tmp/ai-infinity"}}, "timeline": {"path": "timeline.json", "schema": "ai-infinity.timeline.v1", "scene_count": len(chapters)},
         }
