@@ -11,6 +11,11 @@ exec(compile("import os\n" + overlay, str(BASE / "overlay_final_3700.py"), "exec
 # Final production hardening is applied after all creator modules are loaded, so
 # both the canonical studio and legacy media entrypoints share the same guards.
 production_hardening = importlib.import_module("production_hardening")
+ai_infinity_portable_fabric = importlib.import_module("ai_infinity_portable_fabric")
+try:
+    ai_infinity_portable_fabric.register(foundation.app)
+except Exception as exc:
+    foundation.app.state.portable_fabric_error = str(exc)[:800]
 try:
     hardening_state = production_hardening.apply()
 except Exception as exc:
@@ -88,4 +93,6 @@ foundation.app.state.ai_infinity_3705 = True
 foundation.app.state.ai_infinity_3706 = True
 foundation.app.state.ai_infinity_3707 = True
 foundation.app.state.production_hardening = hardening_state
+foundation.app.state.ai_infinity_3708 = True
+foundation.app.state.portable_production_fabric = ai_infinity_portable_fabric.runtime_contract()
 app = _CanonicalAIInfinityASGI(foundation.app)
