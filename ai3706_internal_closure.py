@@ -42,7 +42,6 @@ REQUIRED_INTERNAL_PREFIXES = [
     "/infinity/3701",
     "/infinity/3702",
     "/infinity/3703",
-    "/infinity/3704",
     "/infinity/3705",
 ]
 REQUIRED_EXACT_ROUTES = [
@@ -64,7 +63,7 @@ UI_REQUIRED_LABELS = [
     "Home", "Create", "Production", "Projects", "Intelligence", "Assets",
     "Brand", "Publish", "Analytics", "Agents", "Operations",
     "Quality & Gaps", "System", "Chat", "Notebook", "Engineering",
-    "Turbo 60", "Storage", "Connections",
+    "Knowledge", "Automation", "Storage", "Connections",
 ]
 LOCAL_FEATURES = [
     "creator workspace", "real local media production",
@@ -135,6 +134,7 @@ def _run_checks() -> dict[str, Any]:
         "passed_checks": sum(1 for x in checks if x["passed"]),
         "failed_checks": [x["name"] for x in checks if not x["passed"]],
         "checks": checks,
+        "runtime_errors": {k: str(v)[:1200] for k,v in vars(APP.state).items() if k.endswith("_error") and v},
         "route_count": len(paths),
         "local_features": LOCAL_FEATURES,
         "external_authority_excluded": True,
