@@ -265,8 +265,8 @@ def runtime_contract() -> Dict[str, Any]:
         "version": VERSION,
         "build": BUILD,
         "portable": True,
-        "render_required": False,
-        "render_knowledge": False,
+        "hosting": "self_hosted_container_stack",
+        "platform_dependencies": [],
         "external_worker_mode": EXTERNAL_WORKER,
         "in_process_fallback_available": True,
         "worker_contract": {
@@ -293,11 +293,15 @@ def register(app: Any) -> None:
         # The content studio owns creation commands so the primary command box
         # drives the same durable production graph as the Create workspace.
         content_terms = (
-            "video", "short", "shorts", "reel", "podcast", "article",
-            "social", "content", "thumbnail", "image", "visual", "music",
-            "narration", "documentary", "film", "animation"
+            "video", "short", "shorts", "reel", "reels", "tiktok", "podcast", "article",
+            "blog", "social", "content", "thumbnail", "image", "visual", "music",
+            "narration", "documentary", "film", "animation", "audio", "campaign",
+            "deck", "presentation", "story", "copy", "script"
         )
-        action_terms = ("create ", "make ", "produce ", "generate ", "build ", "turn ", "edit ")
+        action_terms = (
+            "create ", "make ", "produce ", "generate ", "build ", "turn ", "edit ",
+            "write ", "draft ", "compose ", "design ", "prepare ", "develop "
+        )
         is_content = any(t in low for t in content_terms) and any(
             low.startswith(t) or (" " + t) in low for t in action_terms
             for t in action_terms
