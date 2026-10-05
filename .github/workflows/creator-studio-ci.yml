@@ -278,9 +278,10 @@ jobs:
           if artifacts.status_code != 200 or not (artifacts.json().get("artifacts") or []):
               raise SystemExit("Canonical runtime artifact registry is empty")
           summary=client.get("/infinity/studio/workspace/summary").json()
-          analytics=client.get("/infinity/studio/analytics").json()
+          analytics_response=client.get("/infinity/studio/analytics").json()
+          analytics=analytics_response.get("analytics") or analytics_response
           if int(summary.get("projects") or 0) < 1 or int(analytics.get("projects_total") or 0) < 1:
-              raise SystemExit("Canonical runtime projects/analytics did not record the production")
+              raise SystemExit("Canonical runtime projects/analytics did not record the production: summary=%s analytics=%s" % (summary, analytics_response))
           timeline=client.get("/infinity/studio/project/"+project_id+"/timeline")
           if timeline.status_code != 200:
               raise SystemExit("Canonical runtime timeline unavailable")
