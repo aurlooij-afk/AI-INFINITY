@@ -30,6 +30,10 @@ on:
       - "overlay_final_3700.py"
       - ".github/workflows/creator-studio-ci.yml"
 
+concurrency:
+  group: ai-infinity-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
