@@ -2203,6 +2203,10 @@ def worker_loop(model_fn: Optional[Callable]) -> None:
 
 def _ensure_worker(model_fn: Optional[Callable]) -> None:
     global WORKER_STARTED
+    # Portable deployments may run the durable queue in a dedicated worker
+    # container/process. In that mode the web process must remain request-only.
+    if os.getenv("AI_INFINITY_EXTERNAL_WORKER", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
     with WORKER_GUARD:
         if WORKER_STARTED:
             return
@@ -2299,7 +2303,14 @@ def _ensure_scheduler() -> None:
 
 
 def _public_base_url() -> str:
-    return (os.getenv("AI_INFINITY_PUBLIC_URL", "").strip() or os.getenv("RENDER_EXTERNAL_URL", "").strip() or "https://ai-infinity-ca5e.onrender.com").rstrip("/")
+    # Hosting is intentionally not part of the application architecture.
+    # A public URL is explicit when share links are required; local development
+    # gets a safe localhost default rather than silently depending on Render.
+    return (
+        os.getenv("AI_INFINITY_PUBLIC_URL", "").strip()
+        or os.getenv("RENDER_EXTERNAL_URL", "").strip()
+        or "http://localhost:8000"
+    ).rstrip("/")
 
 
 def _share_key() -> bytes:
