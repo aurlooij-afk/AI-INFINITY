@@ -42,18 +42,36 @@ class AIInfinityApplication:
         # AI Infinity has one public website interface: the Creator Studio.
         # Historical foundation APIs remain available as backend routes, but the
         # website itself stays unified on desktop and mobile.
+        async def send_with_no_cache(message):
+            if scope_type == "http" and message.get("type") == "http.response.start":
+                headers = list(message.get("headers") or [])
+                # The canonical AI Infinity shell must never be trapped behind an old
+                # cached Creator Studio HTML document after a deployment.
+                headers = [(k, v) for k, v in headers if k.lower() != b"cache-control"]
+                headers.append((b"cache-control", b"no-store, no-cache, must-revalidate, max-age=0"))
+                headers.append((b"pragma", b"no-cache"))
+                headers.append((b"expires", b"0"))
+                message = dict(message)
+                message["headers"] = headers
+            await send(message)
+
+        # The public root is the canonical AI Infinity operating shell. The
+        # professional Creator Studio remains available under /infinity/studio
+        # and continues to use its real production backend.
+        if scope_type == "http" and path in {"/", "/home"}:
+            await foundation_app(scope, receive, send_with_no_cache)
+            return
+
         if scope_type == "http" and (
-            path == "/"
-            or path == "/home"
-            or path == "/studio"
+            path == "/studio"
             or path.startswith("/studio/")
             or path == "/infinity/studio"
             or path.startswith("/infinity/studio/")
         ):
-            await creator_app(scope, receive, send)
+            await creator_app(scope, receive, send_with_no_cache)
             return
 
-        await foundation_app(scope, receive, send)
+        await foundation_app(scope, receive, send_with_no_cache if scope_type == "http" else send)
 
 
 application = AIInfinityApplication()
