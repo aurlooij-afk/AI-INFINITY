@@ -3,7 +3,7 @@ name: Creator Studio Build Guard
 
 on:
   push:
-    branches: ["main", "ai-infinity-final-creator-studio"]
+    branches: ["main"]
     paths:
       - "*.py"
       - "Dockerfile"
