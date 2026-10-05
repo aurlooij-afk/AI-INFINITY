@@ -31,6 +31,7 @@ def register_pro(app: Any) -> None:
         _project_dir,
         _set_session,
         _save_asset,
+        _asset_rows,
         register_artifact,
         audit_event,
         file_sha256,
