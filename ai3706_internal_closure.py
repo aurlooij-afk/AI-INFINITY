@@ -34,7 +34,7 @@ REQUIRED_MODULES = [
     "ai_infinity_bridge.py", "creator_entrypoint.py", "creator_pro_os.py",
     "ai3701_features.py", "ai3702_platform.py", "ai3703_patch.py",
     "ai3704_storage_fabric.py", "ai3705_closure.py",
-    "overlay_final_3700.py", "runtime_main_3700.py",
+    "overlay_final_3700.py", "runtime_main_3700.py", "creator_final_3800.py", "ui_3800.html",
 ]
 REQUIRED_INTERNAL_PREFIXES = [
     "/infinity/studio",
@@ -54,6 +54,7 @@ REQUIRED_EXACT_ROUTES = [
     "/infinity/3700/quality", "/infinity/3700/system",
     "/infinity/3700/ui-manifest", "/infinity/3700/ui",
     "/infinity/3705/health", "/infinity/3705/readiness",
+    "/infinity/3800/health", "/infinity/3800/capabilities",
     "/infinity/3705/connections", "/infinity/3705/closure",
     "/infinity/3705/self-test", "/infinity/3705/manifest",
     "/infinity/storage/v1/status", "/infinity/storage/v1/assets",
@@ -95,7 +96,7 @@ def _ui_checks() -> list[dict[str, Any]]:
     out = [{"name": "ui_3800.html", "passed": True}]
     for label in UI_REQUIRED_LABELS:
         out.append({"name": "UI navigation: " + label, "passed": label in text})
-    for fn in ["nav()", "refreshAll()", "createFromCommand()", "powerKnowledge()", "powerAutomation()", "powerAssets()", "powerStorage()", "powerPublish", "powerChatCommand()", "powerQuality()"]:
+    for fn in ["nav()", "refreshAll()", "createFromCommand()", "powerKnowledge()", "powerAutomation()", "powerAssets()", "powerStorage()", "preparePowerPublish()", "powerChatCommand()", "powerQuality()"]:
         out.append({"name": "UI function: " + fn, "passed": fn in text})
     return out
 
