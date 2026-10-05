@@ -15302,7 +15302,6 @@ import os as _AI_INFINITY_os
 
 _AI_INFINITY_BASE = _AI_INFINITY_Path(__file__).resolve().parent
 
-# Load the accumulated 3701→3706 platform layers into this exact application.
 for _layer in (
     "ai3701_features.py",
     "ai3702_platform.py",
@@ -15320,7 +15319,6 @@ for _layer in (
         except Exception:
             pass
 
-# Mount the actual production engine on the canonical FastAPI application.
 try:
     _studio_ultimate = _AI_INFINITY_importlib.import_module("studio_ultimate")
     _studio_ultimate.register(app, model_fn=globals().get("_2700_model"))
@@ -15329,7 +15327,6 @@ except Exception as _exc:
     app.state.ai_infinity_creator_studio = False
     app.state.ai_infinity_creator_studio_error = str(_exc)[:800]
 
-# Mount Creator OS 3800 memory, worlds, creative lab, graph and quality loop.
 try:
     _creator_final_3800 = _AI_INFINITY_importlib.import_module("creator_final_3800")
     _creator_final_3800.register(app)
@@ -15338,14 +15335,12 @@ except Exception as _exc:
     app.state.ai_infinity_3800 = False
     app.state.ai_infinity_3800_error = str(_exc)[:800]
 
-# Apply production hardening after all application routes are present.
 try:
     _production_hardening = _AI_INFINITY_importlib.import_module("production_hardening")
     app.state.production_hardening = _production_hardening.apply()
 except Exception as _exc:
     app.state.production_hardening = {"status": "degraded", "truthful": True, "error": str(_exc)[:800]}
 
-# The final 3800 UI is the only public website shell.
 try:
     from fastapi.responses import HTMLResponse as _AI_INFINITY_HTMLResponse
     FINAL3700_UI = (_AI_INFINITY_BASE / "ui_3800.html").read_text(encoding="utf-8")
@@ -15376,3 +15371,11 @@ app.title = "AI Infinity"
 app.version = "TARGET-2050.3800"
 app.state.ai_infinity_runtime = "standalone"
 app.state.ai_infinity_truthful = True
+
+if __name__ == "__main__":
+    import uvicorn as _ai_infinity_uvicorn
+    _ai_infinity_uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(_AI_INFINITY_os.getenv("PORT", "10000")),
+    )
