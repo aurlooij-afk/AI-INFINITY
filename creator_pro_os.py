@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, Response
 from fastapi.responses import FileResponse
 
 
@@ -41,7 +41,7 @@ def register_pro(app: Any) -> None:
         now,
     )
 
-    def owned_project(pid: str, request: Request, response: Any):
+    def owned_project(pid: str, request: Request, response: Response):
         uid = _get_user_id(request)
         _set_session(response, request, uid)
         p = _get_project(pid)
