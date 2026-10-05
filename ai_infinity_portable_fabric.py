@@ -284,7 +284,7 @@ def runtime_contract() -> Dict[str, Any]:
 
 
 def register(app: Any) -> None:
-    from fastapi import HTTPException, Request
+    from fastapi import HTTPException, Request, Response
 
     def _director_request(command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         command = str(command or "").strip()
@@ -379,7 +379,7 @@ def register(app: Any) -> None:
         }
 
     @app.post("/infinity/studio/director")
-    async def director(request: Request, response):
+    async def director(request: Request, response: Response):
         studio_ultimate = __import__("studio_ultimate")
         payload = await request.json()
         command = str(payload.get("command") or payload.get("objective") or "").strip()
