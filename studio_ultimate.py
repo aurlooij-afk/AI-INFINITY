@@ -35,8 +35,7 @@ except Exception:  # pragma: no cover
 
 VERSION = "TARGET-2050.3623"
 BUILD = "AI-INFINITY-FINAL-FREE-FOREVER-CREATOR-WORKBENCH"
-# Free Render has a small CPU budget. Bound all free-mode remote work so a
-# production cannot sit indefinitely on a public download or remote TTS call.
+# Bound all free-mode remote work so a production cannot sit indefinitely on a public download or remote TTS call.
 FAST_REMOTE_TIMEOUT = max(3, min(10, int(os.getenv("AI_INFINITY_FAST_REMOTE_TIMEOUT", "6"))))
 PRODUCT_SURFACE = "Professional Creator OS"
 # The application has no paid tier or in-app billing. External hosting/provider
@@ -2299,7 +2298,7 @@ def _ensure_scheduler() -> None:
 
 
 def _public_base_url() -> str:
-    return (os.getenv("AI_INFINITY_PUBLIC_URL", "").strip() or os.getenv("RENDER_EXTERNAL_URL", "").strip() or "https://ai-infinity-ca5e.onrender.com").rstrip("/")
+    return os.getenv("AI_INFINITY_PUBLIC_URL", "").strip().rstrip("/")
 
 
 def _share_key() -> bytes:
