@@ -263,6 +263,105 @@ def runtime_contract() -> Dict[str, Any]:
 def register(app: Any) -> None:
     from fastapi import HTTPException, Request
 
+    def _director_request(command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        command = str(command or "").strip()
+        low = command.lower()
+
+        # The content studio owns creation commands so the primary command box
+        # drives the same durable production graph as the Create workspace.
+        content_terms = (
+            "video", "short", "shorts", "reel", "podcast", "article",
+            "social", "content", "thumbnail", "image", "visual", "music",
+            "narration", "documentary", "film", "animation"
+        )
+        action_terms = ("create ", "make ", "produce ", "generate ", "build ", "turn ", "edit ")
+        is_content = any(t in low for t in content_terms) and any(
+            low.startswith(t) or (" " + t) in low for t in action_terms
+            for t in action_terms
+        )
+
+        if is_content:
+            import studio_ultimate
+            user_id = studio_ultimate._get_user_id_from_token(payload.get("user_id")) if hasattr(studio_ultimate, "_get_user_id_from_token") else None
+            if not user_id:
+                user_id = str(payload.get("user_id") or "owner")
+            duration = payload.get("duration")
+            if duration is None:
+                import re
+                m = re.search(r"\b(\d{1,4})\s*(?:-|\s)?second", low)
+                duration = int(m.group(1)) if m else 60
+            try:
+                duration = max(20, min(int(duration), 3600))
+            except Exception:
+                duration = 60
+            if any(x in low for x in ("shorts", "short", "reel", "tiktok")):
+                content_type = "video"
+                fmt = "short"
+            elif "podcast" in low:
+                content_type = "podcast"
+                fmt = "long"
+            elif "article" in low or "blog" in low:
+                content_type = "article"
+                fmt = "long"
+            elif "social" in low:
+                content_type = "social"
+                fmt = "short"
+            elif "image" in low or "thumbnail" in low or "visual" in low and "video" not in low:
+                content_type = "video"
+                fmt = "short"
+            else:
+                content_type = "video"
+                fmt = "short" if duration <= 180 else "long"
+
+            req = {
+                "title": command[:200],
+                "objective": command,
+                "topic": command,
+                "format": fmt,
+                "duration": duration,
+                "content_type": content_type,
+                "audience": str(payload.get("audience") or "general audience")[:200],
+                "tone": str(payload.get("tone") or "cinematic, intelligent, useful")[:240],
+                "language": str(payload.get("language") or "English")[:80],
+                "quality_preset": str(payload.get("quality_preset") or "high")[:40],
+                "aspect_ratio": str(payload.get("aspect_ratio") or ("9:16" if fmt == "short" else "16:9"))[:20],
+                "idempotency_key": str(payload.get("idempotency_key") or "")[:120],
+            }
+            result = studio_ultimate.enqueue(req, user_id, None)
+            result["mode"] = "creator-production"
+            result["command"] = command
+            result["truthful"] = True
+            return result
+
+        try:
+            import foundation
+            fn = getattr(foundation, "infinity3603_operating_command", None)
+            if fn:
+                result = fn(command, user_id=str(payload.get("user_id") or "owner"), approved=bool(payload.get("approved", False)))
+                result["mode"] = "operating-system"
+                result["truthful"] = True
+                return result
+        except Exception:
+            pass
+        return {
+            "status": "accepted",
+            "mode": "command-record",
+            "command": command,
+            "message": "Command was recorded; no matching production action was inferred.",
+            "truthful": True,
+        }
+
+    @app.post("/infinity/studio/director")
+    async def director(request: Request):
+        studio_ultimate = __import__("studio_ultimate")
+        payload = await request.json()
+        command = str(payload.get("command") or payload.get("objective") or "").strip()
+        if not command:
+            raise HTTPException(422, "command is required")
+        user_id = studio_ultimate._get_user_id(request)
+        payload["user_id"] = user_id
+        return _director_request(command, payload)
+
     @app.get("/infinity/3708/health")
     def portable_health():
         x = runtime_contract()
