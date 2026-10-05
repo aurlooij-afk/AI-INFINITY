@@ -165,3 +165,12 @@ except Exception as _ai3701_feature_error:
         app.state.ai3701_feature_error = str(_ai3701_feature_error)[:600]
     except Exception:
         pass
+
+# 3702 universal knowledge + automation + simulation layer.
+try:
+    exec(open("ai3702_platform.py", encoding="utf-8").read(), globals())
+except Exception as _ai3702_platform_error:
+    try:
+        app.state.ai3702_platform_error = str(_ai3702_platform_error)[:800]
+    except Exception:
+        pass
