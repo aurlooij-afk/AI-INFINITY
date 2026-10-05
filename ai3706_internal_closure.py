@@ -96,7 +96,7 @@ def _ui_checks() -> list[dict[str, Any]]:
     out = [{"name": "ui_3700.html", "passed": True}]
     for label in UI_REQUIRED_LABELS:
         out.append({"name": "UI navigation: " + label, "passed": label in text})
-    for fn in ["router(", "storage()", "connections()", "notebook()", "engineering()", "turbo60()"]:
+    for fn in ["go(", "render(", "knowledge()", "storage()", "connections()", "engineering()"]:
         out.append({"name": "UI function: " + fn, "passed": fn in text})
     return out
 
@@ -172,6 +172,7 @@ def ai3706_internal_100():
         "passed_checks": r["passed_checks"],
         "total_checks": r["total_checks"],
         "failed_checks": r["failed_checks"],
+        "runtime_errors": r.get("runtime_errors", {}),
         "route_count": r["route_count"],
         "local_features": r["local_features"],
         "external_authority_excluded": True,
