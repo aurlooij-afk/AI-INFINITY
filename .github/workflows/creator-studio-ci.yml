@@ -1,4 +1,4 @@
-# Canonical production gate: every push validates the deployed creator_entrypoint and real media execution.
+# Canonical production gate: every push validates the portable Creator OS and real media execution.
 name: Creator Studio Build Guard
 
 on:
@@ -13,6 +13,8 @@ on:
       - "ui_3700.html"
       - "runtime_main_3700.py"
       - "overlay_final_3700.py"
+      - "creator_final_3800.py"
+      - "ui_3800.html"
       - ".github/workflows/creator-studio-ci.yml"
   pull_request:
     paths:
@@ -41,14 +43,14 @@ jobs:
       - name: Compile all runtime Python modules
         run: |
           set -euo pipefail
-          python -m py_compile main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py overlay_final_3700.py runtime_main_3700.py
+          python -m py_compile main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py creator_final_3800.py ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py overlay_final_3700.py runtime_main_3700.py
           echo "Python syntax checks passed."
       - name: Parse AI Infinity platform browser JavaScript
         run: |
           python - <<'PY'
           from pathlib import Path
           import re
-          html=Path("ui_3700.html").read_text(encoding="utf-8")
+          html=Path("ui_3800.html").read_text(encoding="utf-8")
           scripts=re.findall(r"<script[^>]*>([\s\S]*?)</script>", html, flags=re.I)
           Path("/tmp/ai-infinity-ui.js").write_text("\n".join(scripts),encoding="utf-8")
           if not scripts:
@@ -59,7 +61,7 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           html=Path("ui_3700.html").read_text(encoding="utf-8")
-          required=["AI Infinity","DIRECTOR MODE","REAL CONTENT PRODUCTION","function projects()","function assets()","function analytics()","/infinity/studio/project/","videoPreview","Create real content"]
+          required=["AI Infinity","FINAL 3800","DIRECTOR MODE","REAL CONTENT PRODUCTION","function projects()","function analytics()","/infinity/studio/project/","Create real content","FREE / NO CREDITS"]
           missing=[x for x in required if x not in html]
           if missing:
               raise SystemExit("Canonical UI contract missing: "+", ".join(missing))
@@ -91,7 +93,7 @@ jobs:
           import creator_entrypoint
           from fastapi.testclient import TestClient
 
-          # Render production uses creator_entrypoint:application, exactly as Docker CMD.
+          # Alternate Creator Studio dispatcher is also tested; container production uses the canonical main:app wrapper.
 
           production_paths = {getattr(route, "path", "") for route in creator_entrypoint.creator_app.routes}
           required = {
@@ -218,7 +220,7 @@ jobs:
           import runtime_main_3700
           app=runtime_main_3700.app
           client=TestClient(app)
-          for path in ("/","/health","/infinity/3705/health","/infinity/3705/readiness","/infinity/3705/connections","/infinity/3705/self-test","/infinity/3706/health","/infinity/3706/internal-100","/infinity/3706/self-test"):
+          for path in ("/","/health","/infinity/3705/health","/infinity/3705/readiness","/infinity/3705/connections","/infinity/3705/self-test","/infinity/3706/health","/infinity/3706/internal-100","/infinity/3706/self-test","/infinity/3800/health","/infinity/3800/capabilities","/infinity/3800/dna","/infinity/3800/worlds","/infinity/3800/graph"):
               r=client.get(path)
               if r.status_code >= 500:
                   raise SystemExit(f"{path} returned HTTP {r.status_code}: {r.text[:1000]}")
@@ -227,11 +229,11 @@ jobs:
           root=client.get("/")
           if "AI Infinity" not in root.text:
               raise SystemExit("Canonical root does not contain AI Infinity")
-          if root.headers.get("x-ai-infinity-ui") != "3706-canonical":
+          if root.headers.get("x-ai-infinity-ui") != "3800-free-local-first":
               raise SystemExit("Canonical root header missing: " + str(dict(root.headers)))
-          if "REAL CONTENT PRODUCTION" not in root.text or "Create real content" not in root.text:
+          if "REAL CONTENT PRODUCTION" not in root.text or "Create real content" not in root.text or "FREE / NO CREDITS" not in root.text:
               raise SystemExit("Canonical root is not the real creator shell")
-          if "TARGET-2050.3623" in root.text:
+          if "TARGET-2050.3623" in root.text or "Render" in root.text:
               raise SystemExit("Legacy 3623 UI leaked into canonical root")
           closure=client.get("/infinity/3705/readiness").json()
           if closure.get("software_closure") is not True or closure.get("truthful") is not True:
@@ -274,6 +276,9 @@ jobs:
               rr=client.get("/infinity/studio/project/"+project_id+"/asset/"+name)
               if rr.status_code != 200:
                   raise SystemExit("Canonical runtime artifact unavailable %s: HTTP %s" % (name,rr.status_code))
+          q=client.get("/infinity/3800/quality/"+project_id)
+          if q.status_code != 200 or q.json().get("truthful") is not True:
+              raise SystemExit("3800 quality loop unavailable")
           artifacts=client.get("/infinity/studio/project/"+project_id+"/artifacts")
           if artifacts.status_code != 200 or not (artifacts.json().get("artifacts") or []):
               raise SystemExit("Canonical runtime artifact registry is empty")
@@ -291,7 +296,7 @@ jobs:
           for event in timeline_events:
               if "time" not in event or "T" not in str(event.get("time")):
                   raise SystemExit("Canonical runtime timeline timestamp is not ISO-8601: "+str(event)[:500])
-          print("Canonical runtime + external-gate closure + internal 100% completeness + real media smoke passed:", project_id)
+          print("Canonical runtime + 3800 Creator OS + external-gate closure + internal 100% completeness + real media smoke passed:", project_id)
           PY
 
   docker-build:
