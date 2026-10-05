@@ -174,3 +174,12 @@ except Exception as _ai3702_platform_error:
         app.state.ai3702_platform_error = str(_ai3702_platform_error)[:800]
     except Exception:
         pass
+
+# 3703 deep research + direct local Director execution patch.
+try:
+    exec(open("ai3703_patch.py", encoding="utf-8").read(), globals())
+except Exception as _ai3703_patch_error:
+    try:
+        app.state.ai3703_patch_error = str(_ai3703_patch_error)[:800]
+    except Exception:
+        pass
