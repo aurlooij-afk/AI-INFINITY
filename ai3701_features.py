@@ -122,8 +122,30 @@ def eng_overview():
 
 TPOOL=ThreadPoolExecutor(max_workers=4)
 def turbo_chapters(title,obj,duration):
- focus=["Cold open","Context","Mental model","Core framework","Mechanism","Case study","Failure modes","Workflow","Tradeoffs","Applications","Checklist","Synthesis"];rat=[.055,.07,.08,.095,.11,.1,.08,.095,.075,.085,.07,.085];base=["Define the decision and outcome clearly. Separate evidence from assumption and make constraints explicit.","Explain the mechanism step by step so the audience can understand what changes, what stays constant, and how success is measured.","Use a practical example and a counterexample. Turn the idea into a repeatable method rather than slogans.","Connect this section to research, execution, measurement, recovery, and iteration. Keep language direct and information-dense.","End with a concrete action, metric, and verification question so the viewer knows what to do next."];out=[]
- for i,(f,r) in enumerate(zip(focus,rat),1):out.append({"index":i,"heading":f,"duration":max(60,int(duration*r)),"narration":"\n\n".join("%s %s Topic: %s"%(b,f,obj) for b in base),"visual_query":title+" "+f,"on_screen":f,"proof_needed":[]})
+ focus=["Cold open","Context","Mental model","Core framework","Mechanism","Case study","Failure modes","Workflow","Tradeoffs","Applications","Checklist","Synthesis"]
+ rat=[.055,.07,.08,.095,.11,.1,.08,.095,.075,.085,.07,.085]
+ base=[
+  "Define the decision and the outcome clearly. Separate evidence from assumption and make the constraints explicit. State what the audience should be able to explain or do after this section, and keep the section tied to the larger objective.",
+  "Explain the mechanism step by step. Show what changes, what stays constant, which inputs matter, and which signals indicate progress. Prefer cause-and-effect reasoning over slogans, and distinguish observed evidence from interpretation.",
+  "Use a practical example, a counterexample, and a boundary case. Make the audience able to predict what happens next. Turn the idea into a repeatable method with inputs, actions, checks, recovery steps, and a measurable result.",
+  "Connect the section to research, execution, measurement, recovery, and iteration. Explain how a real operator would move from information to action, how quality is checked, what can fail, and how the workflow adapts without pretending uncertainty is certainty.",
+  "End with a concrete action, metric, and verification question. Give the viewer a decision rule, a checklist, a useful warning, and a next experiment. Keep the language direct, information-dense, and appropriate for spoken narration."
+ ]
+ variants=[
+  "Take the same idea from the perspective of a beginner, then from the perspective of an experienced operator. Explain what each person would notice first and what common mistake would waste time.",
+  "Compare a fast path and a high-quality path. Explain when speed is valuable, when it creates hidden cost, and how to preserve reliability while reducing unnecessary work.",
+  "Trace one realistic scenario from start to finish. Identify the trigger, the first decision, the main bottleneck, the evidence used, the action taken, the verification step, and the lesson learned.",
+  "Describe failure recovery. Show how to detect a bad assumption early, isolate the problem, choose a safe fallback, record the lesson, and return to the main objective without fabricating success.",
+  "Explain measurement. Define the leading signal, the lagging result, the quality threshold, and the point where the operator should stop, revise, or continue.",
+  "Add an advanced nuance that is often skipped in superficial explanations. Clarify the tradeoff, the dependency, the edge case, and the reason the simple rule can break under different conditions.",
+  "Turn the section into a mini operating playbook: preparation, execution, verification, handoff, documentation, and follow-up. Make every step observable and useful outside the video itself.",
+  "Ask the difficult question an expert audience would raise. Answer it carefully, separating what can be supported from what remains uncertain, and show what evidence would change the conclusion.",
+  "Close by reconnecting this section to the central objective. Summarize the insight, name the practical consequence, and give the audience one concrete next move they can make immediately."
+ ]
+ out=[]
+ for i,(f,r) in enumerate(zip(focus,rat),1):
+  text="\n\n".join("%s Section: %s Topic: %s"%(b,f,obj) for b in base+variants)
+  out.append({"index":i,"heading":f,"duration":max(60,int(duration*r)),"narration":text,"visual_query":title+" "+f,"on_screen":f,"proof_needed":[]})
  out[-1]["duration"]=max(60,duration-sum(x["duration"] for x in out[:-1]));return out
 def turbo_model(payload):
  msg=payload.get("messages",[{}])[-1].get("content","");m=re.search(r"TITLE:\s*(.+)",msg);title=(m.group(1).strip() if m else "AI Infinity flagship episode");m=re.search(r"OBJECTIVE:\s*(.+)",msg);obj=(m.group(1).strip() if m else "Create useful long-form content");m=re.search(r"DURATION:\s*(\d+)",msg);dur=int(m.group(1)) if m else 3600
