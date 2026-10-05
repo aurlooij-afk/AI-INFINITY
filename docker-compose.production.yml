@@ -1,0 +1,46 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["/usr/bin/tini","--","uvicorn","runtime_main_3700:app","--host","0.0.0.0","--port","8000"]
+    environment:
+      AI_INFINITY_DATA_DIR: /var/lib/ai-infinity
+      AI_INFINITY_STORAGE_MODE: local
+      AI_INFINITY_EXTERNAL_WORKER: "true"
+      AI_INFINITY_PERSISTENCE_MODE: portable-volume
+      AI_INFINITY_FAST_MODE: "false"
+      AI_INFINITY_FFMPEG_THREADS: "2"
+      AI_INFINITY_FFMPEG_FILTER_THREADS: "2"
+      AI_INFINITY_MEMORY_GUARD_PERCENT: "0.80"
+      AI_INFINITY_MEMORY_RESERVE_MB: "256"
+      AI_INFINITY_PUBLIC_URL: http://localhost:8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ai_infinity_data:/var/lib/ai-infinity
+    restart: unless-stopped
+    depends_on:
+      - worker
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["/usr/bin/tini","--","python","production_worker.py"]
+    environment:
+      AI_INFINITY_DATA_DIR: /var/lib/ai-infinity
+      AI_INFINITY_STORAGE_MODE: local
+      AI_INFINITY_EXTERNAL_WORKER: "true"
+      AI_INFINITY_PERSISTENCE_MODE: portable-volume
+      AI_INFINITY_FAST_MODE: "false"
+      AI_INFINITY_FFMPEG_THREADS: "2"
+      AI_INFINITY_FFMPEG_FILTER_THREADS: "2"
+      AI_INFINITY_MEMORY_GUARD_PERCENT: "0.80"
+      AI_INFINITY_MEMORY_RESERVE_MB: "256"
+    volumes:
+      - ai_infinity_data:/var/lib/ai-infinity
+    restart: unless-stopped
+
+volumes:
+  ai_infinity_data:
