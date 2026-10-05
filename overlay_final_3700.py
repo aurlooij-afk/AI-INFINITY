@@ -155,3 +155,13 @@ APP_VERSION=FINAL3700_VERSION
 BUILD=FINAL3700_BUILD
 PREVIOUS_BUILD=FINAL3700_PREVIOUS
 app.version=APP_VERSION
+
+
+# 3701 acceleration + knowledge + engineering layer.
+try:
+    exec(open("ai3701_features.py", encoding="utf-8").read(), globals())
+except Exception as _ai3701_feature_error:
+    try:
+        app.state.ai3701_feature_error = str(_ai3701_feature_error)[:600]
+    except Exception:
+        pass
