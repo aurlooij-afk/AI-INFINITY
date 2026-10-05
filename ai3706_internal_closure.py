@@ -43,6 +43,7 @@ REQUIRED_INTERNAL_PREFIXES = [
     "/infinity/3702",
     "/infinity/3703",
     "/infinity/3705",
+    "/infinity/3800",
 ]
 REQUIRED_EXACT_ROUTES = [
     "/", "/health",
@@ -91,7 +92,7 @@ def _module_checks() -> list[dict[str, Any]]:
 def _ui_checks() -> list[dict[str, Any]]:
     p = BASE / "ui_3800.html"
     if not p.exists():
-        return [{"name": "ui_3700.html", "passed": False}]
+        return [{"name": "ui_3800.html", "passed": False}]
     text = p.read_text(encoding="utf-8", errors="replace")
     out = [{"name": "ui_3800.html", "passed": True}]
     for label in UI_REQUIRED_LABELS:
