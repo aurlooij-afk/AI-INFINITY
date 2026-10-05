@@ -454,7 +454,12 @@ def register(app: Any) -> None:
 
     @app.get("/infinity/3800/quality/{project_id}")
     def quality(project_id: str, request: Request, response: Response):
-        ensure_session(request, response)
+        uid_ = ensure_session(request, response)
+        studio = studio_module()
+        getter = getattr(studio, "_get_project", None)
+        project = getter(project_id) if callable(getter) else None
+        if not project or str(project.get("user_id") or "") != str(uid_):
+            raise HTTPException(404, "project not found")
         return quality_for_project(project_id)
 
     @app.get("/infinity/3800/reusable")
