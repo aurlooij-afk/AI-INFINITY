@@ -3,10 +3,14 @@ services:
     name: ai-infinity
     runtime: docker
     plan: free
+    maxShutdownDelaySeconds: 300
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
-    autoDeploy: true
+    buildFilter:
+      ignoredPaths:
+        - .github/**
+    autoDeployTrigger: commit
     envVars:
       - key: AI_INFINITY_OWNER_EMAIL
         value: aurlooij@gmail.com
