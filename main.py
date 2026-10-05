@@ -997,7 +997,8 @@ BUILD = "DURABLE-AUTONOMOUS-WORKFLOW-ENGINE"
 
 
 def _init_durable_185():
-    with _db_lock, db() as c:        c.executescript("""
+    with _db_lock, db() as c:
+        c.executescript("""
         CREATE TABLE IF NOT EXISTS durable_work_jobs_185 (
             id TEXT PRIMARY KEY,
             workflow_id TEXT NOT NULL UNIQUE,
@@ -1996,7 +1997,8 @@ def _run_one_step_187(mission_id: str, step_row: Dict[str, Any], previous_result
         return {"status":"pending_approval","approval_required":True,"connector":connector,"action":action,"action_type":step_row.get("action_type")}
 
     eid = create_execution(step_row.get("action_type") or f"{connector}.{action}", connector,
-                           f"{connector}.{action}", side_effect)    _update_step_187(step_row["id"], status="running", execution_id=eid, attempts=(step_row.get("attempts") or 0)+1)
+                           f"{connector}.{action}", side_effect)
+    _update_step_187(step_row["id"], status="running", execution_id=eid, attempts=(step_row.get("attempts") or 0)+1)
     before = {"connector":connector,"action":action,"args":args,"timestamp":now()}
     before_snap = _save_state_snapshot_187(mission_id, step_row["id"], "before", before)
     _update_step_187(step_row["id"], before_state_json=_json_187(before_snap))
@@ -2995,7 +2997,8 @@ with _db_lock, db() as _c:
         error TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL
     );
     CREATE TABLE IF NOT EXISTS real_command_events_190 (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL,        event TEXT NOT NULL, data_json TEXT, created_at REAL NOT NULL
+        id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL,
+        event TEXT NOT NULL, data_json TEXT, created_at REAL NOT NULL
     );
     CREATE TABLE IF NOT EXISTS real_command_approvals_190 (
         id TEXT PRIMARY KEY, job_id TEXT NOT NULL, step_key TEXT NOT NULL,
@@ -3995,6 +3998,7 @@ def _vault_row_192(provider: str, account_name: str = "default") -> Optional[Dic
         ).fetchone()
     return dict(r) if r else None
 
+
 def _vault_access_token_192(provider: str, account_name: str = "default") -> Optional[str]:
     row = _vault_row_192(provider, account_name)
     if not row:
@@ -4993,7 +4997,8 @@ def oauth_client_create_193(body: Dict[str, Any]):
     return {"status": "created", "client_id": app_id, "provider": p["provider"], "name": p["name"], "redirect_uri": p["redirect_uri"], "scopes": p["scopes"], "client_credentials_vault_encrypted": True, "secret_values_exposed": False}
 
 
-def _oauth_client_193(client_id: str) -> Optional[Dict[str, Any]]:    with _db_lock, db() as c:
+def _oauth_client_193(client_id: str) -> Optional[Dict[str, Any]]:
+    with _db_lock, db() as c:
         r = c.execute("SELECT * FROM oauth_clients_193 WHERE id=?", (client_id,)).fetchone()
     return dict(r) if r else None
 
@@ -5992,7 +5997,8 @@ def _natural_to_canonical_196(command: str) -> Dict[str, Any]:
 
     m = re.match(r"^(?:remember|save|store)\s+(?:that\s+)?(.+)$", s, re.I)
     if m:
-        normalized = "remember " + m.group(1).strip()        return {"status":"compiled","normalized":normalized,"intent_type":"memory.remember","confidence":0.97,"item":_real_command_atomic_190(normalized)}
+        normalized = "remember " + m.group(1).strip()
+        return {"status":"compiled","normalized":normalized,"intent_type":"memory.remember","confidence":0.97,"item":_real_command_atomic_190(normalized)}
 
     if re.fullmatch(r"ping", s, re.I):
         return {"status":"compiled","normalized":"ping","intent_type":"system.ping","confidence":1.0,"item":_real_command_atomic_190("ping")}
@@ -6991,7 +6997,8 @@ def _bridge_auth_200(runtime_id: str, bridge_token: str) -> Dict[str, Any]:
 
 
 def _bridge_capabilities_200(row: Dict[str, Any]) -> List[str]:
-    try:        value = json.loads(row.get("capabilities_json") or "[]")
+    try:
+        value = json.loads(row.get("capabilities_json") or "[]")
         return [str(x) for x in value if str(x).strip()]
     except Exception:
         return []
@@ -7990,7 +7997,8 @@ def _model_call2110(messages, system=None):
     msgs = ([] if system is None else [{"role":"system","content":system}]) + list(messages)
     errors=[]
     for p in providers:
-        try:            if p["provider"] == "openai-compatible":
+        try:
+            if p["provider"] == "openai-compatible":
                 base=_os_2110.getenv("AI_INFINITY_LLM_BASE_URL").rstrip("/")
                 if not base.endswith("/chat/completions"): base += "/chat/completions"
                 j=_http_json2110(base,{"model":p["model"],"messages":msgs,"temperature":0.2}, {"Authorization":"Bearer "+_os_2110.getenv("AI_INFINITY_LLM_API_KEY")})
@@ -8989,6 +8997,7 @@ except Exception:
 FINAL2260_VERSION = "TARGET-2050.2260"
 FINAL2260_BUILD = "MAXIMUM-SELF-SUFFICIENCY-PLATFORM-BLUEPRINT"
 FINAL2260_PREVIOUS = FINAL2160_VERSION
+
 AI_INFINITY_MISSION = {'title': 'AI Infinity — a self-sufficient, trusted general-purpose mission platform', 'objective': "AI Infinity is intended to turn a human's natural-language desired outcome into a measurable, authorized, verified real-world result. It combines conversation, reasoning, research, memory, planning, tools, integrations, browser/device bridges, approval policies, recovery, observability and reusable skills behind one command surface. The platform is designed to be free-first, provider-neutral, truthful about its actual runtime capabilities, and resilient when individual models, providers or external services fail. It should improve from verified outcomes rather than unsupported self-claims. A single authorization should grant only the scope the owner explicitly chooses, with revocation, risk gates, auditability and an emergency stop available. The end state is an operating system for safe digital missions: AI Infinity understands, plans, executes, verifies, reconciles, recovers and closes work while humans retain control over consequential authority.", 'operating_loop': ['intent', 'constraints', 'capabilities', 'evidence', 'plan', 'authority', 'execute', 'observe', 'verify', 'reconcile', 'recover', 'learn', 'close'], 'quality_target': 'Compete on measurable task quality, evidence quality, reliability, latency, usability, cost discipline, security and verified outcomes rather than unsupported claims of superiority.', 'free_first_rule': 'No paid provider is mandatory for the core platform. Without an external model, deterministic or built-in fallback behavior must remain available and provider-dependent features must stay truthfully marked.'}
 
 AI_INFINITY_CURRENT_STATE = {'confirmed_target': 'TARGET-2050.2160', 'production_build': 'FINAL-PRODUCTION-GENERAL-AGENT-PLATFORM', 'preserved_kernel': True, 'closure_steps_implemented': 50, 'reported_capabilities': {'ready': 12, 'configured': 12, 'total': 19, 'blocked': 7}, 'model': {'configured': False, 'providers': [], 'builtin_fallback': True, 'paid_dependency_required': False}, 'safety': {'arbitrary_code_execution': False, 'uncertain_external_replay': False, 'secret_values_exposed': False, 'scoped_authority': True, 'emergency_stop_boundary': True}, 'confirmed_self_test': {'status': 'completed', 'passed': True, 'tests': ['version', '50-step closure', 'capability catalog', 'architecture', 'benchmark', 'safety invariants', 'truthful model fallback']}, 'remaining_truthful_gaps': ['external browser runtime/bridge', 'paired device bridge', 'connected email account/provider', 'connected calendar account/provider', 'connected GitHub account', 'connected Slack account', 'connected Microsoft account', 'stronger external model is optional, not mandatory']}
@@ -9988,7 +9997,8 @@ def _f2275_self_test():
     T("uncertain replay disabled",AI_INFINITY_2275_CHARTER["safety"]["automatic_uncertain_external_replay"] is False)
     T("secret exposure disabled",AI_INFINITY_2275_CHARTER["safety"]["secret_values_exposed"] is False)
     T("offline plan available",True)
-    T("command compiler",_2275_classify_command("research, revenue and media") ["intent_tags"]==["research","revenue","media"])    return {"status":"completed","version":FINAL2275_VERSION,"build":FINAL2275_BUILD,"passed":all(x["passed"] for x in tests),"tests":tests,"metrics":_f2275_metrics(),"truthful":True}
+    T("command compiler",_2275_classify_command("research, revenue and media") ["intent_tags"]==["research","revenue","media"])
+    return {"status":"completed","version":FINAL2275_VERSION,"build":FINAL2275_BUILD,"passed":all(x["passed"] for x in tests),"tests":tests,"metrics":_f2275_metrics(),"truthful":True}
 
 
 FINAL2275_UI = r"""<!doctype html>
@@ -10987,7 +10997,8 @@ def _2600_public_research(objective: str, mission_id: str, limit: int = 8) -> Di
 
     with _cf_2300.ThreadPoolExecutor(max_workers=min(6, max(1, len(sources)))) as ex:
         futures = [ex.submit(fetch_one, s) for s in sources]
-        for fut in _cf_2300.as_completed(futures):            result = fut.result()
+        for fut in _cf_2300.as_completed(futures):
+            result = fut.result()
             if result["ok"]:
                 src = result["source"]; f = result["fetch"]
                 item = {
@@ -11986,7 +11997,8 @@ def _2700_safe_url(url, method="GET"):
         # Public GET is allowed by the 2600 public research path; consequential
         # connector calls remain allowlist-bound.
         if method.upper() not in SAFE_METHODS:
-            raise ValueError("external side-effect host is not allowlisted")    return str(url)
+            raise ValueError("external side-effect host is not allowlisted")
+    return str(url)
 
 
 def _2700_connector_specs():
@@ -12985,7 +12997,8 @@ FINAL_INFINITY_UI = r'''<!doctype html>
 .light textarea,.light input,.light select{background:rgba(255,255,255,.82);color:#141820}
 .light .msg.assistant,.light .listRow,.light .conn,.light .stat{background:rgba(255,255,255,.72)}
 .light .avatar{background:#fff;color:#141820}
-.light .nav button,.light .btn,.light .chip{color:#4D5560}.light .mobile{background:rgba(248,248,245,.94)}
+.light .nav button,.light .btn,.light .chip{color:#4D5560}
+.light .mobile{background:rgba(248,248,245,.94)}
 @media(max-width:1120px){.hero{grid-template-columns:1fr}.grid2{grid-template-columns:1fr}.grid3{grid-template-columns:1fr 1fr}}
 @media(max-width:860px){body{overflow:auto}.app{display:block;min-height:100vh;height:auto;padding-bottom:72px}.side{display:none}.top{height:60px;padding:0 14px;position:sticky;top:0;z-index:10}.content{height:auto;overflow:visible;padding:16px 13px 25px}.top .pill{display:none}.hero h1{font-size:36px}.hero p{font-size:14px}.grid3{grid-template-columns:1fr}.stats{grid-template-columns:1fr 1fr}.chatLayout{display:block;height:auto}.chatSide{max-height:160px;margin-bottom:10px}.chatMain{min-height:540px}.msg{max-width:88%}.connGrid{grid-template-columns:1fr}.mobile{position:fixed;display:grid;grid-template-columns:repeat(5,1fr);left:0;right:0;bottom:0;height:68px;background:rgba(9,11,14,.95);border-top:1px solid var(--line);backdrop-filter:blur(17px);z-index:20}.mobile button{border:0;background:transparent;color:#7E8897;font-size:9px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}.mobile button.active{color:#fff}.mi{font-size:18px}.sectionHead h2{font-size:25px}.buttons{flex-direction:column}}
 @media(max-width:430px){.hero h1{font-size:33px}.commandBox{font-size:16px}.card{padding:14px}.tools{max-width:73%}.btn.primary{padding:10px 13px}}
@@ -13985,6 +13998,7 @@ def _gp_command(command, user_id="default", auto_apply=False):
         result["fixed_price_tasks"]=_gp_fixed_price_rows(50)
         _gp_activity("work","Fixed-price work discovery","completed",f"Discovered {len(result['fixed_price_tasks'])} tasks with stated reward signals.")
         return result
+
     if any(x in low for x in ("media","video","content production","youtube","social content")):
         title=s[:80]
         media=_f2300_media_production_plan({"title":title,"objective":s,"audience":"general audience","format":"video"})
@@ -14983,7 +14997,8 @@ def infinity3700_health():
         "platform_shell": True,
         "creator_workspace": True,
         "durable_projects": tables["ai3700_projects"],
-        "durable_brand": tables["ai3700_brand"],        "durable_publish_queue": tables["ai3700_publish_queue"],
+        "durable_brand": tables["ai3700_brand"],
+        "durable_publish_queue": tables["ai3700_publish_queue"],
         "truthful": True,
     }
 
