@@ -38,7 +38,7 @@ jobs:
       - name: Compile all runtime Python modules
         run: |
           set -euo pipefail
-          python -m py_compile main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py overlay_final_3700.py runtime_main_3700.py
+          python -m py_compile main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py overlay_final_3700.py runtime_main_3700.py
           echo "Python syntax checks passed."
       - name: Parse AI Infinity platform browser JavaScript
         run: |
@@ -202,7 +202,7 @@ jobs:
           import runtime_main_3700
           app=runtime_main_3700.app
           client=TestClient(app)
-          for path in ("/","/health","/infinity/3705/health","/infinity/3705/readiness","/infinity/3705/connections","/infinity/3705/self-test"):
+          for path in ("/","/health","/infinity/3705/health","/infinity/3705/readiness","/infinity/3705/connections","/infinity/3705/self-test","/infinity/3706/health","/infinity/3706/internal-100","/infinity/3706/self-test"):
               r=client.get(path)
               if r.status_code >= 500:
                   raise SystemExit(f"{path} returned HTTP {r.status_code}: {r.text[:1000]}")
@@ -217,7 +217,13 @@ jobs:
           selftest=client.get("/infinity/3705/self-test").json()
           if selftest.get("passed") is not True:
               raise SystemExit("Final closure self-test failed: "+str(selftest)[:4000])
-          print("Canonical runtime wrapper + final closure smoke passed.")
+          internal=client.get("/infinity/3706/internal-100").json()
+          if internal.get("internal_100_percent") is not True:
+              raise SystemExit("Internal 100% closure failed: "+str(internal)[:4000])
+          internal_test=client.get("/infinity/3706/self-test").json()
+          if internal_test.get("passed") is not True:
+              raise SystemExit("Internal completeness self-test failed: "+str(internal_test)[:4000])
+          print("Canonical runtime + external-gate closure + internal 100% completeness smoke passed.")
           PY
 
   docker-build:
