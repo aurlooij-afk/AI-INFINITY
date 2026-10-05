@@ -136,6 +136,29 @@ def _project_artifact_rows(project_id: str):
         return []
 
 
+def sync_project_artifacts(project_id: str, paths) -> Dict[str, Any]:
+    """
+    Copy verified finished artifacts into the configured portable object store.
+    Local storage is always used as the durable working copy; S3-compatible
+    storage is an optional second durable copy.
+    """
+    rows = []
+    for path in paths or []:
+        try:
+            p = Path(path)
+            if p.exists() and p.is_file():
+                rows.append(put_object(project_id, p, p.name))
+        except Exception as exc:
+            rows.append({"name": str(path), "stored": False, "error": str(exc)[:500]})
+    return {
+        "mode": STORAGE_MODE,
+        "items": rows,
+        "stored_count": sum(1 for x in rows if x.get("stored")),
+        "external_stored_count": sum(1 for x in rows if x.get("external_stored")),
+        "truthful": True,
+    }
+
+
 def project_manifest(project_id: str) -> Dict[str, Any]:
     p = _studio_project(project_id)
     if not p:
