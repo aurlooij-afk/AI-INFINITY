@@ -189,3 +189,9 @@ def turbo_artifact(jid:str,name:str,request:Request):
  root=Path(r[0]).resolve();p=(root/name).resolve()
  if root not in p.parents or not p.exists():raise HTTPException(404,"artifact not found")
  return FileResponse(p)
+
+# Preserve the foundation clock after this extension module defines its helpers.
+try:
+    now = NOW
+except Exception:
+    pass
