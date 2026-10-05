@@ -298,6 +298,22 @@ def register_pro(app: Any) -> None:
                 script_text = ""
                 if script_path.exists():
                     script_text = script_path.read_text(encoding="utf-8", errors="ignore").strip()
+                # The asset registry is authoritative for generated deliverables.
+                # If a worker/runtime used a different project directory representation,
+                # recover the script from the registered asset path before falling back.
+                if not script_text:
+                    try:
+                        with DB_LOCK, _connect() as c:
+                            row = c.execute(
+                                "SELECT path FROM studio_assets_3610 WHERE project_id=? AND kind='script' ORDER BY created_at DESC LIMIT 1",
+                                (project_id,),
+                            ).fetchone()
+                        asset_path = Path(row["path"]) if row and row["path"] else None
+                        if asset_path and asset_path.is_file():
+                            script_text = asset_path.read_text(encoding="utf-8", errors="ignore").strip()
+                    except Exception:
+                        script_text = ""
+                # A completed production always has at least its generated title/script.
                 chapters = [{"heading": p.get("title") or "Production scene",
                              "narration": script_text[:12000] if script_text else (p.get("title") or "AI Infinity production"),
                              "image_prompt": p.get("title") or "creator production scene",
