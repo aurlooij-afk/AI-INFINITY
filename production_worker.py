@@ -34,6 +34,8 @@ def run() -> int:
             # recovery, checkpoints, rendering and QC instead of duplicating
             # production logic in a second engine.
             studio_ultimate.worker_loop(None)
+        except KeyboardInterrupt:
+            break
         except Exception:
             traceback.print_exc()
             if STOP:
