@@ -48,14 +48,18 @@ def request(path: str, method: str = "GET", payload=None, timeout: int = 30):
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
-    with client.open(req, timeout=timeout) as resp:
-        raw = resp.read()
-        text = raw.decode("utf-8", errors="replace")
-        try:
-            body = json.loads(text)
-        except Exception:
-            body = text
-        return resp.status, body
+    try:
+        with client.open(req, timeout=timeout) as resp:
+            raw = resp.read()
+            text = raw.decode("utf-8", errors="replace")
+            try:
+                body = json.loads(text)
+            except Exception:
+                body = text
+            return resp.status, body
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {exc.code} for {path}: {raw[:4000]}") from exc
 
 
 def wait_health(deadline: float):
