@@ -101,7 +101,7 @@ jobs:
           grep -q "web:" docker-compose.production.yml
           grep -q "worker:" docker-compose.production.yml
           grep -q "caddy:" docker-compose.production.yml
-          ! grep -RniE 'render\.com|RENDER_|render_required|render_knowledge|render\.yaml' --exclude-dir=.git .
+          ! grep -RniE 'render\.com|RENDER_|render_required|render_knowledge|render\.yaml' --exclude-dir=.git --exclude='creator-studio-ci.yml' --exclude='production-studio-gate.yml' .
 
       - name: Import canonical runtime without starting an in-process worker
         run: |
