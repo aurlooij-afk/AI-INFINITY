@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#06090d">
+<meta name="description" content="AI Infinity — free-first, local-first Creator Operating System.">
+<title>AI Infinity — Creator Operating System</title>
+<style>
+:root{--bg:#05070a;--panel:#0b1016;--panel2:#0e151d;--line:#202b38;--text:#f3f7fb;--muted:#95a4b6;--dim:#637287;--mint:#8bf0c8;--lime:#c8ff86;--blue:#9fc0ff;--amber:#f1d27e;--red:#ff9aaa;--shadow:0 24px 90px rgba(0,0,0,.38);--r:18px;--rail:230px}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;color:var(--text);background:radial-gradient(circle at 10% -10%,rgba(139,240,200,.09),transparent 30%),radial-gradient(circle at 95% 0,rgba(159,192,255,.07),transparent 28%),linear-gradient(180deg,#070a0f,#040609 70%,#030508);font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.035;background-image:linear-gradient(rgba(255,255,255,.7) 1px,transparent 1px);background-size:100% 4px}
+button,input,textarea,select{font:inherit}button{cursor:pointer}a{color:inherit;text-decoration:none}
+.app{display:grid;grid-template-columns:var(--rail) minmax(0,1fr);min-height:100vh}.side{position:sticky;top:0;height:100vh;overflow:auto;border-right:1px solid var(--line);background:rgba(6,9,13,.9);backdrop-filter:blur(24px);padding:14px 10px;z-index:20}
+.brand{display:flex;gap:10px;align-items:center;padding:7px 8px 18px}.mark{width:40px;height:40px;border:1px solid #344453;border-radius:14px;display:grid;place-items:center;font-size:22px;font-weight:950;background:linear-gradient(145deg,#151e28,#090d13)}.brand b{display:block;font-size:15px}.brand small{color:var(--dim);font-size:9px}
+.kicker{padding:12px 9px 5px;color:#58677a;font-size:8px;text-transform:uppercase;letter-spacing:.18em;font-weight:950}.nav{display:grid;gap:4px}.nav button{display:flex;align-items:center;gap:9px;padding:10px;border:1px solid transparent;background:transparent;border-radius:11px;color:#aeb9c7;text-align:left}.nav button:hover,.nav button.active{background:#111922;border-color:#293747;color:#fff}.nav i{width:18px;text-align:center;color:#8392a6;font-style:normal}.nav button.active i{color:var(--lime)}
+.main{min-width:0}.top{position:sticky;top:0;z-index:15;height:64px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 18px;background:rgba(5,8,12,.85);backdrop-filter:blur(22px)}.topTitle{font-size:12px;font-weight:900}.crumb{font-size:9px;color:var(--dim)}.topRight{display:flex;gap:7px;align-items:center}.pill{padding:6px 9px;border:1px solid #2a3949;border-radius:999px;background:#0a1016;color:#aebac8;font-size:9px}.pill.good{border-color:#2e5546;color:var(--mint)}.pill.free{border-color:#4b5730;color:var(--lime)}
+.wrap{max-width:1700px;margin:auto;padding:22px 22px 80px}.section{scroll-margin-top:80px;margin-bottom:18px}.hero{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(300px,.6fr);gap:13px}.card{border:1px solid var(--line);border-radius:var(--r);background:linear-gradient(180deg,rgba(13,19,26,.98),rgba(7,11,16,.98));box-shadow:var(--shadow)}.pad{padding:17px}.heroMain{padding:25px;position:relative;overflow:hidden}.heroMain:after{content:"";position:absolute;right:-20%;bottom:-70%;width:65%;height:100%;background:radial-gradient(circle,rgba(200,255,134,.09),transparent 68%);pointer-events:none}
+.eyebrow{color:#6f7f94;font-size:8px;text-transform:uppercase;letter-spacing:.2em;font-weight:950}.hero h1{font-size:clamp(40px,5vw,76px);letter-spacing:-.07em;line-height:.91;margin:10px 0 13px;max-width:900px}.lead{max-width:820px;color:#aeb9c7;margin:0;font-size:14px}
+.commandBox{margin-top:18px;border:1px solid #344455;border-radius:17px;background:#060a0e;overflow:hidden}.command{width:100%;min-height:125px;resize:vertical;border:0;outline:0;background:transparent;color:#f4f7fb;padding:15px;font-size:15px;line-height:1.6}.command::placeholder{color:#506075}.commandBar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;border-top:1px solid #1a2430;padding:8px}
+.btn{border:1px solid #314154;background:#0d141c;color:#eef4fa;border-radius:10px;padding:9px 11px}.btn:hover{background:#151e28;border-color:#4a5e73}.btn.primary{background:linear-gradient(135deg,var(--lime),#8ee8bd);color:#071006;border-color:#e0ffbd;font-weight:950}.btn.small{font-size:9px;padding:7px 9px}.btn.danger{color:var(--red)}
+.tags{display:flex;flex-wrap:wrap;gap:6px}.tag{padding:5px 8px;border:1px solid #263341;background:#0a1017;border-radius:999px;color:#8d9caf;font-size:8px}
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.stat{border:1px solid #202b37;border-radius:12px;background:#090e14;padding:11px}.stat span{display:block;color:#647287;font-size:8px;text-transform:uppercase;letter-spacing:.08em}.stat strong{display:block;margin-top:3px;font-size:24px;letter-spacing:-.05em}
+.header{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;margin:6px 0 10px}.header h2{margin:0;font-size:18px;letter-spacing:-.035em}.header p{margin:2px 0 0;color:var(--dim);font-size:9px}
+.grid2{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(320px,.7fr);gap:12px}.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}.grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.list{display:grid;gap:7px}.item{border:1px solid #202b37;border-radius:12px;background:#090e14;padding:11px}.row{display:flex;justify-content:space-between;align-items:center;gap:8px}.item b{font-size:10px}.sub{margin-top:3px;color:#69788c;font-size:8px}.badge{font-size:8px;padding:4px 6px;border:1px solid #304052;border-radius:999px;color:#aab7c6}.badge.good{color:var(--mint);border-color:#315849}.badge.warn{color:var(--amber);border-color:#584c2b}.badge.bad{color:var(--red);border-color:#633646}
+.field{width:100%;height:39px;border:1px solid #273442;border-radius:10px;background:#080e14;color:#edf3f8;padding:0 10px;outline:none}.area{min-height:95px;height:auto;padding:10px;resize:vertical}.field:focus{border-color:#50677d}.label{display:block;margin:0 0 4px;color:#68778b;font-size:8px;text-transform:uppercase;letter-spacing:.08em;font-weight:900}.form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.full{grid-column:1/-1}.actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}
+.pipeline{display:grid;grid-template-columns:repeat(9,minmax(65px,1fr));gap:5px}.stage{padding:8px;border:1px solid #202b36;border-radius:10px;background:#090e14}.stage b{display:block;font-size:8px}.stage span{display:block;margin-top:2px;color:#5f6e82;font-size:7px}.stage.done{border-color:#2d5143;background:#0b1410}.stage.done span{color:#98dcbf}.stage.live{border-color:#536244;background:#10170f}.stage.live span{color:#c2e9b1}
+.progress{margin-top:10px;height:6px;background:#111922;border-radius:99px;overflow:hidden}.progress i{display:block;height:100%;width:0;background:linear-gradient(90deg,#74dec1,#c8ff86)}.meta{display:flex;justify-content:space-between;color:#657388;font-size:8px;margin-top:4px}
+.preview{aspect-ratio:16/9;border:1px solid #222d38;border-radius:14px;background:#020406;overflow:hidden;display:grid;place-items:center}.preview video{width:100%;height:100%;object-fit:contain}.empty{padding:28px;text-align:center;color:#627185;font-size:9px}.mono{font:8px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word;color:#8291a6}
+.graph{min-height:270px;position:relative;overflow:hidden;background:radial-gradient(circle at 50% 45%,rgba(139,240,200,.05),transparent 45%),#070b10}.node{position:absolute;padding:8px 10px;border:1px solid #334457;border-radius:12px;background:#0b1219;color:#dfe8f1;font-size:9px}.node.world{border-color:#455f57}.node.project{border-color:#3c4f69}.edge{position:absolute;height:1px;background:#2a3949;transform-origin:0 0;opacity:.7}
+.notice{padding:9px 10px;border:1px solid #263441;border-radius:10px;background:#090f15;color:#aeb9c6;font-size:8px}.notice.good{border-color:#315748;color:#a8e8ce}.notice.warn{border-color:#51472d;color:#ecd69c}
+.videoTools{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}.smallField{min-width:0}
+.footer{text-align:center;color:#4f5f73;font-size:8px;padding-top:24px}
+.toast{position:fixed;right:15px;bottom:15px;z-index:90;display:none;max-width:420px;padding:11px 13px;border:1px solid #3a4c60;border-radius:12px;background:#111a24;color:#eff5f9;box-shadow:var(--shadow);font-size:9px}
+@media(max-width:1100px){.hero{grid-template-columns:1fr}.grid2{grid-template-columns:1fr}.grid4{grid-template-columns:repeat(2,1fr)}.pipeline{grid-template-columns:repeat(3,1fr)}}@media(max-width:850px){.app{grid-template-columns:76px 1fr}.side{padding:9px 6px}.brand{justify-content:center}.brandText,.kicker,.nav span{display:none}.nav button{justify-content:center}.wrap{padding:16px 13px 70px}.top{padding:0 12px}.top .pill{display:none}}@media(max-width:650px){.app{display:block}.side{position:fixed;left:0;right:0;bottom:0;top:auto;width:auto;height:auto;padding:5px;border:0;border-top:1px solid var(--line);z-index:40}.brand,.kicker{display:none}.nav{grid-template-columns:repeat(7,1fr)}.nav button{padding:7px 2px;display:grid;justify-items:center;gap:2px}.nav span{display:block;font-size:7px}.main{padding-bottom:57px}.top{height:56px}.wrap{padding:10px 8px 78px}.heroMain{padding:17px}.hero h1{font-size:42px}.form{grid-template-columns:1fr}.full{grid-column:auto}.grid3{grid-template-columns:1fr}.grid4{grid-template-columns:1fr 1fr}.videoTools{grid-template-columns:1fr 1fr}.pipeline{grid-template-columns:1fr 1fr 1fr}.command{min-height:120px}}@media(max-width:420px){.grid4,.videoTools{grid-template-columns:1fr}.pipeline{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="app">
+<aside class="side">
+  <div class="brand"><div class="mark">∞</div><div class="brandText"><b>AI Infinity</b><small>Free Creator OS</small></div></div>
+  <div class="kicker">Universe</div>
+  <nav class="nav">
+    <button class="active" data-target="home"><i>⌂</i><span>Home</span></button>
+    <button data-target="create"><i>✦</i><span>Create</span></button>
+    <button data-target="studio"><i>▶</i><span>Studio</span></button>
+    <button data-target="dna"><i>◇</i><span>DNA</span></button>
+    <button data-target="worlds"><i>◎</i><span>Worlds</span></button>
+    <button data-target="projects"><i>▦</i><span>Projects</span></button>
+    <button data-target="intelligence"><i>⌁</i><span>Mind</span></button>
+    <button data-target="analytics"><i>◒</i><span>Analytics</span></button>
+  </nav>
+  <div class="kicker">Truth</div>
+  <nav class="nav">
+    <button data-target="system"><i>✓</i><span>System</span></button>
+  </nav>
+</aside>
+<section class="main">
+<header class="top"><div><div class="topTitle">AI Infinity · Creator Operating System</div><div class="crumb" id="crumb">intent → production → verified result</div></div><div class="topRight"><span class="pill good" id="live">● local-first core</span><span class="pill free">FREE / NO CREDITS</span><button class="btn small" onclick="refreshAll()">Refresh</button></div></header>
+
+<main class="wrap">
+<section id="home" class="section">
+<div class="hero">
+  <div class="card heroMain">
+    <div class="eyebrow">FINAL 3800 · DIRECTOR MODE · REAL CONTENT PRODUCTION</div>
+    <h1>Bring an idea<br>to life.</h1>
+    <p class="lead">A free-first Creator Operating System built around intent, real media production, creator memory, worlds, quality checks and reusable work.</p>
+    <div class="commandBox">
+      <textarea id="cmd" class="command" placeholder="Describe the outcome… e.g. Create a 45-second cinematic short about the history of solar power for students, with narration, captions, thumbnail and a social package."></textarea>
+      <div class="commandBar">
+        <div class="tags">
+          <span class="tag">One command</span><span class="tag">Real video</span><span class="tag">Voice</span><span class="tag">Captions</span><span class="tag">Thumbnail</span><span class="tag">QC</span>
+        </div>
+        <button class="btn primary" onclick="createFromCommand()">Create real content</button>
+      </div>
+    </div>
+    <div id="commandNotice" style="margin-top:9px"></div>
+  </div>
+  <div class="grid2" style="display:block">
+    <div class="card pad">
+      <div class="header"><div><h2>Infinity state</h2><p>live workspace facts</p></div></div>
+      <div class="stats">
+        <div class="stat"><span>Projects</span><strong id="sProjects">—</strong></div><div class="stat"><span>Worlds</span><strong id="sWorlds">—</strong></div>
+        <div class="stat"><span>Experiments</span><strong id="sExperiments">—</strong></div><div class="stat"><span>Free core</span><strong>ON</strong></div>
+      </div>
+      <div id="homeTruth" class="notice good" style="margin-top:9px">Loading live capability state…</div>
+    </div>
+    <div class="card pad" style="margin-top:10px"><div class="header"><div><h2>Creation path</h2><p>what actually happens</p></div></div>
+      <div class="pipeline"><div class="stage done"><b>Intent</b><span>captured</span></div><div class="stage"><b>Research</b><span>grounding</span></div><div class="stage"><b>Story</b><span>blueprint</span></div><div class="stage"><b>Media</b><span>visuals</span></div><div class="stage"><b>Voice</b><span>audio</span></div><div class="stage"><b>Edit</b><span>assembly</span></div><div class="stage"><b>QC</b><span>checks</span></div><div class="stage"><b>Package</b><span>outputs</span></div><div class="stage"><b>Remember</b><span>DNA</span></div></div>
+    </div>
+  </div>
+</div>
+</section>
+
+<section id="create" class="section">
+<div class="header"><div><h2>Creation Lab</h2><p>Turn one idea into multiple deliberate creative directions.</p></div></div>
+<div class="grid2">
+  <div class="card pad">
+    <div class="form">
+      <div class="full"><label class="label">Base idea</label><textarea id="labIdea" class="field area" placeholder="A documentary about a place, person, technology, story, product or idea…"></textarea></div>
+      <div><label class="label">Direction</label><select id="labStyle" class="field"><option>Cinematic</option><option>Documentary</option><option>Emotional</option><option>Minimal</option><option>Experimental</option></select></div>
+      <div><label class="label">Audience</label><input id="labAudience" class="field" value="general audience"></div>
+    </div>
+    <div class="actions"><button class="btn primary" onclick="makeLab()">Explore 5 universes</button><button class="btn" onclick="loadDNAIntoLab()">Use my DNA</button></div>
+  </div>
+  <div class="card pad"><div class="header"><div><h2>Experiments</h2><p>choose a direction before production</p></div></div><div id="experiments" class="list"><div class="empty">No experiments yet.</div></div></div>
+</div>
+</section>
+
+<section id="studio" class="section">
+<div class="header"><div><h2>Creator Studio</h2><p>Real Content Production · advanced edits operate on actual generated files.</p></div></div>
+<div class="grid2">
+  <div class="card pad">
+    <div class="notice good">The studio is connected to the existing real production worker. AI Infinity does not report an artifact until it exists.</div>
+    <div id="activeProject" style="margin-top:9px"><div class="empty">Create something to open the live production console.</div></div>
+  </div>
+  <div class="card pad">
+    <div class="header"><div><h2>Pro controls</h2><p>non-destructive output operations</p></div></div>
+    <div class="videoTools">
+      <div class="smallField"><label class="label">Trim start</label><input id="trimStart" class="field" type="number" min="0" value="0"></div>
+      <div class="smallField"><label class="label">Trim end</label><input id="trimEnd" class="field" type="number" min="0" value="0"></div>
+      <div class="smallField"><label class="label">Speed</label><input id="speed" class="field" type="number" min=".25" max="4" step=".05" value="1"></div>
+      <div class="smallField"><label class="label">Aspect</label><select id="aspect" class="field"><option>16:9</option><option>9:16</option><option>1:1</option><option>4:5</option></select></div>
+    </div>
+    <div class="actions"><button class="btn" onclick="advancedEdit()">Apply real edit</button><button class="btn" onclick="variants()">Make format variants</button><button class="btn" onclick="interactive()">Build interactive experience</button></div>
+    <div id="studioOut" style="margin-top:9px"></div>
+  </div>
+</div>
+</section>
+
+<section id="dna" class="section">
+<div class="header"><div><h2>Creator DNA</h2><p>Explicitly saved taste becomes reusable creative context.</p></div><button class="btn primary small" onclick="saveDNA()">Save DNA</button></div>
+<div class="card pad">
+  <div class="form">
+    <div><label class="label">Identity</label><input id="dnaIdentity" class="field" placeholder="What kind of creator/brand is this?"></div>
+    <div><label class="label">Audience</label><input id="dnaAudience" class="field" placeholder="Who is this for?"></div>
+    <div><label class="label">Tone</label><input id="dnaTone" class="field" placeholder="clear, cinematic, playful…"></div>
+    <div><label class="label">Visual style</label><input id="dnaVisual" class="field" placeholder="premium editorial…"></div>
+    <div class="full"><label class="label">Brand voice</label><textarea id="dnaVoice" class="field area"></textarea></div>
+    <div class="full"><label class="label">Recurring rules (one per line)</label><textarea id="dnaRules" class="field area" placeholder="Always explain complex ideas simply&#10;Keep hooks under 10 words"></textarea></div>
+  </div>
+</div>
+</section>
+
+<section id="worlds" class="section">
+<div class="header"><div><h2>World Engine</h2><p>Keep characters, places, rules and stories connected.</p></div></div>
+<div class="grid2">
+  <div class="card pad"><div class="form"><div><label class="label">World name</label><input id="worldName" class="field" placeholder="My Story Universe"></div><div><label class="label">Core objective</label><input id="worldObjective" class="field" placeholder="What exists in this world?"></div><div class="full"><label class="label">World DNA</label><textarea id="worldDNA" class="field area" placeholder="Characters, locations, rules, style, continuity…"></textarea></div></div><div class="actions"><button class="btn primary" onclick="createWorld()">Create world</button></div></div>
+  <div class="card pad"><div class="header"><div><h2>Your worlds</h2><p>persistent creative contexts</p></div></div><div id="worldList" class="list"><div class="empty">No worlds yet.</div></div></div>
+</div>
+</section>
+
+<section id="projects" class="section">
+<div class="header"><div><h2>Projects</h2><p>Every project keeps its own production history and artifacts.</p></div></div>
+<div id="projectList" class="list"><div class="empty">Loading projects…</div></div>
+</section>
+
+<section id="intelligence" class="section">
+<div class="header"><div><h2>Intelligence</h2><p>Creation graph + deterministic quality loop + reusable material.</p></div></div>
+<div class="grid2">
+  <div class="card pad"><div class="header"><div><h2>Creation Graph</h2><p>world ↔ project relationships</p></div></div><div id="graph" class="graph"></div></div>
+  <div class="card pad"><div class="header"><div><h2>Reusable material</h2><p>real files that can feed future work</p></div></div><div id="reusable" class="list"><div class="empty">Loading…</div></div></div>
+</div>
+</section>
+
+<section id="analytics" class="section">
+<div class="header"><div><h2>Analytics</h2><p>Workspace facts—not invented performance claims.</p></div></div>
+<div class="grid3" id="analyticsCards"></div>
+</section>
+
+<section id="system" class="section">
+<div class="header"><div><h2>System Truth</h2><p>The architecture promises only what the runtime can substantiate.</p></div></div>
+<div class="grid3">
+  <div class="card pad"><div class="header"><div><h2>Always Free Core</h2><p>application-level policy</p></div></div><div class="notice good">No billing, no credits and no paid API required for the core workspace.</div></div>
+  <div class="card pad"><div class="header"><div><h2>No Render</h2><p>deployment-neutral</p></div></div><div class="notice good">Render is not required by the final 3800 product layer.</div></div>
+  <div class="card pad"><div class="header"><div><h2>Truthful states</h2><p>artifact evidence</p></div></div><div class="notice good">Planned ≠ processing ≠ created ≠ verified ≠ published.</div></div>
+</div>
+<div id="systemRaw" class="card pad" style="margin-top:10px"></div>
+</section>
+
+<div class="footer">AI Infinity · Free-first Creator Operating System · real artifacts, auditable state, open architecture.</div>
+</main>
+</section>
+</div>
+<div id="toast" class="toast"></div>
+<script>
+var currentProject=null, pollTimer=null, dna={};
+
+function $(id){return document.getElementById(id)}
+function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,function(c){return({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]})}
+function toast(msg){var x=$("toast");x.textContent=msg;x.style.display="block";clearTimeout(window.__toast);window.__toast=setTimeout(function(){x.style.display="none"},3200)}
+async function api(path,opt){opt=opt||{};var r=await fetch(path,Object.assign({credentials:"same-origin",cache:"no-store",headers:Object.assign({"Accept":"application/json"},opt.headers||{})},opt));var t=await r.text();var d;try{d=JSON.parse(t)}catch(e){d={raw:t}}if(!r.ok){throw new Error((d&&d.detail)||("HTTP "+r.status))}return d}
+function nav(){document.querySelectorAll(".nav button").forEach(function(b){b.onclick=function(){var id=b.getAttribute("data-target");document.querySelectorAll(".nav button").forEach(x=>x.classList.remove("active"));b.classList.add("active");document.getElementById(id).scrollIntoView({behavior:"smooth"});$("crumb").textContent=id+" · AI Infinity final creator OS"}})}
+async function refreshAll(){try{await Promise.all([home(),loadDNA(),loadWorlds(),projects(),loadExperiments(),graph(),reusable(),analytics(),system()]);$("live").textContent="● live";toast("Workspace refreshed")}catch(e){$("live").textContent="● offline";toast(e.message)}}
+async function home(){var s=await api("/infinity/3800/summary"),c=await api("/infinity/3800/capabilities");$("sProjects").textContent=s.projects;$("sWorlds").textContent=s.worlds;$("sExperiments").textContent=s.experiments;$("homeTruth").innerHTML='<b>Core:</b> '+(c.free_policy.core_free?"free":"restricted")+' · credits '+(c.free_policy.credits?"on":"off")+' · paid API required '+(c.free_policy.paid_api_required?"yes":"no")+' · Render required '+(c.free_policy.render_required?"yes":"no")}
+async function createFromCommand(){var v=$("cmd").value.trim();if(!v)return toast("Describe the outcome first");var notice=$("commandNotice");notice.innerHTML='<div class="notice">Creating a real project and starting the production worker…</div>';try{var p=await api("/infinity/studio/project",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title:"AI Infinity Creation",objective:v,duration:60,format:"short",aspect_ratio:"9:16",content_type:"video",language:(dna.languages&&dna.languages[0])||"English",audience:dna.audience||"general audience",tone:dna.tone||"clear, intelligent, human",voice:"en-US-AriaNeural",visual_style:dna.visual_style||"premium editorial",brand_voice:dna.brand_voice||"",platforms:dna.default_platforms||["youtube","instagram","tiktok"]})});currentProject=p.project_id;notice.innerHTML='<div class="notice good">Production started: <b>'+esc(p.title||p.project_id)+'</b></div>';document.getElementById("studio").scrollIntoView({behavior:"smooth"});pollStudio();projects();return p}catch(e){notice.innerHTML='<div class="notice warn">'+esc(e.message)+'</div>';throw e}}
+async function pollStudio(){if(!currentProject)return;clearTimeout(pollTimer);try{var p=await api("/infinity/studio/project/"+encodeURIComponent(currentProject));renderActive(p);if(["completed","completed_with_qc_warnings","failed","cancelled"].indexOf(p.status)>=0){if(p.status.indexOf("completed")===0)toast("Real content production completed");else toast("Production state: "+p.status);return}pollTimer=setTimeout(pollStudio,1200)}catch(e){toast(e.message)}}
+function renderActive(p){var pct=Math.max(0,Math.min(100,Number(p.progress||0))),st=p.stage||p.status||"queued";$("activeProject").innerHTML='<div class="row"><b>'+esc(p.title||"Content")+'</b><span class="badge '+(p.status==="completed"||p.status==="completed_with_qc_warnings"?"good":p.status==="failed"?"bad":"blue")+'">'+esc(p.status||"queued")+'</span></div><div class="sub">Stage: '+esc(st)+'</div><div class="progress"><i style="width:'+pct+'%"></i></div><div class="meta"><span>'+esc(String(st))+'</span><span>'+pct+'%</span></div><div class="preview" id="previewBox" style="margin-top:10px">'+(p.status&&p.status.indexOf("completed")===0?'<video controls playsinline preload="metadata" src="/infinity/studio/project/'+encodeURIComponent(p.project_id)+'/asset/final.mp4"></video>':'<div class="empty">The real final video appears here when the artifact exists.</div>')+'</div><div class="actions">'+(p.status&&p.status.indexOf("completed")===0?'<button class="btn small" onclick="quality()">Run quality loop</button><button class="btn small" onclick="downloadPackage()">Open package</button>':'<button class="btn small" onclick="pollStudio()">Refresh</button>')+'</div><div id="qualityOut" style="margin-top:8px"></div>'}
+async function quality(){if(!currentProject)return toast("Select a completed project");var q=await api("/infinity/3800/quality/"+encodeURIComponent(currentProject));$("qualityOut").innerHTML='<div class="notice '+(q.score===100?"good":"warn")+'"><b>Quality score '+q.score+'/100</b><br>'+q.checks.map(function(x){return (x.passed?"✓ ":"✕ ")+esc(x.name)+" — "+esc(x.detail)}).join("<br>")+(q.recommendations.length?'<br><br>'+q.recommendations.map(esc).join("<br>"):"")+'</div>'}
+function downloadPackage(){if(currentProject)window.open("/infinity/studio/project/"+encodeURIComponent(currentProject)+"/asset/package.zip","_blank")}
+async function advancedEdit(){if(!currentProject)return toast("Create/select a project first");try{var r=await api("/infinity/studio/project/"+encodeURIComponent(currentProject)+"/edit/advanced",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({trim_start:Number($("trimStart").value)||0,trim_end:Number($("trimEnd").value)||0,speed:Number($("speed").value)||1,aspect_ratio:$("aspect").value,brightness:0,contrast:1,saturation:1,sharpness:0})});$("studioOut").innerHTML='<div class="notice good">Real edit completed: '+esc(r.asset_name||"new artifact")+'</div>';toast("Edit artifact created")}catch(e){$("studioOut").innerHTML='<div class="notice warn">'+esc(e.message)+'</div>'}}
+async function variants(){if(!currentProject)return toast("Create/select a project first");try{var r=await api("/infinity/studio/project/"+encodeURIComponent(currentProject)+"/variant-matrix",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ratios:["9:16","1:1","4:5","16:9"]})});$("studioOut").innerHTML='<div class="notice good">Variants created: '+r.variants.map(function(x){return esc(x.ratio)}).join(" · ")+'</div>';toast("Format variants created")}catch(e){$("studioOut").innerHTML='<div class="notice warn">'+esc(e.message)+'</div>'}}
+async function interactive(){if(!currentProject)return toast("Create/select a project first");try{var r=await api("/infinity/studio/project/"+encodeURIComponent(currentProject)+"/interactive",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title:"AI Infinity Experience",headline:"Explore the idea",body:$("cmd").value||"A creator experience assembled from this project."})});$("studioOut").innerHTML='<div class="notice good">Interactive artifact created: <a href="'+r.download_url+'">open</a></div>'}catch(e){$("studioOut").innerHTML='<div class="notice warn">'+esc(e.message)+'</div>'}}
+async function projects(){var d=await api("/infinity/studio/projects?limit=50"),arr=d.projects||[];$("projectList").innerHTML=arr.length?arr.map(function(p){var done=String(p.status||"").indexOf("completed")===0;return '<div class="item"><div class="row"><div><b>'+esc(p.title||"Untitled")+'</b><div class="sub">'+esc(p.stage||p.status||"queued")+' · '+esc(String(p.updated_at||""))+'</div></div><span class="badge '+(done?"good":p.status==="failed"?"bad":"")+'">'+esc(p.status||"queued")+'</span></div><div class="actions"><button class="btn small" onclick="selectProject(\''+esc(p.project_id)+'\')">Open</button>'+(done?'<button class="btn small" onclick="openQuality(\''+esc(p.project_id)+'\')">Quality</button><a class="btn small" href="/infinity/studio/project/'+encodeURIComponent(p.project_id)+'/asset/final.mp4" target="_blank">Video</a>':"")+'</div></div>'}).join(""):'<div class="empty">No projects yet. Create the first one above.</div>'}
+async function selectProject(id){currentProject=id;document.getElementById("studio").scrollIntoView({behavior:"smooth"});pollStudio()}
+async function openQuality(id){currentProject=id;await pollStudio();setTimeout(quality,250)}
+async function saveDNA(){var profile={identity:$("dnaIdentity").value,audience:$("dnaAudience").value,tone:$("dnaTone").value,visual_style:$("dnaVisual").value,brand_voice:$("dnaVoice").value,languages:["English"],default_platforms:["youtube","instagram","tiktok"],recurring_rules:$("dnaRules").value.split(/\n+/).map(x=>x.trim()).filter(Boolean)};var d=await api("/infinity/3800/dna",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(profile)});dna=d.profile;toast("Creator DNA saved")}
+async function loadDNA(){var d=await api("/infinity/3800/dna");dna=d.profile||{};$("dnaIdentity").value=dna.identity||"";$("dnaAudience").value=dna.audience||"general audience";$("dnaTone").value=dna.tone||"clear, intelligent, human";$("dnaVisual").value=dna.visual_style||"premium editorial";$("dnaVoice").value=dna.brand_voice||"";$("dnaRules").value=(dna.recurring_rules||[]).join("\n")}
+function loadDNAIntoLab(){$("labAudience").value=dna.audience||"general audience";$("labStyle").value=(dna.visual_style||"Cinematic").replace(/^\w/,function(x){return x.toUpperCase()})}
+async function makeLab(){var idea=$("labIdea").value.trim();if(!idea)return toast("Write a base idea first");var styles=["Cinematic","Documentary","Emotional","Minimal","Experimental"];var rows=[];for(var i=0;i<styles.length;i++){var title=styles[i]+" universe";var concept={idea:idea,direction:styles[i],audience:$("labAudience").value.trim()||"general audience",suggestion:"Create a "+styles[i].toLowerCase()+" treatment that preserves the core idea but changes pacing, visual language and audience experience."};var r=await api("/infinity/3800/experiments",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title:title,concept:concept})});rows=r.experiments||rows}renderExperiments(rows);toast("Five creative directions saved")}
+async function loadExperiments(){var d=await api("/infinity/3800/experiments");renderExperiments(d.experiments||[])}
+function renderExperiments(a){$("experiments").innerHTML=a.length?a.slice(0,20).map(function(x){return '<div class="item"><div class="row"><b>'+esc(x.title)+'</b><span class="badge '+(x.chosen?"good":"")+'">'+(x.chosen?"chosen":"idea")+'</span></div><div class="sub">'+esc((x.concept&&x.concept.suggestion)||"Creative direction")+'</div><div class="actions"><button class="btn small" onclick="chooseExperiment(\''+esc(x.experiment_id)+'\')">Choose</button></div></div>'}).join(""):'<div class="empty">No experiments yet.</div>'}
+async function chooseExperiment(id){await api("/infinity/3800/experiments/"+encodeURIComponent(id)+"/choose",{method:"POST"});await loadExperiments();toast("Creative direction chosen")}
+async function createWorld(){var name=$("worldName").value.trim();if(!name)return toast("Name the world first");var d=await api("/infinity/3800/worlds",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:name,objective:$("worldObjective").value,dna:{notes:$("worldDNA").value}})});$("worldName").value="";$("worldObjective").value="";$("worldDNA").value="";renderWorlds(d.worlds||[]);toast("World created")}
+async function loadWorlds(){var d=await api("/infinity/3800/worlds");renderWorlds(d.worlds||[])}
+function renderWorlds(a){$("worldList").innerHTML=a.length?a.map(function(w){return '<div class="item"><div class="row"><b>'+esc(w.name)+'</b><span class="badge good">'+esc(w.status||"active")+'</span></div><div class="sub">'+esc(w.objective||"")+'</div></div>'}).join(""):'<div class="empty">Create your first connected world.</div>'}
+async function graph(){var d=await api("/infinity/3800/graph"),g=$("graph");g.innerHTML="";var ns=d.nodes||[];if(!ns.length){g.innerHTML='<div class="empty">Graph grows as projects and worlds are created.</div>';return}var pos=[];ns.slice(0,24).forEach(function(n,i){var col=i%4,row=Math.floor(i/4);var x=4+col*24,y=8+row*16;var el=document.createElement("div");el.className="node "+(n.type==="world"?"world":"project");el.style.left=x+"%";el.style.top=y+"%";el.textContent=n.label;g.appendChild(el);pos.push({x:x,y:y})});(d.edges||[]).slice(0,24).forEach(function(e){var fi=ns.findIndex(n=>n.id===e.from),ti=ns.findIndex(n=>n.id===e.to);if(fi<0||ti<0)return;var a=pos[fi],b=pos[ti],line=document.createElement("div");line.className="edge";var dx=(b.x-a.x),dy=(b.y-a.y),len=Math.sqrt(dx*dx+dy*dy);line.style.left=a.x+"%";line.style.top=a.y+"%";line.style.width=len+"%";line.style.transform="rotate("+Math.atan2(dy,dx)+"rad)";g.appendChild(line)})}
+async function reusable(){var d=await api("/infinity/3800/reusable");$("reusable").innerHTML=d.items&&d.items.length?d.items.slice(0,30).map(function(x){return '<div class="item"><b>'+esc(x.asset_name)+'</b><div class="sub">'+esc(x.project_title||"Project")+' · '+esc(x.kind||"asset")+'</div><div class="actions"><a class="btn small" href="'+x.download_url+'" target="_blank">Use again</a></div></div>'}).join(""):'<div class="empty">No reusable secondary material yet.</div>'}
+async function analytics(){var s=await api("/infinity/3800/summary"),e=await api("/infinity/3800/events");$("analyticsCards").innerHTML='<div class="card pad"><div class="label">Total projects</div><div style="font-size:30px;font-weight:950">'+s.projects+'</div></div><div class="card pad"><div class="label">Worlds</div><div style="font-size:30px;font-weight:950">'+s.worlds+'</div></div><div class="card pad"><div class="label">Logged creative events</div><div style="font-size:30px;font-weight:950">'+(e.events||[]).length+'</div></div>';window.__events=e.events||[]}
+async function system(){var a=await api("/infinity/3800/health");var b=await api("/health");$("systemRaw").innerHTML='<div class="row"><b>Runtime health</b><span class="badge good">verified response</span></div><div class="mono" style="margin-top:8px">'+esc(JSON.stringify({creator3800:a,foundation:b},null,2))+'</div>'}
+
+document.addEventListener("DOMContentLoaded",function(){nav();refreshAll()});
+</script>
+</body>
+</html>
