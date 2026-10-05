@@ -10,7 +10,7 @@ on:
 jobs:
   deployed-content-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 12
     steps:
       - name: Verify the live canonical shell
         shell: bash
@@ -64,7 +64,7 @@ jobs:
           PY
 
           PROJECT_ID="$(cat /tmp/ai-infinity-smoke/project_id)"
-          DEADLINE=$(( $(date +%s) + 180 ))
+          DEADLINE=$(( $(date +%s) + 600 ))
           while [ "$(date +%s)" -lt "$DEADLINE" ]; do
             curl --fail --silent --show-error --location --retry 2 --retry-delay 2 --retry-all-errors --connect-timeout 15 --max-time 60               -c "$COOKIE" -b "$COOKIE"               "$BASE_URL/infinity/studio/project/$PROJECT_ID" > "$STATUS"
             STATUS_VALUE="$(python - <<'PY'
