@@ -2,6 +2,10 @@ name: AI Infinity Wakeup
 
 on:
   workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/ai-infinity-wakeup.yml"
   schedule:
     - cron: "*/10 * * * *"
 
@@ -75,3 +79,14 @@ jobs:
           grep -qi "x-ai-infinity-ui: 3706-canonical" /tmp/studio.headers
           ! grep -q "TARGET-2050.3623" /tmp/studio.html
           echo "Creator Studio backend, capability catalog and canonical AI Infinity UI are reachable."
+          curl --fail --silent --show-error --location --retry 3 --retry-delay 3 --retry-all-errors --connect-timeout 15 --max-time 60 "${BASE_URL}/infinity/studio/workspace/summary" -o /tmp/studio-summary.json
+          curl --fail --silent --show-error --location --retry 3 --retry-delay 3 --retry-all-errors --connect-timeout 15 --max-time 60 "${BASE_URL}/infinity/studio/analytics" -o /tmp/studio-analytics.json
+          python - <<'PY'
+          import json
+          summary=json.load(open("/tmp/studio-summary.json","r",encoding="utf-8"))
+          raw=json.load(open("/tmp/studio-analytics.json","r",encoding="utf-8"))
+          analytics=raw.get("analytics") or raw
+          if int(summary.get("projects") or 0) != int(analytics.get("projects_total") or 0):
+              raise SystemExit("Creator Studio project/analytics count mismatch: summary=%s analytics=%s"%(summary,raw))
+          print("Creator Studio project/analytics counts are consistent:", summary.get("projects"))
+          PY
