@@ -38,11 +38,11 @@ RUN python -m pip install --upgrade pip \
 
 COPY main.py foundation.py
 COPY studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_studio_2030.html creator_entrypoint.py creator_pro_os.py ./
-COPY runtime_main_3700.py production_hardening.py .
+COPY runtime_main_3700.py production_hardening.py ai_infinity_portable_fabric.py production_worker.py .
 COPY runtime_main_3700.py main.py
 COPY overlay_final_3700.py ui_3700.html ai3701_features.py ai3702_platform.py ai3702_platform.payload.gz ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py ./
 
-RUN python -m py_compile foundation.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py runtime_main_3700.py production_hardening.py overlay_final_3700.py ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py main.py
+RUN python -m py_compile foundation.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py runtime_main_3700.py production_hardening.py ai_infinity_portable_fabric.py production_worker.py overlay_final_3700.py ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py main.py
 
 RUN mkdir -p /var/lib/ai-infinity /tmp/ai-infinity \
     && chown -R aiinfinity:aiinfinity /app /var/lib/ai-infinity /tmp/ai-infinity
