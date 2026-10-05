@@ -11,7 +11,7 @@ Goals:
 - clean completed-job intermediates so long-running creator work does not fill
   the persistent volume;
 - expose a machine-readable runtime hardening health surface;
-- remain portable outside Render.
+- remain portable across hosting environments.
 """
 
 import importlib
