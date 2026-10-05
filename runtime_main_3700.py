@@ -17,8 +17,7 @@ exec(compile("import os\n" + overlay, str(BASE / "overlay_final_3700.py"), "exec
 try:
     creator_final_3800 = importlib.import_module("creator_final_3800")
     creator_final_3800.register(foundation.app)
-    foundation.app.state.ai_infinity_3800 = True
-# Compatibility state markers for the accumulated internal closure checker.
+    # Compatibility state markers for the accumulated internal closure checker.
 # 3700 is loaded by the overlay above; 3704 is loaded by the storage fabric.
 foundation.app.state.ai_infinity_3700 = True
 foundation.app.state.ai_infinity_3704 = bool(getattr(foundation.app.state, "ai_infinity_storage", False))
@@ -98,6 +97,5 @@ class _CanonicalAIInfinityASGI:
 
 foundation.app.title = "AI Infinity"
 foundation.app.version = "TARGET-2050.3800"
-foundation.app.state.ai_infinity_3800 = True
 foundation.app.state.production_hardening = hardening_state
 app = _CanonicalAIInfinityASGI(foundation.app)
