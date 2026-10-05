@@ -10,7 +10,7 @@ existing production pipeline.
 
 Design rules:
 - Core product has no billing or credit system.
-- No Render-specific dependency.
+- No provider-specific deployment dependency.
 - Existing /infinity/studio production APIs remain the execution engine.
 - Creator metadata is stored per existing studio session user.
 - Quality scores are deterministic workspace checks; they never impersonate
