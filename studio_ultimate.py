@@ -1968,7 +1968,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         concat_segments(scene_paths, master)
         requested_ratio = str(req.get("aspect_ratio") or "16:9").strip()
         # FAST mode renders scenes directly at their delivery dimensions. A second
-        # 1080x1920 transcode on Render's 512 MiB instance causes avoidable OOM.
+        # 1080x1920 transcode on a small-memory instance causes avoidable OOM.
         ratio_targets = (
             {"16:9": (1280,720), "9:16": (720,1280), "1:1": (720,720), "4:5": (720,900)}
             if FAST_MODE else
@@ -3145,7 +3145,7 @@ CREATOR_2026_BENCHMARKS = [
     {"id":"2026-live-avatar","name":"Live Avatar","category":"2026 Benchmark","capability":"Live conversational avatars require an authorized realtime avatar provider/API.","status":"adapter-dependent"},
     {"id":"2026-layered-design","name":"Layered Editable Design","category":"2026 Benchmark","capability":"Structured design metadata, templates and reusable assets are first-class; full proprietary layered-canvas generation requires a visual design engine adapter.","status":"adapter-ready"},
     {"id":"2026-interactive-html","name":"Interactive / HTML Experiences","category":"2026 Benchmark","capability":"Interactive creative experiences can be specified through the creative tooling layer; live hosted execution requires a configured renderer.","status":"extensible"},
-    {"id":"2026-cloud-render","name":"Cloud Render Adapter","category":"2026 Benchmark","capability":"The production graph supports external cloud rendering while retaining the local FFmpeg renderer as the default free-first path.","status":"adapter-ready"},
+    {"id":"2026-cloud-render","name":"Optional Cloud Rendering Adapter","category":"2026 Benchmark","capability":"The production graph supports external cloud rendering while retaining the local FFmpeg renderer as the default free-first path.","status":"adapter-ready"},
 ]
 
 MULTIMODAL_TOOLS_3621 = [
