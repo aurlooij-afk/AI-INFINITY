@@ -16,7 +16,7 @@ permissions:
 jobs:
   production-gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 25
     env:
       AI_INFINITY_DATA_DIR: /tmp/ai-infinity-ci
       AI_INFINITY_EXTERNAL_WORKER: "true"
@@ -33,6 +33,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Install media runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg espeak-ng
 
       - name: Install dependencies
         run: |
@@ -61,8 +66,10 @@ jobs:
           import ai_infinity_portable_fabric as fabric
           c = fabric.runtime_contract()
           assert c["portable"] is True
-          assert c["render_required"] is False
+          assert c["portable"] is True
           assert c["external_worker_mode"] is True
+          assert c["hosting"] == "self_hosted_container_stack"
+          assert c["platform_dependencies"] == []
           assert c["worker_contract"]["durable_queue"] is True
           assert c["worker_contract"]["checkpoint_resume"] is True
           print("Portable fabric PASS:", c["version"], c["build"])
@@ -80,9 +87,14 @@ jobs:
         run: |
           test -f docker-compose.production.yml
           test -f .env.production.example
+          test -f Caddyfile
+          test -f scripts/production_acceptance.py
           grep -q "production_worker.py" Dockerfile
           grep -q "ai_infinity_portable_fabric.py" Dockerfile
-          grep -q "ai-infinity-final-creator-studio" .github/workflows/production-studio-gate.yml
+          grep -q "web:" docker-compose.production.yml
+          grep -q "worker:" docker-compose.production.yml
+          grep -q "caddy:" docker-compose.production.yml
+          ! grep -RniE 'render\.com|RENDER_|render_required|render_knowledge|render\.yaml' --exclude-dir=.git .
 
       - name: Import canonical runtime without starting an in-process worker
         run: |
@@ -92,6 +104,13 @@ jobs:
           os.environ["AI_INFINITY_EXTERNAL_WORKER"] = "true"
           import runtime_main_3700
           assert runtime_main_3700.foundation.app.state.ai_infinity_3708 is True
-          assert runtime_main_3700.foundation.app.state.portable_production_fabric["render_required"] is False
+          contract = runtime_main_3700.foundation.app.state.portable_production_fabric
+          assert contract["portable"] is True
+          assert contract["hosting"] == "self_hosted_container_stack"
+          assert contract["platform_dependencies"] == []
           print("Canonical runtime import PASS")
           PY
+
+      - name: Run real 30-second production acceptance
+        run: |
+          python scripts/production_acceptance.py
