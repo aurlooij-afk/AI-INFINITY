@@ -244,6 +244,21 @@ def canonical_timeline(project_id: str) -> Dict[str, Any]:
             pass
 
     result = p.get("result_json") if isinstance(p.get("result_json"), dict) else {}
+    stored_timeline = result.get("timeline") if isinstance(result, dict) else None
+    if isinstance(stored_timeline, dict) and stored_timeline.get("schema") == "ai-infinity.timeline.v1":
+        if timeline_file:
+            try:
+                timeline_file.parent.mkdir(parents=True, exist_ok=True)
+                timeline_file.write_text(json.dumps(stored_timeline, ensure_ascii=False, default=str), encoding="utf-8")
+            except Exception:
+                pass
+        return {
+            "project_id": project_id,
+            "materialized": True,
+            "source": "project.result_json.timeline",
+            "timeline": stored_timeline,
+            "truthful": True,
+        }
     return {
         "project_id": project_id,
         "materialized": False,
