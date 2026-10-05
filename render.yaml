@@ -16,3 +16,11 @@ services:
         value: /tmp/ai-infinity
       - key: AI_INFINITY_3601_BACKGROUND
         value: "true"
+      - key: AI_INFINITY_STORAGE_PRIMARY
+        value: cloudflare_r2
+      - key: AI_INFINITY_STORAGE_REPLICAS
+        value: oracle_object_storage,backblaze_b2,tigris,supabase
+      - key: AI_INFINITY_STORAGE_MAX_UPLOAD_MB
+        value: "250"
+      - key: AI_INFINITY_STORAGE_PRESIGN_SECONDS
+        value: "3600"
