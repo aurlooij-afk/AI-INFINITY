@@ -2127,7 +2127,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         for kind, pth, mt in [
             ("video", captioned, "video/mp4"), ("audio", audio_master, "audio/mpeg"), ("article", article, "text/markdown"), ("social_campaign", social, "text/markdown"),
             ("script", script, "text/markdown"), ("captions", captions, "application/x-subrip"),
-            ("sources", sources, "application/json"), ("manifest", manifest, "application/json"), ("timeline", timeline, "application/json"), ("feature_execution", outdir / "feature_execution.json", "application/json"), ("thumbnail", thumb, "image/jpeg"), ("package", package, "application/zip")
+            ("script", script, "text/markdown"), ("sources", sources, "application/json"), ("manifest", manifest, "application/json"), ("timeline", timeline, "application/json"), ("feature_execution", outdir / "feature_execution.json", "application/json"), ("thumbnail", thumb, "image/jpeg"), ("package", package, "application/zip")
         ]:
             if pth and Path(pth).exists(): _save_asset(project_id, kind, Path(pth), mt, {"title": plan.get("title") or topic})
         for x in shorts:
@@ -2147,7 +2147,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             from ai_infinity_portable_fabric import sync_project_artifacts
             portable_storage = sync_project_artifacts(
                 project_id,
-                [captioned, package, timeline, manifest, thumb, captions, sources],
+                [captioned, package, script, timeline, manifest, thumb, captions, sources],
             )
         except Exception as storage_exc:
             portable_storage = {
