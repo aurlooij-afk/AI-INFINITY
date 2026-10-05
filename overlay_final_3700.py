@@ -203,3 +203,12 @@ except Exception as _ai3705_closure_error:
         app.state.ai3705_closure_error = str(_ai3705_closure_error)[:800]
     except Exception:
         pass
+
+# 3706 internal platform completeness closure (external authority excluded).
+try:
+    exec(open("ai3706_internal_closure.py", encoding="utf-8").read(), globals())
+except Exception as _ai3706_internal_error:
+    try:
+        app.state.ai3706_internal_error = str(_ai3706_internal_error)[:800]
+    except Exception:
+        pass
