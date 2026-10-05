@@ -2048,12 +2048,75 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "assets": assets_meta, "shorts": [{k: v for k, v in x.items() if k != "path"} for x in shorts],
             "self_upgrade": True, "truthful": True,
             "production_profile": _project_meta(project_id),
+            "timeline": timeline_payload,
             "generated_at": utc_iso(), "platform_packages": {k: Path(v).name for k,v in editorial.items() if v},
-            "storage": {"data_dir": str(DATA_DIR), "persistent_configured": str(DATA_DIR) not in {"/tmp", "/tmp/ai-infinity"}},
+            "storage": {"data_dir": str(DATA_DIR), "persistent_configured": str(DATA_DIR) not in {"/tmp", "/tmp/ai-infinity"}}, "timeline": {"path": "timeline.json", "schema": "ai-infinity.timeline.v1", "scene_count": len(chapters)},
         }
         manifest.write_text(jdump(metadata), encoding="utf-8")
+
+        # Canonical persistent timeline: derived from the actual render duration
+        # and the production chapter plan. No invented wall-clock progress.
+        timeline = outdir / "timeline.json"
+        actual_duration = max(0.1, float(probe_duration(captioned)))
+        planned = []
+        for idx, ch in enumerate(chapters, 1):
+            raw_seconds = ch.get("approx_seconds") or ch.get("duration") or ch.get("seconds") or 0
+            try:
+                raw_seconds = max(0.1, float(raw_seconds))
+            except Exception:
+                raw_seconds = 1.0
+            planned.append({
+                "scene_index": idx,
+                "title": str(ch.get("title") or ch.get("name") or ("Scene " + str(idx))),
+                "planned_seconds": raw_seconds,
+                "visual_query": ch.get("visual_query") or ch.get("visual") or ch.get("visual_direction") or "",
+                "voiceover": ch.get("voiceover") or ch.get("narration") or "",
+            })
+        planned_total = sum(x["planned_seconds"] for x in planned) or actual_duration
+        scale = actual_duration / planned_total
+        cursor = 0.0
+        scene_markers = []
+        for row in planned:
+            start = cursor
+            end = min(actual_duration, cursor + row["planned_seconds"] * scale)
+            cursor = end
+            scene_markers.append({
+                **row,
+                "start_seconds": round(start, 3),
+                "end_seconds": round(end, 3),
+                "duration_seconds": round(max(0.0, end - start), 3),
+            })
+        if scene_markers:
+            scene_markers[-1]["end_seconds"] = round(actual_duration, 3)
+            scene_markers[-1]["duration_seconds"] = round(
+                max(0.0, actual_duration - scene_markers[-1]["start_seconds"]), 3
+            )
+        timeline_payload = {
+            "schema": "ai-infinity.timeline.v1",
+            "project_id": project_id,
+            "version": 1,
+            "duration_seconds": round(actual_duration, 3),
+            "tracks": [{
+                "id": "video-master",
+                "type": "video",
+                "source": "final.mp4",
+                "start_seconds": 0.0,
+                "end_seconds": round(actual_duration, 3),
+            }],
+            "scene_markers": scene_markers,
+            "rendered_master": {
+                "filename": "final.mp4",
+                "media_type": "video/mp4",
+                "duration_seconds": round(actual_duration, 3),
+            },
+            "editable": True,
+            "derived_from": "production chapters + verified final render",
+            "truthful": True,
+        }
+        timeline.write_text(jdump(timeline_payload), encoding="utf-8")
+
         package = outdir / f"{safe_name(plan.get('title') or topic)}-AI-Infinity-creator-package.zip"
-        bundle: List[Optional[Path]] = [captioned, script, captions, sources, manifest, outdir / "feature_execution.json", outdir / "creator_experiments.json", shared_music, thumb if thumb and thumb.exists() else None, audio_master, article, social, outdir / "fact_check.json"]
+        bundle: List[Optional[Path]] = [captioned, script, captions, sources, manifest, timeline, outdir / "feature_execution.json", outdir / "creator_experiments.json", shared_music, thumb if thumb and thumb.exists() else None, audio_master, article, social, outdir / "fact_check.json"]
         bundle += [x for x in editorial.values() if x]
         bundle += [Path(x["path"]) for x in shorts if Path(x["path"]).exists()]
         bundle += [p for p in outdir.glob("narration_*.mp3") if p.exists()]
@@ -2065,7 +2128,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         for kind, pth, mt in [
             ("video", captioned, "video/mp4"), ("audio", audio_master, "audio/mpeg"), ("article", article, "text/markdown"), ("social_campaign", social, "text/markdown"),
             ("script", script, "text/markdown"), ("captions", captions, "application/x-subrip"),
-            ("sources", sources, "application/json"), ("manifest", manifest, "application/json"), ("feature_execution", outdir / "feature_execution.json", "application/json"), ("thumbnail", thumb, "image/jpeg"), ("package", package, "application/zip")
+            ("sources", sources, "application/json"), ("manifest", manifest, "application/json"), ("timeline", timeline, "application/json"), ("feature_execution", outdir / "feature_execution.json", "application/json"), ("thumbnail", thumb, "image/jpeg"), ("package", package, "application/zip")
         ]:
             if pth and Path(pth).exists(): _save_asset(project_id, kind, Path(pth), mt, {"title": plan.get("title") or topic})
         for x in shorts:
@@ -2074,8 +2137,27 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             if pth and Path(pth).exists():
                 _save_asset(project_id, k, Path(pth), "application/json" if Path(pth).suffix==".json" else "application/xml" if Path(pth).suffix==".xml" else "text/markdown", {"generated":"3622"})
                 register_artifact(project_id, Path(pth), "application/json" if Path(pth).suffix==".json" else "application/xml" if Path(pth).suffix==".xml" else "text/markdown")
-        for pth, mt in [(captioned,"video/mp4"),(package,"application/zip"),(thumb,"image/jpeg"),(captions,"application/x-subrip"),(sources,"application/json"),(manifest,"application/json"),(outdir / "feature_execution.json","application/json")]:
+        for pth, mt in [(captioned,"video/mp4"),(package,"application/zip"),(script,"text/markdown"),(thumb,"image/jpeg"),(captions,"application/x-subrip"),(sources,"application/json"),(manifest,"application/json"),(timeline,"application/json"),(outdir / "feature_execution.json","application/json")]:
             if pth and Path(pth).exists(): register_artifact(project_id, Path(pth), mt)
+
+        # Persist a second portable storage copy when configured. Failure of
+        # an optional external storage adapter must not corrupt the verified
+        # local production result.
+        portable_storage = {"mode": "local", "stored_count": 0, "external_stored_count": 0, "truthful": True}
+        try:
+            from ai_infinity_portable_fabric import sync_project_artifacts
+            portable_storage = sync_project_artifacts(
+                project_id,
+                [captioned, package, script, timeline, manifest, thumb, captions, sources],
+            )
+        except Exception as storage_exc:
+            portable_storage = {
+                "mode": os.getenv("AI_INFINITY_STORAGE_MODE", "local"),
+                "stored_count": 0,
+                "external_stored_count": 0,
+                "error": str(storage_exc)[:500],
+                "truthful": True,
+            }
 
         _stage(project_id, "quality_control", 93)
         result = {
@@ -2087,13 +2169,14 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "feature_execution": feature_report,
             "duration_seconds": round(probe_duration(captioned), 2),
             "render_profile": "720p-fast" if FAST_MODE else "1080p-production",
+            "portable_storage": portable_storage,
             "quality": qc,
             "research": {"source_count": research.get("source_count", 0)},
             "downloads": {
                 "video": f"/infinity/studio/project/{project_id}/asset/final.mp4", "package": f"/infinity/studio/project/{project_id}/asset/package.zip",
                 "thumbnail": f"/infinity/studio/project/{project_id}/asset/thumbnail.jpg", "script": f"/infinity/studio/project/{project_id}/asset/script.md",
                 "captions": f"/infinity/studio/project/{project_id}/asset/captions.srt", "sources": f"/infinity/studio/project/{project_id}/asset/sources.json",
-                "manifest": f"/infinity/studio/project/{project_id}/asset/manifest.json", "feature_execution": f"/infinity/studio/project/{project_id}/asset/feature_execution.json",
+                "manifest": f"/infinity/studio/project/{project_id}/asset/manifest.json", "timeline": f"/infinity/studio/project/{project_id}/asset/timeline.json", "feature_execution": f"/infinity/studio/project/{project_id}/asset/feature_execution.json",
                 "audio": f"/infinity/studio/project/{project_id}/asset/audio_master.mp3" if audio_master and audio_master.exists() else None,
                 "article": f"/infinity/studio/project/{project_id}/asset/article.md" if article and article.exists() else None,
                 "social_campaign": f"/infinity/studio/project/{project_id}/asset/social_campaign.json" if (outdir/"social_campaign.json").exists() else (f"/infinity/studio/project/{project_id}/asset/social_campaign.md" if social and social.exists() else None),
@@ -2203,6 +2286,10 @@ def worker_loop(model_fn: Optional[Callable]) -> None:
 
 def _ensure_worker(model_fn: Optional[Callable]) -> None:
     global WORKER_STARTED
+    # Portable deployments may run the durable queue in a dedicated worker
+    # container/process. In that mode the web process must remain request-only.
+    if os.getenv("AI_INFINITY_EXTERNAL_WORKER", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
     with WORKER_GUARD:
         if WORKER_STARTED:
             return
@@ -2299,7 +2386,9 @@ def _ensure_scheduler() -> None:
 
 
 def _public_base_url() -> str:
-    return (os.getenv("AI_INFINITY_PUBLIC_URL", "").strip() or os.getenv("RENDER_EXTERNAL_URL", "").strip() or "https://ai-infinity-ca5e.onrender.com").rstrip("/")
+    # Public hosting is explicit. The application never infers a hosting
+    # provider or silently depends on one.
+    return (os.getenv("AI_INFINITY_PUBLIC_URL", "").strip() or "http://localhost:8000").rstrip("/")
 
 
 def _share_key() -> bytes:

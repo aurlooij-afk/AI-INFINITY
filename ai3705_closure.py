@@ -175,7 +175,7 @@ def _durable_runtime() -> Dict[str, Any]:
         "durable_storage_configured": count >= 1,
         "five_provider_storage_configured": count >= 5,
         "configured_provider_count": count,
-        "render_ephemeral_disk_authoritative": False,
+        "ephemeral_disk_authoritative": False,
         "truthful": True
     }
 

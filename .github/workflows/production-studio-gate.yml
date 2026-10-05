@@ -1,0 +1,150 @@
+name: AI Infinity Production Studio Gate
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ai-infinity-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  production-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      AI_INFINITY_DATA_DIR: /tmp/ai-infinity-ci
+      AI_INFINITY_EXTERNAL_WORKER: "true"
+      AI_INFINITY_STORAGE_MODE: local
+      AI_INFINITY_PERSISTENCE_MODE: portable-volume
+      AI_INFINITY_FAST_MODE: "false"
+      AI_INFINITY_FFMPEG_THREADS: "1"
+      AI_INFINITY_FFMPEG_FILTER_THREADS: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install media runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg espeak-ng
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Reproduce image bootstrap
+        run: |
+          cp main.py foundation.py
+
+      - name: Compile production surface
+        run: |
+          python -m py_compile \
+            foundation.py \
+            studio_ultimate.py \
+            content_factory.py \
+            studio_os.py \
+            runtime_main_3700.py \
+            production_hardening.py \
+            ai_infinity_portable_fabric.py \
+            production_worker.py \
+            overlay_final_3700.py
+
+      - name: Validate portable fabric contract
+        run: |
+          python - <<'PY'
+          import os, tempfile
+          os.environ["AI_INFINITY_DATA_DIR"] = tempfile.mkdtemp(prefix="ai-infinity-ci-")
+          os.environ["AI_INFINITY_EXTERNAL_WORKER"] = "true"
+          import ai_infinity_portable_fabric as fabric
+          c = fabric.runtime_contract()
+          assert c["portable"] is True
+          assert c["portable"] is True
+          assert c["external_worker_mode"] is True
+          assert c["hosting"] == "self_hosted_container_stack"
+          assert c["platform_dependencies"] == []
+          assert c["worker_contract"]["durable_queue"] is True
+          assert c["worker_contract"]["checkpoint_resume"] is True
+          print("Portable fabric PASS:", c["version"], c["build"])
+          PY
+
+      - name: Validate dedicated worker entrypoint
+        run: |
+          python - <<'PY'
+          import ast
+          ast.parse(open("production_worker.py", "r", encoding="utf-8").read())
+          print("Dedicated worker syntax PASS")
+          PY
+
+      - name: Validate container configuration
+        run: |
+          test -f docker-compose.production.yml
+          test -f .env.production.example
+          test -f Caddyfile
+          test -f scripts/production_acceptance.py
+          grep -q "production_worker.py" Dockerfile
+          grep -q "ai_infinity_portable_fabric.py" Dockerfile
+          grep -q "web:" docker-compose.production.yml
+          grep -q "worker:" docker-compose.production.yml
+          grep -q "caddy:" docker-compose.production.yml
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          patterns = (
+              re.compile(r"\bonrender\.com\b", re.I),
+              re.compile(r"\bRENDER_[A-Z0-9_]+\b"),
+              re.compile(r"\brender_required\b", re.I),
+              re.compile(r"\brender_knowledge\b", re.I),
+              re.compile(r"\brender\.yaml\b", re.I),
+          )
+          excluded = {".git", "creator-studio-ci.yml", "production-studio-gate.yml"}
+          findings = []
+          for path in Path(".").rglob("*"):
+              if not path.is_file() or any(part in {".git"} for part in path.parts) or path.name in excluded:
+                  continue
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except (UnicodeDecodeError, OSError):
+                  continue
+              for lineno, line in enumerate(text.splitlines(), 1):
+                  lower = line.lower()
+                  if any(pattern.search(line) for pattern in patterns):
+                      findings.append(f"{path}:{lineno}:{line.strip()}")
+          if findings:
+              print("\n".join(findings))
+              raise SystemExit("Legacy hosted-platform references remain")
+          print("Hosted-platform reference audit PASS")
+          PY
+
+      - name: Import canonical runtime without starting an in-process worker
+        run: |
+          python - <<'PY'
+          import os, tempfile
+          os.environ["AI_INFINITY_DATA_DIR"] = tempfile.mkdtemp(prefix="ai-infinity-runtime-")
+          os.environ["AI_INFINITY_EXTERNAL_WORKER"] = "true"
+          import runtime_main_3700
+          assert runtime_main_3700.foundation.app.state.ai_infinity_3708 is True
+          contract = runtime_main_3700.foundation.app.state.portable_production_fabric
+          assert contract["portable"] is True
+          assert contract["hosting"] == "self_hosted_container_stack"
+          assert contract["platform_dependencies"] == []
+          print("Canonical runtime import PASS")
+          PY
+
+      - name: Run real 30-second production acceptance
+        run: |
+          python scripts/production_acceptance.py

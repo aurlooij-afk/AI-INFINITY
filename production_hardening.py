@@ -233,7 +233,7 @@ def _run_ffmpeg(*args: Any, timeout: int = 240) -> None:
         HEAVY_GATE.release()
 
 
-def _cleanup_project_dir(project_dir: Path) -> int:
+def _cleanup_project_dir(project_dir: Path, registered_names=None) -> int:
     if not project_dir.exists() or not project_dir.is_dir():
         return 0
 
@@ -247,6 +247,7 @@ def _cleanup_project_dir(project_dir: Path) -> int:
         "manifest.json",
         "feature_execution.json",
         "creator_experiments.json",
+        "timeline.json",
         "audio_master.mp3",
         "article.md",
         "social_campaign.md",
@@ -258,6 +259,8 @@ def _cleanup_project_dir(project_dir: Path) -> int:
         "platform_manifest.json",
         "podcast_rss.xml",
     }
+    if registered_names:
+        keep_exact.update(Path(str(x)).name for x in registered_names if x)
     removed = 0
     cutoff = time.time() - CLEANUP_AGE_SECONDS
     for path in project_dir.iterdir():
@@ -287,7 +290,12 @@ def _cleanup_completed_projects(studio: Any) -> int:
             ).fetchall()
         for row in rows:
             project_id = str(row["project_id"])
-            removed += _cleanup_project_dir(root / project_id)
+            artifact_rows = conn.execute(
+                "SELECT asset_name FROM studio_artifacts_3614 WHERE project_id=?",
+                (project_id,),
+            ).fetchall()
+            registered_names = [r["asset_name"] for r in artifact_rows]
+            removed += _cleanup_project_dir(root / project_id, registered_names=registered_names)
     except Exception as exc:
         with STATE_LOCK:
             STATE["last_error"] = str(exc)[:500]

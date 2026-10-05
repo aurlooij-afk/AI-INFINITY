@@ -1,4 +1,4 @@
-# Canonical production gate: every push validates the deployed creator_entrypoint and real media execution.
+# Canonical AI Infinity build guard.
 name: Creator Studio Build Guard
 
 on:
@@ -9,10 +9,15 @@ on:
       - "Dockerfile"
       - "requirements.txt"
       - "bridge-requirements.txt"
-      - "creator_studio_2030.html"
       - "ui_3700.html"
       - "runtime_main_3700.py"
       - "overlay_final_3700.py"
+      - "production_hardening.py"
+      - "ai_infinity_portable_fabric.py"
+      - "production_worker.py"
+      - "docker-compose.production.yml"
+      - "Caddyfile"
+      - "scripts/**"
       - ".github/workflows/creator-studio-ci.yml"
   pull_request:
     paths:
@@ -20,278 +25,127 @@ on:
       - "Dockerfile"
       - "requirements.txt"
       - "bridge-requirements.txt"
+      - "ui_3700.html"
+      - "runtime_main_3700.py"
+      - "overlay_final_3700.py"
       - ".github/workflows/creator-studio-ci.yml"
+
+concurrency:
+  group: ai-infinity-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   python-syntax:
-    name: Python syntax guard
+    name: Canonical runtime guard
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    env:
+      AI_INFINITY_DATA_DIR: /tmp/ai-infinity-build-guard
+      AI_INFINITY_EXTERNAL_WORKER: "true"
+      AI_INFINITY_STORAGE_MODE: local
+      AI_INFINITY_PERSISTENCE_MODE: portable-volume
     steps:
       - uses: actions/checkout@v4
+
       - name: Install runtime dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg espeak-ng
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-      - name: Compile all runtime Python modules
+
+      - name: Reproduce image bootstrap
+        run: |
+          cp main.py foundation.py
+
+      - name: Compile runtime Python
         run: |
           set -euo pipefail
-          python -m py_compile main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py overlay_final_3700.py runtime_main_3700.py
+          python -m py_compile             main.py foundation.py studio_ultimate.py studio_os.py content_factory.py             free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py             creator_entrypoint.py creator_pro_os.py ai3701_features.py ai3702_platform.py             ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py             overlay_final_3700.py runtime_main_3700.py production_hardening.py             ai_infinity_portable_fabric.py production_worker.py
           echo "Python syntax checks passed."
-      - name: Parse AI Infinity platform browser JavaScript
+
+      - name: Parse canonical browser JavaScript
         run: |
           python - <<'PY'
           from pathlib import Path
           import re
-          html=Path("ui_3700.html").read_text(encoding="utf-8")
-          scripts=re.findall(r"<script[^>]*>([\s\S]*?)</script>", html, flags=re.I)
-          Path("/tmp/ai-infinity-ui.js").write_text("\n".join(scripts),encoding="utf-8")
+          html = Path("ui_3700.html").read_text(encoding="utf-8")
+          scripts = re.findall(r"<script[^>]*>([\s\S]*?)</script>", html, flags=re.I)
           if not scripts:
-              raise SystemExit("No AI Infinity UI script found")
-          print("Extracted", len(scripts), "AI Infinity script block(s).")
-          PY
-          node --check /tmp/ai-infinity-ui.js
-          python - <<'PY'
-          from pathlib import Path
-          html=Path("ui_3700.html").read_text(encoding="utf-8")
-          required=["AI Infinity","DIRECTOR MODE","REAL CONTENT PRODUCTION","function projects()","function assets()","function analytics()","/infinity/studio/project/","videoPreview","Create real content"]
-          missing=[x for x in required if x not in html]
+              raise SystemExit("No canonical UI script found")
+          Path("/tmp/ai-infinity-ui.js").write_text("\n".join(scripts), encoding="utf-8")
+          required = [
+              "AI Infinity", "DIRECTOR MODE", "REAL CONTENT PRODUCTION",
+              'function projects()', 'function assets()', 'function analytics()',
+              "/infinity/studio/director", "/infinity/studio/project/",
+              "Create real content"
+          ]
+          missing = [x for x in required if x not in html]
           if missing:
-              raise SystemExit("Canonical UI contract missing: "+", ".join(missing))
+              raise SystemExit("Canonical UI contract missing: " + ", ".join(missing))
           if "TARGET-2050.3623" in html:
               raise SystemExit("Legacy 3623 UI marker leaked into canonical UI")
-          print("Canonical UI contract passed.")
           PY
-      - name: Parse Creator Studio browser JavaScript
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import re
-          html=Path("creator_studio_2030.html").read_text(encoding="utf-8")
-          scripts=re.findall(r"<script[^>]*>([\s\S]*?)</script>", html, flags=re.I)
-          Path("/tmp/creator-studio.js").write_text("\n".join(scripts),encoding="utf-8")
-          if not scripts:
-              raise SystemExit("No Creator Studio script found")
-          print("Extracted", len(scripts), "browser script block(s).")
-          PY
-          node --check /tmp/creator-studio.js
-      - name: Instantiate and smoke-test the unified app
-        env:
-          AI_INFINITY_STUDIO_SMOKE: "1"
-          AI_INFINITY_DATA_DIR: "/tmp/ai-infinity-ci-smoke"
-          AI_INFINITY_FAST_MODE: "1"
+          node --check /tmp/ai-infinity-ui.js
+
+      - name: Validate portable architecture
         run: |
           set -euo pipefail
+          test -f docker-compose.production.yml
+          test -f Caddyfile
+          test -f .env.production.example
+          test -f scripts/production_acceptance.py
+          ! grep -RniE 'render\.com|RENDER_|render_required|render_knowledge|render\.yaml' --exclude-dir=.git --exclude='creator-studio-ci.yml' --exclude='production-studio-gate.yml' .
           python - <<'PY'
-          import creator_entrypoint
-          from fastapi.testclient import TestClient
-
-          # Render production uses creator_entrypoint:application, exactly as Docker CMD.
-
-          production_paths = {getattr(route, "path", "") for route in creator_entrypoint.creator_app.routes}
-          required = {
-              "/", "/infinity/studio", "/infinity/studio/health",
-              "/infinity/studio/bootstrap", "/infinity/studio/tools",
-              "/infinity/studio/projects", "/infinity/studio/workspace/export",
-              "/infinity/studio/workspace/backup", "/infinity/studio/creator-pro",
-              "/infinity/studio/open-source",
-              "/infinity/studio/project/{project_id}/storyboard/apply",
-              "/infinity/studio/project/{project_id}/transcript/clip",
-          }
-          missing = sorted(required - production_paths)
-          if missing:
-              raise SystemExit("Production creator app is missing routes: " + ", ".join(missing))
-
-          client = TestClient(creator_entrypoint.application)
-          for path in ("/", "/health", "/infinity/studio", "/infinity/studio/health",
-                       "/infinity/studio/bootstrap", "/infinity/studio/tools",
-                       "/infinity/studio/projects", "/infinity/studio/workspace/export",
-                       "/infinity/studio/workspace/backup"):
-              response = client.get(path) if path != "/infinity/studio/workspace/backup" else client.post(path)
-              if response.status_code >= 500:
-                  raise SystemExit(f"{path} returned HTTP {response.status_code}: {response.text[:500]}")
-              if path != "/" and response.status_code == 404:
-                  raise SystemExit(f"{path} is unexpectedly 404 in production creator app")
-
-          root = client.get("/")
-          if "AI Infinity" not in root.text:
-              raise SystemExit("Unified root page does not contain AI Infinity")
-
-          import time
-
-          smoke = client.post("/infinity/studio/project", json={
-              "title": "CI Creator Smoke",
-              "objective": "Create a tiny useful explainer about renewable energy.",
-              "topic": "renewable energy",
-              "format": "short",
-              "duration": 20,
-              "content_type": "video",
-              "language": "English",
-              "aspect_ratio": "9:16",
-          })
-          if smoke.status_code not in (200,201):
-              raise SystemExit(f"Create project failed: HTTP {smoke.status_code}: {smoke.text[:1000]}")
-          project_id = (smoke.json() or {}).get("project_id")
-          if not project_id:
-              raise SystemExit("Create project did not return project_id")
-          deadline = time.time() + 150
-          final = None
-          while time.time() < deadline:
-              current = client.get("/infinity/studio/project/" + project_id)
-              if current.status_code >= 500:
-                  raise SystemExit(f"Project status failed: HTTP {current.status_code}: {current.text[:1000]}")
-              final = current.json()
-              if final.get("status") in {"completed","completed_with_qc_warnings","failed","cancelled"}:
-                  break
-              time.sleep(1)
-          if not final:
-              raise SystemExit("No project status returned")
-          if final.get("status") not in {"completed","completed_with_qc_warnings"}:
-              raise SystemExit("Real creator smoke production did not complete: " + str(final)[:4000])
-          required_artifacts = ["final.mp4","captions.srt","script.md","thumbnail.jpg","manifest.json","sources.json","audio_master.mp3"]
-          for name in required_artifacts:
-              check = client.get("/infinity/studio/project/" + project_id + "/asset/" + name)
-              if check.status_code != 200:
-                  raise SystemExit(f"Artifact {name} unavailable: HTTP {check.status_code}: {check.text[:500]}")
-          board = client.get("/infinity/studio/project/" + project_id + "/storyboard")
-          if board.status_code != 200 or not (board.json().get("scenes") or []):
-              raise SystemExit("Storyboard was not generated from the real project: HTTP %s %s" % (board.status_code, board.text[:2000]))
-
-          pro = client.get("/infinity/studio/creator-pro")
-          if pro.status_code != 200 or not pro.json().get("editor",{}).get("color"):
-              raise SystemExit("Creator Pro capability surface is unavailable")
-
-          edit = client.post("/infinity/studio/project/" + project_id + "/edit/advanced", json={
-              "trim_start": 0, "trim_end": 0, "speed": 1, "aspect_ratio": "9:16",
-              "brightness": 0, "contrast": 1, "saturation": 1, "sharpness": 0
-          })
-          if edit.status_code != 200:
-              raise SystemExit(f"Advanced video edit failed: HTTP {edit.status_code}: {edit.text[:1200]}")
-
-          clip = client.post("/infinity/studio/project/" + project_id + "/transcript/clip", json={
-              "start": 0.2, "end": 1.5
-          })
-          if clip.status_code != 200:
-              raise SystemExit(f"Transcript clip failed: HTTP {clip.status_code}: {clip.text[:1200]}")
-
-          interactive = client.post("/infinity/studio/project/" + project_id + "/interactive", json={
-              "title": "CI interactive", "headline": "Renewable energy", "body": "A self-contained creator experience."
-          })
-          if interactive.status_code != 200:
-              raise SystemExit(f"Interactive export failed: HTTP {interactive.status_code}: {interactive.text[:1200]}")
-
-          image = client.post("/infinity/studio/project/" + project_id + "/image/edit", json={
-              "source_asset_name": "thumbnail.jpg", "scale": 1, "brightness": 1.05,
-              "contrast": 1.05, "saturation": 1.05, "sharpness": 1.1
-          })
-          if image.status_code != 200:
-              raise SystemExit(f"Image Lab failed: HTTP {image.status_code}: {image.text[:1200]}")
-
-          matrix = client.post("/infinity/studio/project/" + project_id + "/variant-matrix", json={"ratios":["9:16"]})
-          if matrix.status_code != 200 or not (matrix.json().get("variants") or []):
-              raise SystemExit(f"Variant build failed: HTTP {matrix.status_code}: {matrix.text[:1200]}")
-
-          scenes = board.json().get("scenes") or []
-          saved = client.put("/infinity/studio/project/" + project_id + "/storyboard", json={"title":"CI storyboard","scenes":scenes})
-          if saved.status_code != 200:
-              raise SystemExit(f"Storyboard save failed: HTTP {saved.status_code}: {saved.text[:1000]}")
-
-          print("End-to-end creator + Creator Pro smoke production passed:", project_id)
-          print("Production main:app + creator dispatcher smoke test passed.")
+          import os
+          import tempfile
+          os.environ["AI_INFINITY_DATA_DIR"] = tempfile.mkdtemp(prefix="ai-infinity-contract-")
+          os.environ["AI_INFINITY_EXTERNAL_WORKER"] = "true"
+          import ai_infinity_portable_fabric as fabric
+          contract = fabric.runtime_contract()
+          assert contract["portable"] is True
+          assert contract["hosting"] == "self_hosted_container_stack"
+          assert contract["platform_dependencies"] == []
+          assert contract["worker_contract"]["durable_queue"] is True
+          assert contract["worker_contract"]["lease_recovery"] is True
+          assert contract["worker_contract"]["checkpoint_resume"] is True
+          print("Portable architecture PASS:", contract["version"], contract["build"])
           PY
 
-      - name: Smoke-test the canonical runtime wrapper and final closure
-        env:
-          AI_INFINITY_DATA_DIR: "/tmp/ai-infinity-wrapper-smoke"
-          AI_INFINITY_STUDIO_SMOKE: "1"
-          AI_INFINITY_FAST_MODE: "1"
+      - name: Import canonical runtime
         run: |
-          set -euo pipefail
-          cp main.py foundation.py
+          python - <<'PY'
+          import os
+          import tempfile
+          os.environ["AI_INFINITY_DATA_DIR"] = tempfile.mkdtemp(prefix="ai-infinity-runtime-")
+          os.environ["AI_INFINITY_EXTERNAL_WORKER"] = "true"
+          import runtime_main_3700
+          app = runtime_main_3700.app
+          assert runtime_main_3700.foundation.app.state.ai_infinity_3708 is True
+          contract = runtime_main_3700.foundation.app.state.portable_production_fabric
+          assert contract["portable"] is True
+          assert contract["hosting"] == "self_hosted_container_stack"
+          print("Canonical runtime import PASS")
+
+      - name: Verify canonical HTTP surface
+        run: |
           python - <<'PY'
           from fastapi.testclient import TestClient
           import runtime_main_3700
-          app=runtime_main_3700.app
-          client=TestClient(app)
-          for path in ("/","/health","/infinity/3705/health","/infinity/3705/readiness","/infinity/3705/connections","/infinity/3705/self-test","/infinity/3706/health","/infinity/3706/internal-100","/infinity/3706/self-test"):
-              r=client.get(path)
-              if r.status_code >= 500:
-                  raise SystemExit(f"{path} returned HTTP {r.status_code}: {r.text[:1000]}")
-              if r.status_code == 404:
-                  raise SystemExit(f"{path} unexpectedly returned 404")
-          root=client.get("/")
-          if "AI Infinity" not in root.text:
-              raise SystemExit("Canonical root does not contain AI Infinity")
-          if root.headers.get("x-ai-infinity-ui") != "3706-canonical":
-              raise SystemExit("Canonical root header missing: " + str(dict(root.headers)))
-          if "REAL CONTENT PRODUCTION" not in root.text or "Create real content" not in root.text:
-              raise SystemExit("Canonical root is not the real creator shell")
-          if "TARGET-2050.3623" in root.text:
-              raise SystemExit("Legacy 3623 UI leaked into canonical root")
-          closure=client.get("/infinity/3705/readiness").json()
-          if closure.get("software_closure") is not True or closure.get("truthful") is not True:
-              raise SystemExit("Final closure readiness contract failed")
-          selftest=client.get("/infinity/3705/self-test").json()
-          if selftest.get("passed") is not True:
-              raise SystemExit("Final closure self-test failed: "+str(selftest)[:4000])
-          internal=client.get("/infinity/3706/internal-100").json()
-          if internal.get("internal_100_percent") is not True:
-              raise SystemExit("Internal 100% closure failed: "+str(internal)[:4000])
-          internal_test=client.get("/infinity/3706/self-test").json()
-          if internal_test.get("passed") is not True:
-              raise SystemExit("Internal completeness self-test failed: "+str(internal_test)[:4000])
-
-          smoke = client.post("/infinity/studio/project", json={
-              "title": "Canonical Runtime Smoke",
-              "objective": "Create a useful 20-second explainer about renewable energy.",
-              "topic": "renewable energy", "format": "short", "duration": 20,
-              "content_type": "video", "language": "English", "aspect_ratio": "9:16",
-          })
-          if smoke.status_code not in (200,201):
-              raise SystemExit("Canonical runtime create failed: HTTP %s %s" % (smoke.status_code, smoke.text[:1200]))
-          project_id=(smoke.json() or {}).get("project_id")
-          if not project_id:
-              raise SystemExit("Canonical runtime create returned no project_id")
-          import time
-          deadline=time.time()+150
-          final=None
-          while time.time()<deadline:
-              rr=client.get("/infinity/studio/project/"+project_id)
-              if rr.status_code>=500:
-                  raise SystemExit("Canonical runtime project status failed: HTTP %s %s" % (rr.status_code,rr.text[:1200]))
-              final=rr.json()
-              if final.get("status") in {"completed","completed_with_qc_warnings","failed","cancelled"}:
-                  break
-              time.sleep(1)
-          if not final or final.get("status") not in {"completed","completed_with_qc_warnings"}:
-              raise SystemExit("Canonical runtime real production did not complete: "+str(final)[:4000])
-          for name in ["final.mp4","thumbnail.jpg","captions.srt","script.md","audio_master.mp3","manifest.json","sources.json"]:
-              rr=client.get("/infinity/studio/project/"+project_id+"/asset/"+name)
-              if rr.status_code != 200:
-                  raise SystemExit("Canonical runtime artifact unavailable %s: HTTP %s" % (name,rr.status_code))
-          artifacts=client.get("/infinity/studio/project/"+project_id+"/artifacts")
-          if artifacts.status_code != 200 or not (artifacts.json().get("artifacts") or []):
-              raise SystemExit("Canonical runtime artifact registry is empty")
-          summary=client.get("/infinity/studio/workspace/summary").json()
-          analytics_response=client.get("/infinity/studio/analytics").json()
-          analytics=analytics_response.get("analytics") or analytics_response
-          if int(summary.get("projects") or 0) < 1 or int(analytics.get("projects_total") or 0) < 1:
-              raise SystemExit("Canonical runtime projects/analytics did not record the production: summary=%s analytics=%s" % (summary, analytics_response))
-          timeline=client.get("/infinity/studio/project/"+project_id+"/timeline")
-          if timeline.status_code != 200:
-              raise SystemExit("Canonical runtime timeline unavailable")
-          timeline_events=(timeline.json() or {}).get("timeline") or []
-          if not timeline_events:
-              raise SystemExit("Canonical runtime timeline is empty")
-          for event in timeline_events:
-              if "time" not in event or "T" not in str(event.get("time")):
-                  raise SystemExit("Canonical runtime timeline timestamp is not ISO-8601: "+str(event)[:500])
-          print("Canonical runtime + external-gate closure + internal 100% completeness + real media smoke passed:", project_id)
+          client = TestClient(runtime_main_3700.app)
+          for path in ("/", "/health", "/infinity/3708/health", "/infinity/studio/production-fabric"):
+              response = client.get(path)
+              if response.status_code >= 500:
+                  raise SystemExit(f"{path} returned HTTP {response.status_code}: {response.text[:500]}")
+          root = client.get("/")
+          if root.status_code != 200 or "AI Infinity" not in root.text or "REAL CONTENT PRODUCTION" not in root.text:
+              raise SystemExit("Canonical AI Infinity root failed")
+          if root.headers.get("x-ai-infinity-ui") != "3708-portable-production":
+              raise SystemExit("Canonical 3708 UI header missing: " + str(dict(root.headers)))
+          print("Canonical HTTP surface PASS")
           PY
 
   docker-build:
@@ -303,3 +157,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build production image
         run: docker build --pull --tag ai-infinity:ci .
+      - name: Validate Compose file
+        run: |
+          cp .env.production.example .env
+          docker compose -f docker-compose.production.yml config

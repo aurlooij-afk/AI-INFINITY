@@ -1,0 +1,55 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["/usr/bin/tini","--","uvicorn","runtime_main_3700:app","--host","0.0.0.0","--port","8000"]
+    env_file:
+      - .env
+    environment:
+      AI_INFINITY_DATA_DIR: /var/lib/ai-infinity
+      AI_INFINITY_EXTERNAL_WORKER: "true"
+      AI_INFINITY_PERSISTENCE_MODE: portable-volume
+    expose:
+      - "8000"
+    volumes:
+      - ai_infinity_data:/var/lib/ai-infinity
+    restart: unless-stopped
+    init: true
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["/usr/bin/tini","--","python","production_worker.py"]
+    env_file:
+      - .env
+    environment:
+      AI_INFINITY_DATA_DIR: /var/lib/ai-infinity
+      AI_INFINITY_EXTERNAL_WORKER: "true"
+      AI_INFINITY_PERSISTENCE_MODE: portable-volume
+    volumes:
+      - ai_infinity_data:/var/lib/ai-infinity
+    restart: unless-stopped
+    init: true
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      AI_INFINITY_DOMAIN: ${AI_INFINITY_DOMAIN:-localhost}
+      CADDY_EMAIL: ${CADDY_EMAIL:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+    restart: unless-stopped
+
+volumes:
+  ai_infinity_data:
+  caddy_data:
+  caddy_config:

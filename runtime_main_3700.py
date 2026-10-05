@@ -11,6 +11,11 @@ exec(compile("import os\n" + overlay, str(BASE / "overlay_final_3700.py"), "exec
 # Final production hardening is applied after all creator modules are loaded, so
 # both the canonical studio and legacy media entrypoints share the same guards.
 production_hardening = importlib.import_module("production_hardening")
+ai_infinity_portable_fabric = importlib.import_module("ai_infinity_portable_fabric")
+try:
+    ai_infinity_portable_fabric.register(foundation.app)
+except Exception as exc:
+    foundation.app.state.portable_fabric_error = str(exc)[:800]
 try:
     hardening_state = production_hardening.apply()
 except Exception as exc:
@@ -31,7 +36,7 @@ def _canonical_root():
     response.headers["cache-control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["pragma"] = "no-cache"
     response.headers["expires"] = "0"
-    response.headers["x-ai-infinity-ui"] = "3707-production-hardened"
+    response.headers["x-ai-infinity-ui"] = "3708-portable-production"
     return response
 
 # Remove legacy UI entry routes so route order cannot select the old 3623 shell.
@@ -62,7 +67,7 @@ class _CanonicalAIInfinityASGI:
                     (b"content-type",b"text/html; charset=utf-8"),
                     (b"content-length",str(len(body)).encode("ascii")),
                     (b"cache-control",b"no-store, no-cache, must-revalidate, max-age=0"),
-                    (b"x-ai-infinity-ui",b"3707-production-hardened"),
+                    (b"x-ai-infinity-ui",b"3708-portable-production"),
                 ]})
                 await send({"type":"http.response.body","body":b"","more_body":False})
                 return
@@ -72,14 +77,14 @@ class _CanonicalAIInfinityASGI:
                 (b"cache-control",b"no-store, no-cache, must-revalidate, max-age=0"),
                 (b"pragma",b"no-cache"),
                 (b"expires",b"0"),
-                (b"x-ai-infinity-ui",b"3707-production-hardened"),
+                (b"x-ai-infinity-ui",b"3708-portable-production"),
             ]})
             await send({"type":"http.response.body","body":body,"more_body":False})
             return
         await self.inner(scope, receive, send)
 
 foundation.app.title = "AI Infinity"
-foundation.app.version = "TARGET-2050.3707"
+foundation.app.version = "TARGET-2050.3708"
 foundation.app.state.ai_infinity_3700 = True
 foundation.app.state.ai_infinity_3702 = True
 foundation.app.state.ai_infinity_3703 = True
@@ -88,4 +93,6 @@ foundation.app.state.ai_infinity_3705 = True
 foundation.app.state.ai_infinity_3706 = True
 foundation.app.state.ai_infinity_3707 = True
 foundation.app.state.production_hardening = hardening_state
+foundation.app.state.ai_infinity_3708 = True
+foundation.app.state.portable_production_fabric = ai_infinity_portable_fabric.runtime_contract()
 app = _CanonicalAIInfinityASGI(foundation.app)

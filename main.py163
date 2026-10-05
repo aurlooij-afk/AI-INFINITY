@@ -117,7 +117,8 @@ SELF_HOSTS = {
     x.strip().lower().rstrip(".")
     for x in os.getenv(
         "AI_INFINITY_SELF_HOSTS",
-        "ai-infinity-ca5e.onrender.com"
+        "localhost",
+        "127.0.0.1"
     ).split(",")
     if x.strip()
 }
