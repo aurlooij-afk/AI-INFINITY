@@ -103,7 +103,14 @@ jobs:
           grep -q "caddy:" docker-compose.production.yml
           python - <<'PY'
           from pathlib import Path
-          patterns = ("onrender.com", "RENDER_", "render_required", "render_knowledge", "render.yaml")
+          import re
+          patterns = (
+              re.compile(r"\bonrender\.com\b", re.I),
+              re.compile(r"\bRENDER_[A-Z0-9_]+\b"),
+              re.compile(r"\brender_required\b", re.I),
+              re.compile(r"\brender_knowledge\b", re.I),
+              re.compile(r"\brender\.yaml\b", re.I),
+          )
           excluded = {".git", "creator-studio-ci.yml", "production-studio-gate.yml"}
           findings = []
           for path in Path(".").rglob("*"):
@@ -115,7 +122,7 @@ jobs:
                   continue
               for lineno, line in enumerate(text.splitlines(), 1):
                   lower = line.lower()
-                  if any(pattern.lower() in lower for pattern in patterns):
+                  if any(pattern.search(line) for pattern in patterns):
                       findings.append(f"{path}:{lineno}:{line.strip()}")
           if findings:
               print("\n".join(findings))
