@@ -2127,7 +2127,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         for kind, pth, mt in [
             ("video", captioned, "video/mp4"), ("audio", audio_master, "audio/mpeg"), ("article", article, "text/markdown"), ("social_campaign", social, "text/markdown"),
             ("script", script, "text/markdown"), ("captions", captions, "application/x-subrip"),
-            ("script", script, "text/markdown"), ("sources", sources, "application/json"), ("manifest", manifest, "application/json"), ("timeline", timeline, "application/json"), ("feature_execution", outdir / "feature_execution.json", "application/json"), ("thumbnail", thumb, "image/jpeg"), ("package", package, "application/zip")
+            ("sources", sources, "application/json"), ("manifest", manifest, "application/json"), ("timeline", timeline, "application/json"), ("feature_execution", outdir / "feature_execution.json", "application/json"), ("thumbnail", thumb, "image/jpeg"), ("package", package, "application/zip")
         ]:
             if pth and Path(pth).exists(): _save_asset(project_id, kind, Path(pth), mt, {"title": plan.get("title") or topic})
         for x in shorts:
@@ -2136,7 +2136,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             if pth and Path(pth).exists():
                 _save_asset(project_id, k, Path(pth), "application/json" if Path(pth).suffix==".json" else "application/xml" if Path(pth).suffix==".xml" else "text/markdown", {"generated":"3622"})
                 register_artifact(project_id, Path(pth), "application/json" if Path(pth).suffix==".json" else "application/xml" if Path(pth).suffix==".xml" else "text/markdown")
-        for pth, mt in [(captioned,"video/mp4"),(package,"application/zip"),(thumb,"image/jpeg"),(captions,"application/x-subrip"),(sources,"application/json"),(manifest,"application/json"),(timeline,"application/json"),(outdir / "feature_execution.json","application/json")]:
+        for pth, mt in [(captioned,"video/mp4"),(package,"application/zip"),(script,"text/markdown"),(thumb,"image/jpeg"),(captions,"application/x-subrip"),(sources,"application/json"),(manifest,"application/json"),(timeline,"application/json"),(outdir / "feature_execution.json","application/json")]:
             if pth and Path(pth).exists(): register_artifact(project_id, Path(pth), mt)
 
         # Persist a second portable storage copy when configured. Failure of
