@@ -4,7 +4,7 @@ from __future__ import annotations
 AI Infinity Portable Production Fabric.
 
 This layer sits above the existing Creator Studio instead of replacing it.
-It provides a Render-independent runtime contract, portable local/S3-compatible
+It provides a hosting-independent runtime contract, portable local/S3-compatible
 storage, an external-worker switch, truthful production inspection, and a
 stable API surface for the next creator-studio generation.
 """
