@@ -385,6 +385,8 @@ def register(app: Any) -> None:
     async def worlds_put(world_id: str, request: Request, response: Response):
         uid_ = ensure_session(request, response)
         payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(422, "world object is required")
         with DB_LOCK, connect() as c:
             row = c.execute(
                 "SELECT * FROM creator_worlds_3800 WHERE world_id=? AND user_id=?",
@@ -411,6 +413,8 @@ def register(app: Any) -> None:
     async def experiments_post(request: Request, response: Response):
         uid_ = ensure_session(request, response)
         payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(422, "experiment object is required")
         title = clean(payload.get("title"), 180) or "Creative Experiment"
         concept = payload if isinstance(payload, dict) else {}
         eid = uid("experiment")
