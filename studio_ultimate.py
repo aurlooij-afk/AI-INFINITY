@@ -2139,6 +2139,25 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         for pth, mt in [(captioned,"video/mp4"),(package,"application/zip"),(thumb,"image/jpeg"),(captions,"application/x-subrip"),(sources,"application/json"),(manifest,"application/json"),(timeline,"application/json"),(outdir / "feature_execution.json","application/json")]:
             if pth and Path(pth).exists(): register_artifact(project_id, Path(pth), mt)
 
+        # Persist a second portable storage copy when configured. Failure of
+        # an optional external storage adapter must not corrupt the verified
+        # local production result.
+        portable_storage = {"mode": "local", "stored_count": 0, "external_stored_count": 0, "truthful": True}
+        try:
+            from ai_infinity_portable_fabric import sync_project_artifacts
+            portable_storage = sync_project_artifacts(
+                project_id,
+                [captioned, package, timeline, manifest, thumb, captions, sources],
+            )
+        except Exception as storage_exc:
+            portable_storage = {
+                "mode": os.getenv("AI_INFINITY_STORAGE_MODE", "local"),
+                "stored_count": 0,
+                "external_stored_count": 0,
+                "error": str(storage_exc)[:500],
+                "truthful": True,
+            }
+
         _stage(project_id, "quality_control", 93)
         result = {
             "status": "completed" if qc.get("passed") else "completed_with_qc_warnings", "project_id": project_id,
@@ -2149,6 +2168,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "feature_execution": feature_report,
             "duration_seconds": round(probe_duration(captioned), 2),
             "render_profile": "720p-fast" if FAST_MODE else "1080p-production",
+            "portable_storage": portable_storage,
             "quality": qc,
             "research": {"source_count": research.get("source_count", 0)},
             "downloads": {
