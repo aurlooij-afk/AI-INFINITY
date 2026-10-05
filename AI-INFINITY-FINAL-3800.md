@@ -9,7 +9,7 @@ A creator describes an outcome. AI Infinity coordinates the real production pipe
 ## Non-negotiable laws
 
 1. **Core is always free.** No subscription, credits, in-app billing or paid AI API is required for the core workspace.
-2. **No Render dependency.** The application is deployment-neutral and can run anywhere its portable Python runtime is supported; the final product layer contains no Render requirement.
+2. **No hosting-provider dependency.** The application is deployment-neutral and can run anywhere its portable Python runtime is supported; the final product layer contains no Render requirement.
 3. **No fake execution.** The UI distinguishes intent, queued, processing, created, verified and published states.
 4. **Preserve the accumulated platform.** Existing studio, research, automation, storage, safety and closure layers remain underneath the final product experience.
 5. **Local/free-first.** Heavy local media tools and deterministic fallbacks are preferred. Remote providers are optional accelerators, never the definition of the product.
