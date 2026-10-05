@@ -10,7 +10,6 @@ on:
       - "requirements.txt"
       - "bridge-requirements.txt"
       - "creator_studio_2030.html"
-      - "ui_3700.html"
       - "runtime_main_3700.py"
       - "overlay_final_3700.py"
       - "creator_final_3800.py"
@@ -60,7 +59,7 @@ jobs:
           node --check /tmp/ai-infinity-ui.js
           python - <<'PY'
           from pathlib import Path
-          html=Path("ui_3700.html").read_text(encoding="utf-8")
+          html=Path("ui_3800.html").read_text(encoding="utf-8")
           required=["AI Infinity","FINAL 3800","DIRECTOR MODE","REAL CONTENT PRODUCTION","function projects()","function analytics()","/infinity/studio/project/","Create real content","FREE / NO CREDITS"]
           missing=[x for x in required if x not in html]
           if missing:
