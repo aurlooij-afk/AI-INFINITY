@@ -39,7 +39,7 @@ services:
       - key: AI_INFINITY_MEMORY_GUARD_PERCENT
         value: "0.75"
       - key: AI_INFINITY_MEMORY_RESERVE_MB
-        value: "256"
+        value: "128"
       - key: AI_INFINITY_INTERMEDIATE_RETENTION_SECONDS
         value: "3600"
       - key: AI_INFINITY_STORAGE_PRIMARY
