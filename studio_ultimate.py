@@ -2385,14 +2385,9 @@ def _ensure_scheduler() -> None:
 
 
 def _public_base_url() -> str:
-    # Hosting is intentionally not part of the application architecture.
-    # A public URL is explicit when share links are required; local development
-    # gets a safe localhost default rather than silently depending on Render.
-    return (
-        os.getenv("AI_INFINITY_PUBLIC_URL", "").strip()
-        or os.getenv("RENDER_EXTERNAL_URL", "").strip()
-        or "http://localhost:8000"
-    ).rstrip("/")
+    # Public hosting is explicit. The application never infers a hosting
+    # provider or silently depends on one.
+    return (os.getenv("AI_INFINITY_PUBLIC_URL", "").strip() or "http://localhost:8000").rstrip("/")
 
 
 def _share_key() -> bytes:
