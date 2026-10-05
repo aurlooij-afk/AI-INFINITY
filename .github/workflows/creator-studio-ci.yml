@@ -98,7 +98,7 @@ jobs:
           test -f Caddyfile
           test -f .env.production.example
           test -f scripts/production_acceptance.py
-          ! grep -RniE 'render\.com|RENDER_|render_required|render_knowledge|render\.yaml' --exclude-dir=.git .
+          ! grep -RniE 'render\.com|RENDER_|render_required|render_knowledge|render\.yaml' --exclude-dir=.git --exclude='creator-studio-ci.yml' --exclude='production-studio-gate.yml' .
           python - <<'PY'
           import os
           import tempfile
