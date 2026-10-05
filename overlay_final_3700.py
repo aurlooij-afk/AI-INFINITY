@@ -193,3 +193,13 @@ except Exception as _ai3704_storage_error:
         app.state.ai3704_storage_error = str(_ai3704_storage_error)[:800]
     except Exception:
         pass
+
+
+# 3705 final closure / connection readiness fabric.
+try:
+    exec(open("ai3705_closure.py", encoding="utf-8").read(), globals())
+except Exception as _ai3705_closure_error:
+    try:
+        app.state.ai3705_closure_error = str(_ai3705_closure_error)[:800]
+    except Exception:
+        pass
