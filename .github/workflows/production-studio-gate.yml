@@ -101,7 +101,27 @@ jobs:
           grep -q "web:" docker-compose.production.yml
           grep -q "worker:" docker-compose.production.yml
           grep -q "caddy:" docker-compose.production.yml
-          ! grep -RniE 'render\.com|RENDER_|render_required|render_knowledge|render\.yaml' --exclude-dir=.git --exclude='creator-studio-ci.yml' --exclude='production-studio-gate.yml' .
+          python - <<'PY'
+          from pathlib import Path
+          patterns = ("onrender.com", "RENDER_", "render_required", "render_knowledge", "render.yaml")
+          excluded = {".git", "creator-studio-ci.yml", "production-studio-gate.yml"}
+          findings = []
+          for path in Path(".").rglob("*"):
+              if not path.is_file() or any(part in {".git"} for part in path.parts) or path.name in excluded:
+                  continue
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except (UnicodeDecodeError, OSError):
+                  continue
+              for lineno, line in enumerate(text.splitlines(), 1):
+                  lower = line.lower()
+                  if any(pattern.lower() in lower for pattern in patterns):
+                      findings.append(f"{path}:{lineno}:{line.strip()}")
+          if findings:
+              print("\n".join(findings))
+              raise SystemExit("Legacy hosted-platform references remain")
+          print("Hosted-platform reference audit PASS")
+          PY
 
       - name: Import canonical runtime without starting an in-process worker
         run: |
