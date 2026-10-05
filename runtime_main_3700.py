@@ -24,8 +24,9 @@ except Exception:
     pass
 
 foundation.app.title = "AI Infinity"
-foundation.app.version = "TARGET-2050.3703"
+foundation.app.version = "TARGET-2050.3704"
 foundation.app.state.ai_infinity_3700 = True
 foundation.app.state.ai_infinity_3702 = True
 foundation.app.state.ai_infinity_3703 = True
+foundation.app.state.ai_infinity_3704 = True
 app = foundation.app
