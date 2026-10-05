@@ -16,18 +16,17 @@ for route in foundation.app.router.routes:
         route.endpoint = _canonical_root
         break
 
-# Render probes and browsers commonly issue HEAD / before GET /.
-# Register an explicit lightweight HEAD route so the platform shell is probe-safe.
 try:
     foundation.app.add_api_route("/", _canonical_root, methods=["HEAD"], include_in_schema=False)
 except Exception:
     pass
 
 foundation.app.title = "AI Infinity"
-foundation.app.version = "TARGET-2050.3705"
+foundation.app.version = "TARGET-2050.3706"
 foundation.app.state.ai_infinity_3700 = True
 foundation.app.state.ai_infinity_3702 = True
 foundation.app.state.ai_infinity_3703 = True
 foundation.app.state.ai_infinity_3704 = True
 foundation.app.state.ai_infinity_3705 = True
+foundation.app.state.ai_infinity_3706 = True
 app = foundation.app
