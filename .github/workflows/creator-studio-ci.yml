@@ -2,6 +2,9 @@
 name: Creator Studio Build Guard
 
 on:
+  concurrency:
+    group: ai-infinity-creator-studio-main
+    cancel-in-progress: true
   push:
     branches: ["main"]
     paths:
