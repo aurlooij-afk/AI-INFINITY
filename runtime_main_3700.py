@@ -77,7 +77,7 @@ class _CanonicalAIInfinityASGI:
                 (b"cache-control",b"no-store, no-cache, must-revalidate, max-age=0"),
                 (b"pragma",b"no-cache"),
                 (b"expires",b"0"),
-                (b"x-ai-infinity-ui",b"3707-production-hardened"),
+                (b"x-ai-infinity-ui",b"3708-portable-production"),
             ]})
             await send({"type":"http.response.body","body":body,"more_body":False})
             return
