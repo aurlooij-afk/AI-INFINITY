@@ -26,7 +26,7 @@ COPY runtime_main_3700.py .
 COPY runtime_main_3700.py main.py
 COPY overlay_final_3700.py ui_3700.html ai3701_features.py ./
 
-RUN python -m py_compile foundation.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py runtime_main_3700.py overlay_final_3700.py main.py
+RUN python -m py_compile foundation.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py runtime_main_3700.py overlay_final_3700.py ai3701_features.py main.py
 
 RUN mkdir -p /tmp/ai-infinity
 EXPOSE 10000
