@@ -379,14 +379,19 @@ def register(app: Any) -> None:
         }
 
     @app.post("/infinity/studio/director")
-    async def director(request: Request):
+    async def director(request: Request, response):
         studio_ultimate = __import__("studio_ultimate")
         payload = await request.json()
         command = str(payload.get("command") or payload.get("objective") or "").strip()
         if not command:
             raise HTTPException(422, "command is required")
         user_id = studio_ultimate._get_user_id(request)
+        studio_ultimate._set_session(response, request, user_id)
         payload["user_id"] = user_id
+        if not payload.get("idempotency_key"):
+            payload["idempotency_key"] = hashlib.sha256(
+                f"{user_id}|{command}".encode("utf-8")
+            ).hexdigest()[:40]
         return _director_request(command, payload)
 
     @app.get("/infinity/3708/health")
