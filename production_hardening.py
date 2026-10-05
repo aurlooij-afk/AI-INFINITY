@@ -28,7 +28,7 @@ VERSION = "TARGET-2050.3707"
 BUILD = "PRODUCTION-HARDENING-RESOURCE-GUARD"
 
 # Conservative defaults. They are intentionally safe on both the old 512 MiB
-# Render instance and larger production instances.
+# Shared-CPU instances and larger production instances.
 FFMPEG_THREADS = max(1, min(2, int(os.getenv("AI_INFINITY_FFMPEG_THREADS", "1"))))
 FILTER_THREADS = max(1, min(2, int(os.getenv("AI_INFINITY_FFMPEG_FILTER_THREADS", "1"))))
 MEMORY_GUARD_PERCENT = max(
