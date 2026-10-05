@@ -264,13 +264,27 @@ def _s3_head(cfg: Dict[str, Any], key: str) -> Dict[str, Any]:
     }
 
 def _supabase_head(cfg: Dict[str, Any], key: str) -> Dict[str, Any]:
+    # Storage object reads are used for a lightweight existence/size probe because
+    # the public Storage API is centered on GET/POST/PUT/DELETE object operations.
     url = cfg["base"] + _supabase_path(cfg["bucket"], key)
-    resp = requests.head(url, headers=_supabase_headers(cfg), timeout=30)
-    if resp.status_code == 404:
-        return {"exists": False}
-    if resp.status_code >= 300:
-        raise RuntimeError(f"Supabase HEAD failed: HTTP {resp.status_code}")
-    return {"exists": True, "size_bytes": int(resp.headers.get("Content-Length") or 0), "sha256": "", "etag": ""}
+    headers = _supabase_headers(cfg)
+    headers["Range"] = "bytes=0-0"
+    resp = requests.get(url, headers=headers, stream=True, timeout=30)
+    try:
+        if resp.status_code == 404:
+            return {"exists": False}
+        if resp.status_code >= 300:
+            raise RuntimeError(f"Supabase object probe failed: HTTP {resp.status_code}")
+        content_range = str(resp.headers.get("Content-Range") or "")
+        size = int(resp.headers.get("Content-Length") or 0)
+        if "/" in content_range:
+            try:
+                size = int(content_range.rsplit("/", 1)[1])
+            except Exception:
+                pass
+        return {"exists": True, "size_bytes": size, "sha256": "", "etag": ""}
+    finally:
+        resp.close()
 
 def _head_provider(provider: str, key: str) -> Dict[str, Any]:
     cfg = _config(provider)
@@ -290,11 +304,11 @@ def _presign_provider(provider: str, key: str) -> Optional[str]:
             Params={"Bucket": cfg["bucket"], "Key": key},
             ExpiresIn=PRESIGN_SECONDS,
         )
-    url = cfg["base"] + "/storage/v1/object/sign/" + requests.utils.quote(cfg["bucket"], safe="")
+    url = cfg["base"] + _supabase_path(cfg["bucket"], key).replace("/storage/v1/object/", "/storage/v1/object/sign/", 1)
     resp = requests.post(
         url,
         headers=_supabase_headers(cfg),
-        json={"expiresIn": PRESIGN_SECONDS, "prefix": key},
+        json={"expiresIn": PRESIGN_SECONDS},
         timeout=30,
     )
     if resp.status_code >= 300:
