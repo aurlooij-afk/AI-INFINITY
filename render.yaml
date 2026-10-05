@@ -2,11 +2,17 @@ services:
   - type: web
     name: ai-infinity
     runtime: docker
-    plan: free
+    region: oregon
+    plan: 2c-4g
+    numInstances: 1
     maxShutdownDelaySeconds: 300
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
+    disk:
+      name: ai-infinity-data
+      mountPath: /var/lib/ai-infinity
+      sizeGB: 20
     buildFilter:
       ignoredPaths:
         - .github/**
@@ -17,9 +23,25 @@ services:
       - key: AI_INFINITY_OWNER_NAME
         value: AI Infinity Owner
       - key: AI_INFINITY_DATA_DIR
-        value: /tmp/ai-infinity
+        value: /var/lib/ai-infinity
+      - key: AI_INFINITY_PERSISTENCE_MODE
+        value: attached-disk
       - key: AI_INFINITY_3601_BACKGROUND
         value: "true"
+      - key: AI_INFINITY_FAST_MODE
+        value: "false"
+      - key: AI_INFINITY_MAX_HEAVY_JOBS
+        value: "1"
+      - key: AI_INFINITY_FFMPEG_THREADS
+        value: "1"
+      - key: AI_INFINITY_FFMPEG_FILTER_THREADS
+        value: "1"
+      - key: AI_INFINITY_MEMORY_GUARD_PERCENT
+        value: "0.75"
+      - key: AI_INFINITY_MEMORY_RESERVE_MB
+        value: "256"
+      - key: AI_INFINITY_INTERMEDIATE_RETENTION_SECONDS
+        value: "3600"
       - key: AI_INFINITY_STORAGE_PRIMARY
         value: cloudflare_r2
       - key: AI_INFINITY_STORAGE_REPLICAS
