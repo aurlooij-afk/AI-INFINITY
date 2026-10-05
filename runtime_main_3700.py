@@ -36,7 +36,7 @@ def _canonical_root():
     response.headers["cache-control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["pragma"] = "no-cache"
     response.headers["expires"] = "0"
-    response.headers["x-ai-infinity-ui"] = "3707-production-hardened"
+    response.headers["x-ai-infinity-ui"] = "3708-portable-production"
     return response
 
 # Remove legacy UI entry routes so route order cannot select the old 3623 shell.
@@ -67,7 +67,7 @@ class _CanonicalAIInfinityASGI:
                     (b"content-type",b"text/html; charset=utf-8"),
                     (b"content-length",str(len(body)).encode("ascii")),
                     (b"cache-control",b"no-store, no-cache, must-revalidate, max-age=0"),
-                    (b"x-ai-infinity-ui",b"3707-production-hardened"),
+                    (b"x-ai-infinity-ui",b"3708-portable-production"),
                 ]})
                 await send({"type":"http.response.body","body":b"","more_body":False})
                 return
@@ -84,7 +84,7 @@ class _CanonicalAIInfinityASGI:
         await self.inner(scope, receive, send)
 
 foundation.app.title = "AI Infinity"
-foundation.app.version = "TARGET-2050.3707"
+foundation.app.version = "TARGET-2050.3708"
 foundation.app.state.ai_infinity_3700 = True
 foundation.app.state.ai_infinity_3702 = True
 foundation.app.state.ai_infinity_3703 = True
