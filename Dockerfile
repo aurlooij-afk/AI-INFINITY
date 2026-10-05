@@ -25,7 +25,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates curl ffmpeg espeak-ng libsndfile1 libglib2.0-0 \
-        libsm6 libxext1 libxrender1 poppler-utils tini \
+        libsm6 libxext6 libxrender1 poppler-utils tini \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --system --create-home --uid 10001 --shell /usr/sbin/nologin aiinfinity
