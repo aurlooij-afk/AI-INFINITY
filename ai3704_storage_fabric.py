@@ -555,7 +555,7 @@ def storage_status(request: Request):
             "verify_after_write": True,
             "automatic_fallback_reads": True,
             "repair_missing_replicas": True,
-            "ephemeral_render_disk_is_not_authoritative": True,
+            "ephemeral_local_disk_is_not_authoritative": True,
         },
         "counts": counts,
         "truthful": True,
