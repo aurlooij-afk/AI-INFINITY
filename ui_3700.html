@@ -89,7 +89,18 @@ async function openStudioProject(id){
   } catch(e){err(e);}
 }
 
-async function analytics(){var d=await api("/infinity/studio/analytics");$("main").innerHTML='<div class="card hero"><div class="eyebrow">ANALYTICS · REAL WORKSPACE</div><h1>Measure actual production.</h1></div><div class="metrics">'+metric("Projects",d.projects_total||0)+metric("Active",d.active||0)+metric("Completed",d.completed||0)+metric("Artifacts",d.artifact_count||0)+'</div>'+card("Production analytics",'<pre class="out">'+j(d)+'</pre>');$("rail").innerHTML=card("Truth","Metrics are read from the Creator Studio production database.")}
+async function analytics(){
+  var raw=await api("/infinity/studio/analytics");
+  var d=raw.analytics||raw;
+  $("main").innerHTML=
+    '<div class="card hero"><div class="eyebrow">ANALYTICS · REAL WORKSPACE</div><h1>Measure actual production.</h1><p class="muted">Projects, completion, artifacts and quality are read from the same Creator Studio database used by the production worker.</p></div>'+
+    '<div class="metrics">'+metric("Projects",d.projects_total||0)+metric("Active",d.active||0)+metric("Completed",d.completed||0)+metric("Artifacts",d.artifact_count||0)+'</div>'+
+    card("Production analytics",'<pre class="out">'+j(d)+'</pre>');
+  $("rail").innerHTML=
+    card("Truth","Metrics are read from the Creator Studio production database.")+
+    card("Consistency","Projects, Assets and Analytics all use the same production records.");
+}
+
 async function agents(){var d=await api("/infinity/3700/agents");$("main").innerHTML='<div class="card hero"><div class="eyebrow">AGENTS</div><h1>Specialists with a shared operating fabric.</h1></div>'+card("Agent fleet",items(d.agents));$("rail").innerHTML=card("Coordination","Director · Research · Producer · Operator · Verifier · Economy")}
 async function engineering(){var d=await api("/infinity/3701/engineering/overview");$("main").innerHTML='<div class="card hero"><div class="eyebrow">ENGINEERING</div><h1>Repository intelligence inside the workspace.</h1><p class="muted">Inspired by GitHub-native agent workflows: understand the repo, inspect changes, test the plan and keep delivery state visible.</p></div>'+card("Repository",'<b>'+esc(d.repository||"")+'</b><br><span class="badge">'+(d.write_enabled?'write enabled':'read / public API')+'</span>')+card("Recent commits",'<pre class="out">'+j(d.commits||[])+'</pre>');$("rail").innerHTML=card("Capabilities","Search · commits · issues · reviews · Actions · quality gates")}
 async function operations(){var d=await api("/infinity/3700/operations");var plan=await api("/infinity/3702/operator/plan",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({task:"Operate the next user-approved objective with evidence and recovery."})});$("main").innerHTML='<div class="card hero"><div class="eyebrow">OPERATIONS · OPERATOR FABRIC</div><h1>Observe → act → verify → recover.</h1></div>'+card("Execution policy",'<pre class="out">'+j(d)+'</pre>')+card("Operator plan",'<pre class="out">'+j(plan)+'</pre>');$("rail").innerHTML=card("Reality","Emergency stop exists. Unknown external replay is not silently attempted.")}
