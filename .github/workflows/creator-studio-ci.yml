@@ -285,7 +285,10 @@ jobs:
           timeline=client.get("/infinity/studio/project/"+project_id+"/timeline")
           if timeline.status_code != 200:
               raise SystemExit("Canonical runtime timeline unavailable")
-          for event in (timeline.json() or []):
+          timeline_events=(timeline.json() or {}).get("timeline") or []
+          if not timeline_events:
+              raise SystemExit("Canonical runtime timeline is empty")
+          for event in timeline_events:
               if "time" not in event or "T" not in str(event.get("time")):
                   raise SystemExit("Canonical runtime timeline timestamp is not ISO-8601: "+str(event)[:500])
           print("Canonical runtime + external-gate closure + internal 100% completeness + real media smoke passed:", project_id)
