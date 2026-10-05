@@ -17,13 +17,15 @@ exec(compile("import os\n" + overlay, str(BASE / "overlay_final_3700.py"), "exec
 try:
     creator_final_3800 = importlib.import_module("creator_final_3800")
     creator_final_3800.register(foundation.app)
-    # Compatibility state markers for the accumulated internal closure checker.
-# 3700 is loaded by the overlay above; 3704 is loaded by the storage fabric.
-foundation.app.state.ai_infinity_3700 = True
-foundation.app.state.ai_infinity_3704 = bool(getattr(foundation.app.state, "ai_infinity_storage", False))
+    foundation.app.state.ai_infinity_3800 = True
 except Exception as exc:
     foundation.app.state.ai_infinity_3800 = False
     foundation.app.state.ai_infinity_3800_error = str(exc)[:800]
+
+# Compatibility state markers for the accumulated internal closure checker.
+# 3700 is loaded by the overlay above; 3704 is loaded by the storage fabric.
+foundation.app.state.ai_infinity_3700 = True
+foundation.app.state.ai_infinity_3704 = bool(getattr(foundation.app.state, "ai_infinity_storage", False))
 
 # Production hardening remains applied after all creator modules are loaded.
 production_hardening = importlib.import_module("production_hardening")
