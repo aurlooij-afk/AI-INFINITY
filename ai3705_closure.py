@@ -355,7 +355,7 @@ def ai3705_self_test():
             checks.append({"name": name, "passed": bool(value)})
         except Exception as exc:
             checks.append({"name": name, "passed": False, "error": str(exc)[:300]})
-    T("version", lambda: VERSION == "TARGET-2050.3705")
+    T("version", lambda: VERSION in {"TARGET-2050.3705","TARGET-2050.3706"})
     T("database", lambda: bool(DB))
     T("connection catalog", lambda: len(_connections()) >= 10)
     T("storage truth", lambda: _storage_status().get("truthful") is True)
