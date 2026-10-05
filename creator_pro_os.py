@@ -41,9 +41,8 @@ def register_pro(app: Any) -> None:
         now,
     )
 
-    def owned_project(pid: str, request: Request, response: Response):
+    def owned_project(pid: str, request: Request):
         uid = _get_user_id(request)
-        _set_session(response, request, uid)
         p = _get_project(pid)
         if not p or p.get("user_id") != uid:
             raise HTTPException(404, "project not found")
@@ -99,9 +98,8 @@ def register_pro(app: Any) -> None:
             return {"ok": False, "error": str(exc)[:400]}
 
     @app.get("/infinity/studio/creator-pro")
-    def creator_pro_catalog(request: Request, response: Any):
+    def creator_pro_catalog(request: Request):
         uid = _get_user_id(request)
-        _set_session(response, request, uid)
         return {
             "surface": "AI Infinity Creator Pro",
             "editor": {
@@ -163,9 +161,8 @@ def register_pro(app: Any) -> None:
             raise HTTPException(502, f"{provider} request failed: {str(exc)[:500]}")
 
     @app.get("/infinity/studio/open-source")
-    def open_source_status(request: Request, response: Any):
+    def open_source_status(request: Request):
         uid = _get_user_id(request)
-        _set_session(response, request, uid)
         ff = shutil.which("ffmpeg") is not None
         voice = bool(shutil.which("espeak-ng") or shutil.which("espeak"))
         ollama = bool(os.getenv("OLLAMA_BASE_URL", "").strip())
@@ -198,7 +195,7 @@ def register_pro(app: Any) -> None:
 
 
     @app.post("/infinity/studio/open-source/ollama/chat")
-    async def ollama_chat(request: Request, response: Any):
+    async def ollama_chat(request: Request):
         uid = _get_user_id(request); _set_session(response, request, uid)
         payload = await request.json()
         model = safe_text(payload.get("model") or os.getenv("OLLAMA_MODEL") or "llama3.2", 120)
@@ -213,7 +210,7 @@ def register_pro(app: Any) -> None:
         return {"provider":"ollama","model":model,"result":result["data"],"free_first":True,"truthful":True}
 
     @app.post("/infinity/studio/open-source/comfyui/queue")
-    async def comfyui_queue(request: Request, response: Any):
+    async def comfyui_queue(request: Request):
         uid = _get_user_id(request); _set_session(response, request, uid)
         payload = await request.json()
         workflow = payload.get("prompt")
@@ -224,9 +221,8 @@ def register_pro(app: Any) -> None:
         return {"provider":"comfyui","client_id":client_id,"result":result["data"],"free_first":True,"truthful":True}
 
     @app.post("/infinity/studio/open-source/test")
-    async def open_source_test(request: Request, response: Any):
+    async def open_source_test(request: Request):
         uid = _get_user_id(request)
-        _set_session(response, request, uid)
         payload = await request.json()
         provider = str(payload.get("provider") or "").strip().lower()
         endpoint = str(payload.get("endpoint") or "").strip()
@@ -248,8 +244,8 @@ def register_pro(app: Any) -> None:
         return {"provider":provider,"endpoint":endpoint,"result":result,"free_first":True,"truthful":True}
 
     @app.get("/infinity/studio/project/{project_id}/storyboard")
-    def storyboard_get(project_id: str, request: Request, response: Any):
-        uid, p = owned_project(project_id, request, response)
+    def storyboard_get(project_id: str, request: Request):
+        uid, p = owned_project(project_id, request)
         path = _project_dir(project_id) / "storyboard.json"
         if path.exists():
             data = read_json_file(path)
@@ -341,7 +337,7 @@ def register_pro(app: Any) -> None:
         return data
 
     @app.put("/infinity/studio/project/{project_id}/storyboard")
-    async def storyboard_put(project_id: str, request: Request, response: Any):
+    async def storyboard_put(project_id: str, request: Request):
         uid, p = owned_project(project_id, request, response)
         payload = await request.json()
         scenes = payload.get("scenes")
@@ -369,9 +365,9 @@ def register_pro(app: Any) -> None:
 
 
     @app.post("/infinity/studio/project/{project_id}/storyboard/apply")
-    async def storyboard_apply(project_id: str, request: Request, response: Any):
+    async def storyboard_apply(project_id: str, request: Request):
         uid, p = owned_project(project_id, request, response)
-        current = await storyboard_get(project_id, request, response)
+        current = await storyboard_get(project_id, request)
         try:
             payload = await request.json()
         except Exception:
@@ -408,7 +404,7 @@ def register_pro(app: Any) -> None:
         return {"status":"queued","source_project_id":project_id,"project_id":result.get("project_id"),"scene_count":len(clean),"truthful":True}
 
     @app.get("/infinity/studio/project/{project_id}/transcript")
-    def transcript_context(project_id: str, request: Request, response: Any):
+    def transcript_context(project_id: str, request: Request):
         uid, p = owned_project(project_id, request, response)
         root = _project_dir(project_id)
         srt = root / "captions.srt"
@@ -447,7 +443,7 @@ def register_pro(app: Any) -> None:
 
 
     @app.post("/infinity/studio/project/{project_id}/transcript/clip")
-    async def transcript_clip(project_id: str, request: Request, response: Any):
+    async def transcript_clip(project_id: str, request: Request):
         uid, p = owned_project(project_id, request, response)
         if p.get("status") not in {"completed","completed_with_qc_warnings"}:
             raise HTTPException(409, "project master is not ready")
@@ -458,7 +454,7 @@ def register_pro(app: Any) -> None:
         start = payload.get("start")
         end = payload.get("end")
         if start is None or end is None:
-            transcript = await transcript_context(project_id, request, response)
+            transcript = await transcript_context(project_id, request)
             try:
                 idx = int(payload.get("segment_index"))
             except Exception:
@@ -501,7 +497,7 @@ def register_pro(app: Any) -> None:
         return {"status":"completed","project_id":project_id,"asset_name":out.name,"download_url":f"/infinity/studio/project/{project_id}/asset/{out.name}","metadata":meta,"truthful":True}
 
     @app.post("/infinity/studio/project/{project_id}/edit/advanced")
-    async def advanced_edit(project_id: str, request: Request, response: Any):
+    async def advanced_edit(project_id: str, request: Request):
         uid, p = owned_project(project_id, request, response)
         if p.get("status") not in {"completed","completed_with_qc_warnings"}:
             raise HTTPException(409,"project master is not ready")
@@ -589,7 +585,7 @@ def register_pro(app: Any) -> None:
 
 
     @app.post("/infinity/studio/project/{project_id}/image/edit")
-    async def image_edit(project_id: str, request: Request, response: Any):
+    async def image_edit(project_id: str, request: Request):
         uid, p = owned_project(project_id, request, response)
         payload = await request.json()
         source_name = safe_text(payload.get("source_asset_name"), 220)
@@ -689,7 +685,7 @@ def register_pro(app: Any) -> None:
         return {"status":"completed","project_id":project_id,"asset_name":out.name,"download_url":f"/infinity/studio/project/{project_id}/asset/{out.name}","metadata":meta,"truthful":True}
 
     @app.post("/infinity/studio/project/{project_id}/interactive")
-    async def interactive_export(project_id: str, request: Request, response: Any):
+    async def interactive_export(project_id: str, request: Request):
         uid, p = owned_project(project_id, request, response)
         payload=await request.json()
         title=safe_text(payload.get("title") or p.get("title") or "AI Infinity Experience",120)
@@ -714,7 +710,7 @@ def register_pro(app: Any) -> None:
         return {"status":"completed","project_id":project_id,"asset_name":out.name,"download_url":f"/infinity/studio/project/{project_id}/asset/{out.name}","preview_url":f"/infinity/studio/project/{project_id}/asset/{out.name}","metadata":meta,"truthful":True}
 
     @app.post("/infinity/studio/project/{project_id}/variant-matrix")
-    async def variant_matrix(project_id: str, request: Request, response: Any):
+    async def variant_matrix(project_id: str, request: Request):
         uid, p = owned_project(project_id, request, response)
         if p.get("status") not in {"completed","completed_with_qc_warnings"}:
             raise HTTPException(409,"project master is not ready")
