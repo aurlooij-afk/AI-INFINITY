@@ -163,12 +163,17 @@ def main() -> int:
             "captions.srt",
             "script.md",
             "timeline.json",
-            "package.zip",
             "manifest.json",
         }
         missing = sorted(required - set(artifacts))
-        if missing:
-            raise RuntimeError(f"required artifacts missing: {missing}")
+        package_candidates = [
+            name for name in artifacts
+            if str(name).endswith("-AI-Infinity-creator-package.zip")
+        ]
+        if missing or not package_candidates:
+            raise RuntimeError(
+                f"required artifacts missing: {missing}; package_candidates={package_candidates}"
+            )
         if not manifest.get("artifact_integrity_passed"):
             raise RuntimeError("artifact integrity verification failed")
 
