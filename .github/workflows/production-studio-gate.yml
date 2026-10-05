@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - ai-infinity-final-creator-studio
   pull_request:
     branches:
       - main
