@@ -45,7 +45,50 @@ async function saveBrand(){var r=await api("/infinity/3700/brand",{method:"POST"
 async function publish(){var d=await api("/infinity/3700/publish");$("main").innerHTML='<div class="card hero"><div class="eyebrow">PUBLISH</div><h1>Prepare distribution without lying about distribution.</h1><p class="muted">AI Infinity can assemble publication packages locally; external destinations are reported complete only when the destination confirms the write.</p></div>'+card("Publication package",'<input id="ptitle" class="field" placeholder="Title"><br><br><textarea id="pbody" class="field area" placeholder="Post, article, video description or campaign copy"></textarea><br><br><button class="btn primary" onclick="draft()">Prepare package</button>')+card("Queue",items(d.items));$("rail").innerHTML=card("Truth gate","Draft-ready and externally published are different states.")}
 async function draft(){try{var r=await api("/infinity/3700/publish",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title:$("ptitle").value,body:$("pbody").value,target:"draft"})});toast("Draft package prepared");$("main").insertAdjacentHTML("afterbegin",card("Prepared",'<pre class="out">'+j(r)+'</pre>'))}catch(e){err(e)}}
 async function projects(){var d=await api("/infinity/studio/projects?limit=100");var ps=d.projects||[];var html=ps.length?ps.map(function(p){var pct=Math.max(0,Math.min(100,Number(p.progress||0)));var status=p.status||"queued";return '<div class="item"><div class="row"><div><b>'+esc(p.title||p.project_id)+'</b><div class="muted">'+esc(p.project_id)+'</div></div><span class="badge">'+esc(status)+'</span></div><div class="muted" style="margin:8px 0">'+esc(p.stage||"working")+' · '+pct+'%</div><div class="progress"><i style="width:'+pct+'%"></i></div><div class="muted" style="margin-top:8px">Scenes '+esc(p.current_scene||0)+'/'+esc(p.total_scenes||0)+'</div><br><button class="btn" onclick="openStudioProject('+JSON.stringify(p.project_id)+')">Open production</button></div>';}).join(''):'<div class="empty">No production projects yet. Create one from Create or run a command.</div>';$("main").innerHTML='<div class="card hero"><div class="eyebrow">PROJECTS · REAL PRODUCTION HISTORY</div><h1>Every production, tracked from queue to finished artifact.</h1><p class="muted">This list reads the same Creator Studio production database used by the real worker, so counts and status do not come from a decorative dashboard.</p></div>'+card("Production history",html);$("rail").innerHTML=card("Workspace",metric("Projects",ps.length))+card("Create","Use Create or the Home command to start a real production job.");if(ps.some(function(p){return p.status==="queued"||p.status==="running"||p.status==="producing"})){setTimeout(projects,5000)}}
-async function openStudioProject(id){try{var p=await api("/infinity/studio/project/"+encodeURIComponent(id));var r=p.result||{},d=r.downloads||{},base="/infinity/studio/project/"+encodeURIComponent(id)+"/asset/";var files=[["Final video","video","final.mp4"],["Thumbnail","thumbnail","thumbnail.jpg"],["Master audio","audio","audio_master.mp3"],["Captions","captions","captions.srt"],["Script","script","script.md"],["Article","article","article.md"],["SEO","seo","seo.json"],["Social campaign","social_campaign","social_campaign.json"],["Creator experiments","creator_experiments","creator_experiments.json"],["Package","package","package.zip"]],links=files.filter(function(x){return !!d[x[1]]}).map(function(x){return '<a class="btn" target="_blank" href="'+base+x[2]+'">'+esc(x[0])+'</a>'}).join(" ");if(!links)links='<div class="empty">Artifacts are not ready yet.</div>';var preview=d.video?'<video class="videoPreview" controls playsinline preload="metadata" src="'+base+'final.mp4'></video>':"";var integrity="";try{var ar=await api("/infinity/studio/project/"+encodeURIComponent(id)+"/artifacts");integrity=card("Artifact integrity",'<div class="metrics">'+metric("Registered",(ar.artifacts||[]).length)+metric("Hash","SHA-256")+metric("Quality",(r.quality&&r.quality.passed)?"PASS":"REVIEW")+"</div>")}catch(e){}$("main").innerHTML='<div class="card hero"><div class="eyebrow">PRODUCTION · '+esc(p.status)+'</div><h1>'+esc(p.title||id)+'</h1><p class="muted">'+esc(p.stage||"working")+' · '+Math.round(Number(p.progress||0))+'%</p></div>'+card("Preview",preview||'<div class="empty">Preview becomes available when a real video artifact exists.</div>')+card("Output",links)+integrity+card("Production evidence",'<pre class="out">'+j({status:p.status,stage:p.stage,progress:p.progress,current_scene:p.current_scene,total_scenes:p.total_scenes,quality:r.quality,research:r.research,truthful:p.truthful})+'</pre>');$("rail").innerHTML=card("Real project","This view is backed by the production database, artifact registry and output endpoints.")+card("Next step",p.status==="completed"||p.status==="completed_with_qc_warnings"?"Download, review and publish when your destination connection is ready.":"Keep this view open to track the live worker.")}catch(e){err(e)}}
+async function openStudioProject(id){
+  try {
+    var p=await api("/infinity/studio/project/"+encodeURIComponent(id));
+    var r=p.result||{}, d=r.downloads||{};
+    var base="/infinity/studio/project/"+encodeURIComponent(id)+"/asset/";
+    var files=[
+      ["Final video","video","final.mp4"],
+      ["Thumbnail","thumbnail","thumbnail.jpg"],
+      ["Master audio","audio","audio_master.mp3"],
+      ["Captions","captions","captions.srt"],
+      ["Script","script","script.md"],
+      ["Article","article","article.md"],
+      ["SEO","seo","seo.json"],
+      ["Social campaign","social_campaign","social_campaign.json"],
+      ["Creator experiments","creator_experiments","creator_experiments.json"],
+      ["Package","package","package.zip"]
+    ];
+    var links=files.filter(function(x){return !!d[x[1]];}).map(function(x){
+      return '<a class="btn" target="_blank" href="'+base+x[2]+'">'+esc(x[0])+'</a>';
+    }).join(" ");
+    if(!links) links='<div class="empty">Artifacts are not ready yet.</div>';
+    var preview=d.video?'<video class="videoPreview" controls playsinline preload="metadata" src="'+base+'final.mp4"></video>':"";
+    var artifactCount=0;
+    try {
+      var ar=await api("/infinity/studio/project/"+encodeURIComponent(id)+"/artifacts");
+      artifactCount=(ar.artifacts||[]).length;
+    } catch(e) {}
+    var integrity='<div class="metrics">'+
+      metric("Registered",artifactCount)+
+      metric("Quality",(r.quality&&r.quality.passed)?"PASS":"REVIEW")+
+      metric("Integrity","SHA-256")+
+      '</div>';
+    $("main").innerHTML=
+      '<div class="card hero"><div class="eyebrow">PRODUCTION · '+esc(p.status)+'</div><h1>'+esc(p.title||id)+'</h1><p class="muted">'+esc(p.stage||"working")+' · '+Math.round(Number(p.progress||0))+'%</p></div>'+
+      card("Preview",preview||'<div class="empty">Preview becomes available when a real video artifact exists.</div>')+
+      card("Output",links)+
+      card("Artifact integrity",integrity)+
+      card("Production evidence",'<pre class="out">'+j({status:p.status,stage:p.stage,progress:p.progress,current_scene:p.current_scene,total_scenes:p.total_scenes,quality:r.quality,research:r.research,truthful:p.truthful})+'</pre>');
+    $("rail").innerHTML=
+      card("Real project","This view is backed by the production database, artifact registry and output endpoints.")+
+      card("Next step",p.status==="completed"||p.status==="completed_with_qc_warnings"?"Download, review and publish when your destination connection is ready.":"Keep this view open to track the live worker.");
+  } catch(e){err(e);}
+}
+
 async function analytics(){var d=await api("/infinity/studio/analytics");$("main").innerHTML='<div class="card hero"><div class="eyebrow">ANALYTICS · REAL WORKSPACE</div><h1>Measure actual production.</h1></div><div class="metrics">'+metric("Projects",d.projects_total||0)+metric("Active",d.active||0)+metric("Completed",d.completed||0)+metric("Artifacts",d.artifact_count||0)+'</div>'+card("Production analytics",'<pre class="out">'+j(d)+'</pre>');$("rail").innerHTML=card("Truth","Metrics are read from the Creator Studio production database.")}
 async function agents(){var d=await api("/infinity/3700/agents");$("main").innerHTML='<div class="card hero"><div class="eyebrow">AGENTS</div><h1>Specialists with a shared operating fabric.</h1></div>'+card("Agent fleet",items(d.agents));$("rail").innerHTML=card("Coordination","Director · Research · Producer · Operator · Verifier · Economy")}
 async function engineering(){var d=await api("/infinity/3701/engineering/overview");$("main").innerHTML='<div class="card hero"><div class="eyebrow">ENGINEERING</div><h1>Repository intelligence inside the workspace.</h1><p class="muted">Inspired by GitHub-native agent workflows: understand the repo, inspect changes, test the plan and keep delivery state visible.</p></div>'+card("Repository",'<b>'+esc(d.repository||"")+'</b><br><span class="badge">'+(d.write_enabled?'write enabled':'read / public API')+'</span>')+card("Recent commits",'<pre class="out">'+j(d.commits||[])+'</pre>');$("rail").innerHTML=card("Capabilities","Search · commits · issues · reviews · Actions · quality gates")}
