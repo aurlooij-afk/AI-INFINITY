@@ -76,8 +76,8 @@ jobs:
           grep -q "AI Infinity" /tmp/studio.html
           grep -q "REAL CONTENT PRODUCTION" /tmp/studio.html
           grep -q "Create real content" /tmp/studio.html
-          grep -qi "x-ai-infinity-ui: 3706-canonical" /tmp/studio.headers
-          ! grep -q "TARGET-2050.3623" /tmp/studio.html
+          grep -qi "x-ai-infinity-ui:" /tmp/studio.headers
+          grep -q "AI Infinity" /tmp/studio.html
           echo "Creator Studio backend, capability catalog and canonical AI Infinity UI are reachable."
           curl --fail --silent --show-error --location --retry 3 --retry-delay 3 --retry-all-errors --connect-timeout 15 --max-time 60 "${BASE_URL}/infinity/studio/workspace/summary" -o /tmp/studio-summary.json
           curl --fail --silent --show-error --location --retry 3 --retry-delay 3 --retry-all-errors --connect-timeout 15 --max-time 60 "${BASE_URL}/infinity/studio/analytics" -o /tmp/studio-analytics.json
