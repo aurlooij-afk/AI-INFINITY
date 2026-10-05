@@ -183,3 +183,13 @@ except Exception as _ai3703_patch_error:
         app.state.ai3703_patch_error = str(_ai3703_patch_error)[:800]
     except Exception:
         pass
+
+
+# 3704 five-provider durable storage fabric.
+try:
+    exec(open("ai3704_storage_fabric.py", encoding="utf-8").read(), globals())
+except Exception as _ai3704_storage_error:
+    try:
+        app.state.ai3704_storage_error = str(_ai3704_storage_error)[:800]
+    except Exception:
+        pass
