@@ -146,7 +146,7 @@ jobs:
                   raise SystemExit(f"Artifact {name} unavailable: HTTP {check.status_code}: {check.text[:500]}")
           board = client.get("/infinity/studio/project/" + project_id + "/storyboard")
           if board.status_code != 200 or not (board.json().get("scenes") or []):
-              raise SystemExit("Storyboard was not generated from the real project")
+              raise SystemExit("Storyboard was not generated from the real project: HTTP %s %s" % (board.status_code, board.text[:2000]))
 
           pro = client.get("/infinity/studio/creator-pro")
           if pro.status_code != 200 or not pro.json().get("editor",{}).get("color"):
