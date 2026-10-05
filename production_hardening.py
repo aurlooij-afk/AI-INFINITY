@@ -29,15 +29,13 @@ BUILD = "PRODUCTION-HARDENING-RESOURCE-GUARD"
 
 # Conservative defaults. They are intentionally safe on both the old 512 MiB
 # Render instance and larger production instances.
-FFMPEG_THREADS = max(1, min(2, int(os.getenv("AI_INFINITY_FFMPEG_THREADS", "1")))
-)
-FILTER_THREADS = max(1, min(2, int(os.getenv("AI_INFINITY_FFMPEG_FILTER_THREADS", "1")))
-)
+FFMPEG_THREADS = max(1, min(2, int(os.getenv("AI_INFINITY_FFMPEG_THREADS", "1"))))
+FILTER_THREADS = max(1, min(2, int(os.getenv("AI_INFINITY_FFMPEG_FILTER_THREADS", "1"))))
 MEMORY_GUARD_PERCENT = max(
     0.60, min(0.90, float(os.getenv("AI_INFINITY_MEMORY_GUARD_PERCENT", "0.75")))
 )
 MEMORY_RESERVE_MB = max(
-    64, min(512, int(os.getenv("AI_INFINITY_MEMORY_RESERVE_MB", "256")))
+    64, min(256, int(os.getenv("AI_INFINITY_MEMORY_RESERVE_MB", "128")))
 )
 MAX_HEAVY_JOBS = max(
     1, min(2, int(os.getenv("AI_INFINITY_MAX_HEAVY_JOBS", "1")))
@@ -88,11 +86,9 @@ def _read_number(path: Path) -> Optional[int]:
 
 
 def cgroup_memory_limit_bytes() -> Optional[int]:
-    # cgroup v2
     value = _read_number(Path("/sys/fs/cgroup/memory.max"))
     if value is not None:
         return value
-    # cgroup v1 fallback
     return _read_number(Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"))
 
 
@@ -185,7 +181,6 @@ def _run_ffmpeg(*args: Any, timeout: int = 240) -> None:
             start_new_session=True,
         )
 
-        # Keep the process registry compatible with the existing cancel/stop UI.
         registry = getattr(studio, "PROCESS_REGISTRY", None)
         process_lock = getattr(studio, "PROCESS_LOCK", None)
         if project_id and isinstance(registry, dict) and process_lock is not None:
@@ -242,9 +237,6 @@ def _cleanup_project_dir(project_dir: Path) -> int:
     if not project_dir.exists() or not project_dir.is_dir():
         return 0
 
-    # Outputs and manifests are deliberately retained. Everything else is a
-    # reproducible intermediate and can be regenerated from the completed
-    # project package/checkpoints.
     keep_exact = {
         "final.mp4",
         "package.zip",
@@ -310,7 +302,6 @@ def _janitor_loop() -> None:
         try:
             studio = importlib.import_module("studio_ultimate")
             _cleanup_completed_projects(studio)
-            # Also purge abandoned upload/download staging files older than six hours.
             root = Path(getattr(studio, "DATA_DIR", "/tmp/ai-infinity"))
             cutoff = time.time() - CLEANUP_AGE_SECONDS
             for dirname in ("storage-staging", "uploads"):
@@ -381,7 +372,6 @@ def apply() -> dict[str, Any]:
     ORIGINALS["studio_ffmpeg"] = original_ffmpeg
     studio.ffmpeg = _run_ffmpeg
 
-    # The legacy content-factory entrypoint has its own ffmpeg function.
     try:
         factory = importlib.import_module("content_factory")
         original_factory = getattr(factory, "_ffmpeg", None)
@@ -396,8 +386,6 @@ def apply() -> dict[str, Any]:
         with STATE_LOCK:
             STATE["last_error"] = str(exc)[:500]
 
-    # Replacing the project runner gives completed jobs a bounded cleanup pass
-    # without touching its internal production logic.
     original_run_project = getattr(studio, "run_project", None)
     if callable(original_run_project):
         ORIGINALS["studio_run_project"] = original_run_project
@@ -413,8 +401,6 @@ def apply() -> dict[str, Any]:
 
         studio.run_project = run_project_with_cleanup
 
-    # Keep a single cleanup loop. It is intentionally daemonized so normal
-    # container shutdown is never delayed.
     janitor = threading.Thread(
         target=_janitor_loop,
         name="ai-infinity-production-janitor",
