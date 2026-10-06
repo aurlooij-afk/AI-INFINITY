@@ -1,0 +1,121 @@
+name: AI Infinity Canonical Production Gate
+
+on:
+  push:
+    branches: [ai-infinity-canonical-divine]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-infinity-canonical-\${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  canonical:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      AI_INFINITY_FAST_MODE: "1"
+      AI_INFINITY_STUDIO_SMOKE: "0"
+      AI_INFINITY_3601_BACKGROUND: "false"
+      AI_INFINITY_DATA_DIR: /tmp/ai-infinity-canonical-ci
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Media dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg espeak-ng libsndfile1 poppler-utils
+          rm -rf /var/lib/apt/lists/*
+      - name: Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          if [ -s bridge-requirements.txt ]; then python -m pip install -r bridge-requirements.txt; fi
+      - name: Compile canonical runtime
+        run: |
+          python -m py_compile main.py reality_first_3901.py studio_ultimate.py ai_infinity_canonical.py ai_infinity_app.py
+      - name: End-to-end creator proof
+        run: |
+          python - <<'PY'
+          import os,time,json,importlib
+          os.environ["AI_INFINITY_FAST_MODE"]="1"
+          os.environ["AI_INFINITY_STUDIO_SMOKE"]="0"
+          os.environ["AI_INFINITY_3601_BACKGROUND"]="false"
+          os.environ["AI_INFINITY_DATA_DIR"]="/tmp/ai-infinity-canonical-smoke"
+          from fastapi.testclient import TestClient
+          import ai_infinity_app
+          client=TestClient(ai_infinity_app.app)
+          for path in ["/","/health","/infinity/canonical/health","/infinity/canonical/capabilities"]:
+              r=client.get(path);assert r.status_code==200,(path,r.status_code,r.text[:1000])
+          html=client.get("/").text
+          assert "AI Infinity" in html and "AI Infinity Command" in html
+          r=client.post("/infinity/canonical/preflight",json={"command":"Create a cinematic 20 second 16:9 video about mountain landscapes.","content_type":"video","duration":20,"aspect_ratio":"16:9","format":"long"})
+          assert r.status_code==200 and r.json()["ready"] is True,r.text
+          body={"command":"Create a cinematic 20 second 16:9 video about mountain landscapes.","content_type":"video","duration":20,"aspect_ratio":"16:9","format":"long","idempotency_key":"canonical-smoke-v1"}
+          r=client.post("/infinity/canonical/create",json=body);assert r.status_code==200,r.text
+          pid=r.json()["project_id"]
+          r=client.post("/infinity/canonical/create",json=body);assert r.status_code==200 and r.json()["project_id"]==pid,r.text
+          deadline=time.time()+180;truth=None
+          while time.time()<deadline:
+              truth=client.get(f"/infinity/canonical/project/{pid}/truth").json()
+              print(json.dumps({"state":truth.get("canonical_state"),"engine":truth.get("engine_status"),"version":(truth.get("current_version") or {}).get("state")}))
+              if truth.get("done"):break
+              time.sleep(2)
+          assert truth and truth["done"] is True,json.dumps(truth,indent=2)[:16000]
+          cv=truth["current_version"];assert cv["state"]=="VERIFIED",truth
+          ev=cv["evidence"];assert ev["valid"] is True,ev
+          ins=ev.get("inspection") or {};assert ins.get("ok") is True,ins
+          streams=ins.get("streams") or [];video=next(x for x in streams if x.get("codec_type")=="video")
+          assert int(video.get("width") or 0)==1280,video
+          assert int(video.get("height") or 0)==720,video
+          assert abs(float(ins.get("duration_seconds") or 0)-20)<=1,ins
+          assert truth["base_reality"].get("verified") is True,truth["base_reality"]
+          edit=client.post(f"/infinity/canonical/project/{pid}/command",json={"command":"Make it more cinematic and add more contrast."})
+          assert edit.status_code==200,edit.text
+          edit=edit.json();assert edit["status"]=="completed" and edit["artifact"]["valid"] is True,edit
+          vs=client.get(f"/infinity/canonical/project/{pid}/versions").json()["versions"];assert len(vs)>=2 and vs[-1]["state"]=="VERIFIED",vs
+          undo=client.post(f"/infinity/canonical/project/{pid}/undo");assert undo.status_code==200 and undo.json()["current_version_id"]==cv["version_id"],undo.text
+          mem=client.get(f"/infinity/canonical/project/{pid}/memory");assert mem.status_code==200 and any(x.get("project_id")==pid for x in mem.json()["memories"]),mem.text
+          importlib.reload(ai_infinity_app)
+          client2=TestClient(ai_infinity_app.app)
+          pdata=client2.get(f"/infinity/canonical/project/{pid}/truth").json()
+          assert pdata["done"] is True and pdata["current_version_id"]==cv["version_id"],pdata
+          print("CANONICAL_PRODUCTION_GATE_PASS")
+          PY
+      - name: Build production image
+        run: docker build --platform linux/amd64 -t ai-infinity:canonical-ci .
+      - name: Container route proof
+        run: |
+          set -euo pipefail
+          docker run -d --rm --name ai-infinity-canonical \
+            --platform linux/amd64 \
+            -e AI_INFINITY_FAST_MODE=1 \
+            -e AI_INFINITY_STUDIO_SMOKE=0 \
+            -e AI_INFINITY_3601_BACKGROUND=false \
+            -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity \
+            -p 10000:10000 ai-infinity:canonical-ci
+          trap 'docker logs ai-infinity-canonical || true' EXIT
+          for i in \$(seq 1 90); do
+            if curl -fsS http://127.0.0.1:10000/health >/tmp/health.json; then
+              cat /tmp/health.json
+              curl -fsS http://127.0.0.1:10000/infinity/canonical/health
+              curl -fsS http://127.0.0.1:10000/ >/tmp/index.html
+              grep -q "AI Infinity" /tmp/index.html
+              grep -q "AI Infinity Command" /tmp/index.html
+              echo "CONTAINER_CANONICAL_RUNTIME_PASS"
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
