@@ -194,6 +194,7 @@ button,input,textarea,select{font:inherit}button{cursor:pointer}a{color:inherit;
   <div class="card pad"><div class="header"><div><h2>Always Free Core</h2><p>application-level policy</p></div></div><div class="notice good">No billing, no credits and no paid API required for the core workspace.</div></div>
   <div class="card pad"><div class="header"><div><h2>Deployment-neutral core</h2><p>deployment-neutral</p></div></div><div class="notice good">The final 3800 product layer is independent of any hosting provider.</div></div>
   <div class="card pad"><div class="header"><div><h2>Truthful states</h2><p>artifact evidence</p></div></div><div class="notice good">Planned ≠ processing ≠ created ≠ verified ≠ published.</div></div>
+  <div class="card pad"><div class="header"><div><h2>Local engine</h2><p>actual runtime proof</p></div></div><div class="actions"><button class="btn primary" onclick="runLocalSelfTest()">Run media self-test</button></div></div>
 </div>
 <div id="systemRaw" class="card pad" style="margin-top:10px"></div>
 </section>
@@ -254,6 +255,7 @@ async function powerConnections(){try{var r=await Promise.all([api("/infinity/37
 async function powerEngineering(){try{var r=await api("/infinity/3701/engineering/overview");powerOut("Engineering overview",r)}catch(e){powerOut("Engineering error",{error:e.message},"bad")}}
 async function powerChatCommand(){var v=$("powerChat").value.trim();if(!v)return toast("Write a command first");try{var r=await api("/infinity/3702/command",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({command:v})});powerOut("Workspace command",r);$("powerChat").value=""}catch(e){powerOut("Command error",{error:e.message},"bad")}}
 async function powerQuality(){try{var r=await Promise.all([api("/infinity/3702/quality"),api("/infinity/3700/quality"),api("/infinity/3705/readiness"),api("/infinity/3706/internal-100"),api("/infinity/3800/capabilities")]);powerOut("Quality & readiness",{platform_quality:r[0],foundation_regression:r[1],closure:r[2],internal_100:r[3],creator_os:r[4]})}catch(e){powerOut("Quality error",{error:e.message},"bad")}}
+async function runLocalSelfTest(){try{$("systemRaw").innerHTML='<div class="notice">Running actual local media engine test…</div>';var r=await api("/infinity/3800/self-test",{method:"POST"});$("systemRaw").innerHTML='<div class="row"><b>Local media self-test</b><span class="badge '+(r.status==="passed"?"good":"bad")+'">'+esc(r.status)+'</span></div><div class="mono" style="margin-top:8px">'+esc(JSON.stringify(r,null,2))+'</div>'}catch(e){$("systemRaw").innerHTML='<div class="notice warn">'+esc(e.message)+'</div>'}}
 async function system(){var a=await api("/infinity/3800/health");var b=await api("/health");$("systemRaw").innerHTML='<div class="row"><b>Runtime health</b><span class="badge good">verified response</span></div><div class="mono" style="margin-top:8px">'+esc(JSON.stringify({creator3800:a,foundation:b},null,2))+'</div>'}
 
 document.addEventListener("DOMContentLoaded",function(){nav();refreshAll()});
