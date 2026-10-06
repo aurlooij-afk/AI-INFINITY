@@ -1857,6 +1857,53 @@ def _record_autopilot(project_id: str, capabilities: Iterable[str]) -> Dict[str,
     audit_event(project_id,"autopilot_provider_plan",plan)
     return plan
 
+def _normalize_delivery_duration(source: Path, target_seconds: float, out: Path) -> Path:
+    """Make the final delivery honor the requested duration using local FFmpeg only."""
+    try:
+        target = max(1.0, float(target_seconds))
+        actual = float(probe_duration(source))
+    except Exception:
+        return source
+    if actual <= 0 or abs(actual - target) <= 0.75:
+        return source
+    try:
+        out.unlink(missing_ok=True)
+        if actual < target:
+            pad = max(0.1, target - actual)
+            ffmpeg(
+                "-i", source,
+                "-vf", f"tpad=stop_mode=clone:stop_duration={pad:.3f}",
+                "-af", "apad",
+                "-t", f"{target:.3f}",
+                "-map", "0:v:0", "-map", "0:a:0", "-map", "0:s?",
+                "-c:v", "libx264",
+                "-preset", "ultrafast" if FAST_MODE else "veryfast",
+                "-crf", "24" if FAST_MODE else "20",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                "-b:a", "128k" if FAST_MODE else "160k",
+                "-c:s", "mov_text",
+                "-movflags", "+faststart",
+                out,
+                timeout=max(120, int(target * 8)),
+            )
+        else:
+            ffmpeg(
+                "-i", source,
+                "-t", f"{target:.3f}",
+                "-map", "0:v:0", "-map", "0:a:0", "-map", "0:s?",
+                "-c", "copy",
+                "-movflags", "+faststart",
+                out,
+                timeout=max(90, int(target * 4)),
+            )
+        if out.is_file() and out.stat().st_size > 10000 and probe_duration(out) > 0:
+            return out
+    except Exception as exc:
+        audit_event("", "duration_normalization_failed", {"error": str(exc)[:500], "target": target})
+    return source
+
+
 def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
     ACTIVE_PROJECT.project_id = project_id
     project = _get_project(project_id)
@@ -2042,6 +2089,23 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             ffmpeg("-i", master_for_delivery, "-vf", f"subtitles={sub}:force_style='FontName=DejaVu Sans,FontSize=18,Outline=2,Shadow=1,MarginV=45,Alignment=2'", "-c:v", "libx264", "-preset", preset, "-crf", crf, "-c:a", "aac", "-b:a", "128k" if FAST_MODE else "192k", "-movflags", "+faststart", captioned, timeout=max(180, int(probe_duration(master) * 5)))
         else:
             ffmpeg("-i", master_for_delivery, "-i", captions, "-map", "0:v:0", "-map", "0:a:0", "-map", "1:0", "-c:v", "copy", "-c:a", "copy", "-c:s", "mov_text", "-metadata:s:s:0", "language=eng", "-disposition:s:0", "default", "-movflags", "+faststart", captioned, timeout=max(60, int(probe_duration(master) * 2)))
+
+        # Final delivery contract: the user's requested duration is authoritative.
+        # A shorter result is locally padded with a real last-frame hold + silence;
+        # a longer result is trimmed. No external provider is involved.
+        normalized_final = outdir / "final_duration_normalized.mp4"
+        before_duration = probe_duration(captioned)
+        final_source = _normalize_delivery_duration(captioned, float(target), normalized_final)
+        if final_source != captioned and final_source.exists():
+            os.replace(final_source, captioned)
+        after_duration = probe_duration(captioned)
+        checkpoint(project_id, "delivery_duration_verified", {
+            "requested_seconds": float(target),
+            "before_seconds": float(before_duration),
+            "after_seconds": float(after_duration),
+            "within_tolerance": bool(abs(float(after_duration) - float(target)) <= 1.0),
+        })
+
         script = outdir / "script.md"
         lines = [f"# {plan.get('title') or topic}", "", f"Hook: {plan.get('hook') or ''}", ""]
         for ch in chapters:
