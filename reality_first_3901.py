@@ -665,7 +665,7 @@ def _safe_render(original: Any, asset: Dict[str, Any], voice: Path, music: Path,
             f"text='{safe_title}':x=(w-text_w)/2:y=(h-text_h)/2:fontsize={max(28, int(min(width,height)*0.055))}:fontcolor=white"
         )
         ff(
-            "-f", "lavfi", "-i", f"gradients=s={width}x{height}:r=24",
+            "-f", "lavfi", "-i", f"color=c=0x101722:s={width}x{height}:r=24",
             "-t", max(1.0, float(duration)), "-vf", bg_vf,
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "27",
             "-pix_fmt", "yuv420p", "-an", bg, timeout=300,
