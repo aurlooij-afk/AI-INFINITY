@@ -34,23 +34,19 @@ def _apply() -> None:
 
     if callable(original_music) and not getattr(original_music, "_aiinfinity_recovery", False):
         def make_music_safe(outdir, seconds):
+            # Deterministic one-source local music first. This avoids the
+            # multi-input filter graph that was the most fragile early-stage
+            # operation on memory-constrained free containers.
             out = Path(outdir) / "music.m4a"
-            try:
-                result = original_music(outdir, seconds)
-                if _valid(result):
-                    return result
-            except Exception:
-                pass
-            # Guaranteed local music fallback. It is intentionally simple but
-            # genuine audio, so production never depends on a remote provider.
             duration = max(1.0, min(900.0, float(seconds)))
+            ffmpeg = getattr(studio, "ffmpeg")
             try:
-                ffmpeg = getattr(studio, "ffmpeg")
                 ffmpeg(
                     "-f", "lavfi", "-i",
                     f"sine=frequency=110:sample_rate=48000:duration={duration}",
-                    "-filter:a", "volume=0.018,afade=t=in:st=0:d=1,afade=t=out:st="
-                    + str(max(0.1, duration - 2)) + ":d=2",
+                    "-af", "volume=0.025,lowpass=f=1400,afade=t=in:st=0:d=1,"
+                    + "afade=t=out:st=" + str(max(0.1, duration - 2))
+                    + ":d=2",
                     "-c:a", "aac", "-b:a", "64k", "-t", duration, out,
                     timeout=180,
                 )
@@ -58,15 +54,24 @@ def _apply() -> None:
                     return out
             except Exception:
                 pass
-            # Last local fallback uses the system ffmpeg directly and avoids
-            # any provider or model dependency.
+            # Try the original richer generator only after the stable local
+            # path; a later failure is still followed by a real local fallback.
+            try:
+                result = original_music(outdir, seconds)
+                if _valid(result):
+                    return result
+            except Exception:
+                pass
             subprocess.run(
                 ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
                  "-threads", "1", "-f", "lavfi", "-i",
                  f"sine=frequency=110:sample_rate=24000:duration={duration}",
+                 "-af", "volume=0.02",
                  "-c:a", "aac", "-b:a", "48k", "-t", str(duration), str(out)],
                 check=True, timeout=180,
             )
+            if not _valid(out):
+                raise RuntimeError("local music fallback produced no valid audio")
             return out
         make_music_safe._aiinfinity_recovery = True
         studio.make_music = make_music_safe
@@ -74,19 +79,15 @@ def _apply() -> None:
     if callable(original_sfx) and not getattr(original_sfx, "_aiinfinity_recovery", False):
         def make_sfx_safe(outdir, duration, index):
             out = Path(outdir) / f"transition_{index:02d}.wav"
-            try:
-                result = original_sfx(outdir, duration, index)
-                if _valid(result):
-                    return result
-            except Exception:
-                pass
             d = max(0.15, min(1.1, float(duration) * 0.15))
             try:
                 ffmpeg = getattr(studio, "ffmpeg")
                 ffmpeg(
                     "-f", "lavfi", "-i",
-                    f"anullsrc=r=24000:cl=stereo:d={d}",
-                    "-c:a", "pcm_s16le", "-t", d, out, timeout=30,
+                    f"anoisesrc=color=white:amplitude=0.06:duration={d}",
+                    "-af", "highpass=f=900,lowpass=f=6500,afade=t=in:st=0:d=0.03,"
+                    + "afade=t=out:st=" + str(max(0.03, d-0.08)) + ":d=0.08",
+                    "-c:a", "pcm_s16le", "-t", d, out, timeout=45,
                 )
                 if _valid(out):
                     return out
@@ -99,9 +100,36 @@ def _apply() -> None:
                  "-c:a", "pcm_s16le", "-t", str(d), str(out)],
                 check=True, timeout=30,
             )
+            if not _valid(out):
+                raise RuntimeError("local SFX fallback produced no valid audio")
             return out
         make_sfx_safe._aiinfinity_recovery = True
         studio.make_sfx = make_sfx_safe
+
+    original_tts = getattr(studio, "tts", None)
+    if callable(original_tts) and not getattr(original_tts, "_aiinfinity_recovery", False):
+        def tts_local_first(text, outdir, index, voice):
+            # Prefer local espeak so the free core never needs a remote service
+            # merely to finish a valid real project.
+            out = Path(outdir) / f"narration_{index:02d}.mp3"
+            plain = str(text or "").strip()
+            if not plain:
+                raise ValueError("empty narration")
+            exe = __import__("shutil").which("espeak-ng") or __import__("shutil").which("espeak")
+            if exe:
+                wav = Path(outdir) / f"narration_{index:02d}.wav"
+                try:
+                    subprocess.run([exe, "-s", "155", "-w", str(wav), plain], check=True, timeout=45)
+                    ffmpeg = getattr(studio, "ffmpeg")
+                    ffmpeg("-i", wav, "-codec:a", "libmp3lame", "-q:a", "4", out, timeout=120)
+                    if _valid(out):
+                        duration = float(getattr(studio, "probe_duration")(out))
+                        return out, "local-espeak-first", duration
+                except Exception:
+                    pass
+            return original_tts(text, outdir, index, voice)
+        tts_local_first._aiinfinity_recovery = True
+        studio.tts = tts_local_first
 
     if callable(original_concat) and not getattr(original_concat, "_aiinfinity_recovery", False):
         def concat_safe(paths, out):
