@@ -265,7 +265,7 @@ jobs:
           duration=float((x.get("format") or {}).get("duration") or 0)
           streams=x.get("streams") or []
           video=next((s for s in streams if s.get("codec_type")=="video"), {})
-          assert 10 <= duration <= 35, {"duration_seconds":duration,"expected_target_seconds":20}
+          assert 19 <= duration <= 21, {"duration_seconds":duration,"expected_target_seconds":20}
           assert video, streams
           assert any(s.get("codec_type")=="audio" for s in streams), streams
           assert int(video.get("width") or 0) == 1280 and int(video.get("height") or 0) == 720, {
