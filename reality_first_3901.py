@@ -892,18 +892,19 @@ def truth_for_project(project_id: str) -> Dict[str, Any]:
 
 def register(app: Any) -> None:
     """Expose independent proof endpoints without replacing the main creator UI."""
+    from fastapi import Request, Response, HTTPException
+
     @app.get("/infinity/reality/health")
     def reality_health():
         return runtime_health()
 
     @app.get("/infinity/reality/project/{project_id}")
-    def reality_project(project_id: str, request: Any, response: Any):
+    def reality_project(project_id: str, request: Request, response: Response):
         s = _studio()
         uid = s._get_user_id(request)
         s._set_session(response, request, uid)
         p = s._get_project(project_id)
         if not p or p.get("user_id") != uid:
-            from fastapi import HTTPException
             raise HTTPException(404, "project not found")
         return truth_for_project(project_id)
 
