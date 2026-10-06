@@ -394,9 +394,8 @@ def _set_truth(project_id: str, state: str, verified: bool, qc: bool,
     s = studio()
     with _DB_LOCK, s.DB_LOCK, s._connect() as c:
         c.execute(
-            "INSERT INTO reality_projects_3901(project_id,user_id,intent_sha256,request_sha256,plan_sha256,root_path,state,verified,qc_passed,last_report_json,created_at,updated_at,verified_at) "
-            "SELECT project_id,user_id,intent_sha256,request_sha256,plan_sha256,root_path,?,?,?,?,?,?,created_at,?,? "
-            "FROM reality_projects_3901 WHERE project_id=?",
+            "UPDATE reality_projects_3901 SET state=?,verified=?,qc_passed=?,last_report_json=?,updated_at=?,verified_at=? "
+            "WHERE project_id=?",
             (
                 state, int(verified), int(qc), _jdump(report), _now(),
                 _now() if verified else None, project_id,
