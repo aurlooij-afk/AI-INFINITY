@@ -16,6 +16,11 @@ jobs:
       - name: Compile runtime surface
         run: |
           python -m py_compile             main.py             divine_closure_3900.py             studio_ultimate.py             creator_final_3800.py             creator_pro_os.py             production_hardening.py             free_api_fabric.py             ai3701_features.py             ai3702_platform.py             ai3703_patch.py             ai3704_storage_fabric.py             ai3705_closure.py             ai3706_internal_closure.py
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
       - name: Verify canonical creator boundary is wired
         run: |
           set -euo pipefail
