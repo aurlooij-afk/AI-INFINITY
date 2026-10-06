@@ -351,7 +351,12 @@ def _upsert_artifact(project_id: str, path: Path, media_type: str,
             (project_id, info["name"], info["sha256"]),
         ).fetchone()
         if existing:
-            return {**info, "proof": proof, "recorded_at": existing["created_at"]}
+            stored_proof = proof
+            try:
+                stored_proof = json.loads(existing["parameters_json"] or "{}")
+            except Exception:
+                pass
+            return {**info, "proof": stored_proof, "recorded_at": existing["created_at"]}
         c.execute(
             "INSERT INTO reality_artifacts_3901("
             "project_id,asset_name,sha256,size_bytes,media_type,generator_version,source_sha256,"
