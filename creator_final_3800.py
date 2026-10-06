@@ -18,6 +18,7 @@ Design rules:
 """
 
 import json
+import re
 import sqlite3
 import threading
 import time
