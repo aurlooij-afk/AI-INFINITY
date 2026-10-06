@@ -524,7 +524,7 @@ def create_from_command(command,user_id,raw):
     write_json(project_dir(pid)/"canonical_contract.json",manifest)
     with studio().DB_LOCK,db() as c:
         c.execute(
-          "INSERT INTO canonical_projects(project_id,user_id,intent_json,success_json,manifest_json,current_version_id,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO canonical_projects(project_id,user_id,intent_json,success_json,manifest_json,current_version_id,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
           (pid,user_id,json.dumps(intent,ensure_ascii=False,sort_keys=True),json.dumps(intent["success"],sort_keys=True),
            json.dumps(manifest,sort_keys=True),None,"QUEUED",now(),now())
         )
@@ -648,16 +648,3 @@ def register(app):
         uid_=current_user(request,response);require_project(project_id,uid_)
         with studio().DB_LOCK,db() as c:
             rows=[dict(r) for r in c.execute("SELECT event_id,event,data_json,created_at FROM canonical_events WHERE project_id=? ORDER BY event_id ASC",(project_id,)).fetchall()]
-        for r in rows:
-            try:r["data"]=json.loads(r.pop("data_json") or "{}")
-            except Exception:r["data"]={}
-        return {"project_id":project_id,"events":rows,"truthful":True}
-
-    @app.get("/",response_class=HTMLResponse)
-    @app.get("/home",response_class=HTMLResponse)
-    def canonical_root(request:Request,response:Response):
-        current_user(request,response);return HTMLResponse(canonical_html(),headers={"Cache-Control":"no-store"})
-
-    @app.get("/infinity/canonical")
-    def canonical_info():
-        return {"version":VERSION,"build":BUILD,"schema":SCHEMA,"truthful":True}
