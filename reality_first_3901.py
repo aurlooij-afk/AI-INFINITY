@@ -32,10 +32,10 @@ _ORIGINALS: Dict[str, Any] = {}
 def _studio():
     import studio_ultimate
     try:
-        _studio()._init_db()
+        studio_ultimate._init_db()
     except Exception:
         pass
-    return studio
+    return studio_ultimate
 
 
 def _now() -> float:
