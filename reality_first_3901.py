@@ -248,6 +248,22 @@ def _event(project_id: str, node: str, state: str, attempt: int = 1,
         )
 
 
+def _event_once(project_id: str, node: str, state: str, attempt: int = 1,
+                error: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> None:
+    _ensure_schema()
+    s = studio()
+    with _DB_LOCK, s.DB_LOCK, s._connect() as c:
+        row = c.execute(
+            "SELECT state,error,metadata_json FROM reality_events_3901 "
+            "WHERE project_id=? AND node=? ORDER BY event_id DESC LIMIT 1",
+            (project_id, node),
+        ).fetchone()
+        same = bool(row and str(row["state"]) == state and str(row["error"] or "") == str(error or ""))
+        if same:
+            return
+    _event(project_id, node, state, attempt, error, metadata)
+
+
 def _project_record(project_id: str) -> Dict[str, Any]:
     _ensure_schema()
     s = studio()
@@ -330,8 +346,14 @@ def _upsert_artifact(project_id: str, path: Path, media_type: str,
     _ensure_schema()
     s = studio()
     with _DB_LOCK, s.DB_LOCK, s._connect() as c:
+        existing = c.execute(
+            "SELECT * FROM reality_artifacts_3901 WHERE project_id=? AND asset_name=? AND sha256=? LIMIT 1",
+            (project_id, info["name"], info["sha256"]),
+        ).fetchone()
+        if existing:
+            return {**info, "proof": proof, "recorded_at": existing["created_at"]}
         c.execute(
-            "INSERT OR REPLACE INTO reality_artifacts_3901("
+            "INSERT INTO reality_artifacts_3901("
             "project_id,asset_name,sha256,size_bytes,media_type,generator_version,source_sha256,"
             "input_hashes_json,parameters_json,inspection_json,created_at,verified_at"
             ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -367,13 +389,48 @@ def _verify_required(project_id: str, req: Dict[str, Any]) -> Tuple[bool, Dict[s
     proofs: List[Dict[str, Any]] = []
     checks: Dict[str, Any] = {}
     all_ok = True
+
+    # Required deliverables determine customer-usable closure; every other
+    # generated file is still independently hashed and inspected below.
+
     for name, mt in _required_assets(req):
         info = inspect_artifact(root / name, mt)
         proofs.append(info)
         checks[name] = bool(info["exists"] and info["inspection"].get("ok"))
         all_ok = all_ok and checks[name]
         if info["exists"]:
-            _upsert_artifact(project_id, root / name, mt)
+            proof = _upsert_artifact(
+                project_id, root / name, mt,
+                source_hashes=[_digest(req), _digest(_project_record(project_id)["plan"])],
+                parameters={"required": True, "asset_name": name},
+            )
+            info["proof"] = proof.get("proof") if isinstance(proof, dict) else info.get("proof")
+
+    # Independent proof is not restricted to customer-facing deliverables.
+    # Intermediate scenes, narration, music, variants and packages are all real
+    # generated files and receive the same hash + inspection treatment.
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.name == "reality_proof.json":
+            continue
+        if any(p["name"] == path.name for p in proofs):
+            continue
+        suffix = path.suffix.lower()
+        mt = {
+            ".mp4": "video/mp4", ".mov": "video/quicktime", ".mkv": "video/x-matroska",
+            ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+            ".webp": "image/webp", ".json": "application/json", ".srt": "application/x-subrip",
+            ".md": "text/markdown", ".txt": "text/plain", ".xml": "application/xml",
+            ".zip": "application/zip",
+        }.get(suffix, "application/octet-stream")
+        info = inspect_artifact(path, mt)
+        proofs.append(info)
+        if info["exists"]:
+            _upsert_artifact(
+                project_id, path, mt,
+                source_hashes=[_digest(req), _digest(_project_record(project_id)["plan"])],
+                parameters={"generated_file": True, "asset_name": path.name},
+            )
     # Strongest proof for video: final must be a playable media file, not merely a
     # non-empty byte stream.
     final = root / "final.mp4"
@@ -473,14 +530,69 @@ def reconcile_project(project_id: str) -> Dict[str, Any]:
         report["error"] = "required_artifact_proof_incomplete"
         report["missing_or_invalid"] = missing
 
-    _set_truth(project_id, state, state == "VERIFIED", qc_passed, report)
-    root = _project_path(project_id)
+    # Enforce the UI/database state from evidence, never the reverse.
+    if status == "completed" and not required_ok:
+        try:
+            s._update_project(
+                project_id,
+                status="completed_with_qc_warnings",
+                stage="quality_control",
+                progress=100,
+                error="Independent Reality Kernel proof is incomplete.",
+            )
+        except Exception:
+            pass
+    elif status == "failed" and required_ok:
+        try:
+            s._update_project(
+                project_id,
+                status="completed_with_qc_warnings",
+                stage="complete",
+                progress=100,
+                error="A real deliverable exists after worker failure; delivered with QC warnings.",
+            )
+        except Exception:
+            pass
+
+    # Append the canonical project proof chain once per state.
+    if proofs:
+        _event_once(project_id, "artifacts", "ARTIFACT_CREATED", 1,
+                    metadata={"count": len(proofs)})
+    if all(bool(x.get("inspection", {}).get("ok")) for x in proofs):
+        _event_once(project_id, "artifacts", "FILE_INSPECTED", 1,
+                    metadata={"count": len(proofs)})
+    if all(bool(x.get("sha256")) for x in proofs):
+        _event_once(project_id, "artifacts", "HASHED", 1,
+                    metadata={"count": len(proofs)})
+    if qc_passed:
+        _event_once(project_id, "quality", "QC_PASSED", 1,
+                    metadata={"required_artifacts": len(checks)})
+    _event_once(project_id, "reality", state, 1, error=report.get("error"),
+                metadata={"verified": bool(state == "VERIFIED"), "qc_passed": qc_passed})
+
+    _ensure_schema()
+    existing_report = None
     try:
-        # The report is itself a proof record, not a completion flag. It is written
-        # after verification so its contents describe exactly what was inspected.
-        (root / "reality_proof.json").write_text(_jdump(report), encoding="utf-8")
+        with _DB_LOCK, s.DB_LOCK, s._connect() as c:
+            row = c.execute(
+                "SELECT last_report_json FROM reality_projects_3901 WHERE project_id=? LIMIT 1",
+                (project_id,),
+            ).fetchone()
+            if row and row["last_report_json"]:
+                existing_report = json.loads(row["last_report_json"])
     except Exception:
-        pass
+        existing_report = None
+    stable_existing = dict(existing_report or {})
+    stable_existing.pop("generated_at", None)
+    stable_new = dict(report)
+    stable_new.pop("generated_at", None)
+    if stable_existing != stable_new:
+        _set_truth(project_id, state, state == "VERIFIED", qc_passed, report)
+        root = _project_path(project_id)
+        try:
+            (root / "reality_proof.json").write_text(_jdump(report), encoding="utf-8")
+        except Exception:
+            pass
     return report
 
 
@@ -586,7 +698,12 @@ def _emergency_finalize(project_id: str) -> bool:
             lines += [f"## {ch.get('heading')}", str(ch.get('narration') or ""), ""]
         script.write_text("\n".join(lines), encoding="utf-8")
         thumb = root / "thumbnail.jpg"
-        s.make_thumbnail(final, str(p.get("title") or req.get("title") or "AI Infinity"), root)
+        thumb_result = s.make_thumbnail(final, str(p.get("title") or req.get("title") or "AI Infinity"), root)
+        if isinstance(thumb_result, (str, Path)) and Path(thumb_result).is_file() and Path(thumb_result) != thumb:
+            try:
+                shutil.copy2(Path(thumb_result), thumb)
+            except Exception:
+                pass
         if not _valid_file(thumb, 1000):
             return False
         audio = root / "audio_master.mp3"
@@ -623,8 +740,9 @@ def _guarded_run_project(project_id: str, model_fn: Any) -> None:
     if original is None:
         raise RuntimeError("Reality Kernel lost original run_project")
     try:
-        _event(project_id, "production", "QUEUED", 1)
+        _event_once(project_id, "production", "QUEUED", 1)
         _register_project(project_id)
+        _event_once(project_id, "production", "RUNNING", 1, metadata={"worker": "studio_ultimate"})
         original(project_id, model_fn)
         # studio.run_project normally absorbs worker exceptions and marks the
         # project failed. Re-open that result here so late, already-rendered
@@ -705,7 +823,7 @@ def runtime_health() -> Dict[str, Any]:
         "canonical_truth": "filesystem_and_independent_inspection",
         "state_machine": [
             "PLANNED", "QUEUED", "RUNNING", "ARTIFACT_CREATED", "FILE_INSPECTED",
-            "HASHED", "QC_PASSED", "VERIFIED", "DELIVERED",
+            "HASHED", "QC_PASSED", "VERIFIED", "DELIVERED", "PUBLISHED",
         ],
         "self_healing": {
             "scene_renderer": True,
