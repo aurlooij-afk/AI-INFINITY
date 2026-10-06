@@ -222,7 +222,8 @@ jobs:
               f"http://127.0.0.1:10000/infinity/reality/project/{reality_project_id}"
           ], text=True)
           reality=json.loads(reality_response)
-          assert reality.get("truthful") is True
+          print("REALITY_PROOF_REPORT", json.dumps(reality, indent=2, sort_keys=True))
+          assert reality.get("truthful") is True, reality
           assert reality.get("verified") is True, reality
           assert reality.get("state") == "VERIFIED", reality
           names={x["asset_name"] for x in json.load(open("/tmp/artifacts.json")).get("artifacts",[])}
