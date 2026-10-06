@@ -82,7 +82,7 @@ jobs:
               curl -fsS http://127.0.0.1:10000/ >/tmp/index.html
               grep -q "AI Infinity" /tmp/index.html
               echo "container-runtime-ok"
-              exit 0
+              break
             fi
             sleep 2
           done
