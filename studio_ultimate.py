@@ -2073,8 +2073,18 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             if pth and Path(pth).exists():
                 _save_asset(project_id, k, Path(pth), "application/json" if Path(pth).suffix==".json" else "application/xml" if Path(pth).suffix==".xml" else "text/markdown", {"generated":"3622"})
                 register_artifact(project_id, Path(pth), "application/json" if Path(pth).suffix==".json" else "application/xml" if Path(pth).suffix==".xml" else "text/markdown")
-        for pth, mt in [(captioned,"video/mp4"),(package,"application/zip"),(thumb,"image/jpeg"),(captions,"application/x-subrip"),(sources,"application/json"),(manifest,"application/json"),(outdir / "feature_execution.json","application/json")]:
-            if pth and Path(pth).exists(): register_artifact(project_id, Path(pth), mt)
+        for pth, mt in [
+            (captioned, "video/mp4"),
+            (package, "application/zip"),
+            (thumb, "image/jpeg"),
+            (captions, "application/x-subrip"),
+            (sources, "application/json"),
+            (manifest, "application/json"),
+            (script, "text/markdown"),
+            (outdir / "feature_execution.json", "application/json"),
+        ]:
+            if pth and Path(pth).exists():
+                register_artifact(project_id, Path(pth), mt)
 
         _stage(project_id, "quality_control", 93)
         result = {
