@@ -223,9 +223,22 @@ jobs:
           ], text=True)
           reality=json.loads(reality_response)
           print("REALITY_PROOF_REPORT", json.dumps(reality, indent=2, sort_keys=True))
-          assert reality.get("truthful") is True, reality
-          assert reality.get("verified") is True, reality
-          assert reality.get("state") == "VERIFIED", reality
+          proof_checks = {
+              "truthful_bool": (reality.get("truthful") is True),
+              "verified_bool": (reality.get("verified") is True),
+              "state_verified": (reality.get("state") == "VERIFIED"),
+              "qc_passed_bool": (reality.get("qc_passed") is True),
+              "final_video": bool((reality.get("checks") or {}).get("final_has_video_stream")),
+              "final_audio": bool((reality.get("checks") or {}).get("final_has_audio_stream")),
+              "final_duration": bool((reality.get("checks") or {}).get("final_duration_gt_2s")),
+              "manifest": bool((reality.get("checks") or {}).get("manifest.json")),
+              "script": bool((reality.get("checks") or {}).get("script.md")),
+              "captions": bool((reality.get("checks") or {}).get("captions.srt")),
+              "thumbnail": bool((reality.get("checks") or {}).get("thumbnail.jpg")),
+              "audio_master": bool((reality.get("checks") or {}).get("audio_master.mp3")),
+          }
+          print("REALITY_PROOF_FIELD_CHECKS", json.dumps(proof_checks, sort_keys=True))
+          assert all(proof_checks.values()), {"proof_checks": proof_checks, "reality": reality}
           names={x["asset_name"] for x in json.load(open("/tmp/artifacts.json")).get("artifacts",[])}
           required={"final.mp4","captions.srt","thumbnail.jpg","manifest.json","script.md"}
           missing=required-names
