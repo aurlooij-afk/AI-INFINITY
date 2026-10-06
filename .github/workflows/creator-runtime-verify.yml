@@ -203,3 +203,10 @@ jobs:
           test -s /tmp/thumbnail.jpg
           ffprobe -v error -show_entries format=duration,size -of json /tmp/final.mp4
           echo "END_TO_END_CREATOR_ARTIFACT_TEST_PASSED"
+
+
+      - name: Stop test container
+        if: always()
+        run: |
+          docker logs ai-infinity-ci || true
+          docker stop ai-infinity-ci || true
