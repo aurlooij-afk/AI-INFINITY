@@ -256,6 +256,15 @@ def quality_for_project(project_id: str) -> Dict[str, Any]:
     available = expected.intersection(asset_names.union(set(artifacts.keys())))
     check("Core creator package is present", len(available) >= 5, f"{len(available)}/{len(expected)} core artifacts detected")
     storyboard = result.get("storyboard") if isinstance(result, dict) else None
+    if not storyboard and isinstance(project, dict):
+        try:
+            blueprint = project.get("blueprint_json") or project.get("blueprint") or {}
+            if isinstance(blueprint, str):
+                blueprint = json.loads(blueprint or "{}")
+            if isinstance(blueprint, dict):
+                storyboard = blueprint.get("chapters") or (blueprint.get("plan") or {}).get("chapters")
+        except Exception:
+            storyboard = None
     check("Storyboard exists", bool(storyboard or result.get("chapters")), "Storyboard/chapters data is recorded" if (storyboard or result.get("chapters")) else "No storyboard data recorded")
     qc = result.get("qc") if isinstance(result, dict) else None
     if isinstance(qc, dict) and "passed" in qc:
