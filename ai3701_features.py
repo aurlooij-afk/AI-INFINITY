@@ -38,7 +38,7 @@ if studio:
    ch=plan.get("chapters") or []
    def one(i,x):
     p=workdir/("voice_%03d.wav"%i); subprocess.run([exe,"-s","155","-w",str(p),clean(x.get("narration"),18000)],check=True,timeout=240); return p
-   with ThreadPoolExecutor(max_workers=min(6,max(1,len(ch)))) as pool: parts=sorted([f.result() for f in as_completed([pool.submit(one,i+1,x) for i,x in enumerate(ch)])],key=lambda p:p.name)
+   with ThreadPoolExecutor(max_workers=1) as pool: parts=sorted([f.result() for f in as_completed([pool.submit(one,i+1,x) for i,x in enumerate(ch)])],key=lambda p:p.name)
    if not parts:return OV(plan,workdir,voice)
    m=workdir/"voices.txt";m.write_text("".join("file '%s'\n"%str(p).replace("'","'\\''") for p in parts),encoding="utf-8");wav=workdir/"narration.wav";mp3=workdir/"narration.mp3"
    subprocess.run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(m),"-c:a","pcm_s16le",str(wav)],check=True,timeout=900,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
@@ -48,7 +48,7 @@ if studio:
    if not clips:return None
    def norm(i,c):
     p=workdir/("clip_%03d.mp4"%i);studio._ffmpeg("-i",c["path"],"-t","12","-vf",f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}","-an","-r","30","-c:v","libx264","-preset","ultrafast","-pix_fmt","yuv420p",p,timeout=240);return p
-   with ThreadPoolExecutor(max_workers=min(6,len(clips))) as pool:parts=sorted([f.result() for f in as_completed([pool.submit(norm,i,c) for i,c in enumerate(clips)]) if True],key=lambda p:p.name)
+   with ThreadPoolExecutor(max_workers=1) as pool:parts=sorted([f.result() for f in as_completed([pool.submit(norm,i,c) for i,c in enumerate(clips)]) if True],key=lambda p:p.name)
    parts=[p for p in parts if p.exists()]
    if not parts:return OC(clips,target,workdir,width,height)
    m=workdir/"clips.txt";m.write_text("".join("file '%s'\n"%str(parts[i%len(parts)]).replace("'","'\\''") for i in range(max(1,int(target/12)+1))),encoding="utf-8");out=workdir/"visuals.mp4"
