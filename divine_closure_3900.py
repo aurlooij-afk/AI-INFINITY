@@ -173,6 +173,16 @@ def health_payload():
         reality = _rk.runtime_health()
     except Exception as exc:
         reality = {"enabled": False, "patched": False, "verified": False, "error": str(exc)[:400], "truthful": True}
+    studio_truth = {
+        "status": "healthy" if ready else "degraded",
+        "version": str(getattr(s, "VERSION", "")),
+        "build": str(getattr(s, "BUILD", "")),
+        "ffmpeg": bool(ffmpeg),
+        "ffprobe": bool(ffprobe),
+        "offline_voice": bool(speech),
+        "storage_writable": bool(storage["writable"]),
+        "truthful": True,
+    }
     return {
         "status":"healthy" if ready and reality.get("patched") else "degraded",
         "version":VERSION,"build":BUILD,"truthful":True,
@@ -182,7 +192,7 @@ def health_payload():
         "worker_started":bool(getattr(s,"WORKER_STARTED",False)),
         "free_first":True,"external_ai_optional":True,
         "hf_provider_configured":bool(os.getenv("HF_TOKEN","").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN","").strip()),
-        "storage":storage,"studio":studio_health,"hardening":hardening,
+        "storage":storage,"studio":studio_truth,"hardening":hardening,
         "reality_kernel":reality,
     }
 
