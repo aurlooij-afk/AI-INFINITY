@@ -21,6 +21,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from fastapi import HTTPException, Request, Response
+
 VERSION = "TARGET-2050.3901"
 BUILD = "REALITY-FIRST-SELF-HEALING-CREATOR-KERNEL"
 _DB_LOCK = threading.RLock()
@@ -892,8 +894,6 @@ def truth_for_project(project_id: str) -> Dict[str, Any]:
 
 def register(app: Any) -> None:
     """Expose independent proof endpoints without replacing the main creator UI."""
-    from fastapi import Request, Response, HTTPException
-
     @app.get("/infinity/reality/health")
     def reality_health():
         return runtime_health()
