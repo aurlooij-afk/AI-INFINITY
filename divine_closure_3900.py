@@ -131,6 +131,11 @@ def _project(pid: str, uid: str):
     s = _studio(); p = s._get_project(pid)
     if not p or p.get("user_id") != uid: raise HTTPException(404, "project not found")
     out = s._project_public(p); out["artifacts"] = _artifacts(pid); out["truthful"] = True
+    try:
+        import reality_first_3901 as _rk
+        out["reality"] = _rk.truth_for_project(pid)
+    except Exception as exc:
+        out["reality"] = {"enabled": False, "verified": False, "state": "UNKNOWN", "error": str(exc)[:400], "truthful": True}
     return out
 
 
@@ -163,16 +168,22 @@ def health_payload():
         hardening = None
     storage = _storage()
     ready = ffmpeg and ffprobe and speech and storage["writable"]
+    try:
+        import reality_first_3901 as _rk
+        reality = _rk.runtime_health()
+    except Exception as exc:
+        reality = {"enabled": False, "patched": False, "verified": False, "error": str(exc)[:400], "truthful": True}
     return {
-        "status":"healthy" if ready else "degraded",
+        "status":"healthy" if ready and reality.get("patched") else "degraded",
         "version":VERSION,"build":BUILD,"truthful":True,
-        "content_creation_ready":ready,
+        "content_creation_ready":bool(ready and reality.get("patched")),
         "real_media_engine":{"ffmpeg":ffmpeg,"ffprobe":ffprobe},
         "offline_voice_engine":speech,
         "worker_started":bool(getattr(s,"WORKER_STARTED",False)),
         "free_first":True,"external_ai_optional":True,
         "hf_provider_configured":bool(os.getenv("HF_TOKEN","").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN","").strip()),
         "storage":storage,"studio":studio_health,"hardening":hardening,
+        "reality_kernel":reality,
     }
 
 
@@ -207,12 +218,12 @@ function preset(s){$('cmd').value=s;$('cmd').focus()}
 async function refresh(){try{const b=await api('/infinity/divine/bootstrap'),h=b.health,p=b.projects||[];$('pc').textContent=p.length;$('ac').textContent=p.filter(x=>['queued','running','producing'].includes(x.status)).length;$('dc').textContent=p.filter(x=>String(x.status||'').startsWith('completed')).length;$('hp').textContent=h.content_creation_ready?'● creator ready':'● needs attention';$('hp').className='pill '+(h.content_creation_ready?'good':'');$('sn').innerHTML=h.content_creation_ready?'<b>Real creation engine ready.</b> Built-in media path is available.':'<b>Runtime attention required.</b> System shows the exact gap.'}catch(e){$('sn').textContent=e.message}}
 async function createJob(){const c=$('cmd').value.trim();if(!c)return msg('Describe what you want to create first.');msg('Queueing the real production job…');try{const r=await api('/infinity/divine/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:c,content_type:$('ct').value,duration:+$('dur').value,format:$('fmt').value,aspect_ratio:$('asp').value})});current=r.project_id;localStorage.setItem('ai-infinity-divine-project',current);msg('Production queued: '+r.project_id);go('projects');inspect(current)}catch(e){$('notice').innerHTML='<div class="notice warn">'+esc(e.message)+'</div>'}}
 function cls(s){s=String(s||'');return s.startsWith('completed')?'good':(s==='failed'||s==='cancelled')?'bad':['queued','running','producing'].includes(s)?'live':''}
-function render(p){const done=String(p.status||'').startsWith('completed'),failed=['failed','cancelled'].includes(p.status),pct=Math.max(0,Math.min(100,Number(p.progress||0)));const order=['queued','research','creative_direction','production_ready','producing','quality_control','packaging','complete'],bi=order.indexOf(String(p.stage||'queued'));const stages=order.map((x,i)=>'<div class="stage '+(bi>i?'done':bi===i?'live':'')+'">'+esc(x.replaceAll('_',' '))+'</div>').join('');const assets=(p.artifacts||[]).filter(a=>a.exists).map(a=>'<a class="asset" href="'+esc(a.download_url)+'" target="_blank" rel="noopener"><b>'+esc(a.name)+'</b><span>open</span></a>').join('');$('detail').innerHTML='<div class="row"><div><div class="eyebrow">REAL PROJECT</div><h2 style="margin:5px 0">'+esc(p.title||p.project_id)+'</h2><div class="muted">'+esc(p.project_id)+'</div></div><span class="badge '+cls(p.status)+'">'+esc(p.status)+'</span></div><div class="progress"><i style="width:'+pct+'%"></i></div><div class="meta"><span>'+esc(p.stage||'queued')+'</span><span>'+pct+'%</span></div><div class="stages">'+stages+'</div>'+(done?'<div class="preview"><video controls playsinline preload="metadata" src="/infinity/studio/project/'+encodeURIComponent(p.project_id)+'/asset/final.mp4"></video></div>':'<div class="preview"><div class="empty">'+(failed?'Production did not complete; exact error below.':'Real preview appears after the artifact exists.')+'</div></div>')+(failed?'<div class="notice" style="margin-top:9px;color:var(--r)">'+esc(p.error||'Production failed')+'</div>':'')+(assets?'<div class="assets">'+assets+'</div>':'')+'<div class="bar" style="margin-top:10px;padding:0;border:0">'+(!done&&!failed?'<button class="btn danger" onclick="cancelJob(\\''+encodeURIComponent(p.project_id)+'\\')">Cancel</button>':'')+(failed?'<button class="btn" onclick="retryJob(\\''+encodeURIComponent(p.project_id)+'\\')">Retry</button>':'')+'</div>'}
+function render(p){const done=String(p.status||'').startsWith('completed'),failed=['failed','cancelled'].includes(p.status),pct=Math.max(0,Math.min(100,Number(p.progress||0))),r=p.reality||{},verified=!!r.verified,truthState=String(r.state||'UNKNOWN');const order=['queued','research','creative_direction','production_ready','producing','quality_control','packaging','complete'],bi=order.indexOf(String(p.stage||'queued'));const stages=order.map((x,i)=>'<div class="stage '+(bi>i?'done':bi===i?'live':'')+'">'+esc(x.replaceAll('_',' '))+'</div>').join('');const assets=(p.artifacts||[]).filter(a=>a.exists).map(a=>'<a class="asset" href="'+esc(a.download_url)+'" target="_blank" rel="noopener"><b>'+esc(a.name)+'</b><span>open</span></a>').join('');const proof=verified?'<div class="notice good" style="margin-top:9px"><b>VERIFIED BY REALITY KERNEL</b> · filesystem artifact, independent inspection, hashes and QC agree.</div>':truthState==='DELIVERED_WITH_QC_WARNINGS'?'<div class="notice" style="margin-top:9px;color:var(--w)"><b>DELIVERED WITH QC WARNINGS</b> · output exists, but independent quality proof is not fully green.</div>':'<div class="notice" style="margin-top:9px">Reality state: <b>'+esc(truthState)+'</b> · completion is not asserted without artifact evidence.</div>';$('detail').innerHTML='<div class="row"><div><div class="eyebrow">REAL PROJECT</div><h2 style="margin:5px 0">'+esc(p.title||p.project_id)+'</h2><div class="muted">'+esc(p.project_id)+'</div></div><span class="badge '+cls(p.status)+'">'+esc(p.status)+'</span></div><div class="progress"><i style="width:'+pct+'%"></i></div><div class="meta"><span>'+esc(p.stage||'queued')+'</span><span>'+pct+'%</span></div><div class="stages">'+stages+'</div>'+proof+(done&&verified?'<div class="preview"><video controls playsinline preload="metadata" src="/infinity/studio/project/'+encodeURIComponent(p.project_id)+'/asset/final.mp4"></video></div>':'<div class="preview"><div class="empty">'+(failed?'Production did not complete; exact error below.':verified?'Real preview appears after the artifact exists.':'Preview appears only after the kernel proves a real artifact exists.')+'</div></div>')+(failed?'<div class="notice" style="margin-top:9px;color:var(--r)">'+esc(p.error||'Production failed')+'</div>':'')+(assets?'<div class="assets">'+assets+'</div>':'')+'<div class="bar" style="margin-top:10px;padding:0;border:0">'+(!done&&!failed?'<button class="btn danger" onclick="cancelJob(\\''+encodeURIComponent(p.project_id)+'\\')">Cancel</button>':'')+(failed?'<button class="btn" onclick="retryJob(\\''+encodeURIComponent(p.project_id)+'\\')">Retry</button>':'')+'</div>'}
 async function inspect(pid){clearTimeout(timer);try{const p=await api('/infinity/divine/project/'+encodeURIComponent(pid));render(p);if(['completed','completed_with_qc_warnings','failed','cancelled'].includes(p.status)){loadProjects();return}timer=setTimeout(()=>inspect(pid),1500)}catch(e){$('detail').innerHTML='<div class="notice" style="color:var(--r)">'+esc(e.message)+'</div>'}}
 async function loadProjects(){try{const d=await api('/infinity/divine/projects'),rows=d.projects||[];$('plist').innerHTML=rows.length?rows.map(p=>'<div class="project" onclick="inspect(\\''+esc(p.project_id)+'\\')"><div class="row"><b>'+esc(p.title||'Untitled')+'</b><span class="badge '+cls(p.status)+'">'+esc(p.status)+'</span></div><div class="muted" style="margin-top:4px">'+esc(p.stage||'queued')+' · '+Math.round(Number(p.progress||0))+'%</div></div>').join(''):'<div class="empty">No projects yet.</div>'}catch(e){$('plist').innerHTML='<div class="notice" style="color:var(--r)">'+esc(e.message)+'</div>'}}
 async function cancelJob(pid){try{await api('/infinity/divine/project/'+pid+'/cancel',{method:'POST'});inspect(decodeURIComponent(pid))}catch(e){msg(e.message)}}
 async function retryJob(pid){try{await api('/infinity/divine/project/'+pid+'/retry',{method:'POST'});inspect(decodeURIComponent(pid))}catch(e){msg(e.message)}}
-async function loadSystem(){try{const d=await api('/infinity/divine/health');$('rt').textContent=JSON.stringify({status:d.status,content_creation_ready:d.content_creation_ready,media:d.real_media_engine,offline_voice_engine:d.offline_voice_engine,worker_started:d.worker_started,storage:d.storage,free_first:d.free_first,external_ai_optional:d.external_ai_optional,hf_provider_configured:d.hf_provider_configured},null,2);$('st').textContent=JSON.stringify(d.studio||{},null,2)}catch(e){$('rt').textContent=e.message}}
+async function loadSystem(){try{const d=await api('/infinity/divine/health');$('rt').textContent=JSON.stringify({status:d.status,content_creation_ready:d.content_creation_ready,media:d.real_media_engine,offline_voice_engine:d.offline_voice_engine,worker_started:d.worker_started,storage:d.storage,free_first:d.free_first,external_ai_optional:d.external_ai_optional,hf_provider_configured:d.hf_provider_configured,reality_kernel:d.reality_kernel},null,2);$('st').textContent=JSON.stringify(d.studio||{},null,2)}catch(e){$('rt').textContent=e.message}}
 async function boot(){await refresh();await loadProjects();const p=localStorage.getItem('ai-infinity-divine-project');if(p){current=p;go('projects');inspect(p)}}boot();
 </script></body></html>''';
 
@@ -221,6 +232,12 @@ def register(app: Any) -> None:
     global _REGISTERED, _GUARD_STARTED
     if _REGISTERED:
         return
+
+    try:
+        import reality_first_3901 as _rk
+        _rk.register(app)
+    except Exception:
+        pass
 
     async def create_impl(payload: Dict[str, Any], request: Request, response: Response):
         uid = _session(request, response)
