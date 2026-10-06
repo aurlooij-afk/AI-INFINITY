@@ -20,7 +20,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     AI_INFINITY_MEMORY_GUARD_PERCENT=0.75 \
     AI_INFINITY_MEMORY_RESERVE_MB=128 \
     AI_INFINITY_PERSISTENCE_MODE=portable \
-    PORT=10000
+    PORT=10000 \
+    PYTHONPATH=/app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
