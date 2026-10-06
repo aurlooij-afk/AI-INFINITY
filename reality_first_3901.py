@@ -38,6 +38,11 @@ def _studio():
     return studio_ultimate
 
 
+def studio():
+    """Public compatibility accessor for the underlying Creator Studio module."""
+    return _studio()
+
+
 def _now() -> float:
     s = _studio()
     try:
