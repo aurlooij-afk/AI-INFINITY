@@ -279,6 +279,7 @@ def quality_for_project(project_id: str) -> Dict[str, Any]:
 def graph_for_user(user_id: str) -> Dict[str, Any]:
     studio = studio_module()
     projects_fn = getattr(studio, "_project_list", None)
+    project_getter = getattr(studio, "_get_project", None)
     projects = projects_fn(user_id, 100) if callable(projects_fn) else []
     worlds = list_worlds(user_id)
     nodes = []
@@ -289,9 +290,33 @@ def graph_for_user(user_id: str) -> Dict[str, Any]:
         pid = str(p.get("project_id") or p.get("id") or uid("project"))
         nodes.append({"id": pid, "type": "project", "label": p.get("title") or p.get("name") or "Project", "status": p.get("status")})
         objective = str(p.get("objective") or p.get("topic") or "")
+        if callable(project_getter):
+            try:
+                full = project_getter(pid)
+                raw = full.get("request_json") if isinstance(full, dict) else {}
+                if isinstance(raw, str):
+                    raw = json.loads(raw or "{}")
+                if isinstance(raw, dict):
+                    objective = " ".join([
+                        objective,
+                        str(raw.get("objective") or ""),
+                        str(raw.get("topic") or ""),
+                        str(raw.get("title") or ""),
+                    ]).strip()
+            except Exception:
+                pass
+        obj_low = objective.lower()
         for w in worlds:
-            if w["name"].lower() in objective.lower() or str(w.get("objective") or "").lower() in objective.lower():
-                edges.append({"from": w["world_id"], "to": pid, "relation": "context"})
+            world_terms = " ".join([
+                str(w.get("name") or ""),
+                str(w.get("objective") or ""),
+                json.dumps(w.get("dna") or {}, ensure_ascii=False),
+            ]).lower()
+            tokens = [t for t in re.findall(r"[a-z0-9]{4,}", world_terms) if len(t) >= 4]
+            overlap = sum(1 for token in set(tokens) if token in obj_low)
+            direct = str(w.get("name") or "").strip().lower() in obj_low
+            if direct or overlap >= 2:
+                edges.append({"from": w["world_id"], "to": pid, "relation": "context", "evidence": "project brief overlap"})
     return {"nodes": nodes[:220], "edges": edges[:400], "truthful": True}
 
 
