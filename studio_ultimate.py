@@ -678,40 +678,87 @@ Use 5-18 chapters. Total durations should approximately equal the target. Narrat
 
 
 def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int, audience: str, tone: str, research: Dict[str, Any]) -> Dict[str, Any]:
-    sources = [s for s in research.get("sources", []) if s.get("title") and not s.get("error")]
-    if not sources:
-        sources = [{"title": title, "summary": objective, "url": None}]
+    """Build a deterministic, topic-coherent fallback plan without leaking unrelated search snippets."""
+    clean_title = re.sub(r"\s+", " ", title).strip()[:140]
+    clean_objective = re.sub(r"\s+", " ", objective).strip()[:900]
+    topic_terms = set(re.findall(r"[a-z0-9]{4,}", (clean_title + " " + clean_objective).lower()))
+
+    usable_sources = []
+    for src in (research.get("sources") or []):
+        if src.get("error") or not src.get("title"):
+            continue
+        blob = " ".join([
+            str(src.get("title") or ""),
+            str(src.get("summary") or ""),
+        ]).lower()
+        source_terms = set(re.findall(r"[a-z0-9]{4,}", blob))
+        overlap = len(topic_terms.intersection(source_terms))
+        if overlap >= 1:
+            usable_sources.append(src)
+    if not usable_sources:
+        usable_sources = [{"title": clean_title, "summary": "", "url": None}]
+
     if fmt == "short":
         names = ["Hook", "Why it matters", "The key idea", "Practical example", "Takeaway"]
         ratios = [0.16, 0.18, 0.28, 0.22, 0.16]
     else:
         names = ["Hook", "Context", "The core idea", "How it works", "Real-world examples", "What changes", "Practical takeaway", "Closing"]
         ratios = [0.08, 0.10, 0.16, 0.18, 0.18, 0.12, 0.10, 0.08]
+
+    def bounded_narration(name: str, seconds: float, source: Dict[str, Any]) -> str:
+        # Approximate spoken pacing at ~2.3 words/sec. Keep the deterministic
+        # fallback close to the requested runtime instead of copying long search
+        # snippets into the script.
+        budget = max(9, int(max(4.0, seconds) * 2.3))
+        source_title = re.sub(r"\s+", " ", str(source.get("title") or "").strip())
+        lead = f"{name}. {clean_title}."
+        middle = f"The focus is {clean_objective.rstrip('.')}. "
+        tail = {
+            "Hook": "Here is the useful idea.",
+            "Why it matters": "This matters because the outcome is practical.",
+            "The key idea": "The key is to make the idea clear and usable.",
+            "Practical example": "Use it as a repeatable real-world workflow.",
+            "Takeaway": "Keep the lesson simple, specific, and actionable.",
+            "Context": "Start with the context before the decision.",
+            "The core idea": "The core idea should remain easy to apply.",
+            "How it works": "The process is intent, action, feedback, and refinement.",
+            "Real-world examples": "Examples should support the point without distracting from it.",
+            "What changes": "The useful result is better decisions and clearer execution.",
+            "Practical takeaway": "Turn the idea into one concrete next step.",
+            "Closing": "That is the idea to carry forward.",
+        }.get(name, "Keep the result practical and clear.")
+        text = re.sub(r"\s+", " ", f"{lead} {middle}{tail}").strip()
+        if source_title and source_title.lower() not in clean_title.lower() and len(text.split()) < budget - 5:
+            text += f" Source context: {source_title}."
+        words = text.split()
+        if len(words) > budget:
+            text = " ".join(words[:budget]).rstrip(" ,.;:") + "."
+        return text
+
     chapters = []
     for i, name in enumerate(names):
-        src = sources[i % len(sources)]
-        sec = max(4, round(duration * ratios[i], 1))
-        summary = re.sub(r"\s+", " ", str(src.get("summary") or objective)).strip()
-        if len(summary) > 420:
-            summary = summary[:417] + "..."
+        src = usable_sources[i % len(usable_sources)]
+        sec = max(4.0, round(duration * ratios[i], 1))
+        narration = bounded_narration(name, sec, src)
         chapters.append({
-            "heading": f"{name}: {title}" if name not in {"Hook", "Closing"} else f"{name} — {title}",
-            "narration": f"{name}. {title} matters because {objective.rstrip('.')}. {summary}",
-            "visual_query": f"{title} {name}",
-            "image_prompt": f"Cinematic editorial visual illustrating {title}, {name.lower()}, realistic lighting, meaningful composition, no logos, no text, premium documentary look",
+            "heading": f"{name} — {clean_title}" if name in {"Hook", "Closing"} else f"{name}: {clean_title}",
+            "narration": narration,
+            "visual_query": f"{clean_title} {name}",
+            "image_prompt": f"Cinematic editorial visual illustrating {clean_title}, {name.lower()}, realistic lighting, meaningful composition, no logos, no text, premium documentary look",
             "on_screen": name,
             "duration": sec,
-            "proof_needed": [src.get("title")] if src.get("title") else [],
+            "proof_needed": [src.get("title")] if src.get("title") and src.get("title") != clean_title else [],
         })
     return {
-        "title": title[:140],
-        "hook": f"What is the most useful thing to understand about {title}?",
-        "premise": objective,
+        "title": clean_title,
+        "hook": f"What is the most useful thing to understand about {clean_title}?",
+        "premise": clean_objective,
         "audience": audience,
         "tone": tone,
         "cta": "Save this and come back when you are ready to use the idea.",
         "chapters": chapters,
-        "claims_to_verify": [s.get("title") for s in sources[:8]],
+        "claims_to_verify": [s.get("title") for s in usable_sources[:8] if s.get("title") != clean_title],
+        "fallback_mode": "duration_bounded_topic_coherent",
     }
 
 
