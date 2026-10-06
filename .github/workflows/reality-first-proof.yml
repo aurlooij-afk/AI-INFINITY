@@ -1,0 +1,91 @@
+name: AI Infinity Reality-First Proof
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  reality-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install real media runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg espeak-ng
+          ffmpeg -version | head -1
+          espeak-ng --version | head -1
+
+      - name: Install application dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Compile application
+        run: |
+          python -m py_compile             sitecustomize.py             main.py             studio_ultimate.py             divine_closure_3900.py             reality_first_3901.py
+
+      - name: Reality Kernel self-test
+        env:
+          AI_INFINITY_DATA_DIR: /tmp/ai-infinity-proof
+          AI_INFINITY_FAST_MODE: "1"
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+          import reality_first_3901 as rk
+
+          h = rk.runtime_health()
+          assert h["enabled"] is True, h
+          assert h["patched"] is True, h
+          assert h["canonical_truth"] == "filesystem_and_independent_inspection", h
+          assert h["self_healing"]["blind_infinite_retry"] is False, h
+          assert h["local_core"]["ffmpeg"] is True, h
+          assert h["local_core"]["ffprobe"] is True, h
+          assert h["local_core"]["offline_tts"] is True, h
+
+          sample = Path("/tmp/ai-infinity-proof/sample.mp4")
+          sample.parent.mkdir(parents=True, exist_ok=True)
+          subprocess.run([
+              "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+              "-f", "lavfi", "-i", "color=c=black:s=320x240:r=10",
+              "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+              "-t", "2",
+              "-c:v", "libx264", "-pix_fmt", "yuv420p",
+              "-c:a", "aac", "-shortest", str(sample)
+          ], check=True)
+
+          proof = rk.inspect_artifact(sample, "video/mp4")
+          assert proof["exists"] is True, proof
+          assert proof["sha256"], proof
+          assert proof["inspection"]["ok"] is True, proof
+          assert any(s.get("codec_type") == "video" for s in proof["inspection"]["streams"]), proof
+          assert any(s.get("codec_type") == "audio" for s in proof["inspection"]["streams"]), proof
+
+          s = rk.studio()
+          assert getattr(s.enqueue, "_reality_first_wrapped", False), "enqueue wrapper missing"
+          assert getattr(s._render_scene, "_reality_first_wrapped", False), "scene wrapper missing"
+          assert getattr(s.run_project, "_reality_first_wrapped", False), "run wrapper missing"
+          assert getattr(s.concat_segments, "_reality_first_wrapped", False), "assembly wrapper missing"
+
+          print(json.dumps({
+              "status": "PASS",
+              "kernel": h,
+              "sample_sha256": proof["sha256"],
+              "sample_media": proof["inspection"],
+          }, indent=2))
+          PY
+
+      - name: Canonical wiring checks
+        run: |
+          grep -q 'reality_first_3901' sitecustomize.py
+          grep -q 'reality_first_3901.py' Dockerfile
+          grep -q '/infinity/divine/health' Dockerfile
+          grep -q 'reality_first_3901' divine_closure_3900.py
