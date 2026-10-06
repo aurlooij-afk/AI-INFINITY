@@ -368,6 +368,7 @@ def register(app: Any) -> None:
         checks.append({"name": "local speech engine", "passed": bool(espeak), "detail": espeak or "espeak-ng/espeak not installed"})
         data_dir = Path(os.getenv("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity"))
         temp_dir = None
+        storage_error = ""
         try:
             data_dir.mkdir(parents=True, exist_ok=True)
             probe = data_dir / ".write-test"
@@ -376,7 +377,7 @@ def register(app: Any) -> None:
             probe.unlink(missing_ok=True)
         except Exception as exc:
             writable = False
-            checks.append({"name": "runtime storage error detail", "passed": False, "detail": str(exc)[:500]})
+            storage_error = str(exc)[:500]
         checks.append({"name": "runtime storage writable", "passed": writable, "detail": str(data_dir)})
         media_ok = False
         media_detail = "media self-test not executed"
@@ -423,7 +424,7 @@ def register(app: Any) -> None:
                 if temp_dir:
                     shutil.rmtree(temp_dir, ignore_errors=True)
         checks.append({"name": "real local MP4 + audio generation", "passed": media_ok, "detail": media_detail})
-        passed = all(bool(x["passed"]) for x in checks if x.get("name") != "runtime storage error detail")
+        passed = all(bool(x["passed"]) for x in checks)
         return {
             "status": "passed" if passed else "degraded",
             "version": VERSION,
@@ -433,6 +434,7 @@ def register(app: Any) -> None:
             "checks": checks,
             "passed_checks": sum(1 for x in checks if x["passed"]),
             "total_checks": len(checks),
+            "storage_error": storage_error or None,
             "user_id": uid_,
             "truthful": True,
         }
