@@ -13,7 +13,7 @@ def _uid(prefix='studio'):
     return f'{prefix}_{uuid.uuid4().hex}'
 
 def _http_json(url: str, headers: Optional[dict]=None, timeout: int=25):
-    req=Request(url, headers={'User-Agent':'AI-Infinity/3621 (+https://ai-infinity-ca5e.onrender.com)', **(headers or {})})
+    req=Request(url, headers={'User-Agent':'AI-Infinity/Creator-OS', **(headers or {})})
     with urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode('utf-8','replace'))
 
