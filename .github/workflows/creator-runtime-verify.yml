@@ -177,6 +177,16 @@ jobs:
             *) cat /tmp/project.json; docker logs ai-infinity-ci || true; exit 1 ;;
           esac
 
+          curl -fsS -X POST http://127.0.0.1:10000/infinity/3800/self-test > /tmp/local-self-test.json
+          cat /tmp/local-self-test.json
+          python - <<'PY'
+          import json
+          x=json.load(open("/tmp/local-self-test.json"))
+          assert x.get("status")=="passed", x
+          assert x.get("local_only") is True, x
+          assert x.get("external_provider_required") is False, x
+          PY
+
           curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
             "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/artifacts" > /tmp/artifacts.json
           cat /tmp/artifacts.json
