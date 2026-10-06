@@ -64,12 +64,16 @@ def _parse(command: str, raw: Dict[str, Any]) -> Dict[str, Any]:
         n = int(m.group(1)); duration = n * 60 if m.group(2).startswith("m") else n
     duration = max(20, min(duration, 3600))
 
-    aspect = _clean(raw.get("aspect_ratio"), 10)
-    if aspect not in {"16:9","9:16","1:1","4:5"}: aspect = "9:16" if short else "16:9"
-    if re.search(r"\b9\s*:?\s*16\b", low): aspect = "9:16"
-    elif re.search(r"\b1\s*:?\s*1\b|\bsquare\b", low): aspect = "1:1"
-    elif re.search(r"\b4\s*:?\s*5\b", low): aspect = "4:5"
-    elif re.search(r"\b16\s*:?\s*9\b|\blandscape\b|\bwide\b", low): aspect = "16:9"
+    supplied_aspect = _clean(raw.get("aspect_ratio"), 10)
+    aspect_explicit = supplied_aspect in {"16:9","9:16","1:1","4:5"}
+    aspect = supplied_aspect if aspect_explicit else ("9:16" if short else "16:9")
+    # Explicit aspect control wins over generic words like "short" or "reel".
+    # Natural-language aspect terms still work when no explicit aspect was supplied.
+    if not aspect_explicit:
+        if re.search(r"\b9\s*:?\s*16\b", low): aspect = "9:16"
+        elif re.search(r"\b1\s*:?\s*1\b|\bsquare\b", low): aspect = "1:1"
+        elif re.search(r"\b4\s*:?\s*5\b", low): aspect = "4:5"
+        elif re.search(r"\b16\s*:?\s*9\b|\blandscape\b|\bwide\b", low): aspect = "16:9"
 
     platforms = raw.get("platforms") if isinstance(raw.get("platforms"), list) else []
     platforms = [_clean(x, 40).lower() for x in platforms if _clean(x, 40)][:10]
@@ -98,6 +102,7 @@ def _parse(command: str, raw: Dict[str, Any]) -> Dict[str, Any]:
         "call_to_action": _clean(raw.get("call_to_action"), 500),
         "quality_preset": _clean(raw.get("quality_preset"), 30) or "balanced",
         "aspect_ratio": aspect,
+        "_aspect_ratio_explicit": aspect_explicit,
         "reference_urls": [str(x).strip()[:1000] for x in (raw.get("reference_urls") or [])[:12] if str(x).strip()],
         "source_file_names": [str(x).strip()[:260] for x in (raw.get("source_file_names") or [])[:12] if str(x).strip()],
         "notes": _clean(raw.get("notes"), 3000),
