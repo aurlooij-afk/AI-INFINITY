@@ -164,7 +164,7 @@ jobs:
           curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
             -H 'content-type: application/json' \
             --data-binary @/tmp/create.json \
-            http://127.0.0.1:10000/infinity/studio/project > /tmp/create-response.json
+            http://127.0.0.1:10000/infinity/divine/create > /tmp/create-response.json
           cat /tmp/create-response.json
           PROJECT_ID=$(python - <<'PY'
           import json
@@ -216,9 +216,10 @@ jobs:
           import json
           verify=json.load(open("/tmp/verify.json"))
           assert verify.get("passed") is True, verify
+          reality_project_id = json.load(open("/tmp/project.json"))["project_id"]
           reality_response = __import__("subprocess").check_output([
               "curl","-fsS","-c","/tmp/cookies.txt","-b","/tmp/cookies.txt",
-              f"http://127.0.0.1:10000/infinity/reality/project/{json.load(open("/tmp/project.json"))["project_id"]}"
+              f"http://127.0.0.1:10000/infinity/reality/project/{reality_project_id}"
           ], text=True)
           reality=json.loads(reality_response)
           assert reality.get("truthful") is True
