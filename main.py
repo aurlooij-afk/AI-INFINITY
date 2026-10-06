@@ -15387,6 +15387,21 @@ app.version = "TARGET-2050.3800"
 app.state.ai_infinity_runtime = "standalone"
 app.state.ai_infinity_truthful = True
 
+
+# ============================================================================
+# TARGET-2050.3900 — DIVINE CLOSURE
+# One canonical real-creation surface over the existing Creator Studio engine.
+# ============================================================================
+try:
+    from divine_closure_3900 import register as _ai_infinity_register_divine
+    _ai_infinity_register_divine(app)
+    app.version = "TARGET-2050.3900"
+    app.state.ai_infinity_runtime = "divine"
+    app.state.ai_infinity_truthful = True
+except Exception as _divine_exc:
+    app.state.ai_infinity_divine_error = str(_divine_exc)[:1200]
+    app.state.ai_infinity_truthful = True
+
 if __name__ == "__main__":
     import uvicorn as _ai_infinity_uvicorn
     _ai_infinity_uvicorn.run(

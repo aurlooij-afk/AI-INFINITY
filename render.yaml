@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: ai-infinity
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /infinity/divine/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: AI_INFINITY_FAST_MODE
+        value: "1"
+      - key: AI_INFINITY_MAX_HEAVY_JOBS
+        value: "1"
+      - key: AI_INFINITY_MEMORY_GUARD_PERCENT
+        value: "0.75"
+      - key: AI_INFINITY_MEMORY_RESERVE_MB
+        value: "128"
+      - key: AI_INFINITY_PERSISTENCE_MODE
+        value: "portable"
+      - key: AI_INFINITY_SESSION_SECRET
+        generateValue: true
+      - key: AI_INFINITY_VAULT_KEY
+        generateValue: true
