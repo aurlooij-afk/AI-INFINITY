@@ -396,8 +396,43 @@ def _required_assets(req: Dict[str, Any]) -> List[Tuple[str, str]]:
     ]
 
 
+def _repair_missing_companions(project_id: str, req: Dict[str, Any]) -> Dict[str, Any]:
+    """Repair only artifacts that can be deterministically derived from already-valid output."""
+    s = _studio()
+    root = _project_path(project_id)
+    repaired: List[Dict[str, Any]] = []
+    final = root / "final.mp4"
+    final_probe = _media_probe(final) if final.is_file() else {"ok": False}
+    if final_probe.get("ok"):
+        # A delivery audio master is deterministically derivable from the proven
+        # final media stream. It is a real file, not a placeholder.
+        audio = root / "audio_master.mp3"
+        has_audio = any(x.get("codec_type") == "audio" for x in (final_probe.get("streams") or []))
+        if has_audio and not _valid_file(audio, 1000):
+            try:
+                s.ffmpeg(
+                    "-i", final,
+                    "-map", "0:a:0",
+                    "-vn",
+                    "-c:a", "libmp3lame",
+                    "-q:a", "3",
+                    audio,
+                    timeout=180,
+                )
+                if _valid_file(audio, 1000) and _media_probe(audio).get("ok"):
+                    repaired.append({"artifact": "audio_master.mp3", "method": "extract_from_verified_final"})
+            except Exception as exc:
+                _event(project_id, "companion_repair", "FAILED", 1, str(exc)[:1200],
+                       {"artifact": "audio_master.mp3"})
+    return {"repaired": repaired}
+
+
 def _verify_required(project_id: str, req: Dict[str, Any]) -> Tuple[bool, Dict[str, Any], List[Dict[str, Any]]]:
     root = _project_path(project_id)
+    repair_result = _repair_missing_companions(project_id, req)
+    if repair_result.get("repaired"):
+        _event_once(project_id, "companion_repair", "REPAIRED", 1,
+                    metadata={"artifacts": repair_result.get("repaired")})
     proofs: List[Dict[str, Any]] = []
     checks: Dict[str, Any] = {}
     all_ok = True
