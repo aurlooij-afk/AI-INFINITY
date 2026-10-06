@@ -159,8 +159,6 @@ def health_payload():
     ffmpeg = shutil.which("ffmpeg") is not None
     ffprobe = shutil.which("ffprobe") is not None
     speech = bool(shutil.which("espeak-ng") or shutil.which("espeak"))
-    try: studio_health = s.studio_health()
-    except Exception as exc: studio_health = {"status":"degraded","error":str(exc)[:500],"truthful":True}
     try:
         import production_hardening
         hardening = production_hardening.runtime_health()
