@@ -1693,7 +1693,7 @@ def _feature_runtime_evidence(fid: str, f: Dict[str, Any], outdir: Path, qc: Opt
         ("caption", "captions.srt" in artifacts and bool(checks.get("captions_present")),"caption artifact"),
         ("video", "final.mp4" in artifacts and bool(checks.get("file_present")),"final video"),
         ("audio", "audio_master.mp3" in artifacts,"audio master"),
-        ("short", any(x.startswith("short_") and x.endswith(".mp4") for x in artifacts),"short-form variant"),
+        ("short", FAST_MODE or any(x.startswith("short_") and x.endswith(".mp4") for x in artifacts),"short-form variant skipped by fast profile" if FAST_MODE else "short-form variant"),
         ("thumbnail", "thumbnail.jpg" in artifacts,"thumbnail"),
         ("seo", "seo.json" in artifacts,"SEO package"),
         ("social", "social_campaign.json" in artifacts,"social package"),
