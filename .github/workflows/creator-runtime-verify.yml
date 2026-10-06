@@ -90,7 +90,7 @@ jobs:
         run: |
           set -euo pipefail
           docker run -d --rm --name ai-infinity-ci             --platform linux/amd64             -e AI_INFINITY_3601_BACKGROUND=false             -e AI_INFINITY_FAST_MODE=1             -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity             -p 10000:10000             ai-infinity:ci
-          trap 'docker logs ai-infinity-ci || true; docker stop ai-infinity-ci || true' EXIT
+          trap 'docker logs ai-infinity-ci || true' EXIT
           ready=0
           for i in $(seq 1 90); do
             if curl -fsS http://127.0.0.1:10000/health >/tmp/health.json; then
