@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ai-infinity-standalone-runtime-main
+  cancel-in-progress: true
+
 jobs:
   runtime:
     runs-on: ubuntu-latest
