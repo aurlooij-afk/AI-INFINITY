@@ -38,14 +38,14 @@ RUN python -m pip install --upgrade pip \
     && if [ -s bridge-requirements.txt ]; then python -m pip install -r bridge-requirements.txt; fi
 
 # main.py is the complete application entrypoint.
-COPY sitecustomize.py main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_studio_2030.html creator_entrypoint.py creator_pro_os.py ./
+COPY sitecustomize.py main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_studio_2030.html creator_entrypoint.py creator_pro_os.py overlay_final_3700.py runtime_main_3700.py ./
 COPY production_hardening.py creator_final_3800.py ui_3800.html ./
 COPY ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py ./
 
 RUN python -m py_compile \
     sitecustomize.py main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py \
     infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py \
-    creator_pro_os.py production_hardening.py creator_final_3800.py \
+    creator_pro_os.py overlay_final_3700.py runtime_main_3700.py production_hardening.py creator_final_3800.py \
     ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py \
     ai3705_closure.py ai3706_internal_closure.py
 
