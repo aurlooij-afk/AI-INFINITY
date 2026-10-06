@@ -658,12 +658,10 @@ def _safe_render(original: Any, asset: Dict[str, Any], voice: Path, music: Path,
         project_id = str(getattr(s.ACTIVE_PROJECT, "project_id", "") or "")
         ff = getattr(s, "ffmpeg")
         bg = out.with_name(out.stem + ".procedural.mp4")
-        safe_title = str(title or "AI Infinity").replace("\\", "\\\\").replace("'", "\\'")[:72]
-        bg_vf = (
-            f"scale={width}:{height},fps=24,"
-            f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:"
-            f"text='{safe_title}':x=(w-text_w)/2:y=(h-text_h)/2:fontsize={max(28, int(min(width,height)*0.055))}:fontcolor=white"
-        )
+        # Keep the emergency generator independent of user-controlled strings.
+        # The canonical script/captions carry the title; this visual is intentionally
+        # the most portable possible FFmpeg fallback.
+        bg_vf = f"format=yuv420p,fps=24"
         ff(
             "-f", "lavfi", "-i", f"color=c=0x101722:s={width}x{height}:r=24",
             "-t", max(1.0, float(duration)), "-vf", bg_vf,
@@ -935,7 +933,7 @@ def install() -> None:
         enqueue_wrapped._reality_first_wrapped = True
         s.enqueue = enqueue_wrapped
 
-    original_render = _ORIGINALS[" _render_scene"] if " _render_scene" in _ORIGINALS else _ORIGINALS["_render_scene"]
+    original_render = _ORIGINALS["_render_scene"]
     if not getattr(original_render, "_reality_first_wrapped", False):
         def render_wrapped(asset, voice, music, sfx, duration, out, title, aspect_ratio="16:9"):
             pid = str(getattr(s.ACTIVE_PROJECT, "project_id", "") or "")
