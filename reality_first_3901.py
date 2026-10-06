@@ -650,7 +650,44 @@ def _safe_render(original: Any, asset: Dict[str, Any], voice: Path, music: Path,
             last_error = exc
             _event(getattr(s.ACTIVE_PROJECT, "project_id", "") or "", "scene_render", "REPAIR_REQUIRED", attempt_no,
                    str(exc)[:1200], {"strategy": "simple_renderer"})
-    raise RuntimeError(f"scene render failed after self-healing attempts: {last_error}")
+
+    # Final local/procedural ladder rung. It removes every external and user-asset
+    # dependency and synthesizes a genuine moving-color scene with the real voice.
+    # This prevents one broken remote/public visual from destroying the whole job.
+    try:
+        project_id = str(getattr(s.ACTIVE_PROJECT, "project_id", "") or "")
+        ff = getattr(s, "ffmpeg")
+        bg = out.with_name(out.stem + ".procedural.mp4")
+        safe_title = str(title or "AI Infinity").replace("\\", "\\\\").replace("'", "\\'")[:72]
+        bg_vf = (
+            f"scale={width}:{height},fps=24,"
+            f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:"
+            f"text='{safe_title}':x=(w-text_w)/2:y=(h-text_h)/2:fontsize={max(28, int(min(width,height)*0.055))}:fontcolor=white"
+        )
+        ff(
+            "-f", "lavfi", "-i", f"gradients=s={width}x{height}:r=24",
+            "-t", max(1.0, float(duration)), "-vf", bg_vf,
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "27",
+            "-pix_fmt", "yuv420p", "-an", bg, timeout=300,
+        )
+        ff(
+            "-i", bg, "-i", voice,
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "96k",
+            "-movflags", "+faststart", "-t", max(1.0, float(duration)), out,
+            timeout=180,
+        )
+        if _valid_file(out, 10000) and _media_probe(out).get("ok"):
+            _event(project_id, "scene_render", "REPAIRED", 3, metadata={
+                "strategy": "procedural_generator", "size_bytes": out.stat().st_size,
+            })
+            return
+        raise RuntimeError("procedural generator produced an invalid artifact")
+    except Exception as exc:
+        last_error = exc
+        _event(str(getattr(s.ACTIVE_PROJECT, "project_id", "") or ""), "scene_render", "FAILED", 3,
+               str(exc)[:2000], {"strategy": "procedural_generator"})
+    raise RuntimeError(f"scene render failed after self-healing ladder: {last_error}")
 
 
 def _emergency_finalize(project_id: str) -> bool:
