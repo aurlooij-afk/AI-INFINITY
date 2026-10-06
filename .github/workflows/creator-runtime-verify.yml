@@ -66,6 +66,19 @@ jobs:
           print("standalone-runtime-ok")
           PY
 
+      - name: Verify browser shell JavaScript syntax
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          html=Path("ui_3800.html").read_text(encoding="utf-8")
+          scripts=re.findall(r"<script>(.*?)</script>",html,re.S)
+          assert scripts, "No browser script found"
+          Path("/tmp/ui_3800.js").write_text("\n".join(scripts),encoding="utf-8")
+          PY
+          node --check /tmp/ui_3800.js
+
       - name: Build portable image
         run: docker build --platform linux/amd64 --tag ai-infinity:ci .
 
