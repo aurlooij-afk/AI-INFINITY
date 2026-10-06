@@ -2149,10 +2149,25 @@ def enqueue(req: Dict[str, Any], user_id: str, model_fn: Optional[Callable]) -> 
         except Exception:
             pass
     vertical_intent = bool(re.search(r"\b(vertical|short|shorts|reel|reels|tiktok|portrait)\b", command_text))
+    landscape_intent = bool(re.search(r"\b(landscape|wide|16\s*:?\s*9)\b", command_text))
+    square_intent = bool(re.search(r"\b(square|1\s*:?\s*1)\b", command_text))
+    four_five_intent = bool(re.search(r"\b4\s*:?\s*5\b", command_text))
     if vertical_intent and str(req.get("aspect_ratio") or "16:9").strip() == "16:9":
         req["aspect_ratio"] = "9:16"
-    if requested_format == "long" and vertical_intent:
+    elif square_intent:
+        req["aspect_ratio"] = "1:1"
+    elif four_five_intent:
+        req["aspect_ratio"] = "4:5"
+    elif landscape_intent:
+        req["aspect_ratio"] = "16:9"
+    # Natural-language duration should override generic UI defaults. A brief
+    # explicitly asking for a multi-minute piece is long-form unless it also
+    # clearly asks for a vertical/short-form deliverable.
+    effective_duration = int(req.get("duration") or requested_duration or 0)
+    if vertical_intent and requested_format == "long":
         req["format"] = "short"
+    elif effective_duration >= 120 and requested_format in {"short", "shorts", "reel", "tiktok"} and not vertical_intent:
+        req["format"] = "long"
     idem=str(req.get("idempotency_key") or "").strip()[:120]
     if idem:
         with DB_LOCK, _connect() as c:
