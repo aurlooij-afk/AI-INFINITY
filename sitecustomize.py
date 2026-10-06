@@ -164,3 +164,14 @@ def _apply() -> None:
 
 
 _apply()
+
+
+# TARGET-2050.3901 — install the independent Reality Kernel after the
+# lightweight boot-time media fallbacks above have patched studio_ultimate.
+try:
+    import reality_first_3901 as _ai_infinity_reality_first
+    _ai_infinity_reality_first.install()
+except Exception:
+    # Startup must remain fail-open. The Creator Studio still runs and its own
+    # truthful status exposes whether the independent proof layer is active.
+    pass
