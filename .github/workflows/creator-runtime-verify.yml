@@ -88,3 +88,101 @@ jobs:
           done
           echo "Container did not become ready"
           exit 1
+
+
+      - name: Run real creator production smoke test
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          p = {
+            "title": "AI Infinity Production Smoke Test",
+            "objective": "Create a short cinematic motivational video about perseverance and building a better future.",
+            "topic": "perseverance",
+            "format": "short",
+            "duration": 20,
+            "content_type": "video",
+            "audience": "general audience",
+            "tone": "cinematic, clear, encouraging",
+            "language": "English",
+            "aspect_ratio": "16:9",
+            "quality_preset": "fast",
+            "features": []
+          }
+          open("/tmp/create.json","w").write(json.dumps(p))
+          PY
+          curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
+            -H 'content-type: application/json' \
+            --data-binary @/tmp/create.json \
+            http://127.0.0.1:10000/infinity/studio/project > /tmp/create-response.json
+          cat /tmp/create-response.json
+          PROJECT_ID=$(python - <<'PY'
+          import json
+          x=json.load(open("/tmp/create-response.json"))
+          print(x["project_id"])
+          PY
+          )
+          test -n "$PROJECT_ID"
+
+          status=""
+          for i in $(seq 1 240); do
+            curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
+              "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID" > /tmp/project.json
+            python - <<'PY' >/tmp/status.txt
+          import json
+          x=json.load(open("/tmp/project.json"))
+          print(x.get("status",""), x.get("stage",""), x.get("progress",0))
+          if x.get("error"):
+              print("ERROR:", x["error"])
+          PY
+            cat /tmp/status.txt
+            status=$(python - <<'PY'
+          import json
+          print(json.load(open("/tmp/project.json")).get("status",""))
+          PY
+          )
+            case "$status" in
+              completed|completed_with_qc_warnings) break ;;
+              failed|cancelled)
+                cat /tmp/project.json
+                docker logs ai-infinity-ci || true
+                exit 1
+                ;;
+            esac
+            sleep 2
+          done
+          case "$status" in
+            completed|completed_with_qc_warnings) ;;
+            *) cat /tmp/project.json; docker logs ai-infinity-ci || true; exit 1 ;;
+          esac
+
+          curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
+            "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/artifacts" > /tmp/artifacts.json
+          cat /tmp/artifacts.json
+          curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
+            "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/verify" > /tmp/verify.json
+          cat /tmp/verify.json
+          python - <<'PY'
+          import json
+          verify=json.load(open("/tmp/verify.json"))
+          assert verify.get("passed") is True, verify
+          names={x["asset_name"] for x in json.load(open("/tmp/artifacts.json")).get("artifacts",[])}
+          required={"final.mp4","captions.srt","thumbnail.jpg","manifest.json","script.md"}
+          missing=required-names
+          assert not missing, {"missing":sorted(missing),"names":sorted(names)}
+          project=json.load(open("/tmp/project.json"))
+          result=project.get("result") or {}
+          quality=result.get("quality") or {}
+          assert result.get("truthful") is True
+          assert quality.get("passed") is True, quality
+          print("REAL_CREATOR_PRODUCTION_SMOKE_PASS", project.get("project_id"))
+          PY
+
+          curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
+            "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/asset/final.mp4" -o /tmp/final.mp4
+          curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
+            "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/asset/thumbnail.jpg" -o /tmp/thumbnail.jpg
+          test -s /tmp/final.mp4
+          test -s /tmp/thumbnail.jpg
+          ffprobe -v error -show_entries format=duration,size -of json /tmp/final.mp4
+          echo "END_TO_END_CREATOR_ARTIFACT_TEST_PASSED"
