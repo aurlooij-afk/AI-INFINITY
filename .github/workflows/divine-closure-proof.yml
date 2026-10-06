@@ -16,9 +16,16 @@ jobs:
       - name: Compile runtime surface
         run: |
           python -m py_compile             main.py             divine_closure_3900.py             studio_ultimate.py             creator_final_3800.py             creator_pro_os.py             production_hardening.py             free_api_fabric.py             ai3701_features.py             ai3702_platform.py             ai3703_patch.py             ai3704_storage_fabric.py             ai3705_closure.py             ai3706_internal_closure.py
-      - name: Verify canonical closure is wired
+      - name: Verify canonical creator boundary is wired
         run: |
-          grep -q 'divine_closure_3900' main.py
-          grep -q 'TARGET-2050.3900' divine_closure_3900.py
-          grep -q '/infinity/divine/health' Dockerfile
-          grep -q '/infinity/divine/health' render.yaml
+          set -euo pipefail
+          grep -q 'ai_infinity_canonical.py' Dockerfile
+          grep -q 'ai_infinity_app.py' Dockerfile
+          grep -q 'uvicorn ai_infinity_app:app' Dockerfile
+          grep -q 'reality_first_3901.py' Dockerfile
+          python - <<'PY'
+          import ai_infinity_canonical as c
+          assert c.VERSION == "AI-INFINITY-CANONICAL-1.0"
+          assert c.SCHEMA == "ai-infinity-canonical-v1"
+          print("canonical-boundary-ok")
+          PY

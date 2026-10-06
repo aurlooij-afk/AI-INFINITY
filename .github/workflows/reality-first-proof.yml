@@ -83,9 +83,15 @@ jobs:
           }, indent=2))
           PY
 
-      - name: Canonical wiring checks
+      - name: Canonical creator wiring checks
         run: |
-          grep -q 'reality_first_3901' sitecustomize.py
+          set -euo pipefail
           grep -q 'reality_first_3901.py' Dockerfile
-          grep -q '/infinity/divine/health' Dockerfile
-          grep -q 'reality_first_3901' divine_closure_3900.py
+          grep -q 'ai_infinity_canonical.py' Dockerfile
+          grep -q 'ai_infinity_app.py' Dockerfile
+          grep -q 'uvicorn ai_infinity_app:app' Dockerfile
+          python - <<'PY'
+          from ai_infinity_canonical import VERSION
+          assert VERSION == "AI-INFINITY-CANONICAL-1.0"
+          print("canonical creator wiring ok")
+          PY
