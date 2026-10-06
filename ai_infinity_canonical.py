@@ -651,3 +651,18 @@ def register(app):
     def canonical_events(project_id:str,request:Request,response:Response):
         uid_=current_user(request,response);require_project(project_id,uid_)
         with studio().DB_LOCK,db() as c:
+            rows=[dict(r) for r in c.execute("SELECT event_id,event,data_json,created_at FROM canonical_events WHERE project_id=? ORDER BY event_id ASC",(project_id,)).fetchall()]
+        for r in rows:
+            try:r["data"]=json.loads(r.pop("data_json") or "{}")
+            except Exception:r["data"]={}
+        return {"project_id":project_id,"events":rows,"truthful":True}
+
+    @app.get("/",response_class=HTMLResponse)
+    @app.get("/home",response_class=HTMLResponse)
+    def canonical_root(request:Request,response:Response):
+        current_user(request,response)
+        return HTMLResponse(canonical_html(),headers={"Cache-Control":"no-store"})
+
+    @app.get("/infinity/canonical")
+    def canonical_info():
+        return {"version":VERSION,"build":BUILD,"schema":SCHEMA,"truthful":True}
