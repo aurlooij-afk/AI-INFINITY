@@ -367,49 +367,63 @@ def register(app: Any) -> None:
         checks.append({"name": "ffprobe executable", "passed": bool(ffprobe), "detail": ffprobe or "ffprobe not installed"})
         checks.append({"name": "local speech engine", "passed": bool(espeak), "detail": espeak or "espeak-ng/espeak not installed"})
         data_dir = Path(os.getenv("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity"))
+        temp_dir = None
         try:
             data_dir.mkdir(parents=True, exist_ok=True)
             probe = data_dir / ".write-test"
             probe.write_text("ok", encoding="utf-8")
             writable = probe.read_text(encoding="utf-8") == "ok"
             probe.unlink(missing_ok=True)
-        except Exception:
+        except Exception as exc:
             writable = False
+            checks.append({"name": "runtime storage error detail", "passed": False, "detail": str(exc)[:500]})
         checks.append({"name": "runtime storage writable", "passed": writable, "detail": str(data_dir)})
         media_ok = False
         media_detail = "media self-test not executed"
-        temp_dir = Path(tempfile.mkdtemp(prefix="ai-infinity-self-test-", dir=str(data_dir)))
-        out = temp_dir / "self_test.mp4"
-        try:
-            if ffmpeg and ffprobe:
-                proc = subprocess.run(
-                    [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-threads", "1",
-                     "-f", "lavfi", "-i", "color=c=black:s=320x180:d=1",
-                     "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=24000:duration=1",
-                     "-shortest", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-                     "-c:a", "aac", "-b:a", "48k", str(out)],
-                    capture_output=True, text=True, timeout=30,
-                )
-                if proc.returncode != 0:
-                    raise RuntimeError((proc.stderr or proc.stdout or "ffmpeg failed")[-800:])
-                if not out.is_file() or out.stat().st_size < 5000:
-                    raise RuntimeError("generated media file is missing or too small")
-                probe_run = subprocess.run(
-                    [ffprobe, "-v", "error", "-show_entries", "format=duration,size", "-of", "json", str(out)],
-                    capture_output=True, text=True, timeout=15,
-                )
-                if probe_run.returncode != 0:
-                    raise RuntimeError((probe_run.stderr or "ffprobe failed")[-800:])
-                media_ok = True
-                media_detail = probe_run.stdout[:1200]
-            else:
-                media_detail = "media binaries unavailable"
-        except Exception as exc:
-            media_detail = str(exc)[:1200]
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+        if writable:
+            try:
+                temp_dir = Path(tempfile.mkdtemp(prefix="ai-infinity-self-test-", dir=str(data_dir)))
+                out = temp_dir / "self_test.mp4"
+                if not (ffmpeg and ffprobe):
+                    media_detail = "media binaries unavailable"
+                else:
+                    proc = subprocess.run(
+                        [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-threads", "1",
+                         "-f", "lavfi", "-i", "color=c=black:s=320x180:d=1",
+                         "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=24000:duration=1",
+                         "-shortest", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                         "-c:a", "aac", "-b:a", "48k", str(out)],
+                        capture_output=True, text=True, timeout=30,
+                    )
+                    if proc.returncode != 0:
+                        raise RuntimeError((proc.stderr or proc.stdout or "ffmpeg failed")[-800:])
+                    if not out.is_file() or out.stat().st_size < 5000:
+                        raise RuntimeError("generated media file is missing or too small")
+                    probe_run = subprocess.run(
+                        [ffprobe, "-v", "error", "-show_entries", "format=duration,size:stream=codec_type,codec_name",
+                         "-of", "json", str(out)],
+                        capture_output=True, text=True, timeout=15,
+                    )
+                    if probe_run.returncode != 0:
+                        raise RuntimeError((probe_run.stderr or "ffprobe failed")[-800:])
+                    try:
+                        probe_json = json.loads(probe_run.stdout or "{}")
+                    except Exception:
+                        probe_json = {}
+                    streams = probe_json.get("streams") or []
+                    media_ok = (
+                        float((probe_json.get("format") or {}).get("duration") or 0) > 0.5
+                        and any(str(s.get("codec_type")) == "video" for s in streams)
+                        and any(str(s.get("codec_type")) == "audio" for s in streams)
+                    )
+                    media_detail = json.dumps({"format": probe_json.get("format"), "streams": streams}, ensure_ascii=False)[:1600]
+            except Exception as exc:
+                media_detail = str(exc)[:1200]
+            finally:
+                if temp_dir:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
         checks.append({"name": "real local MP4 + audio generation", "passed": media_ok, "detail": media_detail})
-        passed = all(bool(x["passed"]) for x in checks)
+        passed = all(bool(x["passed"]) for x in checks if x.get("name") != "runtime storage error detail")
         return {
             "status": "passed" if passed else "degraded",
             "version": VERSION,
