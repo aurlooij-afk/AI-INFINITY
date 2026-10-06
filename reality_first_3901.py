@@ -29,17 +29,17 @@ _GUARD_STARTED = False
 _ORIGINALS: Dict[str, Any] = {}
 
 
-def studio():
+def _studio():
     import studio_ultimate
     try:
-        studio._init_db()
+        _studio()._init_db()
     except Exception:
         pass
     return studio
 
 
 def _now() -> float:
-    s = studio()
+    s = _studio()
     try:
         return float(s.now())
     except Exception:
@@ -47,7 +47,7 @@ def _now() -> float:
 
 
 def _iso(ts: Optional[float] = None) -> str:
-    s = studio()
+    s = _studio()
     try:
         return str(s.utc_iso(ts if ts is not None else _now()))
     except Exception:
@@ -79,7 +79,7 @@ def _valid_file(path: Path, minimum: int = 1) -> bool:
 
 
 def _project_path(project_id: str) -> Path:
-    s = studio()
+    s = _studio()
     return Path(s._project_dir(project_id)).resolve()
 
 
@@ -183,7 +183,7 @@ def inspect_artifact(path: Path, media_type: str = "") -> Dict[str, Any]:
 
 
 def _ensure_schema() -> None:
-    s = studio()
+    s = _studio()
     with _DB_LOCK, s.DB_LOCK, s._connect() as c:
         c.executescript(
             """
@@ -238,7 +238,7 @@ def _ensure_schema() -> None:
 def _event(project_id: str, node: str, state: str, attempt: int = 1,
            error: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> None:
     _ensure_schema()
-    s = studio()
+    s = _studio()
     with _DB_LOCK, s.DB_LOCK, s._connect() as c:
         c.execute(
             "INSERT INTO reality_events_3901(project_id,node,state,attempt,error,metadata_json,created_at) "
@@ -251,7 +251,7 @@ def _event(project_id: str, node: str, state: str, attempt: int = 1,
 def _event_once(project_id: str, node: str, state: str, attempt: int = 1,
                 error: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> None:
     _ensure_schema()
-    s = studio()
+    s = _studio()
     with _DB_LOCK, s.DB_LOCK, s._connect() as c:
         row = c.execute(
             "SELECT state,error,metadata_json FROM reality_events_3901 "
@@ -266,7 +266,7 @@ def _event_once(project_id: str, node: str, state: str, attempt: int = 1,
 
 def _project_record(project_id: str) -> Dict[str, Any]:
     _ensure_schema()
-    s = studio()
+    s = _studio()
     p = s._get_project(project_id) or {}
     req = p.get("request_json") if isinstance(p.get("request_json"), dict) else {}
     plan = p.get("blueprint_json") if isinstance(p.get("blueprint_json"), dict) else {}
@@ -300,7 +300,7 @@ def _register_project(project_id: str) -> None:
     p = rec["project"]
     if not p:
         return
-    s = studio()
+    s = _studio()
     with _DB_LOCK, s.DB_LOCK, s._connect() as c:
         c.execute(
             "INSERT INTO reality_projects_3901("
@@ -331,8 +331,8 @@ def _upsert_artifact(project_id: str, path: Path, media_type: str,
     rec = _project_record(project_id)
     generator = {
         "kernel_version": VERSION,
-        "studio_version": str(getattr(studio(), "VERSION", "")),
-        "studio_build": str(getattr(studio(), "BUILD", "")),
+        "studio_version": str(getattr(_studio(), "VERSION", "")),
+        "studio_build": str(getattr(_studio(), "BUILD", "")),
     }
     proof = {
         "input_hashes": list(source_hashes or []),
@@ -344,7 +344,7 @@ def _upsert_artifact(project_id: str, path: Path, media_type: str,
         "created_at": _iso(),
     }
     _ensure_schema()
-    s = studio()
+    s = _studio()
     with _DB_LOCK, s.DB_LOCK, s._connect() as c:
         existing = c.execute(
             "SELECT * FROM reality_artifacts_3901 WHERE project_id=? AND asset_name=? AND sha256=? LIMIT 1",
@@ -453,7 +453,7 @@ def _verify_required(project_id: str, req: Dict[str, Any]) -> Tuple[bool, Dict[s
 def _set_truth(project_id: str, state: str, verified: bool, qc: bool,
                report: Dict[str, Any]) -> None:
     _ensure_schema()
-    s = studio()
+    s = _studio()
     with _DB_LOCK, s.DB_LOCK, s._connect() as c:
         c.execute(
             "UPDATE reality_projects_3901 SET state=?,verified=?,qc_passed=?,last_report_json=?,updated_at=?,verified_at=? "
@@ -521,8 +521,8 @@ def reconcile_project(project_id: str) -> Dict[str, Any]:
         "plan_sha256": rec["plan_sha256"],
         "generator": {
             "kernel": VERSION,
-            "studio": str(getattr(studio(), "VERSION", "")),
-            "studio_build": str(getattr(studio(), "BUILD", "")),
+            "studio": str(getattr(_studio(), "VERSION", "")),
+            "studio_build": str(getattr(_studio(), "BUILD", "")),
         },
         "artifacts": proofs,
         "checks": checks,
@@ -604,7 +604,7 @@ def reconcile_project(project_id: str) -> Dict[str, Any]:
 def _safe_render(original: Any, asset: Dict[str, Any], voice: Path, music: Path,
                  sfx: Path, duration: float, out: Path, title: str,
                  aspect_ratio: str, attempt: int) -> None:
-    s = studio()
+    s = _studio()
     try:
         original(asset, voice, music, sfx, duration, out, title, aspect_ratio)
         if _valid_file(out, 10000) and _media_probe(out).get("ok"):
@@ -655,7 +655,7 @@ def _safe_render(original: Any, asset: Dict[str, Any], voice: Path, music: Path,
 
 def _emergency_finalize(project_id: str) -> bool:
     """Best-effort late recovery from already-rendered scenes after a pipeline error."""
-    s = studio()
+    s = _studio()
     root = _project_path(project_id)
     scenes = sorted(
         [p for p in root.glob("scene_*.mp4") if _valid_file(p, 10000)],
@@ -740,7 +740,7 @@ def _emergency_finalize(project_id: str) -> bool:
 
 
 def _guarded_run_project(project_id: str, model_fn: Any) -> None:
-    s = studio()
+    s = _studio()
     original = _ORIGINALS.get("run_project")
     if original is None:
         raise RuntimeError("Reality Kernel lost original run_project")
@@ -749,7 +749,7 @@ def _guarded_run_project(project_id: str, model_fn: Any) -> None:
         _register_project(project_id)
         _event_once(project_id, "production", "RUNNING", 1, metadata={"worker": "studio_ultimate"})
         original(project_id, model_fn)
-        # studio.run_project normally absorbs worker exceptions and marks the
+        # _studio().run_project normally absorbs worker exceptions and marks the
         # project failed. Re-open that result here so late, already-rendered
         # scenes can still be recovered into a real deliverable.
         post = s._get_project(project_id) or {}
@@ -798,7 +798,7 @@ def _guard_loop() -> None:
     while True:
         time.sleep(20)
         try:
-            s = studio()
+            s = _studio()
             _ensure_schema()
             rows = []
             with _DB_LOCK, s.DB_LOCK, s._connect() as c:
@@ -817,7 +817,7 @@ def _guard_loop() -> None:
 
 
 def runtime_health() -> Dict[str, Any]:
-    s = studio()
+    s = _studio()
     _ensure_schema()
     patched = all(callable(getattr(s, name, None)) for name in ("enqueue", "_render_scene", "run_project", "concat_segments"))
     return {
@@ -858,7 +858,7 @@ def register(app: Any) -> None:
 
     @app.get("/infinity/reality/project/{project_id}")
     def reality_project(project_id: str, request: Any, response: Any):
-        s = studio()
+        s = _studio()
         uid = s._get_user_id(request)
         s._set_session(response, request, uid)
         p = s._get_project(project_id)
@@ -872,7 +872,7 @@ def install() -> None:
     global _PATCHED, _GUARD_STARTED
     if _PATCHED:
         return
-    s = studio()
+    s = _studio()
     _ensure_schema()
 
     # Keep the original implementations available for controlled fallback.
