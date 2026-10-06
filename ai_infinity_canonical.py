@@ -495,7 +495,10 @@ out.innerHTML="<span>"+esc(r.message||r.status||"accepted")+"</span><br><br><spa
 
 def canonical_html():
     ui=str(getattr(studio(),"CREATOR_STUDIO_2030_UI",""))
-    return ui.replace("</body>",OVERLAY+"</body>") if "</body>" in ui else ui+OVERLAY
+    match=re.search(r"</body\\s*>",ui,re.I)
+    if match:
+        return ui[:match.start()]+OVERLAY+ui[match.start():]
+    return ui+OVERLAY
 
 def create_from_command(command,user_id,raw):
     intent=compile_intent(command,raw);prof=profile(user_id)
@@ -648,4 +651,3 @@ def register(app):
     def canonical_events(project_id:str,request:Request,response:Response):
         uid_=current_user(request,response);require_project(project_id,uid_)
         with studio().DB_LOCK,db() as c:
-            rows=[dict(r) for r in c.execute("SELECT event_id,event,data_json,created_at FROM canonical_events WHERE project_id=? ORDER BY event_id ASC",(project_id,)).fetchall()]
