@@ -626,6 +626,18 @@ def _guarded_run_project(project_id: str, model_fn: Any) -> None:
         _event(project_id, "production", "QUEUED", 1)
         _register_project(project_id)
         original(project_id, model_fn)
+        # studio.run_project normally absorbs worker exceptions and marks the
+        # project failed. Re-open that result here so late, already-rendered
+        # scenes can still be recovered into a real deliverable.
+        post = s._get_project(project_id) or {}
+        if str(post.get("status") or "").lower() == "failed":
+            try:
+                if _emergency_finalize(project_id):
+                    _event(project_id, "recovery", "REPAIRED", 1, metadata={
+                        "reason": "studio_worker_returned_failed_after_partial_output"
+                    })
+            except Exception as recovery_exc:
+                _event(project_id, "recovery", "FAILED", 1, str(recovery_exc)[:1200])
     except Exception as exc:
         _event(project_id, "production", "FAILED", 1, str(exc)[:2000])
         try:
