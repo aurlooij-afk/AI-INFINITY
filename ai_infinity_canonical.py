@@ -329,12 +329,13 @@ def reconcile(project_id,user_id):
         name=Path(str(cur.get("artifact_name") or "final.mp4")).name
         path=project_dir(project_id)/("final.mp4" if cur.get("kind")=="base" else name)
         ev=artifact_evidence(path)
-        if cur.get("state")=="PENDING" and ev.get("valid"):
+        if cur.get("state")=="PENDING":
             ev["reality_kernel_verified"]=bool(base_truth.get("verified"))
-            with studio().DB_LOCK,db() as c:
-                c.execute("UPDATE canonical_versions SET state='VERIFIED',artifact_name=?,artifact_sha256=?,artifact_size=?,evidence_json=?,updated_at=? WHERE version_id=?",
-                          (path.name,ev.get("sha256"),ev.get("size_bytes"),json.dumps(ev,sort_keys=True),now(),cur["version_id"]))
-            cur=version_by_id(cur["version_id"])
+            if ev.get("valid") and ev["reality_kernel_verified"]:
+                with studio().DB_LOCK,db() as c:
+                    c.execute("UPDATE canonical_versions SET state='VERIFIED',artifact_name=?,artifact_sha256=?,artifact_size=?,evidence_json=?,updated_at=? WHERE version_id=?",
+                              (path.name,ev.get("sha256"),ev.get("size_bytes"),json.dumps(ev,sort_keys=True),now(),cur["version_id"]))
+                cur=version_by_id(cur["version_id"])
         elif cur:cur["evidence"]=ev
     state="VERIFIED" if cur and cur.get("state")=="VERIFIED" and cur.get("evidence",{}).get("valid") else (
       "QUEUED" if str(p.get("status")).lower()=="queued" else str(p.get("status") or "BLOCKED").upper())
