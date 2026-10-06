@@ -144,7 +144,7 @@ def _apply() -> None:
             manifest = Path(out).with_suffix(".recovery.txt")
             manifest.write_text(
                 "".join(
-                    "file '" + str(Path(p)).replace("'", "'\\''") + "'\\n"
+                    "file '" + str(Path(p)).replace("'", "'\\''") + "'\n"
                     for p in paths if Path(p).is_file()
                 ),
                 encoding="utf-8",
