@@ -216,7 +216,18 @@ jobs:
             "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/asset/thumbnail.jpg" -o /tmp/thumbnail.jpg
           test -s /tmp/final.mp4
           test -s /tmp/thumbnail.jpg
-          ffprobe -v error -show_entries format=duration,size -of json /tmp/final.mp4
+          ffprobe -v error -show_entries format=duration,size:stream=codec_type,codec_name -of json /tmp/final.mp4 > /tmp/final-probe.json
+          cat /tmp/final-probe.json
+          python - <<'PY'
+          import json
+          x=json.load(open("/tmp/final-probe.json"))
+          duration=float((x.get("format") or {}).get("duration") or 0)
+          streams=x.get("streams") or []
+          assert 10 <= duration <= 35, {"duration_seconds":duration,"expected_target_seconds":20}
+          assert any(s.get("codec_type")=="video" for s in streams), streams
+          assert any(s.get("codec_type")=="audio" for s in streams), streams
+          print("FINAL_MEDIA_DURATION_AND_STREAMS_PASS", duration)
+          PY
           echo "END_TO_END_CREATOR_ARTIFACT_TEST_PASSED"
 
 
