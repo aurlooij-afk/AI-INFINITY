@@ -487,6 +487,12 @@ def _verify_required(project_id: str, req: Dict[str, Any]) -> Tuple[bool, Dict[s
         checks["final_has_video_stream"] = any(x.get("codec_type") == "video" for x in streams)
         checks["final_has_audio_stream"] = any(x.get("codec_type") == "audio" for x in streams)
         checks["final_duration_gt_2s"] = float(media.get("duration_seconds") or 0) > 2
+        requested_duration = float(req.get("duration") or 0)
+        actual_duration = float(media.get("duration_seconds") or 0)
+        checks["final_duration_matches_request"] = bool(
+            requested_duration <= 0 or abs(actual_duration - requested_duration) <= 1.0
+        )
+        checks["requested_duration_seconds"] = requested_duration
         expected_ratio = str(req.get("aspect_ratio") or "16:9").strip()
         expected = {
             "16:9": 16 / 9,
@@ -506,7 +512,7 @@ def _verify_required(project_id: str, req: Dict[str, Any]) -> Tuple[bool, Dict[s
         checks["final_width"] = actual_w
         checks["final_height"] = actual_h
         if str(req.get("content_type") or "video").lower() in {"video", "social"}:
-            all_ok = all_ok and checks["final_has_video_stream"] and checks["final_has_audio_stream"] and checks["final_duration_gt_2s"] and checks["final_dimensions_present"] and checks["final_aspect_ratio_match"]
+                        all_ok = all_ok and checks["final_has_video_stream"] and checks["final_has_audio_stream"] and checks["final_duration_gt_2s"] and checks["final_duration_matches_request"] and checks["final_dimensions_present"] and checks["final_aspect_ratio_match"]
     return all_ok, checks, proofs
 
 
