@@ -60,6 +60,7 @@ jobs:
           html=client.get("/").text
           assert "AI Infinity" in html and "AI Infinity Command" in html
           r=client.post("/infinity/canonical/preflight",json={"command":"Create a cinematic 20 second 16:9 video about mountain landscapes.","content_type":"video","duration":20,"aspect_ratio":"16:9","format":"long"})
+          print("PREFLIGHT_STATUS", r.status_code, r.text)
           assert r.status_code==200 and r.json()["ready"] is True,r.text
           body={"command":"Create a cinematic 20 second 16:9 video about mountain landscapes.","content_type":"video","duration":20,"aspect_ratio":"16:9","format":"long","idempotency_key":"canonical-smoke-v1"}
           r=client.post("/infinity/canonical/create",json=body);assert r.status_code==200,r.text
