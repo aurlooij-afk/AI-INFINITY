@@ -18,11 +18,16 @@ Design rules:
 """
 
 import json
+import os
 import re
+import shutil
 import sqlite3
+import subprocess
+import tempfile
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException, Request, Response
@@ -340,6 +345,73 @@ def register(app: Any) -> None:
             "quality_loop": True,
             "truthful": True,
             "user_id": uid_,
+        }
+
+    @app.post("/infinity/3800/self-test")
+    def self_test(request: Request, response: Response):
+        uid_ = ensure_session(request, response)
+        checks = []
+        ffmpeg = shutil.which("ffmpeg")
+        ffprobe = shutil.which("ffprobe")
+        espeak = shutil.which("espeak-ng") or shutil.which("espeak")
+        checks.append({"name": "ffmpeg executable", "passed": bool(ffmpeg), "detail": ffmpeg or "ffmpeg not installed"})
+        checks.append({"name": "ffprobe executable", "passed": bool(ffprobe), "detail": ffprobe or "ffprobe not installed"})
+        checks.append({"name": "local speech engine", "passed": bool(espeak), "detail": espeak or "espeak-ng/espeak not installed"})
+        data_dir = Path(os.getenv("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity"))
+        try:
+            data_dir.mkdir(parents=True, exist_ok=True)
+            probe = data_dir / ".write-test"
+            probe.write_text("ok", encoding="utf-8")
+            writable = probe.read_text(encoding="utf-8") == "ok"
+            probe.unlink(missing_ok=True)
+        except Exception:
+            writable = False
+        checks.append({"name": "runtime storage writable", "passed": writable, "detail": str(data_dir)})
+        media_ok = False
+        media_detail = "media self-test not executed"
+        temp_dir = Path(tempfile.mkdtemp(prefix="ai-infinity-self-test-", dir=str(data_dir)))
+        out = temp_dir / "self_test.mp4"
+        try:
+            if ffmpeg and ffprobe:
+                proc = subprocess.run(
+                    [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-threads", "1",
+                     "-f", "lavfi", "-i", "color=c=black:s=320x180:d=1",
+                     "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=24000:duration=1",
+                     "-shortest", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                     "-c:a", "aac", "-b:a", "48k", str(out)],
+                    capture_output=True, text=True, timeout=30,
+                )
+                if proc.returncode != 0:
+                    raise RuntimeError((proc.stderr or proc.stdout or "ffmpeg failed")[-800:])
+                if not out.is_file() or out.stat().st_size < 5000:
+                    raise RuntimeError("generated media file is missing or too small")
+                probe_run = subprocess.run(
+                    [ffprobe, "-v", "error", "-show_entries", "format=duration,size", "-of", "json", str(out)],
+                    capture_output=True, text=True, timeout=15,
+                )
+                if probe_run.returncode != 0:
+                    raise RuntimeError((probe_run.stderr or "ffprobe failed")[-800:])
+                media_ok = True
+                media_detail = probe_run.stdout[:1200]
+            else:
+                media_detail = "media binaries unavailable"
+        except Exception as exc:
+            media_detail = str(exc)[:1200]
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        checks.append({"name": "real local MP4 + audio generation", "passed": media_ok, "detail": media_detail})
+        passed = all(bool(x["passed"]) for x in checks)
+        return {
+            "status": "passed" if passed else "degraded",
+            "version": VERSION,
+            "build": BUILD,
+            "local_only": True,
+            "external_provider_required": False,
+            "checks": checks,
+            "passed_checks": sum(1 for x in checks if x["passed"]),
+            "total_checks": len(checks),
+            "user_id": uid_,
+            "truthful": True,
         }
 
     @app.get("/infinity/3800/capabilities")
