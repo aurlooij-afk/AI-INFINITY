@@ -59,14 +59,23 @@ jobs:
           r = client.get("/health")
           assert r.status_code == 200, r.text
           assert r.json().get("status") == "healthy", r.text
-          r = client.get("/infinity/3800/health")
+          r = client.get("/infinity/divine/health")
           assert r.status_code == 200, r.text
-          assert r.json().get("version") == "TARGET-2050.3800", r.text
-          r = client.get("/infinity/3800/capabilities")
+          h = r.json()
+          assert h.get("version") == "TARGET-2050.3901", r.text
+          assert h.get("truthful") is True, r.text
+          assert h.get("content_creation_ready") is True, r.text
+          assert h.get("reality_kernel", {}).get("patched") is True, r.text
+          r = client.get("/infinity/reality/health")
           assert r.status_code == 200, r.text
+          rh = r.json()
+          assert rh.get("enabled") is True, r.text
+          assert rh.get("canonical_truth") == "filesystem_and_independent_inspection", r.text
           r = client.get("/")
           assert r.status_code == 200, r.text
           assert "AI Infinity" in r.text
+          assert "Create real content" in r.text
+          assert "Reality Kernel" in r.text
           print("standalone-runtime-ok")
           PY
 
@@ -109,6 +118,15 @@ jobs:
             echo "Container did not become ready"
             exit 1
           fi
+
+          curl -fsS http://127.0.0.1:10000/infinity/divine/health > /tmp/divine-health.json
+          cat /tmp/divine-health.json
+          python - <<'PY'
+          import json
+          x=json.load(open("/tmp/divine-health.json"))
+          assert x.get("content_creation_ready") is True, x
+          assert x.get("reality_kernel", {}).get("patched") is True, x
+          PY
 
           curl -fsS -X POST http://127.0.0.1:10000/infinity/3800/self-test > /tmp/local-self-test.json
           cat /tmp/local-self-test.json
@@ -198,6 +216,14 @@ jobs:
           import json
           verify=json.load(open("/tmp/verify.json"))
           assert verify.get("passed") is True, verify
+          reality_response = __import__("subprocess").check_output([
+              "curl","-fsS","-c","/tmp/cookies.txt","-b","/tmp/cookies.txt",
+              f"http://127.0.0.1:10000/infinity/reality/project/{json.load(open("/tmp/project.json"))["project_id"]}"
+          ], text=True)
+          reality=json.loads(reality_response)
+          assert reality.get("truthful") is True
+          assert reality.get("verified") is True, reality
+          assert reality.get("state") == "VERIFIED", reality
           names={x["asset_name"] for x in json.load(open("/tmp/artifacts.json")).get("artifacts",[])}
           required={"final.mp4","captions.srt","thumbnail.jpg","manifest.json","script.md"}
           missing=required-names
