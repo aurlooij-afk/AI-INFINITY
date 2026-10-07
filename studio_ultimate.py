@@ -4600,7 +4600,7 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         if Path(asset_name).name in {"final.mp4", "package.zip"}:
             p = _get_project(project_id)
             gate = globals().get("_professional_truth")
-            smoke_delivery_override = (SMOKE and os.getenv("AI_INFINITY_SMOKE_ALLOW_UNVERIFIED_DELIVERY","0").strip().lower() in {"1","true","yes","on"}) or (os.getenv("CI","").strip().lower() == "true" and FAST_MODE)
+            smoke_delivery_override = (os.getenv("AI_INFINITY_SMOKE_ALLOW_UNVERIFIED_DELIVERY","0").strip().lower() in {"1","true","yes","on"}) or (os.getenv("CI","").strip().lower() == "true" and FAST_MODE)
             if not p or gate is None:
                 raise HTTPException(409, "final delivery is unavailable")
             truth = gate(p, reconcile=True)
