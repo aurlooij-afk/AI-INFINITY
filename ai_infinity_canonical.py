@@ -672,6 +672,8 @@ def register(app):
             except Exception:r["data"]={}
         return {"project_id":project_id,"events":rows,"truthful":True}
 
+    @app.head("/")
+    @app.head("/home")
     @app.get("/",response_class=HTMLResponse)
     @app.get("/home",response_class=HTMLResponse)
     def canonical_root(request:Request,response:Response):
