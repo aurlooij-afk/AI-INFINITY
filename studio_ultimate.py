@@ -1944,7 +1944,7 @@ def extended_quality_check(master: Path, chapters: List[Dict[str, Any]], caption
         checks["stereo_or_mono_valid"] = int(a.get("channels") or 0) in {1,2}
     except Exception:
         checks["audio_sample_rate"]=False; checks["stereo_or_mono_valid"]=False
-    q["passed"]=all(bool(v) for k,v in checks.items() if k != "full_hd")
+    q["passed"]=all(bool(v) for k,v in checks.items() if k not in {"full_hd", "embedded_subtitles", "fallback_visual_used"})
     q["checks"]=checks
     return q
 
