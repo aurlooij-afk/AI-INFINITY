@@ -89,10 +89,9 @@ jobs:
           undo=client.post(f"/infinity/canonical/project/{pid}/undo");assert undo.status_code==200 and undo.json()["current_version_id"]==cv["version_id"],undo.text
           mem=client.get(f"/infinity/canonical/project/{pid}/memory");assert mem.status_code==200 and any(x.get("project_id")==pid for x in mem.json()["memories"]),mem.text
           importlib.reload(ai_infinity_app)
-          client2=TestClient(ai_infinity_app.app)
-          pdata=client2.get(f"/infinity/canonical/project/{pid}/truth").json()
-          assert pdata["done"] is True and pdata["current_version_id"]==cv["version_id"],pdata
-          print("CANONICAL_PRODUCTION_GATE_PASS")
+          # Simulate a real browser reload: preserve the existing session cookie.\n          client2=TestClient(ai_infinity_app.app, cookies=client.cookies)
+          pdata_resp=client2.get(f"/infinity/canonical/project/{pid}/truth")
+          assert pdata_resp.status_code==200,pdata_resp.text\n          pdata=pdata_resp.json()\n          assert pdata["done"] is True and pdata["current_version_id"]==cv["version_id"],pdata\n          print("CANONICAL_PRODUCTION_GATE_PASS")
           PY
       - name: Build production image
         run: docker build --platform linux/amd64 -t ai-infinity:canonical-ci .
