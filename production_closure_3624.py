@@ -493,7 +493,7 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         and checks["captions_present"]
         and checks["thumbnail_present"]
         and checks["manifest_present"]
-        and (checks["persisted_qc_passed"] if p.get("status") != "completed" else True)
+        and checks["persisted_qc_passed"]
         and not failures
     )
     return {
