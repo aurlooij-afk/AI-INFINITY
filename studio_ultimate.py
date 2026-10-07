@@ -2757,7 +2757,8 @@ def enqueue(req: Dict[str, Any], user_id: str, model_fn: Optional[Callable]) -> 
     four_five_intent = bool(re.search(r"\b4\s*:?\s*5\b", command_text))
     # The caller may explicitly mark an aspect choice. That choice is authoritative;
     # only infer an aspect from prose when no explicit aspect control was supplied.
-    aspect_explicit = bool(req.get("_aspect_ratio_explicit"))
+    aspect_value = str(req.get("aspect_ratio") or "").strip()
+    aspect_explicit = bool(req.get("_aspect_ratio_explicit")) or aspect_value in {"16:9","9:16","1:1","4:5"}
     if not aspect_explicit:
         if vertical_intent and str(req.get("aspect_ratio") or "16:9").strip() == "16:9":
             req["aspect_ratio"] = "9:16"
