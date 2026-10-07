@@ -1366,6 +1366,34 @@ def tts(text: str, outdir: Path, index: int, voice: str) -> Tuple[Path, str, flo
     return out, "local-espeak" + ("-fast-fallback" if FAST_MODE else ""), probe_duration(out)
 
 
+def _fit_audio_duration(source: Path, target_seconds: float, out: Path) -> Tuple[Path, float]:
+    """Fit narration to its scene duration without creating a video freeze hold."""
+    target = max(2.0, float(target_seconds))
+    actual = probe_duration(source)
+    if actual <= 0:
+        raise RuntimeError("narration duration is unavailable")
+    if abs(actual - target) <= 0.35:
+        return source, actual
+    ratio = actual / target
+    if ratio < 0.72 or ratio > 1.38:
+        raise RuntimeError(
+            f"narration length {actual:.2f}s cannot be safely fitted to scene target {target:.2f}s"
+        )
+    out.unlink(missing_ok=True)
+    ffmpeg(
+        "-i", source,
+        "-af", f"atempo={ratio:.6f}",
+        "-c:a", "libmp3lame", "-q:a", "2",
+        out,
+        timeout=max(60, int(target * 4)),
+    )
+    if not out.exists() or out.stat().st_size <= 5000:
+        raise RuntimeError("retimed narration artifact is invalid")
+    fitted = probe_duration(out)
+    if abs(fitted - target) > 0.6:
+        raise RuntimeError(f"retimed narration is {fitted:.2f}s, expected {target:.2f}s")
+    return out, fitted
+
 def _make_silent_voice(outdir: Path, index: int, seconds: float = 6.0) -> Tuple[Path, str, float]:
     """Guaranteed local audio fallback so remote TTS cannot stall or kill a job."""
     out = outdir / f"narration_{index:02d}.mp3"
@@ -2215,52 +2243,33 @@ def _record_autopilot(project_id: str, capabilities: Iterable[str]) -> Dict[str,
     return plan
 
 def _normalize_delivery_duration(source: Path, target_seconds: float, out: Path) -> Path:
-    """Make the final delivery honor the requested duration using local FFmpeg only."""
-    try:
-        target = max(1.0, float(target_seconds))
-        actual = float(probe_duration(source))
-    except Exception:
+    """Enforce requested duration without frozen-frame padding."""
+    target = max(1.0, float(target_seconds))
+    actual = float(probe_duration(source))
+    if actual <= 0:
+        raise RuntimeError("final media duration is unavailable")
+    if abs(actual - target) <= 0.75:
         return source
-    if actual <= 0 or abs(actual - target) <= 0.75:
-        return source
-    try:
-        out.unlink(missing_ok=True)
-        if actual < target:
-            pad = max(0.1, target - actual)
-            ffmpeg(
-                "-i", source,
-                "-vf", f"tpad=stop_mode=clone:stop_duration={pad:.3f}",
-                "-af", "apad",
-                "-t", f"{target:.3f}",
-                "-map", "0:v:0", "-map", "0:a:0", "-map", "0:s?",
-                "-c:v", "libx264",
-                "-preset", "ultrafast" if FAST_MODE else "veryfast",
-                "-crf", "24" if FAST_MODE else "20",
-                "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
-                "-b:a", "128k" if FAST_MODE else "160k",
-                "-c:s", "mov_text",
-                "-movflags", "+faststart",
-                out,
-                timeout=max(120, int(target * 8)),
-            )
-        else:
-            ffmpeg(
-                "-i", source,
-                "-t", f"{target:.3f}",
-                "-map", "0:v:0", "-map", "0:a:0", "-map", "0:s?",
-                "-c", "copy",
-                "-movflags", "+faststart",
-                out,
-                timeout=max(90, int(target * 4)),
-            )
-        if out.is_file() and out.stat().st_size > 10000 and probe_duration(out) > 0:
-            return out
-    except Exception as exc:
-        audit_event("", "duration_normalization_failed", {"error": str(exc)[:500], "target": target})
-    return source
-
-
+    if actual < target:
+        raise RuntimeError(
+            f"production underfilled requested duration: {actual:.2f}s vs {target:.2f}s; refusing frozen-frame padding"
+        )
+    out.unlink(missing_ok=True)
+    ffmpeg(
+        "-i", source,
+        "-t", f"{target:.3f}",
+        "-map", "0:v:0", "-map", "0:a:0", "-map", "0:s?",
+        "-c", "copy",
+        "-movflags", "+faststart",
+        out,
+        timeout=max(90, int(target * 4)),
+    )
+    if not out.is_file() or out.stat().st_size <= 10000:
+        raise RuntimeError("duration trim produced an invalid delivery artifact")
+    fitted = float(probe_duration(out))
+    if abs(fitted - target) > 0.75:
+        raise RuntimeError(f"duration trim produced {fitted:.2f}s instead of {target:.2f}s")
+    return out
 def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
     ACTIVE_PROJECT.project_id = project_id
     project = _get_project(project_id)
@@ -2361,12 +2370,21 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         is_short = fmt in {"short", "shorts", "reel", "tiktok"}
         target = int(req.get("duration") or (60 if is_short else 300))
         target = max(20, min(target, 180 if is_short else 3600))
-        max_chapters = 3 if is_short else (4 if FAST_MODE else 8)
+        max_chapters = (3 if FAST_MODE else 5) if is_short else (4 if FAST_MODE else 8)
         if FAST_MODE and not SMOKE:
             target = min(target, 180 if is_short else 900)
         if SMOKE:
             max_chapters, target = 1, min(target, 8)
         chapters = chapters[:max_chapters]
+        raw_durations = []
+        for ch in chapters:
+            try:
+                raw_durations.append(max(2.0, float(ch.get("duration") or 0)))
+            except Exception:
+                raw_durations.append(2.0)
+        duration_basis = sum(raw_durations) or float(len(chapters) * 2)
+        for idx, ch in enumerate(chapters):
+            ch["duration"] = round(float(target) * raw_durations[idx] / duration_basis, 3)
         _stage(project_id, "production_ready", 22, total_scenes=len(chapters), current_scene=0)
 
         assets_meta: List[Dict[str, Any]] = []
@@ -2417,10 +2435,16 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                     "reason": str(voice_exc)[:500],
                 })
             voice_provider = voice_provider or provider
-            ch["actual_duration"] = max(4.0, min(90.0, voice_duration))
-            actual_total += ch["actual_duration"]
+            scene_duration = max(4.0, min(90.0, float(ch.get("duration") or voice_duration)))
+            if abs(float(voice_duration) - scene_duration) > 0.35:
+                retimed = outdir / f"narration_{i:02d}_fitted.mp3"
+                voice, fitted_duration = _fit_audio_duration(voice, scene_duration, retimed)
+                provider = provider + "-retimed"
+                voice_duration = fitted_duration
+            ch["actual_duration"] = scene_duration
+            actual_total += scene_duration
             try:
-                asset = acquire_scene_asset(ch, outdir, i, prefer_motion=(i <= max_ai_video_scenes), duration=ch["actual_duration"])
+                asset = acquire_scene_asset(ch, outdir, i, prefer_motion=(i <= max_ai_video_scenes), duration=scene_duration)
             except Exception as asset_exc:
                 audit_event(project_id, "visual_source_unavailable", {"scene": i, "error": str(asset_exc)[:500]})
                 raise RuntimeError(f"scene {i}: professional visual source unavailable: {str(asset_exc)[:1600]}") from asset_exc
