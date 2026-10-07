@@ -725,7 +725,8 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
     """Build a deterministic, topic-coherent fallback plan without leaking unrelated search snippets."""
     clean_title = re.sub(r"\s+", " ", title).strip()[:140]
     clean_objective = re.sub(r"\s+", " ", objective).strip()[:900]
-    topic_terms = set(re.findall(r"[a-z0-9]{4,}", (clean_title + " " + clean_objective).lower()))
+    topic_label = re.sub(r"^(?:create|make|generate|produce|build)\\s+(?:a|an|the)\\s+(?:\\d+\\s*(?:second|seconds|minute|minutes)\\s+)?(?:cinematic\\s+)?(?:video|film|short|reel)\\s+(?:about|on|for)\\s+", "", clean_title, flags=re.I).strip() or clean_title
+    topic_terms = set(re.findall(r"[a-z0-9]{4,}", (topic_label + " " + clean_objective).lower()))
 
     usable_sources = []
     for src in (research.get("sources") or []):
@@ -771,7 +772,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "Practical takeaway": "Turn the idea into one concrete next step.",
             "Closing": "That is the idea to carry forward.",
         }.get(name, "Keep the result practical and clear.")
-        text = re.sub(r"\s+", " ", f"{lead} {middle}{tail}").strip()
+        text = re.sub(r"\s+", " ", f"{lead} The focus is {topic_label}. {tail}").strip()
         if source_title and source_title.lower() not in clean_title.lower() and len(text.split()) < budget - 5:
             text += f" Source context: {source_title}."
         words = text.split()
@@ -787,15 +788,15 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         chapters.append({
             "heading": f"{name} — {clean_title}" if name in {"Hook", "Closing"} else f"{name}: {clean_title}",
             "narration": narration,
-            "visual_query": f"{clean_title} {name}",
-            "image_prompt": f"Cinematic editorial visual illustrating {clean_title}, {name.lower()}, realistic lighting, meaningful composition, no logos, no text, premium documentary look",
+            "visual_query": f"{topic_label} {name.lower()} documentary real world",
+            "image_prompt": f"Premium documentary photography of {topic_label}; scene purpose: {name.lower()}; realistic people, locations, objects or process, natural lighting, editorial composition, no logos, no text, visually distinct from other scenes",
             "on_screen": name,
             "duration": sec,
             "proof_needed": [src.get("title")] if src.get("title") and src.get("title") != clean_title else [],
         })
     return {
         "title": clean_title,
-        "hook": f"What is the most useful thing to understand about {clean_title}?",
+        "hook": f"What is the most useful thing to understand about {topic_label}?",
         "premise": clean_objective,
         "audience": audience,
         "tone": tone,
@@ -1040,6 +1041,27 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
 
 
 
+def _ci_test_visual(scene: Dict[str, Any], outdir: Path, index: int) -> Optional[Dict[str, Any]]:
+    """Test-only media fixture. This branch is never used unless explicitly enabled by CI."""
+    if os.getenv("AI_INFINITY_TEST_MEDIA", "0").strip().lower() not in {"1", "true", "yes"}:
+        return None
+    p = outdir / f"ci_fixture_{index:02d}.png"
+    if Image is None:
+        return None
+    w, h = 1280, 720
+    im = Image.new("RGB", (w, h), (30, 34, 40))
+    draw = ImageDraw.Draw(im)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 42)
+    except Exception:
+        font = None
+    label = re.sub(r"\\s+", " ", str(scene.get("heading") or "CI media fixture")).strip()[:100]
+    draw.text((60, 60), "AI Infinity CI — TEST MEDIA", fill=(235, 240, 246), font=font)
+    draw.text((60, 135), label, fill=(210, 220, 232), font=font)
+    im.save(p, "PNG", optimize=True)
+    return {"kind":"image","path":str(p),"source":"CI test fixture (not production)","source_url":None,"creator":"AI Infinity tests","license":"test fixture","model":"ci-fixture"}
+
+
 def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_motion: bool = False, duration: float = 6.0) -> Dict[str, Any]:
     query = str(scene.get("visual_query") or scene.get("heading") or "documentary scene")
     ai_prompt = str(scene.get("image_prompt") or f"Premium cinematic documentary visual about {query}; realistic, useful, editorial, no text, no logos, professional photography")
@@ -1064,6 +1086,9 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         if images:
             return images[0]
 
+    test_media = _ci_test_visual(scene, outdir, index)
+    if test_media:
+        return test_media
     raise RuntimeError("no professional visual source is reachable for this scene")
 
 
