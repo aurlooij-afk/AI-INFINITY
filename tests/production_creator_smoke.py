@@ -107,7 +107,7 @@ def main():
     preflight, _ = assert_ok(
         "/infinity/canonical/preflight",
         "POST",
-        {"command": "Create a 20 second cinematic video about resilient creativity"},
+        {"command": "Create a 20 second cinematic video about Earth from space"},
     )
     assert preflight["ready"] is True, preflight
 
@@ -120,7 +120,7 @@ def main():
             "duration": 20,
             "format": "short",
             "aspect_ratio": "16:9",
-            "idempotency_key": "final-ci-resilient-creativity-v1",
+            "idempotency_key": "final-ci-earth-from-space-v1",
         },
     )
     project_id = created["project_id"]
