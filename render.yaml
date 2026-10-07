@@ -17,7 +17,46 @@ services:
         value: "128"
       - key: AI_INFINITY_PERSISTENCE_MODE
         value: "portable"
+      - key: AI_INFINITY_PRODUCTION_GRAPH_WORKER
+        value: "true"
+      - key: AI_INFINITY_RUNWAY_MODEL
+        value: "gen4.5"
+      - key: AI_INFINITY_OPENAI_VIDEO_MODEL
+        value: "sora-2-pro"
+      - key: AI_INFINITY_VISION_MODEL
+        value: "gpt-4o-mini"
+      - key: AI_INFINITY_ELEVEN_MODEL
+        value: "eleven_multilingual_v2"
+      - key: AI_INFINITY_STORAGE_PRIMARY
+        value: "cloudflare_r2"
       - key: AI_INFINITY_SESSION_SECRET
         generateValue: true
       - key: AI_INFINITY_VAULT_KEY
         generateValue: true
+      # Optional external production connectors. Leave empty until authorized.
+      - key: RUNWAYML_API_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: EXA_API_KEY
+        sync: false
+      - key: BRAVE_SEARCH_API_KEY
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: REMOTION_RENDER_URL
+        sync: false
+      - key: CLOUDFLARE_R2_ACCOUNT_ID
+        sync: false
+      - key: CLOUDFLARE_R2_ENDPOINT
+        sync: false
+      - key: CLOUDFLARE_R2_BUCKET
+        sync: false
+      - key: CLOUDFLARE_R2_ACCESS_KEY_ID
+        sync: false
+      - key: CLOUDFLARE_R2_SECRET_ACCESS_KEY
+        sync: false
