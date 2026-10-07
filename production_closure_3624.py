@@ -631,6 +631,17 @@ def _patch_functions():
         return
     s = _studio()
 
+    # Prefer configured professional neural voice before free public/local TTS.
+    original_tts = s.tts
+    if not getattr(original_tts, "__aii_closure_wrapped__", False):
+        def tts_closure(text: str, outdir: Path, index: int, voice: str):
+            eleven = _elevenlabs_tts(text, outdir, index)
+            if eleven:
+                return eleven
+            return original_tts(text, outdir, index, voice)
+        tts_closure.__aii_closure_wrapped__ = True
+        s.tts = tts_closure
+
     # Block fallback visuals before a final movie can be claimed.
     original_acquire = s.acquire_scene_asset
     if not getattr(original_acquire, "__aii_closure_wrapped__", False):
@@ -1077,6 +1088,43 @@ def _readiness(user_id: str, request: Any) -> Dict[str, Any]:
     }
 
 
+def _elevenlabs_tts(text: str, outdir: Path, index: int) -> Optional[Tuple[Path, str, float]]:
+    """Use ElevenLabs only when explicitly configured; otherwise keep free-first routing."""
+    api_key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+    voice_id = os.getenv("ELEVENLABS_VOICE_ID", "").strip()
+    if not api_key or not voice_id:
+        return None
+    model_id = os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2").strip() or "eleven_multilingual_v2"
+    output_format = os.getenv("ELEVENLABS_OUTPUT_FORMAT", "mp3_44100_128").strip() or "mp3_44100_128"
+    from urllib.parse import urlencode
+    from urllib.request import Request as _Request, urlopen as _urlopen
+    endpoint = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/with-timestamps"
+    endpoint += "?" + urlencode({"output_format": output_format})
+    payload = json.dumps({"text": str(text or ""), "model_id": model_id}).encode("utf-8")
+    request = _Request(endpoint, data=payload, headers={
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "xi-api-key": api_key,
+    }, method="POST")
+    try:
+        with _urlopen(request, timeout=max(20, int(os.getenv("ELEVENLABS_TIMEOUT_SECONDS", "45")))) as response:
+            data = json.loads(response.read().decode("utf-8", "replace"))
+        audio_b64 = str(data.get("audio_base64") or "")
+        if not audio_b64:
+            raise RuntimeError("ElevenLabs response contained no audio_base64")
+        audio = __import__("base64").b64decode(audio_b64)
+        out = outdir / f"narration_{index:02d}.mp3"
+        out.write_bytes(audio)
+        if not out.is_file() or out.stat().st_size < 10000:
+            raise RuntimeError("ElevenLabs returned an invalid audio artifact")
+        alignment = data.get("alignment") or data.get("normalized_alignment")
+        if alignment:
+            (outdir / f"narration_{index:02d}.elevenlabs_alignment.json").write_text(json.dumps(alignment, ensure_ascii=False, indent=2), encoding="utf-8")
+        return out, "elevenlabs", _studio().probe_duration(out)
+    except Exception as exc:
+        _studio()._media_debug("elevenlabs", exc)
+        return None
+
 def _provider_diag() -> Dict[str, Any]:
     # This endpoint intentionally separates credential presence from reachability.
     # It never labels a provider "connected" merely because an environment variable exists.
@@ -1104,6 +1152,14 @@ def _provider_diag() -> Dict[str, Any]:
         results.append({"provider": "OpenAI", "configured": True, "reachable": ok, "authenticated": ok, "model_available": ok, "generation_successful": None, "artifact_valid": None, "detail": detail})
     else:
         results.append({"provider": "OpenAI", "configured": False, "reachable": False, "authenticated": False, "model_available": False, "generation_successful": None, "artifact_valid": None})
+
+    eleven_key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+    eleven_voice = os.getenv("ELEVENLABS_VOICE_ID", "").strip()
+    if eleven_key and eleven_voice:
+        ok, detail = probe("https://api.elevenlabs.io/v1/user", {"xi-api-key": eleven_key})
+        results.append({"provider":"ElevenLabs","capability":"neural TTS","configured":True,"reachable":ok,"authenticated":ok,"model_available":ok,"voice_configured":True,"generation_successful":None,"artifact_valid":None,"detail":detail})
+    else:
+        results.append({"provider":"ElevenLabs","capability":"neural TTS","configured":False,"reachable":False,"authenticated":False,"model_available":False,"voice_configured":False,"generation_successful":None,"artifact_valid":None})
 
     hf_key = os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
     if hf_key:
