@@ -37,7 +37,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.gdeltproject.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -75,7 +75,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://tavily.com/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -113,7 +113,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://brave.com/search/api/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -151,7 +151,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://jina.ai/reader/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -189,7 +189,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://commoncrawl.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -227,7 +227,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://duckduckgo.com/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -265,7 +265,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.mediawiki.org/wiki/API:Main_page",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -303,7 +303,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://query.wikidata.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -341,7 +341,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://archive.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -379,7 +379,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.gdeltproject.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -417,7 +417,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://tavily.com/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -455,7 +455,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://brave.com/search/api/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -493,7 +493,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://jina.ai/reader/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -531,7 +531,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://commoncrawl.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -569,7 +569,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://duckduckgo.com/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -607,7 +607,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.mediawiki.org/wiki/API:Main_page",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -2015,7 +2015,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://developers.cloudflare.com/workers-ai/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -2215,7 +2215,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://developers.cloudflare.com/workers-ai/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -2415,7 +2415,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://developers.cloudflare.com/workers-ai/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -2535,7 +2535,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://ollama.com/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -2575,7 +2575,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/ggml-org/llama.cpp",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -3095,7 +3095,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://ollama.com/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -3135,7 +3135,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/ggml-org/llama.cpp",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -3173,7 +3173,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://huggingface.co/Qwen/Qwen-Image",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -3629,7 +3629,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://huggingface.co/Qwen/Qwen-Image",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -3762,8 +3762,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_REMOTE",
-      "health_state": "READY_PUBLIC_PATH",
+      "integration_state": "CONFIG_REQUIRED",
+      "health_state": "CONFIG_REQUIRED",
       "fallback_ids": [
         "cap-096"
       ],
@@ -3781,7 +3781,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.pexels.com/api/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -3800,8 +3800,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_REMOTE",
-      "health_state": "READY_PUBLIC_PATH",
+      "integration_state": "CONFIG_REQUIRED",
+      "health_state": "CONFIG_REQUIRED",
       "fallback_ids": [
         "cap-097"
       ],
@@ -3819,7 +3819,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://pixabay.com/api/docs/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -3857,7 +3857,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://developer.unsplash.com/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -3895,7 +3895,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://api.openverse.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -3933,7 +3933,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://commons.wikimedia.org/wiki/Commons:API",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -3971,7 +3971,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://images.nasa.gov/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -4085,7 +4085,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://archive.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -4104,8 +4104,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_REMOTE",
-      "health_state": "READY_PUBLIC_PATH",
+      "integration_state": "CONFIG_REQUIRED",
+      "health_state": "CONFIG_REQUIRED",
       "fallback_ids": [
         "cap-105"
       ],
@@ -4123,7 +4123,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.pexels.com/api/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -4142,8 +4142,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_REMOTE",
-      "health_state": "READY_PUBLIC_PATH",
+      "integration_state": "CONFIG_REQUIRED",
+      "health_state": "CONFIG_REQUIRED",
       "fallback_ids": [
         "cap-106"
       ],
@@ -4161,7 +4161,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://pixabay.com/api/docs/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -4199,7 +4199,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://developer.unsplash.com/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -4237,7 +4237,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://api.openverse.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -4275,7 +4275,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://commons.wikimedia.org/wiki/Commons:API",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -4313,7 +4313,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://images.nasa.gov/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -4389,7 +4389,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://huggingface.co/Wan-AI/Wan2.2-T2V-A14B",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -4769,7 +4769,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://huggingface.co/docs/hub/spaces-zerogpu",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -4807,7 +4807,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://huggingface.co/Wan-AI/Wan2.2-T2V-A14B",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -4959,7 +4959,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://ffmpeg.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -4997,7 +4997,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.blender.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -5035,7 +5035,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.remotion.dev/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -5339,7 +5339,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://ffmpeg.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -5377,7 +5377,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.blender.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -5415,7 +5415,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.remotion.dev/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -5531,7 +5531,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/remsky/Kokoro-FastAPI",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -5571,7 +5571,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/rhasspy/piper",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -5651,7 +5651,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/rany2/edge-tts",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -5931,7 +5931,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/remsky/Kokoro-FastAPI",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -5971,7 +5971,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/rhasspy/piper",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -6051,7 +6051,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/rany2/edge-tts",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -6131,7 +6131,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/openai/whisper",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -6411,7 +6411,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/openai/whisper",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -6691,7 +6691,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/openai/whisper",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -7651,7 +7651,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/remsky/Kokoro-FastAPI",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -8499,7 +8499,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://ffmpeg.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -8841,7 +8841,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://ffmpeg.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -10209,7 +10209,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/tesseract-ocr/tesseract",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -10437,7 +10437,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://pymupdf.readthedocs.io/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -10665,7 +10665,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/tesseract-ocr/tesseract",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -10779,7 +10779,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://gitbrent.github.io/PptxGenJS/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -11159,7 +11159,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://gitbrent.github.io/PptxGenJS/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -11919,7 +11919,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.blender.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -11957,7 +11957,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://threejs.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -12147,7 +12147,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.blender.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -12185,7 +12185,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://threejs.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -12375,7 +12375,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.blender.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -12413,7 +12413,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://threejs.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -12489,7 +12489,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://developers.google.com/youtube/v3",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -12527,7 +12527,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://developers.tiktok.com/doc/content-posting-api-get-started/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -12565,7 +12565,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://developers.facebook.com/docs/instagram-api/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -12679,7 +12679,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://learn.microsoft.com/linkedin/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -12907,7 +12907,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://developer.x.com/en/docs",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -12983,7 +12983,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://developers.google.com/youtube/v3",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -13021,7 +13021,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://developers.tiktok.com/doc/content-posting-api-get-started/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -14123,7 +14123,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://developers.cloudflare.com/r2/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -14161,7 +14161,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://developers.cloudflare.com/d1/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -14427,7 +14427,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://developers.cloudflare.com/r2/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -14465,7 +14465,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://developers.cloudflare.com/d1/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -15225,7 +15225,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://huggingface.co/docs/hub/spaces-zerogpu",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -15263,7 +15263,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.kaggle.com/docs/notebooks",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -15301,7 +15301,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://colab.research.google.com/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -15339,7 +15339,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://developers.cloudflare.com/workers-ai/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -15415,7 +15415,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/ggml-org/llama.cpp",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -15567,7 +15567,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://huggingface.co/docs/hub/spaces-zerogpu",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -15605,7 +15605,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.kaggle.com/docs/notebooks",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -15643,7 +15643,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://colab.research.google.com/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -15681,7 +15681,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://developers.cloudflare.com/workers-ai/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -19903,7 +19903,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/openai/whisper",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -19943,7 +19943,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/remsky/Kokoro-FastAPI",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -19983,7 +19983,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://ffmpeg.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -20023,7 +20023,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://gitbrent.github.io/PptxGenJS/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -20223,7 +20223,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/openai/whisper",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -20263,7 +20263,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/remsky/Kokoro-FastAPI",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -20303,7 +20303,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://ffmpeg.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -20343,7 +20343,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://gitbrent.github.io/PptxGenJS/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -20419,7 +20419,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://huggingface.co/Qwen/Qwen-Image",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -20457,7 +20457,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://ffmpeg.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -20476,8 +20476,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_REMOTE",
-      "health_state": "READY_PUBLIC_PATH",
+      "integration_state": "CONFIG_REQUIRED",
+      "health_state": "CONFIG_REQUIRED",
       "fallback_ids": [
         "cap-532"
       ],
@@ -20495,7 +20495,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.pexels.com/api/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -20514,8 +20514,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_REMOTE",
-      "health_state": "READY_PUBLIC_PATH",
+      "integration_state": "CONFIG_REQUIRED",
+      "health_state": "CONFIG_REQUIRED",
       "fallback_ids": [
         "cap-533"
       ],
@@ -20533,7 +20533,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://pixabay.com/api/docs/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -20571,7 +20571,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://gitbrent.github.io/PptxGenJS/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -20723,7 +20723,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://huggingface.co/Qwen/Qwen-Image",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -20761,7 +20761,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://ffmpeg.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -20780,8 +20780,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_REMOTE",
-      "health_state": "READY_PUBLIC_PATH",
+      "integration_state": "CONFIG_REQUIRED",
+      "health_state": "CONFIG_REQUIRED",
       "fallback_ids": [
         "cap-540"
       ],
@@ -20799,7 +20799,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.pexels.com/api/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -20818,8 +20818,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_REMOTE",
-      "health_state": "READY_PUBLIC_PATH",
+      "integration_state": "CONFIG_REQUIRED",
+      "health_state": "CONFIG_REQUIRED",
       "fallback_ids": [
         "cap-541"
       ],
@@ -20837,7 +20837,7 @@
       ],
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://pixabay.com/api/docs/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -20877,7 +20877,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/openai/whisper",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -20917,7 +20917,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/remsky/Kokoro-FastAPI",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -20957,7 +20957,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/rhasspy/piper",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -21037,7 +21037,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://ffmpeg.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -21157,7 +21157,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/openai/whisper",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -21197,7 +21197,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/remsky/Kokoro-FastAPI",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -21237,7 +21237,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/rhasspy/piper",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -21317,7 +21317,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://ffmpeg.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -21397,7 +21397,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.gdeltproject.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -21437,7 +21437,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.mediawiki.org/wiki/API:Main_page",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -21477,7 +21477,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://query.wikidata.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -21557,7 +21557,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://archive.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -21597,7 +21597,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://api.openverse.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -21637,7 +21637,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://commons.wikimedia.org/wiki/Commons:API",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -21677,7 +21677,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/openai/whisper",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -21717,7 +21717,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.gdeltproject.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -21757,7 +21757,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://www.mediawiki.org/wiki/API:Main_page",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -21797,7 +21797,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://query.wikidata.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -21877,7 +21877,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://archive.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -22437,7 +22437,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/openai/whisper",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -22477,7 +22477,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/tesseract-ocr/tesseract",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -22557,7 +22557,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://ffmpeg.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -22717,7 +22717,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/openai/whisper",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -22757,7 +22757,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/tesseract-ocr/tesseract",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -22837,7 +22837,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://ffmpeg.org/",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -22957,7 +22957,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/remsky/Kokoro-FastAPI",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -22997,7 +22997,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/rhasspy/piper",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -23157,7 +23157,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/openai/whisper",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -23197,7 +23197,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/remsky/Kokoro-FastAPI",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -23237,7 +23237,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/rhasspy/piper",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -23397,7 +23397,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/openai/whisper",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     },
@@ -23437,7 +23437,7 @@
         "multilingual"
       ],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
-      "source_url": "",
+      "source_url": "https://github.com/remsky/Kokoro-FastAPI",
       "last_verified": "2026-10-07",
       "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
     }
