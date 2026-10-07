@@ -209,7 +209,8 @@ def install(app:Any)->None:
     @app.post("/infinity/3800/self-test")
     def legacy_creator_self_test():
         ff=bool(shutil.which("ffmpeg")); fp=bool(shutil.which("ffprobe")); voice=bool(shutil.which("espeak-ng") or shutil.which("espeak"))
-        return {"status":"passed" if ff and fp and voice else "degraded","checks":{"ffmpeg":ff,"ffprobe":fp,"offline_tts":voice,"professional_creator_route":True},"canonical_surface":"/infinity/pro2","truthful":True}
+        passed=bool(ff and fp and voice)
+        return {"status":"passed" if passed else "degraded","checks":{"ffmpeg":ff,"ffprobe":fp,"offline_tts":voice,"professional_creator_route":True},"local_only":True,"external_provider_required":False,"passed":passed,"canonical_surface":"/infinity/pro2","truthful":True}
 
     @app.get("/infinity/divine/health")
     def divine_health_compat():
