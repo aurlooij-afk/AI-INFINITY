@@ -1254,16 +1254,40 @@ def _make_silent_voice(outdir: Path, index: int, seconds: float = 6.0) -> Tuple[
 
 
 def make_music(outdir: Path, seconds: float) -> Path:
+    """Create an original, restrained cinematic underscore without external music dependency."""
     out = outdir / "music.m4a"
-    s = max(1, float(seconds))
-    # Original procedural music: low bed + upper harmonic + transition pulses.
-    ffmpeg(
-        "-f", "lavfi", "-i", f"sine=frequency=110:sample_rate=48000:duration={s}",
-        "-f", "lavfi", "-i", f"sine=frequency=165:sample_rate=48000:duration={s}",
-        "-f", "lavfi", "-i", f"sine=frequency=330:sample_rate=48000:duration={s}",
-        "-filter_complex", "[0:a]volume=0.030[a0];[1:a]volume=0.018[a1];[2:a]volume=0.006[a2];[a0][a1][a2]amix=inputs=3:duration=longest,lowpass=f=1200,afade=t=in:st=0:d=3,afade=t=out:st=" + str(max(0, s-4)) + ":d=4[a]",
-        "-map", "[a]", "-c:a", "aac", "-b:a", "128k", out, timeout=300,
-    )
+    s = max(1.0, float(seconds))
+    # Four-bar style chord movement. The score is deliberately quiet beneath narration.
+    seg = max(1.5, min(3.0, s / 6.0))
+    chords = [
+        (220.00, 261.63, 329.63),  # Am
+        (196.00, 246.94, 293.66),  # G
+        (174.61, 220.00, 261.63),  # F
+        (196.00, 246.94, 329.63),  # G/B color
+    ]
+    sources = []
+    filters = []
+    labels = []
+    for i, (a, b, e) in enumerate(chords):
+        label = f"c{i}"
+        sources += ["-f", "lavfi", "-i", f"sine=frequency={a}:sample_rate=48000:duration={seg}",
+                    "-f", "lavfi", "-i", f"sine=frequency={b}:sample_rate=48000:duration={seg}",
+                    "-f", "lavfi", "-i", f"sine=frequency={e}:sample_rate=48000:duration={seg}"]
+        base = i * 3
+        filters.append(
+            f"[{base}:a]volume=0.020[t{i}a];"
+            f"[{base+1}:a]volume=0.014[t{i}b];"
+            f"[{base+2}:a]volume=0.009[t{i}e];"
+            f"[t{i}a][t{i}b][t{i}e]amix=inputs=3:duration=longest,"
+            f"lowpass=f=1800,afade=t=in:st=0:d=0.25,afade=t=out:st={max(0.25,seg-0.3)}:d=0.3[{label}]"
+        )
+        labels.append(f"[{label}]")
+    # Repeat the four-chord motif, then trim exactly to requested length.
+    filters.append("".join(labels) + f"concat=n=4:v=0:a=1,aloop=loop=-1:size={int(seg*4*48000)},"
+                    f"atrim=duration={s},aecho=0.55:0.4:45|90:0.10|0.06,"
+                    f"highpass=f=70,lowpass=f=2400,loudnorm=I=-26:TP=-6:LRA=8[m]")
+    ffmpeg(*sources, "-filter_complex", ";".join(filters),
+           "-map", "[m]", "-c:a", "aac", "-b:a", "160k", out, timeout=max(120, int(30 + s * 3)))
     return out
 
 
