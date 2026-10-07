@@ -304,18 +304,23 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         fresh_ok = False
         research = (blueprint.get("research") or {}) if isinstance(blueprint, dict) else {}
         for src in (research.get("sources") or []):
-            published = str(src.get("published_at") or src.get("published") or "")
+            published = str(src.get("published_at") or src.get("published") or src.get("timestamp") or "")
             if published:
                 try:
                     dt = datetime.fromisoformat(published.replace("Z", "+00:00"))
+                except Exception:
+                    try:
+                        from email.utils import parsedate_to_datetime
+                        dt = parsedate_to_datetime(published)
+                    except Exception:
+                        dt = None
+                if dt is not None:
                     if dt.tzinfo is None:
                         dt = dt.replace(tzinfo=timezone.utc)
                     age = max(0, (_now() - dt.timestamp()) / 86400)
                     if age <= 45:
                         fresh_ok = True
                         break
-                except Exception:
-                    continue
     checks["fresh_evidence_ok"] = fresh_ok
     if freshness_requested and not fresh_ok:
         failures.append("brief requires fresh/current evidence but no recent source timestamp was verified")
@@ -650,7 +655,7 @@ def _backup_snapshot(include_media: bool = False) -> Dict[str, Any]:
         "db": db_target.name,
         "projects": [],
         "media_included": bool(include_media),
-        "offsite_backup_configured": bool(os.getenv("AI_INFINITY_BACKUP_WEBHOOK", "").strip()),
+        "backup_webhook_configured": bool(os.getenv("AI_INFINITY_BACKUP_WEBHOOK", "").strip()),
         "truthful": True,
     }
     with s.DB_LOCK, s._connect() as c:
@@ -684,7 +689,7 @@ def _backup_snapshot(include_media: bool = False) -> Dict[str, Any]:
     snapshots = sorted([p for p in root.iterdir() if p.is_dir()], key=lambda p: p.name, reverse=True)
     for old in snapshots[BACKUP_KEEP:]:
         shutil.rmtree(old, ignore_errors=True)
-    return {"status": "created", "path": str(target), "manifest": str(target / "backup-manifest.json"), "media_included": bool(include_media), "offsite_configured": manifest["offsite_backup_configured"], "truthful": True}
+    return {"status": "created", "path": str(target), "manifest": str(target / "backup-manifest.json"), "media_included": bool(include_media), "backup_webhook_configured": manifest["backup_webhook_configured"], "truthful": True}
 
 
 def _readiness(user_id: str, request: Any) -> Dict[str, Any]:
@@ -853,6 +858,7 @@ def install() -> None:
         _patch_functions()
         s = _studio()
         s.CREATOR_STUDIO_UI = _ui_enhancement(getattr(s, "CREATOR_STUDIO_UI", ""))
+        s.CREATOR_STUDIO_2030_UI = _ui_enhancement(getattr(s, "CREATOR_STUDIO_2030_UI", ""))
         try:
             _install_db_pragmas()
         except Exception:
