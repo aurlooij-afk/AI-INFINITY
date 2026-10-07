@@ -2783,6 +2783,32 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         ACTIVE_PROJECT.project_id = None
 
 
+def _infer_command_language_voice(command: str, current_language: str, current_voice: str) -> Tuple[str, str]:
+    text = str(command or "").lower()
+    # Explicit language words are authoritative over the generic UI default.
+    language_rules = [
+        (("pashto", "pshto", "پښتو"), "Pashto", "ps-AF-LatifaNeural"),
+        (("urdu", "اردو"), "Urdu", "ur-PK-UzmaNeural"),
+        (("dari", "دری"), "Dari", "fa-IR-DilaraNeural"),
+        (("arabic", "العربية", "عربی"), "Arabic", "ar-SA-ZariyahNeural"),
+        (("english", "انگلیش"), "English", "en-US-AriaNeural"),
+    ]
+    selected = None
+    for needles, lang, voice in language_rules:
+        if any(n in text for n in needles):
+            selected = (lang, voice)
+            break
+    if not selected:
+        return str(current_language or "English"), str(current_voice or "en-US-AriaNeural")
+    lang, recommended_voice = selected
+    # Do not overwrite an explicit professional voice chosen by the caller.
+    voice = str(current_voice or "").strip()
+    generic_voices = {"", "en-US-AriaNeural", "en-US-JennyNeural"}
+    if voice in generic_voices:
+        voice = recommended_voice
+    return lang, voice
+
+
 def enqueue(req: Dict[str, Any], user_id: str, model_fn: Optional[Callable]) -> Dict[str, Any]:
     title = str(req.get("title") or req.get("topic") or req.get("objective") or "AI content").strip()[:200]
     req = dict(req)
@@ -2832,6 +2858,11 @@ def enqueue(req: Dict[str, Any], user_id: str, model_fn: Optional[Callable]) -> 
     # explicitly asking for a multi-minute piece is long-form unless it also
     # clearly asks for a vertical/short-form deliverable.
     effective_duration = int(req.get("duration") or requested_duration or 0)
+    inferred_language, inferred_voice = _infer_command_language_voice(
+        command_text, str(req.get("language") or "English"), str(req.get("voice") or "")
+    )
+    req["language"] = inferred_language
+    req["voice"] = inferred_voice
     if vertical_intent and requested_format == "long":
         req["format"] = "short"
     elif effective_duration >= 120 and requested_format in {"short", "shorts", "reel", "tiktok"} and not vertical_intent:
