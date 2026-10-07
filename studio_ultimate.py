@@ -725,7 +725,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
     """Build a deterministic, topic-coherent fallback plan without leaking unrelated search snippets."""
     clean_title = re.sub(r"\s+", " ", title).strip()[:140]
     clean_objective = re.sub(r"\s+", " ", objective).strip()[:900]
-    topic_label = re.sub(r"^(?:create|make|generate|produce|build)\\s+(?:a|an|the)\\s+(?:\\d+\\s*(?:second|seconds|minute|minutes)\\s+)?(?:cinematic\\s+)?(?:video|film|short|reel)\\s+(?:about|on|for)\\s+", "", clean_title, flags=re.I).strip() or clean_title
+    topic_label = re.sub(r"^(?:create|make|generate|produce|build)\s+(?:a|an|the)\s+(?:\d+\s*(?:second|seconds|minute|minutes)\s+)?(?:cinematic\s+)?(?:video|film|short|reel)\s+(?:about|on|for)\s+", "", clean_title, flags=re.I).strip() or clean_title
     topic_terms = set(re.findall(r"[a-z0-9]{4,}", (topic_label + " " + clean_objective).lower()))
 
     usable_sources = []
@@ -745,6 +745,13 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
 
     if fmt == "short":
         names = ["Hook", "Why it matters", "The key idea", "Practical example", "Takeaway"]
+        visual_focus = {
+            "Hook": "creator at work, bold opening image, hands sketching or building an idea",
+            "Why it matters": "people collaborating, discussion, decision-making, real-world creative workspace",
+            "The key idea": "prototype, notebook, design process, close-up details, purposeful composition",
+            "Practical example": "real creator using tools, editing, making, testing or publishing a project",
+            "Takeaway": "finished creative work, confident subject, clean editorial closing frame",
+        }
         ratios = [0.16, 0.18, 0.28, 0.22, 0.16]
     else:
         names = ["Hook", "Context", "The core idea", "How it works", "Real-world examples", "What changes", "Practical takeaway", "Closing"]
@@ -788,8 +795,18 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         chapters.append({
             "heading": f"{name} — {clean_title}" if name in {"Hook", "Closing"} else f"{name}: {clean_title}",
             "narration": narration,
-            "visual_query": f"{topic_label} {name.lower()} documentary real world",
-            "image_prompt": f"Premium documentary photography of {topic_label}; scene purpose: {name.lower()}; realistic people, locations, objects or process, natural lighting, editorial composition, no logos, no text, visually distinct from other scenes",
+            focus = visual_focus.get(name, "real-world editorial scene") if fmt == "short" else {
+                "Hook": "human opening moment, compelling subject, clear place or action",
+                "Context": "environment, setting, people and real-world context",
+                "The core idea": "prototype, mechanism, close detail, explanatory visual",
+                "How it works": "process, tools, sequence of action, practical demonstration",
+                "Real-world examples": "people using the idea in a real environment",
+                "What changes": "before-and-after or visible outcome",
+                "Practical takeaway": "creator applying the idea successfully",
+                "Closing": "finished work, confident human subject, memorable final frame",
+            }.get(name, "real-world editorial scene")
+            "visual_query": f"{topic_label} {focus} documentary photography",
+            "image_prompt": f"Premium editorial documentary image about {topic_label}; visual focus: {focus}; realistic people, locations, objects or processes, natural cinematic lighting, coherent composition, strong subject separation, no logos, no text, visually distinct from other scenes",
             "on_screen": name,
             "duration": sec,
             "proof_needed": [src.get("title")] if src.get("title") and src.get("title") != clean_title else [],
