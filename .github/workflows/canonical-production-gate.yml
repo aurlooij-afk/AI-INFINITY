@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ai-infinity-canonical-\${{ github.ref }}
+  group: ai-infinity-canonical-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -110,7 +110,7 @@ jobs:
             -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity \
             -p 10000:10000 ai-infinity:canonical-ci
           trap 'docker logs ai-infinity-canonical || true' EXIT
-          for i in \$(seq 1 90); do
+          for i in $(seq 1 90); do
             if curl -fsS http://127.0.0.1:10000/health >/tmp/health.json; then
               cat /tmp/health.json
               curl -fsS http://127.0.0.1:10000/infinity/canonical/health
