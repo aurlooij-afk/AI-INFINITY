@@ -87,7 +87,8 @@ verify,_=ok("/infinity/studio/project/"+pid+"/verify"); assert verify.get("passe
 
 # Reject the exact failure mode that previously produced abstract/procedural placeholder movies.
 project,_=ok("/infinity/canonical/project/"+pid)
-asset_rows=project.get("assets") or []
+assets,_=ok("/infinity/canonical/project/"+pid+"/assets")
+asset_rows=assets.get("assets") or []
 visual_sources=[]
 for row in asset_rows:
     meta=row.get("metadata") or {}
