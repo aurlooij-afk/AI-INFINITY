@@ -7,6 +7,7 @@ Pillow>=11,<13
 edge-tts>=7,<8
 huggingface_hub>=0.35,<1
 requests>=2.32,<3
+redis>=5,<8
 
 python-multipart>=0.0.20,<1
 pypdf>=6,<7
