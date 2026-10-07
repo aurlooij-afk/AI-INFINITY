@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 import ai_infinity_canonical
 import reality_first_3901
 import studio_ultimate
@@ -30,6 +30,19 @@ production_openai_video.register(app)
 production_closure_3624.register(app)
 professional_creator_v2_timeline_patch.install(app)
 professional_creator_v2.install(app)
+
+# Canonical compatibility endpoint used by the production proof and legacy clients.
+# It delegates to the same real Creator Studio enqueue path; no simulated output.
+async def _divine_create_compat(request: Request):
+    payload = await request.json()
+    uid_value = studio_ultimate._get_user_id(request)
+    req = dict(payload or {})
+    req["professional_pipeline"] = True
+    if not req.get("title"):
+        req["title"] = str(req.get("objective") or req.get("topic") or "AI Infinity production")[:180]
+    return studio_ultimate.enqueue(req, uid_value, None)
+
+app.add_api_route("/infinity/divine/create", _divine_create_compat, methods=["POST"], include_in_schema=False)
 
 application = app
 
