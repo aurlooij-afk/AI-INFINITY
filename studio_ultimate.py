@@ -4947,7 +4947,8 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
     def production_contract_3624(request: Request, response: Response):
         user_id=_get_user_id(request); _set_session(response,request,user_id)
         return {
-            "version": "AI-INFINITY-PRODUCTION-CONTRACT-v1",
+            "version": VERSION,
+            "contract_version": "AI-INFINITY-PRODUCTION-CONTRACT-v1",
             "build": BUILD,
             "truthful": True,
             "execution": {
