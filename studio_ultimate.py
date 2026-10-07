@@ -655,7 +655,7 @@ def _hf_creator_plan(prompt: str) -> Tuple[Optional[Dict[str, Any]], str]:
         if selected_provider and selected_provider.lower() != "auto":
             client_kwargs["provider"]=selected_provider
         client = InferenceClient(**client_kwargs)
-        response = client.chat_completion(
+        response = client.chat.completions.create(
             model=model,
             messages=[
                 {
