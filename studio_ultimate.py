@@ -2055,7 +2055,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         # Shared music bed avoids repeatedly generating the same soundtrack.
         music_seconds = max(12.0, min(600.0, float(target) + 12.0))
         shared_music = make_music(outdir, music_seconds)
-        ai_video_enabled = os.getenv("AI_INFINITY_AI_VIDEO", "0").strip().lower() in {"1","true","yes","auto"}
+        ai_video_enabled = os.getenv("AI_INFINITY_AI_VIDEO", "1").strip().lower() in {"1","true","yes","auto"}
         requested_ai_video_scenes = max(0, int(os.getenv("AI_INFINITY_AI_VIDEO_SCENES", "2")))
         max_ai_video_scenes = min(requested_ai_video_scenes, 1 if FAST_MODE else 4) if ai_video_enabled else 0
         shared_sfx = make_sfx(outdir, 1.0, 0)
