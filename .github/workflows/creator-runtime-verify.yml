@@ -257,7 +257,7 @@ jobs:
             "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/asset/thumbnail.jpg" -o /tmp/thumbnail.jpg
           test -s /tmp/final.mp4
           test -s /tmp/thumbnail.jpg
-          ffprobe -v error -show_entries format=duration,size:stream=codec_type,codec_name -of json /tmp/final.mp4 > /tmp/final-probe.json
+          ffprobe -v error -show_entries format=duration,size:stream=codec_type,codec_name,width,height -of json /tmp/final.mp4 > /tmp/final-probe.json
           cat /tmp/final-probe.json
           python - <<'PY'
           import json
