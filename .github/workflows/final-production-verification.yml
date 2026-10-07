@@ -77,6 +77,11 @@ jobs:
           curl -fsS http://127.0.0.1:10000/health
           curl -fsS http://127.0.0.1:10000/infinity/canonical/health
 
+      - name: Install host media inspection tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Real creator end-to-end smoke test
         env:
           BASE_URL: http://127.0.0.1:10000
