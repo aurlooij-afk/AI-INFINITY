@@ -2258,11 +2258,18 @@ def _normalize_delivery_duration(source: Path, target_seconds: float, out: Path)
     ffmpeg(
         "-i", source,
         "-t", f"{target:.3f}",
-        "-map", "0:v:0", "-map", "0:a:0", "-map", "0:s?",
-        "-c", "copy",
+        "-map", "0:v:0", "-map", "0:a:0",
+        "-c:v", "libx264",
+        "-preset", "veryfast" if FAST_MODE else os.getenv("AI_INFINITY_VIDEO_PRESET", "medium"),
+        "-crf", "20" if FAST_MODE else "18",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-b:a", "128k" if FAST_MODE else "192k",
+        "-ar", "48000",
+        "-ac", "2",
         "-movflags", "+faststart",
         out,
-        timeout=max(90, int(target * 4)),
+        timeout=max(120, int(target * 8)),
     )
     if not out.is_file() or out.stat().st_size <= 10000:
         raise RuntimeError("duration trim produced an invalid delivery artifact")
