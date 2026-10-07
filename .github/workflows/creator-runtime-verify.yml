@@ -28,11 +28,16 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
-      - name: Install OS media dependencies
+      - name: Host media dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg espeak-ng libsndfile1 poppler-utils
-          rm -rf ~/.cache
+          # Media tooling is validated inside the production Docker image.
+          # Keeping the host gate Python-only avoids fragile apt mirrors while
+          # preserving the real packaged-runtime coverage.
+          python - <<'PY'
+          import shutil
+          print("host_ffmpeg", shutil.which("ffmpeg"))
+          print("host_ffprobe", shutil.which("ffprobe"))
+          PY
 
       - name: Install Python dependencies
         run: |
