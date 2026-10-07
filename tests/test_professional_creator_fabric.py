@@ -47,3 +47,17 @@ def test_fabric_capability_lookup():
     x=r.json()
     assert x["number"]==1
     assert x["id"]=="cap-001"
+
+
+def test_every_registry_entry_has_required_truth_fields():
+    from professional_creator_fabric import REGISTRY
+    required = {
+        "id","number","category","capability","resource/provider","implementation_type",
+        "execution_mode","license","commercial_use_state","requires_api_key","requires_gpu",
+        "requires_external_network","free_state","quality_tier","integration_state","health_state",
+        "fallback_ids","supported_input_types","supported_output_types","language_support","notes",
+        "source_url","last_verified"
+    }
+    for entry in REGISTRY["entries"]:
+        assert required.issubset(entry), entry["number"]
+        assert entry["number"] >= 1 and entry["number"] <= 607
