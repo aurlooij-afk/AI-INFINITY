@@ -99,6 +99,31 @@ def cgroup_memory_current_bytes() -> Optional[int]:
     return _read_number(Path("/sys/fs/cgroup/memory/memory.usage_in_bytes"))
 
 
+def cgroup_memory_pressure_bytes() -> Optional[int]:
+    """Return non-reclaimable cgroup memory for the kill-risk guard.
+
+    Media rendering writes large files. memory.current includes reclaimable
+    page cache, so it can spike during a successful render without meaning the
+    process is close to an OOM condition. anon+shmem is a better conservative
+    signal for unreclaimable pressure; memory.current remains observable.
+    """
+    for path in (
+        Path("/sys/fs/cgroup/memory.stat"),
+        Path("/sys/fs/cgroup/memory/memory.stat"),
+    ):
+        try:
+            values = {}
+            for line in path.read_text(encoding="utf-8").splitlines():
+                parts = line.split()
+                if len(parts) == 2 and parts[0] in {"anon", "shmem"}:
+                    values[parts[0]] = int(parts[1])
+            if values:
+                return sum(values.values())
+        except Exception:
+            continue
+    return None
+
+
 def _memory_budget_bytes() -> Optional[int]:
     limit = cgroup_memory_limit_bytes()
     if not limit or limit < 128 * 1024 * 1024:
@@ -199,10 +224,15 @@ def _run_ffmpeg(*args: Any, timeout: int = 240) -> None:
 
             if budget is not None:
                 current = cgroup_memory_current_bytes()
-                if current is not None and current > budget:
+                pressure = cgroup_memory_pressure_bytes()
+                measured = pressure if pressure is not None else current
+                # Do not abort real media assembly solely because Linux is
+                # caching freshly-written MP4 pages. Trip only on the
+                # non-reclaimable anon+shmem pressure when memory.stat exists.
+                if measured is not None and measured > budget:
                     guard_reason = (
                         "AI Infinity memory guard tripped before cgroup OOM: "
-                        f"{current / 1048576:.0f} MiB > {budget / 1048576:.0f} MiB budget"
+                        f"{measured / 1048576:.0f} MiB > {budget / 1048576:.0f} MiB budget"
                     )
                     _terminate_group(process)
                     break
