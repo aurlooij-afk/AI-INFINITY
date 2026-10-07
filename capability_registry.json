@@ -3,7 +3,7 @@
   "registry_name": "AI Infinity 1-607 Professional Content Creation Fabric",
   "generated_at": "2026-10-07",
   "count": 607,
-  "truthfulness_policy": "Registered is not executable; integration_state and health_state are runtime facts.",
+  "truthfulness_policy": "Registration is metadata only. IMPLEMENTED means an executable adapter or local runtime path exists in this repository; health/availability is calculated separately at runtime. Third-party licensing, quotas and provider terms remain resource-specific.",
   "entries": [
     {
       "id": "cap-001",
@@ -56,8 +56,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "CONFIG_REQUIRED",
       "fallback_ids": [
         "cap-001"
       ],
@@ -208,8 +208,8 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "OPTIONAL",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-005"
       ],
@@ -246,8 +246,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-006"
       ],
@@ -398,8 +398,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "CONFIG_REQUIRED",
       "fallback_ids": [
         "cap-010"
       ],
@@ -550,8 +550,8 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "OPTIONAL",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-014"
       ],
@@ -588,8 +588,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-015"
       ],
@@ -666,8 +666,8 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "OPTIONAL",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-017"
       ],
@@ -986,8 +986,8 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "OPTIONAL",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-025"
       ],
@@ -2514,8 +2514,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-064"
       ],
@@ -2554,8 +2554,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-065"
       ],
@@ -3074,8 +3074,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-078"
       ],
@@ -3114,8 +3114,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-079"
       ],
@@ -3762,8 +3762,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-096"
       ],
@@ -3800,8 +3800,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-097"
       ],
@@ -3876,8 +3876,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-099"
       ],
@@ -3914,8 +3914,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-100"
       ],
@@ -3952,8 +3952,8 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "OPTIONAL",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-101"
       ],
@@ -4104,8 +4104,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-105"
       ],
@@ -4142,8 +4142,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-106"
       ],
@@ -4218,8 +4218,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-108"
       ],
@@ -4256,8 +4256,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-109"
       ],
@@ -4294,8 +4294,8 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "OPTIONAL",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-110"
       ],
@@ -4978,8 +4978,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-128"
       ],
@@ -5054,8 +5054,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-130"
       ],
@@ -5092,8 +5092,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-131"
       ],
@@ -5282,8 +5282,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-136"
       ],
@@ -5358,8 +5358,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-138"
       ],
@@ -5434,8 +5434,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-140"
       ],
@@ -5472,8 +5472,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-141"
       ],
@@ -5510,8 +5510,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-142"
       ],
@@ -5550,8 +5550,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-143"
       ],
@@ -5630,8 +5630,8 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "OPTIONAL",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-145"
       ],
@@ -5670,8 +5670,8 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "OPTIONAL",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_LOCAL",
+      "health_state": "READY_LOCAL",
       "fallback_ids": [
         "cap-146"
       ],
@@ -5910,8 +5910,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-152"
       ],
@@ -5950,8 +5950,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-153"
       ],
@@ -6030,8 +6030,8 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "OPTIONAL",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-155"
       ],
@@ -6070,8 +6070,8 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "OPTIONAL",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_LOCAL",
+      "health_state": "READY_LOCAL",
       "fallback_ids": [
         "cap-156"
       ],
@@ -6110,8 +6110,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-157"
       ],
@@ -6150,8 +6150,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-158"
       ],
@@ -6190,8 +6190,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-159"
       ],
@@ -6270,8 +6270,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-161"
       ],
@@ -6390,8 +6390,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-164"
       ],
@@ -6430,8 +6430,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-165"
       ],
@@ -6470,8 +6470,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-166"
       ],
@@ -6550,8 +6550,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-168"
       ],
@@ -6670,8 +6670,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-171"
       ],
@@ -7630,8 +7630,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-195"
       ],
@@ -8518,8 +8518,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-218"
       ],
@@ -8556,8 +8556,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-219"
       ],
@@ -8594,8 +8594,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-220"
       ],
@@ -8632,8 +8632,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-221"
       ],
@@ -8860,8 +8860,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-227"
       ],
@@ -8898,8 +8898,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-228"
       ],
@@ -8936,8 +8936,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-229"
       ],
@@ -8974,8 +8974,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-230"
       ],
@@ -9050,8 +9050,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-232"
       ],
@@ -9126,8 +9126,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-234"
       ],
@@ -9164,8 +9164,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-235"
       ],
@@ -9202,8 +9202,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "CONFIG_REQUIRED",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-236"
       ],
@@ -9240,8 +9240,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-237"
       ],
@@ -9278,8 +9278,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-238"
       ],
@@ -9354,8 +9354,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-240"
       ],
@@ -9392,8 +9392,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-241"
       ],
@@ -9430,8 +9430,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "CONFIG_REQUIRED",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-242"
       ],
@@ -9468,8 +9468,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-243"
       ],
@@ -9506,8 +9506,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-244"
       ],
@@ -9582,8 +9582,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-246"
       ],
@@ -9848,8 +9848,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-253"
       ],
@@ -10190,8 +10190,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-262"
       ],
@@ -10418,8 +10418,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-268"
       ],
@@ -10570,8 +10570,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-272"
       ],
@@ -10608,8 +10608,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-273"
       ],
@@ -10646,8 +10646,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-274"
       ],
@@ -10760,8 +10760,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-277"
       ],
@@ -10798,8 +10798,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-278"
       ],
@@ -10836,8 +10836,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-279"
       ],
@@ -10874,8 +10874,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-280"
       ],
@@ -10950,8 +10950,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-282"
       ],
@@ -10988,8 +10988,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-283"
       ],
@@ -11026,8 +11026,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-284"
       ],
@@ -11064,8 +11064,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-285"
       ],
@@ -11102,8 +11102,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-286"
       ],
@@ -11140,8 +11140,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-287"
       ],
@@ -11178,8 +11178,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-288"
       ],
@@ -11216,8 +11216,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-289"
       ],
@@ -11254,8 +11254,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-290"
       ],
@@ -11330,8 +11330,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-292"
       ],
@@ -11368,8 +11368,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-293"
       ],
@@ -11406,8 +11406,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-294"
       ],
@@ -11482,8 +11482,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-296"
       ],
@@ -11520,8 +11520,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-297"
       ],
@@ -11558,8 +11558,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-298"
       ],
@@ -11596,8 +11596,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-299"
       ],
@@ -11634,8 +11634,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-300"
       ],
@@ -11672,8 +11672,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-301"
       ],
@@ -11710,8 +11710,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-302"
       ],
@@ -11748,8 +11748,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-303"
       ],
@@ -11824,8 +11824,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-305"
       ],
@@ -11862,8 +11862,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-306"
       ],
@@ -11900,8 +11900,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-307"
       ],
@@ -11938,8 +11938,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-308"
       ],
@@ -11976,8 +11976,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-309"
       ],
@@ -12052,8 +12052,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-311"
       ],
@@ -12090,8 +12090,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-312"
       ],
@@ -12128,8 +12128,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-313"
       ],
@@ -12166,8 +12166,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-314"
       ],
@@ -12204,8 +12204,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-315"
       ],
@@ -12280,8 +12280,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-317"
       ],
@@ -12318,8 +12318,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-318"
       ],
@@ -12356,8 +12356,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-319"
       ],
@@ -12394,8 +12394,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-320"
       ],
@@ -12432,8 +12432,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-321"
       ],
@@ -12470,8 +12470,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "CONFIG_REQUIRED",
       "fallback_ids": [
         "cap-322"
       ],
@@ -12964,8 +12964,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "CONFIG_REQUIRED",
       "fallback_ids": [
         "cap-335"
       ],
@@ -14104,8 +14104,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "CONFIG_REQUIRED",
       "fallback_ids": [
         "cap-365"
       ],
@@ -14408,8 +14408,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "CONFIG_REQUIRED",
       "fallback_ids": [
         "cap-373"
       ],
@@ -14637,7 +14637,7 @@
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
       "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "health_state": "RUNTIME_PROBE_REQUIRED",
       "fallback_ids": [
         "cap-379"
       ],
@@ -14675,7 +14675,7 @@
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
       "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "health_state": "RUNTIME_PROBE_REQUIRED",
       "fallback_ids": [
         "cap-380"
       ],
@@ -14751,7 +14751,7 @@
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
       "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "health_state": "RUNTIME_PROBE_REQUIRED",
       "fallback_ids": [
         "cap-382"
       ],
@@ -15017,7 +15017,7 @@
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
       "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "health_state": "RUNTIME_PROBE_REQUIRED",
       "fallback_ids": [
         "cap-389"
       ],
@@ -15055,7 +15055,7 @@
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
       "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "health_state": "RUNTIME_PROBE_REQUIRED",
       "fallback_ids": [
         "cap-390"
       ],
@@ -15093,7 +15093,7 @@
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
       "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "health_state": "RUNTIME_PROBE_REQUIRED",
       "fallback_ids": [
         "cap-391"
       ],
@@ -15396,8 +15396,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-399"
       ],
@@ -15701,7 +15701,7 @@
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
       "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "health_state": "RUNTIME_PROBE_REQUIRED",
       "fallback_ids": [
         "cap-407"
       ],
@@ -15738,8 +15738,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-408"
       ],
@@ -15776,8 +15776,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-409"
       ],
@@ -15852,8 +15852,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-411"
       ],
@@ -15890,8 +15890,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-412"
       ],
@@ -16005,7 +16005,7 @@
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
       "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "health_state": "RUNTIME_PROBE_REQUIRED",
       "fallback_ids": [
         "cap-415"
       ],
@@ -16042,8 +16042,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-416"
       ],
@@ -16080,8 +16080,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-417"
       ],
@@ -16156,8 +16156,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-419"
       ],
@@ -16194,8 +16194,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-420"
       ],
@@ -16232,7 +16232,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-421"
@@ -16270,7 +16270,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-422"
@@ -16308,7 +16308,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-423"
@@ -16346,7 +16346,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-424"
@@ -16384,7 +16384,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-425"
@@ -16422,7 +16422,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-426"
@@ -16460,7 +16460,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-427"
@@ -16498,7 +16498,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-428"
@@ -16536,7 +16536,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-429"
@@ -16574,7 +16574,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-430"
@@ -16612,7 +16612,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-431"
@@ -16650,7 +16650,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-432"
@@ -16688,7 +16688,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-433"
@@ -16726,7 +16726,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-434"
@@ -18855,7 +18855,7 @@
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
       "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "health_state": "READY_LOCAL",
       "fallback_ids": [
         "cap-490"
       ],
@@ -18892,7 +18892,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-491"
@@ -18930,7 +18930,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-492"
@@ -18968,7 +18968,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-493"
@@ -19006,7 +19006,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-494"
@@ -19044,7 +19044,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-495"
@@ -19082,7 +19082,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-496"
@@ -19120,7 +19120,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-497"
@@ -19158,7 +19158,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-498"
@@ -19196,7 +19196,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-499"
@@ -19234,7 +19234,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-500"
@@ -19273,7 +19273,7 @@
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
       "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "health_state": "READY_LOCAL",
       "fallback_ids": [
         "cap-501"
       ],
@@ -19310,7 +19310,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-502"
@@ -19348,7 +19348,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-503"
@@ -19386,7 +19386,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-504"
@@ -19424,7 +19424,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-505"
@@ -19462,7 +19462,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-506"
@@ -19500,7 +19500,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-507"
@@ -19538,7 +19538,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-508"
@@ -19576,7 +19576,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-509"
@@ -19614,7 +19614,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-510"
@@ -19652,7 +19652,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-511"
@@ -19690,7 +19690,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-512"
@@ -19728,7 +19728,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-513"
@@ -19766,7 +19766,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-514"
@@ -19804,7 +19804,7 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "IMPLEMENTED_LOCAL",
+      "integration_state": "OPTIONAL",
       "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-515"
@@ -19882,8 +19882,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-517"
       ],
@@ -19922,8 +19922,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-518"
       ],
@@ -20002,8 +20002,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-520"
       ],
@@ -20042,8 +20042,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-521"
       ],
@@ -20082,8 +20082,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-522"
       ],
@@ -20202,8 +20202,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-525"
       ],
@@ -20242,8 +20242,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-526"
       ],
@@ -20322,8 +20322,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-528"
       ],
@@ -20476,8 +20476,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-532"
       ],
@@ -20514,8 +20514,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-533"
       ],
@@ -20552,8 +20552,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-534"
       ],
@@ -20590,8 +20590,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-535"
       ],
@@ -20780,8 +20780,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-540"
       ],
@@ -20818,8 +20818,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-541"
       ],
@@ -20856,8 +20856,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-542"
       ],
@@ -20896,8 +20896,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-543"
       ],
@@ -20936,8 +20936,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-544"
       ],
@@ -20976,8 +20976,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-545"
       ],
@@ -21136,8 +21136,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-549"
       ],
@@ -21176,8 +21176,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-550"
       ],
@@ -21216,8 +21216,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-551"
       ],
@@ -21256,8 +21256,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-552"
       ],
@@ -21416,8 +21416,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-556"
       ],
@@ -21576,8 +21576,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-560"
       ],
@@ -21616,8 +21616,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-561"
       ],
@@ -21656,8 +21656,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-562"
       ],
@@ -21736,8 +21736,8 @@
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "CONFIG_REQUIRED",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-564"
       ],
@@ -21936,8 +21936,8 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "OPTIONAL",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-569"
       ],
@@ -22216,8 +22216,8 @@
       "requires_external_network": true,
       "free_state": "PUBLIC_OR_OPTIONAL_STATUS_VARIES",
       "quality_tier": "provider_dependent",
-      "integration_state": "OPTIONAL",
-      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
+      "integration_state": "IMPLEMENTED_REMOTE",
+      "health_state": "READY_PUBLIC_PATH",
       "fallback_ids": [
         "cap-576"
       ],
@@ -22416,8 +22416,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-581"
       ],
@@ -22456,8 +22456,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-582"
       ],
@@ -22576,8 +22576,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-585"
       ],
@@ -22616,8 +22616,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-586"
       ],
@@ -22696,8 +22696,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-588"
       ],
@@ -22736,8 +22736,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-589"
       ],
@@ -22856,8 +22856,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-592"
       ],
@@ -22896,8 +22896,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-593"
       ],
@@ -22936,8 +22936,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-594"
       ],
@@ -22976,8 +22976,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-595"
       ],
@@ -23136,8 +23136,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-599"
       ],
@@ -23176,8 +23176,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-600"
       ],
@@ -23216,8 +23216,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-601"
       ],
@@ -23376,8 +23376,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-605"
       ],
@@ -23416,8 +23416,8 @@
       "requires_external_network": false,
       "free_state": "OPEN_SOURCE_OR_LOCAL",
       "quality_tier": "production_candidate",
-      "integration_state": "IMPLEMENTED_LOCAL",
-      "health_state": "READY_LOCAL",
+      "integration_state": "OPTIONAL",
+      "health_state": "UNKNOWN_UNTIL_RUNTIME_PROBE",
       "fallback_ids": [
         "cap-606"
       ],
