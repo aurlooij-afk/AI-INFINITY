@@ -1692,6 +1692,7 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
         "audio_duration_valid": audio_duration > 1,
         "captions_present": captions.exists() and captions.stat().st_size > 20,
         "embedded_subtitles": bool(subtitle_streams),
+        "captions_delivered": bool(subtitle_streams) or (captions.exists() and captions.stat().st_size > 20),
         "caption_count_matches_scenes": caption_blocks == len(chapters) if captions.exists() else False,
         # Narration may intentionally finish before the mastered visual program;\n        # require real narration while allowing the soundtrack/visual tail to continue.\n        "voice_video_duration_aligned": bool(expected_voice > 0 and expected_voice <= duration + 3.0),\n        "scene_count": len(chapters) >= (1 if SMOKE else (3 if FAST_MODE else 4)),
         "visual_assets_present": len(assets) >= len(chapters),
