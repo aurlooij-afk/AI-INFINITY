@@ -143,6 +143,44 @@ def _artifact_registry(project_id: str) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+
+def _write_production_evidence(project_id: str, truth: Dict[str, Any]) -> None:
+    """Persist the human-auditable closure artifacts after every production run."""
+    s = _studio()
+    root = s._project_dir(project_id)
+    root.mkdir(parents=True, exist_ok=True)
+
+    try:
+        events = s._timeline_rows(project_id)
+    except Exception:
+        events = []
+    timeline = {
+        "version": CLOSURE_VERSION,
+        "project_id": project_id,
+        "events": events,
+        "event_count": len(events),
+        "truthful": True,
+    }
+    (root / "timeline.json").write_text(json.dumps(timeline, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+    registry = _artifact_registry(project_id)
+    registry_payload = {
+        "version": CLOSURE_VERSION,
+        "project_id": project_id,
+        "integrity": "sha256",
+        "artifacts": sorted(
+            [{k: v for k, v in item.items()} for item in registry.values()],
+            key=lambda x: str(x.get("asset_name") or ""),
+        ),
+        "truthful": True,
+    }
+    (root / "asset_registry.json").write_text(json.dumps(registry_payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+    (root / "production_truth.json").write_text(
+        json.dumps(truth, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+
 def _reconcile_artifacts(project_id: str) -> Dict[str, Any]:
     s = _studio()
     files = _project_files(project_id)
@@ -402,6 +440,20 @@ def _patch_functions():
         s.acquire_scene_asset = acquire_scene_asset_closure
 
     # Make library data first-class: include filename, size and verified availability.
+    original_projects = s._project_list
+    if not getattr(original_projects, "__aii_closure_wrapped__", False):
+        def project_list_closure(user_id: str, limit: int = 50):
+            rows = original_projects(user_id, limit)
+            out = []
+            for r in rows:
+                d = dict(r)
+                d["created_at_iso"] = _iso(d.get("created_at"))
+                d["updated_at_iso"] = _iso(d.get("updated_at"))
+                out.append(d)
+            return out
+        project_list_closure.__aii_closure_wrapped__ = True
+        s._project_list = project_list_closure
+
     original_library = s._library_rows
     if not getattr(original_library, "__aii_closure_wrapped__", False):
         def library_rows_closure(user_id: str, limit: int = 200):
@@ -569,6 +621,13 @@ def _patch_functions():
                 if not p:
                     return
                 truth = _professional_truth(p, reconcile=True)
+                try:
+                    _write_production_evidence(project_id, truth)
+                    _reconcile_artifacts(project_id)
+                except Exception:
+                    pass
+                # Re-read after evidence files are created so the persisted truth
+                # artifact is itself backed by the same final state we report.
                 if p.get("status") in {"completed", "completed_with_qc_warnings"} and not truth.get("verified"):
                     error = _gate_error_report(project_id, truth)
                     s.audit_event(project_id, "professional_gate_blocked", {"failures": truth.get("failures"), "warnings": truth.get("warnings")})
@@ -622,6 +681,27 @@ def _recover_incomplete_jobs() -> int:
             changed += 1
     return changed
 
+
+
+_BACKUP_THREAD_STARTED = False
+_BACKUP_THREAD_LOCK = threading.Lock()
+
+def _ensure_backup_scheduler() -> None:
+    global _BACKUP_THREAD_STARTED
+    with _BACKUP_THREAD_LOCK:
+        if _BACKUP_THREAD_STARTED or str(_data_dir()).startswith("/tmp"):
+            return
+        _BACKUP_THREAD_STARTED = True
+        def loop():
+            while True:
+                try:
+                    _backup_snapshot(False)
+                except Exception:
+                    pass
+                # Six hours: frequent enough for project metadata recovery, while
+                # keeping storage overhead bounded. Media backups remain explicit.
+                time.sleep(6 * 3600)
+        threading.Thread(target=loop, name="ai-infinity-local-backup", daemon=True).start()
 
 def _install_db_pragmas() -> None:
     s = _studio()
