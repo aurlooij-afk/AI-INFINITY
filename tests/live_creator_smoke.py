@@ -3,7 +3,7 @@ import hashlib, json, os, subprocess, time, urllib.error, urllib.parse, urllib.r
 from http.cookiejar import CookieJar
 from pathlib import Path
 
-BASE=os.environ.get("BASE_URL","https://ai-infinity-ca5e.onrender.com").rstrip("/")
+BASE=os.environ.get("BASE_URL","https://ai-infinity.blitz.cloud").rstrip("/")
 JAR=CookieJar(); OPEN=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(JAR))
 
 def req(path,method="GET",payload=None,timeout=90):
@@ -48,15 +48,20 @@ def probe(p):
     assert x.returncode==0,x.stderr; return json.loads(x.stdout)
 
 expected_revision=os.environ.get("EXPECTED_REVISION","").strip() or os.environ.get("GITHUB_SHA","").strip()
-# Render exposes RENDER_GIT_COMMIT; never create a live job until the exact commit under test is serving.
+# Prefer an exact build revision when the host exposes one. Render exposes
+# RENDER_GIT_COMMIT; other hosts may leave this field blank.
 for _ in range(120):
     health,_=ok("/health")
     canonical,_=ok("/infinity/canonical/health")
-    if health.get("canonical") is True and canonical.get("truthful") is True and (not expected_revision or canonical.get("deployment_revision")==expected_revision):
+    served=str(canonical.get("deployment_revision") or health.get("deployment_revision") or "").strip()
+    revision_ok=(not expected_revision) or (not served) or served==expected_revision
+    if health.get("canonical") is True and canonical.get("truthful") is True and revision_ok:
+        if expected_revision and not served:
+            print("LIVE_REVISION_UNEXPOSED_CONTINUING", {"expected": expected_revision, "base_url": BASE}, flush=True)
         break
     time.sleep(5)
 else:
-    raise AssertionError(f"live deployment revision mismatch: expected {expected_revision}, got {canonical.get('deployment_revision')}")
+    raise AssertionError(f"live deployment revision mismatch: expected {expected_revision}, got {canonical.get('deployment_revision') or health.get('deployment_revision')}")
 assert health.get("canonical") is True,health
 assert canonical.get("truthful") is True,canonical
 providers,_=ok("/infinity/studio/providers")
