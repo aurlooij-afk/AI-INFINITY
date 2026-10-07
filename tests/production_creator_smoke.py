@@ -210,6 +210,16 @@ def main():
     bootstrap, _ = assert_ok("/infinity/canonical/bootstrap")
     assert any(p["project_id"] == project_id for p in bootstrap["projects"])
 
+    # Simulate a browser reload/new HTTP client while retaining the session cookie.
+    cookie_header = "; ".join(f"{c.name}={c.value}" for c in JAR)
+    reload_req = urllib.request.Request(
+        BASE + "/infinity/canonical/bootstrap",
+        headers={"Cookie": cookie_header, "User-Agent": "AI-Infinity-reload-smoke/1"},
+    )
+    with urllib.request.build_opener().open(reload_req, timeout=30) as reload_resp:
+        reload_state = json.loads(reload_resp.read().decode("utf-8"))
+    assert any(p["project_id"] == project_id for p in reload_state["projects"])
+
     # Q: a deliberately invalid edit must fail without corrupting the project.
     try:
         request(
