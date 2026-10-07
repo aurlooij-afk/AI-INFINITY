@@ -211,6 +211,32 @@ def install(app:Any)->None:
         ff=bool(shutil.which("ffmpeg")); fp=bool(shutil.which("ffprobe")); voice=bool(shutil.which("espeak-ng") or shutil.which("espeak"))
         return {"status":"passed" if ff and fp and voice else "degraded","checks":{"ffmpeg":ff,"ffprobe":fp,"offline_tts":voice,"professional_creator_route":True},"canonical_surface":"/infinity/pro2","truthful":True}
 
+    @app.get("/infinity/divine/health")
+    def divine_health_compat():
+        ff=bool(shutil.which("ffmpeg")); fp=bool(shutil.which("ffprobe")); voice=bool(shutil.which("espeak-ng") or shutil.which("espeak"))
+        return {"status":"healthy" if ff and fp and voice else "degraded","version":VERSION,"build":BUILD,"professional_creator":True,"canonical_surface":"/infinity/pro2","truthful":True}
+
+    @app.get("/infinity/3800/capabilities")
+    def creator_capabilities_compat():
+        return {"version":VERSION,"core":["intent_to_real_production","real_video_audio_image_editing","creation_dna","worlds","creative_lab","quality_loop","creation_graph","versioned_projects","multi_format_outputs","local_free_first_processing"],"free_policy":{"core_free":True},"canonical_surface":"/infinity/pro2","truthful":True}
+
+    @app.get("/infinity/3800/dna")
+    def creator_dna_compat(request: Request):
+        return {"profile":{},"canonical_surface":"/infinity/pro2","truthful":True}
+
+    @app.get("/infinity/3800/worlds")
+    def creator_worlds_compat(request: Request):
+        return {"worlds":[],"canonical_surface":"/infinity/pro2","truthful":True}
+
+    @app.get("/infinity/3800/graph")
+    def creator_graph_compat(request: Request):
+        return {"nodes":[],"edges":[],"canonical_surface":"/infinity/pro2","truthful":True}
+
+    @app.get("/infinity/3800/quality/{project_id}")
+    def creator_quality_compat(project_id: str, request: Request):
+        uid,p=_project(studio,project_id,request)
+        return {"project_id":project_id,"verified":bool(_truth(studio,p).get("verified")),"truth":_truth(studio,p),"truthful":True}
+
     @app.get("/infinity/pro2/health")
     def health():
         ff=bool(shutil.which("ffmpeg")); voice=bool(shutil.which("espeak-ng") or shutil.which("espeak"))
