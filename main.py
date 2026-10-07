@@ -3,9 +3,9 @@ import ai_infinity_canonical
 import reality_first_3901
 import studio_ultimate
 import production_graph
+import production_intelligence
 
-# Render currently invokes "uvicorn main:app"; keep that entrypoint compatible
-# while exposing the same production application contract as ai_infinity_app.
+# Render invokes "uvicorn main:app"; preserve that stable entrypoint.
 app = FastAPI(
     title="AI Infinity — Universal Creator Platform",
     version=ai_infinity_canonical.VERSION,
@@ -19,6 +19,7 @@ ai_infinity_canonical.register(app)
 studio_ultimate.register(app)
 reality_first_3901.register(app)
 production_graph.register(app)
+production_intelligence.register(app)
 
 application = app
 
