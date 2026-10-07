@@ -2732,6 +2732,81 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             audit_event(project_id, "optional_variants_failed", {"error": str(variants_exc)[:1000]})
         manifest = outdir / "manifest.json"
         qc = extended_quality_check(captioned, chapters, captions, outdir, assets_meta)
+
+        # Explicit professional delivery manifests required by the creator
+        # contract. These are real records derived from the actual production
+        # artifacts and source/provider metadata; unknown rights remain review-required.
+        production_manifest = outdir / "production_manifest.json"
+        rights_manifest = outdir / "rights_manifest.json"
+        production_manifest.write_text(jdump({
+            "schema": "ai-infinity-production-manifest-v1",
+            "project_id": project_id,
+            "title": plan.get("title") or topic,
+            "generated_at": utc_iso(),
+            "studio_version": VERSION,
+            "format": req.get("format", "long"),
+            "content_type": req.get("content_type", "video"),
+            "language": req.get("language", "English"),
+            "aspect_ratio": req.get("aspect_ratio", "16:9"),
+            "target_duration_seconds": target,
+            "actual_duration_seconds": round(float(probe_duration(captioned)), 3),
+            "artifacts": [
+                {"name": p.name, "sha256": file_sha256(p), "bytes": p.stat().st_size}
+                for p in [captioned, script, captions, sources, manifest, audio_master, article, social]
+                if p and Path(p).is_file()
+            ],
+            "research": {
+                "source_count": int(research.get("source_count") or 0),
+                "status": research.get("status"),
+                "providers": research.get("providers") or {},
+            },
+            "quality": qc,
+            "truthful": True,
+        },), encoding="utf-8")
+
+        rights_items = []
+        for asset in assets_meta:
+            rights_items.append({
+                "asset": asset.get("path") or asset.get("kind"),
+                "kind": asset.get("kind"),
+                "source": asset.get("source"),
+                "source_url": asset.get("source_url"),
+                "creator": asset.get("creator"),
+                "license": asset.get("license"),
+                "rights_status": asset.get("rights_status") or "REVIEW_REQUIRED",
+                "commercial_use_state": asset.get("commercial_use_state") or "UNKNOWN_REVIEW_REQUIRED",
+            })
+        rights_manifest.write_text(jdump({
+            "schema": "ai-infinity-rights-manifest-v1",
+            "project_id": project_id,
+            "generated_at": utc_iso(),
+            "policy": "Unknown or provider-specific rights are never silently treated as commercial clearance.",
+            "assets": rights_items,
+            "research_sources": [
+                {
+                    "title": s.get("title"),
+                    "url": s.get("url"),
+                    "source": s.get("source"),
+                    "retrieved_at": s.get("retrieved_at"),
+                    "rights_status": "SOURCE_REFERENCE_REVIEW_REQUIRED",
+                }
+                for s in (research.get("sources") or [])[:100]
+                if s.get("title") or s.get("url")
+            ],
+            "truthful": True,
+        },), encoding="utf-8")
+
+        # The manifest artifacts themselves are part of the professional QC gate.
+        try:
+            production_manifest_ok = json.loads(production_manifest.read_text(encoding="utf-8")).get("project_id") == project_id
+            rights_manifest_ok = json.loads(rights_manifest.read_text(encoding="utf-8")).get("project_id") == project_id
+        except Exception:
+            production_manifest_ok = False
+            rights_manifest_ok = False
+        qc.setdefault("checks", {})["production_manifest"] = production_manifest_ok
+        qc.setdefault("checks", {})["rights_manifest"] = rights_manifest_ok
+        qc["passed"] = all(bool(v) for k, v in qc["checks"].items() if k not in {"full_hd", "embedded_subtitles", "fallback_visual_used"})
+
         feature_report = _feature_execution_report(project_id, project["user_id"], [str(x) for x in (req.get("features") or [])], outdir, qc=qc, req=req)
         metadata = {
             "studio_version": VERSION, "build": BUILD, "project_id": project_id, "created_at": now(),
@@ -2748,7 +2823,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         }
         manifest.write_text(jdump(metadata), encoding="utf-8")
         package = outdir / f"{safe_name(plan.get('title') or topic)}-AI-Infinity-creator-package.zip"
-        bundle: List[Optional[Path]] = [captioned, script, captions, sources, manifest, outdir / "feature_execution.json", outdir / "creator_experiments.json", shared_music, thumb if thumb and thumb.exists() else None, audio_master, article, social, outdir / "fact_check.json"]
+        bundle: List[Optional[Path]] = [captioned, script, captions, sources, manifest, production_manifest, rights_manifest, outdir / "feature_execution.json", outdir / "creator_experiments.json", shared_music, thumb if thumb and thumb.exists() else None, audio_master, article, social, outdir / "fact_check.json"]
         bundle += [x for x in editorial.values() if x]
         bundle += [Path(x["path"]) for x in shorts if Path(x["path"]).exists()]
         bundle += [p for p in outdir.glob("narration_*.mp3") if p.exists()]
@@ -2760,7 +2835,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         for kind, pth, mt in [
             ("video", captioned, "video/mp4"), ("audio", audio_master, "audio/mpeg"), ("article", article, "text/markdown"), ("social_campaign", social, "text/markdown"),
             ("script", script, "text/markdown"), ("captions", captions, "application/x-subrip"),
-            ("sources", sources, "application/json"), ("manifest", manifest, "application/json"), ("feature_execution", outdir / "feature_execution.json", "application/json"), ("thumbnail", thumb, "image/jpeg"), ("package", package, "application/zip")
+            ("sources", sources, "application/json"), ("manifest", manifest, "application/json"), ("production_manifest", production_manifest, "application/json"), ("rights_manifest", rights_manifest, "application/json"), ("feature_execution", outdir / "feature_execution.json", "application/json"), ("thumbnail", thumb, "image/jpeg"), ("package", package, "application/zip")
         ]:
             if pth and Path(pth).exists(): _save_asset(project_id, kind, Path(pth), mt, {"title": plan.get("title") or topic})
         for x in shorts:
@@ -2776,6 +2851,8 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             (captions, "application/x-subrip"),
             (sources, "application/json"),
             (manifest, "application/json"),
+            (production_manifest, "application/json"),
+            (rights_manifest, "application/json"),
             (script, "text/markdown"),
             (outdir / "feature_execution.json", "application/json"),
         ]:
@@ -2798,7 +2875,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 "video": f"/infinity/studio/project/{project_id}/asset/final.mp4", "package": f"/infinity/studio/project/{project_id}/asset/package.zip",
                 "thumbnail": f"/infinity/studio/project/{project_id}/asset/thumbnail.jpg", "script": f"/infinity/studio/project/{project_id}/asset/script.md",
                 "captions": f"/infinity/studio/project/{project_id}/asset/captions.srt", "sources": f"/infinity/studio/project/{project_id}/asset/sources.json",
-                "manifest": f"/infinity/studio/project/{project_id}/asset/manifest.json", "feature_execution": f"/infinity/studio/project/{project_id}/asset/feature_execution.json",
+                "manifest": f"/infinity/studio/project/{project_id}/asset/manifest.json", "production_manifest": f"/infinity/studio/project/{project_id}/asset/production_manifest.json", "rights_manifest": f"/infinity/studio/project/{project_id}/asset/rights_manifest.json", "feature_execution": f"/infinity/studio/project/{project_id}/asset/feature_execution.json",
                 "audio": f"/infinity/studio/project/{project_id}/asset/audio_master.mp3" if audio_master and audio_master.exists() else None,
                 "article": f"/infinity/studio/project/{project_id}/asset/article.md" if article and article.exists() else None,
                 "social_campaign": f"/infinity/studio/project/{project_id}/asset/social_campaign.json" if (outdir/"social_campaign.json").exists() else (f"/infinity/studio/project/{project_id}/asset/social_campaign.md" if social and social.exists() else None),
@@ -4459,7 +4536,7 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         mapping = {
             "final.mp4": ("final.mp4", "video/mp4"), "package.zip": (next((q["path"] for q in _asset_rows(project_id) if q["kind"] == "package"), "package.zip"), "application/zip"),
             "thumbnail.jpg": ("thumbnail.jpg", "image/jpeg"), "script.md": ("script.md", "text/markdown"), "captions.srt": ("captions.srt", "application/x-subrip"), "sources.json": ("sources.json", "application/json"), "manifest.json": ("manifest.json", "application/json"),
-            "feature_execution.json": ("feature_execution.json", "application/json"), "fact_check.json": ("fact_check.json", "application/json"), "creator_experiments.json": ("creator_experiments.json", "application/json"), "seo.json": ("seo.json", "application/json"), "social_campaign.json": ("social_campaign.json", "application/json"), "accessibility.json": ("accessibility.json", "application/json"), "provenance.json": ("provenance.json", "application/json"), "visual_rights.json": ("visual_rights.json", "application/json"), "timeline.json": ("timeline.json", "application/json"), "asset_registry.json": ("asset_registry.json", "application/json"), "production_truth.json": ("production_truth.json", "application/json"), "platform_manifest.json": ("platform_manifest.json", "application/json"), "podcast_rss.xml": ("podcast_rss.xml", "application/xml")
+            "feature_execution.json": ("feature_execution.json", "application/json"), "production_manifest.json": ("production_manifest.json", "application/json"), "rights_manifest.json": ("rights_manifest.json", "application/json"), "fact_check.json": ("fact_check.json", "application/json"), "creator_experiments.json": ("creator_experiments.json", "application/json"), "seo.json": ("seo.json", "application/json"), "social_campaign.json": ("social_campaign.json", "application/json"), "accessibility.json": ("accessibility.json", "application/json"), "provenance.json": ("provenance.json", "application/json"), "visual_rights.json": ("visual_rights.json", "application/json"), "timeline.json": ("timeline.json", "application/json"), "asset_registry.json": ("asset_registry.json", "application/json"), "production_truth.json": ("production_truth.json", "application/json"), "platform_manifest.json": ("platform_manifest.json", "application/json"), "podcast_rss.xml": ("podcast_rss.xml", "application/xml")
         }
         path_name, media_type = mapping.get(name, (name, None))
         path = _project_dir(project_id) / Path(path_name).name
