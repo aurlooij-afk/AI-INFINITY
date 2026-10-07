@@ -7,6 +7,23 @@ BASE = Path(__file__).resolve().parent
 # Canonical final creator shell.
 foundation.FINAL3700_UI = (BASE / "ui_3800.html").read_text(encoding="utf-8")
 
+# Compatibility alias: the legacy proof calls /infinity/divine/create.
+async def _divine_create_alias(request):
+    payload = await request.json()
+    studio_mod = foundation.studio_ultimate
+    uid_value = studio_mod._get_user_id(request)
+    req = dict(payload or {})
+    req["professional_pipeline"] = True
+    if not req.get("title"):
+        req["title"] = str(req.get("objective") or req.get("topic") or "AI Infinity production")[:180]
+    result = studio_mod.enqueue(req, uid_value, None)
+    return result
+
+try:
+    foundation.app.add_api_route("/infinity/divine/create", _divine_create_alias, methods=["POST"], include_in_schema=False)
+except Exception:
+    pass
+
 # Preserve the existing accumulated platform closure and creator routes.
 overlay = (BASE / "overlay_final_3700.py").read_text(encoding="utf-8")
 overlay = overlay.replace('uid("project")', 'os.urandom(8).hex()').replace('uid("publish")', 'os.urandom(8).hex()')
