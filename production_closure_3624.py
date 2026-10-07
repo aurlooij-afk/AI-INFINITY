@@ -429,6 +429,18 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     if rights_unknown:
         failures.append(f"visual-rights evidence missing for {rights_unknown} visual asset(s)")
 
+    fact_path = files.get("fact_check.json")
+    fact_data = {}
+    if fact_path and fact_path.exists():
+        try:
+            fact_data = json.loads(fact_path.read_text(encoding="utf-8"))
+        except Exception:
+            fact_data = {}
+    checks["factual_review_auto_publish_safe"] = bool(fact_data.get("auto_publish_safe")) if isinstance(fact_data, dict) else False
+    checks["factual_claim_count"] = int(fact_data.get("claim_count") or 0) if isinstance(fact_data, dict) else 0
+    if not checks["factual_review_auto_publish_safe"]:
+        failures.append("factual claim review is not auto-publish safe; unresolved claims require review")
+
     source_count = checks["research_sources"]
     checks["research_required_and_present"] = (source_count > 0) if strict_research else True
     if strict_research and source_count <= 0:
@@ -488,6 +500,7 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         and checks["visual_rights_evidence_present"]
         and checks["research_required_and_present"]
         and checks["fresh_evidence_ok"]
+        and checks["factual_review_auto_publish_safe"]
         and checks["fact_check_present"]
         and checks["provenance_present"]
         and checks["captions_present"]
