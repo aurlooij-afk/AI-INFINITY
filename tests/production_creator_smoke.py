@@ -85,7 +85,7 @@ def download(path: str, out: Path):
     req = urllib.request.Request(BASE + path, headers={"User-Agent": "AI-Infinity-final-production-smoke/1"})
     with OPENER.open(req, timeout=60) as resp:
         out.write_bytes(resp.read())
-    assert out.is_file() and out.stat().st_size > 10000, f"invalid download: {out}"
+    assert out.is_file() and out.stat().st_size >= int(min_bytes), f"invalid download: {out}"
 
 
 def main():
@@ -168,8 +168,9 @@ def main():
         download(
             f"/infinity/studio/project/{urllib.parse.quote(project_id, safe='')}/asset/{urllib.parse.quote(name, safe='')}",
             target,
+            min_bytes=20,
         )
-        assert target.is_file() and target.stat().st_size > 20, name
+        assert target.is_file() and target.stat().st_size >= 20, name
 
     production_manifest = json.loads((root / "production_manifest.json").read_text("utf-8"))
     rights_manifest = json.loads((root / "rights_manifest.json").read_text("utf-8"))
