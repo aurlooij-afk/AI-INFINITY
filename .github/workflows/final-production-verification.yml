@@ -1,0 +1,93 @@
+name: AI Infinity — Final Production Verification
+
+on:
+  push:
+    branches:
+      - ai-infinity-canonical-divine
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  production-verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout canonical branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install production dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Python syntax and ASGI import gate
+        run: |
+          python -m compileall -q .
+          python - <<'PY'
+          import inspect
+          import ai_infinity_app
+          assert callable(ai_infinity_app.app), "ai_infinity_app:app is not callable"
+          assert ai_infinity_app.application is ai_infinity_app.app
+          print("ASGI callable:", type(ai_infinity_app.app).__name__)
+          print("routes:", len(ai_infinity_app.app.routes))
+          PY
+
+      - name: Browser JavaScript syntax gate
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          html = Path("ui_3800.html").read_text(encoding="utf-8")
+          scripts = re.findall(r"<script(?:\\s[^>]*)?>(.*?)</script>", html, re.I | re.S)
+          if not scripts:
+              raise SystemExit("No browser scripts found")
+          for i, source in enumerate(scripts, 1):
+              Path(f"/tmp/ai-infinity-ui-{i}.js").write_text(source, encoding="utf-8")
+          print("JavaScript blocks:", len(scripts))
+          PY
+          for f in /tmp/ai-infinity-ui-*.js; do
+            node --check "$f"
+          done
+
+      - name: Build production Docker image
+        run: docker build --pull -t ai-infinity-final:ci .
+
+      - name: Start production container
+        run: |
+          docker run -d --name ai-infinity-final-ci -p 10000:10000 \
+            -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity \
+            -e AI_INFINITY_PERSISTENCE_MODE=portable \
+            -e AI_INFINITY_MAX_HEAVY_JOBS=1 \
+            -e AI_INFINITY_FFMPEG_THREADS=1 \
+            -e AI_INFINITY_FFMPEG_FILTER_THREADS=1 \
+            -e AI_INFINITY_FAST_MODE=1 \
+            ai-infinity-final:ci
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:10000/health >/tmp/health.json; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:10000/health
+          curl -fsS http://127.0.0.1:10000/infinity/canonical/health
+
+      - name: Real creator end-to-end smoke test
+        env:
+          BASE_URL: http://127.0.0.1:10000
+        run: python tests/production_creator_smoke.py
+
+      - name: Container failure evidence
+        if: failure()
+        run: |
+          docker ps -a
+          docker logs --tail 500 ai-infinity-final-ci || true
+
+      - name: Clean production shutdown
+        if: always()
+        run: docker stop ai-infinity-final-ci
