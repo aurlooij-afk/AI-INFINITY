@@ -47,7 +47,7 @@ def probe(p):
     x=subprocess.run(["ffprobe","-v","error","-show_format","-show_streams","-of","json",str(p)],capture_output=True,text=True,timeout=90)
     assert x.returncode==0,x.stderr; return json.loads(x.stdout)
 
-expected_revision=os.environ.get("GITHUB_SHA","").strip()
+expected_revision=os.environ.get("EXPECTED_REVISION","").strip() or os.environ.get("GITHUB_SHA","").strip()
 # Render exposes RENDER_GIT_COMMIT; never create a live job until the exact commit under test is serving.
 for _ in range(120):
     health,_=ok("/health")
