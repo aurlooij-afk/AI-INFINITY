@@ -168,7 +168,7 @@ def main():
     assert version2 != version1
     edited = root / "version2.mp4"
     edit_asset_name = edit["artifact"]["name"]
-    edit_asset_url = f"/infinity/studio/project/{urllib.parse.quote(project_id, safe=\"\")}/asset/{urllib.parse.quote(edit_asset_name, safe=\"\")}"
+    edit_asset_url = f"/infinity/studio/project/{urllib.parse.quote(project_id, safe='')}/asset/{urllib.parse.quote(edit_asset_name, safe='')}"
     download(edit_asset_url, edited)
     probe2 = ffprobe(edited)
     duration2 = float((probe2.get("format") or {}).get("duration") or 0)
