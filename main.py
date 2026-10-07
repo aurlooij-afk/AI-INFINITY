@@ -1,3 +1,4 @@
+# Final production verification checkpoint: persisted Reality Kernel delivery gate.
 from fastapi import FastAPI, Request, Response
 import ai_infinity_canonical
 import reality_first_3901
