@@ -567,9 +567,14 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         failures.append("factual claim review is not auto-publish safe; unresolved claims require review")
 
     source_count = checks["research_sources"]
-    checks["research_required_and_present"] = (source_count > 0) if strict_research else True
-    if strict_research and source_count <= 0:
-        failures.append("research produced no usable evidence sources")
+    research_intent = fact_sensitive or any(
+        token in brief_for_fact_policy
+        for token in ("research", "sources", "source material", "evidence", "cite", "citation", "citations", "verify", "verification")
+    )
+    checks["research_intent_detected"] = research_intent
+    checks["research_required_and_present"] = (source_count > 0) if (strict_research and research_intent) else True
+    if strict_research and research_intent and source_count <= 0:
+        failures.append("research was requested/required but produced no usable evidence sources")
 
     # If the request explicitly asks for current/latest/trends/news, require a
     # recent source record rather than treating a stale general article as fresh.
