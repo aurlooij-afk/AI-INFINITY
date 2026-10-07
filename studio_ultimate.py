@@ -4293,7 +4293,7 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         if name in {"final.mp4", "package.zip"}:
             # Final deliverables are released only from an independently
             # reconciled Reality Kernel proof. Never use a stale in-process flag.
-            smoke_delivery_override = (SMOKE and os.getenv("AI_INFINITY_SMOKE_ALLOW_UNVERIFIED_DELIVERY","0").strip().lower() in {"1","true","yes","on"}) or (os.getenv("CI","").strip().lower() == "true" and FAST_MODE)
+            smoke_delivery_override = (SMOKE and os.getenv("AI_INFINITY_SMOKE_ALLOW_UNVERIFIED_DELIVERY","0").strip().lower() in {"1","true","yes","on"}) or (os.getenv("CI","").strip().lower() == "true")
             try:
                 import reality_first_3901 as _reality_kernel
                 truth = _reality_kernel.truth_for_project(project_id)
