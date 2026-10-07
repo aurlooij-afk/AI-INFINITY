@@ -750,6 +750,39 @@ def _install_db_pragmas() -> None:
         pass
 
 
+
+def _upload_backup_offsite(target: Path) -> Dict[str, Any]:
+    """Upload an explicit backup bundle to a user-configured HTTPS endpoint."""
+    endpoint = os.getenv("AI_INFINITY_BACKUP_WEBHOOK", "").strip()
+    if not endpoint:
+        return {"configured": False, "uploaded": False}
+    if not endpoint.lower().startswith("https://"):
+        return {"configured": True, "uploaded": False, "error": "backup webhook must use HTTPS"}
+    import zipfile as _zipfile
+    bundle = target / "offsite-backup.zip"
+    try:
+        with _zipfile.ZipFile(bundle, "w", compression=_zipfile.ZIP_DEFLATED) as z:
+            for path in target.rglob("*"):
+                if path.is_file() and path.name != bundle.name:
+                    z.write(path, arcname=path.relative_to(target).as_posix())
+        data = bundle.read_bytes()
+        digest = __import__("hashlib").sha256(data).hexdigest()
+        headers = {
+            "Content-Type": "application/zip",
+            "Content-Length": str(len(data)),
+            "X-AI-Infinity-Backup": bundle.name,
+            "X-AI-Infinity-SHA256": digest,
+        }
+        secret = os.getenv("AI_INFINITY_BACKUP_WEBHOOK_SECRET", "").strip()
+        if secret:
+            headers["X-AI-Infinity-Backup-Secret"] = secret
+        req = _studio().URLRequest(endpoint, data=data, headers=headers, method="POST")
+        with _studio().urlopen(req, timeout=120) as response:
+            status = int(getattr(response, "status", 200))
+        return {"configured": True, "uploaded": 200 <= status < 300, "http_status": status, "sha256": digest, "bytes": len(data)}
+    except Exception as exc:
+        return {"configured": True, "uploaded": False, "error": f"{type(exc).__name__}: {str(exc)[:400]}"}
+
 def _backup_snapshot(include_media: bool = False) -> Dict[str, Any]:
     s = _studio()
     root = _data_dir() / "creator_backups"
@@ -802,10 +835,13 @@ def _backup_snapshot(include_media: bool = False) -> Dict[str, Any]:
             entry["media_bytes"] = total
         manifest["projects"].append(entry)
     (target / "backup-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    offsite = _upload_backup_offsite(target)
+    manifest["offsite"] = offsite
+    (target / "backup-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     snapshots = sorted([p for p in root.iterdir() if p.is_dir()], key=lambda p: p.name, reverse=True)
     for old in snapshots[BACKUP_KEEP:]:
         shutil.rmtree(old, ignore_errors=True)
-    return {"status": "created", "path": str(target), "manifest": str(target / "backup-manifest.json"), "media_included": bool(include_media), "backup_webhook_configured": manifest["backup_webhook_configured"], "truthful": True}
+    return {"status": "created", "path": str(target), "manifest": str(target / "backup-manifest.json"), "media_included": bool(include_media), "backup_webhook_configured": manifest["backup_webhook_configured"], "offsite": offsite, "truthful": True}
 
 
 def _readiness(user_id: str, request: Any) -> Dict[str, Any]:
