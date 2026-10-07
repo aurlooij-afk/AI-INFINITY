@@ -594,6 +594,7 @@ def reconcile_project(project_id: str) -> Dict[str, Any]:
         "checks": checks,
         "studio_qc": studio_qc,
         "generated_at": _iso(),
+        "truthful": True,
         "truth_rule": "filesystem_and_independent_inspection",
     }
     if not required_ok:
