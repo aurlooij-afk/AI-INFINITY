@@ -1,0 +1,75 @@
+name: AI Infinity Real Runtime Production Proof
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-infinity-real-runtime-proof-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  real-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      AI_INFINITY_FAST_MODE: "1"
+      AI_INFINITY_STUDIO_SMOKE: "0"
+      AI_INFINITY_3601_BACKGROUND: "false"
+      AI_INFINITY_DATA_DIR: /tmp/ai-infinity-runtime-proof
+      AI_INFINITY_PERSISTENCE_MODE: portable
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Media dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg espeak-ng libsndfile1 poppler-utils
+      - name: Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Static compile
+        run: |
+          python -m py_compile main.py ai_infinity_app.py professional_creator_fabric.py studio_ultimate.py production_graph.py production_intelligence.py production_closure_3624.py professional_creator_v2.py professional_creator_v2_timeline_patch.py
+          python -m pytest -q tests/test_professional_creator_fabric.py
+          python -m ai_infinity.selftest
+      - name: Start real server
+        run: |
+          nohup python -m uvicorn main:app --host 127.0.0.1 --port 10000 > /tmp/ai-infinity-server.log 2>&1 &
+          echo $! > /tmp/ai-infinity-server.pid
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:10000/health >/tmp/health.json; then
+              cat /tmp/health.json
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/ai-infinity-server.log
+          exit 1
+      - name: Real production smoke
+        run: |
+          python tests/production_creator_smoke.py
+      - name: Upload real production evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-infinity-real-production-proof
+          path: |
+            /tmp/ai-infinity-runtime-proof/**
+            /tmp/ai-infinity-smoke/**
+            /tmp/ai-infinity-server.log
+          if-no-files-found: warn
+      - name: Server log on failure
+        if: failure()
+        run: cat /tmp/ai-infinity-server.log || true
