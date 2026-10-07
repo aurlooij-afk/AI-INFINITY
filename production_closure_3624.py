@@ -179,8 +179,8 @@ def _artifact_registry(project_id: str) -> Dict[str, Dict[str, Any]]:
 
 
 
-def _write_production_evidence(project_id: str, truth: Dict[str, Any]) -> None:
-    """Persist the human-auditable closure artifacts after every production run."""
+def _write_production_evidence(project_id: str, truth: Optional[Dict[str, Any]] = None) -> None:
+    """Persist human-auditable closure artifacts after every production run."""
     s = _studio()
     root = s._project_dir(project_id)
     root.mkdir(parents=True, exist_ok=True)
@@ -203,19 +203,47 @@ def _write_production_evidence(project_id: str, truth: Dict[str, Any]) -> None:
         "version": CLOSURE_VERSION,
         "project_id": project_id,
         "integrity": "sha256",
-        "artifacts": sorted(
-            [{k: v for k, v in item.items()} for item in registry.values()],
-            key=lambda x: str(x.get("asset_name") or ""),
-        ),
+        "artifacts": sorted([dict(item) for item in registry.values()], key=lambda x: str(x.get("asset_name") or "")),
         "truthful": True,
     }
     (root / "asset_registry.json").write_text(json.dumps(registry_payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
-    (root / "production_truth.json").write_text(
-        json.dumps(truth, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
+    # Visual-rights evidence is deliberately conservative: the system records
+    # the license/policy string supplied by the source adapter, but never calls
+    # an asset legally cleared when the source did not provide enough evidence.
+    rights = []
+    for row in _source_assets(s._get_project(project_id) or {}):
+        meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        source = str(meta.get("source") or "")
+        source_url = str(meta.get("source_url") or "")
+        license_name = str(meta.get("license") or "")
+        fallback = bool(meta.get("fallback"))
+        rights_state = "blocked_fallback" if fallback else ("evidence_present" if license_name or str(meta.get("rights_status") or "") else "unknown")
+        rights.append({
+            "asset": Path(str(row.get("path") or "")).name,
+            "source": source,
+            "source_url": source_url,
+            "license": license_name,
+            "creator": meta.get("creator"),
+            "rights_state": rights_state,
+            "rights_status": meta.get("rights_status"),
+            "truthful": True,
+        })
+    rights_report = {
+        "version": CLOSURE_VERSION,
+        "project_id": project_id,
+        "asset_count": len(rights),
+        "evidence_present": sum(1 for x in rights if x["rights_state"] == "evidence_present"),
+        "unknown": sum(1 for x in rights if x["rights_state"] == "unknown"),
+        "fallback_blocked": sum(1 for x in rights if x["rights_state"] == "blocked_fallback"),
+        "assets": rights,
+        "policy": "Unknown rights are never asserted as cleared.",
+        "truthful": True,
+    }
+    (root / "visual_rights.json").write_text(json.dumps(rights_report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
+    if truth is not None:
+        (root / "production_truth.json").write_text(json.dumps(truth, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 def _reconcile_artifacts(project_id: str) -> Dict[str, Any]:
     s = _studio()
     files = _project_files(project_id)
@@ -327,7 +355,7 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         except Exception as exc:
             failures.append(f"final media inspection failed: {type(exc).__name__}: {str(exc)[:220]}")
 
-    required = {"final.mp4", "captions.srt", "script.md", "thumbnail.jpg", "sources.json", "manifest.json", "fact_check.json", "provenance.json"}
+    required = {"final.mp4", "captions.srt", "script.md", "thumbnail.jpg", "sources.json", "manifest.json", "fact_check.json", "provenance.json", "visual_rights.json"}
     missing = sorted(required - set(files))
     checks["required_artifacts_present"] = not missing
     if missing:
@@ -352,6 +380,16 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     if not reg_ok:
         failures.append("artifact registry does not match file bytes")
 
+    try:
+        timeline_rows = s._timeline_rows(project_id)
+    except Exception:
+        timeline_rows = []
+    voice_fallback_events = [x for x in timeline_rows if str(x.get("event") or "") == "voice_fallback"]
+    checks["voice_fallback_count"] = len(voice_fallback_events)
+    checks["professional_voice_present"] = len(voice_fallback_events) == 0
+    if voice_fallback_events and str(req.get("content_type") or "video").lower() == "video":
+        failures.append(f"silent narration fallback detected in {len(voice_fallback_events)} scene(s)")
+
     visual_rows = _source_assets(p)
     checks["visual_source_count"] = len(visual_rows)
     checks["visual_sources_present"] = len(visual_rows) >= max(1, len(chapters) if chapters else 1)
@@ -362,6 +400,34 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         failures.append(f"placeholder/fallback visuals blocked: {len(fallback_rows)} scene assets")
     elif fallback_rows:
         warnings.append(f"{len(fallback_rows)} scenes used local original-motion fallback")
+
+    unique_visual_hashes = set()
+    for row in visual_rows:
+        try:
+            path = Path(str(row.get("path") or ""))
+            if path.is_file():
+                unique_visual_hashes.add(s.file_sha256(path))
+        except Exception:
+            pass
+    required_unique = min(len(visual_rows), max(1, int((len(visual_rows) * 0.6) + 0.999)))
+    checks["unique_visual_hashes"] = len(unique_visual_hashes)
+    checks["visual_diversity_ok"] = len(unique_visual_hashes) >= required_unique
+    if len(visual_rows) > 1 and not checks["visual_diversity_ok"]:
+        failures.append("visual diversity check failed: the edit reuses too few distinct visual assets")
+
+    rights_path = files.get("visual_rights.json")
+    rights_data = {}
+    if rights_path and rights_path.exists():
+        try:
+            rights_data = json.loads(rights_path.read_text(encoding="utf-8"))
+        except Exception:
+            rights_data = {}
+    rights_assets = list(rights_data.get("assets") or []) if isinstance(rights_data, dict) else []
+    rights_unknown = sum(1 for x in rights_assets if str(x.get("rights_state") or "") == "unknown")
+    checks["visual_rights_evidence_present"] = bool(rights_assets) and rights_unknown == 0
+    checks["visual_rights_unknown_count"] = rights_unknown
+    if rights_unknown:
+        failures.append(f"visual-rights evidence missing for {rights_unknown} visual asset(s)")
 
     source_count = checks["research_sources"]
     checks["research_required_and_present"] = (source_count > 0) if strict_research else True
@@ -417,6 +483,9 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         and checks["artifact_registry_consistent"]
         and checks["visual_sources_present"]
         and checks["source_visual_policy_passed"]
+        and checks["visual_diversity_ok"]
+        and checks["professional_voice_present"]
+        and checks["visual_rights_evidence_present"]
         and checks["research_required_and_present"]
         and checks["fresh_evidence_ok"]
         and checks["fact_check_present"]
@@ -656,6 +725,11 @@ def _patch_functions():
                 p = s._get_project(project_id)
                 if not p:
                     return
+                try:
+                    _write_production_evidence(project_id, None)
+                    _reconcile_artifacts(project_id)
+                except Exception:
+                    pass
                 truth = _professional_truth(p, reconcile=True)
                 try:
                     _write_production_evidence(project_id, truth)
