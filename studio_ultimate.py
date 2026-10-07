@@ -683,8 +683,10 @@ def _hf_creator_plan(prompt: str) -> Tuple[Optional[Dict[str, Any]], str]:
         if isinstance(chapters, list) and len(chapters) >= 4:
             data["chapters"] = chapters[:18]
             return data, f"Hugging Face/{model}"
-    except Exception:
-        return None, f"Hugging Face/{model}:unavailable"
+    except Exception as exc:
+        _media_debug("huggingface-text", exc)
+        return None, f"Hugging Face/{model}:unavailable:{type(exc).__name__}:{str(exc)[:420]}"
+    _media_debug("huggingface-text", RuntimeError("provider returned invalid creator blueprint"))
     return None, f"Hugging Face/{model}:invalid"
 
 
@@ -972,7 +974,7 @@ def _openverse_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str
         }), timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 20))
         out = []
         for item in data.get("results", []):
-            image_url = item.get("thumbnail") or item.get("url")
+            image_url = item.get("url") or item.get("thumbnail")
             if not image_url:
                 continue
             raw_path = outdir / f"openverse_raw_{hashlib.sha256(str(image_url).encode()).hexdigest()[:12]}"
@@ -2315,7 +2317,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 asset = acquire_scene_asset(ch, outdir, i, prefer_motion=(i <= max_ai_video_scenes), duration=ch["actual_duration"])
             except Exception as asset_exc:
                 audit_event(project_id, "visual_source_unavailable", {"scene": i, "error": str(asset_exc)[:500]})
-                raise RuntimeError(f"scene {i}: professional visual source unavailable; no placeholder output was produced") from asset_exc
+                raise RuntimeError(f"scene {i}: professional visual source unavailable: {str(asset_exc)[:1600]}") from asset_exc
             assets_meta.append(redact({k: v for k, v in asset.items() if k != "path"}))
             _save_asset(project_id, "visual", Path(asset["path"]), "video/mp4" if asset.get("kind") == "video" else "image/png", asset)
             sfx = shared_sfx if FAST_MODE else make_sfx(outdir, ch["actual_duration"], i)
@@ -3801,6 +3803,8 @@ def _media_provider_probe() -> Dict[str, Any]:
         "checks": checks,
         "reachable": [k for k, v in checks.items() if v.get("ok")],
         "failed": [k for k, v in checks.items() if not v.get("ok")],
+        "last_success": dict(MEDIA_LAST_SUCCESS),
+        "errors": dict(MEDIA_DEBUG_ERRORS),
         "truthful": True,
     }
 
