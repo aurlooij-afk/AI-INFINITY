@@ -4299,8 +4299,22 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
                 truth = _reality_kernel.truth_for_project(project_id)
             except Exception:
                 truth = {"verified": False, "truthful": False}
-            if not truth.get("verified") and not smoke_delivery_override:
-                raise HTTPException(409, "final delivery is blocked until professional verification passes")
+            if not truth.get("verified"):
+                # The Reality Kernel persists its independent verification result.
+                # Re-read that durable gate so delivery authorization cannot diverge
+                # from the proof endpoint because of an in-process/session boundary.
+                try:
+                    with _reality_kernel._DB_LOCK, _connect() as gate_db:
+                        gate_row = gate_db.execute(
+                            "SELECT verified,last_report_json FROM reality_projects_3901 WHERE project_id=? LIMIT 1",
+                            (project_id,),
+                        ).fetchone()
+                    persisted_report = json.loads(gate_row["last_report_json"] or "{}") if gate_row else {}
+                    persisted_verified = bool(gate_row and int(gate_row["verified"] or 0) == 1 and persisted_report.get("verified") is True and persisted_report.get("truthful") is True)
+                except Exception:
+                    persisted_verified = False
+                if not persisted_verified and not smoke_delivery_override:
+                    raise HTTPException(409, "final delivery is blocked until professional verification passes")
         mapping = {
             "final.mp4": ("final.mp4", "video/mp4"), "package.zip": (next((q["path"] for q in _asset_rows(project_id) if q["kind"] == "package"), "package.zip"), "application/zip"),
             "thumbnail.jpg": ("thumbnail.jpg", "image/jpeg"), "script.md": ("script.md", "text/markdown"), "captions.srt": ("captions.srt", "application/x-subrip"), "sources.json": ("sources.json", "application/json"), "manifest.json": ("manifest.json", "application/json"),
