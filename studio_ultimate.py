@@ -638,11 +638,11 @@ def _hf_creator_plan(prompt: str) -> Tuple[Optional[Dict[str, Any]], str]:
     model = os.getenv("AI_INFINITY_TEXT_MODEL", "Qwen/Qwen2.5-7B-Instruct-1M:fastest").strip()
     try:
         from huggingface_hub import InferenceClient
-        client = InferenceClient(
-            provider=os.getenv("AI_INFINITY_HF_PROVIDER", "auto").strip() or "auto",
-            api_key=token,
-            timeout=(45 if FAST_MODE else 120),
-        )
+        client_kwargs={"api_key": token, "timeout": (45 if FAST_MODE else 120)}
+        selected_provider=os.getenv("AI_INFINITY_HF_PROVIDER", "").strip()
+        if selected_provider and selected_provider.lower() != "auto":
+            client_kwargs["provider"]=selected_provider
+        client = InferenceClient(**client_kwargs)
         response = client.chat_completion(
             model=model,
             messages=[
@@ -971,9 +971,12 @@ def _hf_video(prompt: str, outdir: Path, index: int, duration: float) -> Optiona
     try:
         from huggingface_hub import InferenceClient
         model = os.getenv("AI_INFINITY_VIDEO_MODEL", "Wan-AI/Wan2.2-TI2V-5B").strip()
-        client = InferenceClient(provider=os.getenv("AI_INFINITY_HF_PROVIDER", "auto").strip() or "auto", api_key=token)
-        frames = max(24, min(81, int(round(max(2.0, min(float(duration), 5.0)) * 8))))
-        video = client.text_to_video(prompt, model=model, num_frames=frames, num_inference_steps=int(os.getenv("AI_INFINITY_VIDEO_STEPS", "20")))
+        client_kwargs={"api_key": token}
+        selected_provider=os.getenv("AI_INFINITY_HF_PROVIDER", "").strip()
+        if selected_provider and selected_provider.lower() != "auto":
+            client_kwargs["provider"]=selected_provider
+        client = InferenceClient(**client_kwargs)
+        video = client.text_to_video(prompt, model=model)
         if hasattr(video, "read"):
             raw = video.read()
         else:
@@ -1001,18 +1004,16 @@ def _hf_image(prompt: str, outdir: Path, index: int) -> Optional[Dict[str, Any]]
     full_prompt = f"{prompt}. Professional editorial image, photorealistic or cinematic realism, physically plausible, coherent composition, rich natural detail. Negative requirements: {negative}."
     try:
         from huggingface_hub import InferenceClient
-        client = InferenceClient(
-            provider=os.getenv("AI_INFINITY_HF_PROVIDER", "auto").strip() or "auto",
-            api_key=token,
-        )
+        client_kwargs={"api_key": token}
+        selected_provider=os.getenv("AI_INFINITY_HF_PROVIDER", "").strip()
+        if selected_provider and selected_provider.lower() != "auto":
+            client_kwargs["provider"]=selected_provider
+        client = InferenceClient(**client_kwargs)
         for model in models:
             try:
                 image = client.text_to_image(
                     full_prompt,
                     model=model,
-                    width=1536 if not FAST_MODE else 1280,
-                    height=864 if not FAST_MODE else 720,
-                    num_inference_steps=int(os.getenv("AI_INFINITY_IMAGE_STEPS", "6" if FAST_MODE else "10")),
                 )
                 p = outdir / f"ai_visual_{index:02d}.png"
                 image.save(p)
