@@ -3822,7 +3822,11 @@ def _truthful_multimodal_tools() -> List[Dict[str, Any]]:
         elif tid == "image":
             tool["runtime_status"] = "provider-ready" if hf_token else "source-backed"
             tool["provider_configured"] = hf_token
-        elif tid in {"voice","music","text","document-to-show","repurpose","web-to-video"}:
+        elif tid == "voice":
+            eleven_ready = bool(os.getenv("ELEVENLABS_API_KEY","").strip() and os.getenv("ELEVENLABS_VOICE_ID","").strip())
+            tool["runtime_status"] = "provider-ready" if eleven_ready else "local-ready"
+            tool["provider_configured"] = eleven_ready
+        elif tid in {"music","text","document-to-show","repurpose","web-to-video"}:
             tool["runtime_status"] = "local-ready"
             tool["provider_configured"] = False
         else:
@@ -4260,7 +4264,7 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         mapping = {
             "final.mp4": ("final.mp4", "video/mp4"), "package.zip": (next((q["path"] for q in _asset_rows(project_id) if q["kind"] == "package"), "package.zip"), "application/zip"),
             "thumbnail.jpg": ("thumbnail.jpg", "image/jpeg"), "script.md": ("script.md", "text/markdown"), "captions.srt": ("captions.srt", "application/x-subrip"), "sources.json": ("sources.json", "application/json"), "manifest.json": ("manifest.json", "application/json"),
-            "feature_execution.json": ("feature_execution.json", "application/json"), "fact_check.json": ("fact_check.json", "application/json"), "creator_experiments.json": ("creator_experiments.json", "application/json"), "seo.json": ("seo.json", "application/json"), "social_campaign.json": ("social_campaign.json", "application/json"), "accessibility.json": ("accessibility.json", "application/json"), "provenance.json": ("provenance.json", "application/json"), "platform_manifest.json": ("platform_manifest.json", "application/json"), "podcast_rss.xml": ("podcast_rss.xml", "application/xml")
+            "feature_execution.json": ("feature_execution.json", "application/json"), "fact_check.json": ("fact_check.json", "application/json"), "creator_experiments.json": ("creator_experiments.json", "application/json"), "seo.json": ("seo.json", "application/json"), "social_campaign.json": ("social_campaign.json", "application/json"), "accessibility.json": ("accessibility.json", "application/json"), "provenance.json": ("provenance.json", "application/json"), "visual_rights.json": ("visual_rights.json", "application/json"), "timeline.json": ("timeline.json", "application/json"), "asset_registry.json": ("asset_registry.json", "application/json"), "production_truth.json": ("production_truth.json", "application/json"), "platform_manifest.json": ("platform_manifest.json", "application/json"), "podcast_rss.xml": ("podcast_rss.xml", "application/xml")
         }
         path_name, media_type = mapping.get(name, (name, None))
         path = _project_dir(project_id) / Path(path_name).name
