@@ -1,16 +1,10 @@
 from __future__ import annotations
-"""Single production ASGI entrypoint for AI Infinity.
-
-The deployed object is a real FastAPI application. Canonical Creator owns the
-public root and the mature Creator Studio is registered on the same application,
-so there is no module-as-ASGI dispatch layer and no competing root application.
-"""
-
+"""Single production ASGI entrypoint for AI Infinity."""
 from fastapi import FastAPI
-
 import ai_infinity_canonical
 import reality_first_3901
 import studio_ultimate
+import production_graph
 
 app = FastAPI(
     title="AI Infinity — Universal Creator Platform",
@@ -19,19 +13,18 @@ app = FastAPI(
     redoc_url=None,
 )
 
-# Install the independent evidence kernel before route registration. install()
-# is idempotent and patches the already-loaded Studio implementation in place.
+# Reality evidence and production graph patch the real Studio before routes mount.
 reality_first_3901.install()
+production_graph.install()
 
-# One application owns both the canonical creator experience and the mature
-# Studio/API surface. Route order is intentional: canonical root wins, while
-# every /infinity/studio/* capability remains directly available.
+# Preserve the existing creator/Studio surface.
 ai_infinity_canonical.register(app)
 studio_ultimate.register(app)
 reality_first_3901.register(app)
 
-# Both exported names reference the exact same callable ASGI object.
-application = app
+# Additive professional production-control surface.
+production_graph.register(app)
 
-if not callable(app):  # pragma: no cover - defensive startup invariant
+application = app
+if not callable(app):
     raise RuntimeError("ai_infinity_app:app is not an ASGI callable")
