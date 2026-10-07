@@ -67,9 +67,12 @@ assert canonical.get("truthful") is True,canonical
 providers,_=ok("/infinity/studio/providers")
 print("MEDIA_PROVIDER_DIAGNOSTICS", json.dumps(providers, sort_keys=True), flush=True)
 caps,_=ok("/infinity/canonical/capabilities"); assert caps.get("local",{}).get("media_core") is True,caps
+contract,_=ok("/infinity/studio/production/contract")
+assert contract.get("version")=="TARGET-2050.3624", contract
+assert contract.get("contract",{}).get("no_fake_completion") is True, contract
 pre,_=ok("/infinity/canonical/preflight","POST",{"command":"Create a 20 second cinematic video about Earth from space"}); assert pre.get("ready") is True,pre
 
-created,_=ok("/infinity/canonical/create","POST",{"command":"Create a 20 second cinematic video about resilient creativity","duration":20,"format":"short","aspect_ratio":"16:9","idempotency_key":"live-production-proof-v2"})
+created,_=ok("/infinity/canonical/create","POST",{"command":"Create a 20 second cinematic video about Earth from space","duration":20,"format":"short","aspect_ratio":"16:9","idempotency_key":"live-production-proof-v3"})
 pid=created["project_id"]; v1=created["version"]["version_id"]
 state=wait(pid); assert state["status"] in {"completed","completed_with_qc_warnings"},state
 
