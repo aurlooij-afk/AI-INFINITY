@@ -614,8 +614,36 @@ def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
             out.append({"source": "DuckDuckGo", "error": str(e)[:240]})
         return out
 
-    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="studio-research") as pool:
-        futures = [pool.submit(wikipedia), pool.submit(duckduckgo)]
+    def google_news() -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        try:
+            import xml.etree.ElementTree as ET
+            rss_url = "https://news.google.com/rss/search?" + urlencode({
+                "q": topic, "hl": "en-US", "gl": "US", "ceid": "US:en"
+            })
+            raw = http_get(rss_url, timeout=max(4, int(os.getenv("AI_INFINITY_RESEARCH_TIMEOUT", "8"))), max_bytes=3_000_000)
+            root = ET.fromstring(raw)
+            for item in root.findall(".//item")[:limit]:
+                title = (item.findtext("title") or "").strip()
+                url = (item.findtext("link") or "").strip()
+                published = (item.findtext("pubDate") or "").strip()
+                description = (item.findtext("description") or "").strip()
+                description = re.sub(r"<[^>]+>", " ", description)
+                description = html.unescape(re.sub(r"s+", " ", description)).strip()
+                if title and url:
+                    out.append({
+                        "source": "Google News RSS",
+                        "title": html.unescape(title)[:300],
+                        "url": url,
+                        "summary": description[:2000],
+                        "published_at": published,
+                    })
+        except Exception as e:
+            out.append({"source": "Google News RSS", "error": str(e)[:240]})
+        return out
+
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="studio-research") as pool:
+        futures = [pool.submit(wikipedia), pool.submit(duckduckgo), pool.submit(google_news)]
         for f in as_completed(futures):
             try:
                 for item in f.result():
@@ -1228,8 +1256,37 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     test_media=_ci_test_visual(scene,outdir,index)
     if test_media:
         return test_media
+
+    # Last production rung: create an original editorial motion-design scene.
+    # This is a real generated asset, not a test fixture or fake success. It is
+    # explicitly tagged as fallback so downstream QC can warn without killing
+    # an otherwise usable delivery.
+    try:
+        fallback = _procedural_image(
+            ai_prompt or query,
+            outdir,
+            index,
+            width=1600 if FAST_MODE else 1920,
+            height=900 if FAST_MODE else 1080,
+        )
+        if fallback and Path(str(fallback.get("path") or "")).is_file():
+            fallback.update({
+                "quality_tier": "original_motion_design_fallback",
+                "fallback": True,
+                "fallback_reason": "No remote/public visual asset was reachable for this scene.",
+                "rights_status": "original_asset",
+            })
+            _media_success("procedural-fallback", {
+                "scene": index,
+                "query": query,
+                "reason": "remote_visual_ladder_exhausted",
+            })
+            return fallback
+    except Exception as exc:
+        _media_debug("procedural-fallback", exc)
+
     detail="; ".join(source_failures[:16])
-    raise RuntimeError(f"no professional visual source is reachable for this scene [{detail}]")
+    raise RuntimeError(f"no visual source or local fallback is available for this scene [{detail}]")
 
 def ffmpeg(*args: Any, timeout: int = 240) -> None:
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *map(str, args)]
@@ -1350,15 +1407,34 @@ def make_music(outdir: Path, seconds: float) -> Path:
     filters.append("".join(labels) + f"concat=n=4:v=0:a=1,aloop=loop=-1:size={int(seg*4*48000)},"
                     f"atrim=duration={s},aecho=0.55:0.4:45|90:0.10|0.06,"
                     f"highpass=f=70,lowpass=f=2400,loudnorm=I=-26:TP=-6:LRA=8[m]")
-    ffmpeg(*sources, "-filter_complex", ";".join(filters),
-           "-map", "[m]", "-c:a", "aac", "-b:a", "160k", out, timeout=max(120, int(30 + s * 3)))
+    try:
+        ffmpeg(*sources, "-filter_complex", ";".join(filters),
+               "-map", "[m]", "-c:a", "aac", "-b:a", "160k", out, timeout=max(120, int(30 + s * 3)))
+    except Exception as exc:
+        # Keep the core production path alive with a simple original tone bed.
+        audit_event("", "music_fallback", {"error": str(exc)[:600], "duration_seconds": s})
+        out.unlink(missing_ok=True)
+        ffmpeg(
+            "-f", "lavfi", "-i", f"sine=frequency=196:sample_rate=48000:duration={s}",
+            "-af", "volume=0.025,lowpass=f=1800,afade=t=in:st=0:d=0.5,afade=t=out:st=" + str(max(0.5, s - 0.5)) + ":d=0.5",
+            "-c:a", "aac", "-b:a", "128k", out, timeout=max(60, int(12 + s * 2))
+        )
     return out
 
 
 def make_sfx(outdir: Path, duration: float, index: int) -> Path:
     out = outdir / f"transition_{index:02d}.wav"
     d = max(0.15, min(1.1, float(duration) * 0.15))
-    ffmpeg("-f", "lavfi", "-i", f"anoisesrc=color=white:amplitude=0.18:duration={d}", "-af", "highpass=f=900,lowpass=f=6500,afade=t=in:st=0:d=0.04,afade=t=out:st=" + str(max(0.02, d-0.12)) + ":d=0.12", out, timeout=60)
+    try:
+        ffmpeg(
+            "-f", "lavfi", "-i", f"anoisesrc=color=white:amplitude=0.18:duration={d}",
+            "-af", "highpass=f=900,lowpass=f=6500,afade=t=in:st=0:d=0.04,afade=t=out:st=" + str(max(0.02, d-0.12)) + ":d=0.12",
+            out, timeout=60
+        )
+    except Exception as exc:
+        audit_event("", "sfx_fallback", {"error": str(exc)[:600], "duration_seconds": d})
+        out.unlink(missing_ok=True)
+        ffmpeg("-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", d, "-c:a", "pcm_s16le", out, timeout=45)
     return out
 
 
@@ -1566,6 +1642,7 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
         "caption_count_matches_scenes": caption_blocks == len(chapters) if captions.exists() else False,
         # Narration may intentionally finish before the mastered visual program;\n        # require real narration while allowing the soundtrack/visual tail to continue.\n        "voice_video_duration_aligned": bool(expected_voice > 0 and expected_voice <= duration + 3.0),\n        "scene_count": len(chapters) >= (1 if SMOKE else (3 if FAST_MODE else 4)),
         "visual_assets_present": len(assets) >= len(chapters),
+        "fallback_visual_used": not any(bool(x.get("fallback")) for x in (assets or [])),
         "no_fake_slideshow_flag": True,
     }
     passed = all(bool(x) for k, x in checks.items() if k != "full_hd")
@@ -2226,7 +2303,23 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         if reference_sources:
             research.setdefault("sources",[]).extend(reference_sources)
             research["source_count"]=len(research.get("sources") or [])
-        checkpoint(project_id, "research_complete", {"source_count": research.get("source_count",0), "retrieved_at": research.get("retrieved_at"), "reference_count": len(reference_sources)})
+        research_count = int(research.get("source_count") or 0)
+        research_status = "complete" if research_count > 0 else "degraded"
+        audit_event(project_id, "research_complete" if research_count > 0 else "research_degraded", {
+            "source_count": research_count,
+            "reference_count": len(reference_sources),
+            "status": research_status,
+            "provider": research.get("provider") or "public-fallback",
+        })
+        checkpoint(project_id, "research_complete", {
+            "source_count": research_count,
+            "retrieved_at": research.get("retrieved_at"),
+            "reference_count": len(reference_sources),
+            "status": research_status,
+        })
+        research["status"] = research_status
+        if research_count == 0:
+            research["degraded_reason"] = "No public research source responded in the current runtime; factual claims remain review-required."
         _stage(project_id, "creative_direction", 15, blueprint_json=jdump({"research": research}))
         learning = _apply_learning(project["user_id"], str(req.get("tone") or ""), str(req.get("audience") or ""), str(req.get("format") or "long"))
         plan, ai_provider = creative_plan(req, research, model_fn)
@@ -2281,7 +2374,11 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         actual_total = 0.0
         # Shared music bed avoids repeatedly generating the same soundtrack.
         music_seconds = max(12.0, min(600.0, float(target) + 12.0))
-        shared_music = make_music(outdir, music_seconds)
+        try:
+            shared_music = make_music(outdir, music_seconds)
+        except Exception as music_exc:
+            audit_event(project_id, "music_fallback_failed", {"error": str(music_exc)[:800]})
+            shared_music = _make_silent_voice(outdir, 9901, music_seconds)[0]
         ai_video_enabled = os.getenv("AI_INFINITY_AI_VIDEO", "1").strip().lower() in {"1","true","yes","auto"}
         requested_ai_video_scenes = max(0, int(os.getenv("AI_INFINITY_AI_VIDEO_SCENES", "2")))
         max_ai_video_scenes = min(requested_ai_video_scenes, 1 if FAST_MODE else 4) if ai_video_enabled else 0
@@ -2309,7 +2406,15 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 voice, provider, voice_duration = tts(str(ch.get("narration") or ""), outdir, i, str(req.get("voice") or "en-US-AriaNeural"))
             except Exception as voice_exc:
                 audit_event(project_id, "voice_source_unavailable", {"scene": i, "error": str(voice_exc)[:500]})
-                raise RuntimeError(f"scene {i}: narration generation unavailable; silent fallback is disabled") from voice_exc
+                voice, provider, voice_duration = _make_silent_voice(
+                    outdir, i, max(4.0, float(ch.get("duration") or 6.0))
+                )
+                provider = "silent-local-fallback"
+                audit_event(project_id, "voice_fallback", {
+                    "scene": i,
+                    "provider": provider,
+                    "reason": str(voice_exc)[:500],
+                })
             voice_provider = voice_provider or provider
             ch["actual_duration"] = max(4.0, min(90.0, voice_duration))
             actual_total += ch["actual_duration"]
@@ -2320,7 +2425,11 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 raise RuntimeError(f"scene {i}: professional visual source unavailable: {str(asset_exc)[:1600]}") from asset_exc
             assets_meta.append(redact({k: v for k, v in asset.items() if k != "path"}))
             _save_asset(project_id, "visual", Path(asset["path"]), "video/mp4" if asset.get("kind") == "video" else "image/png", asset)
-            sfx = shared_sfx if FAST_MODE else make_sfx(outdir, ch["actual_duration"], i)
+            try:
+                sfx = shared_sfx if FAST_MODE else make_sfx(outdir, ch["actual_duration"], i)
+            except Exception as sfx_exc:
+                audit_event(project_id, "sfx_fallback_failed", {"scene": i, "error": str(sfx_exc)[:600]})
+                sfx = shared_sfx
             mixed = outdir / f"scene_{i:02d}.mp4"
             _render_scene(asset, voice, shared_music, sfx, ch["actual_duration"], mixed, str(ch.get("on_screen") or ch.get("heading") or topic), str(req.get("aspect_ratio") or "16:9"))
             scene_paths.append(mixed)
@@ -2409,17 +2518,56 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             social = outdir / "social_campaign.md"
             social.write_text("# Social Campaign\n\n" + "\n".join([f"- {ch.get('heading')}: {ch.get('narration','')}" for ch in chapters]) + "\n", encoding="utf-8")
 
-        editorial = build_editorial_packages(project_id, outdir, plan, chapters, req, research, str(plan.get("title") or topic))
-        experiments = build_creator_experiments(outdir, plan, chapters, str(plan.get("title") or topic), req)
-        editorial["creator_experiments"] = experiments
-        register_artifact(project_id, experiments, "application/json", {"kind":"creative_experiments","truthful":True})
+        editorial = {}
+        try:
+            editorial = build_editorial_packages(project_id, outdir, plan, chapters, req, research, str(plan.get("title") or topic))
+        except Exception as editorial_exc:
+            audit_event(project_id, "optional_editorial_package_failed", {"error": str(editorial_exc)[:1200]})
+
+        experiments = None
+        try:
+            experiments = build_creator_experiments(outdir, plan, chapters, str(plan.get("title") or topic), req)
+        except Exception as experiment_exc:
+            experiment_path = outdir / "creator_experiments.json"
+            experiment_path.write_text(
+                jdump({
+                    "status": "degraded",
+                    "error": str(experiment_exc)[:800],
+                    "truthful": True,
+                }),
+                encoding="utf-8",
+            )
+            experiments = experiment_path
+            audit_event(project_id, "optional_experiments_failed", {"error": str(experiment_exc)[:800]})
+
+        if experiments and Path(experiments).exists():
+            editorial["creator_experiments"] = experiments
+            register_artifact(project_id, experiments, "application/json", {"kind":"creative_experiments","truthful":True})
+
         if audio_master and audio_master.exists():
-            editorial["podcast_rss"] = podcast_package(outdir, str(plan.get("title") or topic), str(plan.get("hook") or topic), audio_master, probe_duration(audio_master))
+            try:
+                editorial["podcast_rss"] = podcast_package(
+                    outdir, str(plan.get("title") or topic), str(plan.get("hook") or topic),
+                    audio_master, probe_duration(audio_master)
+                )
+            except Exception as podcast_exc:
+                audit_event(project_id, "optional_podcast_package_failed", {"error": str(podcast_exc)[:800]})
         sources = outdir / "sources.json"
         sources.write_text(jdump({"research": research, "visual_assets": assets_meta}), encoding="utf-8")
-        thumb = make_thumbnail(captioned, str(plan.get("title") or topic), outdir)
+        try:
+            thumb = make_thumbnail(captioned, str(plan.get("title") or topic), outdir)
+        except Exception as thumb_exc:
+            thumb = None
+            audit_event(project_id, "optional_thumbnail_failed", {"error": str(thumb_exc)[:800]})
+
         _stage(project_id, "variants_and_package", 84)
-        shorts = [] if (SMOKE or FAST_MODE) else make_variants(captioned, outdir, chapters, str(plan.get("title") or topic))
+        try:
+            shorts = [] if (SMOKE or FAST_MODE) else make_variants(
+                captioned, outdir, chapters, str(plan.get("title") or topic)
+            )
+        except Exception as variants_exc:
+            shorts = []
+            audit_event(project_id, "optional_variants_failed", {"error": str(variants_exc)[:1000]})
         manifest = outdir / "manifest.json"
         qc = extended_quality_check(captioned, chapters, captions, outdir, assets_meta)
         feature_report = _feature_execution_report(project_id, project["user_id"], [str(x) for x in (req.get("features") or [])], outdir, qc=qc, req=req)
@@ -3359,7 +3507,9 @@ function openProject(id){
     var links=[
       ["Master video","final.mp4","video/mp4"],["Package","package.zip","application/zip"],["Script","script.md","text/markdown"],["Captions","captions.srt","application/x-subrip"],["Thumbnail","thumbnail.jpg","image/jpeg"],["Sources","sources.json","application/json"],["SEO","seo.json","application/json"],["Social campaign","social_campaign.json","application/json"],["Provenance","provenance.json","application/json"],["Accessibility","accessibility.json","application/json"]
     ];
-    var cardLinks=links.map(function(a){return "<div class='artifact'><b>"+a[0]+"</b><a href='/infinity/studio/project/"+encodeURIComponent(id)+"/asset/"+encodeURIComponent(a[1])+"' target='_blank'>Open / download</a></div>"}).join("");
+    var allowedPartial={"script.md":true,"captions.srt":true,"sources.json":true,"thumbnail.jpg":true,"audio_master.mp3":true};
+    var visibleLinks=done?links:links.filter(function(a){return allowedPartial[a[1]] && assets.some(function(x){return String(x.name||x.path||"").split("/").pop()===a[1]});});
+    var cardLinks=visibleLinks.map(function(a){return "<div class='artifact'><b>"+a[0]+"</b><a href='/infinity/studio/project/"+encodeURIComponent(id)+"/asset/"+encodeURIComponent(a[1])+"' target='_blank'>"+(done?"Open / download":"Open partial artifact")+"</a></div>"}).join("");
     $("content").innerHTML="<div class='toolbar' style='margin-bottom:12px'><button class='btn' onclick='go(\"projects\")'>← Projects</button><button class='btn' onclick='openProject(\""+esc(id)+"\")'>Refresh</button><button class='btn' onclick='verifyProject(\""+esc(id)+"\")'>Verify</button></div>"+
     "<div class='grid cols2'><div class='card cardPad'>"+
     "<div class='eyebrow'>PROJECT</div><h2 style='margin:6px 0 4px'>"+esc(x.title||id)+"</h2><div class='chips'><span class='status "+statusClass(x.status)+"'>"+esc(x.status)+"</span><span class='chip'>"+Math.round(x.progress||0)+"%</span><span class='chip'>Attempt "+esc(x.attempt||1)+"</span></div><div style='margin-top:14px'>"+stages(x)+"</div><div style='margin-top:14px' class='progress'><i style='width:"+Math.round(x.progress||0)+"%'></i></div>"+
