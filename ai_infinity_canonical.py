@@ -301,9 +301,14 @@ def versions(project_id):
     with studio().DB_LOCK,db() as c:
         rows=[dict(r) for r in c.execute("SELECT * FROM canonical_versions WHERE project_id=? ORDER BY created_at ASC",(project_id,)).fetchall()]
     for r in rows:
-        for k in ("operation_json","evidence_json"):
-            try:r[k]=json.loads(r.get(k) or "{}")
-            except Exception:r[k]={}
+        try:
+            r["operation"] = json.loads(r.get("operation_json") or "{}")
+        except Exception:
+            r["operation"] = {}
+        try:
+            r["evidence"] = json.loads(r.get("evidence_json") or "{}")
+        except Exception:
+            r["evidence"] = {}
     return rows
 
 def version_by_id(version_id):
@@ -311,9 +316,14 @@ def version_by_id(version_id):
         r=c.execute("SELECT * FROM canonical_versions WHERE version_id=?",(version_id,)).fetchone()
     if not r:return None
     d=dict(r)
-    for k in ("operation_json","evidence_json"):
-        try:d[k]=json.loads(d.get(k) or "{}")
-        except Exception:d[k]={}
+    try:
+        d["operation"] = json.loads(d.get("operation_json") or "{}")
+    except Exception:
+        d["operation"] = {}
+    try:
+        d["evidence"] = json.loads(d.get("evidence_json") or "{}")
+    except Exception:
+        d["evidence"] = {}
     return d
 
 def current_version(project_id):
@@ -337,7 +347,8 @@ def reconcile(project_id,user_id):
                               (path.name,ev.get("sha256"),ev.get("size_bytes"),json.dumps(ev,sort_keys=True),now(),cur["version_id"]))
                 cur=version_by_id(cur["version_id"])
         elif cur:cur["evidence"]=ev
-    state="VERIFIED" if cur and cur.get("state")=="VERIFIED" and cur.get("evidence",{}).get("valid") else (
+    current_evidence = (cur or {}).get("evidence") or (cur or {}).get("evidence_json") or {}
+    state="VERIFIED" if cur and cur.get("state")=="VERIFIED" and current_evidence.get("valid") else (
       "QUEUED" if str(p.get("status")).lower()=="queued" else str(p.get("status") or "BLOCKED").upper())
     with studio().DB_LOCK,db() as c:c.execute("UPDATE canonical_projects SET state=?,updated_at=? WHERE project_id=?",(state,now(),project_id))
     return {"project_id":project_id,"canonical_state":state,"engine_status":p.get("status"),
@@ -415,7 +426,9 @@ def apply_edit(project_id,user_id,command):
     except Exception:pass
     event(project_id,user_id,"version_committed",{"version_id":vid,"parent_version_id":parent,"operation":op})
     return {"status":"completed","project_id":project_id,"version_id":vid,"parent_version_id":parent,
-            "label":label,"artifact":{"name":out.name,**ev},"operation":op,"truthful":True,
+            "label":label,
+            "artifact":{"name":out.name,"download_url":f"/infinity/studio/project/{project_id}/asset/{out.name}",**ev},
+            "operation":op,"truthful":True,
             "message":f"{label} committed from a real media edit."}
 
 def undo(project_id,user_id):
