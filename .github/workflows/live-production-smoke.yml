@@ -18,7 +18,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
-      - name: Wait for live Render deployment
+      - name: Wait for live deployment
         env:
           BASE_URL: https://ai-infinity.blitz.cloud
         run: |
