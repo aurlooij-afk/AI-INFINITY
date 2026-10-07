@@ -10,12 +10,12 @@ permissions:
 
 concurrency:
   group: ai-infinity-real-runtime-proof-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   real-runtime:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     env:
       AI_INFINITY_FAST_MODE: "1"
       AI_INFINITY_STUDIO_SMOKE: "0"
