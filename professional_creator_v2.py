@@ -201,6 +201,16 @@ init();
 def install(app:Any)->None:
     import studio_ultimate as studio
 
+    @app.get("/infinity/3800/health")
+    def legacy_creator_health():
+        ff=bool(shutil.which("ffmpeg"))
+        return {"status":"healthy" if ff else "degraded","version":VERSION,"build":BUILD,"canonical_surface":"/infinity/pro2","legacy_compatibility":True,"truthful":True}
+
+    @app.post("/infinity/3800/self-test")
+    def legacy_creator_self_test():
+        ff=bool(shutil.which("ffmpeg")); fp=bool(shutil.which("ffprobe")); voice=bool(shutil.which("espeak-ng") or shutil.which("espeak"))
+        return {"status":"passed" if ff and fp and voice else "degraded","checks":{"ffmpeg":ff,"ffprobe":fp,"offline_tts":voice,"professional_creator_route":True},"canonical_surface":"/infinity/pro2","truthful":True}
+
     @app.get("/infinity/pro2/health")
     def health():
         ff=bool(shutil.which("ffmpeg")); voice=bool(shutil.which("espeak-ng") or shutil.which("espeak"))
