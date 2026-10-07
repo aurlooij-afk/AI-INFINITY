@@ -3663,6 +3663,47 @@ def _marketplace_seed_3621() -> List[Dict[str,Any]]:
         {"id":"podcast-package","title":"Podcast Production Package","category":"Audio","description":"Build podcast-ready narration, mastering, chapters metadata and RSS-ready assets.","price_text":"Set your own client price","status":"ready"},
     ]
 
+def _media_provider_probe() -> Dict[str, Any]:
+    """Non-secret reachability diagnostics for server-side media adapters."""
+    checks = {}
+    specs = [
+        ("nasa", "https://images-api.nasa.gov/search?q=creative&media_type=image&page_size=1"),
+        ("wikimedia", "https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=creative&gsrnamespace=6&gsrlimit=1&prop=imageinfo&iiprop=url&format=json"),
+        ("openverse", "https://api.openverse.org/v1/images/?q=creative&page_size=1&mature=false"),
+        ("pexels", "https://www.pexels.com/"),
+        ("pixabay", "https://pixabay.com/"),
+    ]
+    for name, url in specs:
+        try:
+            with _safe_open_get(url, timeout=(8 if FAST_MODE else 15)) as resp:
+                sample = resp.read(256)
+                checks[name] = {"ok": True, "status": int(getattr(resp, "status", 200)), "bytes": len(sample)}
+        except Exception as exc:
+            checks[name] = {"ok": False, "error": type(exc).__name__ + ": " + str(exc)[:240]}
+    token = os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
+    if token:
+        try:
+            req = URLRequest(
+                "https://huggingface.co/api/models?pipeline_tag=text-to-image&limit=1",
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/json",
+                         "User-Agent": f"AI-Infinity/{VERSION}"},
+                method="GET",
+            )
+            with _SAFE_OPENER.open(req, timeout=(8 if FAST_MODE else 15)) as resp:
+                resp.read(256)
+                checks["huggingface"] = {"ok": True, "status": int(getattr(resp, "status", 200))}
+        except Exception as exc:
+            checks["huggingface"] = {"ok": False, "error": type(exc).__name__ + ": " + str(exc)[:240]}
+    else:
+        checks["huggingface"] = {"ok": False, "error": "token_not_configured"}
+    return {
+        "checks": checks,
+        "reachable": [k for k, v in checks.items() if v.get("ok")],
+        "failed": [k for k, v in checks.items() if not v.get("ok")],
+        "truthful": True,
+    }
+
+
 def register(app: Any, model_fn: Optional[Callable] = None) -> None:
     # Mount the real Creator Pro layer: editable storyboard, transcript-first clipping,
     # advanced FFmpeg controls, image lab, interactive export, variant matrix and
@@ -3671,6 +3712,10 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
     from fastapi import HTTPException, File, UploadFile
     from fastapi.responses import FileResponse, RedirectResponse
     from pydantic import BaseModel, Field
+
+    @app.get("/infinity/studio/providers")
+    def studio_providers():
+        return _media_provider_probe()
 
     @app.get("/infinity/studio/health")
     def studio_health() -> Dict[str, Any]:
