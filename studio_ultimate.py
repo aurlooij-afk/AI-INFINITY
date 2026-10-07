@@ -1007,7 +1007,7 @@ def _hf_video(prompt: str, outdir: Path, index: int, duration: float) -> Optiona
         from huggingface_hub import InferenceClient
         model = os.getenv("AI_INFINITY_VIDEO_MODEL", "Wan-AI/Wan2.2-TI2V-5B").strip()
         client_kwargs={"api_key": token}
-        selected_provider=os.getenv("AI_INFINITY_HF_PROVIDER", "").strip()
+        selected_provider=os.getenv("AI_INFINITY_HF_MEDIA_PROVIDER", "").strip() or os.getenv("AI_INFINITY_HF_PROVIDER", "").strip()
         if selected_provider and selected_provider.lower() != "auto":
             client_kwargs["provider"]=selected_provider
         client = InferenceClient(**client_kwargs)
@@ -1040,7 +1040,7 @@ def _hf_image(prompt: str, outdir: Path, index: int) -> Optional[Dict[str, Any]]
     try:
         from huggingface_hub import InferenceClient
         client_kwargs={"api_key": token}
-        selected_provider=os.getenv("AI_INFINITY_HF_PROVIDER", "").strip()
+        selected_provider=os.getenv("AI_INFINITY_HF_MEDIA_PROVIDER", "").strip() or os.getenv("AI_INFINITY_HF_PROVIDER", "").strip()
         if selected_provider and selected_provider.lower() != "auto":
             client_kwargs["provider"]=selected_provider
         client = InferenceClient(**client_kwargs)
