@@ -821,6 +821,23 @@ def _emergency_finalize(project_id: str) -> bool:
                 {},
             )
             chapters = fallback.get("chapters") or []
+        # Recovery evidence is scene-master authoritative. Keep exactly one
+        # chapter per recovered scene and bind its duration to the actual media.
+        aligned = []
+        for idx, scene_path in enumerate(scenes, 1):
+            source = chapters[idx - 1] if idx - 1 < len(chapters) and isinstance(chapters[idx - 1], dict) else {}
+            try:
+                scene_duration = float(s.probe_duration(scene_path))
+            except Exception:
+                scene_duration = max(2.0, float(source.get("duration") or 2.0))
+            aligned.append({
+                **source,
+                "heading": str(source.get("heading") or f"Scene {idx}")[:240],
+                "narration": str(source.get("narration") or source.get("text") or ""),
+                "duration": scene_duration,
+                "actual_duration": scene_duration,
+            })
+        chapters = aligned
         captions = root / "captions.srt"
         s.write_srt(chapters, captions)
         script = root / "script.md"
