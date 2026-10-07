@@ -550,6 +550,30 @@ def reconcile_project(project_id: str) -> Dict[str, Any]:
     except Exception:
         pass
 
+    # Remove stale proof rows whose referenced files no longer exist. A remote
+    # source asset may legitimately disappear after the final media has been
+    # rendered; retaining a dead row would make the Reality Kernel report a
+    # filesystem contradiction even though the current deliverables are intact.
+    try:
+        root = _project_path(project_id)
+        s = _studio()
+        with _DB_LOCK, s.DB_LOCK, s._connect() as c:
+            stale = []
+            for row in c.execute(
+                "SELECT asset_name, sha256 FROM reality_artifacts_3901 WHERE project_id=?",
+                (project_id,),
+            ).fetchall():
+                asset_name = Path(str(row["asset_name"] or "")).name
+                if asset_name and not (root / asset_name).is_file():
+                    stale.append(asset_name)
+            for asset_name in stale:
+                c.execute(
+                    "DELETE FROM reality_artifacts_3901 WHERE project_id=? AND asset_name=?",
+                    (project_id, asset_name),
+                )
+    except Exception:
+        pass
+
     status = str(p.get("status") or "").lower()
     required_ok, checks, proofs = _verify_required(project_id, req)
 
