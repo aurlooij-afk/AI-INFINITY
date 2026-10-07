@@ -163,6 +163,30 @@ jobs:
           assert x.get("external_provider_required") is False, x
           PY
 
+          # Keep the stale-entrypoint regression isolated from the real
+          # production process. The actual creator smoke must run against a
+          # fresh canonical main:app instance.
+          docker stop ai-infinity-ci >/dev/null
+          docker rm ai-infinity-ci >/dev/null 2>&1 || true
+          docker run -d --rm --name ai-infinity-ci             --platform linux/amd64             -e AI_INFINITY_3601_BACKGROUND=false             -e AI_INFINITY_FAST_MODE=1             -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity             -p 10000:10000             ai-infinity:ci
+          ready=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:10000/health >/tmp/restarted-health.json; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          curl -fsS http://127.0.0.1:10000/infinity/canonical/health >/tmp/restarted-canonical-health.json
+          cat /tmp/restarted-canonical-health.json
+          python - <<'PY'
+          import json
+          x=json.load(open("/tmp/restarted-canonical-health.json"))
+          assert x.get("truthful") is True, x
+          print("fresh-canonical-runtime-ready")
+          PY
+
 
 
       - name: Run real creator production smoke test
