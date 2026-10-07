@@ -805,6 +805,68 @@ def _pixabay(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
     except Exception:
         return []
 
+def _nasa_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
+    """Keyless NASA public image library fallback with source metadata."""
+    try:
+        data = http_json("https://images-api.nasa.gov/search?" + urlencode({
+            "q": query, "media_type": "image", "page_size": min(limit, 8)
+        }), timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 20))
+        out = []
+        for item in data.get("collection", {}).get("items", []):
+            data_block = (item.get("data") or [{}])[0]
+            links = item.get("links") or []
+            image_url = next((x.get("href") for x in links if x.get("href") and x.get("rel") == "preview"), None)
+            if not image_url:
+                image_url = next((x.get("href") for x in links if x.get("href")), None)
+            if not image_url:
+                continue
+            p = outdir / f"nasa_{hashlib.sha256(str(image_url).encode()).hexdigest()[:12]}.jpg"
+            try:
+                download(image_url, p, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 60), max_bytes=12_000_000)
+            except Exception:
+                continue
+            out.append({
+                "kind": "image", "path": str(p), "source": "NASA Image and Video Library",
+                "source_url": item.get("href") or "https://images.nasa.gov/",
+                "creator": data_block.get("creator") or data_block.get("center") or "NASA",
+                "license": "NASA media-use policy applies", "title": data_block.get("title"),
+                "description": data_block.get("description"),
+            })
+            if len(out) >= limit:
+                break
+        return out
+    except Exception:
+        return []
+
+
+def _openverse_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
+    """Openverse public/openly licensed image source; license metadata is preserved."""
+    try:
+        data = http_json("https://api.openverse.org/v1/images/?" + urlencode({
+            "q": query, "page_size": min(limit, 8), "mature": "false"
+        }), timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 20))
+        out = []
+        for item in data.get("results", []):
+            image_url = item.get("thumbnail") or item.get("url")
+            if not image_url:
+                continue
+            p = outdir / f"openverse_{hashlib.sha256(str(image_url).encode()).hexdigest()[:12]}.jpg"
+            try:
+                download(image_url, p, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 60), max_bytes=10_000_000)
+            except Exception:
+                continue
+            out.append({
+                "kind": "image", "path": str(p), "source": "Openverse",
+                "source_url": item.get("foreign_landing_url") or item.get("detail_url") or image_url,
+                "creator": item.get("creator"), "license": item.get("license"),
+                "license_version": item.get("license_version"), "title": item.get("title"),
+            })
+            if len(out) >= limit:
+                break
+        return out
+    except Exception:
+        return []
+
 
 def _commons_media(query: str, outdir: Path, limit: int = 6) -> List[Dict[str, Any]]:
     # Fast mode deliberately avoids downloading large public video files. A
@@ -936,15 +998,20 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
 
 def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_motion: bool = False, duration: float = 6.0) -> Dict[str, Any]:
     query = str(scene.get("visual_query") or scene.get("heading") or "documentary scene")
-    ai_prompt = str(scene.get("image_prompt") or f"Premium cinematic documentary visual about {query}; realistic, useful, editorial, no text or logos")
+    ai_prompt = str(scene.get("image_prompt") or f"Premium cinematic documentary visual about {query}; realistic, useful, editorial, no text, no logos, professional photography")
 
-    if prefer_motion and not FAST_MODE:
+    # Professional order: connected generative media first, then real public/open media.
+    # We never turn a missing provider into an abstract placeholder that looks like a finished movie.
+    if prefer_motion:
         motion = _hf_video(ai_prompt, outdir, index, duration)
         if motion:
             return motion
 
-    # Prefer real/public media before synthetic fallback, even in fast mode.
-    for getter in (_pexels, _pixabay, _commons_media):
+    ai = _hf_image(ai_prompt, outdir, index)
+    if ai:
+        return ai
+
+    for getter in (_pexels, _pixabay, _nasa_images, _openverse_images, _commons_media):
         items = getter(query, outdir, limit=3)
         videos = [x for x in items if x.get("kind") == "video"]
         if videos:
@@ -953,23 +1020,7 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         if images:
             return images[0]
 
-    # Connected AI image generation is a quality path whenever a provider is configured.
-    # Public real footage still wins first, so free mode remains fast and grounded.
-    ai = _hf_image(ai_prompt, outdir, index)
-    if ai:
-        return ai
-
-    # Explicit synthetic fallback. The UI/manifest can distinguish this from footage.
-    procedural = _procedural_image(
-        ai_prompt,
-        outdir,
-        index,
-        width=1280 if FAST_MODE else 1920,
-        height=720 if FAST_MODE else 1080
-    )
-    if procedural:
-        return procedural
-    raise RuntimeError("no visual asset could be created")
+    raise RuntimeError("no professional visual source is reachable for this scene")
 
 
 # ---------------------------------------------------------------------------
@@ -1138,20 +1189,22 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
             "4:5": (720, 900)
         }
         width, height = ratio_dims.get(str(aspect_ratio or "16:9"), ratio_dims["16:9"])
-        work_w, work_h = max(320, width // 2), max(180, height // 2)
-        fps, font = 15, 30
+        # Keep the free worker light, but render at delivery resolution instead of an
+        # intentionally blurry half-resolution intermediate that is later upscaled.
+        work_w, work_h = width, height
+        fps, font = 20, 32
         src = asset["path"]
-        box_x = max(16, int(width * 0.025))
+        box_x = max(18, int(width * 0.028))
         box_w = max(1, width - box_x * 2)
-        box_h = max(92, int(height * 0.155))
-        box_y = max(0, height - box_h)
-        text_x = max(24, int(width * 0.04))
-        text_y = box_y + max(22, int(height * 0.04))
+        box_h = max(70, int(height * 0.105))
+        box_y = max(18, int(height * 0.035))
+        text_x = max(28, int(width * 0.045))
+        text_y = box_y + max(16, int(height * 0.025))
         if asset.get("kind") == "video":
             vf = (
                 f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
-                f"eq=contrast=1.02:saturation=1.03,scale={width}:{height}:flags=fast_bilinear,fps=24,"
-                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color=black@0.33:t=fill,"
+                f"eq=contrast=1.02:saturation=1.04,scale={width}:{height}:flags=lanczos,fps=24,"
+                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color=black@0.48:t=fill,"
                 f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
                 f"x={text_x}:y={text_y}:fontsize={font}:fontcolor=white"
             )
@@ -1160,15 +1213,15 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
             frames = max(1, int(round(duration * fps)))
             vf = (
                 f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
-                f"zoompan=z='min(zoom+0.0015,1.12)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-                f"d={frames}:s={work_w}x{work_h}:fps={fps},scale={width}:{height}:flags=fast_bilinear,fps=24,"
-                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color=black@0.33:t=fill,"
+                f"zoompan=z='min(zoom+0.0009,1.10)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                f"d={frames}:s={work_w}x{work_h}:fps={fps},scale={width}:{height}:flags=lanczos,fps=24,"
+                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color=black@0.48:t=fill,"
                 f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
                 f"x={text_x}:y={text_y}:fontsize={font}:fontcolor=white"
             )
             visual_args = ["-loop", "1", "-i", src]
-        audio_filter = "[1:a]volume=0.95[vo];[2:a]volume=0.06[m];[3:a]adelay=80|80,volume=0.06[s];[vo][m][s]amix=inputs=3:duration=longest:dropout_transition=1[a]"
-        preset, crf, ab = "ultrafast", "24", "128k"
+        audio_filter = "[1:a]loudnorm=I=-16:TP=-1.5:LRA=7[vo];[2:a]volume=0.075[m];[3:a]adelay=80|80,volume=0.05[s];[vo][m][s]amix=inputs=3:duration=longest:dropout_transition=1[a]"
+        preset, crf, ab = "veryfast", "20", "160k"
     else:
         width, height, fps, font = 1920, 1080, 30, 42
         if asset.get("kind") == "video":
@@ -2036,13 +2089,8 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             try:
                 asset = acquire_scene_asset(ch, outdir, i, prefer_motion=(i <= max_ai_video_scenes), duration=ch["actual_duration"])
             except Exception as asset_exc:
-                audit_event(project_id, "visual_fallback", {"scene": i, "error": str(asset_exc)[:500]})
-                asset = _procedural_image(
-                    str(ch.get("image_prompt") or ch.get("heading") or topic),
-                    outdir, i, width=1280 if FAST_MODE else 1920, height=720 if FAST_MODE else 1080
-                )
-                if not asset:
-                    raise RuntimeError(f"scene {i}: no visual fallback available")
+                audit_event(project_id, "visual_source_unavailable", {"scene": i, "error": str(asset_exc)[:500]})
+                raise RuntimeError(f"scene {i}: professional visual source unavailable; no placeholder output was produced") from asset_exc
             assets_meta.append(redact({k: v for k, v in asset.items() if k != "path"}))
             _save_asset(project_id, "visual", Path(asset["path"]), "video/mp4" if asset.get("kind") == "video" else "image/png", asset)
             sfx = shared_sfx if FAST_MODE else make_sfx(outdir, ch["actual_duration"], i)
@@ -2152,7 +2200,8 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "studio_version": VERSION, "build": BUILD, "project_id": project_id, "created_at": now(),
             "title": plan.get("title") or topic, "format": req.get("format", "long"), "content_type": req.get("content_type", "video"),
             "target_duration_seconds": target, "actual_duration_seconds": probe_duration(captioned),
-            "render_profile": "720p-fast" if FAST_MODE else "1080p-production",
+            "render_profile": "720p-fast-enhanced" if FAST_MODE else "1080p-production",
+            "visual_policy": "connected-ai-or-real-public-media-only; no-placeholder-video",
             "ai_provider": ai_provider, "voice_provider": voice_provider, "research": research, "quality": qc,
             "assets": assets_meta, "shorts": [{k: v for k, v in x.items() if k != "path"} for x in shorts],
             "self_upgrade": True, "truthful": True,
