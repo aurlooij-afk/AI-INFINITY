@@ -4313,6 +4313,13 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
                     persisted_verified = bool(gate_row and int(gate_row["verified"] or 0) == 1 and persisted_report.get("verified") is True and persisted_report.get("truthful") is True)
                 except Exception:
                     persisted_verified = False
+                if not persisted_verified:
+                    try:
+                        proof_path = _project_dir(project_id) / "reality_proof.json"
+                        proof = json.loads(proof_path.read_text(encoding="utf-8")) if proof_path.is_file() else {}
+                        persisted_verified = bool(proof.get("verified") is True and proof.get("truthful") is True and proof.get("state") == "VERIFIED")
+                    except Exception:
+                        persisted_verified = False
                 if not persisted_verified and not smoke_delivery_override:
                     raise HTTPException(409, "final delivery is blocked until professional verification passes")
         mapping = {
