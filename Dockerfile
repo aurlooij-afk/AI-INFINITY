@@ -21,6 +21,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     AI_INFINITY_MEMORY_RESERVE_MB=128 \
     AI_INFINITY_PERSISTENCE_MODE=portable \
     AI_INFINITY_DIVINE_CLOSURE=true \
+    AI_INFINITY_PRODUCTION_GRAPH_WORKER=true \
     PORT=10000 \
     PYTHONPATH=/app
 
@@ -37,14 +38,14 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install -r requirements.txt \
     && if [ -s bridge-requirements.txt ]; then python -m pip install -r bridge-requirements.txt; fi
 
-COPY sitecustomize.py main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_studio_2030.html creator_entrypoint.py creator_pro_os.py overlay_final_3700.py runtime_main_3700.py ./
+COPY sitecustomize.py main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_studio_2030.html creator_entrypoint.py creator_pro_os.py overlay_final_3700.py runtime_main_3700.py production_graph.py ./
 COPY production_hardening.py creator_final_3800.py ui_3800.html divine_closure_3900.py reality_first_3901.py ai_infinity_canonical.py ai_infinity_app.py ./
 COPY ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py ./
 
 RUN python -m py_compile \
     sitecustomize.py main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py \
     infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py \
-    overlay_final_3700.py runtime_main_3700.py production_hardening.py creator_final_3800.py \
+    overlay_final_3700.py runtime_main_3700.py production_graph.py production_hardening.py creator_final_3800.py \
     divine_closure_3900.py reality_first_3901.py ai_infinity_canonical.py ai_infinity_app.py \
     ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py
 
@@ -52,6 +53,6 @@ RUN mkdir -p /tmp/ai-infinity && chown -R aiinfinity:aiinfinity /app /tmp/ai-inf
 USER aiinfinity
 EXPOSE 10000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD curl -fsS http://127.0.0.1:${PORT:-10000}/health >/dev/null || exit 1
+  CMD curl -fsS http://127.0.0.1:\${PORT:-10000}/health >/dev/null || exit 1
 ENTRYPOINT ["/usr/bin/tini","--"]
-CMD ["sh","-c","exec uvicorn ai_infinity_app:app --host 0.0.0.0 --port ${PORT:-10000}"]
+CMD ["sh","-c","exec uvicorn ai_infinity_app:app --host 0.0.0.0 --port \${PORT:-10000}"]
