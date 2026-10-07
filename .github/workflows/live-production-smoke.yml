@@ -38,7 +38,7 @@ jobs:
                               data=json.loads(body)
                           except Exception:
                               data={}
-                          revision=str(data.get("revision") or data.get("git_sha") or data.get("commit") or "")
+                          revision=str(data.get("deployment_revision") or data.get("revision") or data.get("git_sha") or data.get("commit") or "")
                           if revision == expected:
                               raise SystemExit(0)
                           print("healthy deployment is not current: expected=%s actual=%s" % (expected, revision or "unknown"),flush=True)
