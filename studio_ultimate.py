@@ -820,7 +820,13 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "narration": narration,
             "visual_query": f"{topic_label} {focus} documentary photography",
             "image_prompt": f"Premium editorial documentary image about {topic_label}; visual focus: {focus}; realistic people, locations, objects or processes, natural cinematic lighting, coherent composition, strong subject separation, no logos, no text, visually distinct from other scenes",
-            "on_screen": name,
+            "on_screen": {
+                "Hook": f"{topic_label}: start with the real problem",
+                "Why it matters": f"Why {topic_label} changes outcomes",
+                "The key idea": f"The core principle behind {topic_label}",
+                "Practical example": f"Put {topic_label} into practice",
+                "Takeaway": f"A practical takeaway on {topic_label}",
+            }.get(name, str(name)),
             "duration": sec,
             "proof_needed": [src.get("title")] if src.get("title") and src.get("title") != clean_title else [],
         })
@@ -1044,6 +1050,9 @@ def _hf_image(prompt: str, outdir: Path, index: int) -> Optional[Dict[str, Any]]
                 image = client.text_to_image(
                     full_prompt,
                     model=model,
+                    width=1280 if FAST_MODE else 1536,
+                    height=720 if FAST_MODE else 864,
+                    num_inference_steps=int(os.getenv("AI_INFINITY_IMAGE_STEPS", "6" if FAST_MODE else "10")),
                 )
                 p = outdir / f"ai_visual_{index:02d}.png"
                 image.save(p)
