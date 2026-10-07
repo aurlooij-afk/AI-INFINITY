@@ -1113,14 +1113,20 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     if ai:
         return ai
 
-    for getter in (_pexels, _pixabay, _nasa_images, _openverse_images, _commons_media):
-        items = getter(query, outdir, limit=3)
-        videos = [x for x in items if x.get("kind") == "video"]
-        if videos:
-            return videos[0]
-        images = [x for x in items if x.get("kind") == "image"]
-        if images:
-            return images[0]
+    query_variants = [query]
+    heading = str(scene.get("heading") or "").strip()
+    focus = re.sub(r"[^a-zA-Z0-9, ._-]+", " ", heading).strip()
+    if focus and focus.lower() not in query.lower():
+        query_variants.append(focus + " real world photography")
+    for q in query_variants[:2]:
+        for getter in (_pexels, _pixabay, _nasa_images, _openverse_images, _commons_media):
+            items = getter(q, outdir, limit=3)
+            videos = [x for x in items if x.get("kind") == "video"]
+            if videos:
+                return videos[0]
+            images = [x for x in items if x.get("kind") == "image"]
+            if images:
+                return images[0]
 
     test_media = _ci_test_visual(scene, outdir, index)
     if test_media:
