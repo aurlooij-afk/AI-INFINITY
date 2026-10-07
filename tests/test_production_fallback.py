@@ -8,6 +8,7 @@ import studio_ultimate as studio
 
 
 def test_scene_asset_has_real_local_fallback(monkeypatch, tmp_path):
+    monkeypatch.setenv("AI_INFINITY_REQUIRE_SOURCE_VISUALS", "0")
     monkeypatch.setattr(studio, "_hf_video", lambda *a, **k: None)
     monkeypatch.setattr(studio, "_hf_image", lambda *a, **k: None)
 
