@@ -90,6 +90,7 @@ jobs:
           AI_INFINITY_STUDIO_SMOKE: "1"
           AI_INFINITY_DATA_DIR: "/tmp/ai-infinity-ci-smoke"
           AI_INFINITY_FAST_MODE: "1"
+          AI_INFINITY_REQUIRE_SOURCE_VISUALS: "0"
         run: |
           set -euo pipefail
           python - <<'PY'
