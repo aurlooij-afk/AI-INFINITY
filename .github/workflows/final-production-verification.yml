@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - ai-infinity-canonical-divine
+      - main
   workflow_dispatch:
 
 permissions:
@@ -69,6 +70,8 @@ jobs:
             -e AI_INFINITY_FFMPEG_THREADS=1 \
             -e AI_INFINITY_FFMPEG_FILTER_THREADS=1 \
             -e AI_INFINITY_FAST_MODE=1 \
+            -e AI_INFINITY_FAST_REMOTE_TIMEOUT=12 \
+            -e AI_INFINITY_AI_VIDEO=0 \
             ai-infinity-final:ci
           for i in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:10000/health >/tmp/health.json; then break; fi
