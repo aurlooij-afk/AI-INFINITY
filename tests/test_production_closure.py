@@ -44,3 +44,8 @@ def test_root_ui_contains_professional_truth_gate():
 def test_alternate_asgi_entrypoint_is_also_wired():
     import ai_infinity_app
     assert any(r.path == "/infinity/studio/system/readiness" for r in ai_infinity_app.app.routes)
+
+def test_short_master_is_never_frozen_to_fake_the_requested_duration(monkeypatch, tmp_path):
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 36.4)
+    with __import__("pytest").raises(RuntimeError, match="refusing frozen-frame padding"):
+        studio._normalize_delivery_duration(tmp_path / "source.mp4", 60, tmp_path / "out.mp4")
