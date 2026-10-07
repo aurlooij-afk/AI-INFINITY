@@ -4290,21 +4290,16 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         # to exist. They remain inaccessible until the professional closure gate
         # has verified the project.
         if name in {"final.mp4", "package.zip"}:
-            # Delivery is released only by the independent Reality Kernel.
-            # This prevents a stale/in-process studio flag from blocking a
-            # genuinely verified artifact, while preserving the 409 gate.
-            gate = globals().get("_professional_truth")
-            if gate is None:
-                try:
-                    import reality_first_3901 as _reality_kernel
-                    gate = lambda project, reconcile=True: _reality_kernel.truth_for_project(str(project.get("project_id") or ""))
-                except Exception:
-                    gate = None
+            # Final deliverables are released only from an independently
+            # reconciled Reality Kernel proof. Never use a stale in-process flag.
             smoke_delivery_override = (SMOKE and os.getenv("AI_INFINITY_SMOKE_ALLOW_UNVERIFIED_DELIVERY","0").strip().lower() in {"1","true","yes","on"}) or (os.getenv("CI","").strip().lower() == "true" and FAST_MODE)
-            if gate is not None:
-                truth = gate(p, reconcile=True) if gate is not getattr(locals(), "_reality_kernel", None) else gate(p)
-                if not truth.get("verified") and not smoke_delivery_override:
-                    raise HTTPException(409, "final delivery is blocked until professional verification passes")
+            try:
+                import reality_first_3901 as _reality_kernel
+                truth = _reality_kernel.truth_for_project(project_id)
+            except Exception:
+                truth = {"verified": False, "truthful": False}
+            if not truth.get("verified") and not smoke_delivery_override:
+                raise HTTPException(409, "final delivery is blocked until professional verification passes")
         mapping = {
             "final.mp4": ("final.mp4", "video/mp4"), "package.zip": (next((q["path"] for q in _asset_rows(project_id) if q["kind"] == "package"), "package.zip"), "application/zip"),
             "thumbnail.jpg": ("thumbnail.jpg", "image/jpeg"), "script.md": ("script.md", "text/markdown"), "captions.srt": ("captions.srt", "application/x-subrip"), "sources.json": ("sources.json", "application/json"), "manifest.json": ("manifest.json", "application/json"),
