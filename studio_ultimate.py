@@ -3780,6 +3780,33 @@ ECOSYSTEM_VERTICALS_3621 = [
     {"id":"ecommerce","name":"E-commerce","capabilities":["product-media","storefront-copy","campaigns","catalog-content"]},
 ]
 
+def _truthful_multimodal_tools() -> List[Dict[str, Any]]:
+    hf_token = bool(os.getenv("HF_TOKEN","").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN","").strip())
+    video_remote = bool(
+        hf_token
+        or os.getenv("OPENAI_API_KEY","").strip()
+        or os.getenv("RUNWAYML_API_SECRET","").strip()
+    )
+    out = []
+    for raw in MULTIMODAL_TOOLS_3621:
+        tool = dict(raw)
+        tid = str(tool.get("id") or "")
+        if tid == "video":
+            tool["runtime_status"] = "provider-ready" if video_remote else "local-render-ready"
+            tool["provider_configured"] = video_remote
+        elif tid == "image":
+            tool["runtime_status"] = "provider-ready" if hf_token else "source-backed"
+            tool["provider_configured"] = hf_token
+        elif tid in {"voice","music","text","document-to-show","repurpose","web-to-video"}:
+            tool["runtime_status"] = "local-ready"
+            tool["provider_configured"] = False
+        else:
+            tool["runtime_status"] = tool.get("status","adapter-dependent")
+            tool["provider_configured"] = False
+        out.append(tool)
+    return out
+
+
 def _site_manifest_3621(user_id: str) -> Dict[str, Any]:
     configured = [x for x in BUILTIN_API_PROVIDERS if x.get("configured")]
     return {
@@ -3790,7 +3817,7 @@ def _site_manifest_3621(user_id: str) -> Dict[str, Any]:
         "mobile_app_module": False,
         "modules": SITE_MODULES_3621,
         "agents": AGENT_CATALOG_3621,
-        "multimodal_tools": MULTIMODAL_TOOLS_3621,
+        "multimodal_tools": _truthful_multimodal_tools(),
         "production_flow": PRODUCTION_FLOW_3621,
         "monetization_lanes": MONETIZATION_LANES_3621,
         "advanced_features": ADVANCED_FEATURES_3621,
@@ -3977,10 +4004,20 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         return {
             "status": "healthy", "version": VERSION, "build": BUILD,
             "research": True, "internet_sources": True, "creative_engine": True,
-            "ai_image_generation": True,
+            "ai_image_generation": bool(os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()),
             "ai_image_generation_provider_available": bool(os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()),
-            "ai_video_generation": True,
-            "ai_video_generation_provider_available": bool(os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()),
+            "ai_video_generation": bool(
+                os.getenv("HF_TOKEN", "").strip()
+                or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
+                or os.getenv("OPENAI_API_KEY", "").strip()
+                or os.getenv("RUNWAYML_API_SECRET", "").strip()
+            ),
+            "ai_video_generation_provider_available": bool(
+                os.getenv("HF_TOKEN", "").strip()
+                or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
+                or os.getenv("OPENAI_API_KEY", "").strip()
+                or os.getenv("RUNWAYML_API_SECRET", "").strip()
+            ),
             "real_motion_video": True, "motion_design_fallback": True,
             "voice": True, "music": True, "captions": True,
             "long_form": True, "short_form": True, "thumbnail": True,
@@ -4704,7 +4741,7 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
     @app.get("/infinity/studio/tools")
     def tools_3621(request: Request, response: Response):
         user_id=_get_user_id(request); _set_session(response,request,user_id)
-        return {"version":VERSION,"tools":MULTIMODAL_TOOLS_3621,"truthful":True}
+        return {"version":VERSION,"tools":_truthful_multimodal_tools(),"truthful":True}
 
     @app.post("/infinity/studio/tools/run")
     async def tools_run_3621(request: Request, response: Response):
