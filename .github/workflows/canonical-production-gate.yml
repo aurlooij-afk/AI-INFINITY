@@ -43,7 +43,7 @@ jobs:
           if [ -s bridge-requirements.txt ]; then python -m pip install -r bridge-requirements.txt; fi
       - name: Compile canonical runtime
         run: |
-          python -m py_compile main.py reality_first_3901.py studio_ultimate.py ai_infinity_canonical.py ai_infinity_app.py
+          python -m py_compile main.py reality_first_3901.py studio_ultimate.py production_closure_3624.py professional_creator_v2.py professional_creator_v2_timeline_patch.py ai_infinity_canonical.py ai_infinity_app.py
       - name: End-to-end creator proof
         run: |
           python - <<'PY'

@@ -550,6 +550,30 @@ def reconcile_project(project_id: str) -> Dict[str, Any]:
     except Exception:
         pass
 
+    # Remove stale proof rows whose referenced files no longer exist. A remote
+    # source asset may legitimately disappear after the final media has been
+    # rendered; retaining a dead row would make the Reality Kernel report a
+    # filesystem contradiction even though the current deliverables are intact.
+    try:
+        root = _project_path(project_id)
+        s = _studio()
+        with _DB_LOCK, s.DB_LOCK, s._connect() as c:
+            stale = []
+            for row in c.execute(
+                "SELECT asset_name, sha256 FROM reality_artifacts_3901 WHERE project_id=?",
+                (project_id,),
+            ).fetchall():
+                asset_name = Path(str(row["asset_name"] or "")).name
+                if asset_name and not (root / asset_name).is_file():
+                    stale.append(asset_name)
+            for asset_name in stale:
+                c.execute(
+                    "DELETE FROM reality_artifacts_3901 WHERE project_id=? AND asset_name=?",
+                    (project_id, asset_name),
+                )
+    except Exception:
+        pass
+
     status = str(p.get("status") or "").lower()
     required_ok, checks, proofs = _verify_required(project_id, req)
 
@@ -797,6 +821,23 @@ def _emergency_finalize(project_id: str) -> bool:
                 {},
             )
             chapters = fallback.get("chapters") or []
+        # Recovery evidence is scene-master authoritative. Keep exactly one
+        # chapter per recovered scene and bind its duration to the actual media.
+        aligned = []
+        for idx, scene_path in enumerate(scenes, 1):
+            source = chapters[idx - 1] if idx - 1 < len(chapters) and isinstance(chapters[idx - 1], dict) else {}
+            try:
+                scene_duration = float(s.probe_duration(scene_path))
+            except Exception:
+                scene_duration = max(2.0, float(source.get("duration") or 2.0))
+            aligned.append({
+                **source,
+                "heading": str(source.get("heading") or f"Scene {idx}")[:240],
+                "narration": str(source.get("narration") or source.get("text") or ""),
+                "duration": scene_duration,
+                "actual_duration": scene_duration,
+            })
+        chapters = aligned
         captions = root / "captions.srt"
         s.write_srt(chapters, captions)
         script = root / "script.md"
@@ -820,20 +861,81 @@ def _emergency_finalize(project_id: str) -> bool:
             s.ffmpeg("-i", final, "-map", "0:a:0", "-c:a", "libmp3lame", "-q:a", "4", audio, timeout=180)
     except Exception:
         return False
+
+    # Recovery must honor the same delivery contract as the normal pipeline.
+    # Trim/re-encode the recovered final to the requested duration, then create
+    # the real manifest and persist independent QC evidence.
+    try:
+        p = s._get_project(project_id) or {}
+        req = p.get("request_json") if isinstance(p.get("request_json"), dict) else {}
+        target = float(req.get("duration") or 0)
+        if target > 0 and hasattr(s, "_normalize_delivery_duration"):
+            normalized = root / "recovered_duration_normalized.mp4"
+            source = s._normalize_delivery_duration(final, target, normalized)
+            if source != final and Path(source).exists():
+                os.replace(source, final)
+        # Write a truthful manifest from the current filesystem.
+        manifest = root / "manifest.json"
+        files = []
+        for fp in sorted(root.iterdir()):
+            if fp.is_file() and fp.name not in {"manifest.json"}:
+                files.append({
+                    "name": fp.name,
+                    "size_bytes": fp.stat().st_size,
+                    "sha256": _file_hash(fp),
+                })
+        manifest.write_text(_jdump({
+            "schema": "ai-infinity.production-manifest.v1",
+            "project_id": project_id,
+            "pipeline": "reality-recovery",
+            "master": "final.mp4",
+            "files": files,
+            "generated_at": _iso(),
+            "truthful": True,
+        }), encoding="utf-8")
+        for path, mt in [
+            (final, "video/mp4"),
+            (audio, "audio/mpeg"),
+            (captions, "application/x-subrip"),
+            (script, "text/markdown"),
+            (thumb, "image/jpeg"),
+            (manifest, "application/json"),
+        ]:
+            if Path(path).is_file():
+                try:
+                    s.register_artifact(project_id, Path(path), mt, {"recovered": True, "truthful": True})
+                except Exception:
+                    pass
+        recovery_assets = [
+            {"kind": "image", "path": str(root / f"scene_{i:02d}.mp4"), "source": "recovered-scene", "rights_status": "inherited_scene_evidence", "reused_source": True}
+            for i in range(1, len(scenes) + 1)
+            if (root / f"scene_{i:02d}.mp4").is_file()
+        ]
+        qc = s.extended_quality_check(final, chapters, captions, root, assets=recovery_assets)
+    except Exception as exc:
+        return False
+
+    try:
+        final_duration = float(s.probe_duration(final))
+    except Exception:
+        final_duration = 0.0
+    result_payload = {
+        "status": "completed_with_qc_warnings" if not qc.get("passed") else "completed",
+        "project_id": project_id,
+        "title": (s._get_project(project_id) or {}).get("title"),
+        "recovered": True,
+        "duration_seconds": final_duration,
+        "quality": qc,
+        "truthful": True,
+    }
     try:
         s._update_project(
             project_id,
-            status="completed_with_qc_warnings",
-            error="Recovered by Reality Kernel after a late production failure.",
-            stage="complete",
+            status=result_payload["status"],
+            error=None if qc.get("passed") else "Recovered by Reality Kernel; professional QC requires review.",
+            stage="quality_control",
             progress=100,
-            result_json=_jdump({
-                "status": "completed_with_qc_warnings",
-                "project_id": project_id,
-                "title": (s._get_project(project_id) or {}).get("title"),
-                "recovered": True,
-                "truthful": True,
-            }),
+            result_json=_jdump(result_payload),
         )
     except Exception:
         return False

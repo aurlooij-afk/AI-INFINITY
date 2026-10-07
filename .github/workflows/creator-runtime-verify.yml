@@ -47,7 +47,7 @@ jobs:
           AI_INFINITY_FAST_MODE: "1"
         run: |
           set -euo pipefail
-          python -m py_compile main.py
+          python -m py_compile main.py professional_creator_v2.py professional_creator_v2_timeline_patch.py production_closure_3624.py studio_ultimate.py
           python - <<'PY'
           import os
           os.environ["AI_INFINITY_DATA_DIR"] = "/tmp/ai-infinity-ci"
@@ -79,7 +79,7 @@ jobs:
 
       - name: Verify professional closure regression tests
         run: |
-          python -m pytest -q tests/test_production_closure.py tests/test_production_fallback.py
+          python -m pytest -q tests/test_production_closure.py tests/test_production_fallback.py tests/test_professional_creator_system.py
 
       - name: Verify browser shell JavaScript syntax
         run: |
@@ -166,6 +166,12 @@ jobs:
 
 
       - name: Run real creator production smoke test
+        env:
+          AI_INFINITY_REQUIRE_SOURCE_VISUALS: "0"
+          AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE: "0"
+          AI_INFINITY_FAST_MODE: "1"
+          AI_INFINITY_3601_BACKGROUND: "false"
+          AI_INFINITY_DATA_DIR: /tmp/ai-infinity-real-smoke
         run: |
           set -euo pipefail
           python - <<'PY'

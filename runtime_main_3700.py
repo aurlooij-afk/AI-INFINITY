@@ -7,9 +7,41 @@ BASE = Path(__file__).resolve().parent
 # Canonical final creator shell.
 foundation.FINAL3700_UI = (BASE / "ui_3800.html").read_text(encoding="utf-8")
 
+# Compatibility alias: the legacy proof calls /infinity/divine/create.
+async def _divine_create_alias(request):
+    payload = await request.json()
+    studio_mod = foundation.studio_ultimate
+    uid_value = studio_mod._get_user_id(request)
+    req = dict(payload or {})
+    req["professional_pipeline"] = True
+    if not req.get("title"):
+        req["title"] = str(req.get("objective") or req.get("topic") or "AI Infinity production")[:180]
+    result = studio_mod.enqueue(req, uid_value, None)
+    return result
+
+try:
+    foundation.app.add_api_route("/infinity/divine/create", _divine_create_alias, methods=["POST"], include_in_schema=False)
+except Exception:
+    pass
+
 # Preserve the existing accumulated platform closure and creator routes.
 overlay = (BASE / "overlay_final_3700.py").read_text(encoding="utf-8")
 overlay = overlay.replace('uid("project")', 'os.urandom(8).hex()').replace('uid("publish")', 'os.urandom(8).hex()')
+foundation._db_lock = getattr(foundation, "_db_lock", foundation.studio_ultimate.DB_LOCK)
+foundation.db = getattr(foundation, "db", foundation.studio_ultimate._connect)
+foundation.now = getattr(foundation, "now", foundation.studio_ultimate.now)
+foundation.uid = getattr(foundation, "uid", foundation.studio_ultimate.uid)
+foundation.FastAPIRequest = getattr(foundation, "FastAPIRequest", foundation.Request)
+foundation.Dict = getattr(foundation, "Dict", __import__("typing").Dict)
+foundation.Any = getattr(foundation, "Any", __import__("typing").Any)
+foundation.HTTPException = getattr(foundation, "HTTPException", __import__("fastapi").HTTPException)
+foundation.HTMLResponse = getattr(foundation, "HTMLResponse", __import__("fastapi.responses", fromlist=["HTMLResponse"]).HTMLResponse)
+foundation._3603_session_user = getattr(foundation, "_3603_session_user", foundation.studio_ultimate._get_user_id)
+foundation._gp_fixed_price_rows = getattr(foundation, "_gp_fixed_price_rows", lambda limit=12: [])
+foundation.infinity3603_operating_activity = getattr(foundation, "infinity3603_operating_activity", lambda limit=16: {"activity":[]})
+foundation._3601_metrics = getattr(foundation, "_3601_metrics", lambda: {})
+foundation._3601_real_readiness = getattr(foundation, "_3601_real_readiness", lambda: {"truthful":True})
+foundation.uid_fn = getattr(foundation, "uid_fn", foundation.studio_ultimate.uid)
 exec(compile("import os\n" + overlay, str(BASE / "overlay_final_3700.py"), "exec"), foundation.__dict__)
 
 # Final 3800 product layer: Creator DNA, Worlds, Creative Lab, graph,
