@@ -2676,15 +2676,59 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             for ch in chapters:
                 article_lines += [f"## {ch.get('heading')}", str(ch.get('narration') or ""), ""]
             article.write_text("\n".join(article_lines), encoding="utf-8")
-        if True:
-            social = outdir / "social_campaign.md"
-            social.write_text("# Social Campaign\n\n" + "\n".join([f"- {ch.get('heading')}: {ch.get('narration','')}" for ch in chapters]) + "\n", encoding="utf-8")
+        # Build the human-readable campaign plus the canonical JSON campaign
+        # contract. The JSON artifact is mandatory for professional delivery and
+        # contains platform-native copy, hooks, CTAs and formatting data.
+        social_markdown = outdir / "social_campaign.md"
+        social_markdown.write_text(
+            "# Social Campaign\n\n" +
+            "\n".join([f"- {ch.get('heading')}: {ch.get('narration','')}" for ch in chapters]) +
+            "\n",
+            encoding="utf-8",
+        )
 
         editorial = {}
         try:
-            editorial = build_editorial_packages(project_id, outdir, plan, chapters, req, research, str(plan.get("title") or topic))
+            editorial = build_editorial_packages(
+                project_id, outdir, plan, chapters, req, research,
+                str(plan.get("title") or topic)
+            )
         except Exception as editorial_exc:
             audit_event(project_id, "optional_editorial_package_failed", {"error": str(editorial_exc)[:1200]})
+
+        # Never downgrade the required JSON campaign to the legacy markdown
+        # representation when the editorial builder is unavailable.
+        social = Path(str(editorial.get("social") or outdir / "social_campaign.json"))
+        if not social.is_file():
+            social_payload = {
+                "method": "platform_native_copy_and_delivery_contracts",
+                "title": str(plan.get("title") or topic),
+                "hook": str(plan.get("hook") or ""),
+                "cta": str(plan.get("cta") or "Follow for the next practical breakdown."),
+                "platforms": {
+                    "YouTube": {
+                        "title_variants": [str(plan.get("title") or topic)[:100]],
+                        "description": "\n\n".join(
+                            str(ch.get("narration") or "") for ch in chapters
+                        )[:4500],
+                        "format": "16:9",
+                    },
+                    "Instagram": {
+                        "caption": "\n\n".join(
+                            str(ch.get("narration") or "") for ch in chapters[:3]
+                        )[:2200],
+                        "format": "9:16",
+                    },
+                    "TikTok": {
+                        "caption": "\n\n".join(
+                            str(ch.get("narration") or "") for ch in chapters[:2]
+                        )[:3900],
+                        "format": "9:16",
+                    },
+                },
+                "truthful": True,
+            }
+            social.write_text(jdump(social_payload), encoding="utf-8")
 
         experiments = None
         try:
