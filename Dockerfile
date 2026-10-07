@@ -12,7 +12,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     VECLIB_NUM_THREADS=1 \
     BLIS_NUM_THREADS=1 \
     MALLOC_ARENA_MAX=2 \
-    AI_INFINITY_DATA_DIR=/tmp/ai-infinity \
+    AI_INFINITY_DATA_DIR=/data/ai-infinity \
     AI_INFINITY_3601_BACKGROUND=true \
     AI_INFINITY_MAX_HEAVY_JOBS=1 \
     AI_INFINITY_FFMPEG_THREADS=1 \
@@ -51,10 +51,11 @@ RUN python -m py_compile \
     ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py
 
 RUN chmod 755 /app/entrypoint.sh \
-    && mkdir -p /tmp/ai-infinity \
-    && chown -R aiinfinity:aiinfinity /app /tmp/ai-infinity
+    && mkdir -p /data/ai-infinity /tmp/ai-infinity \
+    && chown -R aiinfinity:aiinfinity /app /data/ai-infinity /tmp/ai-infinity
 USER aiinfinity
 EXPOSE 10000
+VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -fsS "http://127.0.0.1:${PORT:-10000}/health" >/dev/null || exit 1
 ENTRYPOINT ["/bin/sh","/app/entrypoint.sh"]
