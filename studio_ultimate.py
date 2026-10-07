@@ -647,7 +647,7 @@ def _hf_creator_plan(prompt: str) -> Tuple[Optional[Dict[str, Any]], str]:
     token = os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
     if not token:
         return None, "no-hf-token"
-    model = os.getenv("AI_INFINITY_TEXT_MODEL", "Qwen/Qwen2.5-7B-Instruct-1M:fastest").strip()
+    model = os.getenv("AI_INFINITY_TEXT_MODEL", "Qwen/Qwen2.5-7B-Instruct").strip()
     try:
         from huggingface_hub import InferenceClient
         client_kwargs={"api_key": token, "timeout": (45 if FAST_MODE else 120)}
@@ -667,7 +667,6 @@ def _hf_creator_plan(prompt: str) -> Tuple[Optional[Dict[str, Any]], str]:
             temperature=0.72,
             top_p=0.92,
             max_tokens=5000 if FAST_MODE else 9000,
-            response_format={"type": "json"},
         )
         text = response.choices[0].message.content if getattr(response, "choices", None) else ""
         data = _extract_json(text or "")
