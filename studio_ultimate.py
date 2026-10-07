@@ -1026,7 +1026,7 @@ def _hf_image(prompt: str, outdir: Path, index: int) -> Optional[Dict[str, Any]]
         return None
     requested = os.getenv("AI_INFINITY_IMAGE_MODEL", "").strip()
     models = [requested] if requested else [
-        "black-forest-labs/FLUX.1-Krea-dev",
+        "black-forest-labs/FLUX.1-schnell",
         "Qwen/Qwen-Image",
         "black-forest-labs/FLUX.1-dev",
     ]
