@@ -503,8 +503,18 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         failures.append(f"silent narration fallback detected in {len(voice_fallback_events)} scene(s)")
 
     visual_rows = _source_assets(p)
+    scene_files = []
+    try:
+        scene_files = sorted(_studio()._project_dir(project_id).glob("scene_*.mp4"))
+    except Exception:
+        scene_files = []
+    effective_scene_count = len(scene_files) if scene_files else (len(chapters) if chapters else 1)
     checks["visual_source_count"] = len(visual_rows)
-    checks["visual_sources_present"] = len(visual_rows) >= max(1, len(chapters) if chapters else 1)
+    checks["visual_scene_count"] = effective_scene_count
+    # Compare source evidence to the actual rendered scene masters, not to a
+    # stale or pre-recovery storyboard chapter count. Reused verified sources
+    # still create one visual evidence row per rendered scene.
+    checks["visual_sources_present"] = len(visual_rows) >= max(1, effective_scene_count)
     fallback_rows = [x for x in visual_rows if bool((x.get("metadata") or {}).get("fallback"))]
     checks["fallback_visual_count"] = len(fallback_rows)
     checks["source_visual_policy_passed"] = (not fallback_rows) if strict_visual else True
