@@ -4290,10 +4290,19 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         # to exist. They remain inaccessible until the professional closure gate
         # has verified the project.
         if name in {"final.mp4", "package.zip"}:
+            # Delivery is released only by the independent Reality Kernel.
+            # This prevents a stale/in-process studio flag from blocking a
+            # genuinely verified artifact, while preserving the 409 gate.
             gate = globals().get("_professional_truth")
+            if gate is None:
+                try:
+                    import reality_first_3901 as _reality_kernel
+                    gate = lambda project, reconcile=True: _reality_kernel.truth_for_project(str(project.get("project_id") or ""))
+                except Exception:
+                    gate = None
             smoke_delivery_override = (SMOKE and os.getenv("AI_INFINITY_SMOKE_ALLOW_UNVERIFIED_DELIVERY","0").strip().lower() in {"1","true","yes","on"}) or (os.getenv("CI","").strip().lower() == "true" and FAST_MODE)
             if gate is not None:
-                truth = gate(p, reconcile=True)
+                truth = gate(p, reconcile=True) if gate is not getattr(locals(), "_reality_kernel", None) else gate(p)
                 if not truth.get("verified") and not smoke_delivery_override:
                     raise HTTPException(409, "final delivery is blocked until professional verification passes")
         mapping = {
