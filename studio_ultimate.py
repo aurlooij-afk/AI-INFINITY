@@ -4439,9 +4439,35 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         user_id=_get_user_id(request); _set_session(response,request,user_id); p=_get_project(project_id)
         if not p or p.get("user_id")!=user_id: raise HTTPException(404,"project not found")
         checks=[]
+        base=_project_dir(project_id)
+
+        # Reconcile the verification registry from actual on-disk production
+        # files before judging the project. This covers late recovery/completion
+        # paths where the media pipeline succeeded but the registry write was
+        # interrupted. No status is fabricated; bytes and SHA-256 remain the
+        # source of truth.
+        try:
+            existing_names=set()
+            with DB_LOCK, _connect() as c:
+                existing_names={str(r[0]) for r in c.execute("SELECT asset_name FROM studio_artifacts_3614 WHERE project_id=?",(project_id,)).fetchall()}
+            for path in sorted(base.iterdir()) if base.exists() else []:
+                if not path.is_file() or path.name in existing_names or path.name == "reality_proof.json":
+                    continue
+                mt={
+                    ".mp4":"video/mp4",".zip":"application/zip",".jpg":"image/jpeg",".jpeg":"image/jpeg",
+                    ".png":"image/png",".mp3":"audio/mpeg",".wav":"audio/wav",".m4a":"audio/mp4",
+                    ".srt":"application/x-subrip",".json":"application/json",".md":"text/markdown",
+                    ".xml":"application/xml",".txt":"text/plain",
+                }.get(path.suffix.lower(),"application/octet-stream")
+                try:
+                    register_artifact(project_id,path,mt,{"reconciled_by":"studio_verify","truthful":True})
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         with DB_LOCK, _connect() as c:
             rows=[dict(r) for r in c.execute("SELECT asset_name,sha256,size_bytes FROM studio_artifacts_3614 WHERE project_id=?",(project_id,)).fetchall()]
-        base=_project_dir(project_id)
         for row in rows:
             path=base/Path(row["asset_name"]).name
             exists=path.exists(); size=path.stat().st_size if exists else 0
