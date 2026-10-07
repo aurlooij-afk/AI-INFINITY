@@ -99,6 +99,41 @@ def _parse_result(p: Dict[str, Any]) -> Dict[str, Any]:
         return {}
 
 
+
+def _canonical_state(p: Dict[str, Any]) -> str:
+    status = str(p.get("status") or "").lower()
+    stage = str(p.get("stage") or "").lower()
+    if status == "cancelled":
+        return "CANCELLED"
+    if status == "failed":
+        return "FAILED"
+    if status in {"completed", "completed_with_qc_warnings"}:
+        return "VERIFIED" if status == "completed" else "QC_REVIEW_REQUIRED"
+    mapping = [
+        ("research", "RESEARCHING"),
+        ("direction", "DIRECTING"),
+        ("creative", "DIRECTING"),
+        ("plan", "PLANNING"),
+        ("production", "GENERATING"),
+        ("visual", "GENERATING"),
+        ("voice", "AUDIO"),
+        ("caption", "CAPTIONS"),
+        ("audio", "AUDIO"),
+        ("assembly", "EDITING"),
+        ("edit", "EDITING"),
+        ("quality", "QC"),
+        ("package", "PACKAGING"),
+        ("delivery", "READY"),
+    ]
+    for needle, state in mapping:
+        if needle in stage:
+            return state
+    if status in {"queued"}:
+        return "QUEUED"
+    if status in {"running", "producing"}:
+        return "GENERATING"
+    return "DRAFT"
+
 def _parse_blueprint(p: Dict[str, Any]) -> Dict[str, Any]:
     b = p.get("blueprint_json")
     if isinstance(b, dict):
@@ -405,6 +440,7 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         "warnings": warnings,
         "missing_artifacts": missing,
         "requested": {"duration_seconds": checks["requested_duration"], "content_type": req.get("content_type") or "video", "quality_preset": req.get("quality_preset") or "balanced"},
+        "canonical_state": _canonical_state(p),
         "artifact_paths": {name: _public_path(project_id, name) for name in sorted(files)},
         "timestamps": {
             "created_at": _iso(p.get("created_at")),
@@ -1026,6 +1062,43 @@ def register(app) -> None:
             "offsite_configured": bool(os.getenv("AI_INFINITY_BACKUP_WEBHOOK", "").strip()),
             "truthful": True,
         }
+
+
+    @app.get("/infinity/studio/project/{project_id}/timeline/graph")
+    def timeline_graph(project_id: str, request: Request, response: Response):
+        s = _studio()
+        uid = s._get_user_id(request)
+        s._set_session(response, request, uid)
+        p = _require_project(project_id, uid)
+        rows = s._timeline_rows(project_id)
+        nodes = []
+        for i, event in enumerate(rows, 1):
+            nodes.append({
+                "id": f"event-{i}",
+                "state": _canonical_state(p),
+                "event": event.get("event") or "event",
+                "time": event.get("time") or event.get("created_at_iso") or event.get("created_at"),
+                "payload": event.get("payload") or {},
+            })
+        return {"project_id": project_id, "nodes": nodes, "edges": [{"from": nodes[i-1]["id"], "to": nodes[i]["id"]} for i in range(1, len(nodes))], "truthful": True}
+
+    @app.get("/infinity/studio/project/{project_id}/evidence")
+    def production_evidence(project_id: str, request: Request, response: Response):
+        s = _studio()
+        uid = s._get_user_id(request)
+        s._set_session(response, request, uid)
+        p = _require_project(project_id, uid)
+        truth = _professional_truth(p, reconcile=True)
+        root = s._project_dir(project_id)
+        read = {}
+        for name in ("timeline.json", "asset_registry.json", "production_truth.json", "fact_check.json", "provenance.json", "sources.json"):
+            path = root / name
+            if path.exists():
+                try:
+                    read[name] = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    read[name] = {"available": True}
+        return {"project_id": project_id, "truth": truth, "evidence": read, "truthful": True}
 
     @app.get("/infinity/studio/project/{project_id}/audit/truth")
     def truth_audit(project_id: str, request: Request, response: Response):
