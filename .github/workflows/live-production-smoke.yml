@@ -21,10 +21,12 @@ jobs:
       - name: Wait for live deployment
         env:
           BASE_URL: https://ai-infinity.blitz.cloud
+          EXPECTED_REVISION: ${{ github.sha }}
         run: |
           python - <<'PY'
-          import os,time,urllib.request
+          import os,time,urllib.request,json
           base=os.environ["BASE_URL"].rstrip("/")
+          expected=os.environ["EXPECTED_REVISION"]
           deadline=time.time()+600
           while time.time()<deadline:
               try:
@@ -32,7 +34,14 @@ jobs:
                       body=r.read().decode("utf-8","replace")
                       print(body[:4000],flush=True)
                       if r.status==200:
-                          raise SystemExit(0)
+                          try:
+                              data=json.loads(body)
+                          except Exception:
+                              data={}
+                          revision=str(data.get("revision") or data.get("git_sha") or data.get("commit") or "")
+                          if revision == expected:
+                              raise SystemExit(0)
+                          print("healthy deployment is not current: expected=%s actual=%s" % (expected, revision or "unknown"),flush=True)
               except Exception as e:
                   print("waiting:",e,flush=True)
               time.sleep(10)
