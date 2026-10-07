@@ -5,6 +5,7 @@ import ai_infinity_canonical
 import reality_first_3901
 import studio_ultimate
 import production_graph
+import production_intelligence
 
 app = FastAPI(
     title="AI Infinity — Universal Creator Platform",
@@ -13,17 +14,13 @@ app = FastAPI(
     redoc_url=None,
 )
 
-# Reality evidence and production graph patch the real Studio before routes mount.
 reality_first_3901.install()
 production_graph.install()
-
-# Preserve the existing creator/Studio surface.
 ai_infinity_canonical.register(app)
 studio_ultimate.register(app)
 reality_first_3901.register(app)
-
-# Additive professional production-control surface.
 production_graph.register(app)
+production_intelligence.register(app)
 
 application = app
 if not callable(app):
