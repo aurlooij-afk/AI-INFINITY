@@ -4248,6 +4248,15 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         if not p or p.get("user_id") != user_id:
             raise HTTPException(404, "project not found")
         name = Path(asset_name).name
+        # Final deliverables are release artifacts, not merely files that happen
+        # to exist. They remain inaccessible until the professional closure gate
+        # has verified the project.
+        if name in {"final.mp4", "package.zip"}:
+            gate = globals().get("_professional_truth")
+            if gate is not None:
+                truth = gate(p, reconcile=True)
+                if not truth.get("verified"):
+                    raise HTTPException(409, "final delivery is blocked until professional verification passes")
         mapping = {
             "final.mp4": ("final.mp4", "video/mp4"), "package.zip": (next((q["path"] for q in _asset_rows(project_id) if q["kind"] == "package"), "package.zip"), "application/zip"),
             "thumbnail.jpg": ("thumbnail.jpg", "image/jpeg"), "script.md": ("script.md", "text/markdown"), "captions.srt": ("captions.srt", "application/x-subrip"), "sources.json": ("sources.json", "application/json"), "manifest.json": ("manifest.json", "application/json"),
@@ -4268,6 +4277,14 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         if not verified or verified.get("project_id") != project_id or verified.get("asset") != Path(asset_name).name:
             raise HTTPException(403, "share link is invalid or expired")
         path = _project_dir(project_id) / Path(asset_name).name
+        if Path(asset_name).name in {"final.mp4", "package.zip"}:
+            p = _get_project(project_id)
+            gate = globals().get("_professional_truth")
+            if not p or gate is None:
+                raise HTTPException(409, "final delivery is unavailable")
+            truth = gate(p, reconcile=True)
+            if not truth.get("verified"):
+                raise HTTPException(409, "shared final delivery is blocked until professional verification passes")
         if not path.exists():
             rows = _asset_rows(project_id)
             found = next((r.get("path") for r in rows if Path(str(r.get("path") or "")).name == Path(asset_name).name), None)
