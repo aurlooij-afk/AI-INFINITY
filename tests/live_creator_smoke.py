@@ -67,7 +67,7 @@ assert canonical.get("truthful") is True,canonical
 providers,_=ok("/infinity/studio/providers")
 print("MEDIA_PROVIDER_DIAGNOSTICS", json.dumps(providers, sort_keys=True), flush=True)
 caps,_=ok("/infinity/canonical/capabilities"); assert caps.get("local",{}).get("media_core") is True,caps
-pre,_=ok("/infinity/canonical/preflight","POST",{"command":"Create a 20 second cinematic video about resilient creativity"}); assert pre.get("ready") is True,pre
+pre,_=ok("/infinity/canonical/preflight","POST",{"command":"Create a 20 second cinematic video about Earth from space"}); assert pre.get("ready") is True,pre
 
 created,_=ok("/infinity/canonical/create","POST",{"command":"Create a 20 second cinematic video about resilient creativity","duration":20,"format":"short","aspect_ratio":"16:9","idempotency_key":"live-production-proof-v2"})
 pid=created["project_id"]; v1=created["version"]["version_id"]
