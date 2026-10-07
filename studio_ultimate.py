@@ -2020,8 +2020,36 @@ def _project_dir(project_id: str) -> Path:
 
 
 def _save_asset(project_id: str, kind: str, path: Path, media_type: str, metadata: Dict[str, Any]) -> None:
+    meta = dict(metadata or {})
+    # Persist only user-facing production artifacts when a real durable storage
+    # provider is configured. Intermediate scene files remain local/temp to avoid
+    # unnecessary copies and costs. Unconfigured storage is explicitly recorded.
+    durable_kinds = {"final","package","thumbnail","audio_master","caption","script","seo","social","provenance","manifest","fact_check","accessibility","platform_manifest","short"}
+    if kind in durable_kinds and path.exists() and path.is_file():
+        try:
+            project = _get_project(project_id)
+            user_id = str((project or {}).get("user_id") or "")
+            if user_id:
+                import ai3704_storage_fabric as _storage_fabric
+                storage_result = _storage_fabric._persist_path(
+                    path, user_id, path.name, media_type, {"project_id": project_id, "kind": kind}
+                )
+                meta["durable_storage"] = {
+                    "status": storage_result.get("status"),
+                    "asset_id": storage_result.get("asset_id"),
+                    "sha256": storage_result.get("sha256"),
+                    "configured_providers": storage_result.get("configured_providers", []),
+                    "successful_providers": storage_result.get("successful_providers", []),
+                    "truthful": True,
+                }
+        except Exception as exc:
+            meta["durable_storage"] = {
+                "status": "not_persisted",
+                "error": f"{type(exc).__name__}: {str(exc)[:500]}",
+                "truthful": True,
+            }
     with DB_LOCK, _connect() as c:
-        c.execute("INSERT INTO studio_assets_3610(project_id,kind,path,media_type,metadata_json,created_at) VALUES(?,?,?,?,?,?)", (project_id, kind, str(path), media_type, jdump(redact(metadata)), now()))
+        c.execute("INSERT INTO studio_assets_3610(project_id,kind,path,media_type,metadata_json,created_at) VALUES(?,?,?,?,?,?)", (project_id, kind, str(path), media_type, jdump(redact(meta)), now()))
 
 
 def _get_project(project_id: str) -> Optional[Dict[str, Any]]:
