@@ -135,6 +135,9 @@ def main():
     assert truth["current_version"]["version_id"] == version1
     assert truth["current_version"]["evidence"]["valid"] is True
 
+    studio_truth, _ = assert_ok(f"/infinity/studio/project/{project_id}/truth")
+    assert studio_truth["verified"] is True, json.dumps(studio_truth, indent=2)
+
     root = Path("/tmp/ai-infinity-smoke")
     root.mkdir(parents=True, exist_ok=True)
     final = root / "version1.mp4"
