@@ -82,6 +82,11 @@ jobs:
           assert int(video.get("height") or 0)==720,video
           assert abs(float(ins.get("duration_seconds") or 0)-20)<=1,ins
           assert truth["base_reality"].get("verified") is True,truth["base_reality"]
+          # Exercise a real rejected/destructive request, then prove the verified project survives it.
+          bad=client.post(f"/infinity/canonical/project/{pid}/command",json={"command":"Delete the entire video."})
+          assert bad.status_code in {409,422},bad.text
+          after_failure=client.get(f"/infinity/canonical/project/{pid}/truth").json()
+          assert after_failure["done"] is True and (after_failure.get("current_version") or {}).get("version_id")==cv["version_id"],after_failure
           edit=client.post(f"/infinity/canonical/project/{pid}/command",json={"command":"Make it more cinematic and add more contrast."})
           assert edit.status_code==200,edit.text
           edit=edit.json();assert edit["status"]=="completed" and edit["artifact"]["valid"] is True,edit
