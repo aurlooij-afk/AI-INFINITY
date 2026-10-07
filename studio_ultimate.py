@@ -2877,7 +2877,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 if path and Path(path).exists() and Path(path).name not in seen_names:
                     z.write(path, arcname=Path(path).name); seen_names.add(Path(path).name)
         for kind, pth, mt in [
-            ("video", captioned, "video/mp4"), ("audio", audio_master, "audio/mpeg"), ("article", article, "text/markdown"), ("social_campaign", social, "text/markdown"),
+            ("video", captioned, "video/mp4"), ("audio", audio_master, "audio/mpeg"), ("article", article, "text/markdown"), ("social_campaign", social, "application/json"), ("social_campaign_markdown", social_markdown, "text/markdown"),
             ("script", script, "text/markdown"), ("captions", captions, "application/x-subrip"),
             ("sources", sources, "application/json"), ("manifest", manifest, "application/json"), ("production_manifest", production_manifest, "application/json"), ("rights_manifest", rights_manifest, "application/json"), ("feature_execution", outdir / "feature_execution.json", "application/json"), ("thumbnail", thumb, "image/jpeg"), ("package", package, "application/zip")
         ]:
