@@ -100,8 +100,8 @@ def _objective_media_qc(path: Path) -> Dict[str, Any]:
         ]
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
         log = (p.stderr or "") + (p.stdout or "")
-        black = [float(x) for x in re.findall(r"black_duration:([0-9]+(?:\\.[0-9]+)?)", log)]
-        freeze = [float(x) for x in re.findall(r"freeze_duration:([0-9]+(?:\\.[0-9]+)?)", log)]
+        black = [float(x) for x in re.findall(r"black_duration:([0-9]+(?:\.[0-9]+)?)", log)]
+        freeze = [float(x) for x in re.findall(r"freeze_duration:([0-9]+(?:\.[0-9]+)?)", log)]
         out["black_duration_max"] = max(black) if black else 0.0
         out["freeze_duration_max"] = max(freeze) if freeze else 0.0
         out["black_frame_ok"] = out["black_duration_max"] < 1.5
@@ -115,7 +115,7 @@ def _objective_media_qc(path: Path) -> Dict[str, Any]:
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "info", "-i", str(path), "-vn", "-af", "volumedetect", "-f", "null", "-"]
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         log = (p.stderr or "") + (p.stdout or "")
-        peaks = re.findall(r"max_volume:\s*(-?[0-9]+(?:\\.[0-9]+)?)\s*dB", log)
+        peaks = re.findall(r"max_volume:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*dB", log)
         if peaks:
             peak = float(peaks[-1])
             out["audio_peak_db"] = peak
@@ -397,11 +397,11 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
             checks["freeze_duration_max"] = float(media_qc.get("freeze_duration_max") or 0)
             checks["audio_peak_db"] = media_qc.get("audio_peak_db")
             if not checks["black_frame_ok"]:
-                failures.append(f"prolonged black frame detected ({checks["black_duration_max"]:.2f}s)")
+                failures.append(f"prolonged black frame detected ({checks['black_duration_max']:.2f}s)")
             if not checks["freeze_ok"]:
-                failures.append(f"prolonged frozen frame detected ({checks["freeze_duration_max"]:.2f}s)")
+                failures.append(f"prolonged frozen frame detected ({checks['freeze_duration_max']:.2f}s)")
             if not checks["audio_clipping_ok"]:
-                failures.append(f"audio peak is too close to digital full scale ({checks["audio_peak_db"]} dBFS)")
+                failures.append(f"audio peak is too close to digital full scale ({checks['audio_peak_db']} dBFS)")
         except Exception as exc:
             checks["media_anomaly_scan_ok"] = False
             failures.append(f"objective media QC failed: {type(exc).__name__}: {str(exc)[:220]}")
