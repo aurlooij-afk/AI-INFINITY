@@ -563,12 +563,14 @@ def register(app):
     def public_health(request:Request,response:Response):
         uid_=current_user(request,response);caps=capabilities(uid_)
         return {"status":"healthy" if caps["local"]["media_core"] else "degraded","version":VERSION,"build":BUILD,
+                "deployment_revision":os.getenv("RENDER_GIT_COMMIT",""),"instance_id":os.getenv("RENDER_INSTANCE_ID",""),
                 "canonical":True,"truthful":True,"capabilities":caps}
 
     @app.get("/infinity/canonical/health")
     def health(request:Request,response:Response):
         uid_=current_user(request,response);caps=capabilities(uid_)
-        return {"status":"healthy" if caps["local"]["media_core"] else "degraded","version":VERSION,"build":BUILD,"schema":SCHEMA,
+        return {"status":"healthy" if caps["local"]["media_core"] else "degraded","version":VERSION,"build":BUILD,
+                "deployment_revision":os.getenv("RENDER_GIT_COMMIT",""),"instance_id":os.getenv("RENDER_INSTANCE_ID",""),"schema":SCHEMA,
                 "rules":{"no_ui_truth":True,"evidence_required_for_done":True,"transactional_versions":True,
                          "typed_memory":True,"bounded_recovery":True},"capabilities":caps,"truthful":True}
 
