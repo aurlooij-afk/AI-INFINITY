@@ -75,6 +75,20 @@ assert audio and audio.get("codec_name") in {"aac","mp3"},p1
 assert duration>2 and abs(duration-20)<=1.0,p1
 verify,_=ok("/infinity/studio/project/"+pid+"/verify"); assert verify.get("passed") is True,verify
 
+# Reject the exact failure mode that previously produced abstract/procedural placeholder movies.
+project,_=ok("/infinity/canonical/project/"+pid)
+asset_rows=project.get("assets") or []
+visual_sources=[]
+for row in asset_rows:
+    meta=row.get("metadata") or {}
+    source=str(meta.get("source") or meta.get("model") or "").strip().lower()
+    kind=str(row.get("kind") or "").lower()
+    if kind == "visual":
+        visual_sources.append(source)
+assert visual_sources, project
+assert all("procedural-editorial-engine" not in s and "motion-design generator" not in s for s in visual_sources), visual_sources
+assert any(("hugging face" in s) or ("pexels" in s) or ("pixabay" in s) or ("nasa" in s) or ("openverse" in s) or ("wikimedia" in s) for s in visual_sources), visual_sources
+
 edit,_=ok("/infinity/canonical/project/"+pid+"/command","POST",{"command":"remove the first 2 seconds and make it cinematic"})
 v2=edit["version_id"]; assert v2!=v1
 two=root/"v2.mp4"; name=edit["artifact"]["name"]
