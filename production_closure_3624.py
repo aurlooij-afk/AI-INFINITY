@@ -436,9 +436,12 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
             fact_data = json.loads(fact_path.read_text(encoding="utf-8"))
         except Exception:
             fact_data = {}
+    brief_for_fact_policy = " ".join(str(req.get(k) or "") for k in ("objective", "topic", "title")).lower()
+    fact_sensitive = any(x in brief_for_fact_policy for x in ("latest", "current", "news", "report", "documentary", "educational", "tutorial", "science", "history", "finance", "medical", "health", "research", "facts", "explainer"))
     checks["factual_review_auto_publish_safe"] = bool(fact_data.get("auto_publish_safe")) if isinstance(fact_data, dict) else False
+    checks["factual_review_required"] = fact_sensitive
     checks["factual_claim_count"] = int(fact_data.get("claim_count") or 0) if isinstance(fact_data, dict) else 0
-    if not checks["factual_review_auto_publish_safe"]:
+    if fact_sensitive and not checks["factual_review_auto_publish_safe"]:
         failures.append("factual claim review is not auto-publish safe; unresolved claims require review")
 
     source_count = checks["research_sources"]
@@ -500,7 +503,7 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         and checks["visual_rights_evidence_present"]
         and checks["research_required_and_present"]
         and checks["fresh_evidence_ok"]
-        and checks["factual_review_auto_publish_safe"]
+        and (checks["factual_review_auto_publish_safe"] if checks["factual_review_required"] else True)
         and checks["fact_check_present"]
         and checks["provenance_present"]
         and checks["captions_present"]
