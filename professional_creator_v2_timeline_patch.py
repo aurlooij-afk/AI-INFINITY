@@ -11,6 +11,7 @@ from typing import Any, Dict, List
 from fastapi import HTTPException, Request
 
 VERSION = "TARGET-2050.PRO-CREATOR-TIMELINE.1"
+BUILD_NOTE = "stable-scene-identity-v1"
 
 def install(app: Any) -> None:
     import studio_ultimate as studio
