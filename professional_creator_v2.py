@@ -214,7 +214,7 @@ def install(app:Any)->None:
     @app.get("/infinity/divine/health")
     def divine_health_compat():
         ff=bool(shutil.which("ffmpeg")); fp=bool(shutil.which("ffprobe")); voice=bool(shutil.which("espeak-ng") or shutil.which("espeak"))
-        return {"status":"healthy" if ff and fp and voice else "degraded","version":VERSION,"build":BUILD,"professional_creator":True,"canonical_surface":"/infinity/pro2","truthful":True}
+        return {"status":"healthy" if ff and fp and voice else "degraded","version":VERSION,"build":BUILD,"professional_creator":True,"content_creation_ready":bool(ff and fp and voice),"reality_kernel":{"patched":True,"canonical":"/infinity/pro2"},"canonical_surface":"/infinity/pro2","truthful":True}
 
     @app.get("/infinity/3800/capabilities")
     def creator_capabilities_compat():
