@@ -4943,6 +4943,43 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         user_id=_get_user_id(request); _set_session(response,request,user_id)
         return {"version":VERSION,"flow":PRODUCTION_FLOW_3621,"truthful":True}
 
+    @app.get("/infinity/studio/production/contract")
+    def production_contract_3624(request: Request, response: Response):
+        user_id=_get_user_id(request); _set_session(response,request,user_id)
+        return {
+            "version": "AI-INFINITY-PRODUCTION-CONTRACT-v1",
+            "build": BUILD,
+            "truthful": True,
+            "execution": {
+                "entrypoint": "natural_language_command",
+                "stages": [str(x.get("name") or x.get("stage") or "") for x in PRODUCTION_FLOW_3621],
+                "state_machine": ["queued", "running", "completed", "verified", "failed", "retry"],
+                "delivery_requires_reality_verification": True,
+            },
+            "creative_outputs": {
+                "master": "final.mp4",
+                "captions": "captions.srt",
+                "audio": "audio_master.mp3",
+                "thumbnail": "thumbnail.jpg",
+                "manifest": "manifest.json",
+                "package": "package.zip",
+            },
+            "verification": {
+                "source_of_truth": "filesystem_and_independent_inspection",
+                "artifact_integrity": "sha256",
+                "requires_video_stream": True,
+                "requires_audio_stream": True,
+                "requires_duration_and_aspect_match": True,
+                "requires_professional_qc": True,
+            },
+            "editing": {
+                "timeline": True,
+                "non_destructive_project_state": True,
+                "aspect_ratios": ["16:9", "9:16", "1:1", "4:5"],
+                "variants": True,
+            },
+        }
+
     @app.get("/infinity/studio/analytics")
     def analytics_3621(request: Request, response: Response):
         user_id=_get_user_id(request); _set_session(response,request,user_id)
