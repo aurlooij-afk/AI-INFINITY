@@ -47,8 +47,18 @@ def probe(p):
     x=subprocess.run(["ffprobe","-v","error","-show_format","-show_streams","-of","json",str(p)],capture_output=True,text=True,timeout=90)
     assert x.returncode==0,x.stderr; return json.loads(x.stdout)
 
-health,_=ok("/health"); assert health.get("canonical") is True,health
-canonical,_=ok("/infinity/canonical/health"); assert canonical.get("truthful") is True,canonical
+expected_revision=os.environ.get("GITHUB_SHA","").strip()
+# Render exposes RENDER_GIT_COMMIT; never create a live job until the exact commit under test is serving.
+for _ in range(120):
+    health,_=ok("/health")
+    canonical,_=ok("/infinity/canonical/health")
+    if health.get("canonical") is True and canonical.get("truthful") is True and (not expected_revision or canonical.get("deployment_revision")==expected_revision):
+        break
+    time.sleep(5)
+else:
+    raise AssertionError(f"live deployment revision mismatch: expected {expected_revision}, got {canonical.get('deployment_revision')}")
+assert health.get("canonical") is True,health
+assert canonical.get("truthful") is True,canonical
 caps,_=ok("/infinity/canonical/capabilities"); assert caps.get("local",{}).get("media_core") is True,caps
 pre,_=ok("/infinity/canonical/preflight","POST",{"command":"Create a 20 second cinematic video about resilient creativity"}); assert pre.get("ready") is True,pre
 
