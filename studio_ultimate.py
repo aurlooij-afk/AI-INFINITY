@@ -737,7 +737,8 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
     clean_title = re.sub(r"\s+", " ", title).strip()[:140]
     clean_objective = re.sub(r"\s+", " ", objective).strip()[:900]
     topic_label = re.sub(r"^(?:create|make|generate|produce|build)\s+(?:a|an|the)\s+(?:\d+\s*(?:second|seconds|minute|minutes)\s+)?(?:cinematic\s+)?(?:video|film|short|reel)\s+(?:about|on|for)\s+", "", clean_title, flags=re.I).strip() or clean_title
-    topic_terms = set(re.findall(r"[a-z0-9]{4,}", (topic_label + " " + clean_objective).lower()))
+    stop_terms = {"create","make","generate","produce","build","video","film","short","reel","useful","original","content","high","retention","audience","general","premium","editorial"}
+    topic_terms = {t for t in re.findall(r"[a-z0-9]{4,}", topic_label.lower()) if t not in stop_terms}
 
     usable_sources = []
     for src in (research.get("sources") or []):
@@ -749,7 +750,9 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         ]).lower()
         source_terms = set(re.findall(r"[a-z0-9]{4,}", blob))
         overlap = len(topic_terms.intersection(source_terms))
-        if overlap >= 1:
+        if not topic_terms:
+            continue
+        if overlap >= (2 if len(topic_terms) >= 2 else 1):
             usable_sources.append(src)
     if not usable_sources:
         usable_sources = [{"title": clean_title, "summary": "", "url": None}]
