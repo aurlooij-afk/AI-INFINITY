@@ -31,6 +31,9 @@ jobs:
           grep -q 'ai_infinity_canonical.py' Dockerfile
           grep -q 'ai_infinity_app.py' Dockerfile
           grep -Eq 'CMD uvicorn (main|ai_infinity_app):app' Dockerfile
+          test -f entrypoint.sh
+          sh -n entrypoint.sh
+          grep -q 'ENTRYPOINT ["/bin/sh","/app/entrypoint.sh"]' Dockerfile
           grep -q 'main.py' Dockerfile
           grep -q 'production_openai_video.py' Dockerfile
           grep -q 'reality_first_3901.py' Dockerfile
