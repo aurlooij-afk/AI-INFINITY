@@ -656,11 +656,11 @@ def _hf_creator_plan(prompt: str) -> Tuple[Optional[Dict[str, Any]], str]:
     token = os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
     if not token:
         return None, "no-hf-token"
-    model = os.getenv("AI_INFINITY_TEXT_MODEL", "Qwen/Qwen2.5-7B-Instruct").strip()
+    model = os.getenv("AI_INFINITY_TEXT_MODEL", "Qwen/Qwen2.5-7B-Instruct-1M").strip()
     try:
         from huggingface_hub import InferenceClient
         client_kwargs={"api_key": token, "timeout": (45 if FAST_MODE else 120)}
-        selected_provider=os.getenv("AI_INFINITY_HF_MEDIA_PROVIDER", "").strip() or os.getenv("AI_INFINITY_HF_PROVIDER", "").strip()
+        selected_provider=os.getenv("AI_INFINITY_HF_PROVIDER", "").strip()
         if selected_provider and selected_provider.lower() != "auto":
             client_kwargs["provider"]=selected_provider
         client = InferenceClient(**client_kwargs)
@@ -1065,7 +1065,7 @@ def _hf_video(prompt: str, outdir: Path, index: int, duration: float) -> Optiona
     try:
         from huggingface_hub import InferenceClient
         model=os.getenv("AI_INFINITY_VIDEO_MODEL","Wan-AI/Wan2.2-TI2V-5B").strip()
-        kwargs={"api_key":token}
+        kwargs={"api_key":token, "timeout": (45 if FAST_MODE else 120)}
         provider=os.getenv("AI_INFINITY_HF_MEDIA_PROVIDER","").strip() or os.getenv("AI_INFINITY_HF_PROVIDER","").strip()
         if provider and provider.lower()!="auto":
             kwargs["provider"]=provider
@@ -1093,7 +1093,7 @@ def _hf_image(prompt: str, outdir: Path, index: int) -> Optional[Dict[str, Any]]
     full_prompt=f"{prompt}. Professional editorial image, photorealistic or cinematic realism, physically plausible, coherent composition, rich natural detail. Avoid {negative}."
     try:
         from huggingface_hub import InferenceClient
-        kwargs={"api_key":token}
+        kwargs={"api_key":token, "timeout": (45 if FAST_MODE else 120)}
         provider=os.getenv("AI_INFINITY_HF_MEDIA_PROVIDER","").strip() or os.getenv("AI_INFINITY_HF_PROVIDER","").strip()
         if provider and provider.lower()!="auto":
             kwargs["provider"]=provider
