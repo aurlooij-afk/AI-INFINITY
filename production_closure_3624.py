@@ -21,6 +21,8 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
+import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -74,6 +76,56 @@ def _strict_research() -> bool:
 def _publish_gate() -> bool:
     return os.getenv("AI_INFINITY_REQUIRE_VERIFIED_PUBLISH", PUBLISH_GATE_DEFAULT).strip().lower() in {"1", "true", "yes", "on"}
 
+
+def _objective_media_qc(path: Path) -> Dict[str, Any]:
+    """Independent media anomaly scan for prolonged black/frozen frames and clipping."""
+    out: Dict[str, Any] = {
+        "black_duration_max": 0.0,
+        "freeze_duration_max": 0.0,
+        "black_frame_ok": True,
+        "freeze_ok": True,
+        "audio_peak_db": None,
+        "audio_clipping_ok": True,
+        "scan_ok": True,
+        "truthful": True,
+    }
+    if not path.is_file():
+        out["scan_ok"] = False
+        return out
+    try:
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "info", "-i", str(path),
+            "-vf", "blackdetect=d=0.8:pix_th=0.98,freezedetect=n=-60dB:d=1.5",
+            "-an", "-f", "null", "-",
+        ]
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        log = (p.stderr or "") + (p.stdout or "")
+        black = [float(x) for x in re.findall(r"black_duration:([0-9]+(?:\\.[0-9]+)?)", log)]
+        freeze = [float(x) for x in re.findall(r"freeze_duration:([0-9]+(?:\\.[0-9]+)?)", log)]
+        out["black_duration_max"] = max(black) if black else 0.0
+        out["freeze_duration_max"] = max(freeze) if freeze else 0.0
+        out["black_frame_ok"] = out["black_duration_max"] < 1.5
+        out["freeze_ok"] = out["freeze_duration_max"] < 2.5
+        if p.returncode != 0:
+            out["scan_ok"] = False
+    except Exception as exc:
+        out["scan_ok"] = False
+        out["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+    try:
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "info", "-i", str(path), "-vn", "-af", "volumedetect", "-f", "null", "-"]
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        log = (p.stderr or "") + (p.stdout or "")
+        peaks = re.findall(r"max_volume:\s*(-?[0-9]+(?:\\.[0-9]+)?)\s*dB", log)
+        if peaks:
+            peak = float(peaks[-1])
+            out["audio_peak_db"] = peak
+            out["audio_clipping_ok"] = peak < -0.1
+        elif p.returncode != 0:
+            out["scan_ok"] = False
+    except Exception as exc:
+        out["scan_ok"] = False
+        out["audio_scan_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+    return out
 
 def _public_path(project_id: str, asset_name: str) -> str:
     from urllib.parse import quote
@@ -336,6 +388,25 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
 
     if final and final.exists():
         try:
+            media_qc = _objective_media_qc(final)
+            checks["black_frame_ok"] = bool(media_qc.get("black_frame_ok"))
+            checks["freeze_ok"] = bool(media_qc.get("freeze_ok"))
+            checks["audio_clipping_ok"] = bool(media_qc.get("audio_clipping_ok"))
+            checks["media_anomaly_scan_ok"] = bool(media_qc.get("scan_ok"))
+            checks["black_duration_max"] = float(media_qc.get("black_duration_max") or 0)
+            checks["freeze_duration_max"] = float(media_qc.get("freeze_duration_max") or 0)
+            checks["audio_peak_db"] = media_qc.get("audio_peak_db")
+            if not checks["black_frame_ok"]:
+                failures.append(f"prolonged black frame detected ({checks["black_duration_max"]:.2f}s)")
+            if not checks["freeze_ok"]:
+                failures.append(f"prolonged frozen frame detected ({checks["freeze_duration_max"]:.2f}s)")
+            if not checks["audio_clipping_ok"]:
+                failures.append(f"audio peak is too close to digital full scale ({checks["audio_peak_db"]} dBFS)")
+        except Exception as exc:
+            checks["media_anomaly_scan_ok"] = False
+            failures.append(f"objective media QC failed: {type(exc).__name__}: {str(exc)[:220]}")
+
+        try:
             probe = s.ffprobe_json(final)
             streams = probe.get("streams") or []
             v = next((x for x in streams if x.get("codec_type") == "video"), {})
@@ -509,6 +580,10 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         and checks["captions_present"]
         and checks["thumbnail_present"]
         and checks["manifest_present"]
+        and checks["media_anomaly_scan_ok"]
+        and checks["black_frame_ok"]
+        and checks["freeze_ok"]
+        and checks["audio_clipping_ok"]
         and checks["persisted_qc_passed"]
         and not failures
     )
