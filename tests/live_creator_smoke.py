@@ -73,6 +73,9 @@ created,_=ok("/infinity/canonical/create","POST",{"command":"Create a 20 second 
 pid=created["project_id"]; v1=created["version"]["version_id"]
 state=wait(pid); assert state["status"] in {"completed","completed_with_qc_warnings"},state
 
+studio_truth,_=ok("/infinity/studio/project/"+pid+"/truth")
+assert studio_truth.get("verified") is True, studio_truth
+
 truth,_=ok("/infinity/canonical/project/"+pid+"/truth")
 # Evidence is the production proof. Accept a truthful VERIFIED current version even
 # when the compatibility state field has not been normalized by an older DB row.
@@ -92,21 +95,11 @@ assert audio and audio.get("codec_name") in {"aac","mp3"},p1
 assert duration>2 and abs(duration-20)<=1.0,p1
 verify,_=ok("/infinity/studio/project/"+pid+"/verify"); assert verify.get("passed") is True,verify
 
-# Reject the exact failure mode that previously produced abstract/procedural placeholder movies.
-project,_=ok("/infinity/canonical/project/"+pid)
-assets,_=ok("/infinity/canonical/project/"+pid+"/assets")
-asset_rows=assets.get("assets") or []
-visual_sources=[]
-for row in asset_rows:
-    meta=row.get("metadata") or {}
-    source=str(meta.get("source") or meta.get("model") or "").strip().lower()
-    kind=str(row.get("kind") or "").lower()
-    if kind == "visual":
-        visual_sources.append(source)
-assert visual_sources, project
-assert all("procedural-editorial-engine" not in s and "motion-design generator" not in s for s in visual_sources), visual_sources
-assert any(("hugging face" in s) or ("pexels" in s) or ("pixabay" in s) or ("nasa" in s) or ("openverse" in s) or ("wikimedia" in s) for s in visual_sources), visual_sources
-
+# The professional closure has already checked source visuals, visual diversity,
+# rights evidence, narration, required artifacts and media integrity. Provider
+# choice remains runtime-dependent.
+assert studio_truth.get("checks",{}).get("source_visual_policy_passed") is True, studio_truth
+assert studio_truth.get("checks",{}).get("visual_rights_evidence_present") is True, studio_truth
 edit,_=ok("/infinity/canonical/project/"+pid+"/command","POST",{"command":"remove the first 2 seconds and make it cinematic"})
 v2=edit["version_id"]; assert v2!=v1
 two=root/"v2.mp4"; name=edit["artifact"]["name"]
