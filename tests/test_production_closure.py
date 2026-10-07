@@ -33,7 +33,6 @@ def test_share_urls_are_host_neutral():
 
 
 def test_root_ui_contains_professional_truth_gate():
-    html = main.app.openapi()  # force route registration to finish deterministically
     response = client.get("/")
     assert response.status_code == 200
     body = response.text
@@ -49,3 +48,13 @@ def test_short_master_is_never_frozen_to_fake_the_requested_duration(monkeypatch
     monkeypatch.setattr(studio, "probe_duration", lambda _path: 36.4)
     with __import__("pytest").raises(RuntimeError, match="refusing frozen-frame padding"):
         studio._normalize_delivery_duration(tmp_path / "source.mp4", 60, tmp_path / "out.mp4")
+
+
+def test_strict_visual_gate_blocks_fallback(monkeypatch, tmp_path):
+    monkeypatch.setenv("AI_INFINITY_REQUIRE_SOURCE_VISUALS", "1")
+    import pytest
+    with pytest.raises(RuntimeError, match="fallback visual is not eligible"):
+        studio.acquire_scene_asset(
+            {"heading":"Gate test","visual_query":"professional technology workspace","image_prompt":"professional editorial technology workspace"},
+            Path(tmp_path), 1, prefer_motion=False, duration=5,
+        )
