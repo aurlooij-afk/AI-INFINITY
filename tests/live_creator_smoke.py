@@ -52,7 +52,6 @@ expected_revision=os.environ.get("EXPECTED_REVISION","").strip() or os.environ.g
 for _ in range(120):
     health,_=ok("/health")
     canonical,_=ok("/infinity/canonical/health")
-    providers,_=ok("/infinity/studio/providers"); print("MEDIA_PROVIDER_DIAGNOSTICS", json.dumps(providers, sort_keys=True), flush=True)
     if health.get("canonical") is True and canonical.get("truthful") is True and (not expected_revision or canonical.get("deployment_revision")==expected_revision):
         break
     time.sleep(5)
@@ -60,6 +59,8 @@ else:
     raise AssertionError(f"live deployment revision mismatch: expected {expected_revision}, got {canonical.get('deployment_revision')}")
 assert health.get("canonical") is True,health
 assert canonical.get("truthful") is True,canonical
+providers,_=ok("/infinity/studio/providers")
+print("MEDIA_PROVIDER_DIAGNOSTICS", json.dumps(providers, sort_keys=True), flush=True)
 caps,_=ok("/infinity/canonical/capabilities"); assert caps.get("local",{}).get("media_core") is True,caps
 pre,_=ok("/infinity/canonical/preflight","POST",{"command":"Create a 20 second cinematic video about resilient creativity"}); assert pre.get("ready") is True,pre
 
