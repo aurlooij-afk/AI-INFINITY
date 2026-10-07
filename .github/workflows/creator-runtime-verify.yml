@@ -47,7 +47,7 @@ jobs:
           AI_INFINITY_FAST_MODE: "1"
         run: |
           set -euo pipefail
-          python -m py_compile main.py professional_creator_v2.py professional_creator_v2_timeline_patch.py production_closure_3624.py studio_ultimate.py
+          python -m py_compile main.py professional_creator_v2.py professional_creator_v2_timeline_patch.py professional_creator_fabric.py production_closure_3624.py studio_ultimate.py
           python - <<'PY'
           import os
           os.environ["AI_INFINITY_DATA_DIR"] = "/tmp/ai-infinity-ci"

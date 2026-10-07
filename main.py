@@ -9,6 +9,7 @@ import production_openai_video
 import production_closure_3624
 import professional_creator_v2_timeline_patch
 import professional_creator_v2
+import professional_creator_fabric
 
 # Render invokes "uvicorn main:app"; preserve that stable entrypoint.
 app = FastAPI(
@@ -31,6 +32,7 @@ production_openai_video.register(app)
 production_closure_3624.register(app)
 professional_creator_v2_timeline_patch.install(app)
 professional_creator_v2.install(app)
+professional_creator_fabric.register(app)
 
 # Canonical compatibility endpoint used by the production proof and legacy clients.
 # It delegates to the same real Creator Studio enqueue path; no simulated output.

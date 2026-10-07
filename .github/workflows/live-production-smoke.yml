@@ -2,7 +2,7 @@ name: AI Infinity — Live Production Smoke
 
 on:
   push:
-    branches: [main]
+    branches: [main, ai-infinity-canonical-divine]
   workflow_dispatch:
 
 permissions:
@@ -20,7 +20,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Wait for live deployment
         env:
-          BASE_URL: https://ai-infinity.blitz.cloud
+          BASE_URL: https://ai-infinity-ca5e.onrender.com
           EXPECTED_REVISION: ${{ github.sha }}
         run: |
           python - <<'PY'
@@ -45,7 +45,7 @@ jobs:
               except Exception as e:
                   print("waiting:",e,flush=True)
               time.sleep(10)
-          raise SystemExit("canonical Render deployment did not become live")
+          raise SystemExit("canonical Render deployment did not become live at the configured Render URL")
           PY
       - name: Run real live creator E2E
         env:
