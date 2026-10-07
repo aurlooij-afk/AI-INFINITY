@@ -627,6 +627,47 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _hf_creator_plan(prompt: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Use the configured Hugging Face Inference Provider as the real creator brain.
+    This is deliberately optional: when no credential exists, the deterministic
+    fallback still runs, but production never pretends that it used a remote model.
+    """
+    token = os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
+    if not token:
+        return None, "no-hf-token"
+    model = os.getenv("AI_INFINITY_TEXT_MODEL", "Qwen/Qwen2.5-7B-Instruct-1M:fastest").strip()
+    try:
+        from huggingface_hub import InferenceClient
+        client = InferenceClient(
+            provider=os.getenv("AI_INFINITY_HF_PROVIDER", "auto").strip() or "auto",
+            api_key=token,
+            timeout=(45 if FAST_MODE else 120),
+        )
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are the senior showrunner, researcher, writer, visual director and editor of a premium AI creator studio. Return only valid JSON. Never invent evidence. Make every scene visually specific, varied and production-ready.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.72,
+            top_p=0.92,
+            max_tokens=5000 if FAST_MODE else 9000,
+            response_format={"type": "json_object"},
+        )
+        text = response.choices[0].message.content if getattr(response, "choices", None) else ""
+        data = _extract_json(text or "")
+        chapters = data.get("chapters") if isinstance(data, dict) else None
+        if isinstance(chapters, list) and len(chapters) >= 4:
+            data["chapters"] = chapters[:18]
+            return data, f"Hugging Face/{model}"
+    except Exception:
+        return None, f"Hugging Face/{model}:unavailable"
+    return None, f"Hugging Face/{model}:invalid"
+
+
 def creative_plan(req: Dict[str, Any], research: Dict[str, Any], model_fn: Optional[Callable]) -> Tuple[Dict[str, Any], str]:
     title = str(req.get("title") or req.get("topic") or req.get("objective") or "AI content").strip()
     objective = str(req.get("objective") or "Create useful, original, high-retention content").strip()
@@ -644,8 +685,7 @@ def creative_plan(req: Dict[str, Any], research: Dict[str, Any], model_fn: Optio
         if s.get("title"):
             source_digest.append(f"- {s.get('title')} | {s.get('url')} | {s.get('summary','')[:900]}")
     research_text = "\n".join(source_digest)
-    if model_fn:
-        prompt = f"""You are the senior showrunner, researcher, writer, visual director and editor for a premium creator studio. Build a complete production blueprint for this project.
+    prompt = f"""You are the senior showrunner, researcher, writer, visual director and editor for a premium creator studio. Build a complete production blueprint for this project.
 TITLE: {title}
 OBJECTIVE: {objective}
 FORMAT: {fmt}
@@ -663,7 +703,8 @@ RESEARCH SOURCES (use only as evidence; do not invent facts):
 Return ONLY JSON with:
 title, hook, premise, audience, tone, cta, language, platform_adaptations, chapters
 Each chapter must include: heading, narration, visual_query, image_prompt, on_screen, duration, proof_needed.
-Use 5-18 chapters. Total durations should approximately equal the target. Narration must be original and information-dense rather than filler. Separate factual claims from creative framing. Visuals should mix documentary reality, diagrams, environmental shots, close details and purposeful typography. For unsupported facts, put the topic/claim in proof_needed. Avoid deceptive impersonation, fabricated citations and synthetic claims presented as observed events."""
+Use 5-18 chapters. Total durations should approximately equal the target. Narration must be original and information-dense rather than filler. Make every visual_query materially different from the previous scene. Favor concrete locations, people, objects, processes, macro details, environmental shots, diagrams or editorial compositions that can be found or generated for this exact topic. Never put generic labels such as "Hook" or "The key idea" in image prompts. On-screen text should be a concise claim or phrase, not a duplicate section heading. Separate factual claims from creative framing. For unsupported facts, put the topic/claim in proof_needed. Avoid deceptive impersonation, fabricated citations and synthetic claims presented as observed events."""
+    if model_fn:
         try:
             raw = model_fn({"messages": [{"role": "user", "content": prompt}], "temperature": 0.8}) or {}
             data = _extract_json(raw.get("text") or raw.get("answer") or "")
@@ -674,6 +715,9 @@ Use 5-18 chapters. Total durations should approximately equal the target. Narrat
                 return clean, str(raw.get("provider") or "model")
         except Exception:
             pass
+    hf_plan, hf_provider = _hf_creator_plan(prompt)
+    if hf_plan:
+        return hf_plan, hf_provider
     return _fallback_creative_plan(title, objective, fmt, duration, audience, tone, research), "builtin-creative-engine"
 
 
@@ -2081,8 +2125,8 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             try:
                 voice, provider, voice_duration = tts(str(ch.get("narration") or ""), outdir, i, str(req.get("voice") or "en-US-AriaNeural"))
             except Exception as voice_exc:
-                audit_event(project_id, "voice_fallback", {"scene": i, "error": str(voice_exc)[:500]})
-                voice, provider, voice_duration = _make_silent_voice(outdir, i, 6.0)
+                audit_event(project_id, "voice_source_unavailable", {"scene": i, "error": str(voice_exc)[:500]})
+                raise RuntimeError(f"scene {i}: narration generation unavailable; silent fallback is disabled") from voice_exc
             voice_provider = voice_provider or provider
             ch["actual_duration"] = max(4.0, min(90.0, voice_duration))
             actual_total += ch["actual_duration"]
