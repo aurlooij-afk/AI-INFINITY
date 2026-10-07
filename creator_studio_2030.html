@@ -143,7 +143,7 @@ const BENCHMARKS=[
 {p:"Runway",d:"Agentic video production, reference media, timeline editing, in-context video edits, upscaling, model routing and reusable skills.",u:"https://runway.com/changelog"}
 ];
 function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,x=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[x]))}
-function fmtDate(ts){if(!ts)return"—";try{return new Date(Number(ts)*1000).toLocaleString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}catch{return"—"}}
+function fmtDate(ts){if(ts==null||ts==="")return"—";try{let d;if(typeof ts==="number"){d=new Date(ts<100000000000?ts*1000:ts)}else{const s=String(ts).trim();d=/^\d+(\.\d+)?$/.test(s)?new Date(Number(s)<100000000000?Number(s)*1000:Number(s)):new Date(s)};if(Number.isNaN(d.getTime()))return"—";return d.toLocaleString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}catch{return"—"}}
 function toast(msg){$("toast").textContent=msg;$("toast").style.display="block";clearTimeout(toast.t);toast.t=setTimeout(()=>{$("toast").style.display="none"},3800)}
 async function api(url,opts={}){const res=await fetch(url,Object.assign({credentials:"same-origin",headers:{}},opts));let data;try{data=await res.json()}catch{data={detail:await res.text()}}if(!res.ok)throw new Error(typeof data.detail==="string"?data.detail:(data.message||("HTTP "+res.status)));return data}
 function fillCmd(x){$("cmd").value=x;$("cmd").focus()}function focusCommand(){$("cmd").focus();window.scrollTo({top:0,behavior:"smooth"})}
