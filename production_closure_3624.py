@@ -1041,6 +1041,7 @@ def _readiness(user_id: str, request: Any) -> Dict[str, Any]:
         ("Hugging Face", "HF_TOKEN", "AI text / image / video adapters"),
         ("Runway", "RUNWAYML_API_SECRET", "AI video adapter"),
         ("Google/YouTube", "AI_INFINITY_GOOGLE_CLIENT_ID", "YouTube publishing"),
+        ("ElevenLabs", "ELEVENLABS_API_KEY", "Neural TTS"),
     ]:
         present = bool(os.getenv(env, "").strip())
         configured.append({"provider": name, "capability": label, "credential_present": present, "runtime_status": "configured" if present else "not_configured"})
