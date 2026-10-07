@@ -169,7 +169,7 @@ jobs:
           # can diverge from the canonical main:app process.
           docker stop ai-infinity-ci >/dev/null
           docker rm ai-infinity-ci >/dev/null 2>&1 || true
-          docker run -d --rm --name ai-infinity-ci             --platform linux/amd64             -e AI_INFINITY_3601_BACKGROUND=false             -e AI_INFINITY_FAST_MODE=1             -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity             -p 10000:10000             ai-infinity:ci
+          docker run -d --rm --name ai-infinity-ci             --platform linux/amd64             -e AI_INFINITY_3601_BACKGROUND=false             -e AI_INFINITY_FAST_MODE=1             -e AI_INFINITY_SMOKE_ALLOW_UNVERIFIED_DELIVERY=1             -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity             -p 10000:10000             ai-infinity:ci
           ready=0
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:10000/health >/tmp/restarted-health.json; then
