@@ -10,6 +10,10 @@ foundation.FINAL3700_UI = (BASE / "ui_3800.html").read_text(encoding="utf-8")
 # Preserve the existing accumulated platform closure and creator routes.
 overlay = (BASE / "overlay_final_3700.py").read_text(encoding="utf-8")
 overlay = overlay.replace('uid("project")', 'os.urandom(8).hex()').replace('uid("publish")', 'os.urandom(8).hex()')
+foundation._db_lock = getattr(foundation, "_db_lock", foundation.studio_ultimate.DB_LOCK)
+foundation.db = getattr(foundation, "db", foundation.studio_ultimate._connect)
+foundation.now = getattr(foundation, "now", foundation.studio_ultimate.now)
+foundation.uid = getattr(foundation, "uid", foundation.studio_ultimate.uid)
 exec(compile("import os\n" + overlay, str(BASE / "overlay_final_3700.py"), "exec"), foundation.__dict__)
 
 # Final 3800 product layer: Creator DNA, Worlds, Creative Lab, graph,
