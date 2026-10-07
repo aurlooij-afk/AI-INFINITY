@@ -795,7 +795,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         chapters.append({
             "heading": f"{name} — {clean_title}" if name in {"Hook", "Closing"} else f"{name}: {clean_title}",
             "narration": narration,
-            focus = visual_focus.get(name, "real-world editorial scene") if fmt == "short" else {
+            long_visual_focus = {
                 "Hook": "human opening moment, compelling subject, clear place or action",
                 "Context": "environment, setting, people and real-world context",
                 "The core idea": "prototype, mechanism, close detail, explanatory visual",
@@ -804,7 +804,8 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "What changes": "before-and-after or visible outcome",
                 "Practical takeaway": "creator applying the idea successfully",
                 "Closing": "finished work, confident human subject, memorable final frame",
-            }.get(name, "real-world editorial scene")
+            }
+            focus = (visual_focus if fmt == "short" else long_visual_focus).get(name, "real-world editorial scene")
             "visual_query": f"{topic_label} {focus} documentary photography",
             "image_prompt": f"Premium editorial documentary image about {topic_label}; visual focus: {focus}; realistic people, locations, objects or processes, natural cinematic lighting, coherent composition, strong subject separation, no logos, no text, visually distinct from other scenes",
             "on_screen": name,
