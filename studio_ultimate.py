@@ -1131,20 +1131,27 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     focus = re.sub(r"[^a-zA-Z0-9, ._-]+", " ", heading).strip()
     if focus and focus.lower() not in query.lower():
         query_variants.append(focus + " real world photography")
+    source_failures = []
     for q in query_variants[:2]:
         for getter in (_pexels, _pixabay, _nasa_images, _openverse_images, _commons_media):
-            items = getter(q, outdir, limit=3)
+            try:
+                items = getter(q, outdir, limit=3)
+            except Exception as exc:
+                source_failures.append(f"{getter.__name__}:{type(exc).__name__}:{str(exc)[:160]}")
+                continue
             videos = [x for x in items if x.get("kind") == "video"]
             if videos:
                 return videos[0]
             images = [x for x in items if x.get("kind") == "image"]
             if images:
                 return images[0]
+            source_failures.append(f"{getter.__name__}:no-asset")
 
     test_media = _ci_test_visual(scene, outdir, index)
     if test_media:
         return test_media
-    raise RuntimeError("no professional visual source is reachable for this scene")
+    detail = "; ".join(source_failures[:10])
+    raise RuntimeError(f"no professional visual source is reachable for this scene [{detail}]")
 
 
 # ---------------------------------------------------------------------------
