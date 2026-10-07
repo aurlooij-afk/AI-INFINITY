@@ -52,6 +52,7 @@ expected_revision=os.environ.get("EXPECTED_REVISION","").strip() or os.environ.g
 for _ in range(120):
     health,_=ok("/health")
     canonical,_=ok("/infinity/canonical/health")
+providers,_=ok("/infinity/studio/providers"); print("MEDIA_PROVIDER_DIAGNOSTICS", json.dumps(providers, sort_keys=True), flush=True)
     if health.get("canonical") is True and canonical.get("truthful") is True and (not expected_revision or canonical.get("deployment_revision")==expected_revision):
         break
     time.sleep(5)
