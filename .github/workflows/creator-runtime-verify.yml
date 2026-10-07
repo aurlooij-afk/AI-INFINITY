@@ -77,6 +77,10 @@ jobs:
           print("standalone-runtime-ok")
           PY
 
+      - name: Verify professional closure regression tests
+        run: |
+          python -m pytest -q tests/test_production_closure.py tests/test_production_fallback.py
+
       - name: Verify browser shell JavaScript syntax
         run: |
           set -euo pipefail
@@ -116,6 +120,22 @@ jobs:
             echo "Container did not become ready"
             exit 1
           fi
+
+          # Regression test for the exact Blitz failure mode seen previously:
+          # a persisted malformed Start Command must not replace main:app.
+          docker stop ai-infinity-ci >/dev/null
+          docker rm ai-infinity-ci >/dev/null 2>&1 || true
+          docker run -d --rm --name ai-infinity-ci --platform linux/amd64 -e AI_INFINITY_3601_BACKGROUND=false -e AI_INFINITY_FAST_MODE=1 -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity -p 10000:10000 ai-infinity:ci "[sh,-c,exec uvicorn ai_infinity_app:app --host 0.0.0.0 --port 10000]"
+          sleep 3
+          curl -fsS http://127.0.0.1:10000/infinity/studio/system/readiness > /tmp/closure-readiness.json
+          python - <<'PY'
+          import json
+          x=json.load(open("/tmp/closure-readiness.json"))
+          assert x.get("version") == "TARGET-2050.3624", x
+          assert x.get("production_policy",{}).get("strict_visuals") is True, x
+          assert x.get("production_policy",{}).get("strict_research") is True, x
+          print("stale-command-entrypoint-and-closure-ready")
+          PY
 
           curl -fsS http://127.0.0.1:10000/infinity/divine/health > /tmp/divine-health.json
           cat /tmp/divine-health.json
