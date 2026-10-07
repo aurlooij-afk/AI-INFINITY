@@ -1,0 +1,44 @@
+name: AI Infinity — Live Production Smoke
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Wait for canonical Render deployment
+        env:
+          BASE_URL: https://ai-infinity-ca5e.onrender.com
+        run: |
+          python - <<'PY'
+          import os,time,urllib.request
+          base=os.environ["BASE_URL"].rstrip("/")
+          deadline=time.time()+600
+          while time.time()<deadline:
+              try:
+                  with urllib.request.urlopen(base+"/infinity/canonical/health",timeout=20) as r:
+                      body=r.read().decode("utf-8","replace")
+                      print(body[:4000],flush=True)
+                      if r.status==200 and '"canonical":true' in body.replace(" ","").lower():
+                          raise SystemExit(0)
+              except Exception as e:
+                  print("waiting:",e,flush=True)
+              time.sleep(10)
+          raise SystemExit("canonical Render deployment did not become live")
+          PY
+      - name: Run real live creator E2E
+        env:
+          BASE_URL: https://ai-infinity-ca5e.onrender.com
+        run: python tests/live_creator_smoke.py
