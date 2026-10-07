@@ -94,7 +94,7 @@ jobs:
           pdata_resp=client2.get(f"/infinity/canonical/project/{pid}/truth")
           assert pdata_resp.status_code==200,pdata_resp.text
           pdata=pdata_resp.json()
-          assert pdata["done"] is True and pdata["current_version_id"]==cv["version_id"],pdata
+          assert pdata["done"] is True and (pdata.get("current_version") or {}).get("version_id")==cv["version_id"],pdata
           print("CANONICAL_PRODUCTION_GATE_PASS")
           PY
       - name: Build production image
