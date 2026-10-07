@@ -35,6 +35,7 @@ foundation.FastAPIRequest = getattr(foundation, "FastAPIRequest", foundation.Req
 foundation.Dict = getattr(foundation, "Dict", __import__("typing").Dict)
 foundation.Any = getattr(foundation, "Any", __import__("typing").Any)
 foundation.HTTPException = getattr(foundation, "HTTPException", __import__("fastapi").HTTPException)
+foundation.HTMLResponse = getattr(foundation, "HTMLResponse", __import__("fastapi.responses", fromlist=["HTMLResponse"]).HTMLResponse)
 foundation._3603_session_user = getattr(foundation, "_3603_session_user", foundation.studio_ultimate._get_user_id)
 foundation._gp_fixed_price_rows = getattr(foundation, "_gp_fixed_price_rows", lambda limit=12: [])
 foundation.infinity3603_operating_activity = getattr(foundation, "infinity3603_operating_activity", lambda limit=16: {"activity":[]})
