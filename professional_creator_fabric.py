@@ -18,7 +18,7 @@ BUILD = "PROFESSIONAL-CREATOR-CAPABILITY-FABRIC"
 BASE = Path(__file__).resolve().parent
 REGISTRY_PATH = BASE / "capability_registry.json"
 
-PROVEN_LOCAL_RESOURCES = {"FFmpeg","FFmpeg/ffprobe","Python","FastAPI","eSpeak NG","Redis/Valkey","Docker"}
+PROVEN_LOCAL_RESOURCES = {"FFmpeg","FFmpeg/ffprobe","Python","FastAPI","eSpeak NG"}
 PUBLIC_REMOTE_RESOURCES = {"Wikipedia API","DuckDuckGo","Google News RSS","Openverse API","NASA Images","Wikimedia Commons/API","Pexels API","Pixabay API"}
 EXECUTOR_HINTS = {
     "FFmpeg": "studio_ultimate.ffmpeg", "eSpeak NG": "studio_ultimate.tts",
