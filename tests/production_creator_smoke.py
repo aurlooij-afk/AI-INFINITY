@@ -81,7 +81,7 @@ def sha256(path: Path):
     return h.hexdigest()
 
 
-def download(path: str, out: Path):
+def download(path: str, out: Path, min_bytes: int = 1):
     req = urllib.request.Request(BASE + path, headers={"User-Agent": "AI-Infinity-final-production-smoke/1"})
     with OPENER.open(req, timeout=60) as resp:
         out.write_bytes(resp.read())
