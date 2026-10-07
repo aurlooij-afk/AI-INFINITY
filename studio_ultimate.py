@@ -4506,7 +4506,7 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
             pass
 
         with DB_LOCK, _connect() as c:
-            rows=[dict(r) for r in c.execute("SELECT asset_name,sha256,size_bytes FROM studio_artifacts_3614 WHERE project_id=?",(project_id,)).fetchall()]
+            rows=[dict(r) for r in c.execute("SELECT asset_name,sha256,size_bytes FROM studio_artifacts_3614 WHERE project_id=? AND asset_name <> 'reality_proof.json'",(project_id,)).fetchall()]
         for row in rows:
             path=base/Path(row["asset_name"]).name
             exists=path.exists(); size=path.stat().st_size if exists else 0
