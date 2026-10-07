@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 import ai_infinity_canonical
 import reality_first_3901
 import studio_ultimate
@@ -33,7 +33,7 @@ professional_creator_v2.install(app)
 
 # Canonical compatibility endpoint used by the production proof and legacy clients.
 # It delegates to the same real Creator Studio enqueue path; no simulated output.
-async def _divine_create_compat(request: Request, response):
+async def _divine_create_compat(request: Request, response: Response):
     payload = await request.json()
     uid_value = studio_ultimate._get_user_id(request)
     req = dict(payload or {})
