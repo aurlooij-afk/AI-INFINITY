@@ -24,6 +24,24 @@ ai_infinity_canonical.register(creator)
 studio_ultimate.register(creator, model_fn=getattr(foundation,"_2700_model",None))
 reality_first_3901.register(creator)
 
+# main.py is a Python module, not itself an ASGI callable. Resolve the actual
+# legacy application object explicitly so non-canonical routes remain reachable.
+legacy_app = next(
+    (
+        candidate
+        for candidate in (
+            getattr(foundation, "app", None),
+            getattr(foundation, "application", None),
+        )
+        if callable(candidate)
+    ),
+    None,
+)
+if legacy_app is None and callable(foundation):
+    legacy_app = foundation
+if legacy_app is None:
+    raise RuntimeError("AI Infinity legacy ASGI application was not found in main.py")
+
 class CanonicalApplication:
     async def __call__(self,scope,receive,send):
         path=str(scope.get("path") or "")
@@ -39,7 +57,7 @@ class CanonicalApplication:
         if creator_path:
             await creator(scope,receive,send)
         else:
-            await foundation(scope,receive,send)
+            await legacy_app(scope,receive,send)
 
 app=CanonicalApplication()
 application=app
