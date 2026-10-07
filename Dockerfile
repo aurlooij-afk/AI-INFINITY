@@ -52,6 +52,6 @@ RUN mkdir -p /tmp/ai-infinity && chown -R aiinfinity:aiinfinity /app /tmp/ai-inf
 USER aiinfinity
 EXPOSE 10000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD curl -fsS http://127.0.0.1:\${PORT:-10000}/health >/dev/null || exit 1
+  CMD curl -fsS http://127.0.0.1:${PORT:-10000}/health >/dev/null || exit 1
 ENTRYPOINT ["/usr/bin/tini","--"]
-CMD ["sh","-c","exec uvicorn ai_infinity_app:app --host 0.0.0.0 --port \${PORT:-10000}"]
+CMD ["sh","-c","exec uvicorn ai_infinity_app:app --host 0.0.0.0 --port ${PORT:-10000}"]

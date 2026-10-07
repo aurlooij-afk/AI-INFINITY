@@ -506,7 +506,7 @@ def create_from_command(command,user_id,raw):
         if not raw.get(k) and prof.get(k):intent[k]=prof[k]
     pf=preflight(intent,user_id)
     if not pf["ready"]:raise HTTPException(409,{"message":"Creation preflight failed","preflight":pf})
-    idem=clean(raw.get("idempotency_key"),160);req_hash=digest({"user":user_id,"intent":intent})
+    idem=clean(raw.get("idempotency_key"),160);stable_intent={k:v for k,v in intent.items() if k!="created_at"};req_hash=digest({"user":user_id,"intent":stable_intent})
     if idem:
         with studio().DB_LOCK,db() as c:row=c.execute("SELECT project_id,request_hash FROM canonical_idempotency WHERE user_id=? AND idempotency_key=?",(user_id,idem)).fetchone()
         if row:
