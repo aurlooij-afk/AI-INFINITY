@@ -8,7 +8,7 @@ services:
     autoDeployTrigger: commit
     envVars:
       - key: AI_INFINITY_FAST_MODE
-        value: "1"
+        value: "0"
       - key: AI_INFINITY_MAX_HEAVY_JOBS
         value: "1"
       - key: AI_INFINITY_MEMORY_GUARD_PERCENT
