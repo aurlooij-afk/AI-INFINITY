@@ -844,20 +844,76 @@ def _emergency_finalize(project_id: str) -> bool:
             s.ffmpeg("-i", final, "-map", "0:a:0", "-c:a", "libmp3lame", "-q:a", "4", audio, timeout=180)
     except Exception:
         return False
+
+    # Recovery must honor the same delivery contract as the normal pipeline.
+    # Trim/re-encode the recovered final to the requested duration, then create
+    # the real manifest and persist independent QC evidence.
+    try:
+        p = s._get_project(project_id) or {}
+        req = p.get("request_json") if isinstance(p.get("request_json"), dict) else {}
+        target = float(req.get("duration") or 0)
+        if target > 0 and hasattr(s, "_normalize_delivery_duration"):
+            normalized = root / "recovered_duration_normalized.mp4"
+            source = s._normalize_delivery_duration(final, target, normalized)
+            if source != final and Path(source).exists():
+                os.replace(source, final)
+        # Write a truthful manifest from the current filesystem.
+        manifest = root / "manifest.json"
+        files = []
+        for fp in sorted(root.iterdir()):
+            if fp.is_file() and fp.name not in {"manifest.json"}:
+                files.append({
+                    "name": fp.name,
+                    "size_bytes": fp.stat().st_size,
+                    "sha256": _file_hash(fp),
+                })
+        manifest.write_text(_jdump({
+            "schema": "ai-infinity.production-manifest.v1",
+            "project_id": project_id,
+            "pipeline": "reality-recovery",
+            "master": "final.mp4",
+            "files": files,
+            "generated_at": _iso(),
+            "truthful": True,
+        }), encoding="utf-8")
+        for path, mt in [
+            (final, "video/mp4"),
+            (audio, "audio/mpeg"),
+            (captions, "application/x-subrip"),
+            (script, "text/markdown"),
+            (thumb, "image/jpeg"),
+            (manifest, "application/json"),
+        ]:
+            if Path(path).is_file():
+                try:
+                    s.register_artifact(project_id, Path(path), mt, {"recovered": True, "truthful": True})
+                except Exception:
+                    pass
+        qc = s.extended_quality_check(final, chapters, captions, root, assets=[])
+    except Exception as exc:
+        return False
+
+    try:
+        final_duration = float(s.probe_duration(final))
+    except Exception:
+        final_duration = 0.0
+    result_payload = {
+        "status": "completed_with_qc_warnings" if not qc.get("passed") else "completed",
+        "project_id": project_id,
+        "title": (s._get_project(project_id) or {}).get("title"),
+        "recovered": True,
+        "duration_seconds": final_duration,
+        "quality": qc,
+        "truthful": True,
+    }
     try:
         s._update_project(
             project_id,
-            status="completed_with_qc_warnings",
-            error="Recovered by Reality Kernel after a late production failure.",
-            stage="complete",
+            status=result_payload["status"],
+            error=None if qc.get("passed") else "Recovered by Reality Kernel; professional QC requires review.",
+            stage="quality_control",
             progress=100,
-            result_json=_jdump({
-                "status": "completed_with_qc_warnings",
-                "project_id": project_id,
-                "title": (s._get_project(project_id) or {}).get("title"),
-                "recovered": True,
-                "truthful": True,
-            }),
+            result_json=_jdump(result_payload),
         )
     except Exception:
         return False
