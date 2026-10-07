@@ -30,7 +30,7 @@ jobs:
       - name: Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
           cache: pip
       - name: Media dependencies
         run: |
@@ -47,6 +47,7 @@ jobs:
       - name: Verify 607 capability fabric
         run: |
           python -m pytest -q tests/test_professional_creator_fabric.py
+          python -m ai_infinity.selftest
 
       - name: End-to-end creator proof
         run: |
