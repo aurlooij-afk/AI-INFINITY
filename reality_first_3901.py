@@ -889,7 +889,12 @@ def _emergency_finalize(project_id: str) -> bool:
                     s.register_artifact(project_id, Path(path), mt, {"recovered": True, "truthful": True})
                 except Exception:
                     pass
-        qc = s.extended_quality_check(final, chapters, captions, root, assets=[])
+        recovery_assets = [
+            {"kind": "image", "path": str(root / f"scene_{i:02d}.mp4"), "source": "recovered-scene", "rights_status": "inherited_scene_evidence", "reused_source": True}
+            for i in range(1, len(scenes) + 1)
+            if (root / f"scene_{i:02d}.mp4").is_file()
+        ]
+        qc = s.extended_quality_check(final, chapters, captions, root, assets=recovery_assets)
     except Exception as exc:
         return False
 
