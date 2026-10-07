@@ -157,6 +157,27 @@ def main():
     studio_verify, _ = assert_ok(f"/infinity/studio/project/{project_id}/verify")
     assert studio_verify["passed"] is True, studio_verify
 
+    # Professional delivery contract: verify the actual requested named artifacts.
+    expected_files = [
+        "final.mp4", "thumbnail.jpg", "audio_master.mp3", "captions.srt",
+        "article.md", "seo.json", "social_campaign.json",
+        "production_manifest.json", "rights_manifest.json", "package.zip"
+    ]
+    for name in expected_files:
+        target = root / name
+        download(
+            f"/infinity/studio/project/{urllib.parse.quote(project_id, safe='')}/asset/{urllib.parse.quote(name, safe='')}",
+            target,
+        )
+        assert target.is_file() and target.stat().st_size > 20, name
+
+    production_manifest = json.loads((root / "production_manifest.json").read_text("utf-8"))
+    rights_manifest = json.loads((root / "rights_manifest.json").read_text("utf-8"))
+    assert production_manifest.get("project_id") == project_id
+    assert production_manifest.get("truthful") is True
+    assert rights_manifest.get("project_id") == project_id
+    assert rights_manifest.get("truthful") is True
+
     artifacts, _ = assert_ok(f"/infinity/studio/project/{project_id}/artifacts")
     final_rows = [x for x in artifacts["artifacts"] if x["asset_name"] == "final.mp4"]
     assert final_rows and final_rows[0]["sha256"] == sha256(final), artifacts
