@@ -6,6 +6,7 @@ import production_graph
 import production_intelligence
 import production_openai_video
 import production_closure_3624
+import professional_creator_v2
 
 # Render invokes "uvicorn main:app"; preserve that stable entrypoint.
 app = FastAPI(
@@ -26,6 +27,7 @@ production_graph.register(app)
 production_intelligence.register(app)
 production_openai_video.register(app)
 production_closure_3624.register(app)
+professional_creator_v2.install(app)
 
 application = app
 
