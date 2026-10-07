@@ -4951,6 +4951,18 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
             "contract_version": "AI-INFINITY-PRODUCTION-CONTRACT-v1",
             "build": BUILD,
             "truthful": True,
+            "contract": {
+                "real_artifacts_only": True,
+                "no_fake_completion": True,
+                "independent_reality_verification": True,
+                "sha256_artifact_integrity": True,
+            },
+            "production_policy": {
+                "strict_visuals": True,
+                "strict_research": True,
+                "free_first": True,
+                "truthful_status": True,
+            },
             "execution": {
                 "entrypoint": "natural_language_command",
                 "stages": [str(x.get("name") or x.get("stage") or "") for x in PRODUCTION_FLOW_3621],
