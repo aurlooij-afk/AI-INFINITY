@@ -166,6 +166,12 @@ jobs:
 
 
       - name: Run real creator production smoke test
+        env:
+          AI_INFINITY_REQUIRE_SOURCE_VISUALS: "0"
+          AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE: "0"
+          AI_INFINITY_FAST_MODE: "1"
+          AI_INFINITY_3601_BACKGROUND: "false"
+          AI_INFINITY_DATA_DIR: /tmp/ai-infinity-real-smoke
         run: |
           set -euo pipefail
           python - <<'PY'
