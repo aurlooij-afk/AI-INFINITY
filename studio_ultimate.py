@@ -2325,7 +2325,22 @@ def _autopilot_plan(capabilities: Iterable[str]) -> Dict[str,Any]:
     return {"version":API_FABRIC_VERSION,"capacity":API_FABRIC_CAPACITY,"plan":plan,"truthful":True}
 
 def _record_autopilot(project_id: str, capabilities: Iterable[str]) -> Dict[str,Any]:
+    """Build legacy provider planning plus the canonical 1→607 runtime route.
+    The existing production graph remains the execution authority when an
+    optional runtime provider is unavailable.
+    """
     plan=_autopilot_plan(capabilities)
+    try:
+        from professional_creator_fabric import route as capability_route
+        for item in plan.get("plan") or []:
+            cap=str(item.get("capability") or "")
+            routed=capability_route(cap, free_first=True)
+            item["capability_fabric"]=routed
+            item["runtime_selected"]=routed.get("selected")
+    except Exception as exc:
+        plan["capability_fabric_error"]=f"{type(exc).__name__}: {str(exc)[:240]}"
+    plan["capability_fabric_version"]="TARGET-2050.6070"
+    plan["capability_registry_count"]=607
     audit_event(project_id,"autopilot_provider_plan",plan)
     return plan
 
