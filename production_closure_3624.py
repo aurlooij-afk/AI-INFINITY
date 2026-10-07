@@ -28,6 +28,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from fastapi import Request, Response
 
 CLOSURE_VERSION = "TARGET-2050.3624"
 STRICT_VISUAL_DEFAULT = "1"
