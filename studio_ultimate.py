@@ -1375,14 +1375,20 @@ def _fit_audio_duration(source: Path, target_seconds: float, out: Path) -> Tuple
     if abs(actual - target) <= 0.35:
         return source, actual
     ratio = actual / target
-    if ratio < 0.72 or ratio > 1.38:
-        raise RuntimeError(
-            f"narration length {actual:.2f}s cannot be safely fitted to scene target {target:.2f}s"
-        )
+    factors = []
+    remaining = float(ratio)
+    while remaining < 0.5:
+        factors.append(0.5)
+        remaining /= 0.5
+    while remaining > 2.0:
+        factors.append(2.0)
+        remaining /= 2.0
+    factors.append(remaining)
+    atempo_filter = ",".join(f"atempo={max(0.5, min(2.0, x)):.6f}" for x in factors)
     out.unlink(missing_ok=True)
     ffmpeg(
         "-i", source,
-        "-af", f"atempo={ratio:.6f}",
+        "-af", atempo_filter,
         "-c:a", "libmp3lame", "-q:a", "2",
         out,
         timeout=max(60, int(target * 4)),
