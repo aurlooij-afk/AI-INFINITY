@@ -18,6 +18,20 @@ BUILD = "PROFESSIONAL-CREATOR-CAPABILITY-FABRIC"
 BASE = Path(__file__).resolve().parent
 REGISTRY_PATH = BASE / "capability_registry.json"
 
+PROVEN_LOCAL_RESOURCES = {"FFmpeg","FFmpeg/ffprobe","Python","FastAPI","eSpeak NG","Redis/Valkey","Docker"}
+PUBLIC_REMOTE_RESOURCES = {"Wikipedia API","DuckDuckGo","Google News RSS","Openverse API","NASA Images","Wikimedia Commons/API","Pexels API","Pixabay API"}
+EXECUTOR_HINTS = {
+    "FFmpeg": "studio_ultimate.ffmpeg", "eSpeak NG": "studio_ultimate.tts",
+    "Wikipedia API": "studio_ultimate.research_topic", "DuckDuckGo": "studio_ultimate.research_topic",
+    "Google News RSS": "studio_ultimate.research_topic", "Openverse API": "studio_ultimate.acquire_scene_asset",
+    "NASA Images": "studio_ultimate.acquire_scene_asset", "Wikimedia Commons/API": "studio_ultimate.acquire_scene_asset",
+    "Pexels API": "studio_ultimate.acquire_scene_asset", "Pixabay API": "studio_ultimate.acquire_scene_asset",
+    "YouTube Data API": "studio_ultimate.youtube_upload", "Cloudflare R2": "ai3704_storage_fabric",
+    "Runway": "production_graph.runway_create", "OpenAI": "production_openai_video",
+    "Tavily": "production_intelligence.research", "Brave": "studio_ultimate.research_topic",
+    "ElevenLabs": "production_intelligence.eleven_voice",
+}
+
 LOCAL_COMMANDS = {
     "ffmpeg": lambda: shutil.which("ffmpeg"),
     "ffprobe": lambda: shutil.which("ffprobe"),
@@ -70,23 +84,24 @@ def _runtime_probe(entry: Dict[str, Any]) -> Dict[str, Any]:
     provider = str(entry.get("resource/provider") or "")
     category = str(entry.get("category") or "")
     status = str(entry.get("integration_state") or "OPTIONAL")
-    if provider in {"FFmpeg", "FFmpeg/ffprobe"} or "FFmpeg" in provider:
-        ok = bool(LOCAL_COMMANDS["ffmpeg"]())
-        return {"health_state": "READY_LOCAL" if ok else "FAILED", "available": ok, "reason": "ffmpeg_binary"}
-    if provider == "Whisper.cpp" or provider == "Ollama" or provider == "llama.cpp":
-        return {"health_state": "CONFIG_REQUIRED", "available": False, "reason": "local_runtime_not_loaded_in_web_process"}
-    if status == "IMPLEMENTED_LOCAL":
-        return {"health_state": "READY_LOCAL", "available": True, "reason": "local_runtime_capability"}
+    if provider == "FFmpeg/ffprobe" or "FFmpeg" in provider:
+        ok = bool(LOCAL_COMMANDS["ffmpeg"]()) and bool(LOCAL_COMMANDS["ffprobe"]())
+        return {"health_state": "READY_LOCAL" if ok else "FAILED", "available": ok, "executable": ok, "reason": "ffmpeg_and_ffprobe_binaries"}
+    if provider == "eSpeak NG":
+        ok = bool(LOCAL_COMMANDS["espeak-ng"]())
+        return {"health_state": "READY_LOCAL" if ok else "FAILED", "available": ok, "executable": ok, "reason": "offline_tts_binary"}
+    if provider in PROVEN_LOCAL_RESOURCES:
+        return {"health_state": "READY_LOCAL", "available": True, "executable": True, "reason": "runtime_primitive"}
+    if provider in PUBLIC_REMOTE_RESOURCES:
+        return {"health_state": "READY_PUBLIC_PATH", "available": True, "executable": True, "reason": "implemented_public_adapter", "network_probe": "deferred"}
     if any(k.lower() in provider.lower() for k in PROVIDER_ENV):
         configured = _env_configured(provider)
-        return {
-            "health_state": "READY_CONFIGURED" if configured else "CONFIG_REQUIRED",
-            "available": configured,
-            "reason": "credential_check_only",
-        }
+        return {"health_state": "READY_CONFIGURED" if configured else "CONFIG_REQUIRED", "available": configured, "executable": configured, "reason": "credential_check"}
     if status == "COMPUTE_REQUIRED":
-        return {"health_state": "COMPUTE_REQUIRED", "available": False, "reason": "gpu_or_external_compute_required"}
-    return {"health_state": "OPTIONAL", "available": False, "reason": "not_loaded_or_not_configured"}
+        return {"health_state": "COMPUTE_REQUIRED", "available": False, "executable": False, "reason": "gpu_or_external_compute_required"}
+    if status == "IMPLEMENTED_REMOTE":
+        return {"health_state": "ADAPTER_READY", "available": False, "executable": True, "reason": "adapter_present_connection_or_network_required"}
+    return {"health_state": "OPTIONAL", "available": False, "executable": False, "reason": "not_loaded_or_not_configured"}
 
 def snapshot(user_id: str = "") -> Dict[str, Any]:
     counts = {
@@ -109,10 +124,11 @@ def snapshot(user_id: str = "") -> Dict[str, Any]:
             counts["local"] += 1
         if "FREE_TIER" in str(e.get("free_state")) or "OPEN_SOURCE" in str(e.get("free_state")):
             counts["free_tier"] += 1
-        if state == "READY_LOCAL" or state == "READY_CONFIGURED":
-            counts["available"] += 1
+        if p.get("executable"):
             counts["executable"] += 1
-        elif state == "CONFIG_REQUIRED":
+        if p.get("available"):
+            counts["available"] += 1
+        if state == "CONFIG_REQUIRED":
             counts["configuration_required"] += 1
         elif state == "COMPUTE_REQUIRED":
             counts["compute_limited"] += 1
@@ -130,6 +146,8 @@ def snapshot(user_id: str = "") -> Dict[str, Any]:
             "health_state": state,
             "available": p["available"],
             "reason": p["reason"],
+            "executor": EXECUTOR_HINTS.get(e["resource/provider"]),
+            "network_probe": p.get("network_probe"),
         })
     return {
         "version": VERSION,
@@ -154,7 +172,7 @@ def capability(number_or_id: str) -> Dict[str, Any]:
         found = next((x for x in REGISTRY["entries"] if x.get("id") == token), None)
     if found is None:
         raise KeyError(token)
-    return {**found, "runtime": _runtime_probe(found), "registry_digest": REGISTRY_DIGEST, "truthful": True}
+    return {**found, "runtime": {**_runtime_probe(found), "executor": EXECUTOR_HINTS.get(found.get("resource/provider"))}, "registry_digest": REGISTRY_DIGEST, "truthful": True}
 
 def route(task: str, free_first: bool = True) -> Dict[str, Any]:
     q = str(task or "").strip().lower()
@@ -200,7 +218,8 @@ def route(task: str, free_first: bool = True) -> Dict[str, Any]:
         "family": family,
         "selected": {
             "number": e["number"], "id": e["id"], "resource": e["resource/provider"],
-            "capability": e["capability"], "health_state": p["health_state"], "score": score
+            "capability": e["capability"], "health_state": p["health_state"], "score": score,
+            "executor": EXECUTOR_HINTS.get(e["resource/provider"])
         },
         "fallback_ids": e.get("fallback_ids", []),
         "truthful": True,
