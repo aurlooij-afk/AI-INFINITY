@@ -147,7 +147,7 @@ def url_host_safe(url: str, allow_http: bool = False) -> bool:
         trusted_suffixes = (
             "huggingface.co", "hf.co", "huggingface.cloud",
             "nasa.gov", "wikimedia.org", "wikipedia.org",
-            "pexels.com", "pixabay.com",
+            "openverse.org", "pexels.com", "pixabay.com",
         )
         if any(host == suffix or host.endswith("." + suffix) for suffix in trusted_suffixes):
             return True
