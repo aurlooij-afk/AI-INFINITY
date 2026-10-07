@@ -41,6 +41,7 @@ jobs:
       - name: Run real live creator E2E
         env:
           BASE_URL: https://ai-infinity-ca5e.onrender.com
+          EXPECTED_REVISION: ${{ github.sha }}
         run: python tests/live_creator_smoke.py
       - name: Capture live creator artifacts
         if: always()
