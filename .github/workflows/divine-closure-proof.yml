@@ -21,6 +21,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
+      - name: Verify production fallback contract
+        run: |
+          python -m pytest -q tests/test_production_fallback.py
+
       - name: Verify canonical creator boundary is wired
         run: |
           set -euo pipefail
