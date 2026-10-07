@@ -651,7 +651,7 @@ def _hf_creator_plan(prompt: str) -> Tuple[Optional[Dict[str, Any]], str]:
     try:
         from huggingface_hub import InferenceClient
         client_kwargs={"api_key": token, "timeout": (45 if FAST_MODE else 120)}
-        selected_provider=os.getenv("AI_INFINITY_HF_PROVIDER", "").strip()
+        selected_provider=os.getenv("AI_INFINITY_HF_MEDIA_PROVIDER", "").strip() or os.getenv("AI_INFINITY_HF_PROVIDER", "").strip()
         if selected_provider and selected_provider.lower() != "auto":
             client_kwargs["provider"]=selected_provider
         client = InferenceClient(**client_kwargs)
