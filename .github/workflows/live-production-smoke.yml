@@ -20,7 +20,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Wait for live Render deployment
         env:
-          BASE_URL: https://ai-infinity-ca5e.onrender.com
+          BASE_URL: https://ai-infinity.blitz.cloud
         run: |
           python - <<'PY'
           import os,time,urllib.request
@@ -40,7 +40,7 @@ jobs:
           PY
       - name: Run real live creator E2E
         env:
-          BASE_URL: https://ai-infinity-ca5e.onrender.com
+          BASE_URL: https://ai-infinity.blitz.cloud
           EXPECTED_REVISION: ${{ github.sha }}
         run: python tests/live_creator_smoke.py
       - name: Capture live creator artifacts
