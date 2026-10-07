@@ -643,7 +643,7 @@ def _hf_creator_plan(prompt: str) -> Tuple[Optional[Dict[str, Any]], str]:
             api_key=token,
             timeout=(45 if FAST_MODE else 120),
         )
-        response = client.chat.completions.create(
+        response = client.chat_completion(
             model=model,
             messages=[
                 {
@@ -655,7 +655,7 @@ def _hf_creator_plan(prompt: str) -> Tuple[Optional[Dict[str, Any]], str]:
             temperature=0.72,
             top_p=0.92,
             max_tokens=5000 if FAST_MODE else 9000,
-            response_format={"type": "json_object"},
+            response_format={"type": "json"},
         )
         text = response.choices[0].message.content if getattr(response, "choices", None) else ""
         data = _extract_json(text or "")
@@ -970,7 +970,7 @@ def _hf_video(prompt: str, outdir: Path, index: int, duration: float) -> Optiona
         return None
     try:
         from huggingface_hub import InferenceClient
-        model = os.getenv("AI_INFINITY_VIDEO_MODEL", "Wan-AI/Wan2.1-T2V-1.3B").strip()
+        model = os.getenv("AI_INFINITY_VIDEO_MODEL", "Wan-AI/Wan2.2-TI2V-5B").strip()
         client = InferenceClient(provider=os.getenv("AI_INFINITY_HF_PROVIDER", "auto").strip() or "auto", api_key=token)
         frames = max(24, min(81, int(round(max(2.0, min(float(duration), 5.0)) * 8))))
         video = client.text_to_video(prompt, model=model, num_frames=frames, num_inference_steps=int(os.getenv("AI_INFINITY_VIDEO_STEPS", "20")))
@@ -991,23 +991,41 @@ def _hf_image(prompt: str, outdir: Path, index: int) -> Optional[Dict[str, Any]]
     token = os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
     if not token:
         return None
-    model = os.getenv("AI_INFINITY_IMAGE_MODEL", "black-forest-labs/FLUX.1-schnell").strip()
-    urls = [
-        f"https://router.huggingface.co/hf-inference/models/{quote(model, safe='')}",
-        f"https://api-inference.huggingface.co/models/{quote(model, safe='')}",
+    requested = os.getenv("AI_INFINITY_IMAGE_MODEL", "").strip()
+    models = [requested] if requested else [
+        "black-forest-labs/FLUX.1-Krea-dev",
+        "Qwen/Qwen-Image",
+        "black-forest-labs/FLUX.1-dev",
     ]
-    for endpoint in urls:
-        try:
-            req = URLRequest(endpoint, data=json.dumps({"inputs": prompt}).encode("utf-8"), headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Accept": "image/png"}, method="POST")
-            with urlopen(req, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 90)) as r:
-                content_type = str(r.headers.get("content-type") or "")
-                raw = r.read(12_000_000)
-            if content_type.startswith("image/") or raw.startswith(b"\x89PNG") or raw.startswith(b"\xff\xd8"):
+    negative = "text, subtitles, watermark, logo, UI, collage, distorted anatomy, duplicate objects, blurry, low detail, oversaturated"
+    full_prompt = f"{prompt}. Professional editorial image, photorealistic or cinematic realism, physically plausible, coherent composition, rich natural detail. Negative requirements: {negative}."
+    try:
+        from huggingface_hub import InferenceClient
+        client = InferenceClient(
+            provider=os.getenv("AI_INFINITY_HF_PROVIDER", "auto").strip() or "auto",
+            api_key=token,
+        )
+        for model in models:
+            try:
+                image = client.text_to_image(
+                    full_prompt,
+                    model=model,
+                    width=1536 if not FAST_MODE else 1280,
+                    height=864 if not FAST_MODE else 720,
+                    num_inference_steps=int(os.getenv("AI_INFINITY_IMAGE_STEPS", "6" if FAST_MODE else "10")),
+                )
                 p = outdir / f"ai_visual_{index:02d}.png"
-                p.write_bytes(raw)
-                return {"kind": "image", "path": str(p), "source": "Hugging Face inference", "source_url": endpoint, "creator": "AI generated", "license": "Model/provider terms apply", "model": model}
-        except Exception:
-            continue
+                image.save(p)
+                if p.is_file() and p.stat().st_size > 20_000:
+                    return {
+                        "kind": "image", "path": str(p), "source": "Hugging Face Inference Provider",
+                        "source_url": "https://huggingface.co", "creator": "AI generated",
+                        "license": "Model/provider terms apply", "model": model,
+                    }
+            except Exception:
+                continue
+    except Exception:
+        return None
     return None
 
 
