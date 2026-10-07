@@ -301,6 +301,39 @@ def _reconcile_artifacts(project_id: str) -> Dict[str, Any]:
     s = _studio()
     files = _project_files(project_id)
     existing = _artifact_registry(project_id)
+
+    # The manifest is a required delivery contract. If a production worker
+    # completed all media but missed only this metadata file, reconstruct it
+    # from real on-disk evidence instead of downgrading an otherwise valid
+    # production or inventing a success state.
+    manifest_path = files.get("manifest.json")
+    if manifest_path is not None and (not manifest_path.is_file() or manifest_path.stat().st_size <= 0):
+        final_path = files.get("final.mp4")
+        if final_path is not None and final_path.is_file() and final_path.stat().st_size > 0:
+            try:
+                manifest_payload = {
+                    "schema": "ai-infinity.production-manifest.v1",
+                    "project_id": project_id,
+                    "reconciled_by": CLOSURE_VERSION,
+                    "reconciliation_reason": "required_metadata_manifest_missing",
+                    "generated_at": time.time(),
+                    "truthful": True,
+                    "final": {
+                        "path": str(final_path),
+                        "sha256": s.file_sha256(final_path),
+                        "size_bytes": final_path.stat().st_size,
+                    },
+                    "artifacts": sorted([
+                        {"name": name, "path": str(path), "size_bytes": path.stat().st_size,
+                         "sha256": s.file_sha256(path)}
+                        for name, path in files.items()
+                        if path.is_file() and path.stat().st_size > 0 and name != "manifest.json"
+                    ], key=lambda x: x["name"]),
+                }
+                manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                files["manifest.json"] = manifest_path
+            except Exception:
+                pass
     added = 0
     repaired = 0
     for name, path in files.items():
