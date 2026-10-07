@@ -33,3 +33,13 @@ def test_scene_asset_has_real_local_fallback(monkeypatch, tmp_path):
     assert asset.get("quality_tier") == "original_motion_design_fallback"
     assert asset.get("rights_status") == "original_asset"
     assert asset.get("source") == "AI Infinity motion-design generator"
+
+
+def test_command_language_inference_is_explicit():
+    lang, voice = studio._infer_command_language_voice(
+        "Create a 60 second Pashto launch video",
+        "English",
+        "en-US-AriaNeural",
+    )
+    assert lang == "Pashto"
+    assert voice == "ps-AF-LatifaNeural"
