@@ -26,11 +26,15 @@ jobs:
           set -euo pipefail
           grep -q 'ai_infinity_canonical.py' Dockerfile
           grep -q 'ai_infinity_app.py' Dockerfile
-          grep -q 'uvicorn ai_infinity_app:app' Dockerfile
+          grep -Eq 'CMD uvicorn (main|ai_infinity_app):app' Dockerfile
+          grep -q 'main.py' Dockerfile
+          grep -q 'production_openai_video.py' Dockerfile
           grep -q 'reality_first_3901.py' Dockerfile
           python - <<'PY'
           import ai_infinity_canonical as c
           assert c.VERSION == "AI-INFINITY-CANONICAL-1.0"
           assert c.SCHEMA == "ai-infinity-canonical-v1"
+          import main
+          assert callable(main.app)
           print("canonical-boundary-ok")
           PY
