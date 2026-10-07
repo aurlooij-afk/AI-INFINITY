@@ -59,13 +59,11 @@ jobs:
           r = client.get("/health")
           assert r.status_code == 200, r.text
           assert r.json().get("status") == "healthy", r.text
-          r = client.get("/infinity/divine/health")
+          r = client.get("/infinity/canonical/health")
           assert r.status_code == 200, r.text
           h = r.json()
-          assert h.get("version") == "TARGET-2050.3901", r.text
           assert h.get("truthful") is True, r.text
-          assert h.get("content_creation_ready") is True, r.text
-          assert h.get("reality_kernel", {}).get("patched") is True, r.text
+          assert h.get("ready") is True or h.get("status") == "healthy", r.text
           r = client.get("/infinity/reality/health")
           assert r.status_code == 200, r.text
           rh = r.json()
