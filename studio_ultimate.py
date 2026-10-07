@@ -139,6 +139,18 @@ def url_host_safe(url: str, allow_http: bool = False) -> bool:
         host = u.hostname.lower().rstrip(".")
         if host in {"localhost", "localhost.localdomain"} or host.endswith((".local", ".internal")):
             return False
+
+        # These are fixed first-party/public media endpoints used by AI Infinity's
+        # own source adapters. Render egress can legitimately resolve them through
+        # intermediary DNS/proxy addresses, so do not reject them merely because
+        # the resolver exposes an internal hop. Unknown hosts still fail closed.
+        trusted_suffixes = (
+            "huggingface.co", "hf.co", "huggingface.cloud",
+            "nasa.gov", "wikimedia.org", "wikipedia.org",
+            "pexels.com", "pixabay.com",
+        )
+        if any(host == suffix or host.endswith("." + suffix) for suffix in trusted_suffixes):
+            return True
         try:
             literal = ipaddress.ip_address(host)
             return not (literal.is_private or literal.is_loopback or literal.is_link_local or literal.is_reserved or literal.is_multicast or literal.is_unspecified)
