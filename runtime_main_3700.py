@@ -14,6 +14,7 @@ foundation._db_lock = getattr(foundation, "_db_lock", foundation.studio_ultimate
 foundation.db = getattr(foundation, "db", foundation.studio_ultimate._connect)
 foundation.now = getattr(foundation, "now", foundation.studio_ultimate.now)
 foundation.uid = getattr(foundation, "uid", foundation.studio_ultimate.uid)
+foundation.FastAPIRequest = getattr(foundation, "FastAPIRequest", foundation.Request)
 exec(compile("import os\n" + overlay, str(BASE / "overlay_final_3700.py"), "exec"), foundation.__dict__)
 
 # Final 3800 product layer: Creator DNA, Worlds, Creative Lab, graph,
