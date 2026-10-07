@@ -3,6 +3,7 @@ name: AI Infinity Production Graph Gate
 on:
   push:
     branches:
+      - main
       - ai-infinity-production-graph
   pull_request:
     branches:
@@ -20,7 +21,7 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Compile production application
         run: |
-          python -m py_compile production_graph.py ai_infinity_app.py
-          python -m py_compile studio_ultimate.py reality_first_3901.py ai_infinity_canonical.py
-      - name: Import production graph
-        run: python -c "import production_graph; print(production_graph.VERSION, production_graph.BUILD)"
+          python -m py_compile production_graph.py production_intelligence.py ai_infinity_app.py
+          python -m py_compile main.py studio_ultimate.py reality_first_3901.py ai_infinity_canonical.py
+      - name: Import production stack
+        run: python -c "import production_graph, production_intelligence; print(production_graph.VERSION, production_intelligence.VERSION)"
