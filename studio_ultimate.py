@@ -566,93 +566,150 @@ def download(url: str, path: Path, headers: Optional[Dict[str, str]] = None, tim
         raise
 
 def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
+    """Multi-source public research with explicit provider outcomes and truthful degradation."""
     from urllib.parse import quote_plus
+    import xml.etree.ElementTree as ET
+    clean_topic = re.sub(r"\s+", " ", str(topic or "")).strip()[:500]
+    if not clean_topic:
+        return {"topic": "", "sources": [], "source_count": 0, "providers": {}, "degraded": True, "status": "DEGRADED", "truthful": True}
+    per = max(1, min(int(limit or 10), 10))
     sources: List[Dict[str, Any]] = []
+    providers: Dict[str, Dict[str, Any]] = {}
     seen = set()
 
-    def add(item: Dict[str, Any]) -> None:
-        key = (item.get("url") or "", item.get("title") or "")
-        if not key[0] and not key[1]:
+    def add(source: str, item: Dict[str, Any]) -> None:
+        title = str(item.get("title") or "").strip()
+        url = str(item.get("url") or "").strip()
+        if not title and not url:
             return
+        key = (source.lower(), url, title.lower())
         if key in seen:
             return
         seen.add(key)
-        sources.append(item)
+        row = dict(item)
+        row["source"] = source
+        row["retrieved_at"] = utc_iso()
+        sources.append(row)
 
-    def wikipedia() -> List[Dict[str, Any]]:
-        out: List[Dict[str, Any]] = []
+    def run_provider(name: str, fn) -> None:
         try:
-            url = "https://en.wikipedia.org/w/api.php?" + urlencode({
-                "action": "query", "format": "json", "generator": "search", "gsrsearch": topic,
-                "gsrlimit": min(limit, 10), "prop": "extracts|info", "exintro": 1, "explaintext": 1, "inprop": "url"
-            })
-            data = http_json(url, timeout=max(3, int(os.getenv("AI_INFINITY_RESEARCH_TIMEOUT", "6"))))
-            for p in (data.get("query", {}).get("pages", {}) or {}).values():
-                out.append({"source": "Wikipedia", "title": p.get("title"), "url": p.get("fullurl"), "summary": (p.get("extract") or "")[:5000]})
-        except Exception as e:
-            out.append({"source": "Wikipedia", "error": str(e)[:240]})
+            rows = fn()
+            count = 0
+            for row in rows or []:
+                if isinstance(row, dict) and not row.get("error"):
+                    add(name, row); count += 1
+            providers[name] = {"status": "ready" if count else "empty", "count": count, "truthful": True}
+        except Exception as exc:
+            providers[name] = {"status": "failed", "count": 0, "error": f"{type(exc).__name__}: {str(exc)[:240]}", "truthful": True}
+
+    def wikipedia():
+        url = "https://en.wikipedia.org/w/api.php?" + urlencode({
+            "action":"query","format":"json","generator":"search","gsrsearch":clean_topic,
+            "gsrlimit":per,"prop":"extracts|info","exintro":1,"explaintext":1,"inprop":"url"
+        })
+        data=http_json(url,timeout=max(4,int(os.getenv("AI_INFINITY_RESEARCH_TIMEOUT","8"))))
+        out=[]
+        for p in (data.get("query",{}).get("pages",{}) or {}).values():
+            out.append({"title":p.get("title"),"url":p.get("fullurl"),"summary":(p.get("extract") or "")[:5000]})
         return out
 
-    def duckduckgo() -> List[Dict[str, Any]]:
-        out: List[Dict[str, Any]] = []
-        try:
-            q = quote_plus(topic)
-            raw = http_get(f"https://html.duckduckgo.com/html/?q={q}", timeout=max(3, int(os.getenv("AI_INFINITY_RESEARCH_TIMEOUT", "6"))), max_bytes=3_000_000).decode("utf-8", "replace")
-            blocks = re.findall(r"<div[^>]+class=\"result__body\"[^>]*>(.*?)</div>\s*</div>", raw, re.S | re.I)
-            for block in blocks[:limit]:
-                hm = re.search(r'href=\"([^\"]+)\"[^>]*class=\"result__a\"[^>]*>(.*?)</a>', block, re.S | re.I)
-                if not hm:
-                    hm = re.search(r'class=\"result__a\"[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>', block, re.S | re.I)
-                if hm:
-                    title = re.sub(r"<[^>]+>", "", hm.group(2) or hm.group(1)).strip()
-                    u = hm.group(1) if hm.group(1).startswith("http") else ""
-                    if u:
-                        sm = re.search(r'class=\"result__snippet[^\"]*\"[^>]*>(.*?)</', block, re.S | re.I)
-                        snippet = re.sub(r"<[^>]+>", "", sm.group(1)).strip() if sm else ""
-                        out.append({"source": "DuckDuckGo", "title": html.unescape(title)[:300], "url": u, "summary": html.unescape(snippet)[:1500]})
-        except Exception as e:
-            out.append({"source": "DuckDuckGo", "error": str(e)[:240]})
+    def duckduckgo():
+        raw=http_get("https://html.duckduckgo.com/html/?q="+quote_plus(clean_topic),timeout=max(4,int(os.getenv("AI_INFINITY_RESEARCH_TIMEOUT","8"))),max_bytes=4_000_000).decode("utf-8","replace")
+        out=[]
+        blocks=re.findall(r'<div[^>]+class="result__body"[^>]*>(.*?)</div>\s*</div>',raw,re.S|re.I)
+        for block in blocks[:per]:
+            hm=re.search(r'href="([^"]+)"[^>]*class="result__a"[^>]*>(.*?)</a>',block,re.S|re.I) or re.search(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',block,re.S|re.I)
+            if hm:
+                title=html.unescape(re.sub(r"<[^>]+>","",hm.group(2) or hm.group(1))).strip()
+                sm=re.search(r'class="result__snippet[^"]*"[^>]*>(.*?)</',block,re.S|re.I)
+                summary=html.unescape(re.sub(r"<[^>]+>"," ",sm.group(1))).strip() if sm else ""
+                out.append({"title":title[:300],"url":hm.group(1),"summary":summary[:1800]})
         return out
 
-    def google_news() -> List[Dict[str, Any]]:
-        out: List[Dict[str, Any]] = []
-        try:
-            import xml.etree.ElementTree as ET
-            rss_url = "https://news.google.com/rss/search?" + urlencode({
-                "q": topic, "hl": "en-US", "gl": "US", "ceid": "US:en"
-            })
-            raw = http_get(rss_url, timeout=max(4, int(os.getenv("AI_INFINITY_RESEARCH_TIMEOUT", "8"))), max_bytes=3_000_000)
-            root = ET.fromstring(raw)
-            for item in root.findall(".//item")[:limit]:
-                title = (item.findtext("title") or "").strip()
-                url = (item.findtext("link") or "").strip()
-                published = (item.findtext("pubDate") or "").strip()
-                description = (item.findtext("description") or "").strip()
-                description = re.sub(r"<[^>]+>", " ", description)
-                description = html.unescape(re.sub(r"s+", " ", description)).strip()
-                if title and url:
-                    out.append({
-                        "source": "Google News RSS",
-                        "title": html.unescape(title)[:300],
-                        "url": url,
-                        "summary": description[:2000],
-                        "published_at": published,
-                    })
-        except Exception as e:
-            out.append({"source": "Google News RSS", "error": str(e)[:240]})
+    def google_news():
+        raw=http_get("https://news.google.com/rss/search?"+urlencode({"q":clean_topic,"hl":"en-US","gl":"US","ceid":"US:en"}),timeout=max(4,int(os.getenv("AI_INFINITY_RESEARCH_TIMEOUT","8"))),max_bytes=4_000_000)
+        root=ET.fromstring(raw); out=[]
+        for item in root.findall(".//item")[:per]:
+            title=(item.findtext("title") or "").strip(); url=(item.findtext("link") or "").strip()
+            if title and url: out.append({"title":html.unescape(title),"url":url,"summary":html.unescape(re.sub(r"<[^>]+>"," ",item.findtext("description") or "")).strip()[:2000],"published_at":item.findtext("pubDate") or ""})
         return out
 
-    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="studio-research") as pool:
-        futures = [pool.submit(wikipedia), pool.submit(duckduckgo), pool.submit(google_news)]
-        for f in as_completed(futures):
-            try:
-                for item in f.result():
-                    add(item)
-            except Exception as e:
-                add({"source": "research", "error": str(e)[:240]})
+    def gdelt():
+        data=http_json("https://api.gdeltproject.org/api/v2/doc/doc?"+urlencode({"query":clean_topic,"mode":"artlist","maxrecords":per,"format":"json"}),timeout=max(4,int(os.getenv("AI_INFINITY_RESEARCH_TIMEOUT","8"))))
+        return [{"title":x.get("title"),"url":x.get("url"),"summary":x.get("seendate") or x.get("domain"),"published_at":x.get("seendate")} for x in (data.get("articles") or []) if x.get("title") and x.get("url")]
 
-    retrieved = now()
-    return {"topic": topic, "sources": sources[:limit * 2], "source_count": len([x for x in sources if not x.get("error")]), "retrieved_at": retrieved, "truthful": True}
+    def wikidata():
+        data=http_json("https://www.wikidata.org/w/api.php?"+urlencode({"action":"wbsearchentities","search":clean_topic,"language":"en","format":"json","limit":per}))
+        out=[]
+        for x in data.get("search") or []:
+            qid=x.get("id"); title=x.get("label") or qid
+            out.append({"title":title,"url":f"https://www.wikidata.org/wiki/{qid}" if qid else "","summary":x.get("description") or ""})
+        return out
+
+    def openalex():
+        data=http_json("https://api.openalex.org/works?"+urlencode({"search":clean_topic,"per-page":per}))
+        out=[]
+        for x in data.get("results") or []:
+            out.append({"title":x.get("display_name"),"url":x.get("doi") or x.get("id"),"summary":(x.get("abstract_inverted_index") and "Scholarly work; abstract index available") or "Scholarly work","published_at":x.get("publication_date")})
+        return out
+
+    def crossref():
+        data=http_json("https://api.crossref.org/works?"+urlencode({"query.bibliographic":clean_topic,"rows":per}))
+        out=[]
+        for x in (data.get("message",{}).get("items") or []):
+            title=((x.get("title") or [""])[0]); url=x.get("URL") or ""
+            if title and url: out.append({"title":title,"url":url,"summary":"Crossref bibliographic record","published_at":str((x.get("published-print") or x.get("published-online") or {}).get("date-parts",[""])[0])})
+        return out
+
+    def europe_pmc():
+        data=http_json("https://www.ebi.ac.uk/europepmc/webservices/rest/search?"+urlencode({"query":clean_topic,"format":"json","pageSize":per}))
+        out=[]
+        for x in data.get("resultList",{}).get("result",[]) or []:
+            title=x.get("title"); pmid=x.get("pmid"); url=f"https://europepmc.org/article/MED/{pmid}" if pmid else x.get("doi")
+            if title and url: out.append({"title":title,"url":url,"summary":x.get("abstractText") or "Europe PMC record","published_at":x.get("firstPublicationDate")})
+        return out
+
+    def arxiv():
+        raw=http_get("https://export.arxiv.org/api/query?"+urlencode({"search_query":"all:"+clean_topic,"start":0,"max_results":per}),timeout=max(5,int(os.getenv("AI_INFINITY_RESEARCH_TIMEOUT","10"))),max_bytes=5_000_000)
+        root=ET.fromstring(raw); out=[]
+        ns={"a":"http://www.w3.org/2005/Atom"}
+        for entry in root.findall("a:entry",ns):
+            title=" ".join((entry.findtext("a:title",default="",namespaces=ns) or "").split())
+            link=next((l.get("href") for l in entry.findall("a:link",ns) if l.get("rel")=="alternate"),None)
+            summary=" ".join((entry.findtext("a:summary",default="",namespaces=ns) or "").split())
+            if title and link: out.append({"title":title,"url":link,"summary":summary[:3000],"published_at":entry.findtext("a:published",default="",namespaces=ns)})
+        return out
+
+    def europe_archive():
+        data=http_json("https://archive.org/advancedsearch.php?"+urlencode({"q":clean_topic,"fl[]":["identifier","title","description"],"rows":per,"page":1,"output":"json"}))
+        out=[]
+        for x in (data.get("response",{}).get("docs") or []):
+            ident=x.get("identifier"); title=x.get("title") or ident
+            if ident and title: out.append({"title":title,"url":f"https://archive.org/details/{ident}","summary":str(x.get("description") or "")[:2500]})
+        return out
+
+    # Public sources are intentionally parallel so a slow provider cannot block the whole brief.
+    providers_to_run=[
+        ("Wikipedia",wikipedia),("DuckDuckGo",duckduckgo),("Google News RSS",google_news),
+        ("GDELT",gdelt),("Wikidata",wikidata),("OpenAlex",openalex),("Crossref",crossref),
+        ("Europe PMC",europe_pmc),("arXiv",arxiv),("Internet Archive",europe_archive)
+    ]
+    with ThreadPoolExecutor(max_workers=min(6,len(providers_to_run)),thread_name_prefix="studio-research") as pool:
+        futures={pool.submit(fn):name for name,fn in providers_to_run}
+        for future in as_completed(futures):
+            name=futures[future]
+            try: run_provider(name,lambda f=future: f.result())
+            except Exception as exc: providers[name]={"status":"failed","count":0,"error":f"{type(exc).__name__}: {str(exc)[:240]}","truthful":True}
+
+    # Optional keyed providers are reported, not required for core research.
+    optional={"Tavily":bool(os.getenv("TAVILY_API_KEY","").strip()),"Brave Search API":bool(os.getenv("BRAVE_SEARCH_API_KEY","").strip()),"Exa":bool(os.getenv("EXA_API_KEY","").strip())}
+    for name,configured in optional.items():
+        providers.setdefault(name,{"status":"configured" if configured else "config_required","count":0,"truthful":True})
+
+    valid=[x for x in sources if x.get("url") and x.get("title")]
+    family_count=len(set(str(x.get("source") or "") for x in valid))
+    status="READY" if valid else "DEGRADED"
+    return {"topic":clean_topic,"sources":valid[:per*2],"source_count":len(valid[:per*2]),"provider_count":family_count,"providers":providers,"degraded":not bool(valid),"status":status,"retrieved_at":utc_iso(),"truthful":True}
 
 
 # ---------------------------------------------------------------------------
