@@ -2795,6 +2795,18 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             ],
             "truthful": True,
         },), encoding="utf-8")
+
+        # The manifest artifacts themselves are part of the professional QC gate.
+        try:
+            production_manifest_ok = json.loads(production_manifest.read_text(encoding="utf-8")).get("project_id") == project_id
+            rights_manifest_ok = json.loads(rights_manifest.read_text(encoding="utf-8")).get("project_id") == project_id
+        except Exception:
+            production_manifest_ok = False
+            rights_manifest_ok = False
+        qc.setdefault("checks", {})["production_manifest"] = production_manifest_ok
+        qc.setdefault("checks", {})["rights_manifest"] = rights_manifest_ok
+        qc["passed"] = all(bool(v) for k, v in qc["checks"].items() if k not in {"full_hd", "embedded_subtitles", "fallback_visual_used"})
+
         feature_report = _feature_execution_report(project_id, project["user_id"], [str(x) for x in (req.get("features") or [])], outdir, qc=qc, req=req)
         metadata = {
             "studio_version": VERSION, "build": BUILD, "project_id": project_id, "created_at": now(),
