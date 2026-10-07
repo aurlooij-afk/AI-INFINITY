@@ -1257,6 +1257,25 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     if test_media:
         return test_media
 
+    # If the public/AI source ladder is exhausted but the project already has a
+    # verified public-source visual, reuse that real source rather than inventing
+    # a fake fallback. Scene-specific framing/cropping in the renderer still lets
+    # it serve as a distinct shot.
+    try:
+        reusable = [
+            p for p in sorted(outdir.iterdir())
+            if p.is_file() and p.suffix.lower() in {".jpg",".jpeg",".png",".webp",".mp4",".mov",".mkv",".webm"}
+            and p.name.startswith(("openverse","commons_","nasa_","pexels_","pixabay_"))
+        ]
+        if reusable:
+            chosen = reusable[(max(1, int(index)) - 1) % len(reusable)]
+            suffix = chosen.suffix.lower()
+            if suffix in {".mp4",".mov",".mkv",".webm"}:
+                return {"kind":"video","path":str(chosen),"source":"verified-source-reuse","source_url":None,"creator":None,"license":"inherited from original source","rights_status":"inherited_source_evidence","reused_source":True,"quality_tier":"public_source_reuse"}
+            return {"kind":"image","path":str(chosen),"source":"verified-source-reuse","source_url":None,"creator":None,"license":"inherited from original source","rights_status":"inherited_source_evidence","reused_source":True,"quality_tier":"public_source_reuse"}
+    except Exception:
+        pass
+
     # Last production rung: create an original editorial motion-design scene.
     # This is a real generated asset, not a test fixture or fake success. It is
     # explicitly tagged as fallback so downstream QC can warn without killing
