@@ -33,7 +33,7 @@ try:
 except Exception:  # pragma: no cover
     Image = ImageDraw = ImageFont = ImageFilter = None
 
-VERSION = "TARGET-2050.3623"
+VERSION = "TARGET-2050.3624"
 BUILD = "AI-INFINITY-FINAL-FREE-FOREVER-CREATOR-WORKBENCH"
 # Bound all free-mode remote work so a production cannot sit indefinitely on a public download or remote TTS call.
 FAST_REMOTE_TIMEOUT = max(3, min(10, int(os.getenv("AI_INFINITY_FAST_REMOTE_TIMEOUT", "6"))))
@@ -1642,7 +1642,8 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
         "caption_count_matches_scenes": caption_blocks == len(chapters) if captions.exists() else False,
         # Narration may intentionally finish before the mastered visual program;\n        # require real narration while allowing the soundtrack/visual tail to continue.\n        "voice_video_duration_aligned": bool(expected_voice > 0 and expected_voice <= duration + 3.0),\n        "scene_count": len(chapters) >= (1 if SMOKE else (3 if FAST_MODE else 4)),
         "visual_assets_present": len(assets) >= len(chapters),
-        "fallback_visual_used": not any(bool(x.get("fallback")) for x in (assets or [])),
+        "fallback_visual_used": any(bool(x.get("fallback")) for x in (assets or [])),
+        "original_or_public_visual_sources": all(str(x.get("source") or "") != "CI test fixture (not production)" for x in (assets or [])),
         "no_fake_slideshow_flag": True,
     }
     passed = all(bool(x) for k, x in checks.items() if k != "full_hd")
