@@ -103,6 +103,15 @@ STOP = threading.Event()
 SMOKE = os.getenv("AI_INFINITY_STUDIO_SMOKE", "").strip().lower() in {"1", "true", "yes"}
 FAST_MODE = os.getenv("AI_INFINITY_FAST_MODE", "1").strip().lower() in {"1", "true", "yes", "on"}
 PROCESS_REGISTRY: Dict[str, subprocess.Popen] = {}
+MEDIA_DEBUG_ERRORS: Dict[str, str] = {}
+MEDIA_LAST_SUCCESS: Dict[str, Dict[str, Any]] = {}
+
+def _media_debug(source: str, exc: Exception) -> None:
+    MEDIA_DEBUG_ERRORS[source] = f"{type(exc).__name__}: {str(exc)[:360]}"
+
+def _media_success(source: str, detail: Dict[str, Any]) -> None:
+    MEDIA_LAST_SUCCESS[source] = {k: v for k, v in detail.items() if k != "path"}
+
 PROCESS_LOCK = threading.RLock()
 ACTIVE_PROJECT = threading.local()
 QUEUE_LEASE_SECONDS = max(120, int(os.getenv("AI_INFINITY_QUEUE_LEASE_SECONDS", "300")))
@@ -888,8 +897,30 @@ def _pixabay(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
     except Exception:
         return []
 
+def _normalize_image_file(path: Path, outdir: Path, stem: str) -> Optional[Path]:
+    if Image is None:
+        return path if path.is_file() else None
+    try:
+        with Image.open(path) as im:
+            im.load()
+            if im.mode in {"RGBA", "LA"}:
+                bg = Image.new("RGB", im.size, "white")
+                bg.paste(im, mask=im.getchannel("A"))
+                im = bg
+            else:
+                im = im.convert("RGB")
+            target = outdir / f"{stem}.jpg"
+            im.save(target, "JPEG", quality=94, optimize=True)
+        if target != path:
+            path.unlink(missing_ok=True)
+        return target
+    except Exception as exc:
+        _media_debug("image-normalize", exc)
+        path.unlink(missing_ok=True)
+        return None
+
+
 def _nasa_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
-    """Keyless NASA public image library fallback with source metadata."""
     try:
         data = http_json("https://images-api.nasa.gov/search?" + urlencode({
             "q": query, "media_type": "image", "page_size": min(limit, 8)
@@ -903,27 +934,38 @@ def _nasa_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any
                 image_url = next((x.get("href") for x in links if x.get("href")), None)
             if not image_url:
                 continue
-            p = outdir / f"nasa_{hashlib.sha256(str(image_url).encode()).hexdigest()[:12]}.jpg"
+            raw_path = outdir / f"nasa_raw_{hashlib.sha256(str(image_url).encode()).hexdigest()[:12]}"
             try:
-                download(image_url, p, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 60), max_bytes=12_000_000)
-            except Exception:
+                download(
+                    image_url, raw_path,
+                    headers={"Accept":"image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"},
+                    timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 60), max_bytes=12_000_000
+                )
+                path = _normalize_image_file(raw_path, outdir, raw_path.stem.replace("nasa_raw_","nasa"))
+                if not path:
+                    continue
+            except Exception as exc:
+                _media_debug("nasa", exc)
+                raw_path.unlink(missing_ok=True)
                 continue
-            out.append({
-                "kind": "image", "path": str(p), "source": "NASA Image and Video Library",
-                "source_url": item.get("href") or "https://images.nasa.gov/",
-                "creator": data_block.get("creator") or data_block.get("center") or "NASA",
-                "license": "NASA media-use policy applies", "title": data_block.get("title"),
-                "description": data_block.get("description"),
-            })
+            item_url = item.get("href") or "https://images.nasa.gov/"
+            row = {
+                "kind":"image","path":str(path),"source":"NASA Image and Video Library",
+                "source_url":item_url,"creator":data_block.get("creator") or data_block.get("center") or "NASA",
+                "license":"NASA media-use policy applies","title":data_block.get("title"),
+                "description":data_block.get("description"),
+            }
+            out.append(row)
             if len(out) >= limit:
                 break
+        if out:
+            _media_success("nasa", {"count":len(out),"query":query})
         return out
-    except Exception:
+    except Exception as exc:
+        _media_debug("nasa", exc)
         return []
 
-
 def _openverse_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
-    """Openverse public/openly licensed image source; license metadata is preserved."""
     try:
         data = http_json("https://api.openverse.org/v1/images/?" + urlencode({
             "q": query, "page_size": min(limit, 8), "mature": "false"
@@ -933,143 +975,149 @@ def _openverse_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str
             image_url = item.get("thumbnail") or item.get("url")
             if not image_url:
                 continue
-            p = outdir / f"openverse_{hashlib.sha256(str(image_url).encode()).hexdigest()[:12]}.jpg"
+            raw_path = outdir / f"openverse_raw_{hashlib.sha256(str(image_url).encode()).hexdigest()[:12]}"
             try:
-                download(image_url, p, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 60), max_bytes=10_000_000)
-            except Exception:
+                download(
+                    image_url, raw_path,
+                    headers={"Accept":"image/avif,image/webp,image/apng,image/*,*/*;q=0.8"},
+                    timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 60), max_bytes=10_000_000
+                )
+                path = _normalize_image_file(raw_path, outdir, raw_path.stem.replace("openverse_raw_","openverse"))
+                if not path:
+                    continue
+            except Exception as exc:
+                _media_debug("openverse", exc)
+                raw_path.unlink(missing_ok=True)
                 continue
-            out.append({
-                "kind": "image", "path": str(p), "source": "Openverse",
-                "source_url": item.get("foreign_landing_url") or item.get("detail_url") or image_url,
-                "creator": item.get("creator"), "license": item.get("license"),
-                "license_version": item.get("license_version"), "title": item.get("title"),
-            })
+            row = {
+                "kind":"image","path":str(path),"source":"Openverse",
+                "source_url":item.get("foreign_landing_url") or item.get("detail_url") or image_url,
+                "creator":item.get("creator"),"license":item.get("license"),
+                "license_version":item.get("license_version"),"title":item.get("title"),
+            }
+            out.append(row)
             if len(out) >= limit:
                 break
+        if out:
+            _media_success("openverse", {"count":len(out),"query":query})
         return out
-    except Exception:
+    except Exception as exc:
+        _media_debug("openverse", exc)
         return []
 
-
 def _commons_media(query: str, outdir: Path, limit: int = 6) -> List[Dict[str, Any]]:
-    # Fast mode deliberately avoids downloading large public video files. A
-    # lightweight Commons thumbnail is still genuine source-backed media and
-    # can be animated locally with zoom/pan to produce a moving scene.
     timeout = FAST_REMOTE_TIMEOUT if FAST_MODE else 20
     image_timeout = FAST_REMOTE_TIMEOUT if FAST_MODE else 60
     try:
         params = {
-            "action": "query", "format": "json", "generator": "search", "gsrsearch": query,
-            "gsrnamespace": 6, "gsrlimit": min(limit, 10), "prop": "imageinfo",
-            "iiprop": "url|mime|extmetadata"
+            "action":"query","format":"json","generator":"search","gsrsearch":query,
+            "gsrnamespace":6,"gsrlimit":min(limit,10),"prop":"imageinfo",
+            "iiprop":"url|mime|extmetadata","iiurlwidth":1280 if FAST_MODE else 1920,
         }
-        if FAST_MODE:
-            params["iiurlwidth"] = 1280
         data = http_json("https://commons.wikimedia.org/w/api.php?" + urlencode(params), timeout=timeout)
-        out = []
-        for pge in (data.get("query", {}).get("pages", {}) or {}).values():
-            info = (pge.get("imageinfo") or [{}])[0]
-            original = info.get("url")
-            mime = str(info.get("mime") or "")
+        out=[]
+        for pge in (data.get("query",{}).get("pages",{}) or {}).values():
+            info=(pge.get("imageinfo") or [{}])[0]
+            original=info.get("url"); mime=str(info.get("mime") or "")
             if not original:
                 continue
-            meta = info.get("extmetadata") or {}
-            lic = (meta.get("LicenseShortName") or {}).get("value")
-            creator = (meta.get("Artist") or {}).get("value")
-            is_video = "video" in mime or re.search(r"\.(webm|ogv|mp4)(\?|$)", original, re.I)
+            meta=info.get("extmetadata") or {}
+            lic=(meta.get("LicenseShortName") or {}).get("value")
+            creator=(meta.get("Artist") or {}).get("value")
+            is_video="video" in mime or re.search(r"\.(webm|ogv|mp4)(\?|$)", original, re.I)
             if is_video:
                 if FAST_MODE:
                     continue
-                p = outdir / f"commons_{pge.get('pageid','x')}.media"
+                p=outdir/f"commons_{pge.get('pageid','x')}.media"
                 try:
-                    download(original, p, timeout=90)
-                    out.append({"kind": "video", "path": str(p), "source": "Wikimedia Commons", "source_url": pge.get("canonicalurl") or "https://commons.wikimedia.org", "creator": creator, "license": lic or "Wikimedia Commons stated license", "title": pge.get("title")})
-                except Exception:
-                    continue
+                    download(original,p,timeout=90)
+                    out.append({"kind":"video","path":str(p),"source":"Wikimedia Commons","source_url":pge.get("canonicalurl") or "https://commons.wikimedia.org","creator":creator,"license":lic or "Wikimedia Commons stated license","title":pge.get("title")})
+                except Exception as exc:
+                    _media_debug("wikimedia",exc)
                 continue
-            if re.search(r"\.(jpe?g|png|webp)(\?|$)", original, re.I):
-                u = info.get("thumburl") or original
-                p = outdir / f"commons_{pge.get('pageid','x')}.img"
-                try:
-                    download(u, p, timeout=image_timeout, max_bytes=12_000_000 if FAST_MODE else 40_000_000)
-                    out.append({"kind": "image", "path": str(p), "source": "Wikimedia Commons", "source_url": pge.get("canonicalurl") or "https://commons.wikimedia.org", "creator": creator, "license": lic or "Wikimedia Commons stated license", "title": pge.get("title")})
-                except Exception:
+            if not mime.startswith("image/") and not re.search(r"\.(jpe?g|png|webp|avif|gif|tiff?)(\?|$)", original, re.I):
+                continue
+            u=info.get("thumburl") or original
+            raw=outdir/f"commons_raw_{pge.get('pageid','x')}"
+            try:
+                download(u,raw,headers={"Accept":"image/avif,image/webp,image/apng,image/*,*/*;q=0.8"},timeout=image_timeout,max_bytes=12_000_000 if FAST_MODE else 40_000_000)
+                p=_normalize_image_file(raw,outdir,f"commons_{pge.get('pageid','x')}")
+                if not p:
                     continue
+                out.append({"kind":"image","path":str(p),"source":"Wikimedia Commons","source_url":pge.get("canonicalurl") or "https://commons.wikimedia.org","creator":creator,"license":lic or "Wikimedia Commons stated license","title":pge.get("title")})
+            except Exception as exc:
+                _media_debug("wikimedia",exc)
+                raw.unlink(missing_ok=True)
+                continue
+        if out:
+            _media_success("wikimedia", {"count":len(out),"query":query})
         return out
-    except Exception:
+    except Exception as exc:
+        _media_debug("wikimedia",exc)
         return []
 
-
 def _hf_video(prompt: str, outdir: Path, index: int, duration: float) -> Optional[Dict[str, Any]]:
-    token = os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
+    token=os.getenv("HF_TOKEN","").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN","").strip()
     if not token:
         return None
-    if os.getenv("AI_INFINITY_AI_VIDEO", "1").strip().lower() not in {"1", "true", "yes", "auto"}:
+    if os.getenv("AI_INFINITY_AI_VIDEO","1").strip().lower() not in {"1","true","yes","auto"}:
         return None
     try:
         from huggingface_hub import InferenceClient
-        model = os.getenv("AI_INFINITY_VIDEO_MODEL", "Wan-AI/Wan2.2-TI2V-5B").strip()
-        client_kwargs={"api_key": token}
-        selected_provider=os.getenv("AI_INFINITY_HF_MEDIA_PROVIDER", "").strip() or os.getenv("AI_INFINITY_HF_PROVIDER", "").strip()
-        if selected_provider and selected_provider.lower() != "auto":
-            client_kwargs["provider"]=selected_provider
-        client = InferenceClient(**client_kwargs)
-        video = client.text_to_video(prompt, model=model)
-        if hasattr(video, "read"):
-            raw = video.read()
-        else:
-            raw = bytes(video)
+        model=os.getenv("AI_INFINITY_VIDEO_MODEL","Wan-AI/Wan2.2-TI2V-5B").strip()
+        kwargs={"api_key":token}
+        provider=os.getenv("AI_INFINITY_HF_MEDIA_PROVIDER","").strip() or os.getenv("AI_INFINITY_HF_PROVIDER","").strip()
+        if provider and provider.lower()!="auto":
+            kwargs["provider"]=provider
+        client=InferenceClient(**kwargs)
+        video=client.text_to_video(prompt,model=model)
+        raw=video.read() if hasattr(video,"read") else bytes(video)
         if not raw:
-            return None
-        p = outdir / f"ai_motion_{index:02d}.mp4"
+            raise RuntimeError("provider returned empty video")
+        p=outdir/f"ai_motion_{index:02d}.mp4"
         p.write_bytes(raw)
-        return {"kind": "video", "path": str(p), "source": "Hugging Face Inference Provider", "source_url": "https://huggingface.co", "creator": "AI generated", "license": "Model/provider terms apply", "model": model}
-    except Exception:
+        _media_success("huggingface-video",{"model":model,"size":len(raw)})
+        return {"kind":"video","path":str(p),"source":"Hugging Face Inference Provider","source_url":"https://huggingface.co","creator":"AI generated","license":"Model/provider terms apply","model":model}
+    except Exception as exc:
+        _media_debug("huggingface-video",exc)
         return None
-
 
 def _hf_image(prompt: str, outdir: Path, index: int) -> Optional[Dict[str, Any]]:
-    token = os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
+    token=os.getenv("HF_TOKEN","").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN","").strip()
     if not token:
+        MEDIA_DEBUG_ERRORS["huggingface-image"]="token_not_configured"
         return None
-    requested = os.getenv("AI_INFINITY_IMAGE_MODEL", "").strip()
-    models = [requested] if requested else [
-        "black-forest-labs/FLUX.1-schnell",
-        "Qwen/Qwen-Image",
-        "black-forest-labs/FLUX.1-dev",
-    ]
-    negative = "text, subtitles, watermark, logo, UI, collage, distorted anatomy, duplicate objects, blurry, low detail, oversaturated"
-    full_prompt = f"{prompt}. Professional editorial image, photorealistic or cinematic realism, physically plausible, coherent composition, rich natural detail. Negative requirements: {negative}."
+    requested=os.getenv("AI_INFINITY_IMAGE_MODEL","").strip()
+    models=[requested] if requested else ["Qwen/Qwen-Image","black-forest-labs/FLUX.1-schnell"]
+    negative="text, subtitles, watermark, logo, UI, collage, distorted anatomy, duplicate objects, blurry, low detail, oversaturated"
+    full_prompt=f"{prompt}. Professional editorial image, photorealistic or cinematic realism, physically plausible, coherent composition, rich natural detail. Avoid {negative}."
     try:
         from huggingface_hub import InferenceClient
-        client_kwargs={"api_key": token}
-        selected_provider=os.getenv("AI_INFINITY_HF_MEDIA_PROVIDER", "").strip() or os.getenv("AI_INFINITY_HF_PROVIDER", "").strip()
-        if selected_provider and selected_provider.lower() != "auto":
-            client_kwargs["provider"]=selected_provider
-        client = InferenceClient(**client_kwargs)
+        kwargs={"api_key":token}
+        provider=os.getenv("AI_INFINITY_HF_MEDIA_PROVIDER","").strip() or os.getenv("AI_INFINITY_HF_PROVIDER","").strip()
+        if provider and provider.lower()!="auto":
+            kwargs["provider"]=provider
+        client=InferenceClient(**kwargs)
+        errors=[]
         for model in models:
             try:
-                image = client.text_to_image(
-                    full_prompt,
-                    model=model,
+                image=client.text_to_image(
+                    full_prompt, model=model,
                     width=1280 if FAST_MODE else 1536,
                     height=720 if FAST_MODE else 864,
-                    num_inference_steps=int(os.getenv("AI_INFINITY_IMAGE_STEPS", "6" if FAST_MODE else "10")),
+                    num_inference_steps=int(os.getenv("AI_INFINITY_IMAGE_STEPS","6" if FAST_MODE else "10")),
                 )
-                p = outdir / f"ai_visual_{index:02d}.png"
+                p=outdir/f"ai_visual_{index:02d}.png"
                 image.save(p)
-                if p.is_file() and p.stat().st_size > 20_000:
-                    return {
-                        "kind": "image", "path": str(p), "source": "Hugging Face Inference Provider",
-                        "source_url": "https://huggingface.co", "creator": "AI generated",
-                        "license": "Model/provider terms apply", "model": model,
-                    }
-            except Exception:
-                continue
-    except Exception:
+                if p.is_file() and p.stat().st_size>20_000:
+                    _media_success("huggingface-image",{"model":model,"size":p.stat().st_size})
+                    return {"kind":"image","path":str(p),"source":"Hugging Face Inference Provider","source_url":"https://huggingface.co","creator":"AI generated","license":"Model/provider terms apply","model":model}
+            except Exception as exc:
+                errors.append(f"{model}:{type(exc).__name__}:{str(exc)[:260]}")
+        raise RuntimeError(" | ".join(errors)[:900] or "no image model returned an asset")
+    except Exception as exc:
+        _media_debug("huggingface-image",exc)
         return None
-    return None
-
 
 def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, height: int = 900) -> Optional[Dict[str, Any]]:
     if Image is None:
@@ -1123,52 +1171,63 @@ def _ci_test_visual(scene: Dict[str, Any], outdir: Path, index: int) -> Optional
 
 
 def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_motion: bool = False, duration: float = 6.0) -> Dict[str, Any]:
-    query = str(scene.get("visual_query") or scene.get("heading") or "documentary scene")
-    ai_prompt = str(scene.get("image_prompt") or f"Premium cinematic documentary visual about {query}; realistic, useful, editorial, no text, no logos, professional photography")
-
-    # Professional order: connected generative media first, then real public/open media.
-    # We never turn a missing provider into an abstract placeholder that looks like a finished movie.
+    query=str(scene.get("visual_query") or scene.get("heading") or "documentary scene")
+    ai_prompt=str(scene.get("image_prompt") or f"Premium cinematic documentary visual about {query}; realistic, useful, editorial, no text, no logos, professional photography")
+    MEDIA_DEBUG_ERRORS.clear()
     if prefer_motion:
-        motion = _hf_video(ai_prompt, outdir, index, duration)
+        motion=_hf_video(ai_prompt,outdir,index,duration)
         if motion:
             return motion
 
-    ai = _hf_image(ai_prompt, outdir, index)
+    ai=_hf_image(ai_prompt,outdir,index)
     if ai:
         return ai
 
-    query_variants = [query]
-    heading = str(scene.get("heading") or "").strip()
-    focus = re.sub(r"[^a-zA-Z0-9, ._-]+", " ", heading).strip()
-    if focus and focus.lower() not in query.lower():
-        query_variants.append(focus + " real world photography")
-    source_failures = []
-    for q in query_variants[:2]:
-        for getter in (_pexels, _pixabay, _nasa_images, _openverse_images, _commons_media):
+    heading=str(scene.get("heading") or "").strip()
+    topic=str(scene.get("topic") or scene.get("title") or "").strip()
+    focus=re.sub(r"[^a-zA-Z0-9, ._-]+"," ",heading).strip()
+    def compact(s: str) -> str:
+        stop={"create","make","generate","produce","build","video","film","short","reel","cinematic","documentary","premium","editorial","about","real","world","photography"}
+        words=[w for w in re.findall(r"[A-Za-z0-9]{3,}",s.lower()) if w not in stop]
+        return " ".join(words[:7])
+    core=compact(topic or query or heading)
+    focus_core=compact(focus)
+    generic_focus={
+        "Hook":"creative person working at a desk",
+        "Why it matters":"creative team collaboration workspace",
+        "The key idea":"design notebook prototype close detail",
+        "Practical example":"creator editing and making a project",
+        "Takeaway":"finished creative project in a real workspace",
+    }.get(heading.split("—",1)[0].split(":",1)[0].strip(),"real world creative workspace")
+    query_variants=[]
+    for q in (query, f"{core} {focus_core}", f"{core} {generic_focus}", generic_focus):
+        q=" ".join(q.split()).strip()
+        if q and q.lower() not in {x.lower() for x in query_variants}:
+            query_variants.append(q)
+
+    source_failures=[]
+    getters=(_nasa_images,_openverse_images,_commons_media,_pexels,_pixabay)
+    for q in query_variants[:4]:
+        for getter in getters:
             try:
-                items = getter(q, outdir, limit=3)
+                items=getter(q,outdir,limit=2)
             except Exception as exc:
-                source_failures.append(f"{getter.__name__}:{type(exc).__name__}:{str(exc)[:160]}")
+                source_failures.append(f"{getter.__name__}:{type(exc).__name__}:{str(exc)[:180]}")
                 continue
-            videos = [x for x in items if x.get("kind") == "video"]
+            videos=[x for x in items if x.get("kind")=="video"]
             if videos:
                 return videos[0]
-            images = [x for x in items if x.get("kind") == "image"]
+            images=[x for x in items if x.get("kind")=="image"]
             if images:
                 return images[0]
-            source_failures.append(f"{getter.__name__}:no-asset")
+            debug_key={"_nasa_images":"nasa","_openverse_images":"openverse","_commons_media":"wikimedia","_pexels":"pexels","_pixabay":"pixabay"}.get(getter.__name__,getter.__name__)
+            source_failures.append(f"{getter.__name__}:{MEDIA_DEBUG_ERRORS.get(debug_key,'no-asset')}")
 
-    test_media = _ci_test_visual(scene, outdir, index)
+    test_media=_ci_test_visual(scene,outdir,index)
     if test_media:
         return test_media
-    detail = "; ".join(source_failures[:10])
+    detail="; ".join(source_failures[:16])
     raise RuntimeError(f"no professional visual source is reachable for this scene [{detail}]")
-
-
-# ---------------------------------------------------------------------------
-# Audio and render pipeline.
-# ---------------------------------------------------------------------------
-
 
 def ffmpeg(*args: Any, timeout: int = 240) -> None:
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *map(str, args)]
