@@ -40,14 +40,14 @@ RUN python -m pip install --upgrade pip \
     && if [ -s bridge-requirements.txt ]; then python -m pip install -r bridge-requirements.txt; fi
 
 COPY entrypoint.sh sitecustomize.py main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_studio_2030.html creator_entrypoint.py creator_pro_os.py overlay_final_3700.py runtime_main_3700.py production_graph.py production_intelligence.py production_openai_video.py production_closure_3624.py professional_creator_v2.py professional_creator_v2_timeline_patch.py ./
-COPY production_hardening.py creator_final_3800.py ui_3800.html divine_closure_3900.py reality_first_3901.py ai_infinity_canonical.py ai_infinity_app.py ./
+COPY production_hardening.py creator_final_3800.py ui_3800.html divine_closure_3900.py reality_first_3901.py ai_infinity_canonical.py ai_infinity_app.py professional_creator_fabric.py capability_registry.json ./
 COPY ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py ./
 
 RUN python -m py_compile \
     sitecustomize.py main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py \
     infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py \
     overlay_final_3700.py runtime_main_3700.py production_graph.py production_intelligence.py \
-    production_hardening.py creator_final_3800.py production_closure_3624.py professional_creator_v2.py professional_creator_v2_timeline_patch.py \
+    production_hardening.py creator_final_3800.py production_closure_3624.py professional_creator_v2.py professional_creator_v2_timeline_patch.py professional_creator_fabric.py \
     divine_closure_3900.py reality_first_3901.py ai_infinity_canonical.py ai_infinity_app.py \
     ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py
 
