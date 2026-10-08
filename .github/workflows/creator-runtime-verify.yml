@@ -89,7 +89,7 @@ jobs:
 
       - name: Verify professional closure regression tests
         run: |
-          python -m pytest -q tests/test_production_closure.py tests/test_production_fallback.py tests/test_professional_creator_system.py
+          python -m pytest -q tests/test_production_closure.py tests/test_production_fallback.py tests/test_professional_creator_system.py tests/test_project_state_backend.py
 
       - name: Verify browser shell JavaScript syntax
         run: |
