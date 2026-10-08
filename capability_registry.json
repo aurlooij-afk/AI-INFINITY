@@ -241,7 +241,7 @@
       "execution_mode": "remote_api",
       "license": "PROVIDER_OR_MODEL_TERMS",
       "commercial_use_state": "SUBJECT_TO_PROVIDER_OR_MODEL_TERMS",
-      "requires_api_key": true,
+      "requires_api_key": false,
       "requires_gpu": false,
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
@@ -266,8 +266,8 @@
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
       "source_url": "https://www.mediawiki.org/wiki/API:Main_page",
-      "last_verified": "2026-10-07",
-      "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
+      "last_verified": "2026-10-08",
+      "verification_basis": "Current official provider documentation verified 2026-10-08; anonymous read/search access is allowed for the public endpoint. Authentication may still affect rate limits or privileged operations."
     },
     {
       "id": "cap-008",
@@ -583,7 +583,7 @@
       "execution_mode": "remote_api",
       "license": "PROVIDER_OR_MODEL_TERMS",
       "commercial_use_state": "SUBJECT_TO_PROVIDER_OR_MODEL_TERMS",
-      "requires_api_key": true,
+      "requires_api_key": false,
       "requires_gpu": false,
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
@@ -608,8 +608,8 @@
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
       "source_url": "https://www.mediawiki.org/wiki/API:Main_page",
-      "last_verified": "2026-10-07",
-      "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
+      "last_verified": "2026-10-08",
+      "verification_basis": "Current official provider documentation verified 2026-10-08; anonymous read/search access is allowed for the public endpoint. Authentication may still affect rate limits or privileged operations."
     },
     {
       "id": "cap-017",
@@ -3871,7 +3871,7 @@
       "execution_mode": "remote_api",
       "license": "PROVIDER_OR_MODEL_TERMS",
       "commercial_use_state": "SUBJECT_TO_PROVIDER_OR_MODEL_TERMS",
-      "requires_api_key": true,
+      "requires_api_key": false,
       "requires_gpu": false,
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
@@ -3896,8 +3896,8 @@
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
       "source_url": "https://api.openverse.org/",
-      "last_verified": "2026-10-07",
-      "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
+      "last_verified": "2026-10-08",
+      "verification_basis": "Current official provider documentation verified 2026-10-08; anonymous read/search access is allowed for the public endpoint. Authentication may still affect rate limits or privileged operations."
     },
     {
       "id": "cap-101",
@@ -3909,7 +3909,7 @@
       "execution_mode": "remote_api",
       "license": "PROVIDER_OR_MODEL_TERMS",
       "commercial_use_state": "SUBJECT_TO_PROVIDER_OR_MODEL_TERMS",
-      "requires_api_key": true,
+      "requires_api_key": false,
       "requires_gpu": false,
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
@@ -3934,8 +3934,8 @@
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
       "source_url": "https://commons.wikimedia.org/wiki/Commons:API",
-      "last_verified": "2026-10-07",
-      "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
+      "last_verified": "2026-10-08",
+      "verification_basis": "Current official provider documentation verified 2026-10-08; anonymous read/search access is allowed for the public endpoint. Authentication may still affect rate limits or privileged operations."
     },
     {
       "id": "cap-102",
@@ -4213,7 +4213,7 @@
       "execution_mode": "remote_api",
       "license": "PROVIDER_OR_MODEL_TERMS",
       "commercial_use_state": "SUBJECT_TO_PROVIDER_OR_MODEL_TERMS",
-      "requires_api_key": true,
+      "requires_api_key": false,
       "requires_gpu": false,
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
@@ -4238,8 +4238,8 @@
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
       "source_url": "https://api.openverse.org/",
-      "last_verified": "2026-10-07",
-      "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
+      "last_verified": "2026-10-08",
+      "verification_basis": "Current official provider documentation verified 2026-10-08; anonymous read/search access is allowed for the public endpoint. Authentication may still affect rate limits or privileged operations."
     },
     {
       "id": "cap-110",
@@ -4251,7 +4251,7 @@
       "execution_mode": "remote_api",
       "license": "PROVIDER_OR_MODEL_TERMS",
       "commercial_use_state": "SUBJECT_TO_PROVIDER_OR_MODEL_TERMS",
-      "requires_api_key": true,
+      "requires_api_key": false,
       "requires_gpu": false,
       "requires_external_network": true,
       "free_state": "FREE_TIER_OR_PUBLIC_STATUS_VARIES",
@@ -4276,8 +4276,8 @@
       "language_support": [],
       "notes": "Canonical inventory entry. Registration is not a readiness claim; runtime, quota, compute and license are evaluated separately.",
       "source_url": "https://commons.wikimedia.org/wiki/Commons:API",
-      "last_verified": "2026-10-07",
-      "verification_basis": "AI Infinity canonical inventory; runtime verification required before READY"
+      "last_verified": "2026-10-08",
+      "verification_basis": "Current official provider documentation verified 2026-10-08; anonymous read/search access is allowed for the public endpoint. Authentication may still affect rate limits or privileged operations."
     },
     {
       "id": "cap-111",
