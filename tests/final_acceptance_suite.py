@@ -108,10 +108,14 @@ def t3(s,b):
     f=TMP/"acceptance-source.pdf"; pdf(f); assert f.stat().st_size>500
     up=s.post(b+"/infinity/studio/upload",files={"file":(f.name,f.read_bytes(),"application/pdf")},timeout=180)
     if not up.ok:
-        log_path=Path(os.environ.get("AI_INFINITY_DATA_DIR","/tmp"))/"server.log"
         print("UPLOAD_FAILURE",up.status_code,up.text[:3000])
-        if log_path.exists():
-            print("UPLOAD_SERVER_LOG",log_path.read_text(errors="replace")[-16000:])
+        roots=[Path(os.environ.get("AI_INFINITY_DATA_DIR","/tmp")), Path("/tmp/ai-infinity-final-acceptance")]
+        logs=[]
+        for root in roots:
+            if root.exists():
+                logs.extend(root.rglob("server.log"))
+        for log_path in logs[-5:]:
+            print("UPLOAD_SERVER_LOG",str(log_path),log_path.read_text(errors="replace")[-16000:])
         raise AssertionError(up.text)
     assert up.json().get("text_extracted") is True,up.text
     pid=create(s,b,"Turn the uploaded PDF into research-backed content: produce a podcast package, video, article and social campaign with evidence, captions and a final production package.",source_file_names=[f.name],content_type="video",duration=20,format="short"); waitp(s,b,pid)
