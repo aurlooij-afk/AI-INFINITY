@@ -1502,7 +1502,7 @@ def probe_duration(path: Path) -> float:
         return 0.1
 
 
-def tts(text: str, outdir: Path, index: int, voice: str) -> Tuple[Path, str, float]:
+def tts(text: str, outdir: Path, index: int, voice: str, language: str = "English") -> Tuple[Path, str, float]:
     out = outdir / f"narration_{index:02d}.mp3"
     plain = str(text or "").strip()
     if not plain:
@@ -1532,10 +1532,22 @@ def tts(text: str, outdir: Path, index: int, voice: str) -> Tuple[Path, str, flo
 
     if not exe:
         raise RuntimeError("narration engine unavailable")
+
+    # Never silently synthesize a requested language with an unrelated local voice.
+    # eSpeak NG currently documents Arabic and Urdu plus Persian (not Dari) and does
+    # not list Pashto, so Pashto/Dari must use a genuinely matching remote voice.
+    lang_key = re.sub(r"[^a-z]", "", str(language or "English").lower())
+    local_voice = {"english": "en", "urdu": "ur", "arabic": "ar"}.get(lang_key)
+    if lang_key in {"pashto", "dari"}:
+        raise RuntimeError(f"{language} local voice is not available in the supported eSpeak fallback; requires a matching connected voice provider")
+    if not local_voice:
+        local_voice = "en"
+
     wav = outdir / f"narration_{index:02d}.wav"
-    subprocess.run([exe, "-s", "155", "-w", str(wav), plain], check=True, timeout=45)
+    subprocess.run([exe, "-v", local_voice, "-s", "155", "-w", str(wav), plain], check=True, timeout=45)
     ffmpeg("-i", wav, "-codec:a", "libmp3lame", "-q:a", "2", out, timeout=180)
-    return out, "local-espeak" + ("-fast-fallback" if FAST_MODE else ""), probe_duration(out)
+    provider_name = {"en":"local-espeak","ur":"local-espeak-urdu","ar":"local-espeak-arabic"}.get(local_voice, f"local-espeak-{local_voice}")
+    return out, provider_name + ("-fast-fallback" if FAST_MODE else ""), probe_duration(out)
 
 
 def _fit_audio_duration(source: Path, target_seconds: float, out: Path) -> Tuple[Path, float]:
@@ -2652,9 +2664,13 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             # Every scene is fail-soft: remote/public media or neural TTS may fail,
             # but one failed provider must never block the production pipeline.
             try:
-                voice, provider, voice_duration = tts(str(ch.get("narration") or ""), outdir, i, str(req.get("voice") or "en-US-AriaNeural"))
+                voice, provider, voice_duration = tts(str(ch.get("narration") or ""), outdir, i, str(req.get("voice") or "en-US-AriaNeural"), str(req.get("language") or "English"))
             except Exception as voice_exc:
                 audit_event(project_id, "voice_source_unavailable", {"scene": i, "error": str(voice_exc)[:500]})
+                requested_language = str(req.get("language") or "English").strip().lower()
+                if requested_language in {"pashto", "dari"}:
+                    # These languages must never be marked complete with silent or English audio.
+                    raise RuntimeError(f"{req.get('language')} voice generation unavailable; connect a matching voice provider") from voice_exc
                 voice, provider, voice_duration = _make_silent_voice(
                     outdir, i, max(4.0, float(ch.get("duration") or 6.0))
                 )
@@ -2663,6 +2679,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                     "scene": i,
                     "provider": provider,
                     "reason": str(voice_exc)[:500],
+                    "language": req.get("language"),
                 })
             voice_provider = voice_provider or provider
             scene_duration = max(4.0, min(90.0, float(ch.get("duration") or voice_duration)))
