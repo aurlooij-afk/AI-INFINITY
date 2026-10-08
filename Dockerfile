@@ -84,7 +84,7 @@ RUN espeak-ng --version \
 
 RUN chmod 755 /app/entrypoint.sh \
     && mkdir -p /data/ai-infinity /tmp/ai-infinity \
-    && chown -R aiinfinity:aiinfinity /app /data/ai-infinity /tmp/ai-infinity
+    && chown -R aiinfinity:aiinfinity /app /data /tmp/ai-infinity
 USER aiinfinity
 EXPOSE 10000
 VOLUME ["/data"]
