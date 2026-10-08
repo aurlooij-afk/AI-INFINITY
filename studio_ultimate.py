@@ -97,12 +97,27 @@ ROOT = DATA_DIR / "creator_studio"
 ROOT.mkdir(parents=True, exist_ok=True)
 DB_PATH = Path(os.getenv("AI_INFINITY_DB_PATH", str(DATA_DIR / "ai_infinity.db")))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+_PROJECT_STATE_STATUS = {}
 try:
     from ai_infinity.project_state_backend import DurableConnection as _DurableConnection
     from ai_infinity.project_state_backend import configure as _configure_project_state
-    _configure_project_state(DB_PATH)
-except Exception:
+    _PROJECT_STATE_STATUS = _configure_project_state(DB_PATH)
+    print(
+        "AI Infinity project-state backend:"
+        f" backend={_PROJECT_STATE_STATUS.get('backend')}"
+        f" contract_enabled={bool(_PROJECT_STATE_STATUS.get('contract_enabled'))}"
+        f" configured={bool(_PROJECT_STATE_STATUS.get('configured'))}"
+        f" active={bool(_PROJECT_STATE_STATUS.get('active'))}"
+        f" verified={bool(_PROJECT_STATE_STATUS.get('verified'))}",
+        flush=True,
+    )
+except Exception as exc:
     _DurableConnection = None
+    print(
+        "AI Infinity project-state backend: unavailable"
+        f" error={type(exc).__name__}",
+        flush=True,
+    )
 DB_LOCK = threading.RLock()
 WORKER_STARTED = False
 WORKER_GUARD = threading.Lock()
