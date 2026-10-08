@@ -1637,7 +1637,7 @@ def _espeak_exact_voice(exe: str, language: str) -> Optional[str]:
         # (for example "en") even when the requested variant is "en-us".
         # Suitability is therefore established by a non-header voice row, then
         # the original requested language code is passed to the synthesizer.
-        voice_rows = [x for x in rows if not x.lower().startswith("pty") and not x.lower().startswith("language")]
+        voice_rows = [x for x in rows if re.match(r"^\s*\d+\s+\S+", x)]
         if voice_rows:
             return code
     except Exception:
