@@ -27,15 +27,35 @@ def project_state_durability(root: Path | str) -> dict:
     confirmed_backend = _flag("AI_INFINITY_PROJECT_STATE_DURABLE")
     remote_backend = os.getenv("AI_INFINITY_PROJECT_STATE_BACKEND", "").strip().lower()
 
-    # This application currently uses its local SQLite file for active project
-    # state. A future durable backend can opt in explicitly; R2 artifact
-    # replication alone does not qualify.
-    backend_ready = confirmed_backend and remote_backend in {"sqlite_persistent_volume", "durable_state_backend"}
+    backend_status = {}
+    try:
+        from ai_infinity import project_state_backend
+        backend_status = project_state_backend.status()
+    except Exception as exc:
+        backend_status = {
+            "configured": False,
+            "active": False,
+            "verified": False,
+            "backend": remote_backend or None,
+            "last_error": f"{type(exc).__name__}: {str(exc)[:240]}",
+            "truthful": True,
+        }
+
+    backend_ready = bool(
+        mode == "durable"
+        and confirmed_backend
+        and remote_backend == "cloudflare_r2"
+        and backend_status.get("contract_enabled")
+        and backend_status.get("active")
+        and backend_status.get("verified")
+    )
     local_volume_ready = confirmed_volume and not str(path).startswith("/tmp")
 
-    persistent = mode == "durable" and (local_volume_ready or backend_ready)
+    persistent = bool(backend_ready or (mode == "durable" and local_volume_ready))
     if persistent:
-        reason = "explicit_durable_contract"
+        reason = "verified_durable_state_backend" if backend_ready else "explicit_persistent_volume_contract"
+    elif mode == "durable" and remote_backend:
+        reason = "durable_mode_requested_but_backend_not_verified"
     elif mode == "durable":
         reason = "durable_mode_requested_but_storage_not_confirmed"
     else:
@@ -48,6 +68,7 @@ def project_state_durability(root: Path | str) -> dict:
         "persistent_volume_confirmed": confirmed_volume,
         "project_state_backend_confirmed": confirmed_backend,
         "project_state_backend": remote_backend or None,
+        "project_state_backend_status": backend_status,
         "reason": reason,
         "truthful": True,
     }
