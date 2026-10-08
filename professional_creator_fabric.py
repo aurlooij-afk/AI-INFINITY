@@ -451,7 +451,7 @@ def self_test() -> Dict[str, Any]:
                 os.environ.pop("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS", None)
             else:
                 os.environ["AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS"] = old_disable
-       old = os.environ.get("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS")
+        old = os.environ.get("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS")
         os.environ["AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS"] = "1"
         try:
             disabled_research = studio.research_topic("self-test", limit=1)
