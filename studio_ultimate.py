@@ -5105,7 +5105,6 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         if name in {"final.mp4", "package.zip"}:
             # Final deliverables are released only from an independently
             # reconciled Reality Kernel proof. Never use a stale in-process flag.
-            smoke_delivery_override = (SMOKE and os.getenv("AI_INFINITY_SMOKE_ALLOW_UNVERIFIED_DELIVERY","0").strip().lower() in {"1","true","yes","on"}) or (os.getenv("CI","").strip().lower() == "true")
             try:
                 import reality_first_3901 as _reality_kernel
                 truth = _reality_kernel.truth_for_project(project_id)
@@ -5132,7 +5131,7 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
                         persisted_verified = bool(proof.get("verified") is True and proof.get("truthful") is True and proof.get("state") == "VERIFIED")
                     except Exception:
                         persisted_verified = False
-                if not persisted_verified and not smoke_delivery_override:
+                if not persisted_verified:
                     raise HTTPException(409, "final delivery is blocked until professional verification passes")
         mapping = {
             "final.mp4": ("final.mp4", "video/mp4"), "package.zip": (next((q["path"] for q in _asset_rows(project_id) if q["kind"] == "package"), "package.zip"), "application/zip"),
@@ -5157,11 +5156,10 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         if Path(asset_name).name in {"final.mp4", "package.zip"}:
             p = _get_project(project_id)
             gate = globals().get("_professional_truth")
-            smoke_delivery_override = (os.getenv("AI_INFINITY_SMOKE_ALLOW_UNVERIFIED_DELIVERY","0").strip().lower() in {"1","true","yes","on"}) or (os.getenv("CI","").strip().lower() == "true" and FAST_MODE)
             if not p or gate is None:
                 raise HTTPException(409, "final delivery is unavailable")
             truth = gate(p, reconcile=True)
-            if not truth.get("verified") and not smoke_delivery_override:
+            if not truth.get("verified"):
                 raise HTTPException(409, "shared final delivery is blocked until professional verification passes")
         if not path.exists():
             rows = _asset_rows(project_id)
