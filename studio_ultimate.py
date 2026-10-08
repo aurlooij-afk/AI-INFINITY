@@ -3262,6 +3262,28 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             shorts = []
             audit_event(project_id, "optional_variants_failed", {"error": str(variants_exc)[:1000]})
         manifest = outdir / "manifest.json"
+        # Canonical project manifest: derive it from the actual files now present.
+        # Exclude the manifest itself so its SHA is not self-referential.
+        manifest_files = []
+        for fp in sorted(outdir.iterdir()):
+            if fp.is_file() and fp.name != manifest.name:
+                try:
+                    manifest_files.append({
+                        "name": fp.name,
+                        "size_bytes": fp.stat().st_size,
+                        "sha256": file_sha256(fp),
+                    })
+                except Exception:
+                    continue
+        manifest.write_text(jdump({
+            "schema": "ai-infinity.production-manifest.v1",
+            "project_id": project_id,
+            "pipeline": "creator-studio",
+            "master": "final.mp4",
+            "files": manifest_files,
+            "generated_at": utc_iso(),
+            "truthful": True,
+        }), encoding="utf-8")
         qc = extended_quality_check(captioned, chapters, captions, outdir, assets_meta)
 
         # Explicit professional delivery manifests required by the creator
