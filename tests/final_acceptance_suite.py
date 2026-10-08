@@ -106,7 +106,14 @@ def t2(s,b):
     return {"test":2,"project_id":pid,"pashto_text_verified":True,"pashto_voice_provider":provider,"voice_bytes":voice.stat().st_size}
 def t3(s,b):
     f=TMP/"acceptance-source.pdf"; pdf(f); assert f.stat().st_size>500
-    up=s.post(b+"/infinity/studio/upload",files={"file":(f.name,f.read_bytes(),"application/pdf")},timeout=180); assert up.ok,up.text; assert up.json().get("text_extracted") is True,up.text
+    up=s.post(b+"/infinity/studio/upload",files={"file":(f.name,f.read_bytes(),"application/pdf")},timeout=180)
+    if not up.ok:
+        log_path=Path(os.environ.get("AI_INFINITY_DATA_DIR","/tmp"))/"server.log"
+        print("UPLOAD_FAILURE",up.status_code,up.text[:3000])
+        if log_path.exists():
+            print("UPLOAD_SERVER_LOG",log_path.read_text(errors="replace")[-16000:])
+        raise AssertionError(up.text)
+    assert up.json().get("text_extracted") is True,up.text
     pid=create(s,b,"Turn the uploaded PDF into research-backed content: produce a podcast package, video, article and social campaign with evidence, captions and a final production package.",source_file_names=[f.name],content_type="video",duration=20,format="short"); waitp(s,b,pid)
     got=names(s,b,pid); assert {"final.mp4","podcast_rss.xml","article.md","social_campaign.json","sources.json","captions.srt"}<=got,got
     src=jart(s,b,pid,"sources.json"); assert any(str(x.get("title"))==f.name for x in src.get("sources",[])),src
