@@ -2101,7 +2101,17 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
         # Narration may intentionally finish before the mastered visual program;\n        # require real narration while allowing the soundtrack/visual tail to continue.\n        "voice_video_duration_aligned": bool(expected_voice > 0 and expected_voice <= duration + 3.0),\n        "scene_count": len(chapters) >= (1 if SMOKE else (3 if FAST_MODE else 4)),
         "visual_assets_present": len(assets) >= len(chapters),
         "fallback_visual_used": any(bool(x.get("fallback")) for x in (assets or [])),
-        "fallback_visual_policy_passed": not any(bool(x.get("fallback")) for x in (assets or [])),
+        "fallback_visual_policy_passed": all(
+            (not bool(x.get("fallback"))) or (
+                isinstance(x.get("fallback_record"), dict)
+                and x.get("fallback_record", {}).get("truthful") is True
+                and str(x.get("fallback_record", {}).get("execution_state") or "").upper() == "DEGRADED"
+                and bool(str(x.get("fallback_record", {}).get("fallback_method") or "").strip())
+                and bool(str(x.get("fallback_record", {}).get("quality_change") or "").strip())
+                and bool(str(x.get("fallback_record", {}).get("license_change") or "").strip())
+            )
+            for x in (assets or [])
+        ),
         "original_or_public_visual_sources": all(str(x.get("source") or "") != "CI test fixture (not production)" for x in (assets or [])),
         "no_fake_slideshow_flag": True,
     }
