@@ -1693,13 +1693,8 @@ def _espeak_exact_voice(exe: str, language: str) -> Optional[str]:
         for x in os.getenv("AI_INFINITY_BUNDLED_ESPEAK_LANGUAGES", "").split(",")
         if x.strip()
     }
-    data_root = Path(os.getenv("ESPEAK_DATA_PATH", ""))
-    if data_root.is_dir():
-        # The production image's Docker build smoke test actively generated
-        # English and Pashto WAVs from this exact installed data tree.
-        bundled.update({"en-us", "ps"})
-    if code in bundled:
-        return code
+    # Metadata is only an optimization hint. It is never proof that a voice
+    # exists: the exact executable probe below remains authoritative.
     sample = {
         "ur": "یہ اردو آواز کی جانچ ہے۔",
         "ar": "هذا اختبار للتحقق من الصوت العربي.",
