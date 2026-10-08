@@ -3245,6 +3245,8 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 "source_url": asset.get("source_url"),
                 "creator": asset.get("creator"),
                 "license": asset.get("license"),
+                "asset_sha256": asset.get("asset_sha256"),
+                "asset_size_bytes": asset.get("asset_size_bytes"),
                 "rights_status": asset.get("rights_status") or "REVIEW_REQUIRED",
                 "commercial_use_state": asset.get("commercial_use_state") or "UNKNOWN_REVIEW_REQUIRED",
             })
@@ -5908,6 +5910,22 @@ def _project_list(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
 
 def _project_public(p: Dict[str, Any]) -> Dict[str, Any]:
     runtime_state = _runtime_state_for_status(p.get("status"))
+    # COMPLETED is a release claim, so reconcile it against the independent
+    # Reality Kernel before exposing that state to the creator UI.
+    if str(p.get("status") or "").lower() == "completed":
+        try:
+            kernel = __import__("reality_first_3901")
+            proof = kernel.truth_for_project(p["project_id"])
+            proof_state = str(proof.get("state") or "").upper()
+            runtime_state = {
+                "VERIFIED": "COMPLETED",
+                "DEGRADED": "DEGRADED",
+                "DELIVERED_WITH_QC_WARNINGS": "DEGRADED",
+                "FAILED": "FAILED",
+                "BLOCKED": "BLOCKED",
+            }.get(proof_state, "BLOCKED")
+        except Exception:
+            runtime_state = "BLOCKED"
     out = {"project_id": p["project_id"], "title": p.get("title"), "status": p.get("status"),
            "state": runtime_state, "runtime_state": runtime_state,
            "stage": p.get("stage") or p.get("status"),
