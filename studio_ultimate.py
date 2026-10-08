@@ -2064,16 +2064,35 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
         audio_filter = "[1:a]loudnorm=I=-16:TP=-1.5:LRA=7[vo];[2:a]volume=0.075[m];[3:a]adelay=80|80,volume=0.05[s];[vo][m][s]amix=inputs=3:duration=longest:dropout_transition=1[a]"
         preset, crf, ab = "veryfast", "20", "160k"
     else:
-        width, height, fps, font = 1920, 1080, 30, 42
+        width, height, fps, font = 1920, 1080, 24, 36
+        # Production mode must keep the 1080p delivery contract, but the expensive
+        # motion/filter graph is rendered at a bounded 720p-class working size on
+        # the 512 MiB Render tier, then upscaled once for final delivery.
+        work_w, work_h = 1280, 720
         if asset.get("kind") == "video":
             src = asset["path"]
-            vf = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},eq=contrast=1.02:saturation=1.03,drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':x=75:y=915:fontsize={font}:fontcolor=white"
+            vf = (
+                f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
+                f"eq=contrast=1.02:saturation=1.03,scale={width}:{height}:flags=lanczos,fps={fps},"
+                f"drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,"
+                f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
+                f"x=75:y=915:fontsize={font}:fontcolor=white"
+            )
             visual_args = ["-stream_loop", "-1", "-i", src]
         else:
             frames = max(1, int(round(duration * fps)))
-            vf = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},zoompan=z='min(zoom+0.0008,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={width}x{height}:fps={fps},drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':x=75:y=915:fontsize={font}:fontcolor=white"
+            vf = (
+                f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
+                f"zoompan=z='min(zoom+0.0008,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                f"d={frames}:s={work_w}x{work_h}:fps={fps},scale={width}:{height}:flags=lanczos,fps={fps},"
+                f"drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,"
+                f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
+                f"x=75:y=915:fontsize={font}:fontcolor=white"
+            )
             visual_args = ["-loop", "1", "-i", src]
         audio_filter = "[1:a]loudnorm=I=-18:TP=-1.5:LRA=7[vo];[2:a]volume=0.10[m];[3:a]adelay=80|80,volume=0.10[s];[vo][m][s]amix=inputs=3:duration=longest:dropout_transition=2[a]"
+        # Keep encoder buffering bounded on the free tier without changing the
+        # actual 1080p output dimensions or codecs.
         preset, crf, ab = os.getenv("AI_INFINITY_VIDEO_PRESET", "veryfast"), "18", "192k"
     args: List[Any] = visual_args + ["-i", voice, "-stream_loop", "-1", "-i", music, "-i", sfx,
         "-filter_complex", audio_filter, "-map", "0:v:0", "-map", "[a]", "-vf", vf, "-t", duration,
