@@ -3,8 +3,6 @@ name: AI Infinity Standalone Runtime Verification
 on:
   push:
     branches: [main, ai-infinity-canonical-divine]
-  pull_request:
-    branches: [main, ai-infinity-canonical-divine]
   workflow_dispatch:
 
 permissions:
