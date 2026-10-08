@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
       - name: Compile runtime surface
         run: |
           python -m py_compile             main.py             divine_closure_3900.py             studio_ultimate.py             production_closure_3624.py             creator_final_3800.py             creator_pro_os.py             production_hardening.py             free_api_fabric.py             ai3701_features.py             ai3702_platform.py             ai3703_patch.py             ai3704_storage_fabric.py             ai3705_closure.py             ai3706_internal_closure.py
