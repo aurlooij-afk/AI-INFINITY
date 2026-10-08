@@ -590,12 +590,26 @@ def reconcile_project(project_id: str) -> Dict[str, Any]:
     studio_qc["status"] = status
 
     qc_passed = required_ok and studio_qc["studio_qc_passed"]
-    if status in {"completed", "completed_with_qc_warnings"} and required_ok:
-        state = "VERIFIED" if qc_passed else "DELIVERED_WITH_QC_WARNINGS"
-    elif status in {"failed", "cancelled"} and required_ok:
-        state = "DELIVERED_WITH_QC_WARNINGS"
-    elif status in {"running", "producing", "queued"}:
-        state = status.upper()
+    if status == "completed" and required_ok and qc_passed:
+        state = "VERIFIED"
+    elif status in {"running", "producing"}:
+        state = "RUNNING"
+    elif status == "queued":
+        state = "WAITING"
+    elif status in {"failed", "cancelled"}:
+        state = "FAILED"
+    elif status == "completed_with_qc_warnings":
+        state = "DEGRADED"
+    elif status in {"requires_connection", "config_required"}:
+        state = "REQUIRES_CONNECTION"
+    elif status in {"requires_compute", "compute_required"}:
+        state = "REQUIRES_COMPUTE"
+    elif status == "license_limited":
+        state = "LICENSE_LIMITED"
+    elif status == "rate_limited":
+        state = "RATE_LIMITED"
+    elif status == "degraded":
+        state = "DEGRADED"
     else:
         state = "BLOCKED"
 
@@ -627,26 +641,36 @@ def reconcile_project(project_id: str) -> Dict[str, Any]:
         report["missing_or_invalid"] = missing
 
     # Enforce the UI/database state from evidence, never the reverse.
-    if status == "completed" and not required_ok:
+    # A failed or QC-incomplete project may retain real files for inspection,
+    # but it is never promoted to a successful delivery state.
+    if status == "completed" and not (required_ok and qc_passed):
         try:
+            failure_parts = [k for k, v in checks.items() if not bool(v)]
+            message = "Independent verification/QC failed; successful delivery is blocked."
+            if failure_parts:
+                message += " Failed checks: " + ", ".join(failure_parts[:24])
             s._update_project(
                 project_id,
-                status="completed_with_qc_warnings",
+                status="failed",
                 stage="quality_control",
-                progress=100,
-                error="Independent Reality Kernel proof is incomplete.",
+                progress=min(float(p.get("progress") or 100), 94),
+                error=message[:1200],
             )
+            status = "failed"
+            state = "FAILED"
         except Exception:
             pass
-    elif status == "failed" and required_ok:
+    elif status == "completed_with_qc_warnings":
         try:
             s._update_project(
                 project_id,
-                status="completed_with_qc_warnings",
-                stage="complete",
-                progress=100,
-                error="A real deliverable exists after worker failure; delivered with QC warnings.",
+                status="failed",
+                stage="quality_control",
+                progress=min(float(p.get("progress") or 100), 94),
+                error="Legacy completed_with_qc_warnings state normalized to FAILED; professional QC did not pass.",
             )
+            status = "failed"
+            state = "FAILED"
         except Exception:
             pass
 
@@ -919,8 +943,10 @@ def _emergency_finalize(project_id: str) -> bool:
         final_duration = float(s.probe_duration(final))
     except Exception:
         final_duration = 0.0
+    recovered_status = "completed" if qc.get("passed") else "failed"
     result_payload = {
-        "status": "completed_with_qc_warnings" if not qc.get("passed") else "completed",
+        "status": recovered_status,
+        "state": "COMPLETED" if recovered_status == "completed" else "FAILED",
         "project_id": project_id,
         "title": (s._get_project(project_id) or {}).get("title"),
         "recovered": True,
@@ -932,9 +958,9 @@ def _emergency_finalize(project_id: str) -> bool:
         s._update_project(
             project_id,
             status=result_payload["status"],
-            error=None if qc.get("passed") else "Recovered by Reality Kernel; professional QC requires review.",
-            stage="quality_control",
-            progress=100,
+            error=None if qc.get("passed") else "Recovered by Reality Kernel, but professional QC failed; delivery remains blocked.",
+            stage="complete" if qc.get("passed") else "quality_control",
+            progress=100 if qc.get("passed") else 94,
             result_json=_jdump(result_payload),
         )
     except Exception:
@@ -990,10 +1016,16 @@ def _guarded_run_project(project_id: str, model_fn: Any) -> None:
             report = reconcile_project(project_id)
             # A completed UI state may only survive when the reality report agrees.
             current = s._get_project(project_id) or {}
-            if report.get("verified") and current.get("status") not in {"completed", "completed_with_qc_warnings"}:
-                s._update_project(project_id, status="completed", stage="complete", progress=100)
-            elif not report.get("verified") and current.get("status") == "completed":
-                s._update_project(project_id, status="completed_with_qc_warnings", stage="quality_control", error="Independent Reality Kernel proof failed.", progress=100)
+            if report.get("verified") and current.get("status") not in {"completed"}:
+                s._update_project(project_id, status="completed", stage="complete", progress=100, error=None)
+            elif not report.get("verified") and current.get("status") in {"completed", "completed_with_qc_warnings"}:
+                s._update_project(
+                    project_id,
+                    status="failed",
+                    stage="quality_control",
+                    error="Independent Reality Kernel proof failed; delivery remains blocked.",
+                    progress=min(float(current.get("progress") or 100), 94),
+                )
         except Exception as exc:
             _event(project_id, "reconciliation", "FAILED", 1, str(exc)[:1200])
 
