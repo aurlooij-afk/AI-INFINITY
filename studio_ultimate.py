@@ -948,10 +948,29 @@ def _localized_fallback_copy(language: str, name: str, title: str, topic: str) -
         }
     }
     if lang not in local:
+        tails = {
+            "Hook": "Here is the useful idea.",
+            "Why it matters": "This matters because the outcome should be practical.",
+            "The key idea": "The key is to keep the idea clear and usable.",
+            "Practical example": "Use it as a repeatable real-world workflow.",
+            "Takeaway": "Keep the lesson simple, specific, and actionable.",
+            "Context": "Start with the context before the decision.",
+            "The core idea": "The core idea should remain easy to apply.",
+            "How it works": "The process is intent, action, feedback, and refinement.",
+            "Real-world examples": "Examples should support the point without distracting from it.",
+            "What changes": "The useful result is better decisions and clearer execution.",
+            "Practical takeaway": "Turn the idea into one concrete next step.",
+            "Closing": "That is the idea to carry forward.",
+        }
         return {
-            "name":name, "hook":f"What is most useful to understand about {topic}?",
-            "cta":"Save this and use the idea when you need it.", "narration":f"{name}. {title}. The focus is {topic}.",
-            "on_screen":str(name)
+            "name": name,
+            "hook": f"What is most useful to understand about {topic}?",
+            "cta": "Save this and use the idea when you need it.",
+            "narration_by_name": {
+                key: f"{key}. {title}. The focus is {topic}. {tail}"
+                for key, tail in tails.items()
+            },
+            "on_screen": {key: key for key in tails},
         }
     d=local[lang]
     localized_name=d["names"].get(name,name)
