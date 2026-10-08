@@ -1163,8 +1163,22 @@ def _normalize_image_file(path: Path, outdir: Path, stem: str) -> Optional[Path]
     if Image is None:
         return path if path.is_file() else None
     try:
+        # Public image sources can be many thousands of pixels wide. On the free
+        # Render tier that can create huge decoder allocations before FFmpeg ever
+        # sees the file. Bound the production input before any video filter touches it.
+        max_side = int(os.getenv(
+            "AI_INFINITY_IMAGE_MAX_SIDE",
+            "1280" if FAST_MODE else "2560",
+        ))
+        max_side = max(720, min(max_side, 4096))
         with Image.open(path) as im:
-            im.load()
+            try:
+                im.draft("RGB", (max_side, max_side))
+            except Exception:
+                pass
+            if max(im.size) > max_side:
+                resample = getattr(Image, "Resampling", Image).LANCZOS
+                im.thumbnail((max_side, max_side), resample)
             if im.mode in {"RGBA", "LA"}:
                 bg = Image.new("RGB", im.size, "white")
                 bg.paste(im, mask=im.getchannel("A"))
@@ -1172,7 +1186,7 @@ def _normalize_image_file(path: Path, outdir: Path, stem: str) -> Optional[Path]
             else:
                 im = im.convert("RGB")
             target = outdir / f"{stem}.jpg"
-            im.save(target, "JPEG", quality=94, optimize=True)
+            im.save(target, "JPEG", quality=90 if FAST_MODE else 94, optimize=True)
         if target != path:
             path.unlink(missing_ok=True)
         return target
@@ -2008,10 +2022,18 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
             "4:5": (720, 900)
         }
         width, height = ratio_dims.get(str(aspect_ratio or "16:9"), ratio_dims["16:9"])
-        # Keep the free worker light, but render at delivery resolution instead of an
-        # intentionally blurry half-resolution intermediate that is later upscaled.
-        work_w, work_h = width, height
-        fps, font = 20, 32
+        # Keep the free worker within the 512 MiB Render envelope by rendering
+        # the expensive motion/filter graph at a bounded intermediate size, then
+        # scaling once to the real delivery resolution. The final artifact remains
+        # 1280x720-class (or the equivalent portrait/square profile).
+        work_ratio_dims = {
+            "16:9": (960, 540),
+            "9:16": (540, 960),
+            "1:1": (540, 540),
+            "4:5": (540, 675),
+        }
+        work_w, work_h = work_ratio_dims.get(str(aspect_ratio or "16:9"), (960, 540))
+        fps, font = 18, 30
         src = asset["path"]
         box_x = max(18, int(width * 0.028))
         box_w = max(1, width - box_x * 2)
@@ -2032,7 +2054,7 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
             frames = max(1, int(round(duration * fps)))
             vf = (
                 f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
-                f"zoompan=z='min(zoom+0.0009,1.10)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                f"zoompan=z='min(zoom+0.0007,1.10)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
                 f"d={frames}:s={work_w}x{work_h}:fps={fps},scale={width}:{height}:flags=lanczos,fps=24,"
                 f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color=black@0.48:t=fill,"
                 f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
