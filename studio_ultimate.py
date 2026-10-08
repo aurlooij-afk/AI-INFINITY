@@ -1562,6 +1562,18 @@ def probe_duration(path: Path) -> float:
         return 0.1
 
 
+def _default_tts_voice(language: str) -> str:
+    lang = str(language or "English").strip().lower()
+    return {
+        "english": "en-US-AriaNeural",
+        "urdu": "ur-PK-AsadNeural",
+        "pashto": "ps-AF-LatifaNeural",
+        "arabic": "ar-AE-FatimaNeural",
+        # No exact Dari neural voice is selected here; Dari must use a provider
+        # that explicitly advertises Afghan Persian/Dari synthesis.
+    }.get(lang, "en-US-AriaNeural")
+
+
 def tts(text: str, outdir: Path, index: int, voice: str, language: str = "English") -> Tuple[Path, str, float]:
     out = outdir / f"narration_{index:02d}.mp3"
     plain = str(text or "").strip()
@@ -2726,7 +2738,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             # Every scene is fail-soft: remote/public media or neural TTS may fail,
             # but one failed provider must never block the production pipeline.
             try:
-                voice, provider, voice_duration = tts(str(ch.get("narration") or ""), outdir, i, str(req.get("voice") or "en-US-AriaNeural"), str(req.get("language") or "English"))
+                voice, provider, voice_duration = tts(str(ch.get("narration") or ""), outdir, i, str(req.get("voice") or _default_tts_voice(str(req.get("language") or "English"))), str(req.get("language") or "English"))
             except Exception as voice_exc:
                 audit_event(project_id, "voice_source_unavailable", {"scene": i, "error": str(voice_exc)[:500]})
                 requested_language = str(req.get("language") or "English").strip().lower()
