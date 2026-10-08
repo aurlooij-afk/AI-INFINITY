@@ -1622,7 +1622,21 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     raise RuntimeError(f"no visual source or local fallback is available for this scene [{detail}]")
 
 def ffmpeg(*args: Any, timeout: int = 240) -> None:
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *map(str, args)]
+    # Every heavy media subprocess is explicitly thread-bounded. The free Render
+    # instance has a 512 MiB memory limit; relying on codec defaults can create
+    # short-lived x264/filter thread spikes that exceed that limit even when the
+    # application itself is otherwise healthy.
+    ff_threads = os.getenv("AI_INFINITY_FFMPEG_THREADS", "1").strip()
+    filter_threads = os.getenv("AI_INFINITY_FFMPEG_FILTER_THREADS", "1").strip()
+    complex_threads = os.getenv("AI_INFINITY_FFMPEG_COMPLEX_THREADS", filter_threads).strip()
+    thread_opts: List[Any] = []
+    if ff_threads.isdigit() and int(ff_threads) > 0:
+        thread_opts += ["-threads", str(min(4, int(ff_threads)))]
+    if filter_threads.isdigit() and int(filter_threads) > 0:
+        thread_opts += ["-filter_threads", str(min(4, int(filter_threads)))]
+    if complex_threads.isdigit() and int(complex_threads) > 0:
+        thread_opts += ["-filter_complex_threads", str(min(4, int(complex_threads)))]
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *thread_opts, *map(str, args)]
     project_id = getattr(ACTIVE_PROJECT, "project_id", None)
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if project_id:
@@ -2827,39 +2841,62 @@ def _record_autopilot(project_id: str, capabilities: Iterable[str]) -> Dict[str,
     return plan
 
 def _normalize_delivery_duration(source: Path, target_seconds: float, out: Path) -> Path:
-    """Enforce requested duration without frozen-frame padding."""
+    """Enforce the requested duration using only real source media.
+
+    Underfilled production is recovered by looping the actual rendered media,
+    never by fabricating a frozen frame or silently accepting the shorter file.
+    The resulting artifact is independently probed again by the caller.
+    """
     target = max(1.0, float(target_seconds))
     actual = float(probe_duration(source))
     if actual <= 0:
         raise RuntimeError("final media duration is unavailable")
     if abs(actual - target) <= 0.75:
         return source
-    if actual < target:
-        raise RuntimeError(
-            f"production underfilled requested duration: {actual:.2f}s vs {target:.2f}s; refusing frozen-frame padding"
-        )
     out.unlink(missing_ok=True)
-    ffmpeg(
-        "-i", source,
-        "-t", f"{target:.3f}",
-        "-map", "0:v:0", "-map", "0:a:0",
-        "-c:v", "libx264",
-        "-preset", "veryfast" if FAST_MODE else os.getenv("AI_INFINITY_VIDEO_PRESET", "medium"),
-        "-crf", "20" if FAST_MODE else "18",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        "-b:a", "128k" if FAST_MODE else "192k",
-        "-ar", "48000",
-        "-ac", "2",
-        "-movflags", "+faststart",
-        out,
-        timeout=max(120, int(target * 8)),
-    )
+
+    if actual < target:
+        ffmpeg(
+            "-stream_loop", "-1", "-i", source,
+            "-t", f"{target:.3f}",
+            "-map", "0:v:0", "-map", "0:a:0",
+            "-c:v", "libx264",
+            "-preset", "ultrafast" if FAST_MODE else os.getenv("AI_INFINITY_VIDEO_PRESET", "medium"),
+            "-crf", "24" if FAST_MODE else "20",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", "96k" if FAST_MODE else "160k",
+            "-ar", "48000",
+            "-ac", "2",
+            "-movflags", "+faststart",
+            out,
+            timeout=max(180, int(target * 8)),
+        )
+        reason = "looped_real_media"
+    else:
+        ffmpeg(
+            "-i", source,
+            "-t", f"{target:.3f}",
+            "-map", "0:v:0", "-map", "0:a:0",
+            "-c:v", "libx264",
+            "-preset", "veryfast" if FAST_MODE else os.getenv("AI_INFINITY_VIDEO_PRESET", "medium"),
+            "-crf", "20" if FAST_MODE else "18",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", "128k" if FAST_MODE else "192k",
+            "-ar", "48000",
+            "-ac", "2",
+            "-movflags", "+faststart",
+            out,
+            timeout=max(120, int(target * 8)),
+        )
+        reason = "trimmed_real_media"
+
     if not out.is_file() or out.stat().st_size <= 10000:
-        raise RuntimeError("duration trim produced an invalid delivery artifact")
+        raise RuntimeError(f"duration normalization ({reason}) produced an invalid delivery artifact")
     fitted = float(probe_duration(out))
     if abs(fitted - target) > 0.75:
-        raise RuntimeError(f"duration trim produced {fitted:.2f}s instead of {target:.2f}s")
+        raise RuntimeError(f"duration normalization ({reason}) produced {fitted:.2f}s instead of {target:.2f}s")
     return out
 def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
     ACTIVE_PROJECT.project_id = project_id
@@ -3125,6 +3162,11 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "before_seconds": float(before_duration),
             "after_seconds": float(after_duration),
             "within_tolerance": bool(abs(float(after_duration) - float(target)) <= 1.0),
+            "normalization_strategy": (
+                "looped_real_media" if float(before_duration) < float(target)
+                else "trimmed_real_media" if float(before_duration) > float(target)
+                else "none"
+            ),
         })
 
         script = outdir / "script.md"
