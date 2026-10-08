@@ -77,6 +77,11 @@ jobs:
                   stable_revision=""
               print(f"attempt={attempt} ok={ok} revision={observed_revision or 'unknown'} consecutive={stable} failures={last}")
               if ok and stable >= 6:
+                  # Render may still be completing the final old-instance shutdown immediately
+                  # after the exact revision becomes observable. Give the deployment 60s to
+                  # settle before creating a stateful live project.
+                  print("exact revision stable; waiting for rollout settlement",flush=True)
+                  time.sleep(60)
                   sys.exit(0)
               time.sleep(5)
           raise SystemExit(f"live Render verification failed or never stabilized: {last}")
