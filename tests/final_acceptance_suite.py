@@ -4,6 +4,10 @@ from pathlib import Path
 from urllib.parse import quote
 import requests
 
+REPO_ROOT=Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0,str(REPO_ROOT))
+
 TMP=Path("/tmp/ai-infinity-final-acceptance"); TMP.mkdir(parents=True,exist_ok=True)
 PYURL="https://www.python.org/"
 def req(s,b,p,m="GET",**kw):
