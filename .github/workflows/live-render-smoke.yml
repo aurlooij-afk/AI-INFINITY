@@ -31,9 +31,19 @@ jobs:
           base=os.environ["BASE_URL"].rstrip("/")
           paths=["/health","/infinity/divine/health","/infinity/pro2/health","/infinity/pro2"]
           last={}
-          # The live contract is anchored by the exact Render deployment revision.
-          # /health does not guarantee an instance_id field, so stability is proven
-          # by repeated exact-revision observations instead of an unsupported field.
+          # The canonical /health response is authoritative for deployment identity.
+          # Later health endpoints are allowed to be healthy without repeating that
+          # identity, but MUST NOT overwrite a valid canonical observation.
+          def retain_first_identity(current, candidate):
+              return current or candidate
+          
+          # Focused regression: a later health payload with no identity must preserve
+          # the canonical observation; a genuinely missing identity must stay missing.
+          assert retain_first_identity("", "REAL_INSTANCE") == "REAL_INSTANCE"
+          assert retain_first_identity("REAL_INSTANCE", "") == "REAL_INSTANCE"
+          assert retain_first_identity("REAL_INSTANCE", "OTHER_INSTANCE") == "REAL_INSTANCE"
+          assert retain_first_identity("", "") == ""
+          
           stable=0
           stable_revision=""
           for attempt in range(1, 61):
@@ -50,7 +60,8 @@ jobs:
                               data=json.loads(body.decode("utf-8"))
                               if not isinstance(data, dict) or str(data.get("status","")).lower() not in {"healthy","degraded"}:
                                   raise RuntimeError(f"{path}: invalid health payload {data}")
-                              observed_revision=str(data.get("deployment_revision") or data.get("revision") or data.get("git_sha") or data.get("commit") or "")
+                              candidate_revision=str(data.get("deployment_revision") or data.get("revision") or data.get("git_sha") or data.get("commit") or "")
+                              observed_revision=retain_first_identity(observed_revision, candidate_revision)
                           elif path.endswith("/pro2/health"):
                               data=json.loads(body.decode("utf-8"))
                               if not isinstance(data, dict) or "providers" not in data:
