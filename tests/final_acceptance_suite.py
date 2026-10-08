@@ -21,6 +21,18 @@ def req(s,b,p,m="GET",**kw):
 def start(d,port,extra=None):
     d.mkdir(parents=True,exist_ok=True)
     e=os.environ.copy(); e.update({"AI_INFINITY_DATA_DIR":str(d),"AI_INFINITY_3601_BACKGROUND":"false","AI_INFINITY_FAST_MODE":"1","AI_INFINITY_REQUIRE_SOURCE_VISUALS":"0","AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE":"1","AI_INFINITY_SMOKE_ALLOW_UNVERIFIED_DELIVERY":"1","PYTHONUNBUFFERED":"1"}); e.update(extra or {})
+    diag=subprocess.run(
+        [sys.executable,"-c",
+         "import inspect,studio_ultimate as s; f=s.tts; print('TTS_DIAG',f.__module__,f.__qualname__,getattr(getattr(f,'__code__',None),'co_filename',None),getattr(getattr(f,'__code__',None),'co_firstlineno',None),inspect.signature(f)); print('WRAPPED',getattr(f,'__wrapped__',None))"],
+        env=e,cwd=Path.cwd(),capture_output=True,text=True,timeout=60,
+    )
+    print("BOOT_DIAG",diag.stdout.strip(),diag.stderr.strip())
+    diag2=subprocess.run(
+        [sys.executable,"-c",
+         "import inspect,main,studio_ultimate as s; f=s.tts; print('MAIN_TTS_DIAG',f.__module__,f.__qualname__,getattr(getattr(f,'__code__',None),'co_filename',None),getattr(getattr(f,'__code__',None),'co_firstlineno',None),inspect.signature(f))"],
+        env=e,cwd=Path.cwd(),capture_output=True,text=True,timeout=60,
+    )
+    print("MAIN_BOOT_DIAG",diag2.stdout.strip(),diag2.stderr.strip())
     log=(d/"server.log").open("ab")
     p=subprocess.Popen([sys.executable,"-m","uvicorn","main:app","--host","127.0.0.1","--port",str(port)],env=e,cwd=Path.cwd(),stdout=log,stderr=subprocess.STDOUT)
     b=f"http://127.0.0.1:{port}"; end=time.time()+90
