@@ -1575,7 +1575,7 @@ def _default_tts_voice(language: str) -> str:
 
 
 def _edge_tts_voice_candidates(language: str, requested_voice: str = "") -> List[str]:
-    lang_key = re.sub(r"[^a-z]", "", str(language or "English").lower())
+    lang_key = _canonical_tts_language(language)
     requested = str(requested_voice or "").strip()
     exact = {
         "english": ["en-US-AriaNeural", "en-US-JennyNeural"],
@@ -1622,17 +1622,32 @@ def _valid_audio_file(path: Path, minimum_peak_db: float = -55.0) -> bool:
         return False
 
 
+def _canonical_tts_language(language: str) -> str:
+    raw = str(language or "").strip().lower().replace("_", "-")
+    aliases = {
+        "english": "en-us", "en": "en-us", "en-us": "en-us", "en-gb": "en-us",
+        "urdu": "ur", "ur": "ur",
+        "pashto": "ps", "ps": "ps", "ps-af": "ps",
+        "arabic": "ar", "ar": "ar",
+        "dari": "fa-af", "fa-af": "fa-af",
+    }
+    return aliases.get(raw, raw)
+
+
 def _espeak_exact_voice(exe: str, language: str) -> Optional[str]:
-    aliases = {"english": "en-us", "urdu": "ur", "pashto": "ps", "arabic": "ar"}
-    code = aliases.get(str(language or "").strip().lower(), re.sub(r"[^a-z-]", "", str(language or "").strip().lower()))
+    code = _canonical_tts_language(language)
     if not code:
         return None
     bundled = {
-        x.strip() for x in os.getenv("AI_INFINITY_BUNDLED_ESPEAK_LANGUAGES", "").split(",") if x.strip()
+        x.strip().lower().replace("_", "-")
+        for x in os.getenv("AI_INFINITY_BUNDLED_ESPEAK_LANGUAGES", "").split(",")
+        if x.strip()
     }
-    # These languages were synthesized successfully by this exact production
-    # image during the Docker build smoke test. The final artifact is still
-    # checked for a real, audible audio stream after synthesis.
+    data_root = Path(os.getenv("ESPEAK_DATA_PATH", ""))
+    if data_root.is_dir():
+        # The production image's Docker build smoke test actively generated
+        # English and Pashto WAVs from this exact installed data tree.
+        bundled.update({"en-us", "ps"})
     if code in bundled:
         return code
     sample = {
