@@ -68,6 +68,15 @@ RUN python -m py_compile \
     divine_closure_3900.py reality_first_3901.py ai_infinity_canonical.py ai_infinity_app.py \
     ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py
 
+RUN espeak-ng --version \
+    && espeak-ng --voices=en-us | grep -Eq '(^|[[:space:]])en-us([[:space:]]|$)' \
+    && espeak-ng --voices=ps | grep -Eq '(^|[[:space:]])ps([[:space:]]|$)' \
+    && espeak-ng -v en-us -w /tmp/ai-infinity-en.wav "AI Infinity voice smoke test" \
+    && espeak-ng -v ps -w /tmp/ai-infinity-ps.wav "دا د پښتو غږ ازموینه ده" \
+    && test -s /tmp/ai-infinity-en.wav \
+    && test -s /tmp/ai-infinity-ps.wav \
+    && rm -f /tmp/ai-infinity-en.wav /tmp/ai-infinity-ps.wav
+
 RUN chmod 755 /app/entrypoint.sh \
     && mkdir -p /data/ai-infinity /tmp/ai-infinity \
     && chown -R aiinfinity:aiinfinity /app /data/ai-infinity /tmp/ai-infinity
