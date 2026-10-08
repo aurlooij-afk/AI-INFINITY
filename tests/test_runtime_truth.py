@@ -57,3 +57,13 @@ def test_external_provider_disable_forces_local_visual_fallback(monkeypatch, tmp
     assert path.is_file()
     assert path.stat().st_size > 20_000
     assert asset.get("fallback") is True
+
+
+def test_registry_fallback_ids_are_structurally_valid():
+    from professional_creator_fabric import REGISTRY
+
+    ids = {entry["id"] for entry in REGISTRY["entries"]}
+    assert len(ids) == 607
+    for entry in REGISTRY["entries"]:
+        assert isinstance(entry["fallback_ids"], list)
+        assert all(fallback in ids and fallback != entry["id"] for fallback in entry["fallback_ids"])
