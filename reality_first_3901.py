@@ -646,39 +646,28 @@ def reconcile_project(project_id: str) -> Dict[str, Any]:
         report["error"] = "required_artifact_proof_incomplete"
         report["missing_or_invalid"] = missing
 
-    # Enforce the UI/database state from evidence, never the reverse.
-    # A failed or QC-incomplete project may retain real files for inspection,
-    # but it is never promoted to a successful delivery state.
+    # Truth reads are observational. Never mutate the creator's authoritative
+    # project row from a GET/reconciliation path: production finalization can be
+    # writing its terminal result at the same moment a client polls /truth.
+    # A transiently incomplete terminal snapshot must be reported as FAILED/DEGRADED
+    # by this report, but it must not poison a still-finalizing project row.
     if status == "completed" and not (required_ok and qc_passed):
-        try:
-            failure_parts = [k for k, v in checks.items() if not bool(v)]
-            message = "Independent verification/QC failed; successful delivery is blocked."
-            if failure_parts:
-                message += " Failed checks: " + ", ".join(failure_parts[:24])
-            s._update_project(
-                project_id,
-                status="failed",
-                stage="quality_control",
-                progress=min(float(p.get("progress") or 100), 94),
-                error=message[:1200],
-            )
-            status = "failed"
-            state = "FAILED"
-        except Exception:
-            pass
+        failure_parts = [k for k, v in checks.items() if not bool(v)]
+        message = "Independent verification/QC is not yet complete; successful delivery remains blocked."
+        if failure_parts:
+            message += " Failed checks: " + ", ".join(failure_parts[:24])
+        report["error"] = message[:1200]
+        report["missing_or_invalid"] = failure_parts[:24]
+        state = "FAILED"
+        report["state"] = state
+        report["verified"] = False
+        report["qc_passed"] = False
     elif status == "completed_with_qc_warnings":
-        try:
-            s._update_project(
-                project_id,
-                status="failed",
-                stage="quality_control",
-                progress=min(float(p.get("progress") or 100), 94),
-                error="Legacy completed_with_qc_warnings state normalized to FAILED; professional QC did not pass.",
-            )
-            status = "failed"
-            state = "FAILED"
-        except Exception:
-            pass
+        report["error"] = "Delivery completed with QC warnings; professional verification remains degraded."
+        report["state"] = "DEGRADED"
+        report["verified"] = False
+        report["qc_passed"] = bool(qc_passed)
+        state = "DEGRADED"
 
     # Append the canonical project proof chain once per state.
     if proofs:
