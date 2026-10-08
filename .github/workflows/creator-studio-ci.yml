@@ -94,7 +94,6 @@ jobs:
           AI_INFINITY_FAST_MODE: "1"
           AI_INFINITY_REQUIRE_SOURCE_VISUALS: "0"
           AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE: "0"
-          AI_INFINITY_SMOKE_ALLOW_UNVERIFIED_DELIVERY: "1"
         run: |
           set -euo pipefail
           python - <<'PY'
