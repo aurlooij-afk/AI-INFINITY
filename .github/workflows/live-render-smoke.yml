@@ -9,6 +9,12 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Only one real live-production workload may exercise the free Render service at a time.
+  # These groups intentionally match across both live smoke workflows.
+  group: ai-infinity-live-production-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   live-render-smoke:
     if: github.ref_name == 'main'
@@ -25,9 +31,12 @@ jobs:
           base=os.environ["BASE_URL"].rstrip("/")
           paths=["/health","/infinity/divine/health","/infinity/pro2/health","/infinity/pro2"]
           last={}
+          stable=0
+          stable_instance=""
           for attempt in range(1, 61):
               ok=True
               last={}
+              observed_instance=""
               for path in paths:
                   try:
                       with urllib.request.urlopen(base+path, timeout=12) as r:
@@ -38,6 +47,7 @@ jobs:
                               data=json.loads(body.decode("utf-8"))
                               if not isinstance(data, dict) or str(data.get("status","")).lower() not in {"healthy","degraded"}:
                                   raise RuntimeError(f"{path}: invalid health payload {data}")
+                              observed_instance=str(data.get("instance_id") or "")
                           elif path.endswith("/pro2/health"):
                               data=json.loads(body.decode("utf-8"))
                               if not isinstance(data, dict) or "providers" not in data:
@@ -45,11 +55,17 @@ jobs:
                   except Exception as exc:
                       ok=False
                       last[path]=str(exc)
-              print(f"attempt={attempt} ok={ok} failures={last}")
-              if ok:
+              if ok and observed_instance:
+                  stable = stable + 1 if observed_instance == stable_instance else 1
+                  stable_instance = observed_instance
+              else:
+                  stable=0
+                  stable_instance=""
+              print(f"attempt={attempt} ok={ok} instance={observed_instance or 'unknown'} consecutive={stable} failures={last}")
+              if ok and stable >= 6:
                   sys.exit(0)
-              time.sleep(10)
-          raise SystemExit(f"live Render verification failed: {last}")
+              time.sleep(5)
+          raise SystemExit(f"live Render verification failed or never stabilized: {last}")
           PY
 
       - name: Run a real deployed creator production
