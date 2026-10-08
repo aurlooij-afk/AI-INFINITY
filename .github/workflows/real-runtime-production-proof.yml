@@ -2,9 +2,7 @@ name: AI Infinity Real Runtime Production Proof
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    branches: [main, ai-infinity-canonical-divine]
   workflow_dispatch:
 
 permissions:
