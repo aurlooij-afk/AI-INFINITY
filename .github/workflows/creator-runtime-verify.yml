@@ -30,14 +30,11 @@ jobs:
 
       - name: Host media dependencies
         run: |
-          # Media tooling is validated inside the production Docker image.
-          # Keeping the host gate Python-only avoids fragile apt mirrors while
-          # preserving the real packaged-runtime coverage.
-          python - <<'PY'
-          import shutil
-          print("host_ffmpeg", shutil.which("ffmpeg"))
-          print("host_ffprobe", shutil.which("ffprobe"))
-          PY
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
 
       - name: Install Python dependencies
         run: |
