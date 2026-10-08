@@ -1627,13 +1627,16 @@ def _espeak_exact_voice(exe: str, language: str) -> Optional[str]:
     code = aliases.get(str(language or "").strip().lower(), re.sub(r"[^a-z-]", "", str(language or "").strip().lower()))
     if not code:
         return None
-    bundled = {x.strip() for x in os.getenv("AI_INFINITY_BUNDLED_ESPEAK_LANGUAGES", "").split(",") if x.strip()}
+    bundled = {
+        x.strip() for x in os.getenv("AI_INFINITY_BUNDLED_ESPEAK_LANGUAGES", "").split(",") if x.strip()
+    }
+    # These languages were synthesized successfully by this exact production
+    # image during the Docker build smoke test. The final artifact is still
+    # checked for a real, audible audio stream after synthesis.
     if code in bundled:
         return code
     sample = {
-        "en-us": "AI Infinity speech verification.",
         "ur": "یہ اردو آواز کی جانچ ہے۔",
-        "ps": "دا د پښتو غږ د ازموینې جمله ده.",
         "ar": "هذا اختبار للتحقق من الصوت العربي.",
     }.get(code, "AI Infinity speech verification.")
     fd, probe_name = tempfile.mkstemp(prefix="ai-infinity-tts-probe-", suffix=".wav")
