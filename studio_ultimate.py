@@ -1724,7 +1724,14 @@ def tts(text: str, outdir: Path, index: int, voice: str, language: str = "Englis
     if not exe:
         raise RuntimeError("narration engine unavailable")
 
-    local_voice = _espeak_exact_voice(exe, lang_key)
+    bundled_languages = {
+        x.strip().lower().replace("_", "-")
+        for x in os.getenv("AI_INFINITY_BUNDLED_ESPEAK_LANGUAGES", "").split(",")
+        if x.strip()
+    }
+    if Path(os.getenv("ESPEAK_DATA_PATH", "")).is_dir():
+        bundled_languages.update({"en-us", "ps"})
+    local_voice = lang_key if lang_key in {"en-us", "ps"} and lang_key in bundled_languages else _espeak_exact_voice(exe, lang_key)
     if local_voice:
         wav = outdir / f"narration_{index:02d}.wav"
         subprocess.run([exe, "-v", local_voice, "-s", "155", "-w", str(wav), plain], check=True, timeout=45)
@@ -1732,6 +1739,7 @@ def tts(text: str, outdir: Path, index: int, voice: str, language: str = "Englis
         if not _valid_audio_file(out, minimum_peak_db=-45.0):
             raise RuntimeError("local narration artifact is invalid or effectively silent")
         provider_name = {
+            "en-us":"local-espeak",
             "en":"local-espeak",
             "ur":"local-espeak-urdu",
             "ps":"local-espeak-pashto",
