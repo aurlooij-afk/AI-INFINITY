@@ -2973,7 +2973,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "self_upgrade": True, "truthful": True,
             "production_profile": _project_meta(project_id),
             "generated_at": utc_iso(), "platform_packages": {k: Path(v).name for k,v in editorial.items() if v},
-            "storage": {"data_dir": str(DATA_DIR), "persistent_configured": str(DATA_DIR) not in {"/tmp", "/tmp/ai-infinity"}},
+            "storage": {"data_dir": str(DATA_DIR), **__import__("ai_infinity.persistence_truth", fromlist=["project_state_durability"]).project_state_durability(DATA_DIR), "persistent_configured": __import__("ai_infinity.persistence_truth", fromlist=["project_state_durability"]).project_state_durability(DATA_DIR).get("persistent", False)},
         }
         manifest.write_text(jdump(metadata), encoding="utf-8")
         package = outdir / f"{safe_name(plan.get('title') or topic)}-AI-Infinity-creator-package.zip"
