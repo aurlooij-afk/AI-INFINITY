@@ -8,6 +8,8 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List
@@ -296,8 +298,12 @@ def manifest() -> Dict[str, Any]:
 
 def self_test() -> Dict[str, Any]:
     failures = []
-    if len(REGISTRY["entries"]) != 607: failures.append("registry_count")
-    if [x.get("number") for x in REGISTRY["entries"]] != list(range(1, 608)): failures.append("registry_numbering")
+    if len(REGISTRY["entries"]) != 607:
+        failures.append("registry_count")
+    if [x.get("number") for x in REGISTRY["entries"]] != list(range(1, 608)):
+        failures.append("registry_numbering")
+    if len({x.get("id") for x in REGISTRY["entries"]}) != 607:
+        failures.append("registry_duplicate_ids")
     required = {
         "id", "number", "category", "capability", "resource/provider",
         "implementation_type", "execution_mode", "license", "commercial_use_state",
@@ -307,12 +313,25 @@ def self_test() -> Dict[str, Any]:
         "language_support", "notes", "source_url", "last_verified",
     }
     bad_schema = [x.get("number") for x in REGISTRY["entries"] if not required.issubset(x)]
-    if bad_schema: failures.append("registry_schema")
-    if any(not isinstance(x.get("fallback_ids"), list) for x in REGISTRY["entries"]): failures.append("registry_fallback_schema")
-    if not REGISTRY_DIGEST: failures.append("registry_digest")
-    if not LOCAL_COMMANDS["ffmpeg"](): failures.append("ffmpeg")
-    if not LOCAL_COMMANDS["ffprobe"](): failures.append("ffprobe")
-    if not LOCAL_COMMANDS["espeak-ng"](): failures.append("offline_tts")
+    if bad_schema:
+        failures.append("registry_schema")
+    if any(not isinstance(x.get("fallback_ids"), list) for x in REGISTRY["entries"]):
+        failures.append("registry_fallback_schema")
+    allowed_states = {
+        "IMPLEMENTED", "IMPLEMENTED_LOCAL", "IMPLEMENTED_REMOTE", "ADAPTER_READY",
+        "CONFIG_REQUIRED", "COMPUTE_REQUIRED", "LICENSE_LIMITED", "OPTIONAL", "UNAVAILABLE",
+    }
+    bad_states = [x.get("number") for x in REGISTRY["entries"] if x.get("integration_state") not in allowed_states]
+    if bad_states:
+        failures.append("registry_integration_states")
+    if not REGISTRY_DIGEST:
+        failures.append("registry_digest")
+    if not LOCAL_COMMANDS["ffmpeg"]():
+        failures.append("ffmpeg")
+    if not LOCAL_COMMANDS["ffprobe"]():
+        failures.append("ffprobe")
+    if not LOCAL_COMMANDS["espeak-ng"]():
+        failures.append("offline_tts")
 
     expected_states = {
         "queued": "WAITING", "running": "RUNNING", "producing": "RUNNING",
@@ -321,24 +340,90 @@ def self_test() -> Dict[str, Any]:
         "requires_connection": "REQUIRES_CONNECTION", "requires_compute": "REQUIRES_COMPUTE",
         "license_limited": "LICENSE_LIMITED", "rate_limited": "RATE_LIMITED",
     }
+
+    media_probe = {"ok": False, "reason": "not_run"}
+    offline_voice = {"en": False, "pashto": False}
     try:
         import studio_ultimate as studio
         for raw, want in expected_states.items():
             if studio._runtime_state_for_status(raw) != want:
                 failures.append(f"runtime_state:{raw}")
+
+        # Exercise the actual local media primitives, not just binary discovery.
+        if shutil.which("ffmpeg") and shutil.which("ffprobe"):
+            with tempfile.TemporaryDirectory(prefix="ai-infinity-selftest-") as td:
+                out = Path(td) / "selftest.mp4"
+                cmd = [
+                    shutil.which("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "color=c=black:s=320x180:r=12",
+                    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+                    "-t", "1", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "64k", str(out),
+                ]
+                p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                if p.returncode != 0 or not out.is_file() or out.stat().st_size <= 0:
+                    failures.append("ffmpeg_execution")
+                    media_probe = {"ok": False, "reason": (p.stderr or "ffmpeg_failed")[-500:]}
+                else:
+                    probe = subprocess.run(
+                        [shutil.which("ffprobe"), "-v", "error", "-show_format", "-show_streams", "-of", "json", str(out)],
+                        capture_output=True, text=True, timeout=30,
+                    )
+                    try:
+                        data = json.loads(probe.stdout or "{}")
+                        streams = data.get("streams") or []
+                        media_probe = {
+                            "ok": probe.returncode == 0 and bool(streams),
+                            "duration_seconds": float((data.get("format") or {}).get("duration") or 0),
+                            "has_video": any(x.get("codec_type") == "video" for x in streams),
+                            "has_audio": any(x.get("codec_type") == "audio" for x in streams),
+                        }
+                    except Exception as exc:
+                        media_probe = {"ok": False, "reason": f"{type(exc).__name__}: {str(exc)[:200]}"}
+                    if not (
+                        media_probe.get("ok")
+                        and media_probe.get("has_video")
+                        and media_probe.get("has_audio")
+                        and float(media_probe.get("duration_seconds") or 0) > 0
+                    ):
+                        failures.append("ffprobe_execution")
+
+        voices = subprocess.run(
+            [LOCAL_COMMANDS["espeak-ng"]() and (shutil.which("espeak-ng") or shutil.which("espeak")), "--voices=ps"],
+            capture_output=True, text=True, timeout=30,
+        )
+        offline_voice["pashto"] = voices.returncode == 0 and bool(re.search(r"(^|\s)ps(\s|$)", voices.stdout or "", re.I))
+        if not offline_voice["pashto"]:
+            failures.append("pashto_voice_catalog")
+        with tempfile.TemporaryDirectory(prefix="ai-infinity-voice-selftest-") as td:
+            for label, voice, text_value in (
+                ("en", "en-us", "AI Infinity voice self test"),
+                ("pashto", "ps", "دا د پښتو غږ ازموینه ده"),
+            ):
+                wav = Path(td) / f"{label}.wav"
+                p = subprocess.run(
+                    [shutil.which("espeak-ng") or shutil.which("espeak"), "-v", voice, "-w", str(wav), text_value],
+                    capture_output=True, text=True, timeout=30,
+                )
+                offline_voice[label] = p.returncode == 0 and wav.is_file() and wav.stat().st_size > 1000
+                if not offline_voice[label]:
+                    failures.append(f"offline_tts_execution:{label}")
+
         old = os.environ.get("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS")
         os.environ["AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS"] = "1"
         try:
             disabled_research = studio.research_topic("self-test", limit=1)
             if disabled_research.get("status") != "DEGRADED" or disabled_research.get("source_count") != 0:
                 failures.append("external_disable_research")
+            if any((v or {}).get("status") != "disabled_by_policy" for v in (disabled_research.get("providers") or {}).values()):
+                failures.append("external_disable_provider_states")
         finally:
             if old is None:
                 os.environ.pop("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS", None)
             else:
                 os.environ["AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS"] = old
     except Exception as exc:
-        failures.append(f"runtime_import:{type(exc).__name__}")
+        failures.append(f"runtime_self_test:{type(exc).__name__}:{str(exc)[:160]}")
 
     return {
         "passed": not failures,
@@ -350,10 +435,15 @@ def self_test() -> Dict[str, Any]:
             "ffprobe": bool(LOCAL_COMMANDS["ffprobe"]()),
             "offline_tts": bool(LOCAL_COMMANDS["espeak-ng"]()),
         },
+        "execution": {
+            "real_ffmpeg": media_probe,
+            "real_offline_tts": offline_voice,
+        },
         "truth_contract": {
             "runtime_states": "verified_mapping",
             "external_disable": "verified",
             "registry_schema": not bool(bad_schema),
+            "integration_states": not bool(bad_states),
         },
         "truthful": True,
     }
