@@ -1549,12 +1549,27 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             if p.is_file() and p.suffix.lower() in {".jpg",".jpeg",".png",".webp",".mp4",".mov",".mkv",".webm"}
             and p.name.startswith(("openverse","commons_","nasa_","pexels_","pixabay_"))
         ]
-        if reusable:
-            chosen = reusable[(max(1, int(index)) - 1) % len(reusable)]
-            suffix = chosen.suffix.lower()
+        # Reuse only a source whose bytes have not already been selected for an
+        # earlier scene. If no distinct public source exists, fall through to the
+        # original motion-design generator instead of manufacturing diversity by
+        # relabeling the same file.
+        for chosen in reusable:
+            try:
+                digest=file_sha256(chosen)
+            except Exception:
+                continue
+            if digest in used_visual_hashes:
+                continue
+            suffix=chosen.suffix.lower()
+            selected=outdir / f"selected_visual_{index:02d}{suffix}"
+            try:
+                shutil.copy2(chosen, selected)
+            except Exception:
+                continue
+            used_visual_hashes.add(digest)
             if suffix in {".mp4",".mov",".mkv",".webm"}:
-                return {"kind":"video","path":str(chosen),"source":"verified-source-reuse","source_url":None,"creator":None,"license":"inherited from original source","rights_status":"inherited_source_evidence","reused_source":True,"quality_tier":"public_source_reuse"}
-            return {"kind":"image","path":str(chosen),"source":"verified-source-reuse","source_url":None,"creator":None,"license":"inherited from original source","rights_status":"inherited_source_evidence","reused_source":True,"quality_tier":"public_source_reuse"}
+                return {"kind":"video","path":str(selected),"source":"verified-source-reuse","source_url":None,"creator":None,"license":"inherited from original source","rights_status":"inherited_source_evidence","reused_source":True,"quality_tier":"public_source_reuse","asset_sha256":digest}
+            return {"kind":"image","path":str(selected),"source":"verified-source-reuse","source_url":None,"creator":None,"license":"inherited from original source","rights_status":"inherited_source_evidence","reused_source":True,"quality_tier":"public_source_reuse","asset_sha256":digest}
     except Exception:
         pass
 
