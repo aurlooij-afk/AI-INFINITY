@@ -63,7 +63,13 @@ jobs:
           client = TestClient(main.app)
           r = client.get("/health")
           assert r.status_code == 200, r.text
-          assert r.json().get("status") == "healthy", r.text
+          root_health = r.json()
+          assert root_health.get("status") in {"healthy", "degraded"}, r.text
+          if root_health.get("status") == "degraded":
+              # This host intentionally has no media binaries; the packaged Docker
+              # runtime is the authoritative media environment tested below.
+              caps = root_health.get("capabilities", {}).get("local", {})
+              assert caps.get("media_core") is False, r.text
           r = client.get("/infinity/canonical/health")
           assert r.status_code == 200, r.text
           h = r.json()
