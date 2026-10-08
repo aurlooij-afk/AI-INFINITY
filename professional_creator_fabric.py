@@ -298,6 +298,7 @@ def manifest() -> Dict[str, Any]:
     }
 
 def self_test() -> Dict[str, Any]:
+    import tempfile as _tempfile
     failures = []
     if len(REGISTRY["entries"]) != 607:
         failures.append("registry_count")
@@ -352,7 +353,7 @@ def self_test() -> Dict[str, Any]:
 
         # Exercise the actual local media primitives, not just binary discovery.
         if shutil.which("ffmpeg") and shutil.which("ffprobe"):
-            with tempfile.TemporaryDirectory(prefix="ai-infinity-selftest-") as td:
+            with _tempfile.TemporaryDirectory(prefix="ai-infinity-selftest-") as td:
                 out = Path(td) / "selftest.mp4"
                 cmd = [
                     shutil.which("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
@@ -392,7 +393,7 @@ def self_test() -> Dict[str, Any]:
         old_disable = os.environ.get("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS")
         os.environ["AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS"] = "1"
         try:
-            with tempfile.TemporaryDirectory(prefix="ai-infinity-voice-selftest-") as td:
+            with _tempfile.TemporaryDirectory(prefix="ai-infinity-voice-selftest-") as td:
                 voice_results = {}
                 for label, language, text_value in (
                     ("en", "English", "AI Infinity voice self test"),
