@@ -1079,12 +1079,13 @@ def _backup_snapshot(include_media: bool = False) -> Dict[str, Any]:
 
 def _readiness(user_id: str, request: Any) -> Dict[str, Any]:
     s = _studio()
+    from ai_infinity.persistence_truth import project_state_durability
     strict_visual = _strict_visual()
     strict_research = _strict_research()
     root = _data_dir()
     local_ffmpeg = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
     local_tts = bool(shutil.which("espeak-ng") or shutil.which("espeak"))
-    persistence = not str(root).startswith("/tmp")
+    persistence = project_state_durability(root)
     configured = []
     for name, env, label in [
         ("OpenAI", "OPENAI_API_KEY", "AI video / Sora"),
@@ -1109,10 +1110,10 @@ def _readiness(user_id: str, request: Any) -> Dict[str, Any]:
         "host": host,
         "storage": {
             "data_dir": str(root),
-            "persistent_runtime": persistence,
+            "persistent_runtime": bool(persistence.get("persistent")),
             "local_backups": bool((root / "creator_backups").exists()),
             "offsite_backup_configured": bool(os.getenv("AI_INFINITY_BACKUP_WEBHOOK", "").strip()),
-            "truth_note": "Persistent files depend on the deployment's storage contract; local backups are not offsite backups.",
+            "truth_note": persistence.get("reason"), "durability_contract": persistence,
         },
         "production_policy": {
             "strict_visuals": strict_visual,
