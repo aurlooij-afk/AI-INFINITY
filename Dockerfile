@@ -70,6 +70,8 @@ RUN python -m py_compile \
     divine_closure_3900.py reality_first_3901.py ai_infinity_canonical.py ai_infinity_app.py \
     ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py
 
+RUN python -m compileall -q ai_infinity
+
 RUN espeak-ng --version \
     && espeak-ng --voices=en-us | grep -Eq '(^|[[:space:]])en-us([[:space:]]|$)' \
     && espeak-ng --voices=ps | grep -Eq '(^|[[:space:]])ps([[:space:]]|$)' \
