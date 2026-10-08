@@ -46,7 +46,6 @@ htmlcov/
 *.db-wal
 
 # AI Infinity runtime directories
-ai-infinity/
 infinity-data/
 runtime/
 workspace/
