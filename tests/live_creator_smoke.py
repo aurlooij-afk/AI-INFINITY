@@ -29,7 +29,10 @@ def wait(pid,seconds=420):
     end=time.time()+seconds; last=None
     while time.time()<end:
         last,_=ok("/infinity/studio/project/"+urllib.parse.quote(pid,safe=""))
-        if str(last.get("status","")).lower() in {"completed","completed_with_qc_warnings","failed","cancelled"}: return last
+        if str(last.get("status","")).lower() in {"completed","completed_with_qc_warnings","failed","cancelled"}:
+            assert str(last.get("status")).lower() == "completed", last
+            assert str(last.get("state") or "").upper() == "COMPLETED", last
+            return last
         time.sleep(4)
     raise AssertionError("live creator timeout: "+json.dumps(last)[:4000])
 
