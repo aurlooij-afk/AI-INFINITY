@@ -389,27 +389,38 @@ def self_test() -> Dict[str, Any]:
                     ):
                         failures.append("ffprobe_execution")
 
-        voices = subprocess.run(
-            [LOCAL_COMMANDS["espeak-ng"]() and (shutil.which("espeak-ng") or shutil.which("espeak")), "--voices=ps"],
-            capture_output=True, text=True, timeout=30,
-        )
-        offline_voice["pashto"] = voices.returncode == 0 and bool(re.search(r"(^|\s)ps(\s|$)", voices.stdout or "", re.I))
-        if not offline_voice["pashto"]:
-            failures.append("pashto_voice_catalog")
-        with tempfile.TemporaryDirectory(prefix="ai-infinity-voice-selftest-") as td:
-            for label, voice, text_value in (
-                ("en", "en-us", "AI Infinity voice self test"),
-                ("pashto", "ps", "دا د پښتو غږ ازموینه ده"),
-            ):
-                wav = Path(td) / f"{label}.wav"
-                p = subprocess.run(
-                    [shutil.which("espeak-ng") or shutil.which("espeak"), "-v", voice, "-w", str(wav), text_value],
-                    capture_output=True, text=True, timeout=30,
-                )
-                offline_voice[label] = p.returncode == 0 and wav.is_file() and wav.stat().st_size > 1000
-                if not offline_voice[label]:
-                    failures.append(f"offline_tts_execution:{label}")
-
+        old_disable = os.environ.get("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS")
+        os.environ["AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS"] = "1"
+        try:
+            with tempfile.TemporaryDirectory(prefix="ai-infinity-voice-selftest-") as td:
+                voice_results = {}
+                for label, language, text_value in (
+                    ("en", "English", "AI Infinity voice self test"),
+                    ("pashto", "Pashto", "دا د پښتو غږ ازموینه ده"),
+                ):
+                    try:
+                        wav_out, provider_name, duration = studio.tts(
+                            text_value, Path(td), 1 if label == "en" else 2, "", language
+                        )
+                        ok = Path(wav_out).is_file() and Path(wav_out).stat().st_size > 0 and float(duration or 0) > 0
+                        voice_results[label] = {
+                            "ok": ok,
+                            "provider": provider_name,
+                            "duration_seconds": float(duration or 0),
+                            "bytes": Path(wav_out).stat().st_size if Path(wav_out).is_file() else 0,
+                        }
+                    except Exception as exc:
+                        voice_results[label] = {"ok": False, "reason": f"{type(exc).__name__}: {str(exc)[:240]}"}
+                    offline_voice[label] = bool(voice_results[label].get("ok"))
+                    if not offline_voice[label]:
+                        failures.append(f"offline_tts_execution:{label}")
+                if not (offline_voice["en"] and offline_voice["pashto"]):
+                    failures.append("offline_tts_runtime")
+        finally:
+            if old_disable is None:
+                os.environ.pop("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS", None)
+            else:
+                os.environ["AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS"] = old_disable
         old = os.environ.get("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS")
         os.environ["AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS"] = "1"
         try:
