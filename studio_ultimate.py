@@ -3203,7 +3203,17 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 "podcast_rss": f"/infinity/studio/project/{project_id}/asset/podcast_rss.xml" if (outdir/"podcast_rss.xml").exists() else None
             },
             "shorts": [{"title": x["title"], "duration": x["duration"], "download_url": f"/infinity/studio/project/{project_id}/asset/{Path(x['path']).name}"} for x in shorts],
-            "publication": {"available": True, "destinations": ["youtube", "webhook"], "download_always_available": True, "asset_share_links": {"video": share_url(project_id, "final.mp4", project["user_id"]), "package": share_url(project_id, package.name, project["user_id"])}},
+            "publication": {
+                "available": any(bool(x.get("active")) for x in _connections(project["user_id"])),
+                "connected_destinations": sorted({str(x.get("provider")) for x in _connections(project["user_id"]) if x.get("active")}),
+                "supported_destinations": ["youtube", "webhook"],
+                "download_always_available": True,
+                "asset_share_links": {
+                    "video": share_url(project_id, "final.mp4", project["user_id"]),
+                    "package": share_url(project_id, package.name, project["user_id"]),
+                },
+                "truthful": True,
+            },
             "self_upgrade": _record_learning(project["user_id"], req, qc=qc), "truthful": True,
         }
         _stage(project_id, "complete", 100)
