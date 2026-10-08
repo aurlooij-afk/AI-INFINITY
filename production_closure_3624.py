@@ -683,11 +683,11 @@ def _patch_functions():
     # Prefer configured professional neural voice before free public/local TTS.
     original_tts = s.tts
     if not getattr(original_tts, "__aii_closure_wrapped__", False):
-        def tts_closure(text: str, outdir: Path, index: int, voice: str):
+        def tts_closure(text: str, outdir: Path, index: int, voice: str, language: str = "English"):
             eleven = _elevenlabs_tts(text, outdir, index)
             if eleven:
                 return eleven
-            return original_tts(text, outdir, index, voice)
+            return original_tts(text, outdir, index, voice, language)
         tts_closure.__aii_closure_wrapped__ = True
         s.tts = tts_closure
 
