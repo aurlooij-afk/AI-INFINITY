@@ -5916,6 +5916,9 @@ def _project_public(p: Dict[str, Any]) -> Dict[str, Any]:
         try:
             kernel = __import__("reality_first_3901")
             proof = kernel.truth_for_project(p["project_id"])
+            refreshed = kernel._studio()._get_project(p["project_id"])
+            if refreshed:
+                p = refreshed
             proof_state = str(proof.get("state") or "").upper()
             runtime_state = {
                 "VERIFIED": "COMPLETED",
