@@ -18,7 +18,11 @@ services:
       - key: AI_INFINITY_DATA_DIR
         value: "/tmp/ai-infinity"
       - key: AI_INFINITY_PERSISTENCE_MODE
-        value: "portable"
+        value: "volatile"
+      - key: AI_INFINITY_PERSISTENT_VOLUME_CONFIRMED
+        value: "false"
+      - key: AI_INFINITY_PROJECT_STATE_DURABLE
+        value: "false"
       - key: AI_INFINITY_PRODUCTION_GRAPH_WORKER
         value: "true"
       - key: AI_INFINITY_RUNWAY_MODEL
