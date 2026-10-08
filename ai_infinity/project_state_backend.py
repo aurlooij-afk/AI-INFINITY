@@ -1,0 +1,396 @@
+from __future__ import annotations
+
+"""Authoritative durable SQLite state snapshot backend.
+
+The Creator Studio uses SQLite for its rich transactional state model. On
+ephemeral hosts, the database file itself is not durable. This adapter keeps the
+SQLite transaction model local while checkpointing a consistent database
+snapshot to a real S3-compatible object store (Cloudflare R2 by default). On a
+fresh instance it restores the last verified snapshot before schema creation.
+
+Fail-closed rules:
+- missing credentials never imply durability;
+- failed upload/verification never implies durability;
+- restore failures never destroy an existing local database;
+- secrets never appear in status responses;
+- object-store state is verified by checksum/size before being considered saved.
+"""
+
+import atexit
+import hashlib
+import os
+import sqlite3
+import tempfile
+import threading
+import time
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+try:
+    import boto3
+    from botocore.config import Config as BotoConfig
+except Exception:  # pragma: no cover
+    boto3 = None
+    BotoConfig = None
+
+
+_LOCK = threading.RLock()
+_DB_PATH: Optional[Path] = None
+_SYNC_TIMER: Optional[threading.Timer] = None
+
+_STATUS: Dict[str, Any] = {
+    "configured": False,
+    "active": False,
+    "verified": False,
+    "backend": None,
+    "last_sync_at": None,
+    "last_sha256": None,
+    "last_error": None,
+}
+
+TRUE = {"1", "true", "yes", "on"}
+
+
+def _flag(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in TRUE
+
+
+def _cfg() -> Dict[str, str]:
+    account = os.getenv("CLOUDFLARE_R2_ACCOUNT_ID", "").strip()
+    endpoint = os.getenv("CLOUDFLARE_R2_ENDPOINT", "").strip()
+    if not endpoint and account:
+        endpoint = f"https://{account}.r2.cloudflarestorage.com"
+    return {
+        "endpoint": endpoint,
+        "bucket": os.getenv("CLOUDFLARE_R2_BUCKET", "").strip(),
+        "access": os.getenv("CLOUDFLARE_R2_ACCESS_KEY_ID", "").strip(),
+        "secret": os.getenv("CLOUDFLARE_R2_SECRET_ACCESS_KEY", "").strip(),
+        "region": "auto",
+    }
+
+
+def configured() -> bool:
+    cfg = _cfg()
+    return bool(
+        boto3 is not None
+        and BotoConfig is not None
+        and cfg["endpoint"]
+        and cfg["bucket"]
+        and cfg["access"]
+        and cfg["secret"]
+    )
+
+
+def contract_enabled() -> bool:
+    return (
+        os.getenv("AI_INFINITY_PERSISTENCE_MODE", "volatile").strip().lower() == "durable"
+        and _flag("AI_INFINITY_PROJECT_STATE_DURABLE")
+        and os.getenv("AI_INFINITY_PROJECT_STATE_BACKEND", "cloudflare_r2").strip().lower()
+        == "cloudflare_r2"
+    )
+
+
+def ready() -> bool:
+    with _LOCK:
+        return bool(
+            contract_enabled()
+            and configured()
+            and _STATUS.get("active")
+            and _STATUS.get("verified")
+        )
+
+
+def object_key() -> str:
+    return (
+        os.getenv(
+            "AI_INFINITY_PROJECT_STATE_OBJECT_KEY",
+            "ai-infinity/project-state/ai_infinity.db.snapshot",
+        ).strip()
+        or "ai-infinity/project-state/ai_infinity.db.snapshot"
+    )
+
+
+def _client():
+    if not configured():
+        raise RuntimeError("Cloudflare R2 project-state backend is not configured")
+    cfg = _cfg()
+    return boto3.client(
+        "s3",
+        endpoint_url=cfg["endpoint"],
+        region_name=cfg["region"],
+        aws_access_key_id=cfg["access"],
+        aws_secret_access_key=cfg["secret"],
+        config=BotoConfig(
+            signature_version="s3v4",
+            connect_timeout=8,
+            read_timeout=15,
+            retries={"max_attempts": 3, "mode": "standard"},
+        ),
+    )
+
+
+def _head(key: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    h = _client().head_object(Bucket=_cfg()["bucket"], Key=key or object_key())
+    metadata = h.get("Metadata") or {}
+    return {
+        "size_bytes": int(h.get("ContentLength") or 0),
+        "sha256": str(metadata.get("ai-infinity-sha256") or ""),
+        "snapshot_at": str(metadata.get("ai-infinity-snapshot-at") or ""),
+    }
+
+
+def _verify_roundtrip() -> bool:
+    """Prove the configured credential can write and verify an R2 object."""
+    cfg = _cfg()
+    key = (
+        os.getenv(
+            "AI_INFINITY_PROJECT_STATE_CANARY_KEY",
+            "ai-infinity/project-state/.canary",
+        ).strip()
+        or "ai-infinity/project-state/.canary"
+    )
+    payload = b"ai-infinity-project-state-canary-v1\n"
+    client = _client()
+    client.put_object(
+        Bucket=cfg["bucket"],
+        Key=key,
+        Body=payload,
+        ContentType="text/plain",
+        Metadata={"ai-infinity-canary": "v1"},
+    )
+    h = client.head_object(Bucket=cfg["bucket"], Key=key)
+    verified = int(h.get("ContentLength") or 0) == len(payload)
+    try:
+        client.delete_object(Bucket=cfg["bucket"], Key=key)
+    except Exception:
+        pass
+    return verified
+
+
+def configure(db_path: Path | str) -> Dict[str, Any]:
+    """Attach the backend and restore remote state before local schema init."""
+    global _DB_PATH
+    path = Path(db_path).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with _LOCK:
+        _DB_PATH = path
+        _STATUS.update(
+            {
+                "configured": configured(),
+                "active": bool(contract_enabled() and configured()),
+                "verified": False,
+                "backend": "cloudflare_r2" if contract_enabled() else None,
+                "last_error": None,
+            }
+        )
+
+    if not _STATUS["active"]:
+        return status()
+
+    try:
+        verified = _verify_roundtrip()
+        with _LOCK:
+            _STATUS["verified"] = bool(verified)
+            _STATUS["active"] = bool(verified)
+            if not verified:
+                _STATUS["last_error"] = "R2 canary verification failed"
+    except Exception as exc:
+        with _LOCK:
+            _STATUS["verified"] = False
+            _STATUS["active"] = False
+            _STATUS["last_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        return status()
+
+    restore_on_startup()
+    return status()
+
+
+def restore_on_startup() -> Dict[str, Any]:
+    with _LOCK:
+        path = _DB_PATH
+        active = bool(_STATUS.get("active") and _STATUS.get("verified"))
+    if path is None or not active:
+        return {"restored": False, "reason": "backend_not_active", "truthful": True}
+
+    # A persistent-volume database is authoritative locally. On the ephemeral
+    # Render instance the database file is absent and the remote snapshot wins.
+    if path.exists() and path.stat().st_size > 0:
+        return {"restored": False, "reason": "local_database_present", "truthful": True}
+
+    try:
+        head = _head()
+        if not head or int(head.get("size_bytes") or 0) <= 0:
+            return {"restored": False, "reason": "no_remote_snapshot", "truthful": True}
+
+        raw = _client().get_object(
+            Bucket=_cfg()["bucket"], Key=object_key()
+        )["Body"].read()
+        digest = hashlib.sha256(raw).hexdigest()
+        expected = str(head.get("sha256") or "")
+        if expected and expected != digest:
+            raise RuntimeError("remote project-state snapshot checksum mismatch")
+
+        with tempfile.NamedTemporaryFile(
+            prefix="ai-infinity-state-", suffix=".db", dir=str(path.parent), delete=False
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(raw)
+
+        tmp_path.replace(path)
+        for suffix in ("-wal", "-shm", "-journal"):
+            path.with_name(path.name + suffix).unlink(missing_ok=True)
+
+        with _LOCK:
+            _STATUS["last_sync_at"] = head.get("snapshot_at") or None
+            _STATUS["last_sha256"] = digest
+            _STATUS["last_error"] = None
+
+        return {
+            "restored": True,
+            "size_bytes": len(raw),
+            "sha256": digest,
+            "truthful": True,
+        }
+    except Exception as exc:
+        with _LOCK:
+            _STATUS["last_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        return {
+            "restored": False,
+            "reason": "restore_failed",
+            "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+            "truthful": True,
+        }
+
+
+def _snapshot_database() -> Path:
+    with _LOCK:
+        path = _DB_PATH
+    if path is None:
+        raise RuntimeError("project-state database path is not configured")
+    if not path.exists():
+        raise RuntimeError("project-state database does not exist")
+
+    fd, raw_tmp = tempfile.mkstemp(
+        prefix="ai-infinity-db-", suffix=".snapshot", dir=str(path.parent)
+    )
+    os.close(fd)
+    tmp = Path(raw_tmp)
+
+    try:
+        source = sqlite3.connect(str(path), timeout=30, check_same_thread=False)
+        target = sqlite3.connect(str(tmp), timeout=30, check_same_thread=False)
+        try:
+            source.backup(target)
+            target.commit()
+        finally:
+            target.close()
+            source.close()
+        return tmp
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def snapshot_now() -> Dict[str, Any]:
+    with _LOCK:
+        active = bool(_STATUS.get("active") and _STATUS.get("verified"))
+        path = _DB_PATH
+    if not active or path is None:
+        return {"status": "disabled", "truthful": True}
+
+    tmp: Optional[Path] = None
+    try:
+        tmp = _snapshot_database()
+        raw = tmp.read_bytes()
+        digest = hashlib.sha256(raw).hexdigest()
+        stamp = str(time.time())
+
+        _client().put_object(
+            Bucket=_cfg()["bucket"],
+            Key=object_key(),
+            Body=raw,
+            ContentType="application/x-sqlite3",
+            Metadata={
+                "ai-infinity-sha256": digest,
+                "ai-infinity-snapshot-at": stamp,
+                "ai-infinity-schema": "studio-state-v1",
+            },
+        )
+
+        head = _head()
+        if int((head or {}).get("size_bytes") or -1) != len(raw):
+            raise RuntimeError("R2 project-state snapshot size verification failed")
+        remote_digest = str((head or {}).get("sha256") or "")
+        if remote_digest and remote_digest != digest:
+            raise RuntimeError("R2 project-state snapshot checksum verification failed")
+
+        with _LOCK:
+            _STATUS["last_sync_at"] = stamp
+            _STATUS["last_sha256"] = digest
+            _STATUS["last_error"] = None
+
+        return {
+            "status": "verified",
+            "size_bytes": len(raw),
+            "sha256": digest,
+            "snapshot_at": stamp,
+            "truthful": True,
+        }
+    except Exception as exc:
+        with _LOCK:
+            _STATUS["last_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        return {
+            "status": "failed",
+            "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+            "truthful": True,
+        }
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+
+
+def schedule_sync(delay: float = 0.75) -> None:
+    """Debounce committed write checkpoints."""
+    global _SYNC_TIMER
+    with _LOCK:
+        if not (_STATUS.get("active") and _STATUS.get("verified")):
+            return
+        if _SYNC_TIMER is not None and _SYNC_TIMER.is_alive():
+            return
+        _SYNC_TIMER = threading.Timer(max(0.2, float(delay)), snapshot_now)
+        _SYNC_TIMER.daemon = True
+        _SYNC_TIMER.start()
+
+
+class DurableConnection(sqlite3.Connection):
+    """SQLite connection that schedules a durable snapshot after writes commit."""
+
+    def __enter__(self):
+        self._ai_initial_changes = self.total_changes
+        return super().__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        before = getattr(self, "_ai_initial_changes", self.total_changes)
+        result = super().__exit__(exc_type, exc_value, traceback)
+        if exc_type is None and self.total_changes > before:
+            schedule_sync()
+        return result
+
+
+def status() -> Dict[str, Any]:
+    with _LOCK:
+        out = dict(_STATUS)
+    enabled = contract_enabled()
+    out.update(
+        {
+            "backend": "cloudflare_r2" if enabled else None,
+            "object_key": object_key() if enabled else None,
+            "contract_enabled": enabled,
+            "truthful": True,
+        }
+    )
+    return out
+
+
+atexit.register(snapshot_now)
