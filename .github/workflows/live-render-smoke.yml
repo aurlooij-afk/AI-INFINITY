@@ -58,7 +58,8 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import json, os, time, urllib.request, urllib.error, http.cookiejar, io, zipfile, hashlib, subprocess
+          import io, json, os, time, urllib.request, urllib.parse, urllib.error
+          import http.cookiejar, zipfile, hashlib, subprocess
           base=os.environ["BASE_URL"].rstrip("/")
           cmd="Create a 20-second English cinematic video using only local/free execution, with voiceover, captions, thumbnail and a real final package."
           jar=http.cookiejar.CookieJar()
@@ -139,7 +140,7 @@ jobs:
 
                   with zipfile.ZipFile(io.BytesIO(work["package.zip"])) as z:
                       packaged=set(z.namelist())
-                  package_required=set(required[:-1]) | {"provenance.json"}
+                  package_required=(set(required)-{"package.zip"}) | {"provenance.json"}
                   missing_package=sorted(package_required-packaged)
                   if missing_package:
                       raise SystemExit(f"package.zip missing entries: {missing_package}")
