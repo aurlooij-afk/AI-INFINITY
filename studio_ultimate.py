@@ -730,6 +730,32 @@ def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _language_text_compatible(language: str, chapters: Any) -> bool:
+    """Reject obviously English fallback text when a non-English language was requested."""
+    lang=str(language or "English").strip().lower()
+    if lang == "english":
+        return True
+    blob=" ".join(
+        str(ch.get("narration") or "")
+        for ch in (chapters if isinstance(chapters,list) else [])
+        if isinstance(ch,dict)
+    )
+    letters=[ch for ch in blob if ch.isalpha()]
+    if len(letters) < 20:
+        return False
+    arabic=sum(1 for ch in letters if "\u0600" <= ch <= "\u06ff")
+    ratio=arabic/max(1,len(letters))
+    if lang in {"urdu","pashto","dari","arabic"} and ratio < 0.35:
+        return False
+    if lang=="pashto" and not any(ch in blob for ch in "ځښږڅټډړګڼ"):
+        return False
+    if lang=="urdu" and not any(ch in blob for ch in "ٹڈڑںےھ"):
+        return False
+    if lang=="dari" and not any(ch in blob for ch in "پچژگ"):
+        return False
+    return True
+
+
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
     t = (text or "").strip()
     if not t:
@@ -776,7 +802,7 @@ def _hf_creator_plan(prompt: str) -> Tuple[Optional[Dict[str, Any]], str]:
         text = response.choices[0].message.content if getattr(response, "choices", None) else ""
         data = _extract_json(text or "")
         chapters = data.get("chapters") if isinstance(data, dict) else None
-        if isinstance(chapters, list) and len(chapters) >= 4:
+        if isinstance(chapters, list) and len(chapters) >= 4 and _language_text_compatible(prompt, chapters):
             data["chapters"] = chapters[:18]
             return data, f"Hugging Face/{model}"
     except Exception as exc:
@@ -827,7 +853,7 @@ Use 5-18 chapters. Total durations should approximately equal the target. Narrat
             raw = model_fn({"messages": [{"role": "user", "content": prompt}], "temperature": 0.8}) or {}
             data = _extract_json(raw.get("text") or raw.get("answer") or "")
             chapters = data.get("chapters") if isinstance(data, dict) else None
-            if isinstance(chapters, list) and len(chapters) >= 4:
+            if isinstance(chapters, list) and len(chapters) >= 4 and _language_text_compatible(language, chapters):
                 clean = {**data}
                 clean["chapters"] = chapters[:18]
                 return clean, str(raw.get("provider") or "model")
