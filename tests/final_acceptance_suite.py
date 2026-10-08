@@ -53,7 +53,8 @@ def waitp(s,b,pid,timeout=600):
     while time.time()<end:
         last=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}")
         if str(last.get("status","")).lower() in {"completed","completed_with_qc_warnings","failed","cancelled"}:
-            assert str(last.get("status")).lower() in {"completed","completed_with_qc_warnings"},last
+            assert str(last.get("status")).lower() == "completed",last
+            assert str(last.get("state") or "").upper() == "COMPLETED",last
             return last
         time.sleep(2)
     raise AssertionError(f"timeout {pid}: {last}")
