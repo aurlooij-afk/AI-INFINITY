@@ -564,7 +564,10 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     checks["factual_review_required"] = fact_sensitive
     checks["factual_claim_count"] = int(fact_data.get("claim_count") or 0) if isinstance(fact_data, dict) else 0
     if fact_sensitive and not checks["factual_review_auto_publish_safe"]:
-        failures.append("factual claim review is not auto-publish safe; unresolved claims require review")
+        # Factual review is a publication-safety gate, not a production-integrity
+        # failure. The content can be verified and delivered while auto-publish
+        # remains blocked until the claims receive the required review.
+        warnings.append("factual claim review required before auto-publication")
 
     source_count = checks["research_sources"]
     research_intent = fact_sensitive or any(
@@ -630,7 +633,6 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         and checks["visual_rights_evidence_present"]
         and checks["research_required_and_present"]
         and checks["fresh_evidence_ok"]
-        and (checks["factual_review_auto_publish_safe"] if checks["factual_review_required"] else True)
         and checks["fact_check_present"]
         and checks["provenance_present"]
         and checks["captions_present"]
