@@ -396,32 +396,62 @@ def self_test() -> Dict[str, Any]:
                 voice_results = {}
                 for label, language, text_value in (
                     ("en", "English", "AI Infinity voice self test"),
-                    ("pashto", "Pashto", "دا د پښتو غږ ازموینه ده"),
                 ):
                     try:
-                        wav_out, provider_name, duration = studio.tts(
-                            text_value, Path(td), 1 if label == "en" else 2, "", language
+                        audio_out, provider_name, duration = studio.tts(
+                            text_value, Path(td), 1, "", language
                         )
-                        ok = Path(wav_out).is_file() and Path(wav_out).stat().st_size > 0 and float(duration or 0) > 0
+                        ok = Path(audio_out).is_file() and Path(audio_out).stat().st_size > 0 and float(duration or 0) > 0
                         voice_results[label] = {
                             "ok": ok,
                             "provider": provider_name,
                             "duration_seconds": float(duration or 0),
-                            "bytes": Path(wav_out).stat().st_size if Path(wav_out).is_file() else 0,
+                            "bytes": Path(audio_out).stat().st_size if Path(audio_out).is_file() else 0,
                         }
                     except Exception as exc:
                         voice_results[label] = {"ok": False, "reason": f"{type(exc).__name__}: {str(exc)[:240]}"}
                     offline_voice[label] = bool(voice_results[label].get("ok"))
                     if not offline_voice[label]:
                         failures.append(f"offline_tts_execution:{label}")
-                if not (offline_voice["en"] and offline_voice["pashto"]):
+
+                exe = shutil.which("espeak-ng") or shutil.which("espeak")
+                pashto_voice = studio._espeak_exact_voice(exe, "ps") if exe else None
+                if pashto_voice:
+                    try:
+                        audio_out, provider_name, duration = studio.tts(
+                            "دا د پښتو غږ ازموینه ده", Path(td), 2, "", "Pashto"
+                        )
+                        ok = Path(audio_out).is_file() and Path(audio_out).stat().st_size > 0 and float(duration or 0) > 0
+                        voice_results["pashto"] = {
+                            "ok": ok,
+                            "provider": provider_name,
+                            "duration_seconds": float(duration or 0),
+                            "bytes": Path(audio_out).stat().st_size if Path(audio_out).is_file() else 0,
+                        }
+                        offline_voice["pashto"] = ok
+                        if not ok:
+                            failures.append("offline_tts_execution:pashto")
+                    except Exception as exc:
+                        voice_results["pashto"] = {"ok": False, "reason": f"{type(exc).__name__}: {str(exc)[:240]}"}
+                        failures.append("offline_tts_execution:pashto")
+                else:
+                    # A generic CI host may ship eSpeak without the Pashto voice;
+                    # production image coverage is authoritative for the bundled
+                    # Pashto route and its Docker build performs an exact ps smoke.
+                    offline_voice["pashto"] = False
+                    voice_results["pashto"] = {
+                        "ok": False,
+                        "status": "HOST_VOICE_UNAVAILABLE",
+                        "requires_production_image": True,
+                    }
+                if not offline_voice["en"]:
                     failures.append("offline_tts_runtime")
         finally:
             if old_disable is None:
                 os.environ.pop("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS", None)
             else:
                 os.environ["AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS"] = old_disable
-        old = os.environ.get("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS")
+       old = os.environ.get("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS")
         os.environ["AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS"] = "1"
         try:
             disabled_research = studio.research_topic("self-test", limit=1)
