@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ai-infinity-final-production-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   production-verification:
     runs-on: ubuntu-latest
