@@ -110,8 +110,18 @@ jobs:
       - name: Start image and verify HTTP
         run: |
           set -euo pipefail
-          trap 'docker logs ai-infinity-ci || true' EXIT
-          docker run -d --rm --name ai-infinity-ci --platform linux/amd64             -e AI_INFINITY_3601_BACKGROUND=false             -e AI_INFINITY_FAST_MODE=1             -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity             -p 10000:10000 ai-infinity:ci
+          # Match the free Render memory envelope and preserve the container
+          # after an early crash so the actual bootstrap logs remain available.
+          docker rm -f ai-infinity-ci >/dev/null 2>&1 || true
+          docker run -d --name ai-infinity-ci --platform linux/amd64 \
+            --memory=512m --memory-swap=512m \
+            -e AI_INFINITY_3601_BACKGROUND=false \
+            -e AI_INFINITY_FAST_MODE=1 \
+            -e AI_INFINITY_FFMPEG_THREADS=1 \
+            -e AI_INFINITY_FFMPEG_FILTER_THREADS=1 \
+            -e AI_INFINITY_FFMPEG_COMPLEX_THREADS=1 \
+            -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity \
+            -p 10000:10000 ai-infinity:ci
           ready=0
           for i in $(seq 1 90); do
             if curl -fsS http://127.0.0.1:10000/health >/tmp/health.json; then
@@ -129,6 +139,8 @@ jobs:
           done
           if [ "$ready" -ne 1 ]; then
             echo "Container did not become ready"
+            docker inspect ai-infinity-ci || true
+            docker logs ai-infinity-ci || true
             exit 1
           fi
 
