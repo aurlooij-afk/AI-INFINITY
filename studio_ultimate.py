@@ -97,6 +97,12 @@ ROOT = DATA_DIR / "creator_studio"
 ROOT.mkdir(parents=True, exist_ok=True)
 DB_PATH = Path(os.getenv("AI_INFINITY_DB_PATH", str(DATA_DIR / "ai_infinity.db")))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+try:
+    from ai_infinity.project_state_backend import DurableConnection as _DurableConnection
+    from ai_infinity.project_state_backend import configure as _configure_project_state
+    _configure_project_state(DB_PATH)
+except Exception:
+    _DurableConnection = None
 DB_LOCK = threading.RLock()
 WORKER_STARTED = False
 WORKER_GUARD = threading.Lock()
@@ -265,7 +271,10 @@ def digest(value: Any) -> str:
 
 
 def _connect() -> sqlite3.Connection:
-    c = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    kwargs = {"timeout": 30, "check_same_thread": False}
+    if _DurableConnection is not None:
+        kwargs["factory"] = _DurableConnection
+    c = sqlite3.connect(DB_PATH, **kwargs)
     c.row_factory = sqlite3.Row
     return c
 
