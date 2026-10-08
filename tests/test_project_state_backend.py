@@ -29,6 +29,45 @@ def test_backend_is_truthful_when_unconfigured(monkeypatch, tmp_path: Path):
     assert state["truthful"] is True
 
 
+def test_b2_durability_requires_verified_live_backend(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AI_INFINITY_PERSISTENCE_MODE", "durable")
+    monkeypatch.setenv("AI_INFINITY_PROJECT_STATE_DURABLE", "true")
+    monkeypatch.setenv("AI_INFINITY_PROJECT_STATE_BACKEND", "backblaze_b2")
+
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    truth = importlib.import_module("ai_infinity.persistence_truth")
+    monkeypatch.setattr(
+        backend,
+        "status",
+        lambda: {
+            "contract_enabled": True,
+            "configured": True,
+            "active": True,
+            "verified": True,
+            "truthful": True,
+        },
+    )
+
+    state = truth.project_state_durability(tmp_path)
+    assert state["persistent"] is True
+    assert state["reason"] == "verified_durable_state_backend"
+
+    monkeypatch.setattr(
+        backend,
+        "status",
+        lambda: {
+            "contract_enabled": True,
+            "configured": True,
+            "active": False,
+            "verified": False,
+            "truthful": True,
+        },
+    )
+    state = truth.project_state_durability(tmp_path)
+    assert state["persistent"] is False
+    assert state["reason"] == "durable_mode_requested_but_backend_not_verified"
+
+
 def test_durable_connection_schedules_only_after_committed_write(monkeypatch, tmp_path: Path):
     backend = importlib.import_module("ai_infinity.project_state_backend")
     calls = []
