@@ -447,7 +447,17 @@ def register_pro(app: Any) -> None:
     async def transcript_clip(project_id: str, request: Request):
         uid, p = owned_project(project_id, request)
         if p.get("status") not in {"completed","completed_with_qc_warnings"}:
-            raise HTTPException(409, "project master is not ready")
+            verified = False
+            try:
+                import reality_first_3901 as _reality_kernel
+                verified = bool(_reality_kernel.truth_for_project(project_id).get("verified"))
+            except Exception:
+                verified = False
+            if not verified:
+                raise HTTPException(409, "project master is not ready")
+            p = _get_project(project_id) or p
+            if p.get("status") not in {"completed","completed_with_qc_warnings"}:
+                raise HTTPException(409, "project master is not ready")
         master = _project_dir(project_id) / "final.mp4"
         if not master.exists():
             raise HTTPException(404, "final master not found")
@@ -501,7 +511,17 @@ def register_pro(app: Any) -> None:
     async def advanced_edit(project_id: str, request: Request):
         uid, p = owned_project(project_id, request)
         if p.get("status") not in {"completed","completed_with_qc_warnings"}:
-            raise HTTPException(409,"project master is not ready")
+            verified = False
+            try:
+                import reality_first_3901 as _reality_kernel
+                verified = bool(_reality_kernel.truth_for_project(project_id).get("verified"))
+            except Exception:
+                verified = False
+            if not verified:
+                raise HTTPException(409,"project master is not ready")
+            p = _get_project(project_id) or p
+            if p.get("status") not in {"completed","completed_with_qc_warnings"}:
+                raise HTTPException(409,"project master is not ready")
         payload=await request.json()
         master=_project_dir(project_id)/"final.mp4"
         if not master.exists(): raise HTTPException(404,"final master not found")
