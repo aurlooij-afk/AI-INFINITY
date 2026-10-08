@@ -770,7 +770,7 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _hf_creator_plan(prompt: str) -> Tuple[Optional[Dict[str, Any]], str]:
+def _hf_creator_plan(prompt: str, language: str = "English") -> Tuple[Optional[Dict[str, Any]], str]:
     """Use the configured Hugging Face Inference Provider as the real creator brain.
     This is deliberately optional: when no credential exists, the deterministic
     fallback still runs, but production never pretends that it used a remote model.
@@ -802,7 +802,7 @@ def _hf_creator_plan(prompt: str) -> Tuple[Optional[Dict[str, Any]], str]:
         text = response.choices[0].message.content if getattr(response, "choices", None) else ""
         data = _extract_json(text or "")
         chapters = data.get("chapters") if isinstance(data, dict) else None
-        if isinstance(chapters, list) and len(chapters) >= 4 and _language_text_compatible(prompt, chapters):
+        if isinstance(chapters, list) and len(chapters) >= 4 and _language_text_compatible(language, chapters):
             data["chapters"] = chapters[:18]
             return data, f"Hugging Face/{model}"
     except Exception as exc:
@@ -859,7 +859,7 @@ Use 5-18 chapters. Total durations should approximately equal the target. Narrat
                 return clean, str(raw.get("provider") or "model")
         except Exception:
             pass
-    hf_plan, hf_provider = _hf_creator_plan(prompt)
+    hf_plan, hf_provider = _hf_creator_plan(prompt, language)
     if hf_plan:
         return hf_plan, hf_provider
     return _fallback_creative_plan(title, objective, fmt, duration, audience, tone, research, language), "builtin-creative-engine"
