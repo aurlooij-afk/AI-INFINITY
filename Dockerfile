@@ -1,3 +1,17 @@
+FROM debian:trixie-slim AS espeak-builder
+
+ARG ESPEAK_NG_COMMIT=ba90c8e9f440ad544f674a790bb5f53878b6ffc5
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl build-essential cmake pkg-config libpcaudio-dev libsonic-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL "https://github.com/espeak-ng/espeak-ng/archive/"$ESPEAK_NG_COMMIT".tar.gz" -o /tmp/espeak-ng.tar.gz \
+    && mkdir -p /src \
+    && tar -xzf /tmp/espeak-ng.tar.gz -C /src --strip-components=1 \
+    && cmake -S /src -B /build -DCMAKE_BUILD_TYPE=Release -DENABLE_TESTS=OFF -DUSE_LIBSONIC=ON -DUSE_LIBPCAUDIO=ON -DCMAKE_INSTALL_PREFIX=/opt/espeak-ng \
+    && cmake --build /build --parallel 2 \
+    && cmake --install /build \
+    && rm -rf /src /build /tmp/espeak-ng.tar.gz
+
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -34,6 +48,7 @@ RUN apt-get update \
        libsm6 libxext6 libxrender1 poppler-utils tini \
     && rm -rf /var/lib/apt/lists/*
 
+COPY --from=espeak-builder /opt/espeak-ng/ /usr/local/
 RUN useradd --system --create-home --uid 10001 --shell /usr/sbin/nologin aiinfinity
 WORKDIR /app
 COPY requirements.txt bridge-requirements.txt ./
