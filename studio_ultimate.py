@@ -2927,7 +2927,10 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         if FAST_MODE and not SMOKE:
             target = min(target, 180 if is_short else 900)
         if SMOKE:
-            max_chapters, target = 1, min(target, 8)
+            # Smoke mode may reduce scene count, but it must never rewrite the
+            # user's requested delivery duration. Independent QC compares the
+            # final file to the original request.
+            max_chapters = 1
         chapters = chapters[:max_chapters]
         raw_durations = []
         for ch in chapters:
