@@ -1623,7 +1623,7 @@ def _valid_audio_file(path: Path, minimum_peak_db: float = -55.0) -> bool:
 
 
 def _espeak_exact_voice(exe: str, language: str) -> Optional[str]:
-    aliases = {"english": "en", "urdu": "ur", "pashto": "ps", "arabic": "ar"}
+    aliases = {"english": "en-us", "urdu": "ur", "pashto": "ps", "arabic": "ar"}
     code = aliases.get(str(language or "").strip().lower(), re.sub(r"[^a-z-]", "", str(language or "").strip().lower()))
     if not code:
         return None
