@@ -828,10 +828,123 @@ Use 5-18 chapters. Total durations should approximately equal the target. Narrat
     hf_plan, hf_provider = _hf_creator_plan(prompt)
     if hf_plan:
         return hf_plan, hf_provider
-    return _fallback_creative_plan(title, objective, fmt, duration, audience, tone, research), "builtin-creative-engine"
+    return _fallback_creative_plan(title, objective, fmt, duration, audience, tone, research, language), "builtin-creative-engine"
 
+
+def _localized_fallback_copy(language: str, name: str, title: str, topic: str) -> Dict[str, str]:
+    """Deterministic target-language fallback copy. Never silently returns English for
+    a non-English requested production. Proper nouns/topic tokens are preserved."""
+    lang = str(language or "English").strip().lower()
+    local = {
+        "pashto": {
+            "names": {"Hook":"پیل","Why it matters":"ولې مهمه ده","The key idea":"اصلي نظر","Practical example":"عملي بېلګه","Takeaway":"لنډه پایله","Context":"شالید","The core idea":"اصلي اصل","How it works":"څنګه کار کوي","Real-world examples":"د واقعي نړۍ بېلګې","What changes":"څه بدلېږي","Practical takeaway":"عملي ګام","Closing":"پای"},
+            "hooks":"د {topic} په اړه تر ټولو مهم څه باید پوه شو؟",
+            "cta":"دا موضوع له ځان سره وساتئ او د اړتیا پر وخت یې په عمل کې وازمویئ.",
+            "opening":"دا د {title} مهم تمرکز دی.",
+            "focus":"تمرکز په {topic} دی.",
+            "why":"دا ځکه مهمه ده چې پایله باید روښانه او عملي وي.",
+            "idea":"اصلي نظر دا دی چې موضوع ساده، مشخصه او د کار وړ وساتل شي.",
+            "example":"له دې نظره د واقعي کار لپاره یو تکرارېدونکی بهیر جوړېدای شي.",
+            "takeaway":"عملي پایله دا ده چې بل ګام مشخص او د اجرا وړ وي.",
+            "context":"لومړی شالید روښانه کړئ، بیا پرېکړه او اجرا وکړئ.",
+            "core":"اصلي اصل باید د کارونکي لپاره د پوهېدو او کارولو وړ وي.",
+            "works":"بهیر د نیت، اجرا، نظرخونې او اصلاح له لارې مخته ځي.",
+            "real":"واقعي بېلګې باید ادعا پیاوړې کړي، نه دا چې موضوع بې لارې کړي.",
+            "changes":"ګټوره پایله روښانه تصمیمونه او ښه اجرا ده.",
+            "practical":"موضوع په یوه مشخص عملي ګام بدله کړئ.",
+            "closing":"همدا هغه نظر دی چې باید له ځان سره بل ګام ته یوسئ.",
+            "on_screen":{"Hook":"له اصلي ستونزې پیل","Why it matters":"ولې {topic} پایلې بدلوي","The key idea":"د {topic} اصلي اصل","Practical example":"{topic} په عمل کې","Takeaway":"عملي پایله"},
+        },
+        "urdu": {
+            "names": {"Hook":"ابتدا","Why it matters":"کیوں اہم ہے","The key idea":"بنیادی خیال","Practical example":"عملی مثال","Takeaway":"خلاصہ","Context":"پس منظر","The core idea":"مرکزی اصول","How it works":"یہ کیسے کام کرتا ہے","Real-world examples":"حقیقی دنیا کی مثالیں","What changes":"کیا بدلتا ہے","Practical takeaway":"عملی قدم","Closing":"اختتام"},
+            "hooks":"{topic} کے بارے میں سب سے اہم بات کیا ہے جسے ہمیں سمجھنا چاہیے؟",
+            "cta":"اس بات کو محفوظ رکھیں اور مناسب وقت پر اسے عملی طور پر آزمائیں۔",
+            "opening":"یہ {title} کا اہم نقطۂ آغاز ہے۔",
+            "focus":"توجہ {topic} پر ہے۔",
+            "why":"یہ اس لیے اہم ہے کہ نتیجہ واضح اور عملی ہونا چاہیے۔",
+            "idea":"بنیادی خیال یہ ہے کہ بات سادہ، مخصوص اور قابلِ استعمال رہے۔",
+            "example":"اس خیال کو حقیقی کام کے لیے ایک قابلِ تکرار طریقے میں بدلا جا سکتا ہے۔",
+            "takeaway":"عملی نتیجہ یہ ہے کہ اگلا قدم واضح اور قابلِ عمل ہو۔",
+            "context":"پہلے پس منظر سمجھیں، پھر فیصلہ اور عمل کریں۔",
+            "core":"مرکزی اصول ایسا ہونا چاہیے جسے آسانی سے سمجھا اور استعمال کیا جا سکے۔",
+            "works":"یہ عمل ارادے، اقدام، رائے اور بہتری کے ذریعے آگے بڑھتا ہے۔",
+            "real":"حقیقی مثالوں کو بات مضبوط کرنی چاہیے، توجہ نہیں بھٹکانی چاہیے۔",
+            "changes":"مفید نتیجہ بہتر فیصلے اور واضح عمل درآمد ہے۔",
+            "practical":"اس خیال کو ایک واضح عملی قدم میں تبدیل کریں۔",
+            "closing":"یہی وہ بات ہے جسے اگلے قدم تک ساتھ لے جانا چاہیے۔",
+            "on_screen":{"Hook":"اصل مسئلے سے آغاز","Why it matters":"{topic} کیوں نتائج بدلتا ہے","The key idea":"{topic} کا بنیادی اصول","Practical example":"{topic} کو عمل میں لائیں","Takeaway":"عملی خلاصہ"},
+        },
+        "dari": {
+            "names": {"Hook":"آغاز","Why it matters":"چرا مهم است","The key idea":"ایدهٔ اصلی","Practical example":"نمونهٔ عملی","Takeaway":"جمع‌بندی","Context":"زمینه","The core idea":"اصل مرکزی","How it works":"چگونه کار می‌کند","Real-world examples":"نمونه‌های واقعی","What changes":"چه تغییر می‌کند","Practical takeaway":"گام عملی","Closing":"پایان"},
+            "hooks":"مهم‌ترین چیزی که باید دربارهٔ {topic} بدانیم چیست؟",
+            "cta":"این نکته را نگه دارید و در زمان مناسب آن را در عمل آزمایش کنید.",
+            "opening":"این بخش مهمی از تمرکز {title} است.",
+            "focus":"تمرکز بر {topic} است.",
+            "why":"این موضوع مهم است، چون نتیجه باید روشن و عملی باشد.",
+            "idea":"ایدهٔ اصلی این است که موضوع ساده، مشخص و قابل استفاده بماند.",
+            "example":"این ایده را می‌توان به یک روند تکرارپذیر برای کار واقعی تبدیل کرد.",
+            "takeaway":"نتیجهٔ عملی این است که گام بعدی روشن و قابل اجرا باشد.",
+            "context":"ابتدا زمینه را روشن کنید، سپس تصمیم بگیرید و اجرا کنید.",
+            "core":"اصل مرکزی باید برای فهم و استفادهٔ آسان طراحی شود.",
+            "works":"این روند از نیت، اجرا، بازخورد و اصلاح عبور می‌کند.",
+            "real":"نمونه‌های واقعی باید ادعا را پشتیبانی کنند، نه این‌که حواس را پرت کنند.",
+            "changes":"نتیجهٔ مفید، تصمیم بهتر و اجرای روشن‌تر است.",
+            "practical":"این موضوع را به یک گام عملی مشخص تبدیل کنید.",
+            "closing":"همین نکته است که باید به مرحلهٔ بعد با خود ببرید.",
+            "on_screen":{"Hook":"از مسئلهٔ واقعی آغاز کنید","Why it matters":"چرا {topic} مهم است","The key idea":"اصل {topic}","Practical example":"{topic} در عمل","Takeaway":"نتیجهٔ عملی"},
+        },
+        "arabic": {
+            "names": {"Hook":"البداية","Why it matters":"لماذا يهم","The key idea":"الفكرة الأساسية","Practical example":"مثال عملي","Takeaway":"الخلاصة","Context":"السياق","The core idea":"المبدأ الأساسي","How it works":"كيف يعمل","Real-world examples":"أمثلة من الواقع","What changes":"ما الذي يتغير","Practical takeaway":"خطوة عملية","Closing":"الخاتمة"},
+            "hooks":"ما أهم شيء يجب أن نفهمه عن {topic}؟",
+            "cta":"احتفظ بهذه الفكرة وجرّبها عملياً عندما تحتاج إليها.",
+            "opening":"هذه نقطة أساسية في {title}.",
+            "focus":"التركيز هنا على {topic}.",
+            "why":"هذا مهم لأن النتيجة يجب أن تكون واضحة وقابلة للتطبيق.",
+            "idea":"الفكرة الأساسية هي إبقاء الموضوع بسيطاً ومحدداً وقابلاً للاستخدام.",
+            "example":"يمكن تحويل هذه الفكرة إلى طريقة قابلة للتكرار في العمل الحقيقي.",
+            "takeaway":"النتيجة العملية هي أن تكون الخطوة التالية واضحة وقابلة للتنفيذ.",
+            "context":"ابدأ بالسياق، ثم اتخذ القرار ونفّذه.",
+            "core":"يجب أن يكون المبدأ الأساسي سهلاً للفهم والاستخدام.",
+            "works":"يتقدم المسار عبر النية والتنفيذ والتغذية الراجعة والتحسين.",
+            "real":"يجب أن تدعم الأمثلة الواقعية الفكرة من دون تشتيت.",
+            "changes":"النتيجة المفيدة هي قرارات أفضل وتنفيذ أوضح.",
+            "practical":"حوّل الفكرة إلى خطوة عملية محددة.",
+            "closing":"هذه هي الفكرة التي ينبغي حملها إلى الخطوة التالية.",
+            "on_screen":{"Hook":"ابدأ بالمشكلة الحقيقية","Why it matters":"لماذا يغيّر {topic} النتائج","The key idea":"مبدأ {topic}","Practical example":"{topic} في التطبيق","Takeaway":"خلاصة عملية"},
+        }
+    }
+    if lang not in local:
+        return {
+            "name":name, "hook":f"What is most useful to understand about {topic}?",
+            "cta":"Save this and use the idea when you need it.", "narration":f"{name}. {title}. The focus is {topic}.",
+            "on_screen":str(name)
+        }
+    d=local[lang]
+    localized_name=d["names"].get(name,name)
+    return {
+        "name": localized_name,
+        "hook": d["hooks"].format(topic=topic,title=title),
+        "cta": d["cta"].format(topic=topic,title=title),
+        "opening": d["opening"].format(topic=topic,title=title),
+        "narration_by_name": {
+            "Hook": f"{d['opening'].format(topic=topic,title=title)} {d['hooks'].format(topic=topic,title=title)}",
+            "Why it matters": f"{d['opening'].format(topic=topic,title=title)} {d['why'].format(topic=topic,title=title)}",
+            "The key idea": f"{d['opening'].format(topic=topic,title=title)} {d['idea'].format(topic=topic,title=title)}",
+            "Practical example": f"{d['opening'].format(topic=topic,title=title)} {d['example'].format(topic=topic,title=title)}",
+            "Takeaway": f"{d['opening'].format(topic=topic,title=title)} {d['takeaway'].format(topic=topic,title=title)}",
+            "Context": d["context"].format(topic=topic,title=title),
+            "The core idea": d["core"].format(topic=topic,title=title),
+            "How it works": d["works"].format(topic=topic,title=title),
+            "Real-world examples": d["real"].format(topic=topic,title=title),
+            "What changes": d["changes"].format(topic=topic,title=title),
+            "Practical takeaway": d["practical"].format(topic=topic,title=title),
+            "Closing": d["closing"].format(topic=topic,title=title),
+        },
+        "on_screen": d["on_screen"]
+    }
 
 def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int, audience: str, tone: str, research: Dict[str, Any]) -> Dict[str, Any]:
+    language: str = "English") -> Dict[str, Any]:
     """Build a deterministic, topic-coherent fallback plan without leaking unrelated search snippets."""
     clean_title = re.sub(r"\s+", " ", title).strip()[:140]
     clean_objective = re.sub(r"\s+", " ", objective).strip()[:900]
@@ -875,29 +988,11 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         # fallback close to the requested runtime instead of copying long search
         # snippets into the script.
         budget = max(9, int(max(4.0, seconds) * 2.3))
-        source_title = re.sub(r"\s+", " ", str(source.get("title") or "").strip())
-        lead = f"{name}. {clean_title}."
-        middle = f"The focus is {clean_objective.rstrip('.')}. "
-        tail = {
-            "Hook": "Here is the useful idea.",
-            "Why it matters": "This matters because the outcome is practical.",
-            "The key idea": "The key is to make the idea clear and usable.",
-            "Practical example": "Use it as a repeatable real-world workflow.",
-            "Takeaway": "Keep the lesson simple, specific, and actionable.",
-            "Context": "Start with the context before the decision.",
-            "The core idea": "The core idea should remain easy to apply.",
-            "How it works": "The process is intent, action, feedback, and refinement.",
-            "Real-world examples": "Examples should support the point without distracting from it.",
-            "What changes": "The useful result is better decisions and clearer execution.",
-            "Practical takeaway": "Turn the idea into one concrete next step.",
-            "Closing": "That is the idea to carry forward.",
-        }.get(name, "Keep the result practical and clear.")
-        text = re.sub(r"\s+", " ", f"{lead} The focus is {topic_label}. {tail}").strip()
-        if source_title and source_title.lower() not in clean_title.lower() and len(text.split()) < budget - 5:
-            text += f" Source context: {source_title}."
+        localized = _localized_fallback_copy(language, name, clean_title, topic_label)
+        text = re.sub(r"\\s+", " ", str(localized["narration_by_name"].get(name) or localized["narration_by_name"].get("Closing") or localized["opening"])).strip()
         words = text.split()
         if len(words) > budget:
-            text = " ".join(words[:budget]).rstrip(" ,.;:") + "."
+            text = " ".join(words[:budget]).rstrip(" ,.;:،۔") + "."
         return text
 
     chapters = []
@@ -916,28 +1011,26 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "Closing": "finished work, confident human subject, memorable final frame",
         }
         focus = (visual_focus if fmt == "short" else long_visual_focus).get(name, "real-world editorial scene")
+        localized = _localized_fallback_copy(language, name, clean_title, topic_label)
+        localized_heading = localized["name"]
+        localized_screen = localized["on_screen"].get(name, localized_heading).format(topic=topic_label, title=clean_title)
         chapters.append({
-            "heading": f"{name} — {clean_title}" if name in {"Hook", "Closing"} else f"{name}: {clean_title}",
+            "heading": f"{localized_heading} — {clean_title}" if name in {"Hook", "Closing"} else f"{localized_heading}: {clean_title}",
             "narration": narration,
             "visual_query": f"{topic_label} {focus} documentary photography",
             "image_prompt": f"Premium editorial documentary image about {topic_label}; visual focus: {focus}; realistic people, locations, objects or processes, natural cinematic lighting, coherent composition, strong subject separation, no logos, no text, visually distinct from other scenes",
-            "on_screen": {
-                "Hook": f"{topic_label}: start with the real problem",
-                "Why it matters": f"Why {topic_label} changes outcomes",
-                "The key idea": f"The core principle behind {topic_label}",
-                "Practical example": f"Put {topic_label} into practice",
-                "Takeaway": f"A practical takeaway on {topic_label}",
-            }.get(name, str(name)),
+            "on_screen": localized_screen,
             "duration": sec,
             "proof_needed": [src.get("title")] if src.get("title") and src.get("title") != clean_title else [],
         })
     return {
         "title": clean_title,
-        "hook": f"What is the most useful thing to understand about {topic_label}?",
+        "hook": _localized_fallback_copy(language, "Hook", clean_title, topic_label)["hook"],
         "premise": clean_objective,
         "audience": audience,
         "tone": tone,
-        "cta": "Save this and come back when you are ready to use the idea.",
+        "cta": _localized_fallback_copy(language, "Closing", clean_title, topic_label)["cta"],
+        "language": language,
         "chapters": chapters,
         "claims_to_verify": [s.get("title") for s in usable_sources[:8] if s.get("title") != clean_title],
         "fallback_mode": "duration_bounded_topic_coherent",
