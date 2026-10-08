@@ -4,19 +4,17 @@ on:
   push:
     branches:
       - main
-      - ai-infinity-canonical-divine
   pull_request:
     branches:
       - main
-      - ai-infinity-canonical-divine
-  pull_request_target:
-    branches:
-      - main
-      - ai-infinity-canonical-divine
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ai-infinity-final-acceptance-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   final-acceptance:
