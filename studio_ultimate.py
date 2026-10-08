@@ -1594,14 +1594,49 @@ def _edge_tts_voice_candidates(language: str, requested_voice: str = "") -> List
     return [v for v in candidates if v and not (v in seen or seen.add(v))]
 
 
-def _valid_audio_file(path: Path) -> bool:
+def _audio_peak_db(path: Path) -> Optional[float]:
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-af", "volumedetect", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=60,
+        )
+        blob = (proc.stderr or "") + (proc.stdout or "")
+        match = re.search(r"max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB", blob)
+        return float(match.group(1)) if match else None
+    except Exception:
+        return None
+
+
+def _valid_audio_file(path: Path, minimum_peak_db: float = -55.0) -> bool:
     try:
         if not path.exists() or not path.is_file() or path.stat().st_size < 1000:
             return False
         probe = ffprobe_json(path)
-        return any(str(s.get("codec_type") or "") == "audio" for s in probe.get("streams", [])) and probe_duration(path) > 0.25
+        if not any(str(s.get("codec_type") or "") == "audio" for s in probe.get("streams", [])):
+            return False
+        if probe_duration(path) <= 0.25:
+            return False
+        peak = _audio_peak_db(path)
+        return peak is not None and peak >= minimum_peak_db
     except Exception:
         return False
+
+
+def _espeak_exact_voice(exe: str, language: str) -> Optional[str]:
+    aliases = {"english": "en", "urdu": "ur", "pashto": "ps", "arabic": "ar"}
+    code = aliases.get(str(language or "").strip().lower(), re.sub(r"[^a-z-]", "", str(language or "").strip().lower()))
+    if not code:
+        return None
+    try:
+        proc = subprocess.run([exe, "--voices=" + code], capture_output=True, text=True, timeout=20)
+        if proc.returncode != 0:
+            return None
+        for line in (proc.stdout or "").splitlines():
+            if re.search(r"\b" + re.escape(code) + r"\b", line, re.I):
+                return code
+    except Exception:
+        return None
+    return None
 
 
 def tts(text: str, outdir: Path, index: int, voice: str, language: str = "English") -> Tuple[Path, str, float]:
@@ -1655,20 +1690,22 @@ def tts(text: str, outdir: Path, index: int, voice: str, language: str = "Englis
     if not exe:
         raise RuntimeError("narration engine unavailable")
 
-    # Never silently synthesize a requested language with an unrelated local voice.
-    local_voice = {"english": "en", "urdu": "ur", "arabic": "ar"}.get(lang_key)
-    if lang_key in {"pashto", "dari"}:
-        raise RuntimeError(f"{language} voice generation unavailable after exact-language neural attempts; connect a matching voice provider")
-    if not local_voice:
-        local_voice = "en"
+    local_voice = _espeak_exact_voice(exe, lang_key)
+    if local_voice:
+        wav = outdir / f"narration_{index:02d}.wav"
+        subprocess.run([exe, "-v", local_voice, "-s", "155", "-w", str(wav), plain], check=True, timeout=45)
+        ffmpeg("-i", wav, "-codec:a", "libmp3lame", "-q:a", "2", out, timeout=180)
+        if not _valid_audio_file(out, minimum_peak_db=-45.0):
+            raise RuntimeError("local narration artifact is invalid or effectively silent")
+        provider_name = {
+            "en":"local-espeak",
+            "ur":"local-espeak-urdu",
+            "ps":"local-espeak-pashto",
+            "ar":"local-espeak-arabic",
+        }.get(local_voice, f"local-espeak-{local_voice}")
+        return out, provider_name + ("-fast-fallback" if FAST_MODE else ""), probe_duration(out)
 
-    wav = outdir / f"narration_{index:02d}.wav"
-    subprocess.run([exe, "-v", local_voice, "-s", "155", "-w", str(wav), plain], check=True, timeout=45)
-    ffmpeg("-i", wav, "-codec:a", "libmp3lame", "-q:a", "2", out, timeout=180)
-    if not _valid_audio_file(out):
-        raise RuntimeError("local narration artifact is invalid")
-    provider_name = {"en":"local-espeak","ur":"local-espeak-urdu","ar":"local-espeak-arabic"}.get(local_voice, f"local-espeak-{local_voice}")
-    return out, provider_name + ("-fast-fallback" if FAST_MODE else ""), probe_duration(out)
+    raise RuntimeError(f"{language} voice generation unavailable after exact-language neural and local attempts; connect a matching voice provider")
 
 
 def _fit_audio_duration(source: Path, target_seconds: float, out: Path) -> Tuple[Path, float]:
@@ -1704,14 +1741,6 @@ def _fit_audio_duration(source: Path, target_seconds: float, out: Path) -> Tuple
     if abs(fitted - target) > 0.6:
         raise RuntimeError(f"retimed narration is {fitted:.2f}s, expected {target:.2f}s")
     return out, fitted
-
-def _make_silent_voice(outdir: Path, index: int, seconds: float = 6.0) -> Tuple[Path, str, float]:
-    """Guaranteed local audio fallback so remote TTS cannot stall or kill a job."""
-    out = outdir / f"narration_{index:02d}.mp3"
-    duration = max(4.0, min(30.0, float(seconds)))
-    ffmpeg("-f", "lavfi", "-i", f"anullsrc=r=48000:cl=stereo", "-t", duration, "-c:a", "libmp3lame", "-q:a", "6", out, timeout=45)
-    return out, "silent-local-fallback", probe_duration(out)
-
 
 def make_music(outdir: Path, seconds: float) -> Path:
     """Create an original, restrained cinematic underscore without external music dependency."""
@@ -1976,6 +2005,7 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
         "audio_present": bool(a),
         "aac_audio": str(a.get("codec_name") or "") in {"aac", "mp3"},
         "audio_duration_valid": audio_duration > 1,
+        "audio_audible": (_audio_peak_db(master) is not None and _audio_peak_db(master) >= -45.0),
         "captions_present": captions.exists() and captions.stat().st_size > 20,
         "embedded_subtitles": bool(subtitle_streams),
         "captions_delivered": bool(subtitle_streams) or (captions.exists() and captions.stat().st_size > 20),
@@ -2787,21 +2817,16 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             try:
                 voice, provider, voice_duration = tts(str(ch.get("narration") or ""), outdir, i, str(req.get("voice") or _default_tts_voice(str(req.get("language") or "English"))), str(req.get("language") or "English"))
             except Exception as voice_exc:
-                audit_event(project_id, "voice_source_unavailable", {"scene": i, "error": str(voice_exc)[:500]})
-                requested_language = str(req.get("language") or "English").strip().lower()
-                if requested_language in {"pashto", "dari"}:
-                    # These languages must never be marked complete with silent or English audio.
-                    raise RuntimeError(f"{req.get('language')} voice generation unavailable; connect a matching voice provider") from voice_exc
-                voice, provider, voice_duration = _make_silent_voice(
-                    outdir, i, max(4.0, float(ch.get("duration") or 6.0))
-                )
-                provider = "silent-local-fallback"
-                audit_event(project_id, "voice_fallback", {
+                audit_event(project_id, "voice_source_unavailable", {
                     "scene": i,
-                    "provider": provider,
-                    "reason": str(voice_exc)[:500],
+                    "error": str(voice_exc)[:500],
                     "language": req.get("language"),
+                    "truthful": True,
                 })
+                raise RuntimeError(
+                    f"{req.get('language') or 'English'} voice generation unavailable; "
+                    "no verified audible exact-language provider is currently usable"
+                ) from voice_exc
             voice_provider = voice_provider or provider
             scene_duration = max(4.0, min(90.0, float(ch.get("duration") or voice_duration)))
             if abs(float(voice_duration) - scene_duration) > 0.35:
@@ -2898,9 +2923,12 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             audio_master = outdir / "audio_master.mp3"
             narration_inputs = [outdir / f"narration_{i:02d}.mp3" for i in range(1, len(chapters)+1)]
             concat = outdir / "narration_concat.txt"
-            concat.write_text("\n".join(f"file '{p.as_posix()}'" for p in narration_inputs if p.exists()), encoding="utf-8")
-            if concat.exists() and concat.read_text(encoding="utf-8").strip():
-                ffmpeg("-f", "concat", "-safe", "0", "-i", concat, "-c:a", "libmp3lame", "-q:a", "2", audio_master, timeout=240)
+            if len(narration_inputs) != len([p for p in narration_inputs if p.exists()]):
+                raise RuntimeError("narration set incomplete; cannot master missing voice tracks")
+            concat.write_text("\n".join(f"file '{p.as_posix()}'" for p in narration_inputs), encoding="utf-8")
+            ffmpeg("-f", "concat", "-safe", "0", "-i", concat, "-c:a", "libmp3lame", "-q:a", "2", audio_master, timeout=240)
+            if not _valid_audio_file(audio_master, minimum_peak_db=-45.0):
+                raise RuntimeError("audio master is invalid or effectively silent")
         if True:
             article = outdir / "article.md"
             article_lines = [f"# {plan.get('title') or topic}", "", str(plan.get('hook') or ""), ""]
