@@ -1441,14 +1441,21 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     query=str(scene.get("visual_query") or scene.get("heading") or "documentary scene")
     ai_prompt=str(scene.get("image_prompt") or f"Premium cinematic documentary visual about {query}; realistic, useful, editorial, no text, no logos, professional photography")
     MEDIA_DEBUG_ERRORS.clear()
+    external_disabled = _external_providers_disabled()
+    if external_disabled:
+        MEDIA_DEBUG_ERRORS["external-visual-providers"] = "disabled_by_policy"
     if os.getenv("AI_INFINITY_FORCE_PRIMARY_VISUAL_FAILURE","0").strip().lower() in {"1","true","yes","on"}:
         MEDIA_DEBUG_ERRORS["primary-visual-provider"]="forced_failure"
-    if prefer_motion and os.getenv("AI_INFINITY_FORCE_PRIMARY_VISUAL_FAILURE","0").strip().lower() not in {"1","true","yes","on"}:
+    if (not external_disabled
+            and prefer_motion
+            and os.getenv("AI_INFINITY_FORCE_PRIMARY_VISUAL_FAILURE","0").strip().lower() not in {"1","true","yes","on"}):
         motion=_hf_video(ai_prompt,outdir,index,duration)
         if motion:
             return motion
 
-    ai=None if os.getenv("AI_INFINITY_FORCE_PRIMARY_VISUAL_FAILURE","0").strip().lower() in {"1","true","yes","on"} else _hf_image(ai_prompt,outdir,index)
+    ai = None
+    if not external_disabled and os.getenv("AI_INFINITY_FORCE_PRIMARY_VISUAL_FAILURE","0").strip().lower() not in {"1","true","yes","on"}:
+        ai = _hf_image(ai_prompt,outdir,index)
     if ai:
         return ai
 
@@ -1475,7 +1482,7 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             query_variants.append(q)
 
     source_failures=[]
-    getters=(_nasa_images,_openverse_images,_commons_media,_pexels,_pixabay)
+    getters=() if external_disabled else (_nasa_images,_openverse_images,_commons_media,_pexels,_pixabay)
     for q in query_variants[:4]:
         for getter in getters:
             try:
