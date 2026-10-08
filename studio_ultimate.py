@@ -3038,7 +3038,8 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "storage": {"data_dir": str(DATA_DIR), **__import__("ai_infinity.persistence_truth", fromlist=["project_state_durability"]).project_state_durability(DATA_DIR), "persistent_configured": __import__("ai_infinity.persistence_truth", fromlist=["project_state_durability"]).project_state_durability(DATA_DIR).get("persistent", False)},
         }
         manifest.write_text(jdump(metadata), encoding="utf-8")
-        package = outdir / f"{safe_name(plan.get('title') or topic)}-AI-Infinity-creator-package.zip"
+        named_package = outdir / f"{safe_name(plan.get('title') or topic)}-AI-Infinity-creator-package.zip"
+        package = outdir / "package.zip"
         bundle: List[Optional[Path]] = [captioned, script, captions, sources, manifest, production_manifest, rights_manifest, outdir / "feature_execution.json", outdir / "creator_experiments.json", shared_music, thumb if thumb and thumb.exists() else None, audio_master, article, social, outdir / "fact_check.json"]
         bundle += [x for x in editorial.values() if x]
         bundle += [Path(x["path"]) for x in shorts if Path(x["path"]).exists()]
@@ -3048,8 +3049,14 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             for path in bundle:
                 if path and Path(path).exists() and Path(path).name not in seen_names:
                     z.write(path, arcname=Path(path).name); seen_names.add(Path(path).name)
+        # Preserve a descriptive package filename as an optional convenience copy,
+        # while the canonical production contract is always package.zip.
+        try:
+            shutil.copy2(package, named_package)
+        except Exception as package_alias_exc:
+            audit_event(project_id, "optional_named_package_alias_failed", {"error": str(package_alias_exc)[:500]})
         for kind, pth, mt in [
-            ("video", captioned, "video/mp4"), ("audio", audio_master, "audio/mpeg"), ("article", article, "text/markdown"), ("social_campaign", social, "application/json"), ("social_campaign_markdown", social_markdown, "text/markdown"),
+            ("video", captioned, "video/mp4"), ("audio_master", audio_master, "audio/mpeg"), ("audio", audio_master, "audio/mpeg"), ("article", article, "text/markdown"), ("social_campaign", social, "application/json"), ("social_campaign_markdown", social_markdown, "text/markdown"),
             ("script", script, "text/markdown"), ("captions", captions, "application/x-subrip"),
             ("sources", sources, "application/json"), ("manifest", manifest, "application/json"), ("production_manifest", production_manifest, "application/json"), ("rights_manifest", rights_manifest, "application/json"), ("feature_execution", outdir / "feature_execution.json", "application/json"), ("thumbnail", thumb, "image/jpeg"), ("package", package, "application/zip")
         ]:
@@ -3064,6 +3071,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             (captioned, "video/mp4"),
             (package, "application/zip"),
             (thumb, "image/jpeg"),
+            (audio_master, "audio/mpeg"),
             (captions, "application/x-subrip"),
             (sources, "application/json"),
             (manifest, "application/json"),
