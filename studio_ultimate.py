@@ -102,6 +102,10 @@ WORKER_GUARD = threading.Lock()
 STOP = threading.Event()
 SMOKE = os.getenv("AI_INFINITY_STUDIO_SMOKE", "").strip().lower() in {"1", "true", "yes"}
 FAST_MODE = os.getenv("AI_INFINITY_FAST_MODE", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+def _external_providers_disabled() -> bool:
+    return os.getenv("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS", "0").strip().lower() in {"1", "true", "yes", "on"}
+
 PROCESS_REGISTRY: Dict[str, subprocess.Popen] = {}
 MEDIA_DEBUG_ERRORS: Dict[str, str] = {}
 MEDIA_LAST_SUCCESS: Dict[str, Dict[str, Any]] = {}
@@ -190,6 +194,8 @@ _SAFE_OPENER = build_opener(_NoRedirectHandler())
 
 
 def _safe_open_get(url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 20, max_redirects: int = 3):
+    if _external_providers_disabled():
+        raise RuntimeError("external providers are disabled by runtime policy")
     current = str(url).strip()
     hdrs = {"User-Agent": f"AI-Infinity/{VERSION}", **(headers or {})}
     for _ in range(max(0, int(max_redirects)) + 1):
@@ -214,6 +220,8 @@ def _safe_open_get(url: str, headers: Optional[Dict[str, str]] = None, timeout: 
 
 
 def _safe_open_post(url: str, data: bytes, headers: Optional[Dict[str, str]] = None, timeout: int = 60):
+    if _external_providers_disabled():
+        raise RuntimeError("external providers are disabled by runtime policy")
     if not url_host_safe(url):
         raise ValueError("remote destination must be HTTPS and resolve to a public host")
     req = URLRequest(url, data=data, headers={"User-Agent": f"AI-Infinity/{VERSION}", **(headers or {})}, method="POST")
@@ -1240,6 +1248,9 @@ def _commons_media(query: str, outdir: Path, limit: int = 6) -> List[Dict[str, A
         return []
 
 def _hf_video(prompt: str, outdir: Path, index: int, duration: float) -> Optional[Dict[str, Any]]:
+    if _external_providers_disabled():
+        MEDIA_DEBUG_ERRORS["huggingface-video"]="external_providers_disabled"
+        return None
     token=os.getenv("HF_TOKEN","").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN","").strip()
     if not token:
         return None
@@ -1266,6 +1277,9 @@ def _hf_video(prompt: str, outdir: Path, index: int, duration: float) -> Optiona
         return None
 
 def _hf_image(prompt: str, outdir: Path, index: int) -> Optional[Dict[str, Any]]:
+    if _external_providers_disabled():
+        MEDIA_DEBUG_ERRORS["huggingface-image"]="external_providers_disabled"
+        return None
     token=os.getenv("HF_TOKEN","").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN","").strip()
     if not token:
         MEDIA_DEBUG_ERRORS["huggingface-image"]="token_not_configured"
@@ -1357,12 +1371,14 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     query=str(scene.get("visual_query") or scene.get("heading") or "documentary scene")
     ai_prompt=str(scene.get("image_prompt") or f"Premium cinematic documentary visual about {query}; realistic, useful, editorial, no text, no logos, professional photography")
     MEDIA_DEBUG_ERRORS.clear()
-    if prefer_motion:
+    if os.getenv("AI_INFINITY_FORCE_PRIMARY_VISUAL_FAILURE","0").strip().lower() in {"1","true","yes","on"}:
+        MEDIA_DEBUG_ERRORS["primary-visual-provider"]="forced_failure"
+    if prefer_motion and os.getenv("AI_INFINITY_FORCE_PRIMARY_VISUAL_FAILURE","0").strip().lower() not in {"1","true","yes","on"}:
         motion=_hf_video(ai_prompt,outdir,index,duration)
         if motion:
             return motion
 
-    ai=_hf_image(ai_prompt,outdir,index)
+    ai=None if os.getenv("AI_INFINITY_FORCE_PRIMARY_VISUAL_FAILURE","0").strip().lower() in {"1","true","yes","on"} else _hf_image(ai_prompt,outdir,index)
     if ai:
         return ai
 
@@ -1515,6 +1531,8 @@ def tts(text: str, outdir: Path, index: int, voice: str, language: str = "Englis
     configured_edge_timeout = float(os.getenv("AI_INFINITY_EDGE_TTS_TIMEOUT", "15"))
     edge_timeout = min(configured_edge_timeout, 5.0) if FAST_MODE else min(configured_edge_timeout, 15.0)
     try:
+        if _external_providers_disabled():
+            raise RuntimeError("external providers are disabled by runtime policy")
         import asyncio
         import edge_tts
 
