@@ -96,7 +96,7 @@ def _objective_media_qc(path: Path) -> Dict[str, Any]:
     try:
         cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "info", "-i", str(path),
-            "-vf", "blackdetect=d=0.8:pix_th=0.98,freezedetect=n=-60dB:d=1.5",
+            "-vf", "blackdetect=d=0.8:pix_th=0.08,freezedetect=n=-60dB:d=1.5",
             "-an", "-f", "null", "-",
         ]
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
