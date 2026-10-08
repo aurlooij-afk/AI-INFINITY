@@ -88,8 +88,24 @@ def t1(s,b):
     files={n:dl(s,b,pid,n) for n in reqd}; m=probe(files["final.mp4"]); dur=float((m.get("format")or{}).get("duration")or 0); assert 59<=dur<=61,m
     assert any(x.get("codec_type")=="video" for x in m.get("streams",[])); assert any(x.get("codec_type")=="audio" for x in m.get("streams",[]))
     src=jart(s,b,pid,"sources.json"); assert int(src.get("source_count") or len(src.get("sources")or[]))>0,src
-    with zipfile.ZipFile(files["package.zip"]) as z: assert {"final.mp4","thumbnail.jpg","audio_master.mp3","captions.srt","article.md"}<=set(z.namelist())
-    return {"test":1,"project_id":pid,"duration":dur}
+    truth=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/truth")
+    assert truth.get("verified") is True and truth.get("state")=="VERIFIED", truth
+    production=jart(s,b,pid,"production_manifest.json")
+    assert production.get("project_id")==pid and production.get("truthful") is True
+    manifest_artifacts=production.get("artifacts") or []
+    assert manifest_artifacts, production
+    artifact_hashes={str(x.get("name")):str(x.get("sha256")) for x in manifest_artifacts}
+    assert artifact_hashes.get("final.mp4") == sha(files["final.mp4"]), artifact_hashes
+    rights=jart(s,b,pid,"rights_manifest.json")
+    assert rights.get("project_id")==pid and rights.get("truthful") is True
+    assert rights.get("assets") is not None
+    provenance=jart(s,b,pid,"provenance.json")
+    assert provenance.get("sources") is not None
+    with zipfile.ZipFile(files["package.zip"]) as z:
+        package_names=set(z.namelist())
+        required_package={"final.mp4","thumbnail.jpg","audio_master.mp3","captions.srt","article.md","production_manifest.json","rights_manifest.json","provenance.json","seo.json","social_campaign.json"}
+        assert required_package<=package_names,(required_package-package_names,sorted(package_names))
+    return {"test":1,"project_id":pid,"duration":dur,"truth_verified":True,"manifest_hash_verified":True}
 def t2(s,b):
     pid=create(s,b,"Create a professional 60-second AI Infinity launch video in Pashto, 9:16 vertical, cinematic, with natural voiceover, captions and music.",duration=60,format="short",aspect_ratio="9:16",language="Pashto"); waitp(s,b,pid)
     sc=dl(s,b,pid,"script.md").read_text(encoding="utf-8"); cp=dl(s,b,pid,"captions.srt").read_text(encoding="utf-8")
