@@ -583,6 +583,32 @@ def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
     clean_topic = re.sub(r"\s+", " ", str(topic or "")).strip()[:500]
     if not clean_topic:
         return {"topic": "", "sources": [], "source_count": 0, "providers": {}, "degraded": True, "status": "DEGRADED", "truthful": True}
+    if _external_providers_disabled():
+        disabled = {
+            name: {
+                "status": "disabled_by_policy",
+                "count": 0,
+                "reason": "external providers disabled by runtime policy",
+                "truthful": True,
+            }
+            for name in (
+                "Wikipedia", "DuckDuckGo", "Google News RSS", "GDELT", "Wikidata",
+                "OpenAlex", "Crossref", "Europe PMC", "arXiv", "Internet Archive",
+                "Tavily", "Brave Search API", "Exa",
+            )
+        }
+        return {
+            "topic": clean_topic,
+            "sources": [],
+            "source_count": 0,
+            "provider_count": 0,
+            "providers": disabled,
+            "degraded": True,
+            "status": "DEGRADED",
+            "retrieved_at": utc_iso(),
+            "degraded_reason": "External research access is disabled by runtime policy.",
+            "truthful": True,
+        }
     per = max(1, min(int(limit or 10), 10))
     sources: List[Dict[str, Any]] = []
     providers: Dict[str, Dict[str, Any]] = {}
@@ -2378,8 +2404,62 @@ def _job_active(project_id: str) -> bool:
     return bool(p and p.get("status") not in {"cancelled", "failed", "completed", "completed_with_qc_warnings"})
 
 
+def _runtime_state_for_status(status: Any) -> str:
+    """
+    Canonical public runtime state. Project rows store legacy worker status;
+    this mapping is the only place that translates them to the documented
+    creator-runtime state contract.
+    """
+    value = str(status or "").strip().lower()
+    if value in {"queued", "waiting"}:
+        return "WAITING"
+    if value in {"running", "producing"}:
+        return "RUNNING"
+    if value in {"completed"}:
+        return "COMPLETED"
+    if value in {"completed_with_qc_warnings"}:
+        return "DEGRADED"
+    if value in {"cancelled", "failed"}:
+        return "FAILED"
+    if value in {"requires_connection", "config_required"}:
+        return "REQUIRES_CONNECTION"
+    if value in {"requires_compute", "compute_required"}:
+        return "REQUIRES_COMPUTE"
+    if value in {"license_limited"}:
+        return "LICENSE_LIMITED"
+    if value in {"rate_limited"}:
+        return "RATE_LIMITED"
+    if value in {"degraded"}:
+        return "DEGRADED"
+    if value in {"blocked"}:
+        return "BLOCKED"
+    return "READY"
+
+
+_STAGE_EVENTS = {
+    "research": "RESEARCH_STARTED",
+    "creative_direction": "DIRECTION_COMPLETED",
+    "production_ready": "STORYBOARD_COMPLETED",
+    "visuals_and_voice": "ASSET_STARTED",
+    "visuals_and_voice_resume": "ASSET_COMPLETED",
+    "assembly": "EDIT_STARTED",
+    "captioning_and_mastering": "CAPTIONS_COMPLETED",
+    "variants_and_package": "PACKAGE_STARTED",
+    "quality_control": "QC_STARTED",
+    "complete": "PACKAGE_COMPLETED",
+}
+
+
 def _stage(project_id: str, name: str, progress: float, **extra: Any) -> None:
-    _update_project(project_id, stage=name, progress=round(max(0.0, min(100.0, float(progress))), 2), **extra)
+    bounded = round(max(0.0, min(100.0, float(progress))), 2)
+    _update_project(project_id, stage=name, progress=bounded, **extra)
+    event_name = _STAGE_EVENTS.get(str(name))
+    if event_name:
+        audit_event(project_id, event_name, {
+            "stage": str(name),
+            "progress": bounded,
+            "truthful": True,
+        })
 
 
 def _session_key() -> bytes:
@@ -3218,7 +3298,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
 
         _stage(project_id, "quality_control", 93)
         result = {
-            "status": "completed" if qc.get("passed") else "completed_with_qc_warnings", "project_id": project_id,
+            "status": "completed", "state": "COMPLETED", "project_id": project_id,
             "title": plan.get("title") or topic, "ai_provider": ai_provider, "voice_provider": voice_provider,
             "format": req.get("format", "long"), "content_type": req.get("content_type", "video"),
             "features": [x for x in (req.get("features") or []) if x in _feature_ids(project["user_id"])],
@@ -3254,10 +3334,36 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             },
             "self_upgrade": _record_learning(project["user_id"], req, qc=qc), "truthful": True,
         }
+        if not qc.get("passed"):
+            failed_checks = [k for k, ok in (qc.get("checks") or {}).items() if not bool(ok)]
+            failure_message = "Professional QC failed; delivery remains blocked. Failed checks: " + ", ".join(failed_checks[:24])
+            result["status"] = "failed"
+            result["state"] = "FAILED"
+            result["error"] = failure_message
+            result["failed_checks"] = failed_checks
+            audit_event(project_id, "QC_FAILED", {
+                "failed_checks": failed_checks[:50],
+                "truthful": True,
+            })
+            _update_project(
+                project_id,
+                status="failed",
+                error=failure_message[:1200],
+                result_json=jdump(result),
+                progress=94,
+                stage="quality_control",
+            )
+            with PROCESS_LOCK:
+                PROCESS_REGISTRY.pop(project_id, None)
+            ACTIVE_PROJECT.project_id = None
+            return
+
         _stage(project_id, "complete", 100)
+        result["status"] = "completed"
+        result["state"] = "COMPLETED"
         checkpoint(project_id, "completed", {"result_digest": digest(result), "completed_at": utc_iso()})
-        audit_event(project_id, "completed", {"status": result["status"], "qc_passed": bool(qc.get("passed"))})
-        _update_project(project_id, status=result["status"], result_json=jdump(result), blueprint_json=jdump({"plan": plan, "research": research}), progress=100, stage="complete")
+        audit_event(project_id, "completed", {"status": result["status"], "qc_passed": True, "state": "COMPLETED"})
+        _update_project(project_id, status="completed", result_json=jdump(result), blueprint_json=jdump({"plan": plan, "research": research}), progress=100, stage="complete")
         with PROCESS_LOCK:
             PROCESS_REGISTRY.pop(project_id, None)
         ACTIVE_PROJECT.project_id = None
@@ -4643,9 +4749,17 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
 
     @app.get("/infinity/studio/health")
     def studio_health() -> Dict[str, Any]:
+        external_enabled = not _external_providers_disabled()
+        media_core = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
+        voice_core = bool((shutil.which("espeak-ng") or shutil.which("espeak")) and media_core)
+        durability = {}
+        try:
+            durability = __import__("ai_infinity.persistence_truth", fromlist=["project_state_durability"]).project_state_durability(DATA_DIR)
+        except Exception:
+            durability = {"persistent": False, "reason": "durability_probe_failed", "truthful": True}
         return {
-            "status": "healthy", "version": VERSION, "build": BUILD,
-            "research": True, "internet_sources": True, "creative_engine": True,
+            "status": "healthy" if media_core and voice_core else "degraded", "version": VERSION, "build": BUILD,
+            "research": external_enabled, "internet_sources": external_enabled, "creative_engine": True,
             "ai_image_generation": bool(os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()),
             "ai_image_generation_provider_available": bool(os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()),
             "ai_video_generation": bool(
@@ -4660,12 +4774,20 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
                 or os.getenv("OPENAI_API_KEY", "").strip()
                 or os.getenv("RUNWAYML_API_SECRET", "").strip()
             ),
-            "real_motion_video": True, "motion_design_fallback": True,
-            "voice": True, "music": True, "captions": True,
-            "long_form": True, "short_form": True, "thumbnail": True,
-            "creator_package": True, "persistent_jobs": not str(DATA_DIR).startswith("/tmp/"), "adaptive_learning": True,
+            "real_motion_video": bool(
+                os.getenv("AI_INFINITY_AI_VIDEO", "1").strip().lower() in {"1","true","yes","auto"}
+                and bool(os.getenv("HF_TOKEN","").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN","").strip()
+                         or os.getenv("OPENAI_API_KEY","").strip() or os.getenv("RUNWAYML_API_SECRET","").strip())
+            ),
+            "motion_design_fallback": bool(Image is not None and media_core),
+            "voice": voice_core, "music": media_core, "captions": media_core,
+            "long_form": media_core and voice_core, "short_form": media_core and voice_core,
+            "thumbnail": bool(Image is not None and media_core), "creator_package": media_core and voice_core,
+            "persistent_jobs": bool(durability.get("persistent")),
+            "adaptive_learning": True,
+            "persistence": durability,
             "download_without_publishing": True, "youtube_publishing": True, "webhook_publishing": True,
-            "persistent_projects": not str(DATA_DIR).startswith("/tmp/"), "queued_workers": True, "progress_tracking": True, "cancel_retry": True, "resumable_scene_checkpoints": True, "cancellable_ffmpeg": True, "artifact_sha256": True, "audit_trail": True, "signed_share_links": True,
+            "persistent_projects": bool(durability.get("persistent")), "queued_workers": True, "progress_tracking": True, "cancel_retry": True, "resumable_scene_checkpoints": True, "cancellable_ffmpeg": True, "artifact_sha256": True, "audit_trail": True, "signed_share_links": True,
             "truthful": True,
             "one_command_creation": True, "optional_publishing": True, "download_first": True, "one_time_connections": True,
             "universal_creator_workspace": True, "creator_profile": True, "multi_platform_workflows": True, "platform_deliverable_packages": True, "seo_package": True, "accessibility_package": True, "provenance_package": True, "podcast_rss": True,
@@ -5742,7 +5864,15 @@ def _project_list(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
 
 
 def _project_public(p: Dict[str, Any]) -> Dict[str, Any]:
-    out = {"project_id": p["project_id"], "title": p.get("title"), "status": p.get("status"), "stage": p.get("stage") or p.get("status"), "progress": float(p.get("progress") or 0), "current_scene": int(p.get("current_scene") or 0), "total_scenes": int(p.get("total_scenes") or 0), "attempt": int(p.get("attempt") or 0), "error": p.get("error"), "created_at": p.get("created_at"), "updated_at": p.get("updated_at"), "truthful": True}
+    runtime_state = _runtime_state_for_status(p.get("status"))
+    out = {"project_id": p["project_id"], "title": p.get("title"), "status": p.get("status"),
+           "state": runtime_state, "runtime_state": runtime_state,
+           "stage": p.get("stage") or p.get("status"),
+           "progress": float(p.get("progress") or 0),
+           "current_scene": int(p.get("current_scene") or 0),
+           "total_scenes": int(p.get("total_scenes") or 0),
+           "attempt": int(p.get("attempt") or 0), "error": p.get("error"),
+           "created_at": p.get("created_at"), "updated_at": p.get("updated_at"), "truthful": True}
     r = p.get("result_json")
     if isinstance(r, str):
         try: r = json.loads(r)
