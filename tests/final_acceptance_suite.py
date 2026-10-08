@@ -177,9 +177,9 @@ def t10(s,b,d):
     pid=create(s,b,"Create a 20-second English cinematic recovery test video.",duration=20,format="short",idempotency_key="final-acceptance-corruption");waitp(s,b,pid);scene=d/"creator_studio"/pid/"scene_01.mp4";assert scene.is_file() and scene.stat().st_size>10000
     original=sha(scene);scene.write_bytes(b"CORRUPTED-INTERMEDIATE");corrupted=sha(scene);assert corrupted!=original
     with sqlite3.connect(d/"ai_infinity.db") as c:c.execute("UPDATE studio_projects_3610 SET status='failed',stage='failed',error='acceptance fault injection' WHERE project_id=?",(pid,));c.commit()
-    assert req(s,b,f"/infinity/studio/project/{quote(pid,safe='')} /retry","POST").get("status")=="queued";waitp(s,b,pid);recovered=sha(scene);assert recovered!=corrupted and scene.stat().st_size>10000
-    ev=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')} /audit");assert "scene_completed" in [str(x.get("event")or"") for x in ev.get("audit",[])],ev
-    tr=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')} /truth");assert tr.get("verified") is True,tr
+    assert req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/retry","POST").get("status")=="queued";waitp(s,b,pid);recovered=sha(scene);assert recovered!=corrupted and scene.stat().st_size>10000
+    ev=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/audit");assert "scene_completed" in [str(x.get("event")or"") for x in ev.get("audit",[])],ev
+    tr=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/truth");assert tr.get("verified") is True,tr
     return {"test":10,"project_id":pid,"recovered":True}
 def main():
     d=TMP/"base";shutil.rmtree(d,ignore_errors=True);p,b,l=start(d,18080);s=requests.Session();out=[]
