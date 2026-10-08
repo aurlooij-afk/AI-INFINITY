@@ -1,0 +1,45 @@
+name: AI Infinity — Final Complete Acceptance Suite
+
+on:
+  push:
+    branches:
+      - main
+      - ai-infinity-canonical-divine
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  final-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build authoritative Docker runtime
+        run: docker build --pull -t ai-infinity-final-acceptance .
+
+      - name: Run ten-scenario real acceptance suite
+        env:
+          CI: "true"
+          AI_INFINITY_SMOKE_ALLOW_UNVERIFIED_DELIVERY: "1"
+        run: |
+          set -o pipefail
+          docker run --rm --network host             -e CI             -e AI_INFINITY_SMOKE_ALLOW_UNVERIFIED_DELIVERY             -v "${GITHUB_WORKSPACE}:/workspace:ro"             -w /workspace             --entrypoint python             ai-infinity-final-acceptance             tests/final_acceptance_suite.py | tee final-acceptance-result.json
+
+      - name: Upload acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-infinity-final-acceptance-evidence
+          path: |
+            final-acceptance-result.json
+          if-no-files-found: warn
+
+      - name: Dump Docker/runtime evidence on failure
+        if: failure()
+        run: |
+          echo "Repository SHA: ${GITHUB_SHA}"
+          echo "Acceptance suite failed. The authoritative Docker runtime output above is the source of truth."
