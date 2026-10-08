@@ -35,8 +35,10 @@ jobs:
           base=os.environ["BASE_URL"].rstrip("/")
           expected=os.environ["EXPECTED_REVISION"]
           deadline=time.time()+600
+          # Prove exact revision stability without depending on an instance_id
+          # field that the live health endpoint does not guarantee.
           stable=0
-          stable_instance=""
+          stable_revision=""
           while time.time()<deadline:
               try:
                   with urllib.request.urlopen(base+"/infinity/canonical/health",timeout=20) as r:
@@ -48,22 +50,21 @@ jobs:
                           except Exception:
                               data={}
                           revision=str(data.get("deployment_revision") or data.get("revision") or data.get("git_sha") or data.get("commit") or "")
-                          instance=str(data.get("instance_id") or "")
-                          if revision == expected and instance:
-                              stable = stable + 1 if instance == stable_instance else 1
-                              stable_instance = instance
-                              print("live revision candidate: expected=%s instance=%s consecutive=%s" % (expected, instance, stable),flush=True)
+                          if revision == expected:
+                              stable = stable + 1 if revision == stable_revision else 1
+                              stable_revision = revision
+                              print("live revision candidate: expected=%s revision=%s consecutive=%s" % (expected, revision, stable),flush=True)
                               if stable >= 6:
                                   raise SystemExit(0)
                           else:
                               stable=0
-                              stable_instance=""
-                              print("healthy deployment is not current/stable: expected=%s actual=%s instance=%s" % (expected, revision or "unknown", instance or "unknown"),flush=True)
+                              stable_revision=""
+                              print("healthy deployment is not current/stable: expected=%s actual=%s" % (expected, revision or "unknown"),flush=True)
               except SystemExit:
                   raise
               except Exception as e:
                   stable=0
-                  stable_instance=""
+                  stable_revision=""
                   print("waiting:",e,flush=True)
               time.sleep(5)
           raise SystemExit("canonical Render deployment did not become live and stable at the configured Render URL")
