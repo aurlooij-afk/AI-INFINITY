@@ -2,7 +2,7 @@ name: AI Infinity — Live Production Smoke
 
 on:
   push:
-    branches: [main, ai-infinity-canonical-divine]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
