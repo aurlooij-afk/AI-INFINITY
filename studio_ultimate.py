@@ -2931,7 +2931,15 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             except Exception as podcast_exc:
                 audit_event(project_id, "optional_podcast_package_failed", {"error": str(podcast_exc)[:800]})
         sources = outdir / "sources.json"
-        sources.write_text(jdump({"research": research, "visual_assets": assets_meta}), encoding="utf-8")
+        sources.write_text(jdump({
+            "source_count": int(research.get("source_count") or len(research.get("sources") or [])),
+            "status": research.get("status"),
+            "providers": research.get("providers") or {},
+            "sources": research.get("sources") or [],
+            "research": research,
+            "visual_assets": assets_meta,
+            "truthful": True,
+        }), encoding="utf-8")
         try:
             thumb = make_thumbnail(captioned, str(plan.get("title") or topic), outdir)
         except Exception as thumb_exc:
