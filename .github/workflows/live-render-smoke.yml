@@ -13,7 +13,7 @@ jobs:
   live-render-smoke:
     if: github.ref_name == 'main'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Wait for Render deployment and verify live creator surface
         env:
@@ -58,39 +58,98 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import json, os, time, urllib.request, urllib.error
+          import json, os, time, urllib.request, urllib.error, http.cookiejar, io, zipfile, hashlib, subprocess
           base=os.environ["BASE_URL"].rstrip("/")
           cmd="Create a 20-second English cinematic video using only local/free execution, with voiceover, captions, thumbnail and a real final package."
+          jar=http.cookiejar.CookieJar()
+          opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
           req=urllib.request.Request(
               base+"/infinity/canonical/create",
               data=json.dumps({"command":cmd,"duration":20,"format":"short","aspect_ratio":"9:16"}).encode(),
               headers={"Content-Type":"application/json"},
               method="POST",
           )
-          with urllib.request.urlopen(req,timeout=60) as r:
+          with opener.open(req,timeout=60) as r:
               payload=json.loads(r.read().decode("utf-8"))
+              if r.status != 200:
+                  raise SystemExit(f"create failed: HTTP {r.status}: {payload}")
+
           pid=str(payload.get("project_id") or "")
           if not pid:
               raise SystemExit(f"deployed creator did not return project_id: {payload}")
           print("LIVE_PROJECT",pid)
+
           deadline=time.time()+600
           while time.time()<deadline:
-              with urllib.request.urlopen(base+"/infinity/studio/project/"+pid,timeout=60) as r:
+              with opener.open(base+"/infinity/studio/project/"+urllib.parse.quote(pid,safe=""),timeout=60) as r:
                   state=json.loads(r.read().decode("utf-8"))
               status=str(state.get("status") or "").lower()
               print("LIVE_STATE",json.dumps({k:state.get(k) for k in ("project_id","status","state","runtime_state","stage","progress","error")},ensure_ascii=False))
               if status in {"completed","failed","cancelled","completed_with_qc_warnings"}:
                   if status != "completed" or str(state.get("state") or "").upper()!="COMPLETED":
                       raise SystemExit("deployed real production did not reach verified COMPLETED state")
-                  with urllib.request.urlopen(base+"/infinity/studio/project/"+pid+"/artifacts",timeout=60) as r:
+
+                  pid_q=urllib.parse.quote(pid,safe="")
+                  with opener.open(base+"/infinity/studio/project/"+pid_q+"/artifacts",timeout=60) as r:
                       artifacts=json.loads(r.read().decode("utf-8"))
-                  names={str(a.get("asset_name") or a.get("name")) for a in artifacts.get("artifacts",[])}
-                  required={"final.mp4","thumbnail.jpg","captions.srt","audio_master.mp3","package.zip"}
-                  missing=sorted(required-names)
+
+                  names={}
+                  for a in artifacts.get("artifacts",[]):
+                      n=str(a.get("asset_name") or a.get("name") or "")
+                      if n:
+                          names[n]=a
+
+                  required=[
+                      "final.mp4","thumbnail.jpg","audio_master.mp3","captions.srt",
+                      "article.md","seo.json","social_campaign.json",
+                      "production_manifest.json","rights_manifest.json","package.zip"
+                  ]
+                  missing=sorted(set(required)-set(names))
                   if missing:
                       raise SystemExit(f"deployed production missing artifacts: {missing}")
-                  print("LIVE_ARTIFACTS",json.dumps(sorted(required)))
+
+                  work={}
+                  for name in required:
+                      with opener.open(
+                          base+"/infinity/studio/project/"+pid_q+"/asset/"+urllib.parse.quote(name,safe=""),
+                          timeout=120
+                      ) as r:
+                          data=r.read()
+                      if not data:
+                          raise SystemExit(f"deployed production returned zero bytes for {name}")
+                      work[name]=data
+                      print("LIVE_ARTIFACT",name,len(data))
+
+                  video_path="/tmp/ai-infinity-live-final.mp4"
+                  with open(video_path,"wb") as f:
+                      f.write(work["final.mp4"])
+                  probe=subprocess.run(
+                      ["ffprobe","-v","error","-show_format","-show_streams","-of","json",video_path],
+                      capture_output=True,text=True,timeout=120
+                  )
+                  if probe.returncode != 0:
+                      raise SystemExit(f"ffprobe failed: {probe.stderr}")
+                  media=json.loads(probe.stdout)
+                  streams=media.get("streams",[])
+                  if not any(s.get("codec_type")=="video" for s in streams):
+                      raise SystemExit("final.mp4 has no video stream")
+                  if not any(s.get("codec_type")=="audio" for s in streams):
+                      raise SystemExit("final.mp4 has no audio stream")
+
+                  with zipfile.ZipFile(io.BytesIO(work["package.zip"])) as z:
+                      packaged=set(z.namelist())
+                  package_required=set(required[:-1]) | {"provenance.json"}
+                  missing_package=sorted(package_required-packaged)
+                  if missing_package:
+                      raise SystemExit(f"package.zip missing entries: {missing_package}")
+
+                  print("LIVE_ARTIFACT_SET",json.dumps(required))
+                  print("LIVE_FFPROBE_OK",json.dumps({"streams":len(streams),"duration":media.get("format",{}).get("duration")}))
+                  print("LIVE_PACKAGE_OK",json.dumps(sorted(package_required)))
                   sys.exit(0)
+
               time.sleep(4)
+
           raise SystemExit("deployed real production timed out")
           PY
