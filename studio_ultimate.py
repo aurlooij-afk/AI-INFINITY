@@ -3588,8 +3588,9 @@ def scheduled_publish_loop() -> None:
                 p=_get_project(pid)
                 if not p or p.get("user_id") != uid_:
                     raise RuntimeError("scheduled project is unavailable")
-                if p.get("status") not in {"completed","completed_with_qc_warnings"}:
-                    # Keep the schedule alive until the production is finished.
+                if p.get("status") != "completed":
+                    # Only independently verified completed productions may be published.
+                    # QC-warning legacy rows remain non-deliverable until reprocessed.
                     with DB_LOCK, _connect() as c:
                         c.execute("UPDATE studio_calendar_3618 SET status='planned',updated_at=? WHERE schedule_id=?",(now(),sid))
                     continue
@@ -5176,7 +5177,7 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         user_id=_get_user_id(request); _set_session(response,request,user_id)
         p=_get_project(project_id)
         if not p or p.get("user_id")!=user_id: raise HTTPException(404,"project not found")
-        if p.get("status") not in {"completed","completed_with_qc_warnings"}: raise HTTPException(409,"project master is not ready")
+        if p.get("status") != "completed": raise HTTPException(409,"project master is not ready; professional verification must pass")
         payload=await request.json()
         master=_project_dir(project_id)/"final.mp4"
         if not master.exists(): raise HTTPException(404,"final master not found")
@@ -5871,8 +5872,8 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         p = _get_project(req.project_id)
         if not p or p.get("user_id") != user_id:
             raise HTTPException(404, "project not found")
-        if p.get("status") not in {"completed", "completed_with_qc_warnings"}:
-            raise HTTPException(409, "project is not finished")
+        if p.get("status") != "completed":
+            raise HTTPException(409, "project is not finished; professional verification must pass")
         asset_name = "final.mp4" if req.asset == "final" else safe_name(req.asset)
         if not asset_name.endswith(".mp4"): asset_name += ".mp4"
         final = _project_dir(req.project_id) / Path(asset_name).name
