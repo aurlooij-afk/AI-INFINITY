@@ -66,3 +66,7 @@ def test_black_frame_qc_threshold_is_not_near_white():
     import inspect
     source=inspect.getsource(_objective_media_qc)
     assert "pix_th=0.08" in source
+
+
+def test_runtime_state_default_is_ready():
+    assert studio._runtime_state_for_status("new-unknown-status") == "READY"
