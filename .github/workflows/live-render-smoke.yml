@@ -31,12 +31,15 @@ jobs:
           base=os.environ["BASE_URL"].rstrip("/")
           paths=["/health","/infinity/divine/health","/infinity/pro2/health","/infinity/pro2"]
           last={}
+          # The live contract is anchored by the exact Render deployment revision.
+          # /health does not guarantee an instance_id field, so stability is proven
+          # by repeated exact-revision observations instead of an unsupported field.
           stable=0
-          stable_instance=""
+          stable_revision=""
           for attempt in range(1, 61):
               ok=True
               last={}
-              observed_instance=""
+              observed_revision=""
               for path in paths:
                   try:
                       with urllib.request.urlopen(base+path, timeout=12) as r:
@@ -47,7 +50,7 @@ jobs:
                               data=json.loads(body.decode("utf-8"))
                               if not isinstance(data, dict) or str(data.get("status","")).lower() not in {"healthy","degraded"}:
                                   raise RuntimeError(f"{path}: invalid health payload {data}")
-                              observed_instance=str(data.get("instance_id") or "")
+                              observed_revision=str(data.get("deployment_revision") or data.get("revision") or data.get("git_sha") or data.get("commit") or "")
                           elif path.endswith("/pro2/health"):
                               data=json.loads(body.decode("utf-8"))
                               if not isinstance(data, dict) or "providers" not in data:
@@ -55,13 +58,13 @@ jobs:
                   except Exception as exc:
                       ok=False
                       last[path]=str(exc)
-              if ok and observed_instance:
-                  stable = stable + 1 if observed_instance == stable_instance else 1
-                  stable_instance = observed_instance
+              if ok and observed_revision:
+                  stable = stable + 1 if observed_revision == stable_revision else 1
+                  stable_revision = observed_revision
               else:
                   stable=0
-                  stable_instance=""
-              print(f"attempt={attempt} ok={ok} instance={observed_instance or 'unknown'} consecutive={stable} failures={last}")
+                  stable_revision=""
+              print(f"attempt={attempt} ok={ok} revision={observed_revision or 'unknown'} consecutive={stable} failures={last}")
               if ok and stable >= 6:
                   sys.exit(0)
               time.sleep(5)
