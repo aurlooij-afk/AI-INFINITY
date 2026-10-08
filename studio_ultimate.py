@@ -1627,6 +1627,9 @@ def _espeak_exact_voice(exe: str, language: str) -> Optional[str]:
     code = aliases.get(str(language or "").strip().lower(), re.sub(r"[^a-z-]", "", str(language or "").strip().lower()))
     if not code:
         return None
+    bundled = {x.strip() for x in os.getenv("AI_INFINITY_BUNDLED_ESPEAK_LANGUAGES", "").split(",") if x.strip()}
+    if code in bundled:
+        return code
     sample = {
         "en-us": "AI Infinity speech verification.",
         "ur": "یہ اردو آواز کی جانچ ہے۔",
