@@ -8,13 +8,13 @@ from pathlib import Path
 def test_backend_is_truthful_when_unconfigured(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("AI_INFINITY_PERSISTENCE_MODE", "durable")
     monkeypatch.setenv("AI_INFINITY_PROJECT_STATE_DURABLE", "true")
-    monkeypatch.setenv("AI_INFINITY_PROJECT_STATE_BACKEND", "cloudflare_r2")
+    monkeypatch.setenv("AI_INFINITY_PROJECT_STATE_BACKEND", "backblaze_b2")
     for key in (
-        "CLOUDFLARE_R2_ACCOUNT_ID",
-        "CLOUDFLARE_R2_ENDPOINT",
-        "CLOUDFLARE_R2_BUCKET",
-        "CLOUDFLARE_R2_ACCESS_KEY_ID",
-        "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
+        "B2_ENDPOINT",
+        "B2_BUCKET",
+        "B2_KEY_ID",
+        "B2_APPLICATION_KEY",
+        "B2_REGION",
     ):
         monkeypatch.delenv(key, raising=False)
 
