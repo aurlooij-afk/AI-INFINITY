@@ -4932,9 +4932,14 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
             except Exception: pass
             raise
         except Exception as exc:
-            try: target.unlink(missing_ok=True)
-            except Exception: pass
-            raise HTTPException(500,str(exc)[:300])
+            detail=f"{type(exc).__name__}: {str(exc)[:300]}"
+            print("SOURCE_UPLOAD_ERROR", detail, flush=True)
+            try:
+                if target is not None:
+                    target.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise HTTPException(500,detail)
         extracted=_extract_source_text(target)
         payload={"status":"uploaded","filename":name,"source_file_name":name,"size_bytes":total,"extension":ext,"project_id":project_id or None,"text_extracted":bool(extracted),"text_preview":extracted[:4000],"download_url":f"/infinity/studio/project/{project_id}/asset/{quote(name)}" if project_id else None,"truthful":True}
         if project_id:
