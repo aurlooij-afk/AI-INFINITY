@@ -55,6 +55,10 @@ jobs:
                               stable_revision = revision
                               print("live revision candidate: expected=%s revision=%s consecutive=%s" % (expected, revision, stable),flush=True)
                               if stable >= 6:
+                                  # Let the new Render instance finish rollout and old-instance
+                                  # shutdown before the live test creates persistent project state.
+                                  print("exact revision stable; waiting for rollout settlement",flush=True)
+                                  time.sleep(60)
                                   raise SystemExit(0)
                           else:
                               stable=0
