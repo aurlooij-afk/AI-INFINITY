@@ -3,7 +3,7 @@ import hashlib, json, os, subprocess, time, urllib.error, urllib.parse, urllib.r
 from http.cookiejar import CookieJar
 from pathlib import Path
 
-BASE=os.environ.get("BASE_URL","https://ai-infinity.blitz.cloud").rstrip("/")
+BASE=os.environ.get("BASE_URL","https://ai-infinity-ca5e.onrender.com").rstrip("/")
 JAR=CookieJar(); OPEN=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(JAR))
 
 def req(path,method="GET",payload=None,timeout=90):
