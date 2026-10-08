@@ -1627,23 +1627,29 @@ def _espeak_exact_voice(exe: str, language: str) -> Optional[str]:
     code = aliases.get(str(language or "").strip().lower(), re.sub(r"[^a-z-]", "", str(language or "").strip().lower()))
     if not code:
         return None
+    sample = {
+        "en-us": "AI Infinity speech verification.",
+        "ur": "یہ اردو آواز کی جانچ ہے۔",
+        "ps": "دا د پښتو غږ د ازموینې جمله ده.",
+        "ar": "هذا اختبار للتحقق من الصوت العربي.",
+    }.get(code, "AI Infinity speech verification.")
+    fd, probe_name = tempfile.mkstemp(prefix="ai-infinity-tts-probe-", suffix=".wav")
+    os.close(fd)
     try:
-        proc = subprocess.run([exe, "--voices=" + code], capture_output=True, text=True, timeout=20)
-        if proc.returncode != 0:
-            return None
-        rows = [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
-        # eSpeak's filtered --voices output reports voices suitable for the
-        # requested BCP-47 language. The returned voice name may be generic
-        # (for example "en") even when the requested variant is "en-us".
-        # Suitability is therefore established by a non-header voice row, then
-        # the original requested language code is passed to the synthesizer.
-        voice_rows = [x for x in rows if re.match(r"^\s*\d+\s+\S+", x)]
-        if voice_rows:
+        proc = subprocess.run(
+            [exe, "-v", code, "-s", "155", "-w", probe_name, sample],
+            capture_output=True, text=True, timeout=20,
+        )
+        if proc.returncode == 0 and Path(probe_name).is_file() and Path(probe_name).stat().st_size > 1000:
             return code
     except Exception:
         return None
+    finally:
+        try:
+            Path(probe_name).unlink(missing_ok=True)
+        except Exception:
+            pass
     return None
-
 
 def tts(text: str, outdir: Path, index: int, voice: str, language: str = "English") -> Tuple[Path, str, float]:
     out = outdir / f"narration_{index:02d}.mp3"
