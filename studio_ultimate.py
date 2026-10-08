@@ -1535,10 +1535,27 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             height=900 if FAST_MODE else 1080,
         )
         if fallback and Path(str(fallback.get("path") or "")).is_file():
+            fallback_failures = [
+                {"provider": key, "reason": str(value)[:500]}
+                for key, value in MEDIA_DEBUG_ERRORS.items()
+            ]
+            fallback_failures.extend(
+                {"provider": "public-visual-ladder", "reason": str(item)[:500]}
+                for item in source_failures[:20]
+            )
             fallback.update({
                 "quality_tier": "original_motion_design_fallback",
                 "fallback": True,
-                "fallback_reason": "No remote/public visual asset was reachable for this scene.",
+                "fallback_reason": "No primary AI/public visual asset was reachable for this scene.",
+                "fallback_record": {
+                    "failed_providers": [x["provider"] for x in fallback_failures],
+                    "failure_reasons": fallback_failures[:20],
+                    "fallback_method": "AI Infinity original motion-design generator",
+                    "quality_change": "primary AI/public visual source -> original motion-design fallback",
+                    "license_change": "provider/source-specific -> original generated asset",
+                    "execution_state": "DEGRADED",
+                    "truthful": True,
+                },
                 "rights_status": "original_asset",
             })
             _media_success("procedural-fallback", {
@@ -2978,8 +2995,15 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             except Exception as asset_exc:
                 audit_event(project_id, "visual_source_unavailable", {"scene": i, "error": str(asset_exc)[:500]})
                 raise RuntimeError(f"scene {i}: professional visual source unavailable: {str(asset_exc)[:1600]}") from asset_exc
-            assets_meta.append(redact({k: v for k, v in asset.items() if k != "path"}))
-            _save_asset(project_id, "visual", Path(asset["path"]), "video/mp4" if asset.get("kind") == "video" else "image/png", asset)
+            asset_record = {k: v for k, v in asset.items() if k != "path"}
+            try:
+                asset_record["asset_sha256"] = file_sha256(Path(str(asset.get("path") or "")))
+                asset_record["asset_size_bytes"] = Path(str(asset.get("path") or "")).stat().st_size
+            except Exception:
+                asset_record["asset_sha256"] = None
+                asset_record["asset_size_bytes"] = 0
+            assets_meta.append(redact(asset_record))
+            _save_asset(project_id, "visual", Path(asset["path"]), "video/mp4" if asset.get("kind") == "video" else "image/png", asset_record)
             try:
                 sfx = shared_sfx if FAST_MODE else make_sfx(outdir, ch["actual_duration"], i)
             except Exception as sfx_exc:
