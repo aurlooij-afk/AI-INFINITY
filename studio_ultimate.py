@@ -1574,52 +1574,99 @@ def _default_tts_voice(language: str) -> str:
     }.get(lang, "en-US-AriaNeural")
 
 
+def _edge_tts_voice_candidates(language: str, requested_voice: str = "") -> List[str]:
+    lang_key = re.sub(r"[^a-z]", "", str(language or "English").lower())
+    requested = str(requested_voice or "").strip()
+    exact = {
+        "english": ["en-US-AriaNeural", "en-US-JennyNeural"],
+        "urdu": ["ur-PK-AsadNeural", "ur-PK-UzmaNeural"],
+        "pashto": ["ps-AF-LatifaNeural", "ps-AF-GulNawazNeural"],
+        "arabic": ["ar-AE-FatimaNeural", "ar-SA-ZariyahNeural"],
+    }.get(lang_key, [])
+    candidates = []
+    if requested:
+        req_lang = requested.lower().split("-", 1)[0]
+        if lang_key == "english" or req_lang == lang_key:
+            candidates.append(requested)
+    candidates.extend(exact)
+    # Last-resort discovery is exact-locale constrained, never cross-language.
+    seen=set()
+    return [v for v in candidates if v and not (v in seen or seen.add(v))]
+
+
+def _valid_audio_file(path: Path) -> bool:
+    try:
+        if not path.exists() or not path.is_file() or path.stat().st_size < 1000:
+            return False
+        probe = ffprobe_json(path)
+        return any(str(s.get("codec_type") or "") == "audio" for s in probe.get("streams", [])) and probe_duration(path) > 0.25
+    except Exception:
+        return False
+
+
 def tts(text: str, outdir: Path, index: int, voice: str, language: str = "English") -> Tuple[Path, str, float]:
     out = outdir / f"narration_{index:02d}.mp3"
     plain = str(text or "").strip()
     if not plain:
         raise ValueError("empty narration")
     exe = shutil.which("espeak-ng") or shutil.which("espeak")
+    lang_key = re.sub(r"[^a-z]", "", str(language or "English").lower())
+    candidates = _edge_tts_voice_candidates(language, voice)
 
-    # Prefer a natural neural voice when the free public service is reachable.
-    # Fast mode enforces a hard upper bound even if an older environment variable
-    # contains a larger value; local speech remains the deterministic fallback.
     configured_edge_timeout = float(os.getenv("AI_INFINITY_EDGE_TTS_TIMEOUT", "15"))
-    edge_timeout = min(configured_edge_timeout, 5.0) if FAST_MODE else min(configured_edge_timeout, 15.0)
-    try:
-        if _external_providers_disabled():
-            raise RuntimeError("external providers are disabled by runtime policy")
-        import asyncio
-        import edge_tts
+    edge_timeout = min(configured_edge_timeout, 10.0) if FAST_MODE else min(configured_edge_timeout, 20.0)
+    edge_failures = []
 
-        async def run() -> None:
-            await asyncio.wait_for(
-                edge_tts.Communicate(plain, voice).save(str(out)),
-                timeout=edge_timeout
-            )
+    for candidate_voice in candidates:
+        try:
+            if _external_providers_disabled():
+                raise RuntimeError("external providers are disabled by runtime policy")
+            import asyncio
+            import edge_tts
 
-        asyncio.run(run())
-        if out.exists() and out.stat().st_size > 10000:
-            return out, "edge-tts-neural", probe_duration(out)
-    except Exception:
-        pass
+            async def run() -> None:
+                await asyncio.wait_for(
+                    edge_tts.Communicate(plain, candidate_voice).save(str(out)),
+                    timeout=max(1.0, edge_timeout),
+                )
+
+            asyncio.run(run())
+            if _valid_audio_file(out):
+                return out, f"edge-tts-neural:{candidate_voice}", probe_duration(out)
+            edge_failures.append(f"{candidate_voice}:invalid_audio")
+        except Exception as exc:
+            edge_failures.append(f"{candidate_voice}:{type(exc).__name__}:{str(exc)[:220]}")
+            out.unlink(missing_ok=True)
+
+    if edge_failures:
+        MEDIA_DEBUG_ERRORS["edge-tts"] = "; ".join(edge_failures[:8])
+        project_id = getattr(ACTIVE_PROJECT, "project_id", None)
+        if project_id:
+            try:
+                audit_event(project_id, "edge_tts_fallback", {
+                    "language": language,
+                    "voice_candidates": candidates,
+                    "failures": edge_failures[:8],
+                    "truthful": True,
+                })
+            except Exception:
+                pass
 
     if not exe:
         raise RuntimeError("narration engine unavailable")
 
     # Never silently synthesize a requested language with an unrelated local voice.
-    # eSpeak NG currently documents Arabic and Urdu plus Persian (not Dari) and does
-    # not list Pashto, so Pashto/Dari must use a genuinely matching remote voice.
-    lang_key = re.sub(r"[^a-z]", "", str(language or "English").lower())
     local_voice = {"english": "en", "urdu": "ur", "arabic": "ar"}.get(lang_key)
     if lang_key in {"pashto", "dari"}:
-        raise RuntimeError(f"{language} local voice is not available in the supported eSpeak fallback; requires a matching connected voice provider")
+        raise RuntimeError(f"{language} voice generation unavailable after exact-language neural attempts; connect a matching voice provider")
     if not local_voice:
         local_voice = "en"
 
     wav = outdir / f"narration_{index:02d}.wav"
     subprocess.run([exe, "-v", local_voice, "-s", "155", "-w", str(wav), plain], check=True, timeout=45)
     ffmpeg("-i", wav, "-codec:a", "libmp3lame", "-q:a", "2", out, timeout=180)
+    if not _valid_audio_file(out):
+        raise RuntimeError("local narration artifact is invalid")
     provider_name = {"en":"local-espeak","ur":"local-espeak-urdu","ar":"local-espeak-arabic"}.get(local_voice, f"local-espeak-{local_voice}")
     return out, provider_name + ("-fast-fallback" if FAST_MODE else ""), probe_duration(out)
 
