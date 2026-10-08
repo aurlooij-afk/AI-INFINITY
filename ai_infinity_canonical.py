@@ -250,6 +250,7 @@ def compile_intent(command,raw):
     }
 
 def capabilities(user_id):
+    from ai_infinity.persistence_truth import project_state_durability
     root=Path(os.getenv("AI_INFINITY_DATA_DIR","/tmp/ai-infinity")).resolve()
     ffmpeg=bool(shutil.which("ffmpeg"));ffprobe=bool(shutil.which("ffprobe"))
     tts=bool(shutil.which("espeak-ng") or shutil.which("espeak"))
@@ -266,7 +267,7 @@ def capabilities(user_id):
       "local":{"ffmpeg":ffmpeg,"ffprobe":ffprobe,"offline_tts":tts,"media_core":ffmpeg and ffprobe},
       "remote":{"configured":bool(remote),"health_verified":False},
       "providers":{"huggingface_configured":hf,"youtube_connected":youtube},
-      "storage":{"writable":writable,"persistent":not str(root).startswith("/tmp/"),"path":str(root)},
+      "storage":project_state_durability(root) | {"writable":writable},
       "execution_paths":["local"]+(["remote"] if remote else [])
     }
 
