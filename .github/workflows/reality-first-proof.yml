@@ -2,8 +2,8 @@ name: AI Infinity Reality-First Proof
 
 on:
   push:
-    branches: ["**"]
-  pull_request:
+    branches: [main, ai-infinity-canonical-divine]
+  workflow_dispatch:
 
 jobs:
   reality-proof:
