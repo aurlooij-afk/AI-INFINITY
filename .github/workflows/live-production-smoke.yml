@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Only one real live-production workload may exercise the free Render service at a time.
+  # These groups intentionally match across both live smoke workflows.
+  group: ai-infinity-live-production-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   live-smoke:
     if: github.ref == 'refs/heads/main'
@@ -29,6 +35,8 @@ jobs:
           base=os.environ["BASE_URL"].rstrip("/")
           expected=os.environ["EXPECTED_REVISION"]
           deadline=time.time()+600
+          stable=0
+          stable_instance=""
           while time.time()<deadline:
               try:
                   with urllib.request.urlopen(base+"/infinity/canonical/health",timeout=20) as r:
@@ -40,13 +48,25 @@ jobs:
                           except Exception:
                               data={}
                           revision=str(data.get("deployment_revision") or data.get("revision") or data.get("git_sha") or data.get("commit") or "")
-                          if revision == expected:
-                              raise SystemExit(0)
-                          print("healthy deployment is not current: expected=%s actual=%s" % (expected, revision or "unknown"),flush=True)
+                          instance=str(data.get("instance_id") or "")
+                          if revision == expected and instance:
+                              stable = stable + 1 if instance == stable_instance else 1
+                              stable_instance = instance
+                              print("live revision candidate: expected=%s instance=%s consecutive=%s" % (expected, instance, stable),flush=True)
+                              if stable >= 6:
+                                  raise SystemExit(0)
+                          else:
+                              stable=0
+                              stable_instance=""
+                              print("healthy deployment is not current/stable: expected=%s actual=%s instance=%s" % (expected, revision or "unknown", instance or "unknown"),flush=True)
+              except SystemExit:
+                  raise
               except Exception as e:
+                  stable=0
+                  stable_instance=""
                   print("waiting:",e,flush=True)
-              time.sleep(10)
-          raise SystemExit("canonical Render deployment did not become live at the configured Render URL")
+              time.sleep(5)
+          raise SystemExit("canonical Render deployment did not become live and stable at the configured Render URL")
           PY
       - name: Run real live creator E2E
         env:
