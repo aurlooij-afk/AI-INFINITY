@@ -5,7 +5,7 @@ from __future__ import annotations
 The Creator Studio uses SQLite for its rich transactional state model. On
 ephemeral hosts, the database file itself is not durable. This adapter keeps the
 SQLite transaction model local while checkpointing a consistent database
-snapshot to a real S3-compatible object store (Cloudflare R2 by default). On a
+snapshot to a real S3-compatible object store (Backblaze B2 by default). On a
 fresh instance it restores the last verified snapshot before schema creation.
 
 Fail-closed rules:
@@ -56,16 +56,12 @@ def _flag(name: str, default: str = "false") -> bool:
 
 
 def _cfg() -> Dict[str, str]:
-    account = os.getenv("CLOUDFLARE_R2_ACCOUNT_ID", "").strip()
-    endpoint = os.getenv("CLOUDFLARE_R2_ENDPOINT", "").strip()
-    if not endpoint and account:
-        endpoint = f"https://{account}.r2.cloudflarestorage.com"
     return {
-        "endpoint": endpoint,
-        "bucket": os.getenv("CLOUDFLARE_R2_BUCKET", "").strip(),
-        "access": os.getenv("CLOUDFLARE_R2_ACCESS_KEY_ID", "").strip(),
-        "secret": os.getenv("CLOUDFLARE_R2_SECRET_ACCESS_KEY", "").strip(),
-        "region": "auto",
+        "endpoint": os.getenv("B2_ENDPOINT", "").strip(),
+        "bucket": os.getenv("B2_BUCKET", "").strip(),
+        "access": os.getenv("B2_KEY_ID", "").strip(),
+        "secret": os.getenv("B2_APPLICATION_KEY", "").strip(),
+        "region": os.getenv("B2_REGION", "").strip() or "us-west-004",
     }
 
 
@@ -85,8 +81,8 @@ def contract_enabled() -> bool:
     return (
         os.getenv("AI_INFINITY_PERSISTENCE_MODE", "volatile").strip().lower() == "durable"
         and _flag("AI_INFINITY_PROJECT_STATE_DURABLE")
-        and os.getenv("AI_INFINITY_PROJECT_STATE_BACKEND", "cloudflare_r2").strip().lower()
-        == "cloudflare_r2"
+        and os.getenv("AI_INFINITY_PROJECT_STATE_BACKEND", "backblaze_b2").strip().lower()
+        in {"backblaze_b2", "b2"}
     )
 
 
@@ -112,7 +108,7 @@ def object_key() -> str:
 
 def _client():
     if not configured():
-        raise RuntimeError("Cloudflare R2 project-state backend is not configured")
+        raise RuntimeError("Backblaze B2 project-state backend is not configured")
     cfg = _cfg()
     return boto3.client(
         "s3",
@@ -180,7 +176,7 @@ def configure(db_path: Path | str) -> Dict[str, Any]:
                 "configured": configured(),
                 "active": bool(contract_enabled() and configured()),
                 "verified": False,
-                "backend": "cloudflare_r2" if contract_enabled() else None,
+                "backend": "backblaze_b2" if contract_enabled() else None,
                 "last_error": None,
             }
         )
@@ -194,7 +190,7 @@ def configure(db_path: Path | str) -> Dict[str, Any]:
             _STATUS["verified"] = bool(verified)
             _STATUS["active"] = bool(verified)
             if not verified:
-                _STATUS["last_error"] = "R2 canary verification failed"
+                _STATUS["last_error"] = "B2 canary verification failed"
     except Exception as exc:
         with _LOCK:
             _STATUS["verified"] = False
@@ -320,10 +316,10 @@ def snapshot_now() -> Dict[str, Any]:
 
         head = _head()
         if int((head or {}).get("size_bytes") or -1) != len(raw):
-            raise RuntimeError("R2 project-state snapshot size verification failed")
+            raise RuntimeError("B2 project-state snapshot size verification failed")
         remote_digest = str((head or {}).get("sha256") or "")
         if remote_digest and remote_digest != digest:
-            raise RuntimeError("R2 project-state snapshot checksum verification failed")
+            raise RuntimeError("B2 project-state snapshot checksum verification failed")
 
         with _LOCK:
             _STATUS["last_sync_at"] = stamp
@@ -384,7 +380,7 @@ def status() -> Dict[str, Any]:
     enabled = contract_enabled()
     out.update(
         {
-            "backend": "cloudflare_r2" if enabled else None,
+            "backend": "backblaze_b2" if enabled else None,
             "object_key": object_key() if enabled else None,
             "contract_enabled": enabled,
             "truthful": True,
