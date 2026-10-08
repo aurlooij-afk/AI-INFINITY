@@ -349,8 +349,21 @@ def reconcile(project_id,user_id):
                 cur=version_by_id(cur["version_id"])
         elif cur:cur["evidence"]=ev
     current_evidence = (cur or {}).get("evidence") or (cur or {}).get("evidence_json") or {}
-    state="VERIFIED" if cur and cur.get("state")=="VERIFIED" and current_evidence.get("valid") else (
-      "QUEUED" if str(p.get("status")).lower()=="queued" else str(p.get("status") or "BLOCKED").upper())
+    engine_status = str(p.get("status") or "").lower()
+    verified_release = bool(
+        cur and cur.get("state") == "VERIFIED"
+        and current_evidence.get("valid")
+        and base_truth.get("verified") is True
+        and engine_status == "completed"
+    )
+    state = (
+        "COMPLETED" if verified_release else
+        "WAITING" if engine_status == "queued" else
+        "RUNNING" if engine_status in {"running", "producing"} else
+        "FAILED" if engine_status in {"failed", "cancelled"} else
+        "DEGRADED" if engine_status == "completed_with_qc_warnings" else
+        "BLOCKED"
+    )
     with studio().DB_LOCK,db() as c:c.execute("UPDATE canonical_projects SET state=?,updated_at=? WHERE project_id=?",(state,now(),project_id))
     return {"project_id":project_id,"canonical_state":state,"engine_status":p.get("status"),
             "done":state=="VERIFIED","current_version":cur or {},"base_reality":base_truth,
