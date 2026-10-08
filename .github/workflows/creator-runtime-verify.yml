@@ -92,10 +92,6 @@ jobs:
           print("standalone-runtime-ok")
           PY
 
-      - name: Run canonical self-test
-        run: |
-          python -m ai_infinity.selftest
-
       - name: Verify professional closure regression tests
         run: |
           python -m pytest -q tests/test_production_closure.py tests/test_production_fallback.py tests/test_professional_creator_system.py
@@ -129,6 +125,7 @@ jobs:
               cat /tmp/creator-health.json
               curl -fsS http://127.0.0.1:10000/ >/tmp/index.html
               grep -q "AI Infinity" /tmp/index.html
+              docker exec ai-infinity-ci sh -lc 'AI_INFINITY_DATA_DIR=/tmp/ai-infinity-selftest AI_INFINITY_3601_BACKGROUND=false python -m ai_infinity.selftest'
               echo "container-runtime-ok"
               ready=1
               break
