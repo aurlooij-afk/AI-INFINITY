@@ -4289,6 +4289,16 @@ def _gap_audit_3624(user_id: str) -> Dict[str, Any]:
     ]
     rows=[]; passed=0
     # High-confidence checks tied to existing runtime/source state.
+    persistence_ready = False
+    try:
+        from ai_infinity.persistence_truth import project_state_durability
+        persistence_ready = bool(
+            project_state_durability(
+                Path(os.getenv("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity"))
+            ).get("persistent")
+        )
+    except Exception:
+        persistence_ready = False
     health_flags={
         "command":True,"research":True,"evidence":True,"claims":True,"story":True,"hooks":True,"script":True,
         "editorial":True,"visual-direction":True,"image":True,"video":True,"voice":True,"music":True,"sfx":True,
@@ -4298,13 +4308,13 @@ def _gap_audit_3624(user_id: str) -> Dict[str, Any]:
         "provenance":True,"licensing":True,"package":True,"download":True,"publishing":True,"scheduling":True,
         "analytics":True,"trends":True,"audience":True,"seo":True,"social-copy":True,"podcast":True,"workspace":True,
         "connections":True,"agents":True,"security":True,"privacy":True,"performance":True,"mobile":True,
-        "persistence":False,"backup":False,"observability":True,"truthfulness":True,"provider-routing":True,"extensibility":True
+        "persistence":persistence_ready,"backup":False,"observability":True,"truthfulness":True,"provider-routing":True,"extensibility":True
     }
     external_caps={
         "image":bool(os.getenv("HF_TOKEN","").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN","").strip()),
         "video":bool(os.getenv("HF_TOKEN","").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN","").strip()),
         "publishing":bool(_connections(user_id)),
-        "persistence":False,
+        "persistence":persistence_ready,
         "backup":bool(os.getenv("AI_INFINITY_GITHUB_TOKEN","").strip() and os.getenv("AI_INFINITY_GITHUB_REPO","").strip()),
     }
     for di,domain in enumerate(domains,1):
