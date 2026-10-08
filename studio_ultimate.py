@@ -2832,6 +2832,14 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             research.setdefault("sources",[]).extend(reference_sources)
             research["source_count"]=len(research.get("sources") or [])
         research_count = int(research.get("source_count") or 0)
+        objective_text = str(req.get("objective") or req.get("topic") or req.get("title") or "")
+        explicit_research_required = str(os.getenv("AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE", "0")).strip().lower() in {"1", "true", "yes", "on"}
+        semantic_research_required = bool(re.search(
+            r"\b(research[- ]backed|research-backed|fact[- ]checked|fact-checked|with evidence|evidence[- ]based|source[- ]backed|source-backed)\b",
+            objective_text,
+            re.I,
+        ))
+        research_required = explicit_research_required or semantic_research_required
         research_status = "complete" if research_count > 0 else "degraded"
         audit_event(project_id, "research_complete" if research_count > 0 else "research_degraded", {
             "source_count": research_count,
@@ -2848,6 +2856,10 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         research["status"] = research_status
         if research_count == 0:
             research["degraded_reason"] = "No public research source responded in the current runtime; factual claims remain review-required."
+            if research_required:
+                raise RuntimeError(
+                    "Research evidence is required by the production brief, but no usable research source was available."
+                )
         _stage(project_id, "creative_direction", 15, blueprint_json=jdump({"research": research}))
         learning = _apply_learning(project["user_id"], str(req.get("tone") or ""), str(req.get("audience") or ""), str(req.get("format") or "long"))
         plan, ai_provider = creative_plan(req, research, model_fn)
