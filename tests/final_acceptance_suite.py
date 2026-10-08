@@ -82,8 +82,15 @@ def t2(s,b):
     sc=dl(s,b,pid,"script.md").read_text(encoding="utf-8"); cp=dl(s,b,pid,"captions.srt").read_text(encoding="utf-8")
     assert any(c in sc for c in "ځښږڅټډړګڼ") and any(c in cp for c in "ځښږڅټډړګڼ"),(sc[:1500],cp[:1000])
     assert len(re.findall(r"[\u0600-\u06ff]",sc))>=40
+    state=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}")
+    provider=str((state.get("result") or {}).get("voice_provider") or "")
+    assert ("pashto" in provider.lower()) or ("ps-af" in provider.lower()),state
+    voice=dl(s,b,pid,"narration_01.mp3")
+    assert voice.stat().st_size>2000,voice
+    vp=probe(voice)
+    assert any(x.get("codec_type")=="audio" for x in vp.get("streams",[])),vp
     tr=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/truth"); assert tr.get("verified") is True,tr
-    return {"test":2,"project_id":pid,"pashto_text_verified":True}
+    return {"test":2,"project_id":pid,"pashto_text_verified":True,"pashto_voice_provider":provider,"voice_bytes":voice.stat().st_size}
 def t3(s,b):
     f=TMP/"acceptance-source.pdf"; pdf(f); assert f.stat().st_size>500
     up=s.post(b+"/infinity/studio/upload",files={"file":(f.name,f.read_bytes(),"application/pdf")},timeout=180); assert up.ok,up.text; assert up.json().get("text_extracted") is True,up.text
