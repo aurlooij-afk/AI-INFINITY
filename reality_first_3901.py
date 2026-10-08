@@ -478,6 +478,12 @@ def _verify_required(project_id: str, req: Dict[str, Any]) -> Tuple[bool, Dict[s
                 source_hashes=[_digest(req), _digest(_project_record(project_id)["plan"])],
                 parameters={"generated_file": True, "asset_name": path.name},
             )
+            if not info.get("inspection", {}).get("ok"):
+                all_ok = False
+        else:
+            # A registered/generated file that disappeared is also a filesystem
+            # contradiction for a supposedly completed production.
+            all_ok = False
     # Strongest proof for video: final must be a playable media file, not merely a
     # non-empty byte stream.
     final = root / "final.mp4"
