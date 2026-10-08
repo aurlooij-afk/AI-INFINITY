@@ -9,6 +9,10 @@ on:
     branches:
       - main
       - ai-infinity-canonical-divine
+  pull_request_target:
+    branches:
+      - main
+      - ai-infinity-canonical-divine
   workflow_dispatch:
 
 permissions:
@@ -19,8 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout
+      - name: Checkout PR head
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Build authoritative Docker runtime
         run: docker build --pull -t ai-infinity-final-acceptance .
