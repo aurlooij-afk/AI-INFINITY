@@ -425,7 +425,11 @@ def apply_edit(project_id,user_id,command):
     p=require_project(project_id,user_id);truth=reconcile(project_id,user_id)
     cur=truth.get("current_version") or {}
     source=project_dir(project_id)/Path(str(cur.get("artifact_name") or "final.mp4")).name
+    if not source.is_file():
+        studio()._rehydrate_project_asset(project_id,user_id,source.name)
     if not source.is_file():source=project_dir(project_id)/"final.mp4"
+    if not source.is_file():
+        studio()._rehydrate_project_asset(project_id,user_id,"final.mp4")
     if not source.is_file():raise HTTPException(409,"no verified current media artifact exists")
     op=interpret_edit(command);out,ev=render_edit(project_id,source,op);parent=str(cur.get("version_id") or "")
     vid=uid("ver");label=f"Version {len(versions(project_id))+1}"
@@ -453,7 +457,10 @@ def undo(project_id,user_id):
         if row["version_id"]!=cur["version_id"] and row["state"]=="VERIFIED" and row.get("artifact_name"):
             target=row;break
     if not target:raise HTTPException(409,"no verified previous version")
-    path=project_dir(project_id)/Path(target["artifact_name"]).name;ev=artifact_evidence(path)
+    path=project_dir(project_id)/Path(target["artifact_name"]).name
+    if not path.is_file():
+        studio()._rehydrate_project_asset(project_id,user_id,path.name)
+    ev=artifact_evidence(path)
     if not ev.get("valid"):raise HTTPException(409,"previous version artifact is no longer valid")
     rid=uid("ver")
     with studio().DB_LOCK,db() as c:
