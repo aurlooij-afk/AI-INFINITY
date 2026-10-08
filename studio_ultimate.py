@@ -977,8 +977,7 @@ def _localized_fallback_copy(language: str, name: str, title: str, topic: str) -
         "on_screen": d["on_screen"]
     }
 
-def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int, audience: str, tone: str, research: Dict[str, Any]) -> Dict[str, Any]:
-    language: str = "English") -> Dict[str, Any]:
+def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int, audience: str, tone: str, research: Dict[str, Any], language: str = "English") -> Dict[str, Any]:
     """Build a deterministic, topic-coherent fallback plan without leaking unrelated search snippets."""
     clean_title = re.sub(r"\s+", " ", title).strip()[:140]
     clean_objective = re.sub(r"\s+", " ", objective).strip()[:900]
