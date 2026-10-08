@@ -3,8 +3,8 @@ from __future__ import annotations
 """Truthful project-state durability contract.
 
 Object-storage artifact replication and local filesystem writability are not, by
-themselves, proof that the project's SQLite state will survive replacement.
-The application therefore reports durable project state only when an operator
+themselves, proof that the project's SQLite state will survive replacement. The
+application therefore reports durable project state only when an operator
 explicitly enables the durable contract and confirms a real persistent volume
 or a durable state backend.
 """
@@ -14,6 +14,7 @@ from pathlib import Path
 
 
 TRUE = {"1", "true", "yes", "on"}
+DURABLE_REMOTE_BACKENDS = {"cloudflare_r2", "backblaze_b2", "b2"}
 
 
 def _flag(name: str, default: str = "false") -> bool:
@@ -44,7 +45,7 @@ def project_state_durability(root: Path | str) -> dict:
     backend_ready = bool(
         mode == "durable"
         and confirmed_backend
-        and remote_backend == "cloudflare_r2"
+        and remote_backend in DURABLE_REMOTE_BACKENDS
         and backend_status.get("contract_enabled")
         and backend_status.get("active")
         and backend_status.get("verified")
