@@ -1484,21 +1484,56 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
 
     source_failures=[]
     getters=() if external_disabled else (_nasa_images,_openverse_images,_commons_media,_pexels,_pixabay)
+
+    # Never reuse identical visual bytes for multiple scene source records when
+    # another real candidate is available. This keeps visual provenance aligned
+    # with the actual edit instead of counting the same downloaded bytes as
+    # multiple distinct visuals.
+    used_visual_hashes=set()
+    for previous in outdir.glob("selected_visual_*"):
+        try:
+            if previous.is_file():
+                used_visual_hashes.add(file_sha256(previous))
+        except Exception:
+            pass
+
+    def select_distinct_candidate(candidate: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        path=Path(str(candidate.get("path") or ""))
+        if not path.is_file() or path.stat().st_size <= 1000:
+            return None
+        try:
+            digest=file_sha256(path)
+        except Exception:
+            return None
+        if digest in used_visual_hashes:
+            return None
+        suffix=path.suffix.lower() or ".bin"
+        selected=outdir / f"selected_visual_{index:02d}{suffix}"
+        try:
+            shutil.copy2(path, selected)
+        except Exception:
+            return None
+        used_visual_hashes.add(digest)
+        selected_candidate=dict(candidate)
+        selected_candidate["path"]=str(selected)
+        selected_candidate["source_file"]=str(path)
+        selected_candidate["asset_sha256"]=digest
+        return selected_candidate
+
     for q in query_variants[:4]:
         for getter in getters:
             try:
-                items=getter(q,outdir,limit=2)
+                items=getter(q,outdir,limit=6)
             except Exception as exc:
                 source_failures.append(f"{getter.__name__}:{type(exc).__name__}:{str(exc)[:180]}")
                 continue
-            videos=[x for x in items if x.get("kind")=="video"]
-            if videos:
-                return videos[0]
-            images=[x for x in items if x.get("kind")=="image"]
-            if images:
-                return images[0]
+            candidates=[x for x in items if x.get("kind") in {"video","image"}]
+            for candidate in candidates:
+                selected=select_distinct_candidate(candidate)
+                if selected:
+                    return selected
             debug_key={"_nasa_images":"nasa","_openverse_images":"openverse","_commons_media":"wikimedia","_pexels":"pexels","_pixabay":"pixabay"}.get(getter.__name__,getter.__name__)
-            source_failures.append(f"{getter.__name__}:{MEDIA_DEBUG_ERRORS.get(debug_key,'no-asset')}")
+            source_failures.append(f"{getter.__name__}:{MEDIA_DEBUG_ERRORS.get(debug_key,'no-distinct-asset')}")
 
     test_media=_ci_test_visual(scene,outdir,index)
     if test_media:
