@@ -5,6 +5,10 @@ on:
     branches: [main, ai-infinity-canonical-divine]
   workflow_dispatch:
 
+concurrency:
+  group: ai-infinity-reality-proof-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   reality-proof:
     runs-on: ubuntu-latest
