@@ -1635,6 +1635,7 @@ def _espeak_exact_voice(exe: str, language: str) -> Optional[str]:
     }.get(code, "AI Infinity speech verification.")
     fd, probe_name = tempfile.mkstemp(prefix="ai-infinity-tts-probe-", suffix=".wav")
     os.close(fd)
+    Path(probe_name).unlink(missing_ok=True)
     try:
         proc = subprocess.run(
             [exe, "-v", code, "-s", "155", "-w", probe_name, sample],
