@@ -2861,9 +2861,9 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                     "language": req.get("language"),
                     "truthful": True,
                 })
+                safe_reason = re.sub(r"(api[_ -]?key|token|authorization|bearer)\s*[:=]\s*[^\s,;]+", r"\1=<redacted>", str(voice_exc), flags=re.I)
                 raise RuntimeError(
-                    f"{req.get('language') or 'English'} voice generation unavailable; "
-                    "no verified audible exact-language provider is currently usable"
+                    f"{req.get('language') or 'English'} voice generation unavailable: {safe_reason[:500]}"
                 ) from voice_exc
             voice_provider = voice_provider or provider
             scene_duration = max(4.0, min(90.0, float(ch.get("duration") or voice_duration)))
