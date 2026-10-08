@@ -4905,48 +4905,76 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         return _gap_audit_3624(_get_user_id(request))
 
     @app.post("/infinity/studio/upload")
-    async def upload_source(request: Request, file: UploadFile = File(...), project_id: str = ""):
+    async def upload_source(request: Request, project_id: str = ""):
         user_id=_get_user_id(request)
-        name=_safe_upload_name(file.filename or "upload")
-        ext=Path(name).suffix.lower()
-        if ext not in UPLOAD_ALLOWED_EXT:
-            raise HTTPException(415,"unsupported file type")
-        target_root=_project_dir(project_id) if project_id else ROOT / "uploads" / safe_name(user_id)
         target=None
-        total=0
+        upload=None
+        name="upload"
         try:
-            target_root.mkdir(parents=True,exist_ok=True)
-            target=target_root / name
-            with target.open("wb") as fh:
-                while True:
-                    chunk=await file.read(1024*1024)
-                    if not chunk: break
-                    total+=len(chunk)
-                    if total>UPLOAD_MAX_BYTES:
-                        raise HTTPException(413,f"file exceeds {UPLOAD_MAX_BYTES} bytes")
-                    fh.write(chunk)
+            # Parse multipart explicitly so upload behavior is controlled by the
+            # creator route rather than framework dependency injection.
+            async with request.form(max_files=1, max_fields=8, max_part_size=UPLOAD_MAX_BYTES) as form:
+                upload=form.get("file")
+                if upload is None or not hasattr(upload, "filename") or not hasattr(upload, "read"):
+                    raise HTTPException(400,"multipart field 'file' is required")
+                name=_safe_upload_name(getattr(upload,"filename","upload"))
+                ext=Path(name).suffix.lower()
+                if ext not in UPLOAD_ALLOWED_EXT:
+                    raise HTTPException(415,"unsupported file type")
+                target_root=_project_dir(project_id) if project_id else ROOT / "uploads" / safe_name(user_id)
+                target_root.mkdir(parents=True,exist_ok=True)
+                target=target_root / name
+                total=0
+                with target.open("wb") as fh:
+                    while True:
+                        chunk=await upload.read(1024*1024)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total>UPLOAD_MAX_BYTES:
+                            raise HTTPException(413,f"file exceeds {UPLOAD_MAX_BYTES} bytes")
+                        fh.write(chunk)
+
+            extracted=_extract_source_text(target)
+            payload={
+                "status":"uploaded","filename":name,"source_file_name":name,
+                "size_bytes":total,"extension":ext,"project_id":project_id or None,
+                "text_extracted":bool(extracted),"text_preview":extracted[:4000],
+                "download_url":f"/infinity/studio/project/{project_id}/asset/{quote(name)}" if project_id else None,
+                "truthful":True,
+            }
+            if project_id:
+                _save_asset(project_id,"source",target,"application/octet-stream",{
+                    "filename":name,"size_bytes":total,"text_extracted":bool(extracted),"source_type":"creator_upload"
+                })
+                register_artifact(project_id,target,"application/octet-stream",{
+                    "source_type":"creator_upload","text_extracted":bool(extracted)
+                })
+            audit_event(project_id or None,"source_uploaded",{
+                "user_id":user_id,"filename":name,"size_bytes":total,"text_extracted":bool(extracted)
+            })
+            return payload
         except HTTPException:
-            try:
-                if target is not None:
-                    target.unlink(missing_ok=True)
-            except Exception: pass
+            if target is not None:
+                try: target.unlink(missing_ok=True)
+                except Exception: pass
             raise
         except Exception as exc:
             detail=f"{type(exc).__name__}: {str(exc)[:300]}"
             print("SOURCE_UPLOAD_ERROR", detail, flush=True)
+            if target is not None:
+                try: target.unlink(missing_ok=True)
+                except Exception: pass
+            raise HTTPException(500,detail)
+        finally:
             try:
-                if target is not None:
-                    target.unlink(missing_ok=True)
+                if upload is not None and hasattr(upload, "close"):
+                    result=upload.close()
+                    if inspect.isawaitable(result):
+                        await result
             except Exception:
                 pass
-            raise HTTPException(500,detail)
-        extracted=_extract_source_text(target)
-        payload={"status":"uploaded","filename":name,"source_file_name":name,"size_bytes":total,"extension":ext,"project_id":project_id or None,"text_extracted":bool(extracted),"text_preview":extracted[:4000],"download_url":f"/infinity/studio/project/{project_id}/asset/{quote(name)}" if project_id else None,"truthful":True}
-        if project_id:
-            _save_asset(project_id,"source",target,"application/octet-stream",{"filename":name,"size_bytes":total,"text_extracted":bool(extracted),"source_type":"creator_upload"})
-            register_artifact(project_id,target,"application/octet-stream",{"source_type":"creator_upload","text_extracted":bool(extracted)})
-        audit_event(project_id or None,"source_uploaded",{"user_id":user_id,"filename":name,"size_bytes":total,"text_extracted":bool(extracted)})
-        return payload
+
 
 
     @app.get("/infinity/studio/benchmark-sources")
