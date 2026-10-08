@@ -898,9 +898,9 @@ def _localized_fallback_copy(language: str, name: str, title: str, topic: str) -
     local = {
         "pashto": {
             "names": {"Hook":"پیل","Why it matters":"ولې مهمه ده","The key idea":"اصلي نظر","Practical example":"عملي بېلګه","Takeaway":"لنډه پایله","Context":"شالید","The core idea":"اصلي اصل","How it works":"څنګه کار کوي","Real-world examples":"د واقعي نړۍ بېلګې","What changes":"څه بدلېږي","Practical takeaway":"عملي ګام","Closing":"پای"},
-            "hooks":"د {topic} په اړه تر ټولو مهم څه باید پوه شو؟",
+            "hooks":"په پښتو کې د {topic} په اړه تر ټولو مهم څه باید پوه شو؟",
             "cta":"دا موضوع له ځان سره وساتئ او د اړتیا پر وخت یې په عمل کې وازمویئ.",
-            "opening":"دا د {title} مهم تمرکز دی.",
+            "opening":"په پښتو کې، دا د {title} مهم تمرکز دی.",
             "focus":"تمرکز په {topic} دی.",
             "why":"دا ځکه مهمه ده چې پایله باید روښانه او عملي وي.",
             "idea":"اصلي نظر دا دی چې موضوع ساده، مشخصه او د کار وړ وساتل شي.",
