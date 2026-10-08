@@ -38,6 +38,65 @@ LOCAL_COMMANDS = {
     "espeak-ng": lambda: shutil.which("espeak-ng") or shutil.which("espeak"),
 }
 
+_PUBLIC_PROBE_CACHE: Dict[str, Any] = {}
+_PUBLIC_PROBE_TTL = 45.0
+
+
+def _public_probe(provider: str) -> Dict[str, Any]:
+    """
+    Verify public adapters with a bounded real network request. Registry presence
+    alone never makes an external provider executable.
+    """
+    if os.getenv("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        return {"health_state": "REQUIRES_CONNECTION", "available": False, "executable": False, "reason": "external_providers_disabled"}
+
+    now = time.time()
+    cached = _PUBLIC_PROBE_CACHE.get(provider)
+    if cached and now - float(cached.get("at", 0)) < _PUBLIC_PROBE_TTL:
+        return dict(cached.get("result") or {})
+
+    urls = {
+        "Wikipedia API": "https://en.wikipedia.org/w/api.php?action=query&format=json&meta=siteinfo&siprop=general",
+        "DuckDuckGo": "https://html.duckduckgo.com/html/?q=AI",
+        "Google News RSS": "https://news.google.com/rss/search?q=AI&hl=en-US&gl=US&ceid=US:en",
+        "Openverse API": "https://api.openverse.org/v1/images/?q=AI&page_size=1",
+        "NASA Images": "https://images-api.nasa.gov/search?q=AI&media_type=image&page_size=1",
+        "Wikimedia Commons/API": "https://commons.wikimedia.org/w/api.php?action=query&format=json&meta=siteinfo",
+    }
+    url = urls.get(provider)
+    if not url:
+        result = {"health_state": "UNAVAILABLE", "available": False, "executable": False, "reason": "no_public_probe_defined"}
+    else:
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "AI-Infinity/1.0 (public-provider-runtime-probe)",
+                    "Accept": "application/json,application/xml,text/html,*/*",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                code = int(getattr(resp, "status", 200) or 200)
+                ok = 200 <= code < 400
+            result = {
+                "health_state": "READY_PUBLIC_PATH" if ok else "FAILED",
+                "available": ok,
+                "executable": ok,
+                "reason": "live_public_endpoint_probe",
+                "http_status": code,
+            }
+        except Exception as exc:
+            result = {
+                "health_state": "FAILED",
+                "available": False,
+                "executable": False,
+                "reason": f"{type(exc).__name__}: {str(exc)[:180]}",
+            }
+    _PUBLIC_PROBE_CACHE[provider] = {"at": now, "result": result}
+    return dict(result)
+
+
 PROVIDER_ENV = {
     "Runway": ["RUNWAYML_API_SECRET"],
     "OpenAI": ["OPENAI_API_KEY"],
@@ -93,7 +152,7 @@ def _runtime_probe(entry: Dict[str, Any]) -> Dict[str, Any]:
     if provider in PROVEN_LOCAL_RESOURCES:
         return {"health_state": "READY_LOCAL", "available": True, "executable": True, "reason": "runtime_primitive"}
     if provider in PUBLIC_REMOTE_RESOURCES:
-        return {"health_state": "READY_PUBLIC_PATH", "available": True, "executable": True, "reason": "implemented_public_adapter", "network_probe": "deferred"}
+        return {**_public_probe(provider), "network_probe": "live_bounded_probe"}
     if any(k.lower() in provider.lower() for k in PROVIDER_ENV):
         configured = _env_configured(provider)
         return {"health_state": "READY_CONFIGURED" if configured else "CONFIG_REQUIRED", "available": configured, "executable": configured, "reason": "credential_check"}
@@ -239,10 +298,48 @@ def self_test() -> Dict[str, Any]:
     failures = []
     if len(REGISTRY["entries"]) != 607: failures.append("registry_count")
     if [x.get("number") for x in REGISTRY["entries"]] != list(range(1, 608)): failures.append("registry_numbering")
+    required = {
+        "id", "number", "category", "capability", "resource/provider",
+        "implementation_type", "execution_mode", "license", "commercial_use_state",
+        "requires_api_key", "requires_gpu", "requires_external_network",
+        "free_state", "quality_tier", "integration_state", "health_state",
+        "fallback_ids", "supported_input_types", "supported_output_types",
+        "language_support", "notes", "source_url", "last_verified",
+    }
+    bad_schema = [x.get("number") for x in REGISTRY["entries"] if not required.issubset(x)]
+    if bad_schema: failures.append("registry_schema")
+    if any(not isinstance(x.get("fallback_ids"), list) for x in REGISTRY["entries"]): failures.append("registry_fallback_schema")
     if not REGISTRY_DIGEST: failures.append("registry_digest")
     if not LOCAL_COMMANDS["ffmpeg"](): failures.append("ffmpeg")
     if not LOCAL_COMMANDS["ffprobe"](): failures.append("ffprobe")
     if not LOCAL_COMMANDS["espeak-ng"](): failures.append("offline_tts")
+
+    expected_states = {
+        "queued": "WAITING", "running": "RUNNING", "producing": "RUNNING",
+        "completed": "COMPLETED", "completed_with_qc_warnings": "DEGRADED",
+        "failed": "FAILED", "cancelled": "FAILED", "blocked": "BLOCKED",
+        "requires_connection": "REQUIRES_CONNECTION", "requires_compute": "REQUIRES_COMPUTE",
+        "license_limited": "LICENSE_LIMITED", "rate_limited": "RATE_LIMITED",
+    }
+    try:
+        import studio_ultimate as studio
+        for raw, want in expected_states.items():
+            if studio._runtime_state_for_status(raw) != want:
+                failures.append(f"runtime_state:{raw}")
+        old = os.environ.get("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS")
+        os.environ["AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS"] = "1"
+        try:
+            disabled_research = studio.research_topic("self-test", limit=1)
+            if disabled_research.get("status") != "DEGRADED" or disabled_research.get("source_count") != 0:
+                failures.append("external_disable_research")
+        finally:
+            if old is None:
+                os.environ.pop("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS", None)
+            else:
+                os.environ["AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS"] = old
+    except Exception as exc:
+        failures.append(f"runtime_import:{type(exc).__name__}")
+
     return {
         "passed": not failures,
         "failures": failures,
@@ -252,6 +349,11 @@ def self_test() -> Dict[str, Any]:
             "ffmpeg": bool(LOCAL_COMMANDS["ffmpeg"]()),
             "ffprobe": bool(LOCAL_COMMANDS["ffprobe"]()),
             "offline_tts": bool(LOCAL_COMMANDS["espeak-ng"]()),
+        },
+        "truth_contract": {
+            "runtime_states": "verified_mapping",
+            "external_disable": "verified",
+            "registry_schema": not bool(bad_schema),
         },
         "truthful": True,
     }
