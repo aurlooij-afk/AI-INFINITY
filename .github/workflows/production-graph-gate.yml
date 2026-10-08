@@ -8,6 +8,10 @@ on:
       - ai-infinity-production-graph
   workflow_dispatch:
 
+concurrency:
+  group: ai-infinity-production-graph-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   production-graph-check:
     runs-on: ubuntu-latest
