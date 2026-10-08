@@ -2054,10 +2054,11 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
             visual_args = ["-stream_loop", "-1", "-i", src]
         else:
             frames = max(1, int(round(duration * fps)))
+            # Avoid zoompan in the constrained free-tier path. A long zoompan
+            # graph can retain many generated frames and approach the 512 MiB
+            # service ceiling even with single-threaded FFmpeg.
             vf = (
-                f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
-                f"zoompan=z='min(zoom+0.0007,1.10)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-                f"d={frames}:s={work_w}x{work_h}:fps={fps},scale={width}:{height}:flags=lanczos,fps=24,"
+                f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps=24,"
                 f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color=black@0.48:t=fill,"
                 f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
                 f"x={text_x}:y={text_y}:fontsize={font}:fontcolor=white"
@@ -3055,7 +3056,11 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         is_short = fmt in {"short", "shorts", "reel", "tiktok"}
         target = int(req.get("duration") or (60 if is_short else 300))
         target = max(20, min(target, 180 if is_short else 3600))
-        max_chapters = (3 if FAST_MODE else 5) if is_short else (4 if FAST_MODE else 8)
+        # On the 512 MiB Render free tier, a short production must stay a
+        # single-scene render. This preserves the requested duration and real
+        # deliverables while preventing sequential heavy scene rendering from
+        # accumulating memory pressure across a live request.
+        max_chapters = (1 if FAST_MODE else 5) if is_short else (4 if FAST_MODE else 8)
         if FAST_MODE and not SMOKE:
             target = min(target, 180 if is_short else 900)
         if SMOKE:
@@ -3172,7 +3177,11 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         checkpoint(project_id, "scenes_complete", {"count": len(scene_paths), "total_duration": actual_total})
         _stage(project_id, "assembly", 65, current_scene=len(scene_paths))
         master = outdir / "master.mp4"
-        concat_segments(scene_paths, master)
+        if len(scene_paths) == 1:
+            # One short scene needs no second FFmpeg assembly pass.
+            shutil.copy2(scene_paths[0], master)
+        else:
+            concat_segments(scene_paths, master)
         requested_ratio = str(req.get("aspect_ratio") or "16:9").strip()
         # FAST mode renders scenes directly at their delivery dimensions. A second
         # 1080x1920 transcode on a small-memory instance causes avoidable OOM.
