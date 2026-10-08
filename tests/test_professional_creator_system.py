@@ -1,4 +1,5 @@
 import os
+import shutil
 
 os.environ.setdefault("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity-professional-test")
 os.environ["AI_INFINITY_3601_BACKGROUND"] = "false"
@@ -15,7 +16,10 @@ def test_professional_creator_surface_is_mounted():
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["build"].startswith("PROFESSIONAL-CREATOR-SYSTEM")
-    assert any(p["name"] == "FFmpeg render/edit" and p["ready"] for p in data["providers"])
+    ffmpeg_provider = next(p for p in data["providers"] if p["name"] == "FFmpeg render/edit")
+    expected_ready = bool(shutil.which("ffmpeg"))
+    assert ffmpeg_provider["ready"] is expected_ready, data
+    assert ffmpeg_provider["status"] == ("ready" if expected_ready else "missing"), data
 
 
 def test_professional_creator_ui_is_real_route():
