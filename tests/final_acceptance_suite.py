@@ -145,7 +145,7 @@ def t7():
         return {"test":7,"project_id":pid,"research_status":"degraded"}
     finally:stop(p,l)
 def t8():
-    d=Path("/data/final-acceptance-restart");shutil.rmtree(d,ignore_errors=True);extra={"AI_INFINITY_PERSISTENCE_MODE":"durable","AI_INFINITY_PERSISTENT_VOLUME_CONFIRMED":"true","AI_INFINITY_PROJECT_STATE_DURABLE":"false","AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE":"0"}
+    d=Path("/data/final-acceptance-restart");shutil.rmtree(d,ignore_errors=True);extra={"AI_INFINITY_PERSISTENCE_MODE":"durable","AI_INFINITY_PERSISTENT_VOLUME_CONFIRMED":"true","AI_INFINITY_PROJECT_STATE_DURABLE":"true","AI_INFINITY_PROJECT_STATE_BACKEND":"sqlite_persistent_volume","AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE":"0"}
     p,b,l=start(d,18082,extra);s=requests.Session()
     try:
         c=req(s,b,"/infinity/canonical/capabilities");assert c.get("storage",{}).get("persistent") is True,c
