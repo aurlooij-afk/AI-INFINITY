@@ -7,6 +7,7 @@ Registration is metadata; executable/healthy state comes only from runtime probe
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
