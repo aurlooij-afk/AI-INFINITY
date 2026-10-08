@@ -2488,6 +2488,88 @@ def _project_dir(project_id: str) -> Path:
     return p
 
 
+def _rehydrate_project_asset(project_id: str, user_id: str, filename: str) -> Optional[Path]:
+    """Restore a user-facing artifact from verified object storage when local disk is empty."""
+    target_name = Path(str(filename or "")).name
+    if not target_name:
+        return None
+    root = _project_dir(project_id)
+    # Fast path: local artifact is already present and non-empty.
+    direct = root / target_name
+    if direct.is_file() and direct.stat().st_size > 0:
+        return direct
+    try:
+        import ai3704_storage_fabric as storage
+        with DB_LOCK, _connect() as c:
+            rows = c.execute(
+                "SELECT path,metadata_json FROM studio_assets_3610 "
+                "WHERE project_id=? ORDER BY id DESC LIMIT 500",
+                (project_id,),
+            ).fetchall()
+        candidates = []
+        for row in rows:
+            path_value = Path(str(row["path"] or ""))
+            if path_value.name != target_name:
+                continue
+            try:
+                meta = json.loads(row["metadata_json"] or "{}")
+            except Exception:
+                meta = {}
+            durable = meta.get("durable_storage") if isinstance(meta, dict) else {}
+            if not isinstance(durable, dict):
+                continue
+            asset_id = str(durable.get("asset_id") or "").strip()
+            if asset_id:
+                candidates.append((path_value, asset_id))
+        for path_value, asset_id in candidates:
+            asset = storage._asset_row(asset_id, user_id)
+            replicas = list(asset.get("replicas") or [])
+            providers = []
+            primary = str(asset.get("primary_provider") or "").strip()
+            if primary:
+                providers.append(primary)
+            providers.extend(
+                str(r.get("provider") or "").strip()
+                for r in replicas
+                if str(r.get("status") or "") == "verified"
+            )
+            ordered = []
+            for p in providers:
+                if p and p not in ordered:
+                    ordered.append(p)
+            if not ordered:
+                continue
+            destination = root / safe_name(target_name)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            tmp = destination.with_name(destination.name + ".rehydrate-" + uuid.uuid4().hex)
+            for provider in ordered:
+                try:
+                    storage._download_to(provider, asset["object_key"], tmp)
+                    size_ok = tmp.stat().st_size == int(asset.get("size_bytes") or 0)
+                    sha_ok = file_sha256(tmp) == str(asset.get("sha256") or "")
+                    if not (size_ok and sha_ok):
+                        raise RuntimeError("rehydrated artifact checksum or size mismatch")
+                    tmp.replace(destination)
+                    # Keep the DB-reported path authoritative only within the
+                    # current project directory; never materialize outside it.
+                    if destination != path_value:
+                        try:
+                            if path_value.parent.resolve() == root.resolve():
+                                destination.replace(path_value)
+                                destination = path_value
+                        except Exception:
+                            pass
+                    return destination
+                except Exception:
+                    try:
+                        tmp.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+    except Exception:
+        return None
+    return None
+
+
 def _save_asset(project_id: str, kind: str, path: Path, media_type: str, metadata: Dict[str, Any]) -> None:
     meta = dict(metadata or {})
     # Persist only user-facing production artifacts when a real durable storage
@@ -2506,7 +2588,10 @@ def _save_asset(project_id: str, kind: str, path: Path, media_type: str, metadat
                 meta["durable_storage"] = {
                     "status": storage_result.get("status"),
                     "asset_id": storage_result.get("asset_id"),
+                    "object_key": storage_result.get("object_key"),
+                    "primary_provider": storage_result.get("primary_provider"),
                     "sha256": storage_result.get("sha256"),
+                    "size_bytes": storage_result.get("size_bytes"),
                     "configured_providers": storage_result.get("configured_providers", []),
                     "successful_providers": storage_result.get("successful_providers", []),
                     "truthful": True,
@@ -5299,6 +5384,7 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         if not p or p.get("user_id") != user_id:
             raise HTTPException(404, "project not found")
         name = Path(asset_name).name
+        local_rehydrated = _rehydrate_project_asset(project_id, user_id, name)
         # Final deliverables are release artifacts, not merely files that happen
         # to exist. They remain inaccessible until the professional closure gate
         # has verified the project.
