@@ -366,7 +366,7 @@ def reconcile(project_id,user_id):
     )
     with studio().DB_LOCK,db() as c:c.execute("UPDATE canonical_projects SET state=?,updated_at=? WHERE project_id=?",(state,now(),project_id))
     return {"project_id":project_id,"canonical_state":state,"engine_status":p.get("status"),
-            "done":state=="VERIFIED","current_version":cur or {},"base_reality":base_truth,
+            "done":state=="COMPLETED","current_version":cur or {},"base_reality":base_truth,
             "truth_rule":"filesystem + independent inspection + Reality Kernel evidence","truthful":True}
 
 def interpret_edit(command):
