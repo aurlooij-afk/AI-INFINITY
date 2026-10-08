@@ -4305,7 +4305,7 @@ function openProject(id){
     "<div class='eyebrow'>PROJECT</div><h2 style='margin:6px 0 4px'>"+esc(x.title||id)+"</h2><div class='chips'><span class='status "+statusClass(x.status)+"'>"+esc(x.status)+"</span><span class='chip'>"+Math.round(x.progress||0)+"%</span><span class='chip'>Attempt "+esc(x.attempt||1)+"</span></div><div style='margin-top:14px'>"+stages(x)+"</div><div style='margin-top:14px' class='progress'><i style='width:"+Math.round(x.progress||0)+"%'></i></div>"+
     (done?"<div class='video' style='margin-top:14px'><video controls playsinline src='/infinity/studio/project/"+encodeURIComponent(id)+"/asset/final.mp4'></video></div>":"<div class='notice' style='margin-top:14px'>"+esc(x.status==="failed"?(x.error||"Production failed. Open retry to run again."):"The workspace is producing real artifacts. Refresh is safe.")+"</div>")+
     "<div class='toolbar' style='margin-top:12px'><button class='btn warn' onclick='cancelProject(\""+esc(id)+"\")'>Cancel</button><button class='btn' onclick='retryProject(\""+esc(id)+"\")'>Retry</button></div>"+
-    "</div><div class='card cardPad'><div class='sectionHead'><h3>Production details</h3><span class='status "+statusClass(x.status)+"'>"+esc(x.stage||"")+"</span></div><div class='notice'>"+(x.status==="completed"||x.status==="completed_with_qc_warnings"?"Finalization complete. Artifacts below are addressable from the persistent project store.":"This status comes from the production database, not UI animation.")+"</div><div class='artifacts' style='margin-top:10px'>"+cardLinks+"</div><div id='verifyOut' style='margin-top:10px'></div></div></div>";
+    "</div><div class='card cardPad'><div class='sectionHead'><h3>Production details</h3><span class='status "+statusClass(x.status)+"'>"+esc(x.stage||"")+"</span></div><div class='notice'>"+(x.status==="completed"?"Finalization verified. Artifacts below are release-eligible.":x.status==="completed_with_qc_warnings"?"Quality verification did not pass; delivery remains blocked.":"This status comes from the production database, not UI animation.")+"</div><div class='artifacts' style='margin-top:10px'>"+cardLinks+"</div><div id='verifyOut' style='margin-top:10px'></div></div></div>";
     if(pollTimer)clearInterval(pollTimer);
     if(!done && x.status!=="failed" && x.status!=="cancelled"){pollTimer=setInterval(function(){refreshProjectCard(id)},1600)}
   }).catch(function(e){$("content").innerHTML=renderError(e)});
@@ -4379,7 +4379,7 @@ async function analytics(){
 }
 async function publish(){
   var x=await api("/infinity/studio/publishers");
-  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>DELIVERY</div><h1 style='font-size:40px'>Publish when the destination is actually connected.</h1><p class='heroLead'>AI Infinity prepares the work first. External publishing remains explicitly authorized.</p></div><div class='grid cols2'><div class='card cardPad'><div class='sectionHead'><h3>Destinations</h3></div><div class='list'>"+(x.connections||[]).map(function(c){return "<div class='item'><div class='row'><b>"+esc(c.label||c.provider)+"</b><span class='status "+statusClass(c.status)+"'>"+esc(c.status)+"</span></div><div class='tiny'>"+esc(c.provider)+"</div></div>"}).join("")||"<div class='notice'>No destination connected.</div>"+"</div></div><div class='card cardPad'><div class='sectionHead'><h3>Publish a finished project</h3></div><select id='pubProject' class='select'>"+(x.projects||[]).filter(function(p){return ["completed","completed_with_qc_warnings"].indexOf(p.status)>=0}).map(function(p){return "<option value='"+esc(p.project_id)+"'>"+esc(p.title||p.project_id)+"</option>"}).join("")+"</select><select id='pubProvider' class='select' style='margin-top:8px'><option value='youtube'>YouTube</option><option value='webhook'>Connected destination</option></select><select id='pubPrivacy' class='select' style='margin-top:8px'><option>private</option><option>unlisted</option><option>public</option></select><button class='btn primary' style='margin-top:10px' onclick='publishNow()'>Publish</button><div id='pubOut' style='margin-top:10px'></div></div></div>";
+  $("content").innerHTML="<div class='commandHero'><div class='eyebrow'>DELIVERY</div><h1 style='font-size:40px'>Publish when the destination is actually connected.</h1><p class='heroLead'>AI Infinity prepares the work first. External publishing remains explicitly authorized.</p></div><div class='grid cols2'><div class='card cardPad'><div class='sectionHead'><h3>Destinations</h3></div><div class='list'>"+(x.connections||[]).map(function(c){return "<div class='item'><div class='row'><b>"+esc(c.label||c.provider)+"</b><span class='status "+statusClass(c.status)+"'>"+esc(c.status)+"</span></div><div class='tiny'>"+esc(c.provider)+"</div></div>"}).join("")||"<div class='notice'>No destination connected.</div>"+"</div></div><div class='card cardPad'><div class='sectionHead'><h3>Publish a finished project</h3></div><select id='pubProject' class='select'>"+(x.projects||[]).filter(function(p){return p.status==="completed"}).map(function(p){return "<option value='"+esc(p.project_id)+"'>"+esc(p.title||p.project_id)+"</option>"}).join("")+"</select><select id='pubProvider' class='select' style='margin-top:8px'><option value='youtube'>YouTube</option><option value='webhook'>Connected destination</option></select><select id='pubPrivacy' class='select' style='margin-top:8px'><option>private</option><option>unlisted</option><option>public</option></select><button class='btn primary' style='margin-top:10px' onclick='publishNow()'>Publish</button><div id='pubOut' style='margin-top:10px'></div></div></div>";
 }
 async function publishNow(){
   try{var r=await api("/infinity/studio/publish",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({project_id:$("pubProject").value,provider:$("pubProvider").value,asset:"final.mp4",privacy_status:$("pubPrivacy").value})});$("pubOut").innerHTML="<div class='notice good'>"+esc(r.status||"Publish request completed")+"</div><pre class='mono'>"+esc(JSON.stringify(r,null,2))+"</pre>"}catch(e){$("pubOut").innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>"}
@@ -4695,7 +4695,7 @@ def _analytics_3621(user_id: str) -> Dict[str, Any]:
         if q.get("score") is not None:
             try: quality_scores.append(float(q["score"]))
             except Exception: pass
-        if p.get("status") in {"completed","completed_with_qc_warnings"}:
+        if p.get("status") == "completed":
             try: production_seconds.append(max(0,float(p.get("updated_at",0))-float(p.get("created_at",0))))
             except Exception: pass
     pub_counts={}
@@ -4705,7 +4705,7 @@ def _analytics_3621(user_id: str) -> Dict[str, Any]:
         asset_count=int(c.execute("SELECT COUNT(*) FROM studio_assets_3610 a JOIN studio_projects_3610 p ON p.project_id=a.project_id WHERE p.user_id=?",(user_id,)).fetchone()[0] or 0)
         artifact_count=int(c.execute("SELECT COUNT(*) FROM studio_artifacts_3614 a JOIN studio_projects_3610 p ON p.project_id=a.project_id WHERE p.user_id=?",(user_id,)).fetchone()[0] or 0)
     total=len(projects)
-    completed=status_counts.get("completed",0)+status_counts.get("completed_with_qc_warnings",0)
+    completed=status_counts.get("completed",0)
     return {
         "projects_total":total,"completed":completed,"active":status_counts.get("running",0)+status_counts.get("queued",0),
         "failed":status_counts.get("failed",0),"completion_rate":round(completed/max(1,total),4),
@@ -5514,7 +5514,7 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
     def studio_performance(request: Request, response: Response):
         user_id=_get_user_id(request); _set_session(response,request,user_id)
         with DB_LOCK, _connect() as c:
-            total=int(c.execute("SELECT COUNT(*) FROM studio_projects_3610 WHERE user_id=?",(user_id,)).fetchone()[0]); done=int(c.execute("SELECT COUNT(*) FROM studio_projects_3610 WHERE user_id=? AND status IN ('completed','completed_with_qc_warnings')",(user_id,)).fetchone()[0]); failed=int(c.execute("SELECT COUNT(*) FROM studio_projects_3610 WHERE user_id=? AND status='failed'",(user_id,)).fetchone()[0]); queued=int(c.execute("SELECT COUNT(*) FROM studio_projects_3610 WHERE user_id=? AND status='queued'",(user_id,)).fetchone()[0])
+            total=int(c.execute("SELECT COUNT(*) FROM studio_projects_3610 WHERE user_id=?",(user_id,)).fetchone()[0]); done=int(c.execute("SELECT COUNT(*) FROM studio_projects_3610 WHERE user_id=? AND status='completed'",(user_id,)).fetchone()[0]); failed=int(c.execute("SELECT COUNT(*) FROM studio_projects_3610 WHERE user_id=? AND status='failed'",(user_id,)).fetchone()[0]); queued=int(c.execute("SELECT COUNT(*) FROM studio_projects_3610 WHERE user_id=? AND status='queued'",(user_id,)).fetchone()[0])
         return {"version":VERSION,"projects_total":total,"completed":done,"failed":failed,"queued":queued,"success_rate":round(done/max(1,total),4),"fast_mode":FAST_MODE,"queue_running":bool(WORKER_STARTED),"max_retries":MAX_RETRIES,"truthful":True}
 
     @app.get("/infinity/studio/features")
@@ -5554,7 +5554,7 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
     @app.get("/infinity/studio/workspace/summary")
     def workspace_summary(request: Request, response: Response):
         user_id=_get_user_id(request); _set_session(response,request,user_id); projects=_project_list(user_id,200); catalog=_feature_catalog(user_id)
-        return {"version":VERSION,"projects":len(projects),"completed":sum(p.get("status") in {"completed","completed_with_qc_warnings"} for p in projects),"running":sum(p.get("status") in {"running","queued"} for p in projects),"core_features":len(CREATOR_100_FEATURES),"available_features":len(catalog),"custom_features":len(catalog)-len(CREATOR_100_FEATURES),"extensible":True,"truthful":True}
+        return {"version":VERSION,"projects":len(projects),"completed":sum(p.get("status") == "completed" for p in projects),"running":sum(p.get("status") in {"running","queued"} for p in projects),"core_features":len(CREATOR_100_FEATURES),"available_features":len(catalog),"custom_features":len(catalog)-len(CREATOR_100_FEATURES),"extensible":True,"truthful":True}
 
 
     @app.get("/infinity/studio/site-manifest")
