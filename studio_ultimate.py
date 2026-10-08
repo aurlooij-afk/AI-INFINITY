@@ -1631,9 +1631,15 @@ def _espeak_exact_voice(exe: str, language: str) -> Optional[str]:
         proc = subprocess.run([exe, "--voices=" + code], capture_output=True, text=True, timeout=20)
         if proc.returncode != 0:
             return None
-        for line in (proc.stdout or "").splitlines():
-            if re.search(r"\b" + re.escape(code) + r"\b", line, re.I):
-                return code
+        rows = [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
+        # eSpeak's filtered --voices output reports voices suitable for the
+        # requested BCP-47 language. The returned voice name may be generic
+        # (for example "en") even when the requested variant is "en-us".
+        # Suitability is therefore established by a non-header voice row, then
+        # the original requested language code is passed to the synthesizer.
+        voice_rows = [x for x in rows if not x.lower().startswith("pty") and not x.lower().startswith("language")]
+        if voice_rows:
+            return code
     except Exception:
         return None
     return None
