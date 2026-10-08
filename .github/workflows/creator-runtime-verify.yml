@@ -2,9 +2,9 @@ name: AI Infinity Standalone Runtime Verification
 
 on:
   push:
-    branches: [main]
+    branches: [main, ai-infinity-canonical-divine]
   pull_request:
-    branches: [main]
+    branches: [main, ai-infinity-canonical-divine]
   workflow_dispatch:
 
 permissions:
@@ -91,6 +91,10 @@ jobs:
           assert "Reality Kernel" in r.text
           print("standalone-runtime-ok")
           PY
+
+      - name: Run canonical self-test
+        run: |
+          python -m ai_infinity.selftest
 
       - name: Verify professional closure regression tests
         run: |
