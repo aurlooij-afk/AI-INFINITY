@@ -1596,8 +1596,8 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             ai_prompt or query,
             outdir,
             index,
-            width=1600 if FAST_MODE else 1920,
-            height=900 if FAST_MODE else 1080,
+            width=960 if FAST_MODE else 1920,
+            height=540 if FAST_MODE else 1080,
         )
         if fallback and Path(str(fallback.get("path") or "")).is_file():
             fallback_failures = [
@@ -2027,10 +2027,12 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
         # scaling once to the real delivery resolution. The final artifact remains
         # 1280x720-class (or the equivalent portrait/square profile).
         work_ratio_dims = {
-            "16:9": (960, 540),
-            "9:16": (540, 960),
-            "1:1": (540, 540),
-            "4:5": (540, 675),
+            # 640x360-class intermediates keep FFmpeg frame buffers small on the
+            # 512 MiB free Render service while the final artifact remains 1280x720-class.
+            "16:9": (640, 360),
+            "9:16": (360, 640),
+            "1:1": (360, 360),
+            "4:5": (360, 450),
         }
         work_w, work_h = work_ratio_dims.get(str(aspect_ratio or "16:9"), (960, 540))
         fps, font = 18, 30
@@ -2061,8 +2063,10 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
                 f"x={text_x}:y={text_y}:fontsize={font}:fontcolor=white"
             )
             visual_args = ["-loop", "1", "-i", src]
-        audio_filter = "[1:a]loudnorm=I=-16:TP=-1.5:LRA=7[vo];[2:a]volume=0.075[m];[3:a]adelay=80|80,volume=0.05[s];[vo][m][s]amix=inputs=3:duration=longest:dropout_transition=1[a]"
-        preset, crf, ab = "veryfast", "20", "160k"
+        # Avoid the expensive loudness-analysis filter in FAST mode. A bounded
+        # volume mix is deterministic and materially lighter on constrained workers.
+        audio_filter = "[1:a]volume=0.95[vo];[2:a]volume=0.06[m];[3:a]adelay=80|80,volume=0.04[s];[vo][m][s]amix=inputs=3:duration=longest:dropout_transition=1[a]"
+        preset, crf, ab = "ultrafast", "22", "128k"
     else:
         width, height, fps, font = 1920, 1080, 24, 36
         # Production mode must keep the 1080p delivery contract, but the expensive
@@ -3084,7 +3088,17 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             shared_music = _make_silent_voice(outdir, 9901, music_seconds)[0]
         ai_video_enabled = os.getenv("AI_INFINITY_AI_VIDEO", "1").strip().lower() in {"1","true","yes","auto"}
         requested_ai_video_scenes = max(0, int(os.getenv("AI_INFINITY_AI_VIDEO_SCENES", "2")))
-        max_ai_video_scenes = min(requested_ai_video_scenes, 1 if FAST_MODE else 4) if ai_video_enabled else 0
+        # The free Render tier cannot safely host text-to-video model memory in the
+        # same process as FFmpeg scene assembly. Keep heavy remote video generation
+        # opt-in for FAST mode; standard/normal production may still use it.
+        allow_heavy_fast = os.getenv("AI_INFINITY_ALLOW_HEAVY_VIDEO_FAST", "0").strip().lower() in {"1","true","yes","on"}
+        max_ai_video_scenes = (
+            min(requested_ai_video_scenes, 1 if allow_heavy_fast else 0)
+            if FAST_MODE and ai_video_enabled
+            else min(requested_ai_video_scenes, 4)
+            if ai_video_enabled
+            else 0
+        )
         shared_sfx = make_sfx(outdir, 1.0, 0)
 
         for i, ch in enumerate(chapters, 1):
