@@ -554,7 +554,7 @@ def _verify_provider_content(
             "readback_verified": verified,
             "readback_size_bytes": actual_size,
             "readback_sha256": actual_sha,
-            **({} if verified else {"error": "actual downloaded object size or SHA-256 mismatched"}),
+            **({} if verified else {"error": "actual downloaded object read-back size or SHA-256 mismatched"}),
         }
     finally:
         tmp.unlink(missing_ok=True)
