@@ -61,7 +61,7 @@ def decode(p):
     return {"passed":True,"stderr_empty":not bool(x.stderr.strip())}
 
 def srt_seconds(value):
-    match=re.fullmatch(r"(\\d{2,}):(\\d{2}):(\\d{2}),(\\d{3})",value.strip())
+    match=re.fullmatch(r"(\d{2,}):(\d{2}):(\d{2}),(\d{3})",value.strip())
     assert match,("invalid SRT timestamp",value)
     hours,minutes,seconds,millis=map(int,match.groups())
     assert minutes<60 and seconds<60,("invalid SRT timestamp",value)
@@ -69,7 +69,7 @@ def srt_seconds(value):
 
 def inspect_srt(raw, media_duration):
     text=raw.decode("utf-8-sig","replace").strip()
-    blocks=[b.strip() for b in re.split(r"\\r?\\n\\s*\\r?\\n",text) if b.strip()]
+    blocks=[b.strip() for b in re.split(r"\r?\n\s*\r?\n",text) if b.strip()]
     assert blocks,"captions.srt contains no subtitle cues"
     last_end=0.0
     cues=[]
