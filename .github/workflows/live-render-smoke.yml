@@ -87,6 +87,14 @@ jobs:
           raise SystemExit(f"live Render verification failed or never stabilized: {last}")
           PY
 
+      - name: Install FFmpeg for media acceptance
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          command -v ffprobe
+          command -v ffmpeg
+
       - name: Run a real deployed creator production
         env:
           BASE_URL: https://ai-infinity-ca5e.onrender.com
@@ -168,10 +176,24 @@ jobs:
                       raise SystemExit(f"ffprobe failed: {probe.stderr}")
                   media=json.loads(probe.stdout)
                   streams=media.get("streams",[])
-                  if not any(s.get("codec_type")=="video" for s in streams):
+                  video=next((s for s in streams if s.get("codec_type")=="video"),None)
+                  audio=next((s for s in streams if s.get("codec_type")=="audio"),None)
+                  if not video:
                       raise SystemExit("final.mp4 has no video stream")
-                  if not any(s.get("codec_type")=="audio" for s in streams):
+                  if not audio:
                       raise SystemExit("final.mp4 has no audio stream")
+                  duration=float((media.get("format") or {}).get("duration") or 0)
+                  if duration <= 0 or abs(duration-20.0) > 1.0:
+                      raise SystemExit(f"final.mp4 duration mismatch: expected 20s ±1s, got {duration}")
+
+                  # ffprobe validates container metadata; ffmpeg decode proves every packet
+                  # is readable and catches truncated/corrupt frames and audio packets.
+                  decoded=subprocess.run(
+                      ["ffmpeg","-v","error","-xerror","-i",video_path,"-f","null","-"],
+                      capture_output=True,text=True,timeout=180
+                  )
+                  if decoded.returncode != 0:
+                      raise SystemExit(f"full media decode failed: {decoded.stderr[:3000]}")
 
                   with zipfile.ZipFile(io.BytesIO(work["package.zip"])) as z:
                       packaged=set(z.namelist())

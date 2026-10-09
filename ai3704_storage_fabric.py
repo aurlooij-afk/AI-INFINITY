@@ -95,8 +95,14 @@ def _config(provider: str) -> Dict[str, Any]:
             "region": os.getenv("ORACLE_OBJECT_STORAGE_REGION", "").strip() or "us-phoenix-1",
         }
     if p == "backblaze_b2":
-        endpoint = os.getenv("BACKBLAZE_B2_ENDPOINT", "").strip()
-        region = os.getenv("BACKBLAZE_B2_REGION", "").strip()
+        endpoint = (
+            os.getenv("BACKBLAZE_B2_ENDPOINT", "").strip()
+            or os.getenv("B2_ENDPOINT", "").strip()
+        )
+        region = (
+            os.getenv("BACKBLAZE_B2_REGION", "").strip()
+            or os.getenv("B2_REGION", "").strip()
+        )
         if not endpoint and region:
             endpoint = f"https://s3.{region}.backblazeb2.com"
         return {
@@ -104,9 +110,18 @@ def _config(provider: str) -> Dict[str, Any]:
             "label": "Backblaze B2",
             "kind": "s3",
             "endpoint": endpoint,
-            "bucket": os.getenv("BACKBLAZE_B2_BUCKET", "").strip(),
-            "access": os.getenv("BACKBLAZE_B2_KEY_ID", "").strip(),
-            "secret": os.getenv("BACKBLAZE_B2_APPLICATION_KEY", "").strip(),
+            "bucket": (
+                os.getenv("BACKBLAZE_B2_BUCKET", "").strip()
+                or os.getenv("B2_BUCKET", "").strip()
+            ),
+            "access": (
+                os.getenv("BACKBLAZE_B2_KEY_ID", "").strip()
+                or os.getenv("B2_KEY_ID", "").strip()
+            ),
+            "secret": (
+                os.getenv("BACKBLAZE_B2_APPLICATION_KEY", "").strip()
+                or os.getenv("B2_APPLICATION_KEY", "").strip()
+            ),
             "region": region or "us-west-004",
         }
     if p == "tigris":
@@ -436,15 +451,28 @@ def _persist_path(path: Path, user_id: str, filename: str, content_type: str,
         }
         for fut in as_completed(future_map):
             provider = future_map[fut]
+            uploaded = False
             try:
                 out = fut.result()
-                verification = _head_provider(provider, key)
-                verified = bool(verification.get("exists")) and int(verification.get("size_bytes", -1)) == size
-                if verification.get("sha256"):
-                    verified = verified and verification.get("sha256") == digest
-                results[provider] = {"status": "verified" if verified else "uploaded_unverified", **out, "verification": verification}
+                uploaded = True
+                verification = _verify_provider_content(provider, key, size, digest)
+                verified = bool(verification.get("readback_verified"))
+                results[provider] = {
+                    "status": "verified" if verified else "uploaded_unverified",
+                    **out,
+                    "verification": verification,
+                    "readback_verified": verified,
+                }
+                if not verified:
+                    results[provider]["error"] = str(
+                        verification.get("error") or "actual object read-back did not match"
+                    )[:800]
             except Exception as exc:
-                results[provider] = {"status": "failed", "error": str(exc)[:800]}
+                results[provider] = {
+                    "status": "uploaded_unverified" if uploaded else "failed",
+                    "readback_verified": False,
+                    "error": f"{type(exc).__name__}: {str(exc)[:800]}",
+                }
 
     status = _durability_status(results, configured)
     _record_asset(asset_id, user_id, key, filename, content_type, size, digest, primary, status, metadata)
@@ -471,12 +499,20 @@ def _download_to(provider: str, key: str, destination: Path) -> Dict[str, Any]:
     if cfg["kind"] == "s3":
         obj = _client(cfg).get_object(Bucket=cfg["bucket"], Key=key)
         body = obj["Body"]
-        with destination.open("wb") as f:
-            while True:
-                chunk = body.read(1024 * 1024)
-                if not chunk:
-                    break
-                f.write(chunk)
+        try:
+            with destination.open("wb") as f:
+                while True:
+                    chunk = body.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+        finally:
+            close = getattr(body, "close", None)
+            if callable(close):
+                close()
+            release = getattr(body, "release_conn", None)
+            if callable(release):
+                release()
         return {"size_bytes": destination.stat().st_size}
     url = cfg["base"] + _supabase_path(cfg["bucket"], key)
     with requests.get(url, headers=_supabase_headers(cfg), stream=True, timeout=300) as resp:
@@ -488,9 +524,45 @@ def _download_to(provider: str, key: str, destination: Path) -> Dict[str, Any]:
                     f.write(chunk)
     return {"size_bytes": destination.stat().st_size}
 
+def _verify_provider_content(
+    provider: str, key: str, expected_size: int, expected_sha256: str
+) -> Dict[str, Any]:
+    """Verify the actual stored object bytes, not only HEAD size or self-reported metadata."""
+    head = _head_provider(provider, key)
+    head_size = int(head.get("size_bytes", -1))
+    head_sha = str(head.get("sha256") or "")
+    if not head.get("exists") or head_size != int(expected_size):
+        return {
+            **head,
+            "readback_verified": False,
+            "error": "object HEAD is missing or its size does not match the uploaded bytes",
+        }
+    if head_sha and head_sha != expected_sha256:
+        return {
+            **head,
+            "readback_verified": False,
+            "error": "object SHA-256 metadata does not match the uploaded bytes",
+        }
+
+    tmp = STAGING / f"verify-readback-{uuid.uuid4().hex}.bin"
+    try:
+        _download_to(provider, key, tmp)
+        actual_size, actual_sha = _sha256_file(tmp)
+        verified = actual_size == int(expected_size) and actual_sha == expected_sha256
+        return {
+            **head,
+            "readback_verified": verified,
+            "readback_size_bytes": actual_size,
+            "readback_sha256": actual_sha,
+            **({} if verified else {"error": "actual downloaded object read-back size or SHA-256 mismatched"}),
+        }
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def _repair(asset_id: str, user_id: str) -> Dict[str, Any]:
     asset = _asset_row(asset_id, user_id)
-    successful = [r["provider"] for r in asset["replicas"] if r.get("status") in ("verified", "uploaded_unverified") and _configured(_config(r["provider"]))]
+    successful = [r["provider"] for r in asset["replicas"] if r.get("status") == "verified" and _configured(_config(r["provider"]))]
     configured = _configured_provider_names()
     missing = [p for p in configured if p not in successful]
     if not missing:
@@ -505,12 +577,18 @@ def _repair(asset_id: str, user_id: str) -> Dict[str, Any]:
         for provider in missing:
             try:
                 out = _put_provider(provider, asset["object_key"], tmp, asset["content_type"], asset["sha256"])
-                verification = _head_provider(provider, asset["object_key"])
-                verified = bool(verification.get("exists")) and int(verification.get("size_bytes",-1)) == int(asset["size_bytes"])
-                if verification.get("sha256"):
-                    verified = verified and verification.get("sha256") == asset["sha256"]
+                verification = _verify_provider_content(
+                    provider, asset["object_key"], int(asset["size_bytes"]), str(asset["sha256"])
+                )
+                verified = bool(verification.get("readback_verified"))
                 results[provider] = "verified" if verified else "uploaded_unverified"
-                _record_replica(asset_id, provider, results[provider], {**out, **verification})
+                _record_replica(
+                    asset_id,
+                    provider,
+                    results[provider],
+                    {**out, **verification},
+                    "" if verified else str(verification.get("error") or "read-back failed"),
+                )
             except Exception as exc:
                 results[provider] = "failed: " + str(exc)[:300]
                 _record_replica(asset_id, provider, "failed", {}, str(exc))
@@ -633,35 +711,41 @@ def storage_repair(asset_id: str, request: Request):
     return _repair(asset_id, _uid(request))
 
 @APP.post("/infinity/storage/v1/verify/{asset_id}")
-def storage_verify(asset_id: str, request: Request, full: bool = False):
+def storage_verify(asset_id: str, request: Request, full: bool = True):
     asset = _asset_row(asset_id, _uid(request))
     results = []
     for replica in asset["replicas"]:
         p = replica["provider"]
         try:
-            head = _head_provider(p, asset["object_key"])
-            ok = bool(head.get("exists")) and int(head.get("size_bytes",-1)) == int(asset["size_bytes"])
-            sha = head.get("sha256") or ""
-            if sha:
-                ok = ok and sha == asset["sha256"]
-            if full and ok:
-                tmp = STAGING / f"verify-{uuid.uuid4().hex}.bin"
-                try:
-                    _download_to(p, asset["object_key"], tmp)
-                    _, digest = _sha256_file(tmp)
-                    ok = digest == asset["sha256"]
-                finally:
-                    tmp.unlink(missing_ok=True)
-            status = "verified" if ok else "mismatch"
-            _record_replica(asset_id, p, status, head, "" if ok else "size/checksum mismatch")
-            results.append({"provider": p, "status": status, "details": head})
+            if full:
+                details = _verify_provider_content(
+                    p, asset["object_key"], int(asset["size_bytes"]), str(asset["sha256"])
+                )
+                status = "verified" if details.get("readback_verified") else "mismatch"
+                _record_replica(
+                    asset_id, p, status, details,
+                    "" if status == "verified" else str(details.get("error") or "actual object read-back failed"),
+                )
+            else:
+                details = _head_provider(p, asset["object_key"])
+                head_ok = bool(details.get("exists")) and int(details.get("size_bytes", -1)) == int(asset["size_bytes"])
+                head_sha = str(details.get("sha256") or "")
+                if head_sha:
+                    head_ok = head_ok and head_sha == str(asset["sha256"])
+                status = "metadata_only" if head_ok else "mismatch"
+            results.append({"provider": p, "status": status, "details": details})
         except Exception as exc:
-            _record_replica(asset_id, p, "failed", {}, str(exc))
-            results.append({"provider": p, "status": "failed", "error": str(exc)[:500]})
-    verified = sum(1 for x in results if x["status"] == "verified")
-    status = "durable_5_provider" if verified == 5 else ("durable_multi_provider" if verified >= 2 else ("primary_only" if verified == 1 else "failed"))
-    with LOCK, DB() as c:
-        c.execute("UPDATE ai_storage_assets SET status=?,updated_at=? WHERE asset_id=?", (status,NOW(),asset_id))
+            status = "failed"
+            if full:
+                _record_replica(asset_id, p, status, {}, str(exc))
+            results.append({"provider": p, "status": status, "error": f"{type(exc).__name__}: {str(exc)[:500]}"})
+    if full:
+        verified = sum(1 for x in results if x["status"] == "verified")
+        status = "durable_5_provider" if verified == 5 else ("durable_multi_provider" if verified >= 2 else ("primary_only" if verified == 1 else "failed"))
+        with LOCK, DB() as c:
+            c.execute("UPDATE ai_storage_assets SET status=?,updated_at=? WHERE asset_id=?", (status,NOW(),asset_id))
+    else:
+        status = str(asset.get("status") or "unverified")
     return {"status": status, "asset_id": asset_id, "full_verification": bool(full), "results": results, "truthful": True}
 
 @APP.get("/infinity/storage/v1/url/{asset_id}")

@@ -137,4 +137,49 @@ while time.time()<durability_deadline:
 else:
     raise AssertionError("live B2 snapshot was not durably read-back verified after edit/undo: "+json.dumps({"storage":storage,"backend":backend_state},sort_keys=True)[:5000])
 
-print(json.dumps({"passed":True,"project_id":pid,"version_1":v1,"version_2":v2,"duration":duration,"edited_duration":duration2,"v1_sha256":h1,"v2_sha256":h2,"bytes":one.stat().st_size,"durability":{"persistent":storage.get("persistent"),"snapshot_verified":backend_state.get("snapshot_verified"),"snapshot_sha256":backend_state.get("last_sha256"),"last_sync_at":backend_state.get("last_sync_at")}},indent=2))
+# Prove a binary artifact is in remote B2 storage, read back byte-for-byte,
+# and downloadable independently of the local Render filesystem.
+provider_status,_=ok("/infinity/storage/v1/status")
+configured_providers=provider_status.get("configured_providers") or []
+assert "backblaze_b2" in configured_providers, {
+    "configured_providers": configured_providers,
+    "message": "The existing B2 state credentials must also be usable for artifacts."
+}
+storage_list,_=ok("/infinity/storage/v1/assets?limit=200")
+remote_asset=None
+for row in storage_list.get("assets") or []:
+    if row.get("filename") != "final.mp4":
+        continue
+    details,_=ok("/infinity/storage/v1/assets/"+urllib.parse.quote(str(row.get("asset_id") or ""),safe=""))
+    item=details.get("asset") or {}
+    if (item.get("metadata") or {}).get("project_id")==pid:
+        remote_asset=item
+        break
+assert remote_asset is not None, "the generated final.mp4 was not registered in durable object storage for the test project"
+remote_id=str(remote_asset["asset_id"])
+full_verify,_=ok("/infinity/storage/v1/verify/"+urllib.parse.quote(remote_id,safe="")+"?full=true","POST")
+checks=full_verify.get("results") or []
+b2_check=next((x for x in checks if x.get("provider")=="backblaze_b2"),None)
+assert b2_check and b2_check.get("status")=="verified" and (b2_check.get("details") or {}).get("readback_verified") is True, {
+    "status":full_verify.get("status"),
+    "providers":[{"provider":x.get("provider"),"status":x.get("status")} for x in checks]
+}
+signed,_=ok("/infinity/storage/v1/url/"+urllib.parse.quote(remote_id,safe=""))
+assert signed.get("provider")=="backblaze_b2" and signed.get("url"), {
+    "provider":signed.get("provider"),"signed_url_returned":bool(signed.get("url"))
+}
+try:
+    with urllib.request.urlopen(
+        urllib.request.Request(signed["url"],headers={"User-Agent":"AI-Infinity-object-readback/1"}),
+        timeout=120
+    ) as response:
+        remote_bytes=response.read()
+except Exception as exc:
+    # Never print a signed URL or query parameters in CI logs.
+    raise AssertionError("signed durable artifact download failed: "+type(exc).__name__) from exc
+remote_digest=hashlib.sha256(remote_bytes).hexdigest()
+assert len(remote_bytes)==int(remote_asset.get("size_bytes") or -1), "signed download size mismatch"
+assert remote_digest==str(remote_asset.get("sha256") or ""), "signed download SHA-256 mismatch"
+assert remote_digest==h1, "object-store final.mp4 does not match the app-served restored version"
+
+print(json.dumps({"passed":True,"project_id":pid,"version_1":v1,"version_2":v2,"duration":duration,"edited_duration":duration2,"v1_sha256":h1,"v2_sha256":h2,"bytes":one.stat().st_size,"durability":{"persistent":storage.get("persistent"),"snapshot_verified":backend_state.get("snapshot_verified"),"snapshot_sha256":backend_state.get("last_sha256"),"last_sync_at":backend_state.get("last_sync_at"),"artifact_object_store":{"provider":"backblaze_b2","asset_id":remote_id,"readback_verified":b2_check["details"].get("readback_verified"),"download_size_bytes":len(remote_bytes),"download_sha256":remote_digest}}},indent=2))
