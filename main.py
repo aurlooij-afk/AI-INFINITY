@@ -1,4 +1,5 @@
 # Final production verification checkpoint: persisted Reality Kernel delivery gate.
+from pathlib import Path
 from fastapi import FastAPI, Request, Response
 import ai_infinity_canonical
 import reality_first_3901
@@ -18,6 +19,40 @@ app = FastAPI(
     docs_url="/infinity/canonical/docs",
     redoc_url=None,
 )
+
+# TARGET-2050.3704 is a shared-namespace integration layer, not a standalone
+# Python router module: its routes bind APP from globals()["app"] and use the
+# same SQLite connection/lock as Creator Studio. Load it in the serving
+# main:app namespace only after the actual FastAPI app exists. A normal import
+# would bind a different module namespace and leave these endpoints unmounted.
+_db_lock = studio_ultimate.DB_LOCK
+db = studio_ultimate._connect
+now = studio_ultimate.now
+uid = studio_ultimate._get_user_id
+_storage_fabric_path = Path(__file__).resolve().with_name("ai3704_storage_fabric.py")
+exec(
+    compile(
+        _storage_fabric_path.read_text(encoding="utf-8"),
+        str(_storage_fabric_path),
+        "exec",
+    ),
+    globals(),
+)
+_required_storage_routes = {
+    "/infinity/storage/v1/status",
+    "/infinity/storage/v1/verify/{asset_id}",
+}
+_registered_storage_routes = {
+    str(getattr(route, "path", "")) for route in app.router.routes
+}
+_missing_storage_routes = _required_storage_routes - _registered_storage_routes
+if _missing_storage_routes:
+    raise RuntimeError(
+        "TARGET-2050.3704 storage route registration failed: "
+        + ", ".join(sorted(_missing_storage_routes))
+    )
+app.state.ai_infinity_storage_routes_registered = True
+del _storage_fabric_path, _required_storage_routes, _registered_storage_routes, _missing_storage_routes
 
 reality_first_3901.install()
 production_graph.install()
