@@ -212,6 +212,38 @@ def _source_assets(p: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [r for r in rows if str(r.get("kind") or "").lower() == "visual"]
 
 
+def _visual_diversity_metrics(
+    visual_rows: List[Dict[str, Any]], scene_count: int
+) -> Dict[str, Any]:
+    """Measure visual diversity against rendered scenes, not asset-row count.
+
+    A single rendered scene has no cross-scene diversity requirement. Duplicate
+    database rows must not manufacture an extra required visual. For multi-scene
+    edits, retain the existing 60% distinct-visual threshold, bounded by the
+    number of scene masters actually rendered.
+    """
+    s = _studio()
+    unique_visual_hashes = set()
+    for row in visual_rows:
+        try:
+            path = Path(str(row.get("path") or ""))
+            if path.is_file():
+                unique_visual_hashes.add(s.file_sha256(path))
+        except Exception:
+            pass
+
+    rendered_scene_count = max(1, int(scene_count or 1))
+    required_unique = min(
+        rendered_scene_count,
+        max(1, int((rendered_scene_count * 0.6) + 0.999)),
+    )
+    return {
+        "unique_visual_hashes": len(unique_visual_hashes),
+        "required_unique_visual_hashes": required_unique,
+        "visual_diversity_ok": len(unique_visual_hashes) >= required_unique,
+    }
+
+
 def _artifact_registry(project_id: str) -> Dict[str, Dict[str, Any]]:
     s = _studio()
     with s.DB_LOCK, s._connect() as c:
@@ -523,18 +555,11 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     elif fallback_rows:
         warnings.append(f"{len(fallback_rows)} scenes used local original-motion fallback")
 
-    unique_visual_hashes = set()
-    for row in visual_rows:
-        try:
-            path = Path(str(row.get("path") or ""))
-            if path.is_file():
-                unique_visual_hashes.add(s.file_sha256(path))
-        except Exception:
-            pass
-    required_unique = min(len(visual_rows), max(1, int((len(visual_rows) * 0.6) + 0.999)))
-    checks["unique_visual_hashes"] = len(unique_visual_hashes)
-    checks["visual_diversity_ok"] = len(unique_visual_hashes) >= required_unique
-    if len(visual_rows) > 1 and not checks["visual_diversity_ok"]:
+    visual_diversity = _visual_diversity_metrics(visual_rows, effective_scene_count)
+    checks["unique_visual_hashes"] = visual_diversity["unique_visual_hashes"]
+    checks["visual_diversity_required_unique_hashes"] = visual_diversity["required_unique_visual_hashes"]
+    checks["visual_diversity_ok"] = visual_diversity["visual_diversity_ok"]
+    if effective_scene_count > 1 and not checks["visual_diversity_ok"]:
         failures.append("visual diversity check failed: the edit reuses too few distinct visual assets")
 
     rights_path = files.get("visual_rights.json")
