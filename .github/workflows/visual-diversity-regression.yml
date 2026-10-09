@@ -3,7 +3,15 @@ name: Visual Diversity Truth Regression
 on:
   push:
     branches:
+      - main
       - fix/visual-diversity-scene-count
+    paths:
+      - production_closure_3624.py
+      - tests/test_visual_diversity_truth.py
+      - .github/workflows/visual-diversity-regression.yml
+  pull_request:
+    branches:
+      - main
     paths:
       - production_closure_3624.py
       - tests/test_visual_diversity_truth.py
