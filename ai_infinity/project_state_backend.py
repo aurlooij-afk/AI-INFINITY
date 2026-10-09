@@ -23,6 +23,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -35,13 +36,17 @@ except Exception:  # pragma: no cover
 
 
 _LOCK = threading.RLock()
+_SNAPSHOT_LOCK = threading.Lock()
 _DB_PATH: Optional[Path] = None
 _SYNC_TIMER: Optional[threading.Timer] = None
+_CHANGE_GENERATION = 0
+_SYNC_DIRTY = False
 
 _STATUS: Dict[str, Any] = {
     "configured": False,
     "active": False,
     "verified": False,
+    "snapshot_verified": False,
     "backend": None,
     "last_sync_at": None,
     "last_sha256": None,
@@ -87,12 +92,16 @@ def contract_enabled() -> bool:
 
 
 def ready() -> bool:
+    """Return true only when the backend and current project-state snapshot are verified."""
     with _LOCK:
         return bool(
             contract_enabled()
             and configured()
             and _STATUS.get("active")
             and _STATUS.get("verified")
+            and _STATUS.get("snapshot_verified")
+            and _STATUS.get("last_sha256")
+            and _STATUS.get("last_sync_at")
         )
 
 
@@ -136,31 +145,50 @@ def _head(key: Optional[str] = None) -> Optional[Dict[str, Any]]:
 
 
 def _verify_roundtrip() -> bool:
-    """Prove the configured credential can write and verify an R2 object."""
+    """Prove credentials support a real write/read-back using an isolated canary key."""
     cfg = _cfg()
-    key = (
+    base_key = (
         os.getenv(
             "AI_INFINITY_PROJECT_STATE_CANARY_KEY",
             "ai-infinity/project-state/.canary",
         ).strip()
         or "ai-infinity/project-state/.canary"
     )
+    # Never overwrite or delete an operator-managed canary object.
+    key = f"{base_key}.{uuid.uuid4().hex}"
     payload = b"ai-infinity-project-state-canary-v1\n"
+    digest = hashlib.sha256(payload).hexdigest()
     client = _client()
-    client.put_object(
-        Bucket=cfg["bucket"],
-        Key=key,
-        Body=payload,
-        ContentType="text/plain",
-        Metadata={"ai-infinity-canary": "v1"},
-    )
-    h = client.head_object(Bucket=cfg["bucket"], Key=key)
-    verified = int(h.get("ContentLength") or 0) == len(payload)
     try:
-        client.delete_object(Bucket=cfg["bucket"], Key=key)
-    except Exception:
-        pass
-    return verified
+        client.put_object(
+            Bucket=cfg["bucket"],
+            Key=key,
+            Body=payload,
+            ContentType="text/plain",
+            Metadata={"ai-infinity-canary": "v1", "ai-infinity-sha256": digest},
+        )
+        head = client.head_object(Bucket=cfg["bucket"], Key=key)
+        body = client.get_object(Bucket=cfg["bucket"], Key=key).get("Body")
+        if body is None:
+            return False
+        try:
+            actual = body.read()
+        finally:
+            close = getattr(body, "close", None)
+            if callable(close):
+                close()
+        metadata = head.get("Metadata") or {}
+        return bool(
+            int(head.get("ContentLength") or -1) == len(payload)
+            and actual == payload
+            and hashlib.sha256(actual).hexdigest() == digest
+            and str(metadata.get("ai-infinity-sha256") or "") == digest
+        )
+    finally:
+        try:
+            client.delete_object(Bucket=cfg["bucket"], Key=key)
+        except Exception:
+            pass
 
 
 def configure(db_path: Path | str) -> Dict[str, Any]:
@@ -176,7 +204,10 @@ def configure(db_path: Path | str) -> Dict[str, Any]:
                 "configured": configured(),
                 "active": bool(contract_enabled() and configured()),
                 "verified": False,
+                "snapshot_verified": False,
                 "backend": "backblaze_b2" if contract_enabled() else None,
+                "last_sync_at": None,
+                "last_sha256": None,
                 "last_error": None,
             }
         )
@@ -203,53 +234,74 @@ def configure(db_path: Path | str) -> Dict[str, Any]:
 
 
 def restore_on_startup() -> Dict[str, Any]:
+    global _CHANGE_GENERATION, _SYNC_DIRTY
     with _LOCK:
         path = _DB_PATH
         active = bool(_STATUS.get("active") and _STATUS.get("verified"))
     if path is None or not active:
         return {"restored": False, "reason": "backend_not_active", "truthful": True}
 
-    # A persistent-volume database is authoritative locally. On the ephemeral
-    # Render instance the database file is absent and the remote snapshot wins.
+    # A nonempty local database is authoritative; it is not proof of a current
+    # remote recovery point, so leave snapshot_verified false until synced.
     if path.exists() and path.stat().st_size > 0:
         return {"restored": False, "reason": "local_database_present", "truthful": True}
 
+    tmp_path: Optional[Path] = None
+    body = None
     try:
         head = _head()
         if not head or int(head.get("size_bytes") or 0) <= 0:
             return {"restored": False, "reason": "no_remote_snapshot", "truthful": True}
-
-        raw = _client().get_object(
-            Bucket=_cfg()["bucket"], Key=object_key()
-        )["Body"].read()
-        digest = hashlib.sha256(raw).hexdigest()
         expected = str(head.get("sha256") or "")
-        if expected and expected != digest:
-            raise RuntimeError("remote project-state snapshot checksum mismatch")
+        if len(expected) != 64:
+            raise RuntimeError("remote project-state snapshot has no trustworthy SHA-256 metadata")
 
+        response = _client().get_object(Bucket=_cfg()["bucket"], Key=object_key())
+        body = response.get("Body")
+        if body is None:
+            raise RuntimeError("remote project-state snapshot download returned no body")
+        digest = hashlib.sha256()
+        size = 0
         with tempfile.NamedTemporaryFile(
             prefix="ai-infinity-state-", suffix=".db", dir=str(path.parent), delete=False
         ) as tmp:
             tmp_path = Path(tmp.name)
-            tmp.write(raw)
+            while True:
+                chunk = body.read(1024 * 1024)
+                if not chunk:
+                    break
+                tmp.write(chunk)
+                digest.update(chunk)
+                size += len(chunk)
+        actual_digest = digest.hexdigest()
+        if size != int(head.get("size_bytes") or -1) or actual_digest != expected:
+            raise RuntimeError("remote project-state snapshot size or SHA-256 verification failed")
+
+        check_db = sqlite3.connect(str(tmp_path), timeout=10)
+        try:
+            check = check_db.execute("PRAGMA quick_check").fetchone()
+        finally:
+            check_db.close()
+        if not check or str(check[0]).lower() != "ok":
+            raise RuntimeError("remote project-state snapshot failed SQLite quick_check")
 
         tmp_path.replace(path)
+        tmp_path = None
         for suffix in ("-wal", "-shm", "-journal"):
             path.with_name(path.name + suffix).unlink(missing_ok=True)
 
         with _LOCK:
-            _STATUS["last_sync_at"] = head.get("snapshot_at") or None
-            _STATUS["last_sha256"] = digest
+            _STATUS["snapshot_verified"] = True
+            _STATUS["last_sync_at"] = head.get("snapshot_at") or str(time.time())
+            _STATUS["last_sha256"] = actual_digest
             _STATUS["last_error"] = None
+            _CHANGE_GENERATION = 0
+            _SYNC_DIRTY = False
 
-        return {
-            "restored": True,
-            "size_bytes": len(raw),
-            "sha256": digest,
-            "truthful": True,
-        }
+        return {"restored": True, "size_bytes": size, "sha256": actual_digest, "truthful": True}
     except Exception as exc:
         with _LOCK:
+            _STATUS["snapshot_verified"] = False
             _STATUS["last_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
         return {
             "restored": False,
@@ -257,6 +309,15 @@ def restore_on_startup() -> Dict[str, Any]:
             "error": f"{type(exc).__name__}: {str(exc)[:300]}",
             "truthful": True,
         }
+    finally:
+        close = getattr(body, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
 
 def _snapshot_database() -> Path:
@@ -288,89 +349,152 @@ def _snapshot_database() -> Path:
         raise
 
 
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def snapshot_now() -> Dict[str, Any]:
+    """Publish a consistent SQLite snapshot only after verified object-store read-back."""
+    global _SYNC_DIRTY
+    with _SNAPSHOT_LOCK:
+        with _LOCK:
+            active = bool(_STATUS.get("active") and _STATUS.get("verified"))
+            path = _DB_PATH
+            generation = _CHANGE_GENERATION
+        if not active or path is None:
+            return {"status": "disabled", "truthful": True}
+
+        tmp: Optional[Path] = None
+        try:
+            tmp = _snapshot_database()
+            size = tmp.stat().st_size
+            if size <= 0:
+                raise RuntimeError("project-state snapshot is empty")
+            digest = _sha256_path(tmp)
+            stamp = str(time.time())
+            client = _client()
+            with tmp.open("rb") as stream:
+                client.put_object(
+                    Bucket=_cfg()["bucket"],
+                    Key=object_key(),
+                    Body=stream,
+                    ContentType="application/x-sqlite3",
+                    Metadata={
+                        "ai-infinity-sha256": digest,
+                        "ai-infinity-snapshot-at": stamp,
+                        "ai-infinity-schema": "studio-state-v1",
+                    },
+                )
+
+            head = _head()
+            if not head or int(head.get("size_bytes") or -1) != size:
+                raise RuntimeError("B2 project-state snapshot size verification failed")
+            if str(head.get("sha256") or "") != digest:
+                raise RuntimeError("B2 project-state snapshot SHA-256 metadata verification failed")
+
+            body = client.get_object(Bucket=_cfg()["bucket"], Key=object_key()).get("Body")
+            if body is None:
+                raise RuntimeError("B2 project-state snapshot read-back returned no body")
+            remote_hash = hashlib.sha256()
+            remote_size = 0
+            try:
+                while True:
+                    chunk = body.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    remote_hash.update(chunk)
+                    remote_size += len(chunk)
+            finally:
+                close = getattr(body, "close", None)
+                if callable(close):
+                    close()
+            if remote_size != size or remote_hash.hexdigest() != digest:
+                raise RuntimeError("B2 project-state snapshot read-back integrity check failed")
+
+            with _LOCK:
+                if _CHANGE_GENERATION != generation:
+                    _STATUS["snapshot_verified"] = False
+                    _STATUS["last_error"] = "Database changed during snapshot; a newer checkpoint is required"
+                    _SYNC_DIRTY = True
+                    return {"status": "stale_snapshot", "size_bytes": size, "sha256": digest, "truthful": True}
+                _STATUS["snapshot_verified"] = True
+                _STATUS["last_sync_at"] = stamp
+                _STATUS["last_sha256"] = digest
+                _STATUS["last_error"] = None
+                _SYNC_DIRTY = False
+
+            return {"status": "verified", "size_bytes": size, "sha256": digest, "snapshot_at": stamp, "truthful": True}
+        except Exception as exc:
+            with _LOCK:
+                _STATUS["snapshot_verified"] = False
+                _STATUS["last_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+            return {"status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:300]}", "truthful": True}
+        finally:
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
+
+
+def _snapshot_timer_job() -> None:
+    global _SYNC_TIMER, _SYNC_DIRTY
     with _LOCK:
-        active = bool(_STATUS.get("active") and _STATUS.get("verified"))
-        path = _DB_PATH
-    if not active or path is None:
-        return {"status": "disabled", "truthful": True}
-
-    tmp: Optional[Path] = None
+        generation = _CHANGE_GENERATION
+        _SYNC_DIRTY = False
     try:
-        tmp = _snapshot_database()
-        raw = tmp.read_bytes()
-        digest = hashlib.sha256(raw).hexdigest()
-        stamp = str(time.time())
-
-        _client().put_object(
-            Bucket=_cfg()["bucket"],
-            Key=object_key(),
-            Body=raw,
-            ContentType="application/x-sqlite3",
-            Metadata={
-                "ai-infinity-sha256": digest,
-                "ai-infinity-snapshot-at": stamp,
-                "ai-infinity-schema": "studio-state-v1",
-            },
-        )
-
-        head = _head()
-        if int((head or {}).get("size_bytes") or -1) != len(raw):
-            raise RuntimeError("B2 project-state snapshot size verification failed")
-        remote_digest = str((head or {}).get("sha256") or "")
-        if remote_digest and remote_digest != digest:
-            raise RuntimeError("B2 project-state snapshot checksum verification failed")
-
-        with _LOCK:
-            _STATUS["last_sync_at"] = stamp
-            _STATUS["last_sha256"] = digest
-            _STATUS["last_error"] = None
-
-        return {
-            "status": "verified",
-            "size_bytes": len(raw),
-            "sha256": digest,
-            "snapshot_at": stamp,
-            "truthful": True,
-        }
-    except Exception as exc:
-        with _LOCK:
-            _STATUS["last_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
-        return {
-            "status": "failed",
-            "error": f"{type(exc).__name__}: {str(exc)[:300]}",
-            "truthful": True,
-        }
+        snapshot_now()
     finally:
-        if tmp is not None:
-            tmp.unlink(missing_ok=True)
+        with _LOCK:
+            changed_while_running = _CHANGE_GENERATION != generation or _SYNC_DIRTY
+            _SYNC_TIMER = None
+            active = bool(_STATUS.get("active") and _STATUS.get("verified"))
+            if changed_while_running and active:
+                _SYNC_DIRTY = False
+                _SYNC_TIMER = threading.Timer(0.25, _snapshot_timer_job)
+                _SYNC_TIMER.daemon = True
+                _SYNC_TIMER.start()
 
 
 def schedule_sync(delay: float = 0.75) -> None:
-    """Debounce committed write checkpoints."""
-    global _SYNC_TIMER
+    """Debounce committed writes and schedule another checkpoint for concurrent changes."""
+    global _SYNC_TIMER, _CHANGE_GENERATION, _SYNC_DIRTY
     with _LOCK:
         if not (_STATUS.get("active") and _STATUS.get("verified")):
             return
+        _CHANGE_GENERATION += 1
+        _STATUS["snapshot_verified"] = False
+        _SYNC_DIRTY = True
         if _SYNC_TIMER is not None and _SYNC_TIMER.is_alive():
             return
-        _SYNC_TIMER = threading.Timer(max(0.2, float(delay)), snapshot_now)
+        _SYNC_TIMER = threading.Timer(max(0.2, float(delay)), _snapshot_timer_job)
         _SYNC_TIMER.daemon = True
         _SYNC_TIMER.start()
 
 
 class DurableConnection(sqlite3.Connection):
-    """SQLite connection that schedules a durable snapshot after writes commit."""
+    """SQLite connection that schedules a durable snapshot after committed data or schema changes."""
 
     def __enter__(self):
         self._ai_initial_changes = self.total_changes
+        self._ai_initial_schema_version = int(
+            self.execute("PRAGMA schema_version").fetchone()[0]
+        )
         return super().__enter__()
 
     def __exit__(self, exc_type, exc_value, traceback):
         before = getattr(self, "_ai_initial_changes", self.total_changes)
+        schema_before = getattr(
+            self,
+            "_ai_initial_schema_version",
+            int(self.execute("PRAGMA schema_version").fetchone()[0]),
+        )
         result = super().__exit__(exc_type, exc_value, traceback)
-        if exc_type is None and self.total_changes > before:
-            schedule_sync()
+        if exc_type is None:
+            schema_after = int(self.execute("PRAGMA schema_version").fetchone()[0])
+            if self.total_changes > before or schema_after != schema_before:
+                schedule_sync()
         return result
 
 
@@ -380,6 +504,7 @@ def status() -> Dict[str, Any]:
     enabled = contract_enabled()
     out.update(
         {
+            "snapshot_verified": bool(out.get("snapshot_verified")),
             "backend": "backblaze_b2" if enabled else None,
             "object_key": object_key() if enabled else None,
             "contract_enabled": enabled,

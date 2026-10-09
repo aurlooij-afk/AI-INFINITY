@@ -2,6 +2,7 @@ from __future__ import annotations
 import hashlib, json, os, subprocess, time, urllib.error, urllib.parse, urllib.request
 from http.cookiejar import CookieJar
 from pathlib import Path
+import uuid
 
 BASE=os.environ.get("BASE_URL","https://ai-infinity-ca5e.onrender.com").rstrip("/")
 JAR=CookieJar(); OPEN=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(JAR))
@@ -67,6 +68,8 @@ else:
     raise AssertionError(f"live deployment revision mismatch: expected {expected_revision}, got {canonical.get('deployment_revision') or health.get('deployment_revision')}")
 assert health.get("canonical") is True,health
 assert canonical.get("truthful") is True,canonical
+studio_health,_=ok("/infinity/studio/health")
+assert studio_health.get("fast_mode") is True, studio_health
 providers,_=ok("/infinity/studio/providers")
 print("MEDIA_PROVIDER_DIAGNOSTICS", json.dumps(providers, sort_keys=True), flush=True)
 caps,_=ok("/infinity/canonical/capabilities"); assert caps.get("local",{}).get("media_core") is True,caps
@@ -75,7 +78,7 @@ assert contract.get("version")=="TARGET-2050.3624", contract
 assert contract.get("contract",{}).get("no_fake_completion") is True, contract
 pre,_=ok("/infinity/canonical/preflight","POST",{"command":"Create a 20 second cinematic video about Earth from space"}); assert pre.get("ready") is True,pre
 
-created,_=ok("/infinity/canonical/create","POST",{"command":"Create a 20 second cinematic video about Earth from space","duration":20,"format":"short","aspect_ratio":"16:9","idempotency_key":"live-production-proof-v3"})
+created,_=ok("/infinity/canonical/create","POST",{"command":"Create a 20 second cinematic video about Earth from space","duration":20,"format":"short","aspect_ratio":"16:9","idempotency_key":"live-production-proof-" + (os.environ.get("GITHUB_RUN_ID") or uuid.uuid4().hex)})
 pid=created["project_id"]; v1=created["version"]["version_id"]
 state=wait(pid); assert state["status"] in {"completed","completed_with_qc_warnings"},state
 
@@ -119,4 +122,19 @@ ids=[v["version_id"] for v in versions["versions"]]; assert v1 in ids and v2 in 
 undo,_=ok("/infinity/canonical/project/"+pid+"/undo","POST"); assert undo["current_version_id"]==v1,undo
 restored=root/"restored.mp4"; download("/infinity/studio/project/"+pid+"/asset/final.mp4",restored)
 assert sha(restored)==h1
-print(json.dumps({"passed":True,"project_id":pid,"version_1":v1,"version_2":v2,"duration":duration,"edited_duration":duration2,"v1_sha256":h1,"v2_sha256":h2,"bytes":one.stat().st_size},indent=2))
+
+# Wait for a real project-state snapshot write/read-back to settle after the edit+undo.
+storage={}
+backend_state={}
+durability_deadline=time.time()+30
+while time.time()<durability_deadline:
+    canonical_after,_=ok("/infinity/canonical/health")
+    storage=(canonical_after.get("capabilities") or {}).get("storage") or {}
+    backend_state=storage.get("project_state_backend_status") or {}
+    if storage.get("persistent") is True and backend_state.get("snapshot_verified") is True and len(str(backend_state.get("last_sha256") or ""))==64 and backend_state.get("last_sync_at"):
+        break
+    time.sleep(1)
+else:
+    raise AssertionError("live B2 snapshot was not durably read-back verified after edit/undo: "+json.dumps({"storage":storage,"backend":backend_state},sort_keys=True)[:5000])
+
+print(json.dumps({"passed":True,"project_id":pid,"version_1":v1,"version_2":v2,"duration":duration,"edited_duration":duration2,"v1_sha256":h1,"v2_sha256":h2,"bytes":one.stat().st_size,"durability":{"persistent":storage.get("persistent"),"snapshot_verified":backend_state.get("snapshot_verified"),"snapshot_sha256":backend_state.get("last_sha256"),"last_sync_at":backend_state.get("last_sync_at")}},indent=2))
