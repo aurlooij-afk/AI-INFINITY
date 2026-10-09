@@ -2,6 +2,7 @@ from __future__ import annotations
 import hashlib, json, os, subprocess, time, urllib.error, urllib.parse, urllib.request
 from http.cookiejar import CookieJar
 from pathlib import Path
+import uuid
 
 BASE=os.environ.get("BASE_URL","https://ai-infinity-ca5e.onrender.com").rstrip("/")
 JAR=CookieJar(); OPEN=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(JAR))
@@ -67,6 +68,8 @@ else:
     raise AssertionError(f"live deployment revision mismatch: expected {expected_revision}, got {canonical.get('deployment_revision') or health.get('deployment_revision')}")
 assert health.get("canonical") is True,health
 assert canonical.get("truthful") is True,canonical
+studio_health,_=ok("/infinity/studio/health")
+assert studio_health.get("fast_mode") is True, studio_health
 providers,_=ok("/infinity/studio/providers")
 print("MEDIA_PROVIDER_DIAGNOSTICS", json.dumps(providers, sort_keys=True), flush=True)
 caps,_=ok("/infinity/canonical/capabilities"); assert caps.get("local",{}).get("media_core") is True,caps
@@ -75,7 +78,7 @@ assert contract.get("version")=="TARGET-2050.3624", contract
 assert contract.get("contract",{}).get("no_fake_completion") is True, contract
 pre,_=ok("/infinity/canonical/preflight","POST",{"command":"Create a 20 second cinematic video about Earth from space"}); assert pre.get("ready") is True,pre
 
-created,_=ok("/infinity/canonical/create","POST",{"command":"Create a 20 second cinematic video about Earth from space","duration":20,"format":"short","aspect_ratio":"16:9","idempotency_key":"live-production-proof-v3"})
+created,_=ok("/infinity/canonical/create","POST",{"command":"Create a 20 second cinematic video about Earth from space","duration":20,"format":"short","aspect_ratio":"16:9","idempotency_key":"live-production-proof-" + (os.environ.get("GITHUB_RUN_ID") or uuid.uuid4().hex)})
 pid=created["project_id"]; v1=created["version"]["version_id"]
 state=wait(pid); assert state["status"] in {"completed","completed_with_qc_warnings"},state
 

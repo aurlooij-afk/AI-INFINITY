@@ -14,6 +14,7 @@ from pathlib import Path
 
 
 TRUE = {"1", "true", "yes", "on"}
+DURABLE_REMOTE_BACKENDS = {"cloudflare_r2", "backblaze_b2", "b2"}
 
 
 def _flag(name: str, default: str = "false") -> bool:
@@ -36,6 +37,7 @@ def project_state_durability(root: Path | str) -> dict:
             "configured": False,
             "active": False,
             "verified": False,
+            "snapshot_verified": False,
             "backend": remote_backend or None,
             "last_error": f"{type(exc).__name__}: {str(exc)[:240]}",
             "truthful": True,
@@ -44,10 +46,13 @@ def project_state_durability(root: Path | str) -> dict:
     backend_ready = bool(
         mode == "durable"
         and confirmed_backend
-        and remote_backend == "cloudflare_r2"
+        and remote_backend in DURABLE_REMOTE_BACKENDS
         and backend_status.get("contract_enabled")
         and backend_status.get("active")
         and backend_status.get("verified")
+        and backend_status.get("snapshot_verified")
+        and bool(backend_status.get("last_sha256"))
+        and bool(backend_status.get("last_sync_at"))
     )
     local_volume_ready = confirmed_volume and not str(path).startswith("/tmp")
 
