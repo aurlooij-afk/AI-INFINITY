@@ -474,17 +474,27 @@ def schedule_sync(delay: float = 0.75) -> None:
 
 
 class DurableConnection(sqlite3.Connection):
-    """SQLite connection that schedules a durable snapshot after writes commit."""
+    """SQLite connection that schedules a durable snapshot after committed data or schema changes."""
 
     def __enter__(self):
         self._ai_initial_changes = self.total_changes
+        self._ai_initial_schema_version = int(
+            self.execute("PRAGMA schema_version").fetchone()[0]
+        )
         return super().__enter__()
 
     def __exit__(self, exc_type, exc_value, traceback):
         before = getattr(self, "_ai_initial_changes", self.total_changes)
+        schema_before = getattr(
+            self,
+            "_ai_initial_schema_version",
+            int(self.execute("PRAGMA schema_version").fetchone()[0]),
+        )
         result = super().__exit__(exc_type, exc_value, traceback)
-        if exc_type is None and self.total_changes > before:
-            schedule_sync()
+        if exc_type is None:
+            schema_after = int(self.execute("PRAGMA schema_version").fetchone()[0])
+            if self.total_changes > before or schema_after != schema_before:
+                schedule_sync()
         return result
 
 

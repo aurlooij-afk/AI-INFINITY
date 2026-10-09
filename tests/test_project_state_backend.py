@@ -53,6 +53,22 @@ def test_durable_connection_schedules_only_after_committed_write(monkeypatch, tm
     con.close()
 
 
+def test_durable_connection_schedules_schema_only_commit(monkeypatch, tmp_path: Path):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    calls = []
+    monkeypatch.setattr(backend, "schedule_sync", lambda *args, **kwargs: calls.append(True))
+
+    con = sqlite3.connect(
+        tmp_path / "schema-only.db",
+        factory=backend.DurableConnection,
+        check_same_thread=False,
+    )
+    with con:
+        con.execute("CREATE TABLE schema_change_only (value TEXT)")
+    assert calls == [True], "schema-only DDL must trigger a durable checkpoint"
+    con.close()
+
+
 def test_durable_connection_does_not_schedule_after_rollback(monkeypatch, tmp_path: Path):
     backend = importlib.import_module("ai_infinity.project_state_backend")
     calls = []
