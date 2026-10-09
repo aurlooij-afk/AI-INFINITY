@@ -13,6 +13,13 @@ def test_storage_routes_are_registered_on_the_serving_asgi_app():
     # Render starts this exact object via "uvicorn main:app". Checking an
     # isolated FastAPI instance would miss the original production regression.
     import main
+    import ai3704_storage_fabric
+
+    # Both route decorators and creator artifact saves must use this exact
+    # application/module instance; a second isolated module can mask the 404
+    # while leaving artifact upload or recovery disconnected.
+    assert ai3704_storage_fabric.APP is main.app
+    assert main.app.state.ai_infinity_storage is True
 
     paths = {str(getattr(route, "path", "")) for route in main.app.router.routes}
     assert "/infinity/storage/v1/status" in paths
