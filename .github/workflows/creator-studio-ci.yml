@@ -50,6 +50,8 @@ jobs:
           echo "Python syntax checks passed."
       - name: Verify canonical 607 capability fabric
         run: python -m pytest -q tests/test_professional_creator_fabric.py
+      - name: Verify durable project-state contract
+        run: python -m pytest -q tests/test_project_state_backend.py
       - name: Parse AI Infinity platform browser JavaScript
         run: |
           python - <<'PY'
