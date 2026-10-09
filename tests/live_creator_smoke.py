@@ -122,4 +122,19 @@ ids=[v["version_id"] for v in versions["versions"]]; assert v1 in ids and v2 in 
 undo,_=ok("/infinity/canonical/project/"+pid+"/undo","POST"); assert undo["current_version_id"]==v1,undo
 restored=root/"restored.mp4"; download("/infinity/studio/project/"+pid+"/asset/final.mp4",restored)
 assert sha(restored)==h1
-print(json.dumps({"passed":True,"project_id":pid,"version_1":v1,"version_2":v2,"duration":duration,"edited_duration":duration2,"v1_sha256":h1,"v2_sha256":h2,"bytes":one.stat().st_size},indent=2))
+
+# Wait for a real project-state snapshot write/read-back to settle after the edit+undo.
+storage={}
+backend_state={}
+durability_deadline=time.time()+30
+while time.time()<durability_deadline:
+    canonical_after,_=ok("/infinity/canonical/health")
+    storage=canonical_after.get("storage") or {}
+    backend_state=storage.get("project_state_backend_status") or {}
+    if storage.get("persistent") is True and backend_state.get("snapshot_verified") is True and len(str(backend_state.get("last_sha256") or ""))==64 and backend_state.get("last_sync_at"):
+        break
+    time.sleep(1)
+else:
+    raise AssertionError("live B2 snapshot was not durably read-back verified after edit/undo: "+json.dumps({"storage":storage,"backend":backend_state},sort_keys=True)[:5000])
+
+print(json.dumps({"passed":True,"project_id":pid,"version_1":v1,"version_2":v2,"duration":duration,"edited_duration":duration2,"v1_sha256":h1,"v2_sha256":h2,"bytes":one.stat().st_size,"durability":{"persistent":storage.get("persistent"),"snapshot_verified":backend_state.get("snapshot_verified"),"snapshot_sha256":backend_state.get("last_sha256"),"last_sync_at":backend_state.get("last_sync_at")}},indent=2))

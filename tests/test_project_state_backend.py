@@ -178,3 +178,85 @@ def test_b2_backend_is_not_persistent_until_a_real_snapshot_is_verified(monkeypa
     state = truth.project_state_durability(tmp_path)
     assert state["persistent"] is True
     assert state["reason"] == "verified_durable_state_backend"
+
+
+def test_restore_verifies_checksum_and_sqlite_before_replacing_target(monkeypatch, tmp_path: Path):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _b2_env(monkeypatch)
+    source = tmp_path / "source.db"
+    con = sqlite3.connect(source)
+    con.execute("CREATE TABLE durable_state(id INTEGER PRIMARY KEY, value TEXT)")
+    con.execute("INSERT INTO durable_state(value) VALUES(?)", ("must-survive-restart",))
+    con.commit()
+    con.close()
+    payload = source.read_bytes()
+    digest = hashlib.sha256(payload).hexdigest()
+
+    target_dir = tmp_path / "restored"
+    target_dir.mkdir()
+    target = target_dir / "state.db"
+    good = _MemoryB2()
+    good.objects[("unit-test-bucket", backend.object_key())] = {
+        "body": payload,
+        "metadata": {"ai-infinity-sha256": digest, "ai-infinity-snapshot-at": "2026-10-09T00:00:00Z"},
+    }
+    monkeypatch.setattr(backend, "_client", lambda: good)
+    monkeypatch.setattr(backend, "_DB_PATH", target)
+    monkeypatch.setattr(backend, "_STATUS", {
+        "configured": True, "active": True, "verified": True,
+        "snapshot_verified": False, "backend": "backblaze_b2",
+        "last_sync_at": None, "last_sha256": None, "last_error": None,
+    })
+    monkeypatch.setattr(backend, "_CHANGE_GENERATION", 3)
+    monkeypatch.setattr(backend, "_SYNC_DIRTY", True)
+
+    result = backend.restore_on_startup()
+    assert result["restored"] is True, result
+    assert target.is_file()
+    check_db = sqlite3.connect(target)
+    try:
+        assert check_db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        assert check_db.execute("SELECT value FROM durable_state").fetchone()[0] == "must-survive-restart"
+    finally:
+        check_db.close()
+    assert backend.status()["snapshot_verified"] is True
+    assert backend.status()["last_sha256"] == digest
+    assert backend._CHANGE_GENERATION == 0
+    assert backend._SYNC_DIRTY is False
+
+
+def test_restore_refuses_mismatched_checksum_and_corrupt_sqlite(monkeypatch, tmp_path: Path):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _b2_env(monkeypatch)
+    valid_source = tmp_path / "source.db"
+    con = sqlite3.connect(valid_source)
+    con.execute("CREATE TABLE t(value TEXT)")
+    con.execute("INSERT INTO t(value) VALUES('ok')")
+    con.commit()
+    con.close()
+    valid_bytes = valid_source.read_bytes()
+
+    cases = [
+        ("wrong-checksum", valid_bytes, "0" * 64),
+        ("corrupt-sqlite", b"this is not a SQLite database", hashlib.sha256(b"this is not a SQLite database").hexdigest()),
+    ]
+    for label, payload, metadata_sha in cases:
+        target_dir = tmp_path / label
+        target_dir.mkdir()
+        target = target_dir / "state.db"
+        fake = _MemoryB2()
+        fake.objects[("unit-test-bucket", backend.object_key())] = {
+            "body": payload,
+            "metadata": {"ai-infinity-sha256": metadata_sha, "ai-infinity-snapshot-at": "2026-10-09T00:00:00Z"},
+        }
+        monkeypatch.setattr(backend, "_client", lambda store=fake: store)
+        monkeypatch.setattr(backend, "_DB_PATH", target)
+        monkeypatch.setattr(backend, "_STATUS", {
+            "configured": True, "active": True, "verified": True,
+            "snapshot_verified": False, "backend": "backblaze_b2",
+            "last_sync_at": None, "last_sha256": None, "last_error": None,
+        })
+        result = backend.restore_on_startup()
+        assert result["restored"] is False, (label, result)
+        assert not target.exists(), f"{label}: unverified bytes replaced the target database"
+        assert backend.status()["snapshot_verified"] is False
