@@ -10,6 +10,7 @@ provides one canonical readiness surface for the entire platform.
 
 import json
 import os
+import sys
 import time
 from typing import Any, Dict
 
@@ -38,9 +39,18 @@ def _configured_all(names) -> bool:
 
 def _storage_status() -> Dict[str, Any]:
     fn = globals().get("storage_status")
+    if not callable(fn):
+        storage_module = sys.modules.get("ai3704_storage_fabric")
+        # In main:app the fabric is intentionally a real module so Creator
+        # Studio's imports reuse its endpoints and object-store functions.
+        # Query only the module that registered routes on this same ASGI app.
+        if storage_module is not None and getattr(storage_module, "APP", None) is APP:
+            fn = getattr(storage_module, "storage_status", None)
     if callable(fn):
         try:
-            data = fn(Request({"type": "http", "method": "GET"}))
+            # storage_status currently uses the shared database/config only; it
+            # does not read Request. Avoid constructing an incomplete ASGI scope.
+            data = fn(None)
             if isinstance(data, dict):
                 return data
         except Exception:
