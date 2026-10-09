@@ -129,7 +129,7 @@ backend_state={}
 durability_deadline=time.time()+30
 while time.time()<durability_deadline:
     canonical_after,_=ok("/infinity/canonical/health")
-    storage=canonical_after.get("storage") or {}
+    storage=(canonical_after.get("capabilities") or {}).get("storage") or {}
     backend_state=storage.get("project_state_backend_status") or {}
     if storage.get("persistent") is True and backend_state.get("snapshot_verified") is True and len(str(backend_state.get("last_sha256") or ""))==64 and backend_state.get("last_sync_at"):
         break
