@@ -188,6 +188,19 @@ def _scene_list(blueprint: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def _fingerprint(project: Dict[str, Any], files: Dict[str, Path]) -> str:
     s = _studio()
+    canonical_current_version_id = None
+    # Project content can be versioned canonically without replacing final.mp4.
+    # Bind human approval to the active canonical version as well as bytes.
+    try:
+        with s.DB_LOCK, s._connect() as db:
+            row = db.execute(
+                "SELECT current_version_id FROM canonical_projects WHERE project_id=?",
+                (str(project.get("project_id") or ""),),
+            ).fetchone()
+        if row:
+            canonical_current_version_id = row["current_version_id"] if hasattr(row, "keys") else row[0]
+    except Exception:
+        canonical_current_version_id = None
     names = {
         "final.mp4", "thumbnail.jpg", "audio_master.mp3", "captions.srt", "script.md",
         "transcript.txt", "sources.json", "fact_check.json", "provenance.json",
@@ -199,7 +212,7 @@ def _fingerprint(project: Dict[str, Any], files: Dict[str, Path]) -> str:
     for name, path in sorted(files.items()):
         if not path.is_file() or name == "editorial_scorecard.json":
             continue
-        if name in names or (name.startswith("scene_") and path.suffix.lower() in {".mp4", ".jpg", ".jpeg", ".png"}):
+        if name in names or (name.startswith("scene_") and path.suffix.lower() in {".mp4", ".jpg", ".jpeg", ".png"}) or (name.startswith("version_") and path.suffix.lower() == ".mp4"):
             try:
                 artifacts.append({
                     "name": name,
@@ -210,6 +223,7 @@ def _fingerprint(project: Dict[str, Any], files: Dict[str, Path]) -> str:
                 artifacts.append({"name": name, "unreadable": True})
     brief = {
         "project_id": str(project.get("project_id") or ""),
+        "canonical_current_version_id": canonical_current_version_id,
         "request": _loads(project.get("request_json")),
         "blueprint": _loads(project.get("blueprint_json")),
         "artifact_evidence": artifacts,
