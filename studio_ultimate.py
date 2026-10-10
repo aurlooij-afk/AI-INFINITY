@@ -1635,7 +1635,7 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
         title_lines.append(current)
     title_lines = title_lines[:3]
     title_y = int(height * .25)
-    draw.text((x0, title_y), " / ".join(title_lines) if width < 600 else "\\n".join(title_lines), font=title_font, fill=white, spacing=max(4,int(7*scale)))
+    draw.multiline_text((x0, title_y), "\\n".join(title_lines), font=title_font, fill=white, spacing=max(4,int(7*scale)))
     title_box = draw.multiline_textbbox((x0,title_y), "\\n".join(title_lines), font=title_font, spacing=max(4,int(7*scale)))
     subtext = focus or ("A closer look at the subject" if not is_creator else "From idea to a usable outcome")
     subtext = subtext[:100]
@@ -1669,7 +1669,12 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
             py=ry2-int(art_h*.19)+row*int(art_h*.045)
             for col in range(5):
                 px=rx1+int(art_w*.06)+col*int(art_w*.115)
-                draw.polygon([(px,py),(px+int(art_w*.085),py-int(art_h*.028)),(px+int(art_w*.105),py+int(art_h*.018),(px+int(art_w*.02),py+int(art_h*.042)],fill=(39,137+row*10,153,240))
+                draw.polygon([
+                    (px, py),
+                    (px + int(art_w*.085), py - int(art_h*.028)),
+                    (px + int(art_w*.105), py + int(art_h*.018)),
+                    (px + int(art_w*.02), py + int(art_h*.042)),
+                ], fill=(39,137+row*10,153,240))
     elif is_tech:
         # Chip + routed nodes: a real topic illustration rather than fake product UI.
         chip_w,chip_h=int(art_w*.36),int(art_h*.34)
@@ -1699,7 +1704,11 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
             fy=frame_y+int((i%2)*art_h*.055)
             draw.rounded_rectangle((fx,fy,fx+frame_w,fy+int(art_h*.31)),radius=int(12*scale),fill=(23+i*5,79+i*8,102+i*10,255),outline=(150,222,235,190),width=max(1,int(2*scale)))
             draw.ellipse((fx+int(frame_w*.57),fy+int(art_h*.09),fx+int(frame_w*.84),fy+int(art_h*.18)),fill=gold if i==1 else turquoise)
-            draw.polygon([(fx+int(frame_w*.2),fy+int(art_h*.27)),(fx+int(frame_w*.55),fy+int(art_h*.10),(fx+int(frame_w*.90),fy+int(art_h*.29)],fill=(99,187,191,255))
+            draw.polygon([
+                (fx + int(frame_w*.2), fy + int(art_h*.27)),
+                (fx + int(frame_w*.55), fy + int(art_h*.10)),
+                (fx + int(frame_w*.90), fy + int(art_h*.29)),
+            ], fill=(99,187,191,255))
         timeline_y=ry1+int(art_h*.58)
         draw.line((rx1+int(art_w*.09),timeline_y,rx2-int(art_w*.09),timeline_y),fill=(190,213,235,160),width=max(2,int(3*scale)))
         for i in range(6):
