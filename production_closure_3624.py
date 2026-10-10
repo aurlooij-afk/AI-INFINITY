@@ -619,14 +619,18 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     except Exception:
         scene_files = []
     effective_scene_count = len(scene_files) if scene_files else (len(chapters) if chapters else 1)
+    video_quality_gate_required = str(req.get("content_type") or "video").strip().lower() in {"video", "short", "reel", "film", "documentary"}
     minimum_scene_count = _minimum_professional_scene_count(req)
     actual_rendered_scene_count = len(scene_files)
+    checks["video_quality_gate_required"] = video_quality_gate_required
     checks["visual_source_count"] = len(visual_rows)
     checks["visual_scene_count"] = effective_scene_count
     checks["actual_rendered_scene_count"] = actual_rendered_scene_count
     checks["minimum_professional_scene_count"] = minimum_scene_count
-    checks["professional_scene_coverage_passed"] = actual_rendered_scene_count >= minimum_scene_count
-    if not checks["professional_scene_coverage_passed"]:
+    checks["professional_scene_coverage_passed"] = (
+        not video_quality_gate_required or actual_rendered_scene_count >= minimum_scene_count
+    )
+    if video_quality_gate_required and not checks["professional_scene_coverage_passed"]:
         failures.append(
             f"professional scene coverage failed: {actual_rendered_scene_count} rendered scene(s), "
             f"{minimum_scene_count} required for this video brief"
@@ -650,12 +654,14 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     required_professional_unique = min(minimum_scene_count, actual_rendered_scene_count) if actual_rendered_scene_count else minimum_scene_count
     checks["professional_unique_visuals_required"] = required_professional_unique
     checks["professional_visual_diversity_passed"] = (
-        actual_rendered_scene_count >= minimum_scene_count
-        and int(visual_diversity.get("unique_visual_hashes") or 0) >= required_professional_unique
+        not video_quality_gate_required or (
+            actual_rendered_scene_count >= minimum_scene_count
+            and int(visual_diversity.get("unique_visual_hashes") or 0) >= required_professional_unique
+        )
     )
     if actual_rendered_scene_count > 1 and not checks["visual_diversity_ok"]:
         failures.append("visual diversity check failed: the edit reuses too few distinct visual assets")
-    if not checks["professional_visual_diversity_passed"]:
+    if video_quality_gate_required and not checks["professional_visual_diversity_passed"]:
         failures.append(
             f"professional visual diversity failed: {visual_diversity.get('unique_visual_hashes', 0)} unique "
             f"visual(s), {required_professional_unique} required across the rendered scenes"
@@ -676,8 +682,7 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     checks["spoken_script_word_count"] = script_word_count
     checks["required_spoken_script_words"] = required_script_words
     checks["script_content_floor_passed"] = (
-        str(req.get("content_type") or "video").lower() != "video"
-        or script_word_count >= required_script_words
+        not video_quality_gate_required or script_word_count >= required_script_words
     )
     if not checks["script_content_floor_passed"]:
         failures.append(
@@ -689,13 +694,15 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     checks["caption_timing"] = caption_metrics
     expected_caption_cues = max(1, int((float(checks.get("actual_duration") or 0) + 4.999) // 5))
     checks["minimum_caption_cues"] = expected_caption_cues
-    checks["caption_sync_passed"] = bool(
-        caption_metrics["timing_valid"]
-        and caption_metrics["cue_count"] >= expected_caption_cues
-        and caption_metrics["max_cue_duration_seconds"] <= 5.75
-        and caption_metrics["coverage_ratio"] >= 0.80
+    checks["caption_sync_passed"] = (
+        not video_quality_gate_required or float(checks.get("actual_duration") or 0) < 15 or bool(
+            caption_metrics["timing_valid"]
+            and caption_metrics["cue_count"] >= expected_caption_cues
+            and caption_metrics["max_cue_duration_seconds"] <= 5.75
+            and caption_metrics["coverage_ratio"] >= 0.80
+        )
     )
-    if str(req.get("content_type") or "video").lower() == "video" and float(checks.get("actual_duration") or 0) >= 15 and not checks["caption_sync_passed"]:
+    if video_quality_gate_required and float(checks.get("actual_duration") or 0) >= 15 and not checks["caption_sync_passed"]:
         failures.append(
             "caption timing failed: cues must remain synchronized, cover the programme, "
             "and avoid a single prolonged subtitle"
