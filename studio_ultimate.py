@@ -1085,9 +1085,66 @@ def _localized_fallback_copy(language: str, name: str, title: str, topic: str) -
 
 def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int, audience: str, tone: str, research: Dict[str, Any], language: str = "English") -> Dict[str, Any]:
     """Build a deterministic, topic-coherent fallback plan without leaking unrelated search snippets."""
-    clean_title = re.sub(r"\s+", " ", title).strip()[:140]
+    raw_title = re.sub(r"\s+", " ", title).strip()[:900]
     clean_objective = re.sub(r"\s+", " ", objective).strip()[:900]
-    topic_label = re.sub(r"^(?:create|make|generate|produce|build)\s+(?:a|an|the)\s+(?:\d+\s*(?:second|seconds|minute|minutes)\s+)?(?:cinematic\s+)?(?:video|film|short|reel)\s+(?:about|on|for)\s+", "", clean_title, flags=re.I).strip() or clean_title
+
+    def subject_from_brief(value: str) -> str:
+        subject = re.sub(r"\s+", " ", str(value or "")).strip()
+        prompt_prefix = re.match(
+            r"^(?:please\s+)?(?:create|make|generate|produce|build|write|draft|develop)\s+",
+            subject, re.I
+        )
+        if not prompt_prefix:
+            return subject[:140]
+        commandless = subject[prompt_prefix.end():].strip()
+        # Prefer an explicit subject after "video/film about|on|for X".
+        about = re.search(
+            r"\b(?:video|film|short|reel|documentary|explainer)\s+(?:about|on|for|covering|exploring)\s+(.+)",
+            commandless, re.I
+        )
+        if about:
+            candidate = about.group(1)
+            candidate = re.split(
+                r"\s+(?:with\s+(?:voiceover|narration|background|music|captions|subtitles)|"
+                r"in\s+(?:English|Urdu|Pashto|Dari|Arabic)|"
+                r"for\s+(?:YouTube|TikTok|Instagram)|"
+                r"research[- ]backed|aspect ratio|SEO metadata|social campaign|production/rights|"
+                r"thumbnail|captions|subtitles|voiceover)\b|[,;.]",
+                candidate, maxsplit=1, flags=re.I
+            )[0].strip()
+            return candidate[:140] or subject[:140]
+        # Many natural briefs put the subject before "video": e.g.
+        # "Create a professional 60-second AI Infinity launch video in English".
+        candidate = re.sub(
+            r"^(?:(?:a|an|the)\s+)?(?:(?:professional|cinematic|premium|high[- ]quality|research[- ]backed|"
+            r"educational|engaging|compelling|polished)\s+)*",
+            "", commandless, flags=re.I
+        )
+        candidate = re.sub(
+            r"^\d+\s*[- ]?(?:second|seconds|minute|minutes)\s+",
+            "", candidate, flags=re.I
+        )
+        candidate = re.sub(
+            r"\s+(?:video|film|short|reel|documentary|explainer)\b.*$",
+            "", candidate, flags=re.I
+        )
+        candidate = re.split(
+            r"\s+(?:in\s+(?:English|Urdu|Pashto|Dari|Arabic)|"
+            r"with\s+(?:voiceover|narration|background|music|captions|subtitles)|"
+            r"research[- ]backed|aspect ratio|SEO metadata|social campaign|production/rights|thumbnail)\b|[,;.]",
+            candidate, maxsplit=1, flags=re.I
+        )[0].strip()
+        candidate = re.sub(r"^(?:a|an|the)\s+", "", candidate, flags=re.I)
+        return candidate[:140] or subject[:140]
+
+    clean_title = subject_from_brief(raw_title)
+    topic_source = clean_title or subject_from_brief(clean_objective)
+    topic_label = re.sub(
+        r"^(?:create|make|generate|produce|build)\s+(?:a|an|the)\s+"
+        r"(?:\d+\s*(?:second|seconds|minute|minutes)\s+)?"
+        r"(?:cinematic\s+)?(?:video|film|short|reel)\s+(?:about|on|for)\s+",
+        "", topic_source, flags=re.I
+    ).strip() or topic_source
     stop_terms = {"create","make","generate","produce","build","video","film","short","reel","useful","original","content","high","retention","audience","general","premium","editorial"}
     topic_terms = {t for t in re.findall(r"[a-z0-9]{4,}", topic_label.lower()) if t not in stop_terms}
 
