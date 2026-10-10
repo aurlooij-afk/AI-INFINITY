@@ -809,8 +809,6 @@ def _decorate(scorecard: Dict[str, Any], review_state: Dict[str, Any]) -> Dict[s
 def install() -> None:
     """Add the review UI to the actual main:app-served Creator Studio shell."""
     global _INSTALLED_UI
-    if _INSTALLED_UI:
-        return
     s = _studio()
     _install_publish_gate()
     html = getattr(s, "CREATOR_STUDIO_UI", "")
