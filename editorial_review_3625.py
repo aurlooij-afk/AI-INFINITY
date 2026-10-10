@@ -186,21 +186,27 @@ def _scene_list(blueprint: Dict[str, Any]) -> List[Dict[str, Any]]:
     return []
 
 
-def _fingerprint(project: Dict[str, Any], files: Dict[str, Path]) -> str:
+def _canonical_current_version_id(project_id: str) -> Optional[str]:
     s = _studio()
-    canonical_current_version_id = None
-    # Project content can be versioned canonically without replacing final.mp4.
-    # Bind human approval to the active canonical version as well as bytes.
     try:
         with s.DB_LOCK, s._connect() as db:
             row = db.execute(
                 "SELECT current_version_id FROM canonical_projects WHERE project_id=?",
-                (str(project.get("project_id") or ""),),
+                (project_id,),
             ).fetchone()
         if row:
-            canonical_current_version_id = row["current_version_id"] if hasattr(row, "keys") else row[0]
+            value = row["current_version_id"] if hasattr(row, "keys") else row[0]
+            return str(value) if value else None
     except Exception:
-        canonical_current_version_id = None
+        pass
+    return None
+
+
+def _fingerprint(project: Dict[str, Any], files: Dict[str, Path]) -> str:
+    s = _studio()
+    # Project content can be versioned canonically without replacing final.mp4.
+    # Bind human approval to the active canonical version as well as bytes.
+    canonical_current_version_id = _canonical_current_version_id(str(project.get("project_id") or ""))
     names = {
         "final.mp4", "thumbnail.jpg", "audio_master.mp3", "captions.srt", "script.md",
         "transcript.txt", "sources.json", "fact_check.json", "provenance.json",
