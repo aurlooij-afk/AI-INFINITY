@@ -24,11 +24,13 @@ jobs:
       - name: Wait for Render deployment and verify live creator surface
         env:
           BASE_URL: https://ai-infinity-ca5e.onrender.com
+          EXPECTED_REVISION: ${{ github.sha }}
         run: |
           set -euo pipefail
           python - <<'PY'
           import json, os, sys, time, urllib.request
           base=os.environ["BASE_URL"].rstrip("/")
+          expected_revision=os.environ["EXPECTED_REVISION"]
           paths=["/health","/infinity/divine/health","/infinity/pro2/health","/infinity/pro2","/infinity/storage/v1/status"]
           last={}
           # The canonical /health response is authoritative for deployment identity.
@@ -73,14 +75,14 @@ jobs:
                   except Exception as exc:
                       ok=False
                       last[path]=str(exc)
-              if ok and observed_revision:
+              if ok and observed_revision == expected_revision:
                   stable = stable + 1 if observed_revision == stable_revision else 1
                   stable_revision = observed_revision
               else:
                   stable=0
                   stable_revision=""
-              print(f"attempt={attempt} ok={ok} revision={observed_revision or 'unknown'} consecutive={stable} failures={last}")
-              if ok and stable >= 6:
+              print(f"attempt={attempt} ok={ok} expected={expected_revision} revision={observed_revision or 'unknown'} consecutive={stable} failures={last}")
+              if ok and observed_revision == expected_revision and stable >= 6:
                   # Render may still be completing the final old-instance shutdown immediately
                   # after the exact revision becomes observable. Give the deployment 60s to
                   # settle before creating a stateful live project.
