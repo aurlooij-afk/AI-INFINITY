@@ -218,7 +218,10 @@ def _fingerprint(project: Dict[str, Any], files: Dict[str, Path]) -> str:
     for name, path in sorted(files.items()):
         if not path.is_file() or name == "editorial_scorecard.json":
             continue
-        if name in names or (name.startswith("scene_") and path.suffix.lower() in {".mp4", ".jpg", ".jpeg", ".png"}) or (name.startswith("version_") and path.suffix.lower() == ".mp4"):
+        # Historical version media remains available as history, but does not
+        # belong to the active deliverable fingerprint. The current canonical
+        # version ID and current served artifact bytes are authoritative.
+        if name in names or (name.startswith("scene_") and path.suffix.lower() in {".mp4", ".jpg", ".jpeg", ".png"}):
             try:
                 artifacts.append({
                     "name": name,
