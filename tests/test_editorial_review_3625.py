@@ -97,6 +97,30 @@ def test_content_fingerprint_changes_when_delivered_media_changes(monkeypatch, t
     assert original != changed
 
 
+def test_content_fingerprint_changes_when_canonical_current_version_changes(monkeypatch, tmp_path):
+    class FakeStudio:
+        @staticmethod
+        def _project_dir(project_id):
+            return tmp_path
+
+        @staticmethod
+        def file_sha256(path):
+            h = hashlib.sha256()
+            with Path(path).open("rb") as stream:
+                for chunk in iter(lambda: stream.read(65536), b""):
+                    h.update(chunk)
+            return h.hexdigest()
+
+    video = tmp_path / "final.mp4"
+    video.write_bytes(b"same original media bytes")
+    monkeypatch.setattr(editorial, "_studio", lambda: FakeStudio())
+    project = {"project_id": "canonical-fingerprint-test", "request_json": {"objective": "brief"}}
+    monkeypatch.setattr(editorial, "_canonical_current_version_id", lambda _pid: "version-1")
+    first = editorial._fingerprint(project, {"final.mp4": video})
+    monkeypatch.setattr(editorial, "_canonical_current_version_id", lambda _pid: "version-2")
+    second = editorial._fingerprint(project, {"final.mp4": video})
+    assert first != second
+
 def test_human_review_state_is_bound_to_the_exact_current_fingerprint():
     rows = [{
         "review_id": "review-1", "content_fingerprint": "old", "decision": "approve",
