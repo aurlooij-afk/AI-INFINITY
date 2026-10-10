@@ -675,6 +675,72 @@ def _review_state(rows: List[Dict[str, Any]], fingerprint: str) -> Dict[str, Any
     }
 
 
+def _editorial_publish_status(project_id: str, user_id: str) -> Dict[str, Any]:
+    """Require current-fingerprint approval before any connected publishing side effect."""
+    s = _studio()
+    project = s._get_project(project_id) if project_id else None
+    if not project or str(project.get("user_id") or "") != str(user_id):
+        return {
+            "approved": False, "state": "project_not_owned_or_missing",
+            "reason": "publishing requires the owner-scoped project and its current review",
+            "truthful": True,
+        }
+    files = _project_files(project_id)
+    card = _read_json(files.get("editorial_scorecard.json"))
+    current_fingerprint = _fingerprint(project, files)
+    if str(card.get("content_fingerprint") or "") != current_fingerprint:
+        return {
+            "approved": False, "state": "missing_or_stale_scorecard",
+            "content_fingerprint": current_fingerprint,
+            "reason": "refresh the scorecard and record human approval for the exact current artifacts",
+            "truthful": True,
+        }
+    gate = card.get("release_gate") if isinstance(card.get("release_gate"), dict) else {}
+    state = _review_state(_review_rows(project_id, str(user_id)), current_fingerprint)
+    approved = bool(gate.get("eligible_for_human_approval")) and bool(state.get("publish_ready"))
+    return {
+        "approved": approved,
+        "state": state.get("state") or "pending",
+        "content_fingerprint": current_fingerprint,
+        "scorecard_version": card.get("version"),
+        "release_gate": gate,
+        "human_approval": state,
+        "reason": "" if approved else "technical truth, the editorial thresholds, and an explicit approval for the current fingerprint are all required",
+        "truthful": True,
+    }
+
+
+def _install_publish_gate() -> None:
+    s = _studio()
+    for function_name in ("youtube_upload", "webhook_publish"):
+        original = getattr(s, function_name, None)
+        if not callable(original) or getattr(original, "__aii_editorial_review_wrapped__", False):
+            continue
+
+        def wrap(original_function, provider_name):
+            def gated_publish(user_id: str, video: Path, metadata: Dict[str, Any]):
+                info = dict(metadata or {})
+                project_id = str(info.get("project_id") or "")
+                gate = _editorial_publish_status(project_id, str(user_id))
+                if not gate.get("approved"):
+                    return {
+                        "status": "blocked_by_editorial_review",
+                        "provider": provider_name,
+                        "project_id": project_id or None,
+                        "publish_ready": False,
+                        "editorial_review": gate,
+                        "error": gate.get("reason") or "human editorial approval is required",
+                        "truthful": True,
+                    }
+                return original_function(user_id, video, info)
+            gated_publish.__name__ = getattr(original_function, "__name__", "gated_publish")
+            gated_publish.__aii_editorial_review_wrapped__ = True
+            gated_publish.__aii_original_publish_function__ = original_function
+            return gated_publish
+
+        setattr(s, function_name, wrap(original, function_name))
+
+
 def _persist_scorecard(project: Dict[str, Any], scorecard: Dict[str, Any], review_state: Dict[str, Any]) -> Dict[str, Any]:
     s = _studio()
     pid = str(project.get("project_id") or "")
@@ -746,6 +812,7 @@ def install() -> None:
     if _INSTALLED_UI:
         return
     s = _studio()
+    _install_publish_gate()
     html = getattr(s, "CREATOR_STUDIO_UI", "")
     if not html or "aii-editorial-review-3625" in html:
         _INSTALLED_UI = True
