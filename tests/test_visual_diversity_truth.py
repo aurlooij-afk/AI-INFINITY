@@ -227,3 +227,35 @@ def test_scene_selection_keeps_short_arc_for_five_scene_short():
     ]]
     selected = studio._select_scene_coverage(chapters, 3)
     assert [row["heading"] for row in selected] == ["Hook", "The key idea", "Takeaway"]
+
+
+def test_only_truthfully_labelled_vector_art_is_eligible_as_degraded_draft():
+    assert closure._is_qualified_illustrative_fallback({
+        "fallback": True,
+        "quality_tier": "original_vector_editorial_fallback",
+        "asset_kind": "illustrative_graphic_not_photograph",
+        "rights_status": "original_asset",
+        "fallback_record": {
+            "truthful": True,
+            "execution_state": "DEGRADED",
+            "fallback_method": "Topic-led original vector/editorial illustration",
+            "quality_change": "AI/public media -> illustrative graphic",
+            "license_change": "provider terms -> original generated illustrative asset",
+        },
+    })
+
+
+def test_unlabelled_procedural_placeholder_is_not_eligible_as_degraded_draft():
+    assert not closure._is_qualified_illustrative_fallback({
+        "fallback": True,
+        "quality_tier": "original_motion_design_fallback",
+        "asset_kind": "placeholder",
+        "rights_status": "original_asset",
+        "fallback_record": {
+            "truthful": True,
+            "execution_state": "DEGRADED",
+            "fallback_method": "generic shapes",
+            "quality_change": "photo -> generic card",
+            "license_change": "provider -> original",
+        },
+    })
