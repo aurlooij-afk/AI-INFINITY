@@ -913,7 +913,7 @@ Use 5-18 chapters. Total durations should approximately equal the target. Narrat
     hf_plan, hf_provider = _hf_creator_plan(prompt, language)
     if hf_plan:
         return hf_plan, hf_provider
-    return _fallback_creative_plan(title, objective, fmt, duration, audience, tone, research, language), "builtin-creative-engine"
+    return _fallback_creative_plan(title, objective, fmt, duration, audience, tone, research, language, topic=str(req.get("topic") or "")), "builtin-creative-engine"
 
 
 def _localized_fallback_copy(language: str, name: str, title: str, topic: str) -> Dict[str, str]:
@@ -996,6 +996,39 @@ def _localized_fallback_copy(language: str, name: str, title: str, topic: str) -
             "practical":"حوّل الفكرة إلى خطوة عملية محددة.",
             "closing":"هذه هي الفكرة التي ينبغي حملها إلى الخطوة التالية.",
             "on_screen":{"Hook":"ابدأ بالمشكلة الحقيقية","Why it matters":"لماذا يغيّر {topic} النتائج","The key idea":"مبدأ {topic}","Practical example":"{topic} في التطبيق","Takeaway":"خلاصة عملية"},
+        },
+        "english": {
+            "names": {"Hook":"Opening question","Why it matters":"Why it matters","The key idea":"Core principle","Practical example":"In practice","Takeaway":"Next step","Context":"Context","The core idea":"Core principle","How it works":"How it works","Real-world examples":"Real examples","What changes":"What changes","Practical takeaway":"Next step","Closing":"Closing"},
+            "hooks":"What changes when the usual approach stops working, and what can we test instead?",
+            "cta":"Choose one useful next step, test it, and improve from what the result shows.",
+            "opening":"Start with a clear problem and the change the audience needs to understand.",
+            "focus":"Keep the central subject visible and the point easy to follow.",
+            "why":"Audience needs, available time, and real constraints shape which response makes sense.",
+            "idea":"Break {topic} into one specific principle, and separate what is known from what still needs proof.",
+            "example":"Show a concrete process from the starting point to the outcome, tying each action to the goal.",
+            "takeaway":"Choose one measurable next step, test it on a small scale, and use the result to guide improvement.",
+            "context":"Introduce the situation, the people affected, and the decision that must be made.",
+            "core":"Connect one clear idea to observable evidence and a practical outcome.",
+            "works":"Walk through the process in sequence, showing the inputs, choices, and effects.",
+            "real":"Use examples only when they can be verified; label illustrations rather than presenting them as observed facts.",
+            "changes":"Describe the intended change without promising results that the available evidence cannot support.",
+            "practical":"Turn the principle into one action someone can try, then say how success will be measured.",
+            "closing":"Keep the next step specific: act, observe the result, and revise what does not work.",
+            "narration_by_name": {
+                "Hook":"What makes {topic} worth understanding? Name the problem and the change you want people to notice.",
+                "Why it matters":"Audience needs and practical limits shape useful decisions. Identify them before choosing an approach.",
+                "The key idea":"Break {topic} into one clear idea you can test. Separate what is known from what still needs proof.",
+                "Practical example":"Show the process from its starting point to the outcome. Tie every action to the intended result.",
+                "Takeaway":"Choose one measurable next step. Test it, observe the result, and improve from evidence rather than assumption.",
+                "Context":"Start with the situation, the people affected, and the decision that needs to be made.",
+                "The core idea":"Connect one clear principle to something observable. Explain what would count as evidence that it works.",
+                "How it works":"Move through the process in order. Show the inputs, the decisions, and the effect of each step.",
+                "Real-world examples":"Use an example only when the source can be checked. Clearly label any demonstration that is illustrative.",
+                "What changes":"Describe the outcome that is sought, not a guarantee. Be clear about what the available evidence can support.",
+                "Practical takeaway":"Choose one action, define a useful measure, and check the result before repeating the approach.",
+                "Closing":"Carry one useful action forward. Observe what happens, then adjust the next attempt using the result."
+            },
+            "on_screen":{"Hook":"A clear problem","Why it matters":"Know the stakes","The key idea":"One useful principle","Practical example":"Show the process","Takeaway":"Test and improve","Context":"Set the context","The core idea":"Make it clear","How it works":"See the steps","Real-world examples":"Evidence matters","What changes":"The outcome","Practical takeaway":"One next step","Closing":"What comes next"},
         }
     }
     if lang not in local:
@@ -1031,27 +1064,94 @@ def _localized_fallback_copy(language: str, name: str, title: str, topic: str) -
         "cta": d["cta"].format(topic=topic,title=title),
         "opening": d["opening"].format(topic=topic,title=title),
         "narration_by_name": {
-            "Hook": f"{d['opening'].format(topic=topic,title=title)} {d['hooks'].format(topic=topic,title=title)}",
-            "Why it matters": f"{d['opening'].format(topic=topic,title=title)} {d['why'].format(topic=topic,title=title)}",
-            "The key idea": f"{d['opening'].format(topic=topic,title=title)} {d['idea'].format(topic=topic,title=title)}",
-            "Practical example": f"{d['opening'].format(topic=topic,title=title)} {d['example'].format(topic=topic,title=title)}",
-            "Takeaway": f"{d['opening'].format(topic=topic,title=title)} {d['takeaway'].format(topic=topic,title=title)}",
-            "Context": d["context"].format(topic=topic,title=title),
-            "The core idea": d["core"].format(topic=topic,title=title),
-            "How it works": d["works"].format(topic=topic,title=title),
-            "Real-world examples": d["real"].format(topic=topic,title=title),
-            "What changes": d["changes"].format(topic=topic,title=title),
-            "Practical takeaway": d["practical"].format(topic=topic,title=title),
-            "Closing": d["closing"].format(topic=topic,title=title),
+            key: value.format(topic=topic, title=title)
+            for key, value in (d.get("narration_by_name") or {
+                "Hook": f"{d['opening']} {d['hooks']}",
+                "Why it matters": f"{d['opening']} {d['why']}",
+                "The key idea": f"{d['opening']} {d['idea']}",
+                "Practical example": f"{d['opening']} {d['example']}",
+                "Takeaway": f"{d['opening']} {d['takeaway']}",
+                "Context": d["context"],
+                "The core idea": d["core"],
+                "How it works": d["works"],
+                "Real-world examples": d["real"],
+                "What changes": d["changes"],
+                "Practical takeaway": d["practical"],
+                "Closing": d["closing"],
+            }).items()
         },
         "on_screen": d["on_screen"]
     }
 
-def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int, audience: str, tone: str, research: Dict[str, Any], language: str = "English") -> Dict[str, Any]:
+def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int, audience: str, tone: str, research: Dict[str, Any], language: str = "English", topic: str = "") -> Dict[str, Any]:
     """Build a deterministic, topic-coherent fallback plan without leaking unrelated search snippets."""
-    clean_title = re.sub(r"\s+", " ", title).strip()[:140]
+    raw_title = re.sub(r"\s+", " ", title).strip()[:900]
     clean_objective = re.sub(r"\s+", " ", objective).strip()[:900]
-    topic_label = re.sub(r"^(?:create|make|generate|produce|build)\s+(?:a|an|the)\s+(?:\d+\s*(?:second|seconds|minute|minutes)\s+)?(?:cinematic\s+)?(?:video|film|short|reel)\s+(?:about|on|for)\s+", "", clean_title, flags=re.I).strip() or clean_title
+
+    def subject_from_brief(value: str) -> str:
+        subject = re.sub(r"\s+", " ", str(value or "")).strip()
+        prompt_prefix = re.match(
+            r"^(?:please\s+)?(?:create|make|generate|produce|build|write|draft|develop)\s+",
+            subject, re.I
+        )
+        if not prompt_prefix:
+            return subject[:140]
+        commandless = subject[prompt_prefix.end():].strip()
+        # Prefer an explicit subject after "video/film about|on|for X".
+        about = re.search(
+            r"\b(?:video|film|short|reel|documentary|explainer)\s+(?:about|on|for|covering|exploring)\s+(.+)",
+            commandless, re.I
+        )
+        if about:
+            candidate = about.group(1)
+            candidate = re.split(
+                r"\s+(?:with\s+(?:voiceover|narration|background|music|captions|subtitles)|"
+                r"in\s+(?:English|Urdu|Pashto|Dari|Arabic)|"
+                r"for\s+(?:YouTube|TikTok|Instagram)|"
+                r"research[- ]backed|aspect ratio|SEO metadata|social campaign|production/rights|"
+                r"thumbnail|captions|subtitles|voiceover)\b|[,;.]",
+                candidate, maxsplit=1, flags=re.I
+            )[0].strip()
+            return candidate[:140] or subject[:140]
+        # Many natural briefs put the subject before "video": e.g.
+        # "Create a professional 60-second AI Infinity launch video in English".
+        candidate = re.sub(
+            r"^(?:(?:a|an|the)\s+)?(?:(?:professional|cinematic|premium|high[- ]quality|research[- ]backed|"
+            r"educational|engaging|compelling|polished)\s+)*",
+            "", commandless, flags=re.I
+        )
+        candidate = re.sub(
+            r"^\d+\s*[- ]?(?:second|seconds|minute|minutes)\s+",
+            "", candidate, flags=re.I
+        )
+        candidate = re.sub(
+            r"\s+(?:video|film|short|reel|documentary|explainer)\b.*$",
+            "", candidate, flags=re.I
+        )
+        candidate = re.split(
+            r"\s+(?:in\s+(?:English|Urdu|Pashto|Dari|Arabic)|"
+            r"with\s+(?:voiceover|narration|background|music|captions|subtitles)|"
+            r"research[- ]backed|aspect ratio|SEO metadata|social campaign|production/rights|thumbnail)\b|[,;.]",
+            candidate, maxsplit=1, flags=re.I
+        )[0].strip()
+        candidate = re.sub(r"^(?:a|an|the)\s+", "", candidate, flags=re.I)
+        return candidate[:140] or subject[:140]
+
+    clean_title = subject_from_brief(raw_title)
+    explicit_topic = re.sub(r"\s+", " ", str(topic or "")).strip()
+    objective_has_subject_clause = bool(re.search(
+        r"\b(?:video|film|short|reel|documentary|explainer)\s+(?:about|on|for|covering|exploring)\b",
+        clean_objective, re.I
+    ))
+    objective_topic = subject_from_brief(clean_objective) if objective_has_subject_clause else ""
+    topic_source = explicit_topic or objective_topic or clean_title or subject_from_brief(clean_objective)
+    topic_label = subject_from_brief(topic_source) if topic_source != clean_title else topic_source
+    topic_label = re.sub(
+        r"^(?:create|make|generate|produce|build)\s+(?:a|an|the)\s+"
+        r"(?:\d+\s*(?:second|seconds|minute|minutes)\s+)?"
+        r"(?:cinematic\s+)?(?:video|film|short|reel)\s+(?:about|on|for)\s+",
+        "", topic_label, flags=re.I
+    ).strip() or topic_label
     stop_terms = {"create","make","generate","produce","build","video","film","short","reel","useful","original","content","high","retention","audience","general","premium","editorial"}
     topic_terms = {t for t in re.findall(r"[a-z0-9]{4,}", topic_label.lower()) if t not in stop_terms}
 
@@ -1075,11 +1175,11 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
     if fmt == "short":
         names = ["Hook", "Why it matters", "The key idea", "Practical example", "Takeaway"]
         visual_focus = {
-            "Hook": "creator at work, bold opening image, hands sketching or building an idea",
-            "Why it matters": "people collaborating, discussion, decision-making, real-world creative workspace",
-            "The key idea": "prototype, notebook, design process, close-up details, purposeful composition",
-            "Practical example": "real creator using tools, editing, making, testing or publishing a project",
-            "Takeaway": "finished creative work, confident subject, clean editorial closing frame",
+            "Hook": f"striking opening view of {topic_label}; the clearest subject that communicates the idea",
+            "Why it matters": f"real-world context showing why {topic_label} matters to people affected by it",
+            "The key idea": f"close-up or clear visual explanation of the central mechanism behind {topic_label}",
+            "Practical example": f"a concrete real-world example demonstrating {topic_label} in action",
+            "Takeaway": f"a resolved outcome or memorable closing frame connected to {topic_label}",
         }
         ratios = [0.16, 0.18, 0.28, 0.22, 0.16]
     else:
@@ -1087,10 +1187,9 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         ratios = [0.08, 0.10, 0.16, 0.18, 0.18, 0.12, 0.10, 0.08]
 
     def bounded_narration(name: str, seconds: float, source: Dict[str, Any]) -> str:
-        # Approximate spoken pacing at ~2.3 words/sec. Keep the deterministic
-        # fallback close to the requested runtime instead of copying long search
-        # snippets into the script.
-        budget = max(9, int(max(4.0, seconds) * 2.3))
+        # Keep enough natural narration for short scenes; the execution layer may
+        # rebalance scene durations after low-memory mode reduces the scene count.
+        budget = max(14, int(max(4.0, seconds) * 2.3))
         localized = _localized_fallback_copy(language, name, clean_title, topic_label)
         text = re.sub(r"\\s+", " ", str(localized["narration_by_name"].get(name) or localized["narration_by_name"].get("Closing") or localized["opening"])).strip()
         words = text.split()
@@ -1113,12 +1212,14 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "Practical takeaway": "creator applying the idea successfully",
             "Closing": "finished work, confident human subject, memorable final frame",
         }
-        focus = (visual_focus if fmt == "short" else long_visual_focus).get(name, "real-world editorial scene")
+        focus = (visual_focus if fmt == "short" else long_visual_focus).get(name, f"a purposeful real-world visual about {topic_label}")
         localized = _localized_fallback_copy(language, name, clean_title, topic_label)
         localized_heading = localized["name"]
         localized_screen = localized["on_screen"].get(name, localized_heading).format(topic=topic_label, title=clean_title)
         chapters.append({
             "heading": f"{localized_heading} — {clean_title}" if name in {"Hook", "Closing"} else f"{localized_heading}: {clean_title}",
+            "topic": topic_label,
+            "visual_focus": focus,
             "narration": narration,
             "visual_query": f"{topic_label} {focus} documentary photography",
             "image_prompt": f"Premium editorial documentary image about {topic_label}; visual focus: {focus}; realistic people, locations, objects or processes, natural cinematic lighting, coherent composition, strong subject separation, no logos, no text, visually distinct from other scenes",
@@ -1375,12 +1476,20 @@ def _hf_video(prompt: str, outdir: Path, index: int, duration: float) -> Optiona
         client=InferenceClient(**kwargs)
         video=client.text_to_video(prompt,model=model)
         raw=video.read() if hasattr(video,"read") else bytes(video)
-        if not raw:
-            raise RuntimeError("provider returned empty video")
+        if not raw or len(raw) < 20_000:
+            raise RuntimeError("provider returned empty or implausibly small video")
         p=outdir/f"ai_motion_{index:02d}.mp4"
         p.write_bytes(raw)
-        _media_success("huggingface-video",{"model":model,"size":len(raw)})
-        return {"kind":"video","path":str(p),"source":"Hugging Face Inference Provider","source_url":"https://huggingface.co","creator":"AI generated","license":"Model/provider terms apply","model":model}
+        probe=ffprobe_json(p)
+        streams=probe.get("streams") or []
+        v=next((x for x in streams if x.get("codec_type")=="video"),None)
+        if not v or int(v.get("width") or 0)<320 or int(v.get("height") or 0)<240:
+            raise RuntimeError("provider video failed stream/resolution validation")
+        seconds=probe_duration(p)
+        if seconds < 0.5:
+            raise RuntimeError("provider video has no trustworthy playable duration")
+        _media_success("huggingface-video",{"model":model,"size":len(raw),"duration":round(seconds,3)})
+        return {"kind":"video","path":str(p),"source":"Hugging Face Inference Provider","source_url":"https://huggingface.co","creator":"AI generated","license":"Model/provider terms apply","model":model,"duration_seconds":round(seconds,3),"validated_media":True}
     except Exception as exc:
         _media_debug("huggingface-video",exc)
         return None
@@ -1415,9 +1524,17 @@ def _hf_image(prompt: str, outdir: Path, index: int) -> Optional[Dict[str, Any]]
                 )
                 p=outdir/f"ai_visual_{index:02d}.png"
                 image.save(p)
+                image_width=image_height=0
                 if p.is_file() and p.stat().st_size>20_000:
-                    _media_success("huggingface-image",{"model":model,"size":p.stat().st_size})
-                    return {"kind":"image","path":str(p),"source":"Hugging Face Inference Provider","source_url":"https://huggingface.co","creator":"AI generated","license":"Model/provider terms apply","model":model}
+                    with Image.open(p) as check_image:
+                        check_image.verify()
+                    with Image.open(p) as check_image:
+                        image_width,image_height=check_image.size
+                    if min(image_width,image_height)<320:
+                        p.unlink(missing_ok=True)
+                        raise RuntimeError("provider image resolution is below the minimum usable scene size")
+                    _media_success("huggingface-image",{"model":model,"size":p.stat().st_size,"width":image_width,"height":image_height})
+                    return {"kind":"image","path":str(p),"source":"Hugging Face Inference Provider","source_url":"https://huggingface.co","creator":"AI generated","license":"Model/provider terms apply","model":model,"width":image_width,"height":image_height,"validated_media":True}
             except Exception as exc:
                 errors.append(f"{model}:{type(exc).__name__}:{str(exc)[:260]}")
         raise RuntimeError(" | ".join(errors)[:900] or "no image model returned an asset")
@@ -1426,32 +1543,255 @@ def _hf_image(prompt: str, outdir: Path, index: int) -> Optional[Dict[str, Any]]
         return None
 
 def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, height: int = 900) -> Optional[Dict[str, Any]]:
+    """Render an original topic-led editorial illustration when AI/media providers fail.
+
+    This is deliberately labelled vector/editorial fallback, never a synthetic
+    photograph. Its composition depends on the scene subject and focus and varies
+    across scenes so the rendered video has visual coverage rather than a repeated
+    generic title card.
+    """
     if Image is None:
         return None
-    seed = int(hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12], 16)
-    # Deterministic editorial visual: abstract scene geometry + typography.
-    base = (12 + seed % 28, 16 + (seed // 3) % 25, 28 + (seed // 7) % 40)
-    im = Image.new("RGB", (width, height), base)
+    outdir.mkdir(parents=True, exist_ok=True)
+    raw = re.sub(r"\\s+", " ", str(prompt or "")).strip()
+    subject_match = re.search(r"\\babout\\s+(.+?)(?:;|\\.\\s|$)", raw, re.I)
+    subject = subject_match.group(1).strip(" .;,:") if subject_match else raw
+    subject = re.split(
+        r"\\b(?:visual focus|visual emphasis|composition|photorealistic|professional editorial)\\b",
+        subject, maxsplit=1, flags=re.I
+    )[0].strip(" .;,:")
+    subject = re.sub(r"^(?:premium|original|cinematic|editorial|documentary|image|visuals?)\\s+", "", subject, flags=re.I)
+    subject = re.sub(r"\\s+", " ", subject).strip()[:100] or "Ideas into real creative work"
+
+    focus_match = re.search(r"\\bvisual focus\\s*:\\s*(.+?)(?:;|\\.\\s|$)", raw, re.I)
+    focus = focus_match.group(1).strip(" .;,:") if focus_match else ""
+    focus = re.sub(r"\\s+", " ", focus)[:115]
+    seed = int(hashlib.sha256(f"{subject}|{focus}|{index}".encode("utf-8")).hexdigest()[:12], 16)
+    variant = (seed ^ (index * 7919)) % 5
+
+    def clamp(v: int) -> int:
+        return max(0, min(255, int(v)))
+
+    # Deep ink-to-slate gradient creates legible contrast without relying on
+    # external image APIs. Work directly at the configured scene dimensions.
+    top = (8 + seed % 12, 16 + (seed >> 4) % 17, 31 + (seed >> 8) % 25)
+    bottom = (19 + (seed >> 12) % 16, 31 + (seed >> 17) % 21, 51 + (seed >> 22) % 24)
+    im = Image.new("RGB", (width, height), top)
     draw = ImageDraw.Draw(im, "RGBA")
-    cx, cy = width // 2, height // 2
-    for i in range(14):
-        x = (seed * (i + 3) * 17) % width
-        y = (seed * (i + 5) * 13) % height
-        r = 60 + ((seed >> (i % 18)) % 360)
-        draw.ellipse((x-r, y-r, x+r, y+r), fill=(60 + (i*11)%150, 80 + (i*17)%130, 150 + (i*7)%90, 32), outline=(220, 235, 255, 35), width=2)
-    font = None
-    try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 46)
-    except Exception:
-        pass
-    words = re.sub(r"\s+", " ", prompt).strip()
-    if len(words) > 80:
-        words = words[:77] + "..."
-    draw.rounded_rectangle((60, height-180, width-60, height-60), radius=28, fill=(0,0,0,120))
-    draw.text((90, height-155), words, fill=(245,248,255,235), font=font)
-    p = outdir / f"procedural_visual_{index:02d}.png"
-    im.save(p, "PNG", optimize=True)
-    return {"kind": "image", "path": str(p), "source": "AI Infinity motion-design generator", "source_url": None, "creator": "AI Infinity", "license": "Original generated asset", "model": "procedural-editorial-engine"}
+    for y in range(height):
+        t = y / max(1, height - 1)
+        rgb = tuple(clamp(top[k] * (1 - t) + bottom[k] * t) for k in range(3))
+        draw.line((0, y, width, y), fill=rgb + (255,))
+    # Quiet alignment grid and glows give an editorial frame while leaving room
+    # for the actual subject illustration.
+    grid = max(24, int(width / 32))
+    for x in range(0, width, grid):
+        draw.line((x, 0, x, height), fill=(170, 204, 238, 13), width=1)
+    for y in range(0, height, grid):
+        draw.line((0, y, width, y), fill=(170, 204, 238, 13), width=1)
+    glow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow, "RGBA")
+    cx, cy = int(width * (0.69 if variant % 2 == 0 else 0.72)), int(height * 0.48)
+    radius = int(min(width, height) * 0.38)
+    accent = (
+        (63 + (seed >> 5) % 46, 170 + (seed >> 9) % 60, 185 + (seed >> 13) % 60, 48)
+        if variant % 2 == 0 else
+        (104 + (seed >> 5) % 65, 104 + (seed >> 9) % 76, 222 + (seed >> 13) % 33, 45)
+    )
+    gd.ellipse((cx-radius, cy-radius, cx+radius, cy+radius), fill=accent)
+    im = Image.alpha_composite(im.convert("RGBA"), glow)
+    draw = ImageDraw.Draw(im, "RGBA")
+
+    scale = width / 1600.0
+    def xy(x: float, y: float) -> tuple[int, int]:
+        return (int(x * width), int(y * height))
+    def box(x1: float, y1: float, x2: float, y2: float) -> tuple[int, int, int, int]:
+        return (int(x1 * width), int(y1 * height), int(x2 * width), int(y2 * height))
+    def font_at(size: int, bold: bool = False):
+        candidates = (
+            ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+            if bold else
+            ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+        )
+        for candidate in candidates:
+            try:
+                return ImageFont.truetype(candidate, max(9, int(size * scale)))
+            except Exception:
+                continue
+        return ImageFont.load_default()
+    label_font = font_at(18, True)
+    title_font = font_at(52 if width >= 1200 else 36, True)
+    body_font = font_at(22 if width >= 1200 else 16)
+    micro_font = font_at(15 if width >= 1200 else 10, True)
+    white = (244, 248, 255, 255)
+    muted = (177, 195, 216, 235)
+    turquoise = (66, 222, 204, 255)
+    gold = (255, 192, 94, 255)
+    x0, y0 = int(width * .065), int(height * .075)
+    draw.rounded_rectangle(box(.055,.055,.27,.105), radius=int(12*scale), fill=(255,255,255,17), outline=(190,215,245,70), width=max(1,int(scale)))
+    draw.text((x0, int(height*.069)), "AI INFINITY  /  ORIGINAL EDITORIAL ART", font=micro_font, fill=muted)
+
+    # A small token set is sufficient for composition selection; exact claims are
+    # never invented and no numeric chart values are fabricated.
+    s = subject.lower() + " " + focus.lower()
+    is_energy = any(w in s for w in ("solar", "renewable", "wind turbine", "energy", "electric", "climate", "power grid"))
+    is_tech = bool(re.search(r"\b(?:ai|artificial intelligence|machine learning)\b", s)) or any(w in s for w in ("software", "technology", "chip", "data", "digital"))
+    is_creator = any(w in s for w in ("creator", "creative", "video", "film", "editing", "content", "design", "launch", "brand", "storyboard", "camera"))
+    is_science = any(w in s for w in ("science", "research", "education", "learning", "experiment", "laboratory", "discovery", "knowledge"))
+    is_business = any(w in s for w in ("business", "finance", "market", "startup", "growth", "strategy", "economy", "revenue"))
+    # Keep title short, human-readable and separate from the provider prompt.
+    title = subject[:1].upper() + subject[1:]
+    if len(title) > 52:
+        title = title[:49].rstrip() + "..."
+    words = title.split()
+    title_lines, current = [], ""
+    max_title_width = int(width * .46)
+    for word in words:
+        candidate = (current + " " + word).strip()
+        try:
+            w = draw.textbbox((0,0), candidate, font=title_font)[2]
+        except Exception:
+            w = len(candidate) * 24
+        if current and w > max_title_width:
+            title_lines.append(current); current = word
+        else:
+            current = candidate
+    if current:
+        title_lines.append(current)
+    title_lines = title_lines[:3]
+    title_y = int(height * .25)
+    draw.multiline_text((x0, title_y), "\\n".join(title_lines), font=title_font, fill=white, spacing=max(4,int(7*scale)))
+    title_box = draw.multiline_textbbox((x0,title_y), "\\n".join(title_lines), font=title_font, spacing=max(4,int(7*scale)))
+    subtext = focus or ("A closer look at the subject" if not is_creator else "From idea to a usable outcome")
+    subtext = subtext[:100]
+    draw.text((x0, min(int(height*.62), title_box[3] + int(20*scale))), subtext, font=body_font, fill=muted)
+
+    # Subject illustration occupies the right half (plus the lower edge), with
+    # clearly distinct shot designs selected by scene index and content category.
+    rx1, ry1, rx2, ry2 = int(width*.55), int(height*.19), int(width*.94), int(height*.82)
+    center_x, center_y = (rx1+rx2)//2, (ry1+ry2)//2
+    art_w, art_h = rx2-rx1, ry2-ry1
+    draw.rounded_rectangle((rx1,ry1,rx2,ry2), radius=int(34*scale), fill=(11,23,40,170), outline=(180,215,245,65), width=max(1,int(2*scale)))
+    if is_energy:
+        sun_r = int(min(art_w,art_h)*.105)
+        draw.ellipse((rx1+int(art_w*.61)-sun_r,ry1+int(art_h*.18)-sun_r,rx1+int(art_w*.61)+sun_r,ry1+int(art_h*.18)+sun_r), fill=gold)
+        draw.polygon([(rx1,ry1+int(art_h*.58)),(rx1+int(art_w*.34),ry1+int(art_h*.30)),(rx1+int(art_w*.57),ry1+int(art_h*.60)),(rx2,ry1+int(art_h*.43)),(rx2,ry2),(rx1,ry2)], fill=(24,77,91,255))
+        draw.polygon([(rx1,ry1+int(art_h*.72)),(rx1+int(art_w*.36),ry1+int(art_h*.53)),(rx1+int(art_w*.65),ry1+int(art_h*.72)),(rx2,ry1+int(art_h*.60)),(rx2,ry2),(rx1,ry2)], fill=(15,51,66,255))
+        # Three visibly different turbines imply renewable-energy coverage.
+        for fx, fy, radius in ((.25,.48,.095),(.56,.42,.12),(.80,.53,.07)):
+            tx, ty = rx1+int(art_w*fx), ry1+int(art_h*fy)
+            hub = (tx,ty)
+            draw.line((tx,ty,tx,ry2-int(art_h*.06)), fill=(220,235,248,230), width=max(2,int(3*scale)))
+            blade=int(art_h*radius)
+            for angle in (0,120,240):
+                import math
+                theta=math.radians(angle)
+                ex=tx+int(math.sin(theta)*blade)
+                ey=ty-int(math.cos(theta)*blade)
+                draw.line((tx,ty,ex,ey), fill=(234,244,255,255), width=max(2,int(4*scale)))
+            draw.ellipse((tx-int(4*scale),ty-int(4*scale),tx+int(4*scale),ty+int(4*scale)),fill=gold)
+        for row in range(3):
+            py=ry2-int(art_h*.19)+row*int(art_h*.045)
+            for col in range(5):
+                px=rx1+int(art_w*.06)+col*int(art_w*.115)
+                draw.polygon([
+                    (px, py),
+                    (px + int(art_w*.085), py - int(art_h*.028)),
+                    (px + int(art_w*.105), py + int(art_h*.018)),
+                    (px + int(art_w*.02), py + int(art_h*.042)),
+                ], fill=(39,137+row*10,153,240))
+    elif is_tech:
+        # Chip + routed nodes: a real topic illustration rather than fake product UI.
+        chip_w,chip_h=int(art_w*.36),int(art_h*.34)
+        chip=(center_x-chip_w//2,center_y-chip_h//2,center_x+chip_w//2,center_y+chip_h//2)
+        for angle in range(0,360,45):
+            import math
+            theta=math.radians(angle)
+            ex=center_x+int(math.cos(theta)*art_w*.42)
+            ey=center_y+int(math.sin(theta)*art_h*.42)
+            draw.line((center_x,center_y,ex,ey),fill=(66,222,204,130),width=max(2,int(3*scale)))
+            draw.ellipse((ex-int(7*scale),ey-int(7*scale),ex+int(7*scale),ey+int(7*scale)),fill=turquoise)
+        draw.rounded_rectangle(chip,radius=int(20*scale),fill=(20,82,104,255),outline=turquoise,width=max(2,int(4*scale)))
+        inset=int(18*scale)
+        draw.rounded_rectangle((chip[0]+inset,chip[1]+inset,chip[2]-inset,chip[3]-inset),radius=int(10*scale),outline=(239,249,255,190),width=max(1,int(2*scale)))
+        chip_label="AI" if any(w in s for w in ("artificial intelligence"," ai ","machine learning")) else "DATA"
+        tw=draw.textbbox((0,0),chip_label,font=font_at(44,True))[2]
+        draw.text((center_x-tw//2,center_y-int(24*scale)),chip_label,font=font_at(44,True),fill=white)
+        for i in range(4):
+            px=rx1+int(art_w*.12)+i*int(art_w*.23)
+            draw.line((px,ry2-int(18*scale),px,ry2-int(3*scale)),fill=turquoise,width=max(2,int(3*scale)))
+    elif is_creator:
+        # Three storyboard frames feed into an editing timeline and final play icon.
+        frame_y=ry1+int(art_h*.12)
+        frame_w=int(art_w*.25)
+        for i in range(3):
+            fx=rx1+int(art_w*.09)+i*int(art_w*.29)
+            fy=frame_y+int((i%2)*art_h*.055)
+            draw.rounded_rectangle((fx,fy,fx+frame_w,fy+int(art_h*.31)),radius=int(12*scale),fill=(23+i*5,79+i*8,102+i*10,255),outline=(150,222,235,190),width=max(1,int(2*scale)))
+            draw.ellipse((fx+int(frame_w*.57),fy+int(art_h*.09),fx+int(frame_w*.84),fy+int(art_h*.18)),fill=gold if i==1 else turquoise)
+            draw.polygon([
+                (fx + int(frame_w*.2), fy + int(art_h*.27)),
+                (fx + int(frame_w*.55), fy + int(art_h*.10)),
+                (fx + int(frame_w*.90), fy + int(art_h*.29)),
+            ], fill=(99,187,191,255))
+        timeline_y=ry1+int(art_h*.58)
+        draw.line((rx1+int(art_w*.09),timeline_y,rx2-int(art_w*.09),timeline_y),fill=(190,213,235,160),width=max(2,int(3*scale)))
+        for i in range(6):
+            tx=rx1+int(art_w*.1)+i*int(art_w*.14)
+            draw.rounded_rectangle((tx,timeline_y+int(15*scale),tx+int(art_w*.1),timeline_y+int(46*scale)),radius=int(5*scale),fill=(41+i*4,108+i*7,129+i*5,255))
+        rr=int(min(art_w,art_h)*.055)
+        draw.ellipse((rx2-int(art_w*.18)-rr,ry2-int(art_h*.11)-rr,rx2-int(art_w*.18)+rr,ry2-int(art_h*.11)+rr),fill=gold)
+        draw.polygon([(rx2-int(art_w*.19),ry2-int(art_h*.11)-int(rr*.62)),(rx2-int(art_w*.19),ry2-int(art_h*.11)+int(rr*.62)),(rx2-int(art_w*.13),ry2-int(art_h*.11))],fill=(16,31,50,255))
+    elif is_science:
+        import math
+        for orbit in (.16,.25,.34):
+            bbox=(center_x-int(art_w*orbit),center_y-int(art_h*orbit*.75),center_x+int(art_w*orbit),center_y+int(art_h*orbit*.75))
+            draw.ellipse(bbox,outline=(130,190,231,180),width=max(2,int(2*scale)))
+        draw.ellipse((center_x-int(art_w*.06),center_y-int(art_h*.07),center_x+int(art_w*.06),center_y+int(art_h*.07)),fill=gold)
+        for angle in (15,125,245):
+            theta=math.radians(angle)
+            px=center_x+int(math.cos(theta)*art_w*.22)
+            py=center_y+int(math.sin(theta)*art_h*.18)
+            rr=int(min(art_w,art_h)*.04)
+            draw.ellipse((px-rr,py-rr,px+rr,py+rr),fill=turquoise,outline=white,width=max(1,int(2*scale)))
+    elif is_business:
+        base_y=ry2-int(art_h*.14)
+        for i,hfraction in enumerate((.26,.43,.35,.61,.72,.86)):
+            bx=rx1+int(art_w*.1)+i*int(art_w*.13)
+            bh=int(art_h*hfraction*.6)
+            draw.rounded_rectangle((bx,base_y-bh,bx+int(art_w*.075),base_y),radius=int(6*scale),fill=(48+i*7,129+i*9,173+i*8,245))
+        pts=[]
+        for i,yfraction in enumerate((.58,.49,.54,.34,.28,.17)):
+            pts.append((rx1+int(art_w*.12)+i*int(art_w*.13),ry1+int(art_h*yfraction)))
+        draw.line(pts,fill=gold,width=max(3,int(5*scale)),joint="curve")
+        for px,py in pts:
+            rr=int(5*scale)
+            draw.ellipse((px-rr,py-rr,px+rr,py+rr),fill=gold)
+    else:
+        # Topic-neutral fallback keeps a composed focal subject and layered form,
+        # not an unsupported claim that a specific real-world photo exists.
+        for j in range(4):
+            r=int(min(art_w,art_h)*(.12+j*.055))
+            ox=center_x+int((j-1.5)*art_w*.075)
+            oy=center_y+int((j%2-.5)*art_h*.08)
+            draw.ellipse((ox-r,oy-r,ox+r,oy+r),outline=(100+j*22,190+j*12,224,180-j*25),width=max(2,int((4-j)*scale)))
+        draw.rounded_rectangle((rx1+int(art_w*.2),ry1+int(art_h*.32),rx1+int(art_w*.8),ry1+int(art_h*.68)),radius=int(20*scale),fill=(18,61,80,235),outline=turquoise,width=max(2,int(3*scale)))
+        draw.text((rx1+int(art_w*.27),ry1+int(art_h*.42)),"IDEA  /  ACTION",font=font_at(21,True),fill=white)
+
+    # Footer identifies the shot as original illustrative artwork rather than a
+    # stock asset or documentary photograph.
+    draw.line((int(width*.065),int(height*.88),int(width*.94),int(height*.88)),fill=(177,202,228,100),width=max(1,int(scale)))
+    draw.text((int(width*.065),int(height*.91)),f"SCENE {index:02d}  /  {variant+1:02d}",font=micro_font,fill=turquoise)
+    footer="ILLUSTRATIVE MOTION-DESIGN FALLBACK  •  NOT A PHOTOGRAPH"
+    draw.text((int(width*.34),int(height*.91)),footer,font=font_at(13),fill=(157,179,201,210))
+    p=outdir/f"procedural_visual_{index:02d}.png"
+    im.convert("RGB").save(p,"PNG",optimize=True)
+    return {
+        "kind":"image","path":str(p),"source":"AI Infinity original vector editorial fallback",
+        "source_url":None,"creator":"AI Infinity","license":"Original generated illustrative asset",
+        "model":"topic-led-vector-editorial-engine","quality_tier":"original_vector_editorial_fallback",
+        "asset_kind":"illustrative_graphic_not_photograph","topic":subject,"visual_focus":focus
+    }
 
 
 
@@ -1477,8 +1817,22 @@ def _ci_test_visual(scene: Dict[str, Any], outdir: Path, index: int) -> Optional
 
 
 def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_motion: bool = False, duration: float = 6.0) -> Dict[str, Any]:
-    query=str(scene.get("visual_query") or scene.get("heading") or "documentary scene")
-    ai_prompt=str(scene.get("image_prompt") or f"Premium cinematic documentary visual about {query}; realistic, useful, editorial, no text, no logos, professional photography")
+    raw_query=str(scene.get("visual_query") or scene.get("heading") or "documentary scene")
+    ai_prompt=str(scene.get("image_prompt") or f"Premium cinematic documentary visual about {raw_query}; realistic, useful, editorial, no text, no logos, professional photography")
+    heading=str(scene.get("heading") or "").strip()
+    topic=str(scene.get("topic") or scene.get("title") or "").strip()
+    focus=str(scene.get("visual_focus") or "").strip()
+    if not topic:
+        topic_match=re.search(r"\\babout\\s+(.+?)(?:;|\\.\\s|$)",ai_prompt,re.I)
+        topic=(topic_match.group(1).strip(" .;,:") if topic_match else "")
+    if not focus:
+        focus_match=re.search(r"\\bvisual focus\\s*:\\s*(.+?)(?:;|\\.\\s|$)",ai_prompt,re.I)
+        focus=(focus_match.group(1).strip(" .;,:") if focus_match else "")
+    if not topic:
+        topic=re.split(r"\\b(?:striking opening view|real-world context|close-up|concrete real-world example|resolved outcome|environment, setting|prototype, mechanism|process, tools|people using the idea|before-and-after|creator applying)\\b",raw_query,1,flags=re.I)[0]
+    topic=re.sub(r"\\s+"," ",topic).strip(" .;,:")[:140] or heading or "documentary scene"
+    focus=re.sub(r"\\s+"," ",focus).strip(" .;,:")[:180]
+    query=" ".join(x for x in (topic,focus) if x).strip() or raw_query
     MEDIA_DEBUG_ERRORS.clear()
     external_disabled = _external_providers_disabled()
     if external_disabled:
@@ -1498,24 +1852,16 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     if ai:
         return ai
 
-    heading=str(scene.get("heading") or "").strip()
-    topic=str(scene.get("topic") or scene.get("title") or "").strip()
-    focus=re.sub(r"[^a-zA-Z0-9, ._-]+"," ",heading).strip()
     def compact(s: str) -> str:
-        stop={"create","make","generate","produce","build","video","film","short","reel","cinematic","documentary","premium","editorial","about","real","world","photography"}
+        stop={"create","make","generate","produce","build","video","film","short","reel","cinematic","documentary","premium","editorial","about","real","world","photography","professional","opening","view","visual","focus","context","close","up","concrete","example","resolved","outcome","people","using","idea","process","tools","showing","clear","subject","matters","affected","central","mechanism","connected","purposeful","scene"}
         words=[w for w in re.findall(r"[A-Za-z0-9]{3,}",s.lower()) if w not in stop]
         return " ".join(words[:7])
-    core=compact(topic or query or heading)
-    focus_core=compact(focus)
-    generic_focus={
-        "Hook":"creative person working at a desk",
-        "Why it matters":"creative team collaboration workspace",
-        "The key idea":"design notebook prototype close detail",
-        "Practical example":"creator editing and making a project",
-        "Takeaway":"finished creative project in a real workspace",
-    }.get(heading.split("—",1)[0].split(":",1)[0].strip(),"real world creative workspace")
+    core=compact(topic or raw_query or heading)
+    focus_core=compact(focus or heading)
+    # Search only topic-specific phrases. Earlier generic "creator at a desk"
+    # queries repeatedly returned irrelevant visuals for energy/science/etc.
     query_variants=[]
-    for q in (query, f"{core} {focus_core}", f"{core} {generic_focus}", generic_focus):
+    for q in (query, f"{core} {focus_core}"):
         q=" ".join(q.split()).strip()
         if q and q.lower() not in {x.lower() for x in query_variants}:
             query_variants.append(q)
@@ -1535,10 +1881,49 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         except Exception:
             pass
 
-    def select_distinct_candidate(candidate: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def candidate_is_relevant(candidate: Dict[str, Any]) -> bool:
+        title_text=" ".join(str(candidate.get(k) or "") for k in ("title","description","alt","caption")).lower()
+        if not title_text.strip():
+            # Some video APIs do not supply titles; their search query itself is
+            # the provider's relevance contract.
+            return True
+        words=set(re.findall(r"[a-z0-9]{4,}",title_text))
+        topic_words=set(re.findall(r"[a-z0-9]{4,}",core.lower()))
+        focus_words=set(re.findall(r"[a-z0-9]{4,}",focus_core.lower()))
+        topical={"professional","cinematic","photography","documentary","visual","scene","real","world","image","video","shot","stock","background","free"}
+        topic_words-=topical
+        focus_words-=topical
+        # At least one specific subject/focus term must appear in metadata. It
+        # is better to use a clearly-labelled local illustration than to claim a
+        # visually unrelated stock asset is relevant to the brief.
+        return not (topic_words or focus_words) or bool((topic_words|focus_words) & words)
+
+    def candidate_media_is_usable(candidate: Dict[str, Any]) -> bool:
         path=Path(str(candidate.get("path") or ""))
         if not path.is_file() or path.stat().st_size <= 1000:
+            return False
+        try:
+            if candidate.get("kind") == "video":
+                probe=ffprobe_json(path)
+                streams=probe.get("streams") or []
+                stream=next((x for x in streams if x.get("codec_type")=="video"),None)
+                if not stream or int(stream.get("width") or 0)<320 or int(stream.get("height") or 0)<240:
+                    return False
+                return probe_duration(path)>0.5
+            if Image is None:
+                return False
+            with Image.open(path) as media:
+                media.verify()
+            with Image.open(path) as media:
+                return min(media.size)>=320
+        except Exception as exc:
+            _media_debug("scene-candidate-validation",exc)
+            return False
+
+    def select_distinct_candidate(candidate: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not candidate_media_is_usable(candidate) or not candidate_is_relevant(candidate):
             return None
+        path=Path(str(candidate.get("path") or ""))
         try:
             digest=file_sha256(path)
         except Exception:
@@ -1558,10 +1943,13 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         selected_candidate["asset_sha256"]=digest
         return selected_candidate
 
-    for q in query_variants[:4]:
-        for getter in getters:
+    for getter in getters:
+        # First query is the exact scene brief; the second is a compact retry for
+        # rate-limited/over-constrained public search. Each provider is queried
+        # at most twice per scene to reduce avoidable HTTP 429 bursts.
+        for q in query_variants[:2]:
             try:
-                items=getter(q,outdir,limit=6)
+                items=getter(q,outdir,limit=4)
             except Exception as exc:
                 source_failures.append(f"{getter.__name__}:{type(exc).__name__}:{str(exc)[:180]}")
                 continue
@@ -1571,7 +1959,7 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
                 if selected:
                     return selected
             debug_key={"_nasa_images":"nasa","_openverse_images":"openverse","_commons_media":"wikimedia","_pexels":"pexels","_pixabay":"pixabay"}.get(getter.__name__,getter.__name__)
-            source_failures.append(f"{getter.__name__}:{MEDIA_DEBUG_ERRORS.get(debug_key,'no-distinct-asset')}")
+            source_failures.append(f"{getter.__name__}:{MEDIA_DEBUG_ERRORS.get(debug_key,'no-relevant-distinct-asset')}")
 
     test_media=_ci_test_visual(scene,outdir,index)
     if test_media:
@@ -1611,10 +1999,10 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     except Exception:
         pass
 
-    # Last production rung: create an original editorial motion-design scene.
-    # This is a real generated asset, not a test fixture or fake success. It is
-    # explicitly tagged as fallback so downstream QC can warn without killing
-    # an otherwise usable delivery.
+    # Last production rung: create a subject-aware original editorial
+    # illustration, not an abstract title card or a pretend photographic asset.
+    # Quality state remains DEGRADED and metadata must disclose why providers
+    # failed so callers never confuse local illustration with generated video.
     try:
         fallback = _procedural_image(
             ai_prompt or query,
@@ -1633,19 +2021,20 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
                 for item in source_failures[:20]
             )
             fallback.update({
-                "quality_tier": "original_motion_design_fallback",
+                "quality_tier": "original_vector_editorial_fallback",
                 "fallback": True,
-                "fallback_reason": "No primary AI/public visual asset was reachable for this scene.",
+                "fallback_reason": "No usable, relevant AI/public visual asset was reachable for this scene.",
                 "fallback_record": {
                     "failed_providers": [x["provider"] for x in fallback_failures],
                     "failure_reasons": fallback_failures[:20],
-                    "fallback_method": "AI Infinity original motion-design generator",
-                    "quality_change": "primary AI/public visual source -> original motion-design fallback",
-                    "license_change": "provider/source-specific -> original generated asset",
+                    "fallback_method": "Topic-led original vector/editorial illustration with bounded Ken Burns motion",
+                    "quality_change": "AI/public media -> clearly-labelled illustrative graphic; photographic realism is not claimed",
+                    "license_change": "provider/source-specific -> original generated illustrative asset",
                     "execution_state": "DEGRADED",
                     "truthful": True,
                 },
                 "rights_status": "original_asset",
+                "visual_quality_notice": "Illustrative graphic, not a photograph or AI-generated video.",
             })
             _media_success("procedural-fallback", {
                 "scene": index,
@@ -1999,21 +2388,61 @@ def _subtitle_time(x: float) -> str:
 
 
 def write_srt(chapters: List[Dict[str, Any]], path: Path) -> None:
+    """Write bounded, sequential subtitle cues from the same narration timeline."""
     lines = []
     t = 0.0
-    for i, ch in enumerate(chapters, 1):
+    cue_number = 1
+    for ch in chapters:
         d = max(0.2, float(ch.get("actual_duration") or ch.get("duration") or 1))
-        text = re.sub(r"\s+", " ", str(ch.get("narration") or "")).strip()
-        words = text.split()
-        wrapped=[]; line=""
+        words = re.sub(r"\s+", " ", str(ch.get("narration") or "")).strip().split()
+        if not words:
+            t += d
+            continue
+
+        # First group by readable line length and word count.
+        chunks = []
+        current = []
         for word in words:
-            if line and len(line)+1+len(word)>42:
-                wrapped.append(line); line=word
-            else:
-                line=(line+" "+word).strip()
-        if line: wrapped.append(line)
-        text="\n".join(wrapped[:4])
-        lines.append(f"{i}\n{_subtitle_time(t)} --> {_subtitle_time(t+d)}\n{text}\n")
+            proposed = " ".join(current + [word])
+            if current and (len(current) >= 8 or len(proposed) > 78):
+                chunks.append(current)
+                current = []
+            current.append(word)
+        if current:
+            chunks.append(current)
+
+        # A long narration segment must not leave one subtitle parked on screen
+        # for 15–60 seconds. Rebalance words into time-bounded cue groups while
+        # preserving the spoken word order.
+        target_cues = max(1, int((d + 4.499) // 4.5))
+        if target_cues > len(chunks) and len(words) >= target_cues:
+            balanced = []
+            for j in range(target_cues):
+                left = j * len(words) // target_cues
+                right = (j + 1) * len(words) // target_cues
+                if right > left:
+                    balanced.append(words[left:right])
+            chunks = balanced
+
+        total_weight = max(1, sum(len(chunk) for chunk in chunks))
+        elapsed = 0.0
+        for j, chunk in enumerate(chunks):
+            cue_duration = d - elapsed if j == len(chunks) - 1 else d * len(chunk) / total_weight
+            wrapped = []
+            line = ""
+            for word in chunk:
+                if line and len(line) + 1 + len(word) > 42:
+                    wrapped.append(line)
+                    line = word
+                else:
+                    line = (line + " " + word).strip()
+            if line:
+                wrapped.append(line)
+            start = t + elapsed
+            end = t + d if j == len(chunks) - 1 else start + cue_duration
+            lines.append(f"{cue_number}\n{_subtitle_time(start)} --> {_subtitle_time(end)}\n" + "\n".join(wrapped[:2]) + "\n")
+            cue_number += 1
+            elapsed = end - t
         t += d
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -2077,13 +2506,17 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
             )
             visual_args = ["-stream_loop", "-1", "-i", src]
         else:
-            frames = max(1, int(round(duration * fps)))
-            # Avoid zoompan in the constrained free-tier path. A long zoompan
-            # graph can retain many generated frames and approach the 512 MiB
-            # service ceiling even with single-threaded FFmpeg.
+            # Create a low-memory Ken Burns move by panning across a slightly
+            # oversized working image. Unlike zoompan, this does not retain a
+            # long generated-frame sequence; buffers stay at the 640x360-class
+            # working dimensions until the final scale.
+            zoom_w, zoom_h = max(work_w + 1, int(work_w * 1.12)), max(work_h + 1, int(work_h * 1.12))
             vf = (
-                f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps=24,"
-                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color=black@0.48:t=fill,"
+                f"scale={zoom_w}:{zoom_h}:force_original_aspect_ratio=increase,crop={zoom_w}:{zoom_h},fps={fps},"
+                f"crop={work_w}:{work_h}:x='(in_w-out_w)*(0.5-0.5*cos(PI*t/{duration}))':"
+                f"y='(in_h-out_h)*(0.5+0.5*sin(PI*t/{duration}))',"
+                f"scale={width}:{height}:flags=lanczos,eq=contrast=1.02:saturation=1.04,"
+                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color=black@0.38:t=fill,"
                 f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
                 f"x={text_x}:y={text_y}:fontsize={font}:fontcolor=white"
             )
@@ -2205,9 +2638,35 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
     try: audio_duration = float((a.get("duration") or 0))
     except Exception: audio_duration = 0.0
     caption_blocks = 0
+    caption_max_seconds = 0.0
+    caption_timing_valid = False
+    caption_duration_coverage = 0.0
     if captions.exists():
-        try: caption_blocks = len(re.findall(r"(?m)^\d+\s*$", captions.read_text(encoding="utf-8", errors="ignore")))
-        except Exception: caption_blocks = 0
+        try:
+            srt_text = captions.read_text(encoding="utf-8-sig", errors="ignore")
+            caption_blocks = len(re.findall(r"(?m)^\d+\s*$", srt_text))
+            timestamp_re = re.compile(
+                r"(?m)^(\d{2,}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*"
+                r"(\d{2,}):(\d{2}):(\d{2}),(\d{3})\s*$"
+            )
+            times = []
+            for match in timestamp_re.finditer(srt_text):
+                values = [int(value) for value in match.groups()]
+                start = values[0] * 3600 + values[1] * 60 + values[2] + values[3] / 1000.0
+                end = values[4] * 3600 + values[5] * 60 + values[6] + values[7] / 1000.0
+                if end <= start or (times and start < times[-1][1] - 0.03):
+                    times = []
+                    break
+                times.append((start, end))
+            if times:
+                caption_timing_valid = True
+                caption_max_seconds = max(end - start for start, end in times)
+                caption_duration_coverage = min(1.0, sum(end - start for start, end in times) / max(0.001, duration))
+        except Exception:
+            caption_blocks = 0
+    # Short captions are intentionally split into multiple cues per scene. Validate
+    # their timing/readability contract rather than requiring one cue per scene.
+    expected_caption_cues = max(1, int((duration + 4.999) // 5))
     checks = {
         "file_present": master.exists() and master.stat().st_size > 10000,
         "duration_nonzero": duration > 2,
@@ -2227,7 +2686,15 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
         "captions_present": captions.exists() and captions.stat().st_size > 20,
         "embedded_subtitles": bool(subtitle_streams),
         "captions_delivered": bool(subtitle_streams) or (captions.exists() and captions.stat().st_size > 20),
-        "caption_count_matches_scenes": caption_blocks == len(chapters) if captions.exists() else False,
+        "caption_count_matches_scenes": (
+            caption_blocks >= len(chapters)
+            and (duration < 15 or (
+                caption_blocks >= expected_caption_cues
+                and caption_timing_valid
+                and caption_max_seconds <= 5.75
+                and caption_duration_coverage >= 0.80
+            ))
+        ) if captions.exists() else False,
         # Narration may intentionally finish before the mastered visual program;\n        # require real narration while allowing the soundtrack/visual tail to continue.\n        "voice_video_duration_aligned": bool(expected_voice > 0 and expected_voice <= duration + 3.0),\n        "scene_count": len(chapters) >= (1 if SMOKE else (3 if FAST_MODE else 4)),
         "visual_assets_present": len(assets) >= len(chapters),
         "fallback_visual_used": any(bool(x.get("fallback")) for x in (assets or [])),
@@ -3053,6 +3520,33 @@ def _normalize_delivery_duration(source: Path, target_seconds: float, out: Path)
     if abs(fitted - target) > 0.75:
         raise RuntimeError(f"duration normalization ({reason}) produced {fitted:.2f}s instead of {target:.2f}s")
     return out
+def _select_scene_coverage(chapters: List[Dict[str, Any]], max_scenes: int) -> List[Dict[str, Any]]:
+    """Downsample long storyboards across the complete narrative arc, not just the opening."""
+    scenes = list(chapters or [])
+    try:
+        limit = max(1, int(max_scenes))
+    except (TypeError, ValueError):
+        limit = 1
+    if len(scenes) <= limit:
+        return [dict(scene) for scene in scenes]
+    if limit == 1:
+        return [dict(scenes[0])]
+    indexes = []
+    for slot in range(limit):
+        index = int(round(slot * (len(scenes) - 1) / (limit - 1)))
+        if not indexes or index > indexes[-1]:
+            indexes.append(index)
+    # The bounded evenly-spaced selection always preserves both the opening
+    # and the ending; defensive fill handles future non-integer limit policies.
+    for index in range(len(scenes)):
+        if len(indexes) >= limit:
+            break
+        if index not in indexes:
+            indexes.append(index)
+    indexes = sorted(indexes[:limit])
+    return [dict(scenes[index]) for index in indexes]
+
+
 def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
     ACTIVE_PROJECT.project_id = project_id
     project = _get_project(project_id)
@@ -3161,23 +3655,52 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 audit_event(project_id, "storyboard_override_applied", {"source_project":override.get("source_project"),"scene_count":len(normalized)})
         if not chapters:
             raise RuntimeError("creative engine returned no chapters")
+
+        # Avoid burning generic planner labels such as "Hook" into the media.
+        # Use the selected language's concise editorial overlay instead.
+        generic_labels = {
+            "hook": "Hook", "opening": "Hook", "context": "Context",
+            "why it matters": "Why it matters", "the key idea": "The key idea",
+            "the core idea": "The core idea", "practical example": "Practical example",
+            "takeaway": "Takeaway", "practical takeaway": "Practical takeaway",
+            "real-world examples": "Real-world examples", "what changes": "What changes",
+            "how it works": "How it works", "closing": "Closing",
+        }
+        request_language = str(req.get("language") or "English")
+        for chapter in chapters:
+            current_label = re.sub(r"\s+", " ", str(chapter.get("on_screen") or "")).strip().lower()
+            if current_label in generic_labels:
+                key = generic_labels[current_label]
+                copy = _localized_fallback_copy(
+                    request_language, key, str(plan.get("title") or topic), str(req.get("topic") or topic)
+                )
+                replacement = (copy.get("on_screen") or {}).get(key, "")
+                if replacement and replacement.strip().lower() != current_label:
+                    chapter["on_screen"] = replacement
+
         fmt = str(req.get("format", "long")).lower()
         is_short = fmt in {"short", "shorts", "reel", "tiktok"}
         target = int(req.get("duration") or (60 if is_short else 300))
         target = max(20, min(target, 180 if is_short else 3600))
-        # On the 512 MiB Render free tier, a short production must stay a
-        # single-scene render. This preserves the requested duration and real
-        # deliverables while preventing sequential heavy scene rendering from
-        # accumulating memory pressure across a live request.
-        max_chapters = (1 if FAST_MODE else 5) if is_short else (4 if FAST_MODE else 8)
+        # Low-memory production remains sequential and renders each shot in its
+        # own bounded FFmpeg process. A normal short must still contain editorial
+        # coverage; duplicating one still for the full duration is not a professional
+        # short. Only explicit single-shot briefs and isolated smoke tests use one.
+        brief_for_scene_policy = " ".join(str(req.get(k) or "") for k in ("objective", "topic", "title"))
+        explicitly_single_scene = bool(re.search(
+            r"\b(single[- ]scene|single[- ]shot|one[- ]shot|one continuous shot|static shot|still[- ]image video|looping background)\b",
+            brief_for_scene_policy, re.I
+        ))
+        max_chapters = (3 if FAST_MODE else 5) if is_short else (4 if FAST_MODE else 8)
+        if explicitly_single_scene:
+            max_chapters = 1
         if FAST_MODE and not SMOKE:
             target = min(target, 180 if is_short else 900)
         if SMOKE:
-            # Smoke mode may reduce scene count, but it must never rewrite the
-            # user's requested delivery duration. Independent QC compares the
-            # final file to the original request.
+            # Isolated smoke mode checks runtime wiring; it is not the creative
+            # quality benchmark and must never be confused with live acceptance.
             max_chapters = 1
-        chapters = chapters[:max_chapters]
+        chapters = _select_scene_coverage(chapters, max_chapters)
         raw_durations = []
         for ch in chapters:
             try:
