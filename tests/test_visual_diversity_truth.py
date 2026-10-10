@@ -259,3 +259,16 @@ def test_unlabelled_procedural_placeholder_is_not_eligible_as_degraded_draft():
             "license_change": "provider -> original",
         },
     })
+
+
+def test_explicit_brief_topic_overrides_generic_project_title():
+    studio = closure._studio()
+    plan = studio._fallback_creative_plan(
+        "Canonical Runtime Smoke",
+        "Create a useful 20-second explainer about renewable energy.",
+        "short", 20, "general audience", "clear", {"sources": []}, "English",
+        topic="renewable energy",
+    )
+    assert plan["title"] == "Canonical Runtime Smoke"
+    assert all("renewable energy" in chapter["visual_query"].lower() for chapter in plan["chapters"])
+    assert all("Canonical Runtime Smoke" not in chapter["visual_query"] for chapter in plan["chapters"])
