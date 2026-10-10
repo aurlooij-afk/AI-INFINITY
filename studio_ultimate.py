@@ -2284,9 +2284,35 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
     try: audio_duration = float((a.get("duration") or 0))
     except Exception: audio_duration = 0.0
     caption_blocks = 0
+    caption_max_seconds = 0.0
+    caption_timing_valid = False
+    caption_duration_coverage = 0.0
     if captions.exists():
-        try: caption_blocks = len(re.findall(r"(?m)^\d+\s*$", captions.read_text(encoding="utf-8", errors="ignore")))
-        except Exception: caption_blocks = 0
+        try:
+            srt_text = captions.read_text(encoding="utf-8-sig", errors="ignore")
+            caption_blocks = len(re.findall(r"(?m)^\d+\s*$", srt_text))
+            timestamp_re = re.compile(
+                r"(?m)^(\d{2,}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*"
+                r"(\d{2,}):(\d{2}):(\d{2}),(\d{3})\s*$"
+            )
+            times = []
+            for match in timestamp_re.finditer(srt_text):
+                values = [int(value) for value in match.groups()]
+                start = values[0] * 3600 + values[1] * 60 + values[2] + values[3] / 1000.0
+                end = values[4] * 3600 + values[5] * 60 + values[6] + values[7] / 1000.0
+                if end <= start or (times and start < times[-1][1] - 0.03):
+                    times = []
+                    break
+                times.append((start, end))
+            if times:
+                caption_timing_valid = True
+                caption_max_seconds = max(end - start for start, end in times)
+                caption_duration_coverage = min(1.0, sum(end - start for start, end in times) / max(0.001, duration))
+        except Exception:
+            caption_blocks = 0
+    # Short captions are intentionally split into multiple cues per scene. Validate
+    # their timing/readability contract rather than requiring one cue per scene.
+    expected_caption_cues = max(1, int((duration + 4.999) // 5))
     checks = {
         "file_present": master.exists() and master.stat().st_size > 10000,
         "duration_nonzero": duration > 2,
@@ -2306,7 +2332,15 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
         "captions_present": captions.exists() and captions.stat().st_size > 20,
         "embedded_subtitles": bool(subtitle_streams),
         "captions_delivered": bool(subtitle_streams) or (captions.exists() and captions.stat().st_size > 20),
-        "caption_count_matches_scenes": caption_blocks == len(chapters) if captions.exists() else False,
+        "caption_count_matches_scenes": (
+            caption_blocks >= len(chapters)
+            and (duration < 15 or (
+                caption_blocks >= expected_caption_cues
+                and caption_timing_valid
+                and caption_max_seconds <= 5.75
+                and caption_duration_coverage >= 0.80
+            ))
+        ) if captions.exists() else False,
         # Narration may intentionally finish before the mastered visual program;\n        # require real narration while allowing the soundtrack/visual tail to continue.\n        "voice_video_duration_aligned": bool(expected_voice > 0 and expected_voice <= duration + 3.0),\n        "scene_count": len(chapters) >= (1 if SMOKE else (3 if FAST_MODE else 4)),
         "visual_assets_present": len(assets) >= len(chapters),
         "fallback_visual_used": any(bool(x.get("fallback")) for x in (assets or [])),
