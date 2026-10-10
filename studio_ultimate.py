@@ -1810,8 +1810,22 @@ def _ci_test_visual(scene: Dict[str, Any], outdir: Path, index: int) -> Optional
 
 
 def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_motion: bool = False, duration: float = 6.0) -> Dict[str, Any]:
-    query=str(scene.get("visual_query") or scene.get("heading") or "documentary scene")
-    ai_prompt=str(scene.get("image_prompt") or f"Premium cinematic documentary visual about {query}; realistic, useful, editorial, no text, no logos, professional photography")
+    raw_query=str(scene.get("visual_query") or scene.get("heading") or "documentary scene")
+    ai_prompt=str(scene.get("image_prompt") or f"Premium cinematic documentary visual about {raw_query}; realistic, useful, editorial, no text, no logos, professional photography")
+    heading=str(scene.get("heading") or "").strip()
+    topic=str(scene.get("topic") or scene.get("title") or "").strip()
+    focus=str(scene.get("visual_focus") or "").strip()
+    if not topic:
+        topic_match=re.search(r"\\babout\\s+(.+?)(?:;|\\.\\s|$)",ai_prompt,re.I)
+        topic=(topic_match.group(1).strip(" .;,:") if topic_match else "")
+    if not focus:
+        focus_match=re.search(r"\\bvisual focus\\s*:\\s*(.+?)(?:;|\\.\\s|$)",ai_prompt,re.I)
+        focus=(focus_match.group(1).strip(" .;,:") if focus_match else "")
+    if not topic:
+        topic=re.split(r"\\b(?:striking opening view|real-world context|close-up|concrete real-world example|resolved outcome|environment, setting|prototype, mechanism|process, tools|people using the idea|before-and-after|creator applying)\\b",raw_query,1,flags=re.I)[0]
+    topic=re.sub(r"\\s+"," ",topic).strip(" .;,:")[:140] or heading or "documentary scene"
+    focus=re.sub(r"\\s+"," ",focus).strip(" .;,:")[:180]
+    query=" ".join(x for x in (topic,focus) if x).strip() or raw_query
     MEDIA_DEBUG_ERRORS.clear()
     external_disabled = _external_providers_disabled()
     if external_disabled:
@@ -1831,24 +1845,16 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     if ai:
         return ai
 
-    heading=str(scene.get("heading") or "").strip()
-    topic=str(scene.get("topic") or scene.get("title") or "").strip()
-    focus=re.sub(r"[^a-zA-Z0-9, ._-]+"," ",heading).strip()
     def compact(s: str) -> str:
-        stop={"create","make","generate","produce","build","video","film","short","reel","cinematic","documentary","premium","editorial","about","real","world","photography"}
+        stop={"create","make","generate","produce","build","video","film","short","reel","cinematic","documentary","premium","editorial","about","real","world","photography","professional","opening","view","visual","focus","context","close","up","concrete","example","resolved","outcome","people","using","idea","process","tools","showing","clear","subject","matters","affected","central","mechanism","connected","purposeful","scene"}
         words=[w for w in re.findall(r"[A-Za-z0-9]{3,}",s.lower()) if w not in stop]
         return " ".join(words[:7])
-    core=compact(topic or query or heading)
-    focus_core=compact(focus)
-    generic_focus={
-        "Hook":"creative person working at a desk",
-        "Why it matters":"creative team collaboration workspace",
-        "The key idea":"design notebook prototype close detail",
-        "Practical example":"creator editing and making a project",
-        "Takeaway":"finished creative project in a real workspace",
-    }.get(heading.split("—",1)[0].split(":",1)[0].strip(),"real world creative workspace")
+    core=compact(topic or raw_query or heading)
+    focus_core=compact(focus or heading)
+    # Search only topic-specific phrases. Earlier generic "creator at a desk"
+    # queries repeatedly returned irrelevant visuals for energy/science/etc.
     query_variants=[]
-    for q in (query, f"{core} {focus_core}", f"{core} {generic_focus}", generic_focus):
+    for q in (query, f"{core} {focus_core}"):
         q=" ".join(q.split()).strip()
         if q and q.lower() not in {x.lower() for x in query_variants}:
             query_variants.append(q)
@@ -1868,10 +1874,49 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         except Exception:
             pass
 
-    def select_distinct_candidate(candidate: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def candidate_is_relevant(candidate: Dict[str, Any]) -> bool:
+        title_text=" ".join(str(candidate.get(k) or "") for k in ("title","description","alt","caption")).lower()
+        if not title_text.strip():
+            # Some video APIs do not supply titles; their search query itself is
+            # the provider's relevance contract.
+            return True
+        words=set(re.findall(r"[a-z0-9]{4,}",title_text))
+        topic_words=set(re.findall(r"[a-z0-9]{4,}",core.lower()))
+        focus_words=set(re.findall(r"[a-z0-9]{4,}",focus_core.lower()))
+        topical={"professional","cinematic","photography","documentary","visual","scene","real","world","image","video","shot","stock","background","free"}
+        topic_words-=topical
+        focus_words-=topical
+        # At least one specific subject/focus term must appear in metadata. It
+        # is better to use a clearly-labelled local illustration than to claim a
+        # visually unrelated stock asset is relevant to the brief.
+        return not (topic_words or focus_words) or bool((topic_words|focus_words) & words)
+
+    def candidate_media_is_usable(candidate: Dict[str, Any]) -> bool:
         path=Path(str(candidate.get("path") or ""))
         if not path.is_file() or path.stat().st_size <= 1000:
+            return False
+        try:
+            if candidate.get("kind") == "video":
+                probe=ffprobe_json(path)
+                streams=probe.get("streams") or []
+                stream=next((x for x in streams if x.get("codec_type")=="video"),None)
+                if not stream or int(stream.get("width") or 0)<320 or int(stream.get("height") or 0)<240:
+                    return False
+                return probe_duration(path)>0.5
+            if Image is None:
+                return False
+            with Image.open(path) as media:
+                media.verify()
+            with Image.open(path) as media:
+                return min(media.size)>=320
+        except Exception as exc:
+            _media_debug("scene-candidate-validation",exc)
+            return False
+
+    def select_distinct_candidate(candidate: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not candidate_media_is_usable(candidate) or not candidate_is_relevant(candidate):
             return None
+        path=Path(str(candidate.get("path") or ""))
         try:
             digest=file_sha256(path)
         except Exception:
@@ -1891,10 +1936,13 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         selected_candidate["asset_sha256"]=digest
         return selected_candidate
 
-    for q in query_variants[:4]:
-        for getter in getters:
+    for getter in getters:
+        # First query is the exact scene brief; the second is a compact retry for
+        # rate-limited/over-constrained public search. Each provider is queried
+        # at most twice per scene to reduce avoidable HTTP 429 bursts.
+        for q in query_variants[:2]:
             try:
-                items=getter(q,outdir,limit=6)
+                items=getter(q,outdir,limit=4)
             except Exception as exc:
                 source_failures.append(f"{getter.__name__}:{type(exc).__name__}:{str(exc)[:180]}")
                 continue
@@ -1904,7 +1952,7 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
                 if selected:
                     return selected
             debug_key={"_nasa_images":"nasa","_openverse_images":"openverse","_commons_media":"wikimedia","_pexels":"pexels","_pixabay":"pixabay"}.get(getter.__name__,getter.__name__)
-            source_failures.append(f"{getter.__name__}:{MEDIA_DEBUG_ERRORS.get(debug_key,'no-distinct-asset')}")
+            source_failures.append(f"{getter.__name__}:{MEDIA_DEBUG_ERRORS.get(debug_key,'no-relevant-distinct-asset')}")
 
     test_media=_ci_test_visual(scene,outdir,index)
     if test_media:
@@ -1944,10 +1992,10 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     except Exception:
         pass
 
-    # Last production rung: create an original editorial motion-design scene.
-    # This is a real generated asset, not a test fixture or fake success. It is
-    # explicitly tagged as fallback so downstream QC can warn without killing
-    # an otherwise usable delivery.
+    # Last production rung: create a subject-aware original editorial
+    # illustration, not an abstract title card or a pretend photographic asset.
+    # Quality state remains DEGRADED and metadata must disclose why providers
+    # failed so callers never confuse local illustration with generated video.
     try:
         fallback = _procedural_image(
             ai_prompt or query,
@@ -1966,19 +2014,20 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
                 for item in source_failures[:20]
             )
             fallback.update({
-                "quality_tier": "original_motion_design_fallback",
+                "quality_tier": "original_vector_editorial_fallback",
                 "fallback": True,
-                "fallback_reason": "No primary AI/public visual asset was reachable for this scene.",
+                "fallback_reason": "No usable, relevant AI/public visual asset was reachable for this scene.",
                 "fallback_record": {
                     "failed_providers": [x["provider"] for x in fallback_failures],
                     "failure_reasons": fallback_failures[:20],
-                    "fallback_method": "AI Infinity original motion-design generator",
-                    "quality_change": "primary AI/public visual source -> original motion-design fallback",
-                    "license_change": "provider/source-specific -> original generated asset",
+                    "fallback_method": "Topic-led original vector/editorial illustration with bounded Ken Burns motion",
+                    "quality_change": "AI/public media -> clearly-labelled illustrative graphic; photographic realism is not claimed",
+                    "license_change": "provider/source-specific -> original generated illustrative asset",
                     "execution_state": "DEGRADED",
                     "truthful": True,
                 },
                 "rights_status": "original_asset",
+                "visual_quality_notice": "Illustrative graphic, not a photograph or AI-generated video.",
             })
             _media_success("procedural-fallback", {
                 "scene": index,
