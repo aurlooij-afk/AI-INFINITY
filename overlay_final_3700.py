@@ -186,8 +186,16 @@ except Exception as _ai3703_patch_error:
 
 
 # 3704 five-provider durable storage fabric.
+# main:app now loads this as an importable module with the real serving app and
+# shared database injected. Reuse that registration instead of installing a
+# second set of endpoint handlers into the same ASGI route table.
 try:
-    exec(open("ai3704_storage_fabric.py", encoding="utf-8").read(), globals())
+    import sys
+    _loaded_storage_fabric = sys.modules.get("ai3704_storage_fabric")
+    if getattr(getattr(app, "state", None), "ai_infinity_storage", False) and _loaded_storage_fabric is not None and getattr(_loaded_storage_fabric, "APP", None) is app:
+        app.state.ai3704_storage_loaded_via_main = True
+    else:
+        exec(open("ai3704_storage_fabric.py", encoding="utf-8").read(), globals())
 except Exception as _ai3704_storage_error:
     try:
         app.state.ai3704_storage_error = str(_ai3704_storage_error)[:800]

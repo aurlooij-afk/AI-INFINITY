@@ -1,4 +1,7 @@
 # Final production verification checkpoint: persisted Reality Kernel delivery gate.
+import importlib.util
+from pathlib import Path
+import sys
 from fastapi import FastAPI, Request, Response
 import ai_infinity_canonical
 import reality_first_3901
@@ -18,6 +21,48 @@ app = FastAPI(
     docs_url="/infinity/canonical/docs",
     redoc_url=None,
 )
+
+# TARGET-2050.3704 must be loaded as the importable storage module because
+# Creator Studio calls "import ai3704_storage_fabric" while saving/rehydrating
+# real artifacts. Inject the live application and its existing database/lock
+# before executing the module; otherwise decorators can bind to another app or
+# the import can fail after a production job has finished.
+_db_lock = studio_ultimate.DB_LOCK
+db = studio_ultimate._connect
+now = studio_ultimate.now
+uid = studio_ultimate._get_user_id
+_storage_fabric_path = Path(__file__).resolve().with_name("ai3704_storage_fabric.py")
+_storage_spec = importlib.util.spec_from_file_location("ai3704_storage_fabric", _storage_fabric_path)
+if _storage_spec is None or _storage_spec.loader is None:
+    raise RuntimeError("TARGET-2050.3704 storage fabric module could not be loaded")
+_storage_module = importlib.util.module_from_spec(_storage_spec)
+_storage_module.app = app
+_storage_module.db = db
+_storage_module._db_lock = _db_lock
+_storage_module.now = now
+_storage_module.uid = uid
+sys.modules[_storage_spec.name] = _storage_module
+try:
+    _storage_spec.loader.exec_module(_storage_module)
+except Exception:
+    sys.modules.pop(_storage_spec.name, None)
+    raise
+
+_required_storage_routes = {
+    "/infinity/storage/v1/status",
+    "/infinity/storage/v1/verify/{asset_id}",
+}
+_registered_storage_routes = {
+    str(getattr(route, "path", "")) for route in app.router.routes
+}
+_missing_storage_routes = _required_storage_routes - _registered_storage_routes
+if _missing_storage_routes:
+    raise RuntimeError(
+        "TARGET-2050.3704 storage route registration failed: "
+        + ", ".join(sorted(_missing_storage_routes))
+    )
+app.state.ai_infinity_storage_routes_registered = True
+del _storage_fabric_path, _storage_spec, _storage_module, _required_storage_routes, _registered_storage_routes, _missing_storage_routes
 
 reality_first_3901.install()
 production_graph.install()

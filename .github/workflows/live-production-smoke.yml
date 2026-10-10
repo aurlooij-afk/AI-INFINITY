@@ -25,6 +25,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
+          command -v ffmpeg
+          command -v ffprobe
       - name: Wait for live deployment
         env:
           BASE_URL: https://ai-infinity-ca5e.onrender.com

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import hashlib, json, os, subprocess, time, urllib.error, urllib.parse, urllib.request
+import hashlib, io, json, os, re, shutil, subprocess, time, urllib.error, urllib.parse, urllib.request, zipfile
 from http.cookiejar import CookieJar
 from pathlib import Path
 import uuid
@@ -48,8 +48,46 @@ def sha(p):
     return h.hexdigest()
 
 def probe(p):
+    if not shutil.which("ffprobe"):
+        raise RuntimeError("acceptance runner is misconfigured: ffprobe is not installed")
     x=subprocess.run(["ffprobe","-v","error","-show_format","-show_streams","-of","json",str(p)],capture_output=True,text=True,timeout=90)
     assert x.returncode==0,x.stderr; return json.loads(x.stdout)
+
+def decode(p):
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("acceptance runner is misconfigured: ffmpeg is not installed")
+    x=subprocess.run(["ffmpeg","-v","error","-xerror","-i",str(p),"-f","null","-"],capture_output=True,text=True,timeout=180)
+    assert x.returncode==0,("full FFmpeg decode failed for "+p.name+": "+x.stderr[:3000])
+    return {"passed":True,"stderr_empty":not bool(x.stderr.strip())}
+
+def srt_seconds(value):
+    match=re.fullmatch(r"(\d{2,}):(\d{2}):(\d{2}),(\d{3})",value.strip())
+    assert match,("invalid SRT timestamp",value)
+    hours,minutes,seconds,millis=map(int,match.groups())
+    assert minutes<60 and seconds<60,("invalid SRT timestamp",value)
+    return hours*3600+minutes*60+seconds+millis/1000.0
+
+def inspect_srt(raw, media_duration):
+    text=raw.decode("utf-8-sig","replace").strip()
+    blocks=[b.strip() for b in re.split(r"\r?\n\s*\r?\n",text) if b.strip()]
+    assert blocks,"captions.srt contains no subtitle cues"
+    last_end=0.0
+    cues=[]
+    for block in blocks:
+        rows=block.splitlines()
+        timing_index=next((i for i,row in enumerate(rows) if "-->" in row),None)
+        assert timing_index is not None,("subtitle cue has no timing line",block[:300])
+        left,right=[x.strip().split()[0] for x in rows[timing_index].split("-->",1)]
+        start,end=srt_seconds(left),srt_seconds(right)
+        lines=[x.strip() for x in rows[timing_index+1:] if x.strip()]
+        assert lines,("subtitle cue has no text",block[:300])
+        assert end>start,("subtitle cue has non-positive duration",block[:300])
+        assert start>=last_end-0.001,("subtitle cues overlap or are out of order",block[:300])
+        assert end<=media_duration+0.75,("subtitle cue exceeds final audio/video duration",block[:300])
+        assert all(len(line)<=84 for line in lines),("subtitle line exceeds 84 characters",block[:300])
+        last_end=end
+        cues.append({"start":start,"end":end,"line_count":len(lines),"max_line_chars":max(map(len,lines))})
+    return {"passed":True,"cue_count":len(cues),"cues":cues}
 
 expected_revision=os.environ.get("EXPECTED_REVISION","").strip() or os.environ.get("GITHUB_SHA","").strip()
 # Prefer an exact build revision when the host exposes one. Render exposes
@@ -96,12 +134,35 @@ assert evidence.get("valid") is True,truth
 
 root=Path("/tmp/live-ai-infinity"); root.mkdir(parents=True,exist_ok=True)
 one=root/"v1.mp4"; download("/infinity/studio/project/"+pid+"/asset/final.mp4",one)
-p1=probe(one); streams=p1.get("streams",[])
+p1=probe(one); decode_v1=decode(one); streams=p1.get("streams",[])
 video=next((s for s in streams if s.get("codec_type")=="video"),None); audio=next((s for s in streams if s.get("codec_type")=="audio"),None)
 duration=float((p1.get("format") or {}).get("duration") or 0)
 assert video and video.get("codec_name")=="h264",p1
 assert audio and audio.get("codec_name") in {"aac","mp3"},p1
 assert duration>2 and abs(duration-20)<=1.0,p1
+
+assert int(video.get("width") or 0)>int(video.get("height") or 0),("20-second acceptance video must be landscape",video)
+artifact_names=["final.mp4","thumbnail.jpg","audio_master.mp3","captions.srt","article.md","seo.json","social_campaign.json","production_manifest.json","rights_manifest.json","package.zip"]
+artifact_bytes={}
+artifact_evidence={}
+for artifact_name in artifact_names:
+    _,_,raw=req("/infinity/studio/project/"+urllib.parse.quote(pid,safe="")+"/asset/"+urllib.parse.quote(artifact_name,safe=""))
+    assert raw,("artifact download returned zero bytes",artifact_name)
+    artifact_bytes[artifact_name]=raw
+    artifact_evidence[artifact_name]={"size_bytes":len(raw),"sha256":hashlib.sha256(raw).hexdigest()}
+for json_name in ("seo.json","social_campaign.json","production_manifest.json","rights_manifest.json"):
+    parsed=json.loads(artifact_bytes[json_name].decode("utf-8-sig"))
+    assert isinstance(parsed,(dict,list)),("JSON deliverable has an unexpected root type",json_name)
+caption_evidence=inspect_srt(artifact_bytes["captions.srt"],duration)
+assert artifact_evidence["final.mp4"]["sha256"]==sha(one),"artifact endpoint final.mp4 differs from the tested app-served version"
+with zipfile.ZipFile(io.BytesIO(artifact_bytes["package.zip"])) as package:
+    damaged=package.testzip()
+    assert damaged is None,("ZIP CRC validation failed",damaged)
+    package_entries=set(package.namelist())
+package_required=(set(artifact_names)-{"package.zip"})|{"provenance.json"}
+missing_package=sorted(package_required-package_entries)
+assert not missing_package,("package.zip is missing required deliverables",missing_package)
+package_evidence={"passed":True,"entry_count":len(package_entries),"required_entries":sorted(package_required),"missing_entries":[]}
 verify,_=ok("/infinity/studio/project/"+pid+"/verify"); assert verify.get("passed") is True,verify
 
 # The professional closure has already checked source visuals, visual diversity,
@@ -113,7 +174,7 @@ edit,_=ok("/infinity/canonical/project/"+pid+"/command","POST",{"command":"remov
 v2=edit["version_id"]; assert v2!=v1
 two=root/"v2.mp4"; name=edit["artifact"]["name"]
 download("/infinity/studio/project/"+pid+"/asset/"+urllib.parse.quote(name,safe=""),two)
-p2=probe(two); duration2=float((p2.get("format") or {}).get("duration") or 0)
+p2=probe(two); decode_v2=decode(two); duration2=float((p2.get("format") or {}).get("duration") or 0)
 assert 2<duration2<duration,(duration,duration2)
 h1,h2=sha(one),sha(two); assert h1!=h2
 
@@ -182,4 +243,25 @@ assert len(remote_bytes)==int(remote_asset.get("size_bytes") or -1), "signed dow
 assert remote_digest==str(remote_asset.get("sha256") or ""), "signed download SHA-256 mismatch"
 assert remote_digest==h1, "object-store final.mp4 does not match the app-served restored version"
 
-print(json.dumps({"passed":True,"project_id":pid,"version_1":v1,"version_2":v2,"duration":duration,"edited_duration":duration2,"v1_sha256":h1,"v2_sha256":h2,"bytes":one.stat().st_size,"durability":{"persistent":storage.get("persistent"),"snapshot_verified":backend_state.get("snapshot_verified"),"snapshot_sha256":backend_state.get("last_sha256"),"last_sync_at":backend_state.get("last_sync_at"),"artifact_object_store":{"provider":"backblaze_b2","asset_id":remote_id,"readback_verified":b2_check["details"].get("readback_verified"),"download_size_bytes":len(remote_bytes),"download_sha256":remote_digest}}},indent=2))
+evidence={
+    "passed":True,
+    "tested_revision":served or expected_revision,
+    "project_id":pid,
+    "versions":{"original":v1,"edited":v2,"undo_restored":undo.get("current_version_id")},
+    "media":{
+        "original":{"size_bytes":one.stat().st_size,"sha256":h1,"duration_seconds":duration,"width":video.get("width"),"height":video.get("height"),"ffprobe_passed":True,"full_decode":decode_v1},
+        "edited":{"size_bytes":two.stat().st_size,"sha256":h2,"duration_seconds":duration2,"ffprobe_passed":True,"full_decode":decode_v2},
+        "original_restored_after_undo":{"size_bytes":restored.stat().st_size,"sha256":sha(restored),"matches_exact_original":sha(restored)==h1},
+    },
+    "deliverables":artifact_evidence,
+    "captions":caption_evidence,
+    "package":package_evidence,
+    "edit_undo_reload":{"edit_created_new_version":v2!=v1,"edited_media_hash_differs":h1!=h2,"undo_restored_original_version":undo.get("current_version_id")==v1,"undo_restored_original_hash":sha(restored)==h1,"history_contains_both_versions":v1 in ids and v2 in ids},
+    "durability":{
+        "project_state":{"persistent":storage.get("persistent"),"snapshot_verified":backend_state.get("snapshot_verified"),"snapshot_sha256":backend_state.get("last_sha256"),"last_sync_at":backend_state.get("last_sync_at")},
+        "artifact_object_store":{"provider":"backblaze_b2","asset_id":remote_id,"readback_verified":b2_check["details"].get("readback_verified"),"download_size_bytes":len(remote_bytes),"download_sha256":remote_digest,"matches_app_served_artifact":remote_digest==h1},
+    },
+}
+evidence_path=root/"live-acceptance-evidence.json"
+evidence_path.write_text(json.dumps(evidence,ensure_ascii=False,indent=2),encoding="utf-8")
+print(json.dumps(evidence,ensure_ascii=False,indent=2))
