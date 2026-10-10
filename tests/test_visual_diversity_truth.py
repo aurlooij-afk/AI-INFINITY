@@ -137,3 +137,72 @@ def test_fallback_brief_extracts_subject_instead_of_delivery_metadata():
     assert plan["title"].lower() == "ai infinity launch"
     assert all("AI Infinity launch" in chapter["visual_query"] for chapter in plan["chapters"])
     assert all("production/rights manifests" not in chapter["visual_query"].lower() for chapter in plan["chapters"])
+
+
+def test_offline_visual_fallback_is_topic_led_and_truthfully_labelled(monkeypatch, tmp_path):
+    studio = closure._studio()
+    monkeypatch.setenv("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS", "1")
+    monkeypatch.setenv("AI_INFINITY_TEST_MEDIA", "0")
+    monkeypatch.setattr(studio, "FAST_MODE", True)
+    first = studio.acquire_scene_asset({
+        "topic": "renewable energy",
+        "heading": "Energy transition — Opening",
+        "visual_focus": "wind turbines and solar panels in a landscape",
+        "visual_query": "renewable energy wind turbines solar panels",
+        "image_prompt": "Premium editorial image about renewable energy; visual focus: wind turbines and solar panels in a landscape; no text, no logo",
+    }, tmp_path, 1, duration=6)
+    second = studio.acquire_scene_asset({
+        "topic": "renewable energy",
+        "heading": "Energy transition — Practical example",
+        "visual_focus": "solar panels on an operational farm",
+        "visual_query": "renewable energy solar panels on an operational farm",
+        "image_prompt": "Premium editorial image about renewable energy; visual focus: solar panels on an operational farm; no text, no logo",
+    }, tmp_path, 2, duration=6)
+
+    assert first["fallback"] is True
+    assert first["quality_tier"] == "original_vector_editorial_fallback"
+    assert first["asset_kind"] == "illustrative_graphic_not_photograph"
+    assert first["fallback_record"]["execution_state"] == "DEGRADED"
+    assert "not a photograph" in first["visual_quality_notice"].lower()
+    assert studio.file_sha256(Path(first["path"])) != studio.file_sha256(Path(second["path"]))
+    with studio.Image.open(first["path"]) as image:
+        assert image.size == (960, 540)
+        image.verify()
+
+
+def test_unrelated_public_visual_candidate_is_not_accepted(monkeypatch, tmp_path):
+    studio = closure._studio()
+    monkeypatch.setenv("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS", "0")
+    monkeypatch.setenv("AI_INFINITY_FORCE_PRIMARY_VISUAL_FAILURE", "1")
+    monkeypatch.setenv("AI_INFINITY_TEST_MEDIA", "0")
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGINGFACEHUB_API_TOKEN", raising=False)
+    monkeypatch.setattr(studio, "FAST_MODE", True)
+
+    unrelated = tmp_path / "unrelated-candidate.png"
+    studio.Image.new("RGB", (640, 360), (55, 70, 90)).save(unrelated, "PNG")
+
+    def unrelated_result(query, outdir, limit=6):
+        return [{
+            "kind": "image",
+            "path": str(unrelated),
+            "title": "A cat in a garden",
+            "source": "Openverse",
+            "source_url": "https://example.invalid/cat",
+            "license": "test fixture",
+        }]
+
+    for name in ("_nasa_images", "_openverse_images", "_commons_media", "_pexels", "_pixabay"):
+        monkeypatch.setattr(studio, name, unrelated_result)
+
+    asset = studio.acquire_scene_asset({
+        "topic": "renewable energy",
+        "heading": "Solar panels",
+        "visual_focus": "solar panels on a utility-scale farm",
+        "visual_query": "renewable energy solar panels on a utility-scale farm",
+        "image_prompt": "Premium editorial image about renewable energy; visual focus: solar panels on a utility-scale farm",
+    }, tmp_path, 3, duration=6)
+
+    assert asset["fallback"] is True
+    assert asset["source"] == "AI Infinity original vector editorial fallback"
+    assert asset["fallback_record"]["execution_state"] == "DEGRADED"
