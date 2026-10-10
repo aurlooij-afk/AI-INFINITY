@@ -54,6 +54,12 @@ jobs:
         run: python -m pytest -q tests/test_project_state_backend.py
       - name: Verify durable artifact object read-back contract
         run: python -m pytest -q tests/test_storage_artifact_readback.py
+      - name: Verify emitted creator deliverables persist to object storage
+        env:
+          AI_INFINITY_DATA_DIR: "/tmp/ai-infinity-deliverable-durability-ci"
+          AI_INFINITY_STUDIO_SMOKE: "1"
+          AI_INFINITY_FAST_MODE: "1"
+        run: python -m pytest -q tests/test_studio_asset_durability.py
       - name: Verify public storage route and live harness regressions
         env:
           AI_INFINITY_DATA_DIR: "/tmp/ai-infinity-storage-route-ci"
