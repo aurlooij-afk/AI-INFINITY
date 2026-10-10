@@ -1211,6 +1211,8 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         localized_screen = localized["on_screen"].get(name, localized_heading).format(topic=topic_label, title=clean_title)
         chapters.append({
             "heading": f"{localized_heading} — {clean_title}" if name in {"Hook", "Closing"} else f"{localized_heading}: {clean_title}",
+            "topic": topic_label,
+            "visual_focus": focus,
             "narration": narration,
             "visual_query": f"{topic_label} {focus} documentary photography",
             "image_prompt": f"Premium editorial documentary image about {topic_label}; visual focus: {focus}; realistic people, locations, objects or processes, natural cinematic lighting, coherent composition, strong subject separation, no logos, no text, visually distinct from other scenes",
