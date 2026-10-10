@@ -121,6 +121,31 @@ def test_content_fingerprint_changes_when_canonical_current_version_changes(monk
     second = editorial._fingerprint(project, {"final.mp4": video})
     assert first != second
 
+def test_undo_fingerprint_ignores_noncurrent_historical_version_artifacts(monkeypatch, tmp_path):
+    class FakeStudio:
+        @staticmethod
+        def _project_dir(project_id):
+            return tmp_path
+
+        @staticmethod
+        def file_sha256(path):
+            h = hashlib.sha256()
+            with Path(path).open('rb') as stream:
+                for chunk in iter(lambda: stream.read(65536), b''):
+                    h.update(chunk)
+            return h.hexdigest()
+
+    monkeypatch.setattr(editorial, '_studio', lambda: FakeStudio())
+    monkeypatch.setattr(editorial, '_canonical_current_version_id', lambda _pid: 'version-original')
+    project = {'project_id': 'undo-fingerprint-test', 'request_json': {'objective': 'brief'}}
+    final = tmp_path / 'final.mp4'
+    historical = tmp_path / 'version-edited.mp4'
+    final.write_bytes(b'original artifact bytes')
+    before = editorial._fingerprint(project, {'final.mp4': final})
+    historical.write_bytes(b'edited historical bytes')
+    after_undo = editorial._fingerprint(project, {'final.mp4': final, 'version-edited.mp4': historical})
+    assert before == after_undo
+
 def test_human_review_state_is_bound_to_the_exact_current_fingerprint():
     rows = [{
         "review_id": "review-1", "content_fingerprint": "old", "decision": "approve",
