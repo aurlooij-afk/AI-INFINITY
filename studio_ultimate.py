@@ -996,6 +996,39 @@ def _localized_fallback_copy(language: str, name: str, title: str, topic: str) -
             "practical":"حوّل الفكرة إلى خطوة عملية محددة.",
             "closing":"هذه هي الفكرة التي ينبغي حملها إلى الخطوة التالية.",
             "on_screen":{"Hook":"ابدأ بالمشكلة الحقيقية","Why it matters":"لماذا يغيّر {topic} النتائج","The key idea":"مبدأ {topic}","Practical example":"{topic} في التطبيق","Takeaway":"خلاصة عملية"},
+        },
+        "english": {
+            "names": {"Hook":"Opening question","Why it matters":"Why it matters","The key idea":"Core principle","Practical example":"In practice","Takeaway":"Next step","Context":"Context","The core idea":"Core principle","How it works":"How it works","Real-world examples":"Real examples","What changes":"What changes","Practical takeaway":"Next step","Closing":"Closing"},
+            "hooks":"What changes when the usual approach stops working, and what can we test instead?",
+            "cta":"Choose one useful next step, test it, and improve from what the result shows.",
+            "opening":"Start with a clear problem and the change the audience needs to understand.",
+            "focus":"Keep the central subject visible and the point easy to follow.",
+            "why":"Audience needs, available time, and real constraints shape which response makes sense.",
+            "idea":"Break {topic} into one specific principle, and separate what is known from what still needs proof.",
+            "example":"Show a concrete process from the starting point to the outcome, tying each action to the goal.",
+            "takeaway":"Choose one measurable next step, test it on a small scale, and use the result to guide improvement.",
+            "context":"Introduce the situation, the people affected, and the decision that must be made.",
+            "core":"Connect one clear idea to observable evidence and a practical outcome.",
+            "works":"Walk through the process in sequence, showing the inputs, choices, and effects.",
+            "real":"Use examples only when they can be verified; label illustrations rather than presenting them as observed facts.",
+            "changes":"Describe the intended change without promising results that the available evidence cannot support.",
+            "practical":"Turn the principle into one action someone can try, then say how success will be measured.",
+            "closing":"Keep the next step specific: act, observe the result, and revise what does not work.",
+            "narration_by_name": {
+                "Hook":"What makes {topic} worth understanding? Name the problem and the change you want people to notice.",
+                "Why it matters":"Audience needs and practical limits shape useful decisions. Identify them before choosing an approach.",
+                "The key idea":"Break {topic} into one clear idea you can test. Separate what is known from what still needs proof.",
+                "Practical example":"Show the process from its starting point to the outcome. Tie every action to the intended result.",
+                "Takeaway":"Choose one measurable next step. Test it, observe the result, and improve from evidence rather than assumption.",
+                "Context":"Start with the situation, the people affected, and the decision that needs to be made.",
+                "The core idea":"Connect one clear principle to something observable. Explain what would count as evidence that it works.",
+                "How it works":"Move through the process in order. Show the inputs, the decisions, and the effect of each step.",
+                "Real-world examples":"Use an example only when the source can be checked. Clearly label any demonstration that is illustrative.",
+                "What changes":"Describe the outcome that is sought, not a guarantee. Be clear about what the available evidence can support.",
+                "Practical takeaway":"Choose one action, define a useful measure, and check the result before repeating the approach.",
+                "Closing":"Carry one useful action forward. Observe what happens, then adjust the next attempt using the result."
+            },
+            "on_screen":{"Hook":"A clear problem","Why it matters":"Know the stakes","The key idea":"One useful principle","Practical example":"Show the process","Takeaway":"Test and improve","Context":"Set the context","The core idea":"Make it clear","How it works":"See the steps","Real-world examples":"Evidence matters","What changes":"The outcome","Practical takeaway":"One next step","Closing":"What comes next"},
         }
     }
     if lang not in local:
@@ -1031,18 +1064,21 @@ def _localized_fallback_copy(language: str, name: str, title: str, topic: str) -
         "cta": d["cta"].format(topic=topic,title=title),
         "opening": d["opening"].format(topic=topic,title=title),
         "narration_by_name": {
-            "Hook": f"{d['opening'].format(topic=topic,title=title)} {d['hooks'].format(topic=topic,title=title)}",
-            "Why it matters": f"{d['opening'].format(topic=topic,title=title)} {d['why'].format(topic=topic,title=title)}",
-            "The key idea": f"{d['opening'].format(topic=topic,title=title)} {d['idea'].format(topic=topic,title=title)}",
-            "Practical example": f"{d['opening'].format(topic=topic,title=title)} {d['example'].format(topic=topic,title=title)}",
-            "Takeaway": f"{d['opening'].format(topic=topic,title=title)} {d['takeaway'].format(topic=topic,title=title)}",
-            "Context": d["context"].format(topic=topic,title=title),
-            "The core idea": d["core"].format(topic=topic,title=title),
-            "How it works": d["works"].format(topic=topic,title=title),
-            "Real-world examples": d["real"].format(topic=topic,title=title),
-            "What changes": d["changes"].format(topic=topic,title=title),
-            "Practical takeaway": d["practical"].format(topic=topic,title=title),
-            "Closing": d["closing"].format(topic=topic,title=title),
+            key: value.format(topic=topic, title=title)
+            for key, value in (d.get("narration_by_name") or {
+                "Hook": f"{d['opening']} {d['hooks']}",
+                "Why it matters": f"{d['opening']} {d['why']}",
+                "The key idea": f"{d['opening']} {d['idea']}",
+                "Practical example": f"{d['opening']} {d['example']}",
+                "Takeaway": f"{d['opening']} {d['takeaway']}",
+                "Context": d["context"],
+                "The core idea": d["core"],
+                "How it works": d["works"],
+                "Real-world examples": d["real"],
+                "What changes": d["changes"],
+                "Practical takeaway": d["practical"],
+                "Closing": d["closing"],
+            }).items()
         },
         "on_screen": d["on_screen"]
     }
@@ -1075,11 +1111,11 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
     if fmt == "short":
         names = ["Hook", "Why it matters", "The key idea", "Practical example", "Takeaway"]
         visual_focus = {
-            "Hook": "creator at work, bold opening image, hands sketching or building an idea",
-            "Why it matters": "people collaborating, discussion, decision-making, real-world creative workspace",
-            "The key idea": "prototype, notebook, design process, close-up details, purposeful composition",
-            "Practical example": "real creator using tools, editing, making, testing or publishing a project",
-            "Takeaway": "finished creative work, confident subject, clean editorial closing frame",
+            "Hook": f"striking opening view of {topic_label}; the clearest subject that communicates the idea",
+            "Why it matters": f"real-world context showing why {topic_label} matters to people affected by it",
+            "The key idea": f"close-up or clear visual explanation of the central mechanism behind {topic_label}",
+            "Practical example": f"a concrete real-world example demonstrating {topic_label} in action",
+            "Takeaway": f"a resolved outcome or memorable closing frame connected to {topic_label}",
         }
         ratios = [0.16, 0.18, 0.28, 0.22, 0.16]
     else:
@@ -1087,10 +1123,9 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         ratios = [0.08, 0.10, 0.16, 0.18, 0.18, 0.12, 0.10, 0.08]
 
     def bounded_narration(name: str, seconds: float, source: Dict[str, Any]) -> str:
-        # Approximate spoken pacing at ~2.3 words/sec. Keep the deterministic
-        # fallback close to the requested runtime instead of copying long search
-        # snippets into the script.
-        budget = max(9, int(max(4.0, seconds) * 2.3))
+        # Keep enough natural narration for short scenes; the execution layer may
+        # rebalance scene durations after low-memory mode reduces the scene count.
+        budget = max(14, int(max(4.0, seconds) * 2.3))
         localized = _localized_fallback_copy(language, name, clean_title, topic_label)
         text = re.sub(r"\\s+", " ", str(localized["narration_by_name"].get(name) or localized["narration_by_name"].get("Closing") or localized["opening"])).strip()
         words = text.split()
@@ -1113,7 +1148,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "Practical takeaway": "creator applying the idea successfully",
             "Closing": "finished work, confident human subject, memorable final frame",
         }
-        focus = (visual_focus if fmt == "short" else long_visual_focus).get(name, "real-world editorial scene")
+        focus = (visual_focus if fmt == "short" else long_visual_focus).get(name, f"a purposeful real-world visual about {topic_label}")
         localized = _localized_fallback_copy(language, name, clean_title, topic_label)
         localized_heading = localized["name"]
         localized_screen = localized["on_screen"].get(name, localized_heading).format(topic=topic_label, title=clean_title)
@@ -1999,21 +2034,61 @@ def _subtitle_time(x: float) -> str:
 
 
 def write_srt(chapters: List[Dict[str, Any]], path: Path) -> None:
+    """Write bounded, sequential subtitle cues from the same narration timeline."""
     lines = []
     t = 0.0
-    for i, ch in enumerate(chapters, 1):
+    cue_number = 1
+    for ch in chapters:
         d = max(0.2, float(ch.get("actual_duration") or ch.get("duration") or 1))
-        text = re.sub(r"\s+", " ", str(ch.get("narration") or "")).strip()
-        words = text.split()
-        wrapped=[]; line=""
+        words = re.sub(r"\s+", " ", str(ch.get("narration") or "")).strip().split()
+        if not words:
+            t += d
+            continue
+
+        # First group by readable line length and word count.
+        chunks = []
+        current = []
         for word in words:
-            if line and len(line)+1+len(word)>42:
-                wrapped.append(line); line=word
-            else:
-                line=(line+" "+word).strip()
-        if line: wrapped.append(line)
-        text="\n".join(wrapped[:4])
-        lines.append(f"{i}\n{_subtitle_time(t)} --> {_subtitle_time(t+d)}\n{text}\n")
+            proposed = " ".join(current + [word])
+            if current and (len(current) >= 8 or len(proposed) > 78):
+                chunks.append(current)
+                current = []
+            current.append(word)
+        if current:
+            chunks.append(current)
+
+        # A long narration segment must not leave one subtitle parked on screen
+        # for 15–60 seconds. Rebalance words into time-bounded cue groups while
+        # preserving the spoken word order.
+        target_cues = max(1, int((d + 4.499) // 4.5))
+        if target_cues > len(chunks) and len(words) >= target_cues:
+            balanced = []
+            for j in range(target_cues):
+                left = j * len(words) // target_cues
+                right = (j + 1) * len(words) // target_cues
+                if right > left:
+                    balanced.append(words[left:right])
+            chunks = balanced
+
+        total_weight = max(1, sum(len(chunk) for chunk in chunks))
+        elapsed = 0.0
+        for j, chunk in enumerate(chunks):
+            cue_duration = d - elapsed if j == len(chunks) - 1 else d * len(chunk) / total_weight
+            wrapped = []
+            line = ""
+            for word in chunk:
+                if line and len(line) + 1 + len(word) > 42:
+                    wrapped.append(line)
+                    line = word
+                else:
+                    line = (line + " " + word).strip()
+            if line:
+                wrapped.append(line)
+            start = t + elapsed
+            end = t + d if j == len(chunks) - 1 else start + cue_duration
+            lines.append(f"{cue_number}\n{_subtitle_time(start)} --> {_subtitle_time(end)}\n" + "\n".join(wrapped[:2]) + "\n")
+            cue_number += 1
+            elapsed = end - t
         t += d
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -2077,13 +2152,17 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
             )
             visual_args = ["-stream_loop", "-1", "-i", src]
         else:
-            frames = max(1, int(round(duration * fps)))
-            # Avoid zoompan in the constrained free-tier path. A long zoompan
-            # graph can retain many generated frames and approach the 512 MiB
-            # service ceiling even with single-threaded FFmpeg.
+            # Create a low-memory Ken Burns move by panning across a slightly
+            # oversized working image. Unlike zoompan, this does not retain a
+            # long generated-frame sequence; buffers stay at the 640x360-class
+            # working dimensions until the final scale.
+            zoom_w, zoom_h = max(work_w + 1, int(work_w * 1.12)), max(work_h + 1, int(work_h * 1.12))
             vf = (
-                f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps=24,"
-                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color=black@0.48:t=fill,"
+                f"scale={zoom_w}:{zoom_h}:force_original_aspect_ratio=increase,crop={zoom_w}:{zoom_h},fps={fps},"
+                f"crop={work_w}:{work_h}:x='(in_w-out_w)*(0.5-0.5*cos(PI*t/{duration}))':"
+                f"y='(in_h-out_h)*(0.5+0.5*sin(PI*t/{duration}))',"
+                f"scale={width}:{height}:flags=lanczos,eq=contrast=1.02:saturation=1.04,"
+                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color=black@0.38:t=fill,"
                 f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
                 f"x={text_x}:y={text_y}:fontsize={font}:fontcolor=white"
             )
@@ -3161,21 +3240,50 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 audit_event(project_id, "storyboard_override_applied", {"source_project":override.get("source_project"),"scene_count":len(normalized)})
         if not chapters:
             raise RuntimeError("creative engine returned no chapters")
+
+        # Avoid burning generic planner labels such as "Hook" into the media.
+        # Use the selected language's concise editorial overlay instead.
+        generic_labels = {
+            "hook": "Hook", "opening": "Hook", "context": "Context",
+            "why it matters": "Why it matters", "the key idea": "The key idea",
+            "the core idea": "The core idea", "practical example": "Practical example",
+            "takeaway": "Takeaway", "practical takeaway": "Practical takeaway",
+            "real-world examples": "Real-world examples", "what changes": "What changes",
+            "how it works": "How it works", "closing": "Closing",
+        }
+        request_language = str(req.get("language") or "English")
+        for chapter in chapters:
+            current_label = re.sub(r"\s+", " ", str(chapter.get("on_screen") or "")).strip().lower()
+            if current_label in generic_labels:
+                key = generic_labels[current_label]
+                copy = _localized_fallback_copy(
+                    request_language, key, str(plan.get("title") or topic), str(req.get("topic") or topic)
+                )
+                replacement = (copy.get("on_screen") or {}).get(key, "")
+                if replacement and replacement.strip().lower() != current_label:
+                    chapter["on_screen"] = replacement
+
         fmt = str(req.get("format", "long")).lower()
         is_short = fmt in {"short", "shorts", "reel", "tiktok"}
         target = int(req.get("duration") or (60 if is_short else 300))
         target = max(20, min(target, 180 if is_short else 3600))
-        # On the 512 MiB Render free tier, a short production must stay a
-        # single-scene render. This preserves the requested duration and real
-        # deliverables while preventing sequential heavy scene rendering from
-        # accumulating memory pressure across a live request.
-        max_chapters = (1 if FAST_MODE else 5) if is_short else (4 if FAST_MODE else 8)
+        # Low-memory production remains sequential and renders each shot in its
+        # own bounded FFmpeg process. A normal short must still contain editorial
+        # coverage; duplicating one still for the full duration is not a professional
+        # short. Only explicit single-shot briefs and isolated smoke tests use one.
+        brief_for_scene_policy = " ".join(str(req.get(k) or "") for k in ("objective", "topic", "title"))
+        explicitly_single_scene = bool(re.search(
+            r"\b(single[- ]scene|single[- ]shot|one[- ]shot|one continuous shot|static shot|still[- ]image video|looping background)\b",
+            brief_for_scene_policy, re.I
+        ))
+        max_chapters = (3 if FAST_MODE else 5) if is_short else (4 if FAST_MODE else 8)
+        if explicitly_single_scene:
+            max_chapters = 1
         if FAST_MODE and not SMOKE:
             target = min(target, 180 if is_short else 900)
         if SMOKE:
-            # Smoke mode may reduce scene count, but it must never rewrite the
-            # user's requested delivery duration. Independent QC compares the
-            # final file to the original request.
+            # Isolated smoke mode checks runtime wiring; it is not the creative
+            # quality benchmark and must never be confused with live acceptance.
             max_chapters = 1
         chapters = chapters[:max_chapters]
         raw_durations = []
