@@ -1635,7 +1635,7 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
     # never invented and no numeric chart values are fabricated.
     s = subject.lower() + " " + focus.lower()
     is_energy = any(w in s for w in ("solar", "renewable", "wind turbine", "energy", "electric", "climate", "power grid"))
-    is_tech = any(w in s for w in ("artificial intelligence", " ai ", "software", "technology", "chip", "machine learning", "data", "digital"))
+    is_tech = bool(re.search(r"\b(?:ai|artificial intelligence|machine learning)\b", s)) or any(w in s for w in ("software", "technology", "chip", "data", "digital"))
     is_creator = any(w in s for w in ("creator", "creative", "video", "film", "editing", "content", "design", "launch", "brand", "storyboard", "camera"))
     is_science = any(w in s for w in ("science", "research", "education", "learning", "experiment", "laboratory", "discovery", "knowledge"))
     is_business = any(w in s for w in ("business", "finance", "market", "startup", "growth", "strategy", "economy", "revenue"))
