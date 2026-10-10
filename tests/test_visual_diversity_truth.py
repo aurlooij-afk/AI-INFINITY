@@ -122,3 +122,18 @@ def test_long_scene_subtitles_are_split_into_time_bounded_cues(tmp_path):
             return int(hh) * 3600 + int(mm) * 60 + int(ss) + int(ms) / 1000
         durations.append(seconds(right) - seconds(left))
     assert max(durations) <= 5.75
+
+
+def test_fallback_brief_extracts_subject_instead_of_delivery_metadata():
+    studio = closure._studio()
+    brief = (
+        "Create a professional 60-second AI Infinity launch video in English, 16:9, "
+        "cinematic, research-backed, with voiceover, background music, captions, "
+        "thumbnail, article, SEO metadata, social campaign package and production/rights manifests."
+    )
+    plan = studio._fallback_creative_plan(
+        brief, brief, "long", 60, "general audience", "clear, intelligent, human", {"sources": []}, "English"
+    )
+    assert plan["title"].lower() == "ai infinity launch"
+    assert all("AI Infinity launch" in chapter["visual_query"] for chapter in plan["chapters"])
+    assert all("production/rights manifests" not in chapter["visual_query"].lower() for chapter in plan["chapters"])
