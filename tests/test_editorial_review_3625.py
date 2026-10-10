@@ -138,6 +138,54 @@ def test_human_review_state_is_bound_to_the_exact_current_fingerprint():
     assert approved["publish_ready"] is True
 
 
+def test_connected_publish_gate_requires_human_approval_for_current_fingerprint(monkeypatch, tmp_path):
+    current_project = {
+        "project_id": "publish-gate-test",
+        "user_id": "creator-1",
+        "updated_at": 100,
+        "created_at": 90,
+    }
+
+    class FakeStudio:
+        @staticmethod
+        def _get_project(project_id):
+            return current_project if project_id == "publish-gate-test" else None
+
+    monkeypatch.setattr(editorial, "_studio", lambda: FakeStudio())
+    monkeypatch.setattr(editorial, "_project_files", lambda project_id: {})
+    monkeypatch.setattr(editorial, "_fingerprint", lambda project, files: "fingerprint-current")
+    monkeypatch.setattr(editorial, "_read_json", lambda path: {
+        "version": editorial.VERSION,
+        "content_fingerprint": "fingerprint-current",
+        "release_gate": {"eligible_for_human_approval": True},
+    })
+
+    monkeypatch.setattr(editorial, "_review_rows", lambda project_id, user_id: [])
+    pending = editorial._editorial_publish_status("publish-gate-test", "creator-1")
+    assert pending["approved"] is False
+    assert pending["state"] == "pending"
+
+    monkeypatch.setattr(editorial, "_review_rows", lambda project_id, user_id: [{
+        "review_id": "review-1",
+        "content_fingerprint": "old-fingerprint",
+        "decision": "approve",
+        "created_at": 1,
+    }])
+    stale = editorial._editorial_publish_status("publish-gate-test", "creator-1")
+    assert stale["approved"] is False
+    assert stale["state"] == "stale"
+
+    monkeypatch.setattr(editorial, "_review_rows", lambda project_id, user_id: [{
+        "review_id": "review-2",
+        "content_fingerprint": "fingerprint-current",
+        "decision": "approve",
+        "created_at": 2,
+    }])
+    approved = editorial._editorial_publish_status("publish-gate-test", "creator-1")
+    assert approved["approved"] is True
+    assert approved["state"] == "approved"
+
+
 def test_production_app_exposes_editorial_review_and_keeps_approval_explicit():
     import main
     from fastapi.testclient import TestClient
