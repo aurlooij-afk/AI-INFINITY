@@ -110,7 +110,7 @@ def test_long_scene_subtitles_are_split_into_time_bounded_cues(tmp_path):
     )
     studio.write_srt([{"actual_duration": 20.0, "narration": narration}], path)
     text = path.read_text(encoding="utf-8")
-    cues = [part for part in text.strip().split("\\n\\n") if "-->" in part]
+    cues = [part for part in text.strip().split("\n\n") if "-->" in part]
     assert len(cues) >= 4
     durations = []
     for cue in cues:
