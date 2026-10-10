@@ -3513,6 +3513,33 @@ def _normalize_delivery_duration(source: Path, target_seconds: float, out: Path)
     if abs(fitted - target) > 0.75:
         raise RuntimeError(f"duration normalization ({reason}) produced {fitted:.2f}s instead of {target:.2f}s")
     return out
+def _select_scene_coverage(chapters: List[Dict[str, Any]], max_scenes: int) -> List[Dict[str, Any]]:
+    """Downsample long storyboards across the complete narrative arc, not just the opening."""
+    scenes = list(chapters or [])
+    try:
+        limit = max(1, int(max_scenes))
+    except (TypeError, ValueError):
+        limit = 1
+    if len(scenes) <= limit:
+        return [dict(scene) for scene in scenes]
+    if limit == 1:
+        return [dict(scenes[0])]
+    indexes = []
+    for slot in range(limit):
+        index = int(round(slot * (len(scenes) - 1) / (limit - 1)))
+        if not indexes or index > indexes[-1]:
+            indexes.append(index)
+    # The bounded evenly-spaced selection always preserves both the opening
+    # and the ending; defensive fill handles future non-integer limit policies.
+    for index in range(len(scenes)):
+        if len(indexes) >= limit:
+            break
+        if index not in indexes:
+            indexes.append(index)
+    indexes = sorted(indexes[:limit])
+    return [dict(scenes[index]) for index in indexes]
+
+
 def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
     ACTIVE_PROJECT.project_id = project_id
     project = _get_project(project_id)
@@ -3666,7 +3693,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             # Isolated smoke mode checks runtime wiring; it is not the creative
             # quality benchmark and must never be confused with live acceptance.
             max_chapters = 1
-        chapters = chapters[:max_chapters]
+        chapters = _select_scene_coverage(chapters, max_chapters)
         raw_durations = []
         for ch in chapters:
             try:
