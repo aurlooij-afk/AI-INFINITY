@@ -62,3 +62,63 @@ def test_multi_scene_diversity_passes_at_the_existing_sixty_percent_threshold(mo
     assert result["unique_visual_hashes"] == 3
     assert result["required_unique_visual_hashes"] == 3
     assert result["visual_diversity_ok"] is True
+
+
+def test_professional_scene_floor_rejects_single_scene_for_normal_video():
+    assert closure._minimum_professional_scene_count({
+        "content_type": "video",
+        "duration": 20,
+        "objective": "Create a cinematic video about resilient creativity",
+    }) == 3
+
+
+def test_professional_scene_floor_scales_up_for_longer_video():
+    assert closure._minimum_professional_scene_count({
+        "content_type": "video",
+        "duration": 60,
+        "objective": "Create an educational video",
+    }) == 4
+
+
+def test_professional_scene_floor_allows_explicit_single_shot_brief():
+    assert closure._minimum_professional_scene_count({
+        "content_type": "video",
+        "duration": 60,
+        "objective": "Create a one-shot continuous cinematic scene",
+    }) == 1
+
+
+def test_english_fallback_uses_editorial_copy_instead_of_internal_labels():
+    studio = closure._studio()
+    copy = studio._localized_fallback_copy(
+        "English", "Hook",
+        "Create a 20-second cinematic video about resilient creativity",
+        "resilient creativity",
+    )
+    assert copy["on_screen"]["Hook"] == "A clear problem"
+    assert "resilient creativity" in copy["narration_by_name"]["Hook"].lower()
+    assert not copy["narration_by_name"]["Hook"].startswith("Hook.")
+
+
+def test_long_scene_subtitles_are_split_into_time_bounded_cues(tmp_path):
+    studio = closure._studio()
+    path = tmp_path / "captions.srt"
+    narration = (
+        "What makes resilient creativity worth understanding? Name the problem and the change you want people to notice. "
+        "Audience needs and practical limits shape useful decisions. Identify them before choosing an approach. "
+        "Choose one measurable next step, test it, observe the result, and improve from evidence rather than assumption."
+    )
+    studio.write_srt([{"actual_duration": 20.0, "narration": narration}], path)
+    text = path.read_text(encoding="utf-8")
+    cues = [part for part in text.strip().split("\\n\\n") if "-->" in part]
+    assert len(cues) >= 4
+    durations = []
+    for cue in cues:
+        timing = next(line for line in cue.splitlines() if "-->" in line)
+        left, right = [x.strip() for x in timing.split("-->")]
+        def seconds(value):
+            hh, mm, rest = value.split(":")
+            ss, ms = rest.split(",")
+            return int(hh) * 3600 + int(mm) * 60 + int(ss) + int(ms) / 1000
+        durations.append(seconds(right) - seconds(left))
+    assert max(durations) <= 5.75
