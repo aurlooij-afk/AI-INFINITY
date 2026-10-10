@@ -1518,32 +1518,246 @@ def _hf_image(prompt: str, outdir: Path, index: int) -> Optional[Dict[str, Any]]
         return None
 
 def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, height: int = 900) -> Optional[Dict[str, Any]]:
+    """Render an original topic-led editorial illustration when AI/media providers fail.
+
+    This is deliberately labelled vector/editorial fallback, never a synthetic
+    photograph. Its composition depends on the scene subject and focus and varies
+    across scenes so the rendered video has visual coverage rather than a repeated
+    generic title card.
+    """
     if Image is None:
         return None
-    seed = int(hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12], 16)
-    # Deterministic editorial visual: abstract scene geometry + typography.
-    base = (12 + seed % 28, 16 + (seed // 3) % 25, 28 + (seed // 7) % 40)
-    im = Image.new("RGB", (width, height), base)
+    outdir.mkdir(parents=True, exist_ok=True)
+    raw = re.sub(r"\\s+", " ", str(prompt or "")).strip()
+    subject_match = re.search(r"\\babout\\s+(.+?)(?:;|\\.\\s|$)", raw, re.I)
+    subject = subject_match.group(1).strip(" .;,:") if subject_match else raw
+    subject = re.split(
+        r"\\b(?:visual focus|visual emphasis|composition|photorealistic|professional editorial)\\b",
+        subject, maxsplit=1, flags=re.I
+    )[0].strip(" .;,:")
+    subject = re.sub(r"^(?:premium|original|cinematic|editorial|documentary|image|visuals?)\\s+", "", subject, flags=re.I)
+    subject = re.sub(r"\\s+", " ", subject).strip()[:100] or "Ideas into real creative work"
+
+    focus_match = re.search(r"\\bvisual focus\\s*:\\s*(.+?)(?:;|\\.\\s|$)", raw, re.I)
+    focus = focus_match.group(1).strip(" .;,:") if focus_match else ""
+    focus = re.sub(r"\\s+", " ", focus)[:115]
+    seed = int(hashlib.sha256(f"{subject}|{focus}|{index}".encode("utf-8")).hexdigest()[:12], 16)
+    variant = (seed ^ (index * 7919)) % 5
+
+    def clamp(v: int) -> int:
+        return max(0, min(255, int(v)))
+
+    # Deep ink-to-slate gradient creates legible contrast without relying on
+    # external image APIs. Work directly at the configured scene dimensions.
+    top = (8 + seed % 12, 16 + (seed >> 4) % 17, 31 + (seed >> 8) % 25)
+    bottom = (19 + (seed >> 12) % 16, 31 + (seed >> 17) % 21, 51 + (seed >> 22) % 24)
+    im = Image.new("RGB", (width, height), top)
     draw = ImageDraw.Draw(im, "RGBA")
-    cx, cy = width // 2, height // 2
-    for i in range(14):
-        x = (seed * (i + 3) * 17) % width
-        y = (seed * (i + 5) * 13) % height
-        r = 60 + ((seed >> (i % 18)) % 360)
-        draw.ellipse((x-r, y-r, x+r, y+r), fill=(60 + (i*11)%150, 80 + (i*17)%130, 150 + (i*7)%90, 32), outline=(220, 235, 255, 35), width=2)
-    font = None
-    try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 46)
-    except Exception:
-        pass
-    words = re.sub(r"\s+", " ", prompt).strip()
-    if len(words) > 80:
-        words = words[:77] + "..."
-    draw.rounded_rectangle((60, height-180, width-60, height-60), radius=28, fill=(0,0,0,120))
-    draw.text((90, height-155), words, fill=(245,248,255,235), font=font)
-    p = outdir / f"procedural_visual_{index:02d}.png"
-    im.save(p, "PNG", optimize=True)
-    return {"kind": "image", "path": str(p), "source": "AI Infinity motion-design generator", "source_url": None, "creator": "AI Infinity", "license": "Original generated asset", "model": "procedural-editorial-engine"}
+    for y in range(height):
+        t = y / max(1, height - 1)
+        rgb = tuple(clamp(top[k] * (1 - t) + bottom[k] * t) for k in range(3))
+        draw.line((0, y, width, y), fill=rgb + (255,))
+    # Quiet alignment grid and glows give an editorial frame while leaving room
+    # for the actual subject illustration.
+    grid = max(24, int(width / 32))
+    for x in range(0, width, grid):
+        draw.line((x, 0, x, height), fill=(170, 204, 238, 13), width=1)
+    for y in range(0, height, grid):
+        draw.line((0, y, width, y), fill=(170, 204, 238, 13), width=1)
+    glow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow, "RGBA")
+    cx, cy = int(width * (0.69 if variant % 2 == 0 else 0.72)), int(height * 0.48)
+    radius = int(min(width, height) * 0.38)
+    accent = (
+        (63 + (seed >> 5) % 46, 170 + (seed >> 9) % 60, 185 + (seed >> 13) % 60, 48)
+        if variant % 2 == 0 else
+        (104 + (seed >> 5) % 65, 104 + (seed >> 9) % 76, 222 + (seed >> 13) % 33, 45)
+    )
+    gd.ellipse((cx-radius, cy-radius, cx+radius, cy+radius), fill=accent)
+    im = Image.alpha_composite(im.convert("RGBA"), glow)
+    draw = ImageDraw.Draw(im, "RGBA")
+
+    scale = width / 1600.0
+    def xy(x: float, y: float) -> tuple[int, int]:
+        return (int(x * width), int(y * height))
+    def box(x1: float, y1: float, x2: float, y2: float) -> tuple[int, int, int, int]:
+        return (int(x1 * width), int(y1 * height), int(x2 * width), int(y2 * height))
+    def font_at(size: int, bold: bool = False):
+        candidates = (
+            ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+            if bold else
+            ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+        )
+        for candidate in candidates:
+            try:
+                return ImageFont.truetype(candidate, max(9, int(size * scale)))
+            except Exception:
+                continue
+        return ImageFont.load_default()
+    label_font = font_at(18, True)
+    title_font = font_at(52 if width >= 1200 else 36, True)
+    body_font = font_at(22 if width >= 1200 else 16)
+    micro_font = font_at(15 if width >= 1200 else 10, True)
+    white = (244, 248, 255, 255)
+    muted = (177, 195, 216, 235)
+    turquoise = (66, 222, 204, 255)
+    gold = (255, 192, 94, 255)
+    x0, y0 = int(width * .065), int(height * .075)
+    draw.rounded_rectangle(box(.055,.055,.27,.105), radius=int(12*scale), fill=(255,255,255,17), outline=(190,215,245,70), width=max(1,int(scale)))
+    draw.text((x0, int(height*.069)), "AI INFINITY  /  ORIGINAL EDITORIAL ART", font=micro_font, fill=muted)
+
+    # A small token set is sufficient for composition selection; exact claims are
+    # never invented and no numeric chart values are fabricated.
+    s = subject.lower() + " " + focus.lower()
+    is_energy = any(w in s for w in ("solar", "renewable", "wind turbine", "energy", "electric", "climate", "power grid"))
+    is_tech = any(w in s for w in ("artificial intelligence", " ai ", "software", "technology", "chip", "machine learning", "data", "digital"))
+    is_creator = any(w in s for w in ("creator", "creative", "video", "film", "editing", "content", "design", "launch", "brand", "storyboard", "camera"))
+    is_science = any(w in s for w in ("science", "research", "education", "learning", "experiment", "laboratory", "discovery", "knowledge"))
+    is_business = any(w in s for w in ("business", "finance", "market", "startup", "growth", "strategy", "economy", "revenue"))
+    # Keep title short, human-readable and separate from the provider prompt.
+    title = subject[:1].upper() + subject[1:]
+    if len(title) > 52:
+        title = title[:49].rstrip() + "..."
+    words = title.split()
+    title_lines, current = [], ""
+    max_title_width = int(width * .46)
+    for word in words:
+        candidate = (current + " " + word).strip()
+        try:
+            w = draw.textbbox((0,0), candidate, font=title_font)[2]
+        except Exception:
+            w = len(candidate) * 24
+        if current and w > max_title_width:
+            title_lines.append(current); current = word
+        else:
+            current = candidate
+    if current:
+        title_lines.append(current)
+    title_lines = title_lines[:3]
+    title_y = int(height * .25)
+    draw.text((x0, title_y), " / ".join(title_lines) if width < 600 else "\\n".join(title_lines), font=title_font, fill=white, spacing=max(4,int(7*scale)))
+    title_box = draw.multiline_textbbox((x0,title_y), "\\n".join(title_lines), font=title_font, spacing=max(4,int(7*scale)))
+    subtext = focus or ("A closer look at the subject" if not is_creator else "From idea to a usable outcome")
+    subtext = subtext[:100]
+    draw.text((x0, min(int(height*.62), title_box[3] + int(20*scale))), subtext, font=body_font, fill=muted)
+
+    # Subject illustration occupies the right half (plus the lower edge), with
+    # clearly distinct shot designs selected by scene index and content category.
+    rx1, ry1, rx2, ry2 = int(width*.55), int(height*.19), int(width*.94), int(height*.82)
+    center_x, center_y = (rx1+rx2)//2, (ry1+ry2)//2
+    art_w, art_h = rx2-rx1, ry2-ry1
+    draw.rounded_rectangle((rx1,ry1,rx2,ry2), radius=int(34*scale), fill=(11,23,40,170), outline=(180,215,245,65), width=max(1,int(2*scale)))
+    if is_energy:
+        sun_r = int(min(art_w,art_h)*.105)
+        draw.ellipse((rx1+int(art_w*.61)-sun_r,ry1+int(art_h*.18)-sun_r,rx1+int(art_w*.61)+sun_r,ry1+int(art_h*.18)+sun_r), fill=gold)
+        draw.polygon([(rx1,ry1+int(art_h*.58)),(rx1+int(art_w*.34),ry1+int(art_h*.30)),(rx1+int(art_w*.57),ry1+int(art_h*.60)),(rx2,ry1+int(art_h*.43)),(rx2,ry2),(rx1,ry2)], fill=(24,77,91,255))
+        draw.polygon([(rx1,ry1+int(art_h*.72)),(rx1+int(art_w*.36),ry1+int(art_h*.53)),(rx1+int(art_w*.65),ry1+int(art_h*.72)),(rx2,ry1+int(art_h*.60)),(rx2,ry2),(rx1,ry2)], fill=(15,51,66,255))
+        # Three visibly different turbines imply renewable-energy coverage.
+        for fx, fy, radius in ((.25,.48,.095),(.56,.42,.12),(.80,.53,.07)):
+            tx, ty = rx1+int(art_w*fx), ry1+int(art_h*fy)
+            hub = (tx,ty)
+            draw.line((tx,ty,tx,ry2-int(art_h*.06)), fill=(220,235,248,230), width=max(2,int(3*scale)))
+            blade=int(art_h*radius)
+            for angle in (0,120,240):
+                import math
+                theta=math.radians(angle)
+                ex=tx+int(math.sin(theta)*blade)
+                ey=ty-int(math.cos(theta)*blade)
+                draw.line((tx,ty,ex,ey), fill=(234,244,255,255), width=max(2,int(4*scale)))
+            draw.ellipse((tx-int(4*scale),ty-int(4*scale),tx+int(4*scale),ty+int(4*scale)),fill=gold)
+        for row in range(3):
+            py=ry2-int(art_h*.19)+row*int(art_h*.045)
+            for col in range(5):
+                px=rx1+int(art_w*.06)+col*int(art_w*.115)
+                draw.polygon([(px,py),(px+int(art_w*.085),py-int(art_h*.028)),(px+int(art_w*.105),py+int(art_h*.018),(px+int(art_w*.02),py+int(art_h*.042)],fill=(39,137+row*10,153,240))
+    elif is_tech:
+        # Chip + routed nodes: a real topic illustration rather than fake product UI.
+        chip_w,chip_h=int(art_w*.36),int(art_h*.34)
+        chip=(center_x-chip_w//2,center_y-chip_h//2,center_x+chip_w//2,center_y+chip_h//2)
+        for angle in range(0,360,45):
+            import math
+            theta=math.radians(angle)
+            ex=center_x+int(math.cos(theta)*art_w*.42)
+            ey=center_y+int(math.sin(theta)*art_h*.42)
+            draw.line((center_x,center_y,ex,ey),fill=(66,222,204,130),width=max(2,int(3*scale)))
+            draw.ellipse((ex-int(7*scale),ey-int(7*scale),ex+int(7*scale),ey+int(7*scale)),fill=turquoise)
+        draw.rounded_rectangle(chip,radius=int(20*scale),fill=(20,82,104,255),outline=turquoise,width=max(2,int(4*scale)))
+        inset=int(18*scale)
+        draw.rounded_rectangle((chip[0]+inset,chip[1]+inset,chip[2]-inset,chip[3]-inset),radius=int(10*scale),outline=(239,249,255,190),width=max(1,int(2*scale)))
+        chip_label="AI" if any(w in s for w in ("artificial intelligence"," ai ","machine learning")) else "DATA"
+        tw=draw.textbbox((0,0),chip_label,font=font_at(44,True))[2]
+        draw.text((center_x-tw//2,center_y-int(24*scale)),chip_label,font=font_at(44,True),fill=white)
+        for i in range(4):
+            px=rx1+int(art_w*.12)+i*int(art_w*.23)
+            draw.line((px,ry2-int(18*scale),px,ry2-int(3*scale)),fill=turquoise,width=max(2,int(3*scale)))
+    elif is_creator:
+        # Three storyboard frames feed into an editing timeline and final play icon.
+        frame_y=ry1+int(art_h*.12)
+        frame_w=int(art_w*.25)
+        for i in range(3):
+            fx=rx1+int(art_w*.09)+i*int(art_w*.29)
+            fy=frame_y+int((i%2)*art_h*.055)
+            draw.rounded_rectangle((fx,fy,fx+frame_w,fy+int(art_h*.31)),radius=int(12*scale),fill=(23+i*5,79+i*8,102+i*10,255),outline=(150,222,235,190),width=max(1,int(2*scale)))
+            draw.ellipse((fx+int(frame_w*.57),fy+int(art_h*.09),fx+int(frame_w*.84),fy+int(art_h*.18)),fill=gold if i==1 else turquoise)
+            draw.polygon([(fx+int(frame_w*.2),fy+int(art_h*.27)),(fx+int(frame_w*.55),fy+int(art_h*.10),(fx+int(frame_w*.90),fy+int(art_h*.29)],fill=(99,187,191,255))
+        timeline_y=ry1+int(art_h*.58)
+        draw.line((rx1+int(art_w*.09),timeline_y,rx2-int(art_w*.09),timeline_y),fill=(190,213,235,160),width=max(2,int(3*scale)))
+        for i in range(6):
+            tx=rx1+int(art_w*.1)+i*int(art_w*.14)
+            draw.rounded_rectangle((tx,timeline_y+int(15*scale),tx+int(art_w*.1),timeline_y+int(46*scale)),radius=int(5*scale),fill=(41+i*4,108+i*7,129+i*5,255))
+        rr=int(min(art_w,art_h)*.055)
+        draw.ellipse((rx2-int(art_w*.18)-rr,ry2-int(art_h*.11)-rr,rx2-int(art_w*.18)+rr,ry2-int(art_h*.11)+rr),fill=gold)
+        draw.polygon([(rx2-int(art_w*.19),ry2-int(art_h*.11)-int(rr*.62)),(rx2-int(art_w*.19),ry2-int(art_h*.11)+int(rr*.62)),(rx2-int(art_w*.13),ry2-int(art_h*.11))],fill=(16,31,50,255))
+    elif is_science:
+        import math
+        for orbit in (.16,.25,.34):
+            bbox=(center_x-int(art_w*orbit),center_y-int(art_h*orbit*.75),center_x+int(art_w*orbit),center_y+int(art_h*orbit*.75))
+            draw.ellipse(bbox,outline=(130,190,231,180),width=max(2,int(2*scale)))
+        draw.ellipse((center_x-int(art_w*.06),center_y-int(art_h*.07),center_x+int(art_w*.06),center_y+int(art_h*.07)),fill=gold)
+        for angle in (15,125,245):
+            theta=math.radians(angle)
+            px=center_x+int(math.cos(theta)*art_w*.22)
+            py=center_y+int(math.sin(theta)*art_h*.18)
+            rr=int(min(art_w,art_h)*.04)
+            draw.ellipse((px-rr,py-rr,px+rr,py+rr),fill=turquoise,outline=white,width=max(1,int(2*scale)))
+    elif is_business:
+        base_y=ry2-int(art_h*.14)
+        for i,hfraction in enumerate((.26,.43,.35,.61,.72,.86)):
+            bx=rx1+int(art_w*.1)+i*int(art_w*.13)
+            bh=int(art_h*hfraction*.6)
+            draw.rounded_rectangle((bx,base_y-bh,bx+int(art_w*.075),base_y),radius=int(6*scale),fill=(48+i*7,129+i*9,173+i*8,245))
+        pts=[]
+        for i,yfraction in enumerate((.58,.49,.54,.34,.28,.17)):
+            pts.append((rx1+int(art_w*.12)+i*int(art_w*.13),ry1+int(art_h*yfraction)))
+        draw.line(pts,fill=gold,width=max(3,int(5*scale)),joint="curve")
+        for px,py in pts:
+            rr=int(5*scale)
+            draw.ellipse((px-rr,py-rr,px+rr,py+rr),fill=gold)
+    else:
+        # Topic-neutral fallback keeps a composed focal subject and layered form,
+        # not an unsupported claim that a specific real-world photo exists.
+        for j in range(4):
+            r=int(min(art_w,art_h)*(.12+j*.055))
+            ox=center_x+int((j-1.5)*art_w*.075)
+            oy=center_y+int((j%2-.5)*art_h*.08)
+            draw.ellipse((ox-r,oy-r,ox+r,oy+r),outline=(100+j*22,190+j*12,224,180-j*25),width=max(2,int((4-j)*scale)))
+        draw.rounded_rectangle((rx1+int(art_w*.2),ry1+int(art_h*.32),rx1+int(art_w*.8),ry1+int(art_h*.68)),radius=int(20*scale),fill=(18,61,80,235),outline=turquoise,width=max(2,int(3*scale)))
+        draw.text((rx1+int(art_w*.27),ry1+int(art_h*.42)),"IDEA  /  ACTION",font=font_at(21,True),fill=white)
+
+    # Footer identifies the shot as original illustrative artwork rather than a
+    # stock asset or documentary photograph.
+    draw.line((int(width*.065),int(height*.88),int(width*.94),int(height*.88)),fill=(177,202,228,100),width=max(1,int(scale)))
+    draw.text((int(width*.065),int(height*.91)),f"SCENE {index:02d}  /  {variant+1:02d}",font=micro_font,fill=turquoise)
+    footer="ILLUSTRATIVE MOTION-DESIGN FALLBACK  •  NOT A PHOTOGRAPH"
+    draw.text((int(width*.34),int(height*.91)),footer,font=font_at(13),fill=(157,179,201,210))
+    p=outdir/f"procedural_visual_{index:02d}.png"
+    im.convert("RGB").save(p,"PNG",optimize=True)
+    return {
+        "kind":"image","path":str(p),"source":"AI Infinity original vector editorial fallback",
+        "source_url":None,"creator":"AI Infinity","license":"Original generated illustrative asset",
+        "model":"topic-led-vector-editorial-engine","quality_tier":"original_vector_editorial_fallback",
+        "asset_kind":"illustrative_graphic_not_photograph","topic":subject,"visual_focus":focus
+    }
 
 
 
