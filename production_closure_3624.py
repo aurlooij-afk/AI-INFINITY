@@ -212,6 +212,84 @@ def _source_assets(p: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [r for r in rows if str(r.get("kind") or "").lower() == "visual"]
 
 
+def _minimum_professional_scene_count(req: Dict[str, Any]) -> int:
+    """Return the minimum real shot coverage for a normal video brief.
+
+    One scene is allowed only for an explicitly requested single-shot/loop, a
+    non-video deliverable, or a genuinely very short sub-8-second clip. A normal
+    20-second short needs at least three rendered scenes; longer works scale up
+    to eight. The target is a coverage floor, not a claim about artistic taste.
+    """
+    content_type = str(req.get("content_type") or "video").strip().lower()
+    if content_type not in {"video", "short", "reel", "film", "documentary"}:
+        return 1
+    brief = " ".join(str(req.get(k) or "") for k in ("objective", "topic", "title"))
+    if re.search(
+        r"\b(single[- ]scene|single[- ]shot|one[- ]shot|one continuous shot|static shot|still[- ]image video|looping background)\b",
+        brief, re.I
+    ):
+        return 1
+    try:
+        duration = max(0.0, float(req.get("duration") or 0))
+    except (TypeError, ValueError):
+        duration = 0.0
+    if duration < 8:
+        return 1
+    return min(8, max(3, int((duration + 14.999) // 15)))
+
+
+def _caption_timing_metrics(path: Optional[Path], media_duration: float) -> Dict[str, Any]:
+    """Check SRT cue syntax, order, bounds, and occupied time without pretending to judge transcription quality."""
+    result = {
+        "cue_count": 0,
+        "timing_valid": False,
+        "max_cue_duration_seconds": 0.0,
+        "coverage_ratio": 0.0,
+        "caption_word_count": 0,
+    }
+    if not path or not path.is_file():
+        return result
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except Exception:
+        return result
+
+    blocks = [block for block in re.split(r"\n\s*\n", text.strip()) if block.strip()]
+    cues = []
+    timing_re = re.compile(
+        r"^(\d{2,}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*"
+        r"(\d{2,}):(\d{2}):(\d{2}),(\d{3})$"
+    )
+    for block in blocks:
+        rows = [row.strip() for row in block.splitlines() if row.strip()]
+        timing_at = next((i for i, row in enumerate(rows) if "-->" in row), None)
+        if timing_at is None:
+            continue
+        match = timing_re.match(rows[timing_at])
+        caption_text = " ".join(rows[timing_at + 1:]).strip()
+        if not match or not caption_text:
+            return result
+        values = [int(x) for x in match.groups()]
+        start = values[0] * 3600 + values[1] * 60 + values[2] + values[3] / 1000.0
+        end = values[4] * 3600 + values[5] * 60 + values[6] + values[7] / 1000.0
+        if end <= start or start < 0 or end > max(0.0, float(media_duration)) + 0.75:
+            return result
+        cues.append({"start": start, "end": end, "text": caption_text})
+    if not cues:
+        return result
+    sequential = all(cues[i]["start"] >= cues[i - 1]["end"] - 0.03 for i in range(1, len(cues)))
+    total_active = sum(max(0.0, x["end"] - x["start"]) for x in cues)
+    duration = max(0.001, float(media_duration))
+    result.update({
+        "cue_count": len(cues),
+        "timing_valid": bool(sequential),
+        "max_cue_duration_seconds": round(max(x["end"] - x["start"] for x in cues), 3),
+        "coverage_ratio": round(min(1.0, total_active / duration), 3),
+        "caption_word_count": sum(len(re.findall(r"\b[\w'-]+\b", x["text"])) for x in cues),
+    })
+    return result
+
+
 def _visual_diversity_metrics(
     visual_rows: List[Dict[str, Any]], scene_count: int
 ) -> Dict[str, Any]:
@@ -541,8 +619,18 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     except Exception:
         scene_files = []
     effective_scene_count = len(scene_files) if scene_files else (len(chapters) if chapters else 1)
+    minimum_scene_count = _minimum_professional_scene_count(req)
+    actual_rendered_scene_count = len(scene_files)
     checks["visual_source_count"] = len(visual_rows)
     checks["visual_scene_count"] = effective_scene_count
+    checks["actual_rendered_scene_count"] = actual_rendered_scene_count
+    checks["minimum_professional_scene_count"] = minimum_scene_count
+    checks["professional_scene_coverage_passed"] = actual_rendered_scene_count >= minimum_scene_count
+    if not checks["professional_scene_coverage_passed"]:
+        failures.append(
+            f"professional scene coverage failed: {actual_rendered_scene_count} rendered scene(s), "
+            f"{minimum_scene_count} required for this video brief"
+        )
     # Compare source evidence to the actual rendered scene masters, not to a
     # stale or pre-recovery storyboard chapter count. Reused verified sources
     # still create one visual evidence row per rendered scene.
@@ -559,8 +647,59 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     checks["unique_visual_hashes"] = visual_diversity["unique_visual_hashes"]
     checks["visual_diversity_required_unique_hashes"] = visual_diversity["required_unique_visual_hashes"]
     checks["visual_diversity_ok"] = visual_diversity["visual_diversity_ok"]
-    if effective_scene_count > 1 and not checks["visual_diversity_ok"]:
+    required_professional_unique = min(minimum_scene_count, actual_rendered_scene_count) if actual_rendered_scene_count else minimum_scene_count
+    checks["professional_unique_visuals_required"] = required_professional_unique
+    checks["professional_visual_diversity_passed"] = (
+        actual_rendered_scene_count >= minimum_scene_count
+        and int(visual_diversity.get("unique_visual_hashes") or 0) >= required_professional_unique
+    )
+    if actual_rendered_scene_count > 1 and not checks["visual_diversity_ok"]:
         failures.append("visual diversity check failed: the edit reuses too few distinct visual assets")
+    if not checks["professional_visual_diversity_passed"]:
+        failures.append(
+            f"professional visual diversity failed: {visual_diversity.get('unique_visual_hashes', 0)} unique "
+            f"visual(s), {required_professional_unique} required across the rendered scenes"
+        )
+
+    script_path = files.get("script.md")
+    script_word_count = 0
+    if script_path and script_path.is_file():
+        try:
+            script_text = script_path.read_text(encoding="utf-8")
+            # Do not count title/metadata headings or the unspoken planner hook;
+            # count the narration paragraphs that actually enter the spoken script.
+            script_body = re.sub(r"(?m)^\s*#{1,6}\s+.*$|^\s*Hook:\s*.*$", "", script_text)
+            script_word_count = len(re.findall(r"\b[\w'-]+\b", script_body))
+        except Exception:
+            script_word_count = 0
+    required_script_words = max(12, int(float(checks.get("requested_duration") or 0) * 1.0))
+    checks["spoken_script_word_count"] = script_word_count
+    checks["required_spoken_script_words"] = required_script_words
+    checks["script_content_floor_passed"] = (
+        str(req.get("content_type") or "video").lower() != "video"
+        or script_word_count >= required_script_words
+    )
+    if not checks["script_content_floor_passed"]:
+        failures.append(
+            f"spoken script is underfilled: {script_word_count} words; "
+            f"at least {required_script_words} are required for the requested runtime"
+        )
+
+    caption_metrics = _caption_timing_metrics(files.get("captions.srt"), float(checks.get("actual_duration") or 0))
+    checks["caption_timing"] = caption_metrics
+    expected_caption_cues = max(1, int((float(checks.get("actual_duration") or 0) + 4.999) // 5))
+    checks["minimum_caption_cues"] = expected_caption_cues
+    checks["caption_sync_passed"] = bool(
+        caption_metrics["timing_valid"]
+        and caption_metrics["cue_count"] >= expected_caption_cues
+        and caption_metrics["max_cue_duration_seconds"] <= 5.75
+        and caption_metrics["coverage_ratio"] >= 0.80
+    )
+    if str(req.get("content_type") or "video").lower() == "video" and float(checks.get("actual_duration") or 0) >= 15 and not checks["caption_sync_passed"]:
+        failures.append(
+            "caption timing failed: cues must remain synchronized, cover the programme, "
+            "and avoid a single prolonged subtitle"
+        )
 
     rights_path = files.get("visual_rights.json")
     rights_data = {}
@@ -654,6 +793,10 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         and checks["visual_sources_present"]
         and checks["source_visual_policy_passed"]
         and checks["visual_diversity_ok"]
+        and checks["professional_scene_coverage_passed"]
+        and checks["professional_visual_diversity_passed"]
+        and checks["script_content_floor_passed"]
+        and checks["caption_sync_passed"]
         and checks["professional_voice_present"]
         and checks["visual_rights_evidence_present"]
         and checks["research_required_and_present"]
