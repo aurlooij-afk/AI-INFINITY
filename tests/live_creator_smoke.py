@@ -170,7 +170,10 @@ verify,_=ok("/infinity/studio/project/"+pid+"/verify"); assert verify.get("passe
 # choice remains runtime-dependent.
 assert studio_truth.get("checks",{}).get("source_visual_policy_passed") is True, studio_truth
 assert studio_truth.get("checks",{}).get("visual_rights_evidence_present") is True, studio_truth
-edit,_=ok("/infinity/canonical/project/"+pid+"/command","POST",{"command":"remove the first 2 seconds and make it cinematic"})
+# A real FFmpeg re-render is synchronous on this endpoint today. Keep a firm bound
+# above its configured ffmpeg timeout (max(180s, duration*8)) plus storage read-back;
+# 90s previously timed out the client after the server had successfully committed v2.
+edit,_=ok("/infinity/canonical/project/"+pid+"/command","POST",{"command":"remove the first 2 seconds and make it cinematic"},timeout=240)
 v2=edit["version_id"]; assert v2!=v1
 two=root/"v2.mp4"; name=edit["artifact"]["name"]
 download("/infinity/studio/project/"+pid+"/asset/"+urllib.parse.quote(name,safe=""),two)
