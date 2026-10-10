@@ -206,3 +206,24 @@ def test_unrelated_public_visual_candidate_is_not_accepted(monkeypatch, tmp_path
     assert asset["fallback"] is True
     assert asset["source"] == "AI Infinity original vector editorial fallback"
     assert asset["fallback_record"]["execution_state"] == "DEGRADED"
+
+
+def test_scene_selection_keeps_opening_middle_and_closing_of_long_storyboard():
+    studio = closure._studio()
+    chapters = [{"heading": name, "narration": name} for name in [
+        "Hook", "Context", "Core idea", "How it works",
+        "Real examples", "What changes", "Practical takeaway", "Closing",
+    ]]
+    selected = studio._select_scene_coverage(chapters, 4)
+    assert [row["heading"] for row in selected] == [
+        "Hook", "Core idea", "What changes", "Closing"
+    ]
+
+
+def test_scene_selection_keeps_short_arc_for_five_scene_short():
+    studio = closure._studio()
+    chapters = [{"heading": name} for name in [
+        "Hook", "Why it matters", "The key idea", "Practical example", "Takeaway"
+    ]]
+    selected = studio._select_scene_coverage(chapters, 3)
+    assert [row["heading"] for row in selected] == ["Hook", "The key idea", "Takeaway"]
