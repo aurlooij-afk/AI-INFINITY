@@ -1469,12 +1469,20 @@ def _hf_video(prompt: str, outdir: Path, index: int, duration: float) -> Optiona
         client=InferenceClient(**kwargs)
         video=client.text_to_video(prompt,model=model)
         raw=video.read() if hasattr(video,"read") else bytes(video)
-        if not raw:
-            raise RuntimeError("provider returned empty video")
+        if not raw or len(raw) < 20_000:
+            raise RuntimeError("provider returned empty or implausibly small video")
         p=outdir/f"ai_motion_{index:02d}.mp4"
         p.write_bytes(raw)
-        _media_success("huggingface-video",{"model":model,"size":len(raw)})
-        return {"kind":"video","path":str(p),"source":"Hugging Face Inference Provider","source_url":"https://huggingface.co","creator":"AI generated","license":"Model/provider terms apply","model":model}
+        probe=ffprobe_json(p)
+        streams=probe.get("streams") or []
+        v=next((x for x in streams if x.get("codec_type")=="video"),None)
+        if not v or int(v.get("width") or 0)<320 or int(v.get("height") or 0)<240:
+            raise RuntimeError("provider video failed stream/resolution validation")
+        seconds=probe_duration(p)
+        if seconds < 0.5:
+            raise RuntimeError("provider video has no trustworthy playable duration")
+        _media_success("huggingface-video",{"model":model,"size":len(raw),"duration":round(seconds,3)})
+        return {"kind":"video","path":str(p),"source":"Hugging Face Inference Provider","source_url":"https://huggingface.co","creator":"AI generated","license":"Model/provider terms apply","model":model,"duration_seconds":round(seconds,3),"validated_media":True}
     except Exception as exc:
         _media_debug("huggingface-video",exc)
         return None
@@ -1509,9 +1517,17 @@ def _hf_image(prompt: str, outdir: Path, index: int) -> Optional[Dict[str, Any]]
                 )
                 p=outdir/f"ai_visual_{index:02d}.png"
                 image.save(p)
+                image_width=image_height=0
                 if p.is_file() and p.stat().st_size>20_000:
-                    _media_success("huggingface-image",{"model":model,"size":p.stat().st_size})
-                    return {"kind":"image","path":str(p),"source":"Hugging Face Inference Provider","source_url":"https://huggingface.co","creator":"AI generated","license":"Model/provider terms apply","model":model}
+                    with Image.open(p) as check_image:
+                        check_image.verify()
+                    with Image.open(p) as check_image:
+                        image_width,image_height=check_image.size
+                    if min(image_width,image_height)<320:
+                        p.unlink(missing_ok=True)
+                        raise RuntimeError("provider image resolution is below the minimum usable scene size")
+                    _media_success("huggingface-image",{"model":model,"size":p.stat().st_size,"width":image_width,"height":image_height})
+                    return {"kind":"image","path":str(p),"source":"Hugging Face Inference Provider","source_url":"https://huggingface.co","creator":"AI generated","license":"Model/provider terms apply","model":model,"width":image_width,"height":image_height,"validated_media":True}
             except Exception as exc:
                 errors.append(f"{model}:{type(exc).__name__}:{str(exc)[:260]}")
         raise RuntimeError(" | ".join(errors)[:900] or "no image model returned an asset")
