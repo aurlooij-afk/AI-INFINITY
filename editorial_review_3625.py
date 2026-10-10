@@ -834,8 +834,6 @@ def install() -> None:
 
 
 def register(app) -> None:
-    from fastapi.responses import JSONResponse
-
     _ensure_review_table()
 
     @app.get("/infinity/studio/project/{project_id}/editorial-scorecard")
@@ -845,11 +843,11 @@ def register(app) -> None:
         rows = _review_rows(project_id, user_id)
         state = _review_state(rows, str(card["content_fingerprint"]))
         persisted = _persist_scorecard(project, card, state)
-        return JSONResponse({
+        return {
             "scorecard": _decorate(card, state),
             "scorecard_artifact": persisted,
             "truthful": True,
-        })
+        }
 
     @app.get("/infinity/studio/project/{project_id}/editorial-reviews")
     def get_editorial_reviews(project_id: str, request: Request, response: Response):
@@ -907,9 +905,9 @@ def register(app) -> None:
         rows = _review_rows(project_id, user_id)
         state = _review_state(rows, current)
         persisted = _persist_scorecard(project, card, state)
-        return JSONResponse({
+        return {
             "review": review,
             "human_approval": state,
             "scorecard_artifact": persisted,
             "truthful": True,
-        })
+        }
