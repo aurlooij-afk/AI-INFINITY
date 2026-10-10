@@ -24,7 +24,7 @@ jobs:
       - name: Wait for Render deployment and verify live creator surface
         env:
           BASE_URL: https://ai-infinity-ca5e.onrender.com
-          EXPECTED_REVISION: \${{ github.sha }}
+          EXPECTED_REVISION: ${{ github.sha }}
         run: |
           set -euo pipefail
           python - <<'PY'
