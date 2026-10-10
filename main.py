@@ -81,6 +81,8 @@ editorial_review_3625.register(app)
 professional_creator_v2_timeline_patch.install(app)
 professional_creator_v2.install(app)
 professional_creator_fabric.register(app)
+# Recheck the final creator UI and republish guard after all add-on installers.
+editorial_review_3625.install()
 
 # Canonical compatibility endpoint used by the production proof and legacy clients.
 # It delegates to the same real Creator Studio enqueue path; no simulated output.
