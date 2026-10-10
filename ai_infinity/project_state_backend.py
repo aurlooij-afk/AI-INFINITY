@@ -61,12 +61,36 @@ def _flag(name: str, default: str = "false") -> bool:
 
 
 def _cfg() -> Dict[str, str]:
+    # Use the same variable precedence as ai3704_storage_fabric. Deployments
+    # commonly configure BACKBLAZE_B2_* for artifact storage and the legacy
+    # B2_* aliases for older integrations; using a different key pair here can
+    # make media durability work while project-state snapshots fail (for
+    # example, HeadObject 403 from a restricted legacy key).
+    endpoint = (
+        os.getenv("BACKBLAZE_B2_ENDPOINT", "").strip()
+        or os.getenv("B2_ENDPOINT", "").strip()
+    )
+    region = (
+        os.getenv("BACKBLAZE_B2_REGION", "").strip()
+        or os.getenv("B2_REGION", "").strip()
+    )
+    if not endpoint and region:
+        endpoint = f"https://s3.{region}.backblazeb2.com"
     return {
-        "endpoint": os.getenv("B2_ENDPOINT", "").strip(),
-        "bucket": os.getenv("B2_BUCKET", "").strip(),
-        "access": os.getenv("B2_KEY_ID", "").strip(),
-        "secret": os.getenv("B2_APPLICATION_KEY", "").strip(),
-        "region": os.getenv("B2_REGION", "").strip() or "us-west-004",
+        "endpoint": endpoint,
+        "bucket": (
+            os.getenv("BACKBLAZE_B2_BUCKET", "").strip()
+            or os.getenv("B2_BUCKET", "").strip()
+        ),
+        "access": (
+            os.getenv("BACKBLAZE_B2_KEY_ID", "").strip()
+            or os.getenv("B2_KEY_ID", "").strip()
+        ),
+        "secret": (
+            os.getenv("BACKBLAZE_B2_APPLICATION_KEY", "").strip()
+            or os.getenv("B2_APPLICATION_KEY", "").strip()
+        ),
+        "region": region or "us-west-004",
     }
 
 

@@ -12,6 +12,11 @@ def test_backend_is_truthful_when_unconfigured(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("AI_INFINITY_PROJECT_STATE_DURABLE", "true")
     monkeypatch.setenv("AI_INFINITY_PROJECT_STATE_BACKEND", "backblaze_b2")
     for key in (
+        "BACKBLAZE_B2_ENDPOINT",
+        "BACKBLAZE_B2_BUCKET",
+        "BACKBLAZE_B2_KEY_ID",
+        "BACKBLAZE_B2_APPLICATION_KEY",
+        "BACKBLAZE_B2_REGION",
         "B2_ENDPOINT",
         "B2_BUCKET",
         "B2_KEY_ID",
@@ -122,10 +127,48 @@ def _b2_env(monkeypatch):
     monkeypatch.setenv("AI_INFINITY_PERSISTENCE_MODE", "durable")
     monkeypatch.setenv("AI_INFINITY_PROJECT_STATE_DURABLE", "true")
     monkeypatch.setenv("AI_INFINITY_PROJECT_STATE_BACKEND", "backblaze_b2")
+    for key in (
+        "BACKBLAZE_B2_ENDPOINT",
+        "BACKBLAZE_B2_BUCKET",
+        "BACKBLAZE_B2_KEY_ID",
+        "BACKBLAZE_B2_APPLICATION_KEY",
+        "BACKBLAZE_B2_REGION",
+    ):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("B2_BUCKET", "unit-test-bucket")
     monkeypatch.setenv("B2_ENDPOINT", "https://b2.invalid")
     monkeypatch.setenv("B2_KEY_ID", "test-key-id")
     monkeypatch.setenv("B2_APPLICATION_KEY", "test-key-secret")
+
+
+
+def test_project_state_prefers_shared_backblaze_storage_credentials(monkeypatch):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _b2_env(monkeypatch)
+    monkeypatch.setenv("BACKBLAZE_B2_ENDPOINT", "https://s3.us-east-005.backblazeb2.com")
+    monkeypatch.setenv("BACKBLAZE_B2_REGION", "us-east-005")
+    monkeypatch.setenv("BACKBLAZE_B2_BUCKET", "shared-artifact-bucket")
+    monkeypatch.setenv("BACKBLAZE_B2_KEY_ID", "shared-key-id")
+    monkeypatch.setenv("BACKBLAZE_B2_APPLICATION_KEY", "shared-application-key")
+
+    cfg = backend._cfg()
+    assert cfg["endpoint"] == "https://s3.us-east-005.backblazeb2.com"
+    assert cfg["region"] == "us-east-005"
+    assert cfg["bucket"] == "shared-artifact-bucket"
+    assert cfg["access"] == "shared-key-id"
+    assert cfg["secret"] == "shared-application-key"
+
+
+def test_project_state_derives_endpoint_from_shared_b2_region(monkeypatch):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _b2_env(monkeypatch)
+    monkeypatch.delenv("BACKBLAZE_B2_ENDPOINT", raising=False)
+    monkeypatch.delenv("B2_ENDPOINT", raising=False)
+    monkeypatch.setenv("BACKBLAZE_B2_REGION", "eu-central-003")
+
+    cfg = backend._cfg()
+    assert cfg["endpoint"] == "https://s3.eu-central-003.backblazeb2.com"
+    assert cfg["region"] == "eu-central-003"
 
 
 def test_b2_canary_requires_exact_write_readback(monkeypatch):
