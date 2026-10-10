@@ -51,8 +51,8 @@ _FACT_SENSITIVE = (
     "health", "research", "facts", "explainer", "statistics", "evidence",
 )
 _SECRET_PATTERNS = [
-    re.compile(r"(?i)(?:api[_-]?key|secret[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\\s*['\\\"]?\\s*[:=]\\s*['\\\"]?[A-Za-z0-9_./+=-]{16,}"),
-    re.compile(r"(?i)https?://[^\\s\\\"]+\\?(?:[^\\s\\\"]*&)?(?:X-Amz-Signature|Signature|token)=.{12,}"),
+    re.compile(r'''(?i)(?:api[_-]?key|secret[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\s*['"]?\s*[:=]\s*['"]?[A-Za-z0-9_./+=-]{16,}'''),
+    re.compile(r'''(?i)https?://[^\s"]+\?(?:[^\s"]*&)?(?:X-Amz-Signature|Signature|token)=.{12,}'''),
 ]
 
 
@@ -112,11 +112,11 @@ def _score(score: int, evidence: List[str], method: str, limitation: str = "") -
 
 
 def _srt_metrics(text: str, duration: float) -> Dict[str, Any]:
-    blocks = [x.strip() for x in re.split(r"\\r?\\n\\s*\\r?\\n", (text or "").strip()) if x.strip()]
+    blocks = [x.strip() for x in re.split(r"\r?\n\s*\r?\n", (text or "").strip()) if x.strip()]
     cues = []
     errors = []
     last_end = 0.0
-    timestamp = re.compile(r"^(\\d{2,}):(\\d{2}):(\\d{2}),(\\d{3})$")
+    timestamp = re.compile(r"^(\d{2,}):(\d{2}):(\d{2}),(\d{3})$")
 
     def seconds(value: str) -> Optional[float]:
         match = timestamp.match(value.strip())
@@ -245,7 +245,7 @@ def build_scorecard(project: Dict[str, Any]) -> Dict[str, Any]:
     plan = blueprint.get("plan") if isinstance(blueprint.get("plan"), dict) else blueprint
     chapters = _scene_list(blueprint)
     script = _read_text(files.get("script.md")) or _read_text(files.get("transcript.txt"))
-    script_words = re.findall(r"\\b[\\w’'-]+\\b", script, flags=re.UNICODE)
+    script_words = re.findall(r"\b[\w’'-]+\b", script, flags=re.UNICODE)
     script_word_count = len(script_words)
     title = str(req.get("title") or project.get("title") or "").strip()
     objective = str(req.get("objective") or req.get("topic") or "").strip()
@@ -564,7 +564,7 @@ def build_scorecard(project: Dict[str, Any]) -> Dict[str, Any]:
         "project_id": pid,
         "project_status": project.get("status"),
         "content_fingerprint": _fingerprint(project, files),
-        "generated_at_epoch": int(time.time()),
+        "generated_at_epoch": int(project.get("updated_at") or project.get("created_at") or 0),
         "scoring_policy": {
             "scale": {"1": "critical weakness", "2": "weak", "3": "adequate but needs review", "4": "strong observable evidence", "5": "strong evidence across the applicable checks"},
             "thresholds": {"average_at_least": 4.0, "no_applicable_dimension_below": 3, "critical_failures_allowed": 0},
