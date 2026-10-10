@@ -2590,7 +2590,7 @@ def _save_asset(project_id: str, kind: str, path: Path, media_type: str, metadat
     # Persist only user-facing production artifacts when a real durable storage
     # provider is configured. Intermediate scene files remain local/temp to avoid
     # unnecessary copies and costs. Unconfigured storage is explicitly recorded.
-    durable_kinds = {"final","package","thumbnail","audio_master","caption","script","seo","social","provenance","manifest","production_manifest","rights_manifest","fact_check","accessibility","platform_manifest","short","version"}
+    durable_kinds = {"final","video","package","thumbnail","audio","audio_master","caption","captions","script","transcript","article","seo","social","social_campaign","social_campaign_markdown","sources","provenance","manifest","production_manifest","rights_manifest","rights","fact_check","accessibility","platform_manifest","feature_execution","short","version","edit","editorial_scorecard"}
     if kind in durable_kinds and path.exists() and path.is_file():
         try:
             project = _get_project(project_id)
