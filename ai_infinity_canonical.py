@@ -572,6 +572,16 @@ def create_from_command(command,user_id,raw):
          "_aspect_ratio_explicit": clean(raw.get("aspect_ratio"),10) in {"16:9","9:16","1:1","4:5"},
          "reference_urls":intent["reference_urls"],
          "source_file_names":intent["source_file_names"],"notes":intent["notes"],"idempotency_key":idem}
+    fixture_id = clean(raw.get("acceptance_fixture_id"), 80)
+    if fixture_id:
+        fixture_enabled = (
+            os.getenv("CI", "").strip().lower() == "true"
+            and os.getenv("AI_INFINITY_TEST_MEDIA", "0").strip().lower() in {"1", "true", "yes"}
+            and fixture_id == "cc0-recovery-illustration-v1"
+        )
+        if not fixture_enabled:
+            raise HTTPException(422, "acceptance media fixtures are available only in the explicitly enabled CI test harness")
+        req["_acceptance_fixture_id"] = fixture_id
     main=__import__("main")
     result=studio().enqueue(req,user_id,getattr(main,"_2700_model",None));pid=str(result.get("project_id") or "")
     if not pid:raise HTTPException(502,"creator engine did not return a project id")

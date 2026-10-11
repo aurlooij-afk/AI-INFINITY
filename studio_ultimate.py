@@ -1831,27 +1831,77 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
 
 
 def _ci_test_visual(scene: Dict[str, Any], outdir: Path, index: int) -> Optional[Dict[str, Any]]:
-    """Test-only media fixture. This branch is never used unless explicitly enabled by CI."""
-    if os.getenv("AI_INFINITY_TEST_MEDIA", "0").strip().lower() not in {"1", "true", "yes"}:
+    """Generate a deterministic CC0 illustration only for an explicitly enabled CI recovery test.
+
+    The output is always labelled as illustrative fallback, not footage. It can
+    make retry tests reproducible but can never establish professional verification.
+    """
+    fixture_id = str(scene.get("_acceptance_fixture_id") or "")
+    enabled = (
+        os.getenv("CI", "").strip().lower() == "true"
+        and os.getenv("AI_INFINITY_TEST_MEDIA", "0").strip().lower() in {"1", "true", "yes"}
+        and fixture_id == "cc0-recovery-illustration-v1"
+    )
+    if not enabled or Image is None:
         return None
     p = outdir / f"ci_fixture_{index:02d}.png"
-    if Image is None:
-        return None
-    w, h = 1280, 720
-    im = Image.new("RGB", (w, h), (30, 34, 40))
+    palettes = [
+        ((20, 37, 64), (49, 145, 174), (241, 184, 85)),
+        ((39, 32, 65), (139, 94, 190), (243, 156, 124)),
+        ((22, 58, 53), (48, 155, 121), (242, 202, 92)),
+        ((65, 39, 38), (189, 91, 65), (245, 190, 94)),
+    ]
+    background, accent, gold = palettes[(index - 1) % len(palettes)]
+    width, height = 1280, 720
+    im = Image.new("RGB", (width, height), background)
     draw = ImageDraw.Draw(im)
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 42)
+        small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
     except Exception:
-        font = None
-    label = re.sub(r"\\s+", " ", str(scene.get("heading") or "CI media fixture")).strip()[:100]
-    draw.text((60, 60), "AI Infinity CI — TEST MEDIA", fill=(235, 240, 246), font=font)
-    draw.text((60, 135), label, fill=(210, 220, 232), font=font)
+        font = ImageFont.load_default()
+        small = ImageFont.load_default()
+    label = re.sub(r"\s+", " ", str(scene.get("heading") or "Recovery scene")).strip()[:72]
+    draw.rounded_rectangle((50, 50, width - 50, height - 50), radius=30, outline=accent, width=5)
+    draw.ellipse((width - 430, 120, width - 110, 440), outline=accent, width=20)
+    draw.ellipse((width - 360, 190, width - 180, 370), outline=gold, width=12)
+    draw.line((100, 410, 400 + index * 70, 250 + index * 18), fill=gold, width=12)
+    for n in range(index + 2):
+        x = 120 + n * 95
+        bar_height = 65 + ((n + index) % 4) * 32
+        draw.rounded_rectangle((x, 520 - bar_height, x + 52, 520), radius=8, fill=accent)
+    draw.text((95, 110), "AI INFINITY / CC0 TEST ILLUSTRATION", fill=(240, 244, 248), font=small)
+    draw.text((95, 190), label or "Recovery scene", fill=(240, 244, 248), font=font)
+    draw.text((95, 590), f"SCENE {index:02d} - NOT REAL FOOTAGE", fill=gold, font=small)
     im.save(p, "PNG", optimize=True)
-    return {"kind":"image","path":str(p),"source":"CI test fixture (not production)","source_url":None,"creator":"AI Infinity tests","license":"test fixture","model":"ci-fixture"}
-
+    return {
+        "kind": "image",
+        "path": str(p),
+        "source": "AI Infinity deterministic CC0 recovery-test illustration",
+        "source_url": None,
+        "creator": "AI Infinity repository test fixture",
+        "license": "CC0 1.0 Universal Public Domain Dedication",
+        "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "rights_status": "original_asset",
+        "commercial_use_state": "public_domain_cc0_1_0",
+        "title": f"Recovery fixture illustration scene {index:02d}",
+        "fallback": True,
+        "quality_tier": "original_vector_editorial_fallback",
+        "asset_kind": "illustrative_graphic_not_photograph",
+        "fallback_record": {
+            "truthful": True,
+            "execution_state": "DEGRADED",
+            "fallback_method": "Deterministic CC0 illustration used only in fault-injection acceptance tests",
+            "quality_change": "Real scene media replaced by a labelled test illustration; not source footage",
+            "license_change": "Provider-specific rights replaced by original CC0 1.0 test fixture",
+        },
+    }
 
 def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_motion: bool = False, duration: float = 6.0) -> Dict[str, Any]:
+    # Test fixture short-circuits external acquisition only when explicitly allow-listed by CI.
+    ci_fixture = _ci_test_visual(scene, outdir, index)
+    if ci_fixture is not None:
+        return ci_fixture
     raw_query=str(scene.get("visual_query") or scene.get("heading") or "documentary scene")
     ai_prompt=str(scene.get("image_prompt") or f"Premium cinematic documentary visual about {raw_query}; realistic, useful, editorial, no text, no logos, professional photography")
     heading=str(scene.get("heading") or "").strip()
@@ -3841,7 +3891,12 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             ch["actual_duration"] = scene_duration
             actual_total += scene_duration
             try:
-                asset = acquire_scene_asset(ch, outdir, i, prefer_motion=(i <= max_ai_video_scenes), duration=scene_duration)
+                scene_for_acquisition = ch
+                fixture_id = str(req.get("_acceptance_fixture_id") or "")
+                if fixture_id == "cc0-recovery-illustration-v1":
+                    scene_for_acquisition = dict(ch)
+                    scene_for_acquisition["_acceptance_fixture_id"] = fixture_id
+                asset = acquire_scene_asset(scene_for_acquisition, outdir, i, prefer_motion=(i <= max_ai_video_scenes), duration=scene_duration)
             except Exception as asset_exc:
                 audit_event(project_id, "visual_source_unavailable", {"scene": i, "error": str(asset_exc)[:500]})
                 raise RuntimeError(f"scene {i}: professional visual source unavailable: {str(asset_exc)[:1600]}") from asset_exc
@@ -6085,6 +6140,12 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         p = _get_project(project_id)
         if not p or p.get("user_id") != user_id: raise HTTPException(404, "project not found")
         if p.get("status") not in {"failed", "cancelled", "completed_with_qc_warnings"}: raise HTTPException(409, "project is not retryable")
+        audit_event(project_id, "retry_requested", {
+            "previous_status": p.get("status"),
+            "next_attempt": int(p.get("attempt") or 0) + 1,
+            "by": "creator",
+            "truthful": True,
+        })
         _update_project(project_id, status="queued", stage="queued", progress=0, error=None)
         _ensure_worker(model_fn)
         return {"status": "queued", "project_id": project_id, "truthful": True}

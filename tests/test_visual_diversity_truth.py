@@ -357,3 +357,38 @@ def test_fast_mode_scene_budget_meets_sixty_second_professional_floor():
     assert studio._max_scene_count(True, False, False, False) == 5
     assert studio._max_scene_count(True, True, False, True) == 1
     assert studio._max_scene_count(True, True, True, False) == 1
+
+
+
+def test_ci_recovery_fixture_is_cc0_labelled_and_never_used_without_exact_marker(monkeypatch, tmp_path):
+    studio = closure._studio()
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setenv("AI_INFINITY_TEST_MEDIA", "1")
+    assert studio._ci_test_visual({"heading": "Recovery scene"}, tmp_path, 1) is None
+
+    asset = studio._ci_test_visual({
+        "heading": "Recovery scene",
+        "_acceptance_fixture_id": "cc0-recovery-illustration-v1",
+    }, tmp_path, 1)
+    assert asset is not None
+    assert asset["fallback"] is True
+    assert asset["quality_tier"] == "original_vector_editorial_fallback"
+    assert asset["asset_kind"] == "illustrative_graphic_not_photograph"
+    assert asset["rights_status"] == "original_asset"
+    assert "CC0 1.0" in asset["license"]
+    assert asset["license_url"] == "https://creativecommons.org/publicdomain/zero/1.0/"
+    assert closure._is_qualified_illustrative_fallback(asset)
+    path = Path(asset["path"])
+    assert path.is_file() and path.stat().st_size > 1000
+    with studio.Image.open(path) as im:
+        assert im.format == "PNG" and im.size == (1280, 720)
+
+
+def test_ci_recovery_fixture_is_disabled_outside_ci_even_with_allowlisted_id(monkeypatch, tmp_path):
+    studio = closure._studio()
+    monkeypatch.setenv("CI", "false")
+    monkeypatch.setenv("AI_INFINITY_TEST_MEDIA", "1")
+    assert studio._ci_test_visual({
+        "heading": "This must not be generated",
+        "_acceptance_fixture_id": "cc0-recovery-illustration-v1",
+    }, tmp_path, 1) is None

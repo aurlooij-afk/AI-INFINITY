@@ -90,6 +90,12 @@ def t1(s,b):
     src=jart(s,b,pid,"sources.json"); assert int(src.get("source_count") or len(src.get("sources")or[]))>0,src
     truth=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/truth")
     assert truth.get("verified") is True and truth.get("state")=="VERIFIED", truth
+    checks=truth.get("checks") or {}
+    assert checks.get("source_visual_policy_passed") is True, truth
+    assert int(checks.get("fallback_visual_count") or 0) == 0, truth
+    assert checks.get("aspect_ratio_passed") is True and checks.get("requested_aspect_ratio") == "16:9", truth
+    assert int(checks.get("actual_rendered_scene_count") or 0) >= int(checks.get("minimum_professional_scene_count") or 1), truth
+    assert checks.get("visual_rights_evidence_present") is True, truth
     production=jart(s,b,pid,"production_manifest.json")
     assert production.get("project_id")==pid and production.get("truthful") is True
     manifest_artifacts=production.get("artifacts") or []
@@ -172,15 +178,35 @@ def t7():
         return {"test":7,"project_id":pid,"research_status":"degraded"}
     finally:stop(p,l)
 def t8():
-    d=Path("/data/final-acceptance-restart");shutil.rmtree(d,ignore_errors=True);extra={"AI_INFINITY_PERSISTENCE_MODE":"durable","AI_INFINITY_PERSISTENT_VOLUME_CONFIRMED":"true","AI_INFINITY_PROJECT_STATE_DURABLE":"true","AI_INFINITY_PROJECT_STATE_BACKEND":"sqlite_persistent_volume","AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE":"0"}
+    # A process restart in the same ephemeral container is not a durable-volume proof.
+    d=TMP/"restart-ephemeral";shutil.rmtree(d,ignore_errors=True)
+    extra={
+        "AI_INFINITY_PERSISTENCE_MODE":"durable",
+        "AI_INFINITY_PERSISTENT_VOLUME_CONFIRMED":"true",
+        "AI_INFINITY_PROJECT_STATE_DURABLE":"true",
+        "AI_INFINITY_PROJECT_STATE_BACKEND":"sqlite_persistent_volume",
+        "AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE":"0",
+    }
     p,b,l=start(d,18082,extra);s=requests.Session()
     try:
-        c=req(s,b,"/infinity/canonical/capabilities");assert c.get("storage",{}).get("persistent") is True,c
-        pid=create(s,b,"Create a 20-second English cinematic project for restart persistence.",duration=20,format="short");waitp(s,b,pid)
+        c=req(s,b,"/infinity/canonical/capabilities")
+        assert c.get("storage",{}).get("persistent") is False,c
+        pid=create(s,b,"Create a 20-second English cinematic project for process-restart recovery.",duration=20,format="short")
+        waitp(s,b,pid)
     finally:stop(p,l)
     p2,b2,l2=start(d,18082,extra)
     try:
-        st=req(s,b2,f"/infinity/studio/project/{quote(pid,safe='')}");assert st.get("project_id")==pid and st.get("status") in {"completed","completed_with_qc_warnings"},st;assert "final.mp4" in names(s,b2,pid);c2=req(s,b2,"/infinity/canonical/capabilities");assert c2.get("storage",{}).get("persistent") is True,c2;return {"test":8,"project_id":pid,"persistent":True}
+        st=req(s,b2,f"/infinity/studio/project/{quote(pid,safe='')}")
+        assert st.get("project_id")==pid and st.get("status") in {"completed","completed_with_qc_warnings"},st
+        assert "final.mp4" in names(s,b2,pid)
+        c2=req(s,b2,"/infinity/canonical/capabilities")
+        assert c2.get("storage",{}).get("persistent") is False,c2
+        return {
+            "test":8,"project_id":pid,
+            "process_restart_persisted":True,
+            "persistent_storage_claimed":False,
+            "confirmation_flags_rejected":True,
+        }
     finally:stop(p2,l2)
 def t9(s,b):
     cookie=s.cookies.get("ai_infinity_session");assert cookie
@@ -189,18 +215,101 @@ def t9(s,b):
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:pids=list(ex.map(one,("ALPHA","BETA")))
     assert len(set(pids))==2;p=[waitp(s,b,x) for x in pids];text=json.dumps(p,ensure_ascii=False);assert "CONCURRENCY-ALPHA" in text and "CONCURRENCY-BETA" in text;textitles={str(x.get("title")or"") for x in p};assert len(textitles)==2
     return {"test":9,"project_ids":pids,"isolated":True}
-def t10(s,b,d):
-    pid=create(s,b,"Create a 20-second English cinematic recovery test video.",duration=20,format="short",idempotency_key="final-acceptance-corruption");waitp(s,b,pid);scene=d/"creator_studio"/pid/"scene_01.mp4";assert scene.is_file() and scene.stat().st_size>10000
-    original=sha(scene);scene.write_bytes(b"CORRUPTED-INTERMEDIATE");corrupted=sha(scene);assert corrupted!=original
-    with sqlite3.connect(d/"ai_infinity.db") as c:c.execute("UPDATE studio_projects_3610 SET status='failed',stage='failed',error='acceptance fault injection' WHERE project_id=?",(pid,));c.commit()
-    assert req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/retry","POST").get("status")=="queued";waitp(s,b,pid);recovered=sha(scene);assert recovered!=corrupted and scene.stat().st_size>10000
-    ev=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/audit");assert "scene_completed" in [str(x.get("event")or"") for x in ev.get("audit",[])],ev
-    tr=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/truth");assert tr.get("verified") is True,tr
-    return {"test":10,"project_id":pid,"recovered":True}
+def t10(s,b,d,other_project_id):
+    pid=create(
+        s,b,
+        "Create a 20-second English cinematic recovery test video.",
+        duration=20,format="short",idempotency_key="final-acceptance-corruption",
+        acceptance_fixture_id="cc0-recovery-illustration-v1",
+    )
+    waitp(s,b,pid)
+    scene=d/"creator_studio"/pid/"scene_01.mp4"
+    assert scene.is_file() and scene.stat().st_size>10000,scene
+    got=names(s,b,pid)
+    assert "ci_fixture_01.png" in got,got
+    rights=jart(s,b,pid,"visual_rights.json")
+    rights_assets=rights.get("assets") or []
+    assert any(
+        x.get("source")=="AI Infinity deterministic CC0 recovery-test illustration"
+        and "CC0 1.0" in str(x.get("license") or "")
+        and x.get("rights_state")=="blocked_fallback"
+        for x in rights_assets
+    ),rights
+
+    # Snapshot an already completed project to prove retry cannot mutate another tenant/project.
+    assert other_project_id and other_project_id != pid
+    other_scene=d/"creator_studio"/other_project_id/"scene_01.mp4"
+    assert other_scene.is_file() and other_scene.stat().st_size>10000,other_scene
+    other_sha_before=sha(other_scene)
+    other_state_before=req(s,b,f"/infinity/studio/project/{quote(other_project_id,safe='')}")
+    assert str(other_state_before.get("status") or "").lower()=="completed",other_state_before
+
+    scene.write_bytes(b"CORRUPTED-INTERMEDIATE")
+    corrupted=sha(scene)
+    with sqlite3.connect(d/"ai_infinity.db") as c:
+        c.execute(
+            "UPDATE studio_projects_3610 SET status='failed',stage='failed',error='acceptance fault injection' WHERE project_id=?",
+            (pid,),
+        )
+        c.commit()
+    retry=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/retry","POST")
+    assert retry.get("status")=="queued",retry
+    waitp(s,b,pid)
+    recovered=sha(scene)
+    assert recovered!=corrupted and scene.stat().st_size>10000,(corrupted,recovered)
+    media=probe(scene)
+    streams=media.get("streams") or []
+    assert any(x.get("codec_type")=="video" for x in streams),media
+    assert any(x.get("codec_type")=="audio" for x in streams),media
+    seconds=float((media.get("format") or {}).get("duration") or 0)
+    assert 1.0 <= seconds <= 15.0,media
+    decode=subprocess.run(
+        ["ffmpeg","-v","error","-i",str(scene),"-f","null","-"],
+        capture_output=True,text=True,timeout=120,
+    )
+    assert decode.returncode==0,decode.stderr[-2000:]
+
+    ev=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/audit")
+    audit=ev.get("audit") or []
+    retry_positions=[i for i,x in enumerate(audit) if str(x.get("event") or "")=="retry_requested"]
+    assert retry_positions,audit
+    retry_pos=retry_positions[-1]
+    assert any(str(x.get("event") or "")=="scene_completed" for x in audit[retry_pos+1:]),audit
+    assert sha(other_scene)==other_sha_before
+    other_state_after=req(s,b,f"/infinity/studio/project/{quote(other_project_id,safe='')}")
+    assert str(other_state_after.get("status") or "").lower()=="completed",other_state_after
+    assert "final.mp4" in names(s,b,other_project_id)
+
+    tr=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/truth")
+    checks=tr.get("checks") or {}
+    fallback_count=int(checks.get("fallback_visual_count") or 0)
+    if fallback_count:
+        assert tr.get("verified") is False and tr.get("state")=="REVIEW_REQUIRED",tr
+        assert checks.get("source_visual_policy_passed") is False,tr
+        assert checks.get("qualified_illustrative_fallback") is True,tr
+        assert checks.get("illustrative_fallback_delivery_eligible") is True,tr
+        assert not (tr.get("failures") or []),tr
+        publish=req(
+            s,b,"/infinity/studio/publish","POST",
+            json={"project_id":pid,"provider":"youtube","asset":"final"},
+        )
+        assert publish.get("status")=="blocked_by_quality_gate",publish
+    else:
+        assert tr.get("verified") is True and tr.get("state")=="VERIFIED",tr
+        assert checks.get("source_visual_policy_passed") is True,tr
+        assert not (tr.get("failures") or []),tr
+    return {
+        "test":10,"project_id":pid,"recovered":True,
+        "recovery_sha256":recovered,"decoded_scene_seconds":seconds,
+        "retry_audit":True,"cross_project_isolation":True,
+        "truth_state":tr.get("state"),"fallback_visual_count":fallback_count,
+        "publish_blocked_when_fallback":bool(fallback_count),
+    }
 def main():
-    d=TMP/"base";shutil.rmtree(d,ignore_errors=True);p,b,l=start(d,18080);s=requests.Session();out=[]
+    d=TMP/"base";shutil.rmtree(d,ignore_errors=True);p,b,l=start(d,18080,{"AI_INFINITY_TEST_MEDIA":"1"});s=requests.Session();out=[]
     try:
-        out += [t1(s,b),t2(s,b),t3(s,b),t4(s,b),t5(),t6(),t7(),t8(),t9(s,b),t10(s,b,d)]
+        out += [t1(s,b),t2(s,b),t3(s,b),t4(s,b),t5(),t6(),t7(),t8(),t9(s,b)]
+        out.append(t10(s,b,d,out[-1]["project_ids"][0]))
     finally:stop(p,l)
     print(json.dumps({"passed":True,"tests":out},ensure_ascii=False,indent=2))
 if __name__=="__main__":main()
