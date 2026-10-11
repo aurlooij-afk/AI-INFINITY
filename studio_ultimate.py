@@ -1174,8 +1174,8 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
 
     brief_for_visuals = f"{raw_title} {clean_objective}"
     ai_infinity_launch = bool(
-        re.search(r"\\bAI\\s+Infinity\\b", brief_for_visuals, re.I)
-        and re.search(r"\\b(launch|product|platform|studio|creator|software)\\b", brief_for_visuals, re.I)
+        re.search(r"\bAI\s+Infinity\b", brief_for_visuals, re.I)
+        and re.search(r"\b(launch|product|platform|studio|creator|software)\b", brief_for_visuals, re.I)
     )
     # AI Infinity is a creator/content-production product, not a known stock-photo
     # subject. Search public media for the real workflow and equipment the brief
