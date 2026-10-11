@@ -1181,7 +1181,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
     # subject. Search public media for the real workflow and equipment the brief
     # describes instead of querying the brand name and receiving unrelated results.
     visual_search_subject = (
-        "content creation software video editing workflow creator studio"
+        "content creator"
         if ai_infinity_launch else topic_label
     )
     if fmt == "short":
@@ -1427,6 +1427,8 @@ def _openverse_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str
                 "source_url":item.get("foreign_landing_url") or item.get("detail_url") or image_url,
                 "creator":item.get("creator"),"license":item.get("license"),
                 "license_version":item.get("license_version"),"title":item.get("title"),
+                "description":item.get("description") or item.get("alt") or "",
+                "tags":" ".join(str(t.get("name") or t.get("title") or "") if isinstance(t,dict) else str(t) for t in (item.get("tags") or [])[:25]),
             }
             out.append(row)
             if len(out) >= limit:
@@ -1464,7 +1466,8 @@ def _commons_media(query: str, outdir: Path, limit: int = 6) -> List[Dict[str, A
                 p=outdir/f"commons_{pge.get('pageid','x')}.media"
                 try:
                     download(original,p,timeout=90)
-                    out.append({"kind":"video","path":str(p),"source":"Wikimedia Commons","source_url":pge.get("canonicalurl") or "https://commons.wikimedia.org","creator":creator,"license":lic or "Wikimedia Commons stated license","title":pge.get("title")})
+                    out.append({"kind":"video","path":str(p),"source":"Wikimedia Commons","source_url":pge.get("canonicalurl") or "https://commons.wikimedia.org","creator":creator,"license":lic or "Wikimedia Commons stated license","title":pge.get("title"),
+                             "description":(meta.get("ImageDescription") or {}).get("value") or (meta.get("ObjectName") or {}).get("value") or ""})
                 except Exception as exc:
                     _media_debug("wikimedia",exc)
                 continue
@@ -1894,10 +1897,26 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     # Search only topic-specific phrases. Earlier generic "creator at a desk"
     # queries repeatedly returned irrelevant visuals for energy/science/etc.
     query_variants=[]
-    for q in (query, f"{core} {focus_core}"):
-        q=" ".join(q.split()).strip()
-        if q and q.lower() not in {x.lower() for x in query_variants}:
-            query_variants.append(q)
+    if scene.get("visual_search_subject"):
+        subject_words=re.findall(r"[A-Za-z0-9]{4,}",search_subject.lower())
+        focus_words_compact=re.findall(r"[A-Za-z0-9]{4,}",focus_core.lower())
+        # Long natural-language prompts often overconstrain public image search.
+        # Use short, scene-specific search phrases; candidate metadata is still
+        # checked for relevance and byte-distinctness before any asset is accepted.
+        subject_and_focus=[]
+        for word in subject_words[:2] + focus_words_compact[:4]:
+            if word not in subject_and_focus:
+                subject_and_focus.append(word)
+        focused_retry=" ".join(focus_words_compact[-4:])
+        for q in (" ".join(subject_and_focus), focused_retry):
+            q=" ".join(q.split()).strip()
+            if q and q.lower() not in {x.lower() for x in query_variants}:
+                query_variants.append(q)
+    else:
+        for q in (query, f"{core} {focus_core}"):
+            q=" ".join(q.split()).strip()
+            if q and q.lower() not in {x.lower() for x in query_variants}:
+                query_variants.append(q)
 
     source_failures=[]
     getters=() if external_disabled else (_nasa_images,_openverse_images,_commons_media,_pexels,_pixabay)
@@ -1915,7 +1934,7 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             pass
 
     def candidate_is_relevant(candidate: Dict[str, Any]) -> bool:
-        title_text=" ".join(str(candidate.get(k) or "") for k in ("title","description","alt","caption")).lower()
+        title_text=" ".join(str(candidate.get(k) or "") for k in ("title","description","alt","caption","tags")).lower()
         if not title_text.strip():
             # Some video APIs do not supply titles; their search query itself is
             # the provider's relevance contract.
