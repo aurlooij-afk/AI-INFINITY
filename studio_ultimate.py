@@ -2382,9 +2382,13 @@ def make_sfx(outdir: Path, duration: float, index: int) -> Path:
 
 
 def _subtitle_time(x: float) -> str:
-    ms = int(round((x - int(x)) * 1000))
-    sec = int(x)
-    return f"{sec//3600:02}:{sec%3600//60:02}:{sec%60:02},{ms:03}"
+    # Round the full timestamp in milliseconds first, then split it into clock
+    # fields. Rounding the fractional part alone can emit invalid ",1000" cues.
+    total_ms = max(0, int(round(float(x) * 1000)))
+    hours, remainder = divmod(total_ms, 3_600_000)
+    minutes, remainder = divmod(remainder, 60_000)
+    seconds, milliseconds = divmod(remainder, 1000)
+    return f"{hours:02}:{minutes:02}:{seconds:02},{milliseconds:03}"
 
 
 def write_srt(chapters: List[Dict[str, Any]], path: Path) -> None:

@@ -191,12 +191,27 @@ def compile_intent(command,raw):
     text=clean(command)
     if len(text)<8:raise HTTPException(422,"Describe what you want to bring to life.")
     low=text.lower()
-    ct=clean(raw.get("content_type"),30).lower()
-    if ct not in {"video","podcast","article","social"}:ct="video"
-    if ct=="video":
-        if re.search(r"\b(podcast|audio show)\b",low):ct="podcast"
-        elif re.search(r"\b(article|blog|essay)\b",low):ct="article"
-        elif re.search(r"\b(social|linkedin post|instagram post|tweet|x post)\b",low):ct="social"
+    # An explicitly selected deliverable always wins. When the user gives only
+    # a natural-language command, infer the primary deliverable from its first
+    # occurrence; collateral assets (e.g. article.md/social copy in a video pack)
+    # must not silently disable the primary video's verification gates.
+    allowed_types={"video","podcast","article","social"}
+    requested_type=clean(raw.get("content_type"),30).lower()
+    if requested_type in allowed_types:
+        ct=requested_type
+    else:
+        intent_patterns=(
+            (r"\b(?:video|film|reel|documentary|explainer)\b","video"),
+            (r"\b(?:podcast|audio show)\b","podcast"),
+            (r"\b(?:article|blog|essay)\b","article"),
+            (r"\b(?:social(?:\s+media)?\s+(?:post|campaign)|linkedin post|instagram post|tweet|x post)\b","social"),
+        )
+        intent_matches=[]
+        for pattern, inferred_type in intent_patterns:
+            match=re.search(pattern,low)
+            if match:
+                intent_matches.append((match.start(),inferred_type))
+        ct=min(intent_matches,key=lambda item:item[0])[1] if intent_matches else "video"
     fmt=clean(raw.get("format"),30).lower()
     if fmt not in {"long","short","shorts","reel","tiktok"}:fmt=""
     explicit_ratio=clean(raw.get("aspect_ratio"),10)

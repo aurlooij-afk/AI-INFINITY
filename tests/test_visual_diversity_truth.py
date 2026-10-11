@@ -2,6 +2,7 @@
 import hashlib
 from pathlib import Path
 
+import ai_infinity_canonical as canonical
 import production_closure_3624 as closure
 
 
@@ -122,6 +123,11 @@ def test_long_scene_subtitles_are_split_into_time_bounded_cues(tmp_path):
             return int(hh) * 3600 + int(mm) * 60 + int(ss) + int(ms) / 1000
         durations.append(seconds(right) - seconds(left))
     assert max(durations) <= 5.75
+
+    # Exercise the exact validator used by production truth, not just local syntax.
+    metrics = closure._caption_timing_metrics(path, 20.0)
+    assert metrics["cue_count"] >= 4
+    assert metrics["timing_valid"] is True
 
 
 def test_fallback_brief_extracts_subject_instead_of_delivery_metadata():
@@ -272,3 +278,28 @@ def test_explicit_brief_topic_overrides_generic_project_title():
     assert plan["title"] == "Canonical Runtime Smoke"
     assert all("renewable energy" in chapter["visual_query"].lower() for chapter in plan["chapters"])
     assert all("Canonical Runtime Smoke" not in chapter["visual_query"] for chapter in plan["chapters"])
+
+
+
+def test_subtitle_timestamp_rounding_carries_across_clock_boundaries():
+    studio = closure._studio()
+    assert studio._subtitle_time(4.9999) == "00:00:05,000"
+    assert studio._subtitle_time(59.9999) == "00:01:00,000"
+
+
+def test_primary_video_deliverable_is_not_reclassified_by_packaged_article():
+    brief = (
+        "Create a professional 60-second AI Infinity launch video in English, 16:9, "
+        "cinematic, research-backed, with voiceover, background music, captions, "
+        "thumbnail, article, SEO metadata, social campaign package and production/rights manifests."
+    )
+    intent = canonical.compile_intent(brief, {"duration": 60, "format": "long"})
+    assert intent["constraints"]["content_type"] == "video"
+    assert "final.mp4" in intent["success"]["required_artifacts"]
+
+
+def test_article_remains_primary_when_video_is_only_a_secondary_reference():
+    brief = "Write a research-backed article about energy storage that includes a short video reference and social assets."
+    intent = canonical.compile_intent(brief, {})
+    assert intent["constraints"]["content_type"] == "article"
+    assert "article.md" in intent["success"]["required_artifacts"]
