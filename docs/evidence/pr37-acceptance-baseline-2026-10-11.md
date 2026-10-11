@@ -18,3 +18,14 @@ The source also showed a persistence test that used environment confirmation fla
 After the changes, record the exact tested SHA and workflow URLs here. All ten scenarios must run in the same complete acceptance run. Scenario 1 must independently require non-fallback visuals from the real provider ladder; scenario 10 must verify retry/recovery/isolation and conditionally expect REVIEW_REQUIRED when fallback remains. Scenario 8 must prove confirmation flags alone do not claim persistence.
 
 No post-fix pass is implied by this baseline record.
+
+
+## Post-fix execution record: commit 17f7debb6109e08d07dfa54d18dd1a778978849f
+
+- Focused visual/recovery regressions: passed, 25 tests in 0.74s.
+- Python syntax/runtime guard: passed, including module compile, existing durable-state and storage tests, app/startup smoke and canonical wrapper smoke.
+- Docker image guard: passed.
+- Full acceptance run: https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38180781168 — failed at the last assertion in scenario 10, after scenarios 1–9 had completed and the recovery scenario's preceding checks passed.
+- Scenario 10 truth remained correct: the deterministic CC0 illustration resulted in REVIEW_REQUIRED rather than VERIFIED. The recovered scene's bytes changed from the corrupted intermediate, FFmpeg decode passed, retry/scene-completed audit checks and cross-project isolation passed, and publication was not sent.
+- The sole failing assertion expected only blocked_by_quality_gate. The actual response was blocked_by_editorial_review with publish_ready=false, because the later editorial-review guard blocks the same publish request before an upload. This is a test assumption defect, not a production gate failure.
+- Next action: the test now accepts only one of the two explicit block statuses and asserts there is no external URL/publish result. No professional truth or rights gate was weakened. The current commit's full acceptance is still red; rerun on the next exact SHA before considering merge.

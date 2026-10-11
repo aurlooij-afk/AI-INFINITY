@@ -293,7 +293,14 @@ def t10(s,b,d,other_project_id):
             s,b,"/infinity/studio/publish","POST",
             json={"project_id":pid,"provider":"youtube","asset":"final"},
         )
-        assert publish.get("status")=="blocked_by_quality_gate",publish
+        blocked_status = str(publish.get("status") or "")
+        assert blocked_status in {"blocked_by_quality_gate", "blocked_by_editorial_review"}, publish
+        assert not publish.get("url") and not publish.get("external_url"), publish
+        if blocked_status == "blocked_by_quality_gate":
+            assert publish.get("truthful") is True, publish
+        else:
+            assert publish.get("publish_ready") is False, publish
+            assert (publish.get("editorial_review") or {}).get("approved") is False, publish
     else:
         assert tr.get("verified") is True and tr.get("state")=="VERIFIED",tr
         assert checks.get("source_visual_policy_passed") is True,tr
@@ -304,6 +311,7 @@ def t10(s,b,d,other_project_id):
         "retry_audit":True,"cross_project_isolation":True,
         "truth_state":tr.get("state"),"fallback_visual_count":fallback_count,
         "publish_blocked_when_fallback":bool(fallback_count),
+        "publish_block_status":(publish.get("status") if fallback_count else None),
     }
 def main():
     d=TMP/"base";shutil.rmtree(d,ignore_errors=True);p,b,l=start(d,18080,{"AI_INFINITY_TEST_MEDIA":"1"});s=requests.Session();out=[]
