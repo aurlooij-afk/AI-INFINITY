@@ -141,7 +141,11 @@ def test_fallback_brief_extracts_subject_instead_of_delivery_metadata():
         brief, brief, "long", 60, "general audience", "clear, intelligent, human", {"sources": []}, "English"
     )
     assert plan["title"].lower() == "ai infinity launch"
-    assert all("AI Infinity launch" in chapter["visual_query"] for chapter in plan["chapters"])
+    assert all(chapter["topic"] == "AI Infinity launch" for chapter in plan["chapters"])
+    assert all(
+        "content creation software video editing workflow creator studio" in chapter["visual_query"]
+        for chapter in plan["chapters"]
+    )
     assert all("production/rights manifests" not in chapter["visual_query"].lower() for chapter in plan["chapters"])
 
 
