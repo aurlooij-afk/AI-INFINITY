@@ -4325,7 +4325,7 @@ def _infer_command_language_voice(command: str, current_language: str, current_v
 def _resolve_format_intent(requested_format: str, command_text: str, effective_duration: int, explicit: bool = False) -> str:
     """Infer short-form only when the format selector was not explicitly chosen."""
     selected = str(requested_format or "long").strip().lower()
-    vertical = bool(re.search(r"\\b(vertical|short|shorts|reel|reels|tiktok|portrait)\\b", str(command_text or ""), re.I))
+    vertical = bool(re.search(r"\b(vertical|short|shorts|reel|reels|tiktok|portrait)\b", str(command_text or ""), re.I))
     short_values = {"short", "shorts", "reel", "tiktok"}
     if vertical and selected == "long" and not explicit:
         return "short"
