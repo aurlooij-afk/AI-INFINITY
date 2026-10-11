@@ -323,7 +323,7 @@ def test_ai_infinity_launch_plan_searches_real_creator_workflow_scenes():
     chapters = plan["chapters"]
     assert len(chapters) == 8
     assert all(
-        chapter["visual_search_subject"] == "content creation software video editing workflow creator studio"
+        chapter["visual_search_subject"] == "content creator"
         for chapter in chapters
     )
     assert len({chapter["visual_focus"] for chapter in chapters}) == len(chapters)
