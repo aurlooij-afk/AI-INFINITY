@@ -1172,6 +1172,18 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
     if not usable_sources:
         usable_sources = [{"title": clean_title, "summary": "", "url": None}]
 
+    brief_for_visuals = f"{raw_title} {clean_objective}"
+    ai_infinity_launch = bool(
+        re.search(r"\\bAI\\s+Infinity\\b", brief_for_visuals, re.I)
+        and re.search(r"\\b(launch|product|platform|studio|creator|software)\\b", brief_for_visuals, re.I)
+    )
+    # AI Infinity is a creator/content-production product, not a known stock-photo
+    # subject. Search public media for the real workflow and equipment the brief
+    # describes instead of querying the brand name and receiving unrelated results.
+    visual_search_subject = (
+        "content creation software video editing workflow creator studio"
+        if ai_infinity_launch else topic_label
+    )
     if fmt == "short":
         names = ["Hook", "Why it matters", "The key idea", "Practical example", "Takeaway"]
         visual_focus = {
@@ -1181,6 +1193,14 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "Practical example": f"a concrete real-world example demonstrating {topic_label} in action",
             "Takeaway": f"a resolved outcome or memorable closing frame connected to {topic_label}",
         }
+        if ai_infinity_launch:
+            visual_focus = {
+                "Hook": "content creator working at a video editing workstation",
+                "Why it matters": "creator recording a short video in a real studio with camera and microphone",
+                "The key idea": "close-up computer monitor displaying a video editing timeline and subtitle tracks",
+                "Practical example": "creator editing a vertical video beside camera microphone and lights",
+                "Takeaway": "finished edited video playing on a large studio display",
+            }
         ratios = [0.16, 0.18, 0.28, 0.22, 0.16]
     else:
         names = ["Hook", "Context", "The core idea", "How it works", "Real-world examples", "What changes", "Practical takeaway", "Closing"]
@@ -1212,6 +1232,17 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "Practical takeaway": "creator applying the idea successfully",
             "Closing": "finished work, confident human subject, memorable final frame",
         }
+        if ai_infinity_launch:
+            long_visual_focus = {
+                "Hook": "content creator working at a video editing workstation",
+                "Context": "wide view of a creative production studio with camera microphone and editing monitors",
+                "The core idea": "close-up computer monitor displaying a video editing timeline and subtitle tracks",
+                "How it works": "hands editing video clips audio waveforms and caption tracks on a workstation",
+                "Real-world examples": "creator filming a vertical video using camera lights and a microphone",
+                "What changes": "before-and-after comparison of raw footage and a finished edited film on screens",
+                "Practical takeaway": "creator reviewing a script storyboard captions and video timeline at a desk",
+                "Closing": "finished launch film playing on a large studio display",
+            }
         focus = (visual_focus if fmt == "short" else long_visual_focus).get(name, f"a purposeful real-world visual about {topic_label}")
         localized = _localized_fallback_copy(language, name, clean_title, topic_label)
         localized_heading = localized["name"]
@@ -1220,8 +1251,9 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "heading": f"{localized_heading} — {clean_title}" if name in {"Hook", "Closing"} else f"{localized_heading}: {clean_title}",
             "topic": topic_label,
             "visual_focus": focus,
+            "visual_search_subject": visual_search_subject,
             "narration": narration,
-            "visual_query": f"{topic_label} {focus} documentary photography",
+            "visual_query": f"{visual_search_subject} {focus} documentary photography",
             "image_prompt": f"Premium editorial documentary image about {topic_label}; visual focus: {focus}; realistic people, locations, objects or processes, natural cinematic lighting, coherent composition, strong subject separation, no logos, no text, visually distinct from other scenes",
             "on_screen": localized_screen,
             "duration": sec,
@@ -1832,7 +1864,8 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         topic=re.split(r"\\b(?:striking opening view|real-world context|close-up|concrete real-world example|resolved outcome|environment, setting|prototype, mechanism|process, tools|people using the idea|before-and-after|creator applying)\\b",raw_query,1,flags=re.I)[0]
     topic=re.sub(r"\\s+"," ",topic).strip(" .;,:")[:140] or heading or "documentary scene"
     focus=re.sub(r"\\s+"," ",focus).strip(" .;,:")[:180]
-    query=" ".join(x for x in (topic,focus) if x).strip() or raw_query
+    search_subject=str(scene.get("visual_search_subject") or topic).strip()[:180]
+    query=" ".join(x for x in (search_subject,focus) if x).strip() or raw_query
     MEDIA_DEBUG_ERRORS.clear()
     external_disabled = _external_providers_disabled()
     if external_disabled:
@@ -1856,7 +1889,7 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         stop={"create","make","generate","produce","build","video","film","short","reel","cinematic","documentary","premium","editorial","about","real","world","photography","professional","opening","view","visual","focus","context","close","up","concrete","example","resolved","outcome","people","using","idea","process","tools","showing","clear","subject","matters","affected","central","mechanism","connected","purposeful","scene"}
         words=[w for w in re.findall(r"[A-Za-z0-9]{3,}",s.lower()) if w not in stop]
         return " ".join(words[:7])
-    core=compact(topic or raw_query or heading)
+    core=compact(search_subject or topic or raw_query or heading)
     focus_core=compact(focus or heading)
     # Search only topic-specific phrases. Earlier generic "creator at a desk"
     # queries repeatedly returned irrelevant visuals for energy/science/etc.

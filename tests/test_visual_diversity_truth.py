@@ -303,3 +303,25 @@ def test_article_remains_primary_when_video_is_only_a_secondary_reference():
     intent = canonical.compile_intent(brief, {})
     assert intent["constraints"]["content_type"] == "article"
     assert "article.md" in intent["success"]["required_artifacts"]
+
+
+
+def test_ai_infinity_launch_plan_searches_real_creator_workflow_scenes():
+    studio = closure._studio()
+    brief = (
+        "Create a professional 60-second AI Infinity launch video with voiceover, "
+        "captions, thumbnail, article and social campaign package."
+    )
+    plan = studio._fallback_creative_plan(
+        brief, brief, "long", 60, "general audience",
+        "cinematic, intelligent, useful", {"sources": []}, "English",
+    )
+    chapters = plan["chapters"]
+    assert len(chapters) == 8
+    assert all(
+        chapter["visual_search_subject"] == "content creation software video editing workflow creator studio"
+        for chapter in chapters
+    )
+    assert len({chapter["visual_focus"] for chapter in chapters}) == len(chapters)
+    assert any("editing timeline" in chapter["visual_query"] for chapter in chapters)
+    assert any("finished launch film" in chapter["visual_query"] for chapter in chapters)
