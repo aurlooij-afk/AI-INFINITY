@@ -33,8 +33,48 @@ jobs:
         env:
           CI: "true"
         run: |
-          set -o pipefail
-          docker run --rm --network host             -e CI             -v "${GITHUB_WORKSPACE}:/workspace:ro"             -w /workspace             --entrypoint python             ai-infinity-final-acceptance             tests/final_acceptance_suite.py | tee final-acceptance-result.json
+          set -uo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/acceptance-evidence"
+          set +e
+          docker run --rm --network host \
+            -e CI \
+            -e AI_INFINITY_EVIDENCE_DIR=/evidence \
+            -v "${GITHUB_WORKSPACE}:/workspace:ro" \
+            -v "${GITHUB_WORKSPACE}/acceptance-evidence:/evidence" \
+            -w /workspace \
+            --entrypoint python \
+            ai-infinity-final-acceptance \
+            tests/final_acceptance_suite.py 2>&1 | tee acceptance-output.log
+          suite_status=${PIPESTATUS[0]}
+          set -e
+          python - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          raw = Path("acceptance-output.log").read_text(encoding="utf-8", errors="replace")
+          decoder = json.JSONDecoder()
+          result = None
+          for match in reversed(list(re.finditer(r"(?m)^\s*\{", raw))):
+              try:
+                  value, _ = decoder.raw_decode(raw[match.start():])
+              except Exception:
+                  continue
+              if isinstance(value, dict) and isinstance(value.get("tests"), list) and "passed" in value:
+                  result = value
+                  break
+          if result is None:
+              result = {
+                  "passed": False,
+                  "error": "The runtime did not emit a complete ten-scenario JSON result.",
+                  "evidence_source": "Workflow logs contain diagnostics; no structured result was parsed.",
+              }
+          Path("final-acceptance-result.json").write_text(
+              json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          exit "$suite_status"
 
       - name: Upload acceptance evidence
         if: always()
@@ -43,6 +83,7 @@ jobs:
           name: ai-infinity-final-acceptance-evidence
           path: |
             final-acceptance-result.json
+            acceptance-evidence/**
           if-no-files-found: warn
 
       - name: Dump Docker/runtime evidence on failure

@@ -1,0 +1,103 @@
+{
+  "schema": "ai-infinity-acceptance-evidence.v1",
+  "repository": "aurlooij-afk/AI-INFINITY",
+  "pull_request": 37,
+  "tested_sha": "0e50a1a36208e542be030da614184acecbd4bbbb",
+  "workflow": {
+    "full_acceptance": "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38181419443",
+    "focused_regression": "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38181419420",
+    "runtime_build_guard": "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38181419423"
+  },
+  "results": [
+    {
+      "test": 1,
+      "project_id": "studio_e929f030f34c4990bc852e86831fefd4",
+      "status": "pass",
+      "duration_seconds": 60.075229,
+      "truth_verified": true,
+      "manifest_hash_verified": true
+    },
+    {
+      "test": 2,
+      "project_id": "studio_4487fba36b764fa782c8b9ea7ec928cd",
+      "status": "pass",
+      "pashto_text_verified": true,
+      "pashto_voice_provider": "edge-tts-neural:ps-AF-LatifaNeural",
+      "voice_bytes": 47088,
+      "native_speaker_review": "PENDING"
+    },
+    {
+      "test": 3,
+      "project_id": "studio_7167e29b83324d9d8ec47ce51b157327",
+      "status": "pass",
+      "pdf_executed": true
+    },
+    {
+      "test": 4,
+      "project_id": "studio_6d9f3f96dc714da089e5ec60310c59de",
+      "status": "pass",
+      "reference_url": "https://www.python.org/"
+    },
+    {
+      "test": 5,
+      "status": "pass",
+      "distinct_variant_count": 3
+    },
+    {
+      "test": 6,
+      "status": "pass",
+      "forced_primary_visual_failure_recovered": true,
+      "recovered_source": "NASA Image and Video Library"
+    },
+    {
+      "test": 7,
+      "project_id": "studio_dc736f695a884a65b667665406ef24a3",
+      "status": "pass",
+      "external_providers_disabled": true,
+      "research_status": "degraded"
+    },
+    {
+      "test": 8,
+      "project_id": "studio_10251c9fc071472d8be2f0435ce1ab89",
+      "status": "pass",
+      "process_restart_persisted": true,
+      "persistent_storage_claimed": false,
+      "confirmation_flags_rejected": true,
+      "clean_instance_restore": "NOT_TESTED"
+    },
+    {
+      "test": 9,
+      "status": "pass",
+      "isolated": true,
+      "project_ids": [
+        "studio_f6abb648c0d840eba67a73257bac3245",
+        "studio_a5f696657a914aac8419400f6d8b1bde"
+      ]
+    },
+    {
+      "test": 10,
+      "project_id": "studio_2e2dbd7f63b649ef8ffdeeddf7c58b1f",
+      "status": "pass",
+      "recovered": true,
+      "recovery_sha256": "1a9ef79cd8ef5fcf5b10369997ddbe8f4c665cf8feee87e408d16d9fc8e9b096",
+      "decoded_scene_seconds": 4.888889,
+      "retry_audit": true,
+      "cross_project_isolation": true,
+      "truth_state": "REVIEW_REQUIRED",
+      "fallback_visual_count": 5,
+      "publish_blocked_when_fallback": true,
+      "publish_block_status": "blocked_by_editorial_review"
+    }
+  ],
+  "claims_not_proven": [
+    "live production endpoint health / deployed revision",
+    "fresh Backblaze B2 PUT/HEAD/GET/hash canary",
+    "clean-instance SQLite snapshot restore",
+    "human editorial review and two-reviewer scores",
+    "native Pashto speaker review",
+    "1080p professional-mode production",
+    "OpenTimelineIO editable export",
+    "three-case MLT renderer comparison"
+  ],
+  "truthful": true
+}

@@ -82,6 +82,102 @@ def pdf(path):
     x=len(out);out.extend(f"xref\n0 {len(objs)+1}\n".encode());out.extend(b"0000000000 65535 f \n")
     for o in offs[1:]:out.extend(f"{o:010d} 00000 n \n".encode())
     out.extend(f"trailer << /Size {len(objs)+1} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n".encode());path.write_bytes(out)
+def create_review_packet(project_id, files, truth, production, rights, media_probe):
+    evidence_value=os.getenv("AI_INFINITY_EVIDENCE_DIR","").strip()
+    if not evidence_value:
+        return None
+    from PIL import Image, ImageDraw, ImageFont
+    evidence_dir=Path(evidence_value).resolve()
+    evidence_dir.mkdir(parents=True,exist_ok=True)
+    final=Path(files["final.mp4"])
+    video=next((x for x in (media_probe.get("streams") or []) if x.get("codec_type")=="video"),{})
+    audio=next((x for x in (media_probe.get("streams") or []) if x.get("codec_type")=="audio"),{})
+    duration=float((media_probe.get("format") or {}).get("duration") or 0)
+    width,height=int(video.get("width") or 0),int(video.get("height") or 0)
+    frames=[]
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="aii-review-frames-") as work:
+        for index,fraction in enumerate((0.06,0.18,0.30,0.42,0.54,0.66,0.78,0.90),1):
+            stamp=duration*fraction
+            frame_path=Path(work)/("frame-%02d.jpg"%index)
+            subprocess.run(
+                ["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{stamp:.3f}",
+                 "-i",str(final),"-frames:v","1","-vf","scale=480:270",str(frame_path)],
+                check=True,capture_output=True,text=True,timeout=120,
+            )
+            with Image.open(frame_path) as image:
+                frames.append((image.convert("RGB").copy(),stamp))
+    cols,cell_w,cell_h,pad=3,500,305,20
+    rows=(len(frames)+cols-1)//cols
+    sheet=Image.new("RGB",(cols*cell_w+(cols+1)*pad,rows*cell_h+(rows+1)*pad),(15,21,29))
+    draw=ImageDraw.Draw(sheet)
+    try:
+        small=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",18)
+    except Exception:
+        small=ImageFont.load_default()
+    for index,(frame,stamp) in enumerate(frames):
+        col,row=index%cols,index//cols
+        x,y=pad+col*(cell_w+pad),pad+row*(cell_h+pad)
+        draw.text((x+5,y+1),f"Frame {index+1:02d} at {stamp:.1f}s",fill=(235,241,247),font=small)
+        sheet.paste(frame,(x+10,y+27))
+    contact=evidence_dir/(project_id+"-contact-sheet.png")
+    sheet.save(contact,"PNG",optimize=True)
+    src=json.loads(Path(files["sources.json"]).read_text(encoding="utf-8"))
+    scorecard={
+        "schema":"ai-infinity-human-editorial-scorecard.v1","project_id":project_id,
+        "human_review_status":"PENDING","reviewers":[],
+        "native_language_review":{"status":"PENDING","required_for_non_English_release":True},
+        "scale":{"minimum":1,"maximum":5},
+        "dimensions":[
+            {"name":name,"critical":critical,"rating_1_to_5":None,"notes":""}
+            for name,critical in [
+                ("brief_adherence",True),("hook_and_story_arc",True),
+                ("scene_relevance_and_variety",True),("pacing_and_transitions",False),
+                ("voice_intelligibility_and_delivery",True),("audio_mix_and_loudness",True),
+                ("caption_accuracy_and_synchronization",True),("visual_composition_and_brand",False),
+                ("facts_and_source_support",True),("rights_and_attribution",True),
+                ("language_and_cultural_fit",True),("editability_and_project_recovery",False),
+            ]
+        ],
+        "internal_release_policy":{"average_minimum":4.0,"critical_dimension_minimum":3,"critical_fact_or_rights_failure_allowed":False},
+        "policy_note":"Internal review policy; not an external industry certification.",
+    }
+    metadata={
+        "project_id":project_id,"truth_state":truth.get("state"),"truth_verified":truth.get("verified"),
+        "fallback_visual_count":(truth.get("checks") or {}).get("fallback_visual_count"),
+        "requested":truth.get("requested"),"duration_seconds":round(duration,3),
+        "resolution":[width,height],"aspect_ratio":round(width/height,5) if width and height else None,
+        "video_codec":video.get("codec_name"),"audio_codec":audio.get("codec_name"),
+        "media_sha256":sha(final),"media_size_bytes":final.stat().st_size,
+        "source_count":int(src.get("source_count") or len(src.get("sources") or [])),
+        "rights_asset_count":len(rights.get("assets") or []),"human_review_status":"PENDING",
+    }
+    readme=(
+        "AI Infinity reviewer packet\n\n"
+        "Contains downloaded deliverables, provenance/source and rights records, an eight-frame contact sheet, "
+        "and a blank editorial scorecard. The scorecard is intentionally unscored: no human or native-language "
+        "review is implied. Review the entire video and verify claims, sources, rights, pacing, audio, captions, "
+        "language and editability before release. Any fallback visual, unresolved rights, critical factual issue, "
+        "or failed truth gate blocks professional verification and publishing.\n"
+    )
+    packet=evidence_dir/(project_id+"-reviewer-packet.zip")
+    with zipfile.ZipFile(packet,"w",compression=zipfile.ZIP_DEFLATED,compresslevel=3) as z:
+        for name,path in sorted(files.items()):
+            path=Path(path)
+            if not path.is_file() or name=="package.zip":
+                continue
+            compression=zipfile.ZIP_STORED if path.suffix.lower() in {".mp4",".mp3",".zip"} else zipfile.ZIP_DEFLATED
+            z.write(path,"artifacts/"+name,compress_type=compression)
+        z.write(contact,"review/contact-sheet.png")
+        z.writestr("review/README.md",readme)
+        z.writestr("review/production-truth.json",json.dumps(truth,ensure_ascii=False,indent=2,default=str))
+        z.writestr("review/media-properties.json",json.dumps(metadata,ensure_ascii=False,indent=2,default=str))
+        z.writestr("review/editorial-scorecard-template.json",json.dumps(scorecard,ensure_ascii=False,indent=2))
+    return {"packet_name":packet.name,"packet_sha256":sha(packet),"packet_size_bytes":packet.stat().st_size,
+            "contact_sheet_name":contact.name,"contact_sheet_sha256":sha(contact),
+            "media_sha256":metadata["media_sha256"],"human_review_status":"PENDING"}
+
+
 def t1(s,b):
     pid=create(s,b,"Create a professional 60-second AI Infinity launch video in English, 16:9, cinematic, research-backed, with voiceover, background music, captions, thumbnail, article, SEO metadata, social campaign package and production/rights manifests.",duration=60,format="long",aspect_ratio="16:9"); waitp(s,b,pid)
     reqd={"final.mp4","thumbnail.jpg","audio_master.mp3","captions.srt","article.md","seo.json","social_campaign.json","production_manifest.json","rights_manifest.json","package.zip"}; got=names(s,b,pid); assert reqd<=got,(reqd-got,got)
@@ -107,11 +203,20 @@ def t1(s,b):
     assert rights.get("assets") is not None
     provenance=jart(s,b,pid,"provenance.json")
     assert provenance.get("sources") is not None
+    for extra_name in ("script.md","sources.json","provenance.json","fact_check.json","manifest.json","visual_rights.json"):
+        if extra_name not in files:
+            files[extra_name]=dl(s,b,pid,extra_name)
+    reviewer_packet=create_review_packet(pid,files,truth,production,rights,m)
+    if os.getenv("AI_INFINITY_EVIDENCE_DIR","").strip():
+        assert reviewer_packet and reviewer_packet.get("packet_size_bytes",0)>100000,reviewer_packet
     with zipfile.ZipFile(files["package.zip"]) as z:
         package_names=set(z.namelist())
         required_package={"final.mp4","thumbnail.jpg","audio_master.mp3","captions.srt","article.md","production_manifest.json","rights_manifest.json","provenance.json","seo.json","social_campaign.json"}
         assert required_package<=package_names,(required_package-package_names,sorted(package_names))
-    return {"test":1,"project_id":pid,"duration":dur,"truth_verified":True,"manifest_hash_verified":True}
+    return {
+        "test":1,"project_id":pid,"duration":dur,"truth_verified":True,
+        "manifest_hash_verified":True,"reviewer_packet":reviewer_packet,
+    }
 def t2(s,b):
     pid=create(s,b,"Create a professional 60-second AI Infinity launch video in Pashto, 9:16 vertical, cinematic, with natural voiceover, captions and music.",duration=60,format="short",aspect_ratio="9:16",language="Pashto"); waitp(s,b,pid)
     sc=dl(s,b,pid,"script.md").read_text(encoding="utf-8"); cp=dl(s,b,pid,"captions.srt").read_text(encoding="utf-8")
