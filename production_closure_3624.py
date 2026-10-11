@@ -518,13 +518,33 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     plan = blueprint.get("plan") if isinstance(blueprint.get("plan"), dict) else blueprint
     chapters = list((plan or {}).get("chapters") or [])
     files = _project_files(project_id)
+    # Canonical contract is the source of user intent. Validate the rendered media
+    # against it even if a legacy worker or heuristic altered request_json later.
+    canonical_constraints = {}
+    contract_path = files.get("canonical_contract.json")
+    try:
+        contract_data = json.loads(contract_path.read_text(encoding="utf-8")) if contract_path and contract_path.is_file() else {}
+        contract_intent = contract_data.get("intent") if isinstance(contract_data.get("intent"), dict) else {}
+        canonical_constraints = contract_intent.get("constraints") if isinstance(contract_intent.get("constraints"), dict) else {}
+    except Exception:
+        canonical_constraints = {}
+    expected_req = dict(req)
+    for request_key, intent_key in (
+        ("format", "format"), ("content_type", "content_type"),
+        ("aspect_ratio", "aspect_ratio"), ("duration", "duration_seconds"),
+    ):
+        intent_value = canonical_constraints.get(intent_key)
+        if intent_value not in (None, ""):
+            expected_req[request_key] = intent_value
     strict_visual = _strict_visual()
     strict_research = _strict_research()
     final = files.get("final.mp4")
     checks: Dict[str, Any] = {
         "project_status_completed": p.get("status") in {"completed", "completed_with_qc_warnings"},
         "final_exists": bool(final and final.is_file() and final.stat().st_size > 10000),
-        "requested_duration": float(req.get("duration") or result.get("duration_seconds") or 0),
+        "requested_duration": float(expected_req.get("duration") or result.get("duration_seconds") or 0),
+        "requested_format": str(expected_req.get("format") or "long"),
+        "requested_aspect_ratio": str(expected_req.get("aspect_ratio") or "16:9"),
         "actual_duration": 0.0,
         "duration_within_1s": False,
         "video_stream": False,
@@ -591,6 +611,19 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
             minimum = 1280 if fast else 1920
             checks["resolution_ok"] = max(width, height) >= minimum and min(width, height) >= 720
             checks["resolution"] = [width, height]
+            expected_ratio_name = str(expected_req.get("aspect_ratio") or "16:9").strip()
+            expected_ratio = {"16:9": 16/9, "9:16": 9/16, "1:1": 1.0, "4:5": 4/5}.get(expected_ratio_name)
+            actual_ratio = (width / height) if width > 0 and height > 0 else 0.0
+            checks["aspect_ratio_actual"] = round(actual_ratio, 5) if actual_ratio else None
+            checks["aspect_ratio_passed"] = bool(
+                expected_ratio and actual_ratio > 0
+                and abs(actual_ratio - expected_ratio) / expected_ratio <= 0.03
+            )
+            if not checks["aspect_ratio_passed"]:
+                failures.append(
+                    f"aspect ratio mismatch: requested {expected_ratio_name}, "
+                    f"rendered {width}x{height} ({actual_ratio:.4f}:1)"
+                )
         except Exception as exc:
             failures.append(f"final media inspection failed: {type(exc).__name__}: {str(exc)[:220]}")
 
@@ -636,8 +669,8 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     except Exception:
         scene_files = []
     effective_scene_count = len(scene_files) if scene_files else (len(chapters) if chapters else 1)
-    video_quality_gate_required = str(req.get("content_type") or "video").strip().lower() in {"video", "short", "reel", "film", "documentary"}
-    minimum_scene_count = _minimum_professional_scene_count(req)
+    video_quality_gate_required = str(expected_req.get("content_type") or "video").strip().lower() in {"video", "short", "reel", "film", "documentary"}
+    minimum_scene_count = _minimum_professional_scene_count(expected_req)
     actual_rendered_scene_count = len(scene_files)
     checks["video_quality_gate_required"] = video_quality_gate_required
     checks["visual_source_count"] = len(visual_rows)
@@ -815,7 +848,7 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
 
     draft_quality_keys = (
         "project_status_completed", "final_exists", "duration_within_1s",
-        "video_stream", "audio_stream", "h264", "audio_codec_ok", "resolution_ok",
+        "video_stream", "audio_stream", "h264", "audio_codec_ok", "resolution_ok", "aspect_ratio_passed",
         "required_artifacts_present", "artifact_registry_consistent", "visual_sources_present",
         "visual_diversity_ok", "professional_scene_coverage_passed",
         "professional_visual_diversity_passed", "script_content_floor_passed",
@@ -840,6 +873,7 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         and checks["h264"]
         and checks["audio_codec_ok"]
         and checks["resolution_ok"]
+        and checks["aspect_ratio_passed"]
         and checks["required_artifacts_present"]
         and checks["artifact_registry_consistent"]
         and checks["visual_sources_present"]
@@ -877,7 +911,13 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         "failures": failures,
         "warnings": warnings,
         "missing_artifacts": missing,
-        "requested": {"duration_seconds": checks["requested_duration"], "content_type": req.get("content_type") or "video", "quality_preset": req.get("quality_preset") or "balanced"},
+        "requested": {
+            "duration_seconds": checks["requested_duration"],
+            "format": checks["requested_format"],
+            "aspect_ratio": checks["requested_aspect_ratio"],
+            "content_type": expected_req.get("content_type") or "video",
+            "quality_preset": req.get("quality_preset") or "balanced",
+        },
         "canonical_state": _canonical_state(p),
         "artifact_paths": {name: _public_path(project_id, name) for name in sorted(files)},
         "timestamps": {

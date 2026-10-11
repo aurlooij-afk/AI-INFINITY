@@ -4322,6 +4322,18 @@ def _infer_command_language_voice(command: str, current_language: str, current_v
     return lang, voice
 
 
+def _resolve_format_intent(requested_format: str, command_text: str, effective_duration: int, explicit: bool = False) -> str:
+    """Infer short-form only when the format selector was not explicitly chosen."""
+    selected = str(requested_format or "long").strip().lower()
+    vertical = bool(re.search(r"\\b(vertical|short|shorts|reel|reels|tiktok|portrait)\\b", str(command_text or ""), re.I))
+    short_values = {"short", "shorts", "reel", "tiktok"}
+    if vertical and selected == "long" and not explicit:
+        return "short"
+    if int(effective_duration or 0) >= 120 and selected in short_values and not vertical and not explicit:
+        return "long"
+    return selected
+
+
 def enqueue(req: Dict[str, Any], user_id: str, model_fn: Optional[Callable]) -> Dict[str, Any]:
     title = str(req.get("title") or req.get("topic") or req.get("objective") or "AI content").strip()[:200]
     req = dict(req)
@@ -4376,10 +4388,10 @@ def enqueue(req: Dict[str, Any], user_id: str, model_fn: Optional[Callable]) -> 
     )
     req["language"] = inferred_language
     req["voice"] = inferred_voice
-    if vertical_intent and requested_format == "long":
-        req["format"] = "short"
-    elif effective_duration >= 120 and requested_format in {"short", "shorts", "reel", "tiktok"} and not vertical_intent:
-        req["format"] = "long"
+    req["format"] = _resolve_format_intent(
+        requested_format, command_text, effective_duration,
+        explicit=bool(req.get("_format_explicit")),
+    )
     idem=str(req.get("idempotency_key") or "").strip()[:120]
     if idem:
         with DB_LOCK, _connect() as c:
@@ -5185,6 +5197,7 @@ async function create(){
 async function submitCommand(id){
   var objective=$(id).value.trim();if(objective.length<8){alert("Describe what you want to make.");return}
   var payload={title:objective.slice(0,140),objective:objective,topic:objective,format:current==="home"?"long":($("fmt")?$("fmt").value:"long"),duration:Number(($("duration")&&$("duration").value)||300),content_type:($("ctype")&&$("ctype").value)||"video",audience:($("audience")&&$("audience").value)||"general audience",tone:"professional, cinematic, useful",language:($("language")&&$("language").value)||"English",platforms:(($("platforms")&&$("platforms").value)||"").split(",").map(function(x){return x.trim()}).filter(Boolean),voice:($("voice")&&$("voice").value)||"en-US-AriaNeural",quality_preset:($("quality")&&$("quality").value)||"balanced",aspect_ratio:($("ratio")&&$("ratio").value)||"16:9",};
+  if(current!=="home"){payload._format_explicit=true;payload._aspect_ratio_explicit=true;}
   var out=current==="home"?null:$("createOut");if(out)out.innerHTML="<div class='notice'>Queueing durable production job…</div>";
   try{var r=await api("/infinity/studio/project",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)});latestProject=r.project_id;localStorage.setItem("aii_latest_project",r.project_id);if(out)out.innerHTML="<div class='notice good'><b>Production started.</b><div class='tiny'>"+esc(r.project_id)+"</div></div>";go("projects");setTimeout(function(){openProject(r.project_id)},180)}
   catch(e){if(out)out.innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>";else alert(e.message)}

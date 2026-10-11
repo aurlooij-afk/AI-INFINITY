@@ -566,7 +566,11 @@ def create_from_command(command,user_id,raw):
          "duration":c["duration_seconds"],"content_type":c["content_type"],"audience":intent["audience"],
          "tone":intent["tone"],"voice":intent["voice"],"language":c["language"],"platforms":c["platforms"],
          "brand_voice":intent["brand_voice"],"visual_style":intent["visual_style"],"call_to_action":intent["call_to_action"],
-         "quality_preset":intent["quality_preset"],"aspect_ratio":c["aspect_ratio"],"reference_urls":intent["reference_urls"],
+         "quality_preset":intent["quality_preset"],"aspect_ratio":c["aspect_ratio"],
+         # Preserve user-selected controls across downstream natural-language inference.
+         "_format_explicit": clean(raw.get("format"),30).lower() in {"long","short","shorts","reel","tiktok"},
+         "_aspect_ratio_explicit": clean(raw.get("aspect_ratio"),10) in {"16:9","9:16","1:1","4:5"},
+         "reference_urls":intent["reference_urls"],
          "source_file_names":intent["source_file_names"],"notes":intent["notes"],"idempotency_key":idem}
     main=__import__("main")
     result=studio().enqueue(req,user_id,getattr(main,"_2700_model",None));pid=str(result.get("project_id") or "")

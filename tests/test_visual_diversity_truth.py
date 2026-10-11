@@ -297,8 +297,12 @@ def test_primary_video_deliverable_is_not_reclassified_by_packaged_article():
         "cinematic, research-backed, with voiceover, background music, captions, "
         "thumbnail, article, SEO metadata, social campaign package and production/rights manifests."
     )
-    intent = canonical.compile_intent(brief, {"duration": 60, "format": "long"})
+    intent = canonical.compile_intent(
+        brief, {"duration": 60, "format": "long", "aspect_ratio": "16:9"}
+    )
     assert intent["constraints"]["content_type"] == "video"
+    assert intent["constraints"]["format"] == "long"
+    assert intent["constraints"]["aspect_ratio"] == "16:9"
     assert "final.mp4" in intent["success"]["required_artifacts"]
 
 
@@ -329,3 +333,17 @@ def test_ai_infinity_launch_plan_searches_real_creator_workflow_scenes():
     assert len({chapter["visual_focus"] for chapter in chapters}) == len(chapters)
     assert any("editing timeline" in chapter["visual_query"] for chapter in chapters)
     assert any("finished launch film" in chapter["visual_query"] for chapter in chapters)
+
+
+
+def test_explicit_long_form_selection_survives_short_video_collateral():
+    studio = closure._studio()
+    text = "Create a long-form 16:9 film and include three Shorts as secondary campaign assets."
+    assert studio._resolve_format_intent("long", text, 60, explicit=True) == "long"
+    assert studio._resolve_format_intent("long", text, 60, explicit=False) == "short"
+
+
+def test_explicit_short_form_selection_is_not_silently_rewritten():
+    studio = closure._studio()
+    text = "Create a portrait launch reel."
+    assert studio._resolve_format_intent("short", text, 300, explicit=True) == "short"
