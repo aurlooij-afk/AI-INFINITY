@@ -3576,6 +3576,13 @@ def _normalize_delivery_duration(source: Path, target_seconds: float, out: Path)
     if abs(fitted - target) > 0.75:
         raise RuntimeError(f"duration normalization ({reason}) produced {fitted:.2f}s instead of {target:.2f}s")
     return out
+def _max_scene_count(is_short: bool, fast_mode: bool, smoke: bool, explicitly_single_scene: bool) -> int:
+    """Keep fast production at or above the verified scene floor for 60-second work."""
+    if smoke or explicitly_single_scene:
+        return 1
+    return (4 if fast_mode else 5) if is_short else (4 if fast_mode else 8)
+
+
 def _select_scene_coverage(chapters: List[Dict[str, Any]], max_scenes: int) -> List[Dict[str, Any]]:
     """Downsample long storyboards across the complete narrative arc, not just the opening."""
     scenes = list(chapters or [])
@@ -3747,15 +3754,14 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             r"\b(single[- ]scene|single[- ]shot|one[- ]shot|one continuous shot|static shot|still[- ]image video|looping background)\b",
             brief_for_scene_policy, re.I
         ))
-        max_chapters = (3 if FAST_MODE else 5) if is_short else (4 if FAST_MODE else 8)
-        if explicitly_single_scene:
-            max_chapters = 1
+        max_chapters = _max_scene_count(
+            is_short=is_short,
+            fast_mode=FAST_MODE,
+            smoke=SMOKE,
+            explicitly_single_scene=explicitly_single_scene,
+        )
         if FAST_MODE and not SMOKE:
             target = min(target, 180 if is_short else 900)
-        if SMOKE:
-            # Isolated smoke mode checks runtime wiring; it is not the creative
-            # quality benchmark and must never be confused with live acceptance.
-            max_chapters = 1
         chapters = _select_scene_coverage(chapters, max_chapters)
         raw_durations = []
         for ch in chapters:

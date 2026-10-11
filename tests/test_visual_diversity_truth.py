@@ -347,3 +347,13 @@ def test_explicit_short_form_selection_is_not_silently_rewritten():
     studio = closure._studio()
     text = "Create a portrait launch reel."
     assert studio._resolve_format_intent("short", text, 300, explicit=True) == "short"
+
+
+
+def test_fast_mode_scene_budget_meets_sixty_second_professional_floor():
+    studio = closure._studio()
+    assert studio._max_scene_count(True, True, False, False) == 4
+    assert studio._max_scene_count(False, True, False, False) == 4
+    assert studio._max_scene_count(True, False, False, False) == 5
+    assert studio._max_scene_count(True, True, False, True) == 1
+    assert studio._max_scene_count(True, True, True, False) == 1
