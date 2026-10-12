@@ -88,6 +88,34 @@ def _publish_quality_gate_passed(verified: bool, checks: Dict[str, Any]) -> bool
     return bool(verified and factual_review_safe)
 
 
+def _visual_acquisition_diagnostics(visual_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Expose sanitized fallback causes in truth evidence for reproducible diagnosis."""
+    out: List[Dict[str, Any]] = []
+    for row in visual_rows:
+        meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        if not meta.get("fallback"):
+            continue
+        record = meta.get("fallback_record") if isinstance(meta.get("fallback_record"), dict) else {}
+        reasons = record.get("failure_reasons") if isinstance(record.get("failure_reasons"), list) else []
+        sanitized = []
+        for item in reasons[:20]:
+            if not isinstance(item, dict):
+                continue
+            provider = str(item.get("provider") or "unknown")[:80]
+            reason = str(item.get("reason") or "unknown")[:500]
+            reason = re.sub(r"(?i)(api[_-]?key|token|authorization)(?:=|:|\\s)+[^&\\s]+", r"\\1=[REDACTED]", reason)
+            reason = re.sub(r"(https?://[^?\\s]+)\\?[^\\s]+", r"\\1?[REDACTED]", reason)
+            sanitized.append({"provider": provider, "reason": reason})
+        out.append({
+            "asset": Path(str(row.get("path") or "")).name,
+            "failed_providers": [str(x)[:80] for x in (record.get("failed_providers") or [])[:20]],
+            "failure_reasons": sanitized,
+            "fallback_reason": str(meta.get("fallback_reason") or "")[:300],
+            "truthful": True,
+        })
+    return out
+
+
 def _objective_media_qc(path: Path) -> Dict[str, Any]:
     """Independent media anomaly scan for prolonged black/frozen frames and clipping."""
     out: Dict[str, Any] = {
@@ -722,6 +750,7 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         failures.append(f"silent narration fallback detected in {len(voice_fallback_events)} scene(s)")
 
     visual_rows = _source_assets(p)
+    checks["visual_acquisition_failures"] = _visual_acquisition_diagnostics(visual_rows)
     scene_files = []
     try:
         scene_files = sorted(_studio()._project_dir(project_id).glob("scene_*.mp4"))

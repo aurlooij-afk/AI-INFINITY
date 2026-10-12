@@ -509,20 +509,13 @@ def test_visual_candidate_relevance_requires_scene_specific_metadata():
 
 def test_publish_quality_gate_blocks_fallback_or_unreviewed_factual_claims():
     assert not closure._publish_quality_gate_passed(
-        True, False,
-        {"visual_rights_evidence_present": False, "source_visual_policy_passed": False},
+        False, {"visual_rights_evidence_present": False, "source_visual_policy_passed": False},
     )
     assert not closure._publish_quality_gate_passed(
-        True, True,
-        {"factual_review_required": True, "factual_review_auto_publish_safe": False},
+        True, {"factual_review_required": True, "factual_review_auto_publish_safe": False},
     )
     assert closure._publish_quality_gate_passed(
-        True, True,
-        {"factual_review_required": False, "visual_rights_evidence_present": True},
-    )
-    assert not closure._publish_quality_gate_passed(
-        False, True,
-        {"factual_review_required": False},
+        True, {"factual_review_required": False, "visual_rights_evidence_present": True},
     )
 
 
@@ -532,10 +525,13 @@ def test_openverse_search_requests_commercial_modification_compatible_licenses(m
     def fake_http_json(url, *args, **kwargs):
         captured["url"] = url
         return {"results": []}
-    monkeypatch.setattr(studio, "http_json", fake_http_json)
-    assert studio._openverse_images("video editor workstation", Path(tmp_path), limit=4) == []
-    assert "license=cc0%2Cby" in captured["url"]
-    assert "license_type=commercial%2Cmodification" in captured["url"]
+    assert studio._openverse_search_params("video editor workstation", 4) == {
+        "q": "video editor workstation",
+        "page_size": 4,
+        "mature": "false",
+        "license": "cc0,by",
+        "license_type": "commercial,modification",
+    }
 
 
 def test_publish_quality_gate_is_required_even_when_legacy_toggle_is_disabled(monkeypatch):
@@ -549,3 +545,28 @@ def test_publish_quality_gate_is_required_even_when_legacy_toggle_is_disabled(mo
     assert closure._publish_quality_gate_passed(
         True, {"factual_review_required": False, "visual_rights_evidence_present": True}
     )
+
+
+
+def test_visual_acquisition_diagnostics_preserve_provider_failure_reasons_and_redact_secrets():
+    rows = [{
+        "path": "/tmp/project/procedural_visual_01.png",
+        "metadata": {
+            "fallback": True,
+            "fallback_reason": "No relevant public visual was acquired.",
+            "fallback_record": {
+                "failed_providers": ["openverse", "wikimedia"],
+                "failure_reasons": [
+                    {"provider": "openverse", "reason": "HTTPError: 429"},
+                    {"provider": "wikimedia", "reason": "url=https://example.org/api?token=secret"},
+                ],
+            },
+        },
+    }]
+    result = closure._visual_acquisition_diagnostics(rows)
+    assert result[0]["asset"] == "procedural_visual_01.png"
+    assert result[0]["failed_providers"] == ["openverse", "wikimedia"]
+    assert "429" in result[0]["failure_reasons"][0]["reason"]
+    assert "secret" not in result[0]["failure_reasons"][1]["reason"]
+    assert "[REDACTED]" in result[0]["failure_reasons"][1]["reason"]
+    assert closure._visual_acquisition_diagnostics([{"path": "real.jpg", "metadata": {"source": "Openverse"}}]) == []

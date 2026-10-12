@@ -17,3 +17,6 @@ Checked 2026-10-12 against PR #37 head 367b9db5dcf19114f9eaee6831bf5f7f568918da.
 - Visual Diversity Truth Regression — run 38277290751: success on 367b9db5dcf19114f9eaee6831bf5f7f568918da.
 - Final Complete Acceptance Suite — run 38277290770: in progress at the latest observed check; report its final result separately.
 - Creator Studio Build Guard — run 38277290750: in progress at the latest observed check.
+
+
+8. **Acquisition diagnostics are now surfaced for the next acceptance attempt.** Run 38277808132 on 7686f7f94d2afe87174c1af63fcd5ef7f34865d0 still failed scenario 1 with three fallbacks, one cleared visual-rights record and 3 unresolved rights records. The next source patch adds sanitized per-scene provider failure reasons to production truth and tests the redaction. These diagnostics are for root-cause isolation; they do not relax VERIFIED.

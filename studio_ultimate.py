@@ -1521,15 +1521,23 @@ def _commercial_use_from_license(license_name: Any, license_url: Any) -> str:
     return "UNKNOWN_REVIEW_REQUIRED"
 
 
+def _openverse_search_params(query: str, limit: int = 3) -> Dict[str, Any]:
+    """Centralize the source-license constraints for the public Openverse adapter."""
+    return {
+        "q": query,
+        "page_size": min(limit, 8),
+        "mature": "false",
+        "license": "cc0,by",
+        "license_type": "commercial,modification",
+    }
+
+
 def _openverse_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
     try:
         # Filter at source to licenses that permit commercial use and modification
         # without unimplemented ShareAlike obligations; still validate every record.
-        data = http_json("https://api.openverse.org/v1/images/?" + urlencode({
-            "q": query, "page_size": min(limit, 8), "mature": "false",
-            "license": "cc0,by",
-            "license_type": "commercial,modification",
-        }), timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 20))
+        request_url = "https://api.openverse.org/v1/images/?" + urlencode(_openverse_search_params(query, limit))
+        data = http_json(request_url, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 20))
         out = []
         for item in data.get("results", []):
             image_url = item.get("url") or item.get("thumbnail")
