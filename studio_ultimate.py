@@ -1523,8 +1523,12 @@ def _commercial_use_from_license(license_name: Any, license_url: Any) -> str:
 
 def _openverse_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
     try:
+        # Filter at source to licenses that permit commercial use and modification
+        # without unimplemented ShareAlike obligations; still validate every record.
         data = http_json("https://api.openverse.org/v1/images/?" + urlencode({
-            "q": query, "page_size": min(limit, 8), "mature": "false"
+            "q": query, "page_size": min(limit, 8), "mature": "false",
+            "license": "cc0,by",
+            "license_type": "commercial,modification",
         }), timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 20))
         out = []
         for item in data.get("results", []):

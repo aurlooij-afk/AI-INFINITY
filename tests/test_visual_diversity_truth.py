@@ -524,3 +524,28 @@ def test_publish_quality_gate_blocks_fallback_or_unreviewed_factual_claims():
         False, True,
         {"factual_review_required": False},
     )
+
+
+
+def test_openverse_search_requests_commercial_modification_compatible_licenses(monkeypatch, tmp_path):
+    captured = {}
+    def fake_http_json(url, *args, **kwargs):
+        captured["url"] = url
+        return {"results": []}
+    monkeypatch.setattr(studio, "http_json", fake_http_json)
+    assert studio._openverse_images("video editor workstation", Path(tmp_path), limit=4) == []
+    assert "license=cc0%2Cby" in captured["url"]
+    assert "license_type=commercial%2Cmodification" in captured["url"]
+
+
+def test_publish_quality_gate_is_required_even_when_legacy_toggle_is_disabled(monkeypatch):
+    monkeypatch.setenv("AI_INFINITY_REQUIRE_VERIFIED_PUBLISH", "0")
+    assert not closure._publish_quality_gate_passed(
+        False, {"visual_rights_evidence_present": False}
+    )
+    assert not closure._publish_quality_gate_passed(
+        True, {"factual_review_required": True, "factual_review_auto_publish_safe": False}
+    )
+    assert closure._publish_quality_gate_passed(
+        True, {"factual_review_required": False, "visual_rights_evidence_present": True}
+    )

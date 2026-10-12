@@ -1,29 +1,19 @@
 # AI Infinity known blockers
 
-Checked 2026-10-12 against PR #37 head 86d65d7c604020412954bdfdb7e462eb63188428. This record is refreshed from the exact workflow output; do not declare a blocker closed from code inspection alone.
+Checked 2026-10-12 against PR #37 head 367b9db5dcf19114f9eaee6831bf5f7f568918da. Close blockers only with current workflow and artifact evidence.
 
 ## Current release blockers
 
-1. **Rights gate fix exposed a real evidence-writer boundary error and fallback scenes.** Visual Diversity Truth Regression run 38247302675 passed; Creator Studio Build Guard run 38247302694 passed; Final Complete Acceptance Suite run 38247302672 failed on scenario 1. The failure output truthfully showed state REVIEW_REQUIRED, three illustrative fallback scenes, source_visual_policy_passed=false and no visual_rights.json. The missing file was caused by the rights helper having been inserted inside the evidence writer's region, making the remaining writer code unreachable. This commit moves the helper to module scope and restores the visual-rights evidence body within _write_production_evidence. After this correction, run the full suite again. If the real provider still cannot supply relevant, source-backed, compatible media for every required scene, scenario 1 must remain failed/REVIEW_REQUIRED until that production root cause is resolved.
-2. **Live site/revision unverified.** The available probe saw https://ai-infinity.blitz.cloud/ return HTTP 503 on 2026-10-12. Render metadata identifies https://ai-infinity-ca5e.onrender.com (service srv-dallhl740ujc73eetgp0); its latest recorded live deployment is dep-db4v138u01pc73fohdh0 at c59421d2da4b9b32eaccdee2ca71e2b9ccfd07ed from October 10. That predates PR #37. Actual current Render HTTP status and running revision remain unverified.
-3. **Storage restore incomplete.** The SQLite process-restart scenario explicitly reported persistent_storage_claimed=false. No current isolated B2 PUT/HEAD/GET/hash/size canary or clean-instance project/database restore proof is available.
-4. **Editorial/native-language review pending.** The previous reviewer packet recorded human_review_status=PENDING. Pashto used local-espeak-pashto-fast-fallback; native-speaker review is not recorded. No two-reviewer scorecard has passed for the current production artifact.
-5. **Production profile/editable export unproved.** The last accepted MP4 was 1280x720. A real requested 1080p profile, three-case MLT comparison and OpenTimelineIO package with external source media have not been proven on the deployed revision.
-6. **Provider-backed quality is distinct from fixtures.** Recovery fixtures validate retry mechanics only. Run a separate real-provider-backed 60-second production and inspect visual relevance, license/terms, resolution and independent QC; fixtures do not prove live provider quality.
-7. **Original research documents must remain unmodified.** Both AI_Infinity_Creator_Benchmark_and_Reuse_Plan.md and AI_Infinity_10_Method_Deep_Research_and_Master_Command.md were found in the Project Library and have not been overwritten. They do not appear in the current PR branch tree. The additive benchmark report is not a replacement for either original. To copy originals into this branch byte-for-byte, a raw-byte source must be available; the Files connector denied raw-byte materialization for these Library objects, so no reconstructed text is being substituted.
+1. **Real-source professional production is still the first acceptance gate.** Earlier runs on this branch produced a 60-second 1280x720 H.264/AAC render with three illustrative fallbacks and no cleared source rights. Current code includes a semantic scene-focus matcher; this follow-up filters Openverse to CC0/CC BY commercial/modification-compatible records and still locally verifies each license. The ten-scenario suite must prove zero fallback scenes, relevant source metadata, requested resolution and matching artifact hashes before professional verification.
+2. **Publishing must be fail-closed regardless of the legacy toggle.** The previous truth response exposed publish_gate=true while the actual state was REVIEW_REQUIRED. This commit makes YouTube and webhook paths always require a project ID and publish_allowed_by_quality_gate, including the factual-review outcome. CI must validate this exact change.
+3. **Live endpoint/revision remains unverified.** The available probe saw https://ai-infinity.blitz.cloud/ return HTTP 503 on 2026-10-12. Render metadata identifies https://ai-infinity-ca5e.onrender.com (service srv-dallhl740ujc73eetgp0); the latest recorded live deployment remains main commit c59421d2da4b9b32eaccdee2ca71e2b9ccfd07ed. Do not assume current health or revision.
+4. **Storage durability and restore are incomplete.** A current isolated B2 PUT/HEAD/GET/size/SHA-256 canary and clean-instance project-state restore have not been run.
+5. **Editorial and native-language approval remains pending.** Reviewer packet templates are not review evidence. Pashto pronunciation, intelligibility, caption readability and cultural fit require actual native-speaker review; two reviewer scorecards remain unrecorded.
+6. **Production profile/edit interchange remain unproved.** Real 1080p output, 20s/60s/3m modes, the three-case MLT comparison and an OpenTimelineIO package with referenced media have not passed on the exact deployed revision.
+7. **Preserved originals remain unchanged.** Both original research documents were found in the Project Library. The connector denied raw-byte materialization; neither was overwritten or reconstructed. They remain absent from the current PR tree, so no byte-for-byte copy into Git is claimed.
 
-## Workflow links
+## Recent workflows
 
-- [Visual Diversity Truth Regression — 38247302675](https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38247302675): success on commit 86d65d7c604020412954bdfdb7e462eb63188428.
-- [Creator Studio Build Guard — 38247302694](https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38247302694): success on commit 86d65d7c604020412954bdfdb7e462eb63188428.
-- [Final Complete Acceptance Suite — 38247302672](https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38247302672): failure on scenario 1; do not treat its previous success on an older SHA as release proof.
-
-## Release discipline
-
-- No merge while a required check is red/pending or artifact evidence contradicts a success label.
-- No deployment before all required pre-release gates pass and the target/authorization are clear.
-- Unknown/incompatible rights, missing provenance and fallback visuals block professionally verified delivery and publishing.
-- No human-artistry/language claim without recorded reviewer evidence.
-- No durability claim without current read-back hash/size and clean-instance restore proof.
-
-8. **Scene-focus mapping and publish truth patch awaiting CI.** On head 9fce34a603462e5b1714dd930f65a2663bef2dd7, acceptance run 38248377597 correctly reported REVIEW_REQUIRED: technical media checks passed, but three illustrative fallback scenes and all four unresolved rights records blocked professional verification. Source review found scene relevance depended on literal word overlap, and Pexels manufactured a “title” from its provider and ID when the API does not provide one. The follow-up patch adds multi-concept scene relevance, query/retrieval provenance, actual title-presence truth, and makes publish/canonical truth reflect verification. It must pass tests and new acceptance evidence before any release claim.
+- Visual Diversity Truth Regression — run 38277290751: success on 367b9db5dcf19114f9eaee6831bf5f7f568918da.
+- Final Complete Acceptance Suite — run 38277290770: in progress at the latest observed check; report its final result separately.
+- Creator Studio Build Guard — run 38277290750: in progress at the latest observed check.

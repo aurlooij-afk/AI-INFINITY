@@ -62,3 +62,13 @@ Sampling limitation: this is a reviewable 44-example cohort, not a claim that ev
 3. Separate automated technical checks from human editorial and native-language approval.
 4. Provider failure remains a truthful degraded/blocked state; illustration is a draft, not source footage.
 5. Authorized post-publication analytics can inform revisions but cannot replace pre-release review.
+
+
+## Additional official API/platform evidence, checked 2026-10-12
+
+- The maintained Openverse API documents item fields such as title, foreign landing URL, creator, license ID/version/URL, tags, category, width and height, plus license and license-type filters. The source adapter now requests CC0/CC BY and commercial/modification-compatible results and still validates each response locally: https://api.openverse.org/v1/ and https://docs.openverse.org/meta/media_properties/api.html.
+- YouTube guidance describes appeal, engagement and satisfaction as separate audience-response dimensions. Title, thumbnail and opening should truthfully communicate value; post-publication analytics inform revision and cannot be fabricated as a pre-publication prediction: https://support.google.com/youtube/answer/16559650?hl=en.
+- YouTube's September 2025 analytics guidance covers CTR, viewer retention, traffic sources and videos that bring new viewers. AI Infinity should show those measures only after an authorized analytics connection: https://blog.youtube/creator-and-artist-stories/master-these-4-metrics/.
+- YouTube's August 2025 interview with Jordan Howlett emphasizes authentic personal perspective and persistence, not persona imitation or guaranteed virality: https://blog.youtube/creator-and-artist-stories/five-tips-to-master-shorts/.
+- TikTok Creative Codes are advertising guidance for TikTok-first structure, production fundamentals, sound and attention. They are an optional campaign profile, not a universal style mandate: https://ads.tiktok.com/business/en-US/creative-codes.
+- Adobe's updated January 2026 loudness-meter guidance distinguishes measured integrated/short-term/momentary loudness and context presets. AI Infinity should report measurements against a named delivery profile rather than a universal peak-only score: https://helpx.adobe.com/ca/premiere/desktop/add-audio-effects/apply-audio-effects/edit-loudness-meter-settings.html.

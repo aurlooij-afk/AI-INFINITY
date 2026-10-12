@@ -79,13 +79,13 @@ def _publish_gate() -> bool:
     return os.getenv("AI_INFINITY_REQUIRE_VERIFIED_PUBLISH", PUBLISH_GATE_DEFAULT).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _publish_quality_gate_passed(gate_enabled: bool, verified: bool, checks: Dict[str, Any]) -> bool:
-    """Report eligibility only when the configured gate and all safety prerequisites pass."""
+def _publish_quality_gate_passed(verified: bool, checks: Dict[str, Any]) -> bool:
+    """Publishing always needs verified media and a safe factual-review outcome."""
     factual_review_safe = (
         not bool(checks.get("factual_review_required"))
         or bool(checks.get("factual_review_auto_publish_safe"))
     )
-    return bool(gate_enabled and verified and factual_review_safe)
+    return bool(verified and factual_review_safe)
 
 
 def _objective_media_qc(path: Path) -> Dict[str, Any]:
@@ -972,8 +972,8 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         "strict_visual_policy": strict_visual,
         "strict_research_policy": strict_research,
         "publish_gate_enabled": _publish_gate(),
-        "publish_gate": _publish_quality_gate_passed(_publish_gate(), verified, checks),
-        "publish_allowed_by_quality_gate": _publish_quality_gate_passed(True, verified, checks),
+        "publish_gate": bool(_publish_gate() and _publish_quality_gate_passed(verified, checks)),
+        "publish_allowed_by_quality_gate": _publish_quality_gate_passed(verified, checks),
         "checks": checks,
         "failures": failures,
         "warnings": warnings,
@@ -1182,17 +1182,22 @@ def _patch_functions():
     if not getattr(original_youtube, "__aii_closure_wrapped__", False):
         def youtube_upload_closure(user_id: str, video: Path, metadata: Dict[str, Any]):
             project_id = str(metadata.get("project_id") or "")
-            if _publish_gate() and project_id:
-                p = s._get_project(project_id)
-                truth = _professional_truth(p, reconcile=True) if p else None
-                if not truth or not truth.get("verified"):
-                    return {
-                        "status": "blocked_by_quality_gate",
-                        "provider": "youtube",
-                        "project_id": project_id,
-                        "truthful": True,
-                        "error": _gate_error_report(project_id, truth or {}),
-                    }
+            if not project_id:
+                return {
+                    "status": "blocked_by_quality_gate", "provider": "youtube",
+                    "truthful": True,
+                    "error": "A project ID is required to prove production and editorial eligibility.",
+                }
+            p = s._get_project(project_id)
+            truth = _professional_truth(p, reconcile=True) if p else None
+            if not truth or not truth.get("publish_allowed_by_quality_gate"):
+                return {
+                    "status": "blocked_by_quality_gate",
+                    "provider": "youtube",
+                    "project_id": project_id,
+                    "truthful": True,
+                    "error": _gate_error_report(project_id, truth or {}),
+                }
             return original_youtube(user_id, video, metadata)
         youtube_upload_closure.__aii_closure_wrapped__ = True
         s.youtube_upload = youtube_upload_closure
@@ -1201,17 +1206,22 @@ def _patch_functions():
     if not getattr(original_webhook, "__aii_closure_wrapped__", False):
         def webhook_publish_closure(user_id: str, video: Path, metadata: Dict[str, Any]):
             project_id = str(metadata.get("project_id") or "")
-            if _publish_gate() and project_id:
-                p = s._get_project(project_id)
-                truth = _professional_truth(p, reconcile=True) if p else None
-                if not truth or not truth.get("verified"):
-                    return {
-                        "status": "blocked_by_quality_gate",
-                        "provider": "webhook",
-                        "project_id": project_id,
-                        "truthful": True,
-                        "error": _gate_error_report(project_id, truth or {}),
-                    }
+            if not project_id:
+                return {
+                    "status": "blocked_by_quality_gate", "provider": "webhook",
+                    "truthful": True,
+                    "error": "A project ID is required to prove production and editorial eligibility.",
+                }
+            p = s._get_project(project_id)
+            truth = _professional_truth(p, reconcile=True) if p else None
+            if not truth or not truth.get("publish_allowed_by_quality_gate"):
+                return {
+                    "status": "blocked_by_quality_gate",
+                    "provider": "webhook",
+                    "project_id": project_id,
+                    "truthful": True,
+                    "error": _gate_error_report(project_id, truth or {}),
+                }
             return original_webhook(user_id, video, metadata)
         webhook_publish_closure.__aii_closure_wrapped__ = True
         s.webhook_publish = webhook_publish_closure
