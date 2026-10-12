@@ -130,6 +130,8 @@ def _external_providers_disabled() -> bool:
 
 PROCESS_REGISTRY: Dict[str, subprocess.Popen] = {}
 MEDIA_DEBUG_ERRORS: Dict[str, str] = {}
+# Exact provider records survive distinct-source reuse; bytes alone are not provenance.
+MEDIA_SOURCE_METADATA_BY_PATH: Dict[str, Dict[str, Any]] = {}
 MEDIA_LAST_SUCCESS: Dict[str, Dict[str, Any]] = {}
 
 def _media_debug(source: str, exc: Exception) -> None:
@@ -1292,7 +1294,19 @@ def _pexels(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
                 continue
             p = outdir / f"pexels_{v.get('id','x')}.mp4"
             download(f["link"], p, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 90), max_bytes=(24_000_000 if FAST_MODE else 40_000_000))
-            out.append({"kind": "video", "path": str(p), "source": "Pexels", "source_url": v.get("url"), "creator": (v.get("user") or {}).get("name"), "license": "Pexels license", "width": f.get("width"), "height": f.get("height")})
+            creator = str((v.get("user") or {}).get("name") or "").strip()
+            asset_url = str(v.get("url") or "").strip()
+            out.append({
+                "kind": "video", "path": str(p), "source": "Pexels",
+                "source_id": v.get("id"), "source_url": asset_url,
+                "title": f"Pexels video {v.get('id')}" if v.get("id") else asset_url,
+                "creator": creator or None, "attribution": f"{creator} / Pexels" if creator else None,
+                "license": "Pexels license", "license_url": "https://www.pexels.com/license/",
+                "commercial_use_state": "commercial_use_allowed_under_provider_terms",
+                "rights_status": "license_metadata_present" if asset_url and creator else "REVIEW_REQUIRED",
+                "provider_restrictions": "Pexels restrictions on standalone redistribution, endorsement and third-party rights apply",
+                "width": f.get("width"), "height": f.get("height"),
+            })
         return out
     except Exception:
         return []
@@ -1311,7 +1325,19 @@ def _pixabay(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
                 continue
             p = outdir / f"pixabay_{v.get('id','x')}.mp4"
             download(f["url"], p, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 90), max_bytes=(24_000_000 if FAST_MODE else 40_000_000))
-            out.append({"kind": "video", "path": str(p), "source": "Pixabay", "source_url": v.get("pageURL"), "creator": v.get("user"), "license": "Pixabay Content License", "width": f.get("width"), "height": f.get("height")})
+            creator = str(v.get("user") or "").strip()
+            asset_url = str(v.get("pageURL") or "").strip()
+            out.append({
+                "kind": "video", "path": str(p), "source": "Pixabay",
+                "source_id": v.get("id"), "source_url": asset_url,
+                "title": str(v.get("tags") or f"Pixabay video {v.get('id') or ''}").strip(),
+                "creator": creator or None, "attribution": f"{creator} / Pixabay" if creator else None,
+                "license": "Pixabay Content License", "license_url": "https://pixabay.com/service/license-summary/",
+                "commercial_use_state": "commercial_use_allowed_under_provider_terms",
+                "rights_status": "license_metadata_present" if asset_url and creator else "REVIEW_REQUIRED",
+                "provider_restrictions": "Pixabay restrictions on standalone redistribution, trademarks, privacy and deceptive use apply",
+                "width": f.get("width"), "height": f.get("height"),
+            })
         return out
     except Exception:
         return []
@@ -1398,6 +1424,22 @@ def _nasa_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any
         _media_debug("nasa", exc)
         return []
 
+def _commercial_use_from_license(license_name: Any, license_url: Any) -> str:
+    """Classify known license URLs; ambiguous terms remain review-required."""
+    name = str(license_name or "").strip().lower()
+    url = str(license_url or "").strip().lower()
+    combined = name + " " + url
+    if re.search(r"\bby[-_ ]?nc\b|non[- ]commercial|/licenses/by-nc(?:-sa|-nd)?/", combined):
+        return "not_permitted_for_commercial_use"
+    if re.search(r"\bby[-_ ]?nd\b|no[- ]derivatives|/licenses/by-nd(?:-sa)?/", combined):
+        return "not_cleared_for_derivative_editing"
+    if "publicdomain/zero/1.0" in url or "cc0" in name or "/cc0/" in url:
+        return "public_domain_cc0_1_0"
+    if "/licenses/by/" in url and re.search(r"/licenses/by/[0-9]+(?:\.[0-9]+)?/?$", url):
+        return "commercial_use_allowed_with_attribution"
+    return "UNKNOWN_REVIEW_REQUIRED"
+
+
 def _openverse_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
     try:
         data = http_json("https://api.openverse.org/v1/images/?" + urlencode({
@@ -1422,13 +1464,27 @@ def _openverse_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str
                 _media_debug("openverse", exc)
                 raw_path.unlink(missing_ok=True)
                 continue
+            license_id = str(item.get("license") or "").strip()
+            license_version = str(item.get("license_version") or "").strip()
+            license_labels = {"cc0": "CC0", "by": "CC BY", "by-sa": "CC BY-SA", "by-nc": "CC BY-NC", "by-nd": "CC BY-ND", "by-nc-sa": "CC BY-NC-SA", "by-nc-nd": "CC BY-NC-ND", "pdm": "Public Domain Mark"}
+            license_label = str(item.get("license_name") or license_labels.get(license_id.lower(), license_id) or "").strip()
+            if license_version and license_label and license_version.lower() not in license_label.lower():
+                license_label = f"{license_label} {license_version}"
+            license_url = str(item.get("license_url") or "").strip()
+            source_url = str(item.get("foreign_landing_url") or "").strip()
+            commercial_state = _commercial_use_from_license(license_label, license_url)
+            creator = str(item.get("creator") or "").strip()
+            title = str(item.get("title") or "").strip()
+            complete_license_metadata = bool(source_url and license_url and license_label and title and (creator or commercial_state == "public_domain_cc0_1_0") and commercial_state in {"public_domain_cc0_1_0", "commercial_use_allowed_with_attribution"})
             row = {
-                "kind":"image","path":str(path),"source":"Openverse",
-                "source_url":item.get("foreign_landing_url") or item.get("detail_url") or image_url,
-                "creator":item.get("creator"),"license":item.get("license"),
-                "license_version":item.get("license_version"),"title":item.get("title"),
-                "description":item.get("description") or item.get("alt") or "",
-                "tags":" ".join(str(t.get("name") or t.get("title") or "") if isinstance(t,dict) else str(t) for t in (item.get("tags") or [])[:25]),
+                "kind": "image", "path": str(path), "source": "Openverse",
+                "source_id": item.get("id"), "source_url": source_url or None,
+                "creator": creator or None, "attribution": item.get("attribution"),
+                "license": license_label, "license_url": license_url or None,
+                "license_version": license_version or None, "commercial_use_state": commercial_state,
+                "rights_status": "license_metadata_present" if complete_license_metadata else "REVIEW_REQUIRED",
+                "title": title, "description": item.get("description") or item.get("alt") or "",
+                "tags": " ".join(str(t.get("name") or t.get("title") or "") if isinstance(t, dict) else str(t) for t in (item.get("tags") or [])[:25]),
             }
             out.append(row)
             if len(out) >= limit:
@@ -1466,8 +1522,22 @@ def _commons_media(query: str, outdir: Path, limit: int = 6) -> List[Dict[str, A
                 p=outdir/f"commons_{pge.get('pageid','x')}.media"
                 try:
                     download(original,p,timeout=90)
-                    out.append({"kind":"video","path":str(p),"source":"Wikimedia Commons","source_url":pge.get("canonicalurl") or "https://commons.wikimedia.org","creator":creator,"license":lic or "Wikimedia Commons stated license","title":pge.get("title"),
-                             "description":(meta.get("ImageDescription") or {}).get("value") or (meta.get("ObjectName") or {}).get("value") or ""})
+                    source_url = str(pge.get("canonicalurl") or "").strip()
+                    license_url = str((meta.get("LicenseUrl") or {}).get("value") or "").strip()
+                    license_name = str(lic or "").strip()
+                    commercial_state = _commercial_use_from_license(license_name, license_url)
+                    title = str(pge.get("title") or "").strip()
+                    complete = bool(source_url and license_url and license_name and title and (creator or commercial_state == "public_domain_cc0_1_0") and commercial_state in {"public_domain_cc0_1_0", "commercial_use_allowed_with_attribution"})
+                    out.append({
+                        "kind": "video", "path": str(p), "source": "Wikimedia Commons",
+                        "source_id": pge.get("pageid"), "source_url": source_url or None,
+                        "creator": creator, "attribution": (meta.get("Credit") or {}).get("value"),
+                        "license": license_name or None, "license_url": license_url or None,
+                        "commercial_use_state": commercial_state,
+                        "rights_status": "license_metadata_present" if complete else "REVIEW_REQUIRED",
+                        "title": title, "description": (meta.get("ImageDescription") or {}).get("value") or (meta.get("ObjectName") or {}).get("value") or "",
+                        "license_terms": (meta.get("UsageTerms") or {}).get("value"),
+                    })
                 except Exception as exc:
                     _media_debug("wikimedia",exc)
                 continue
@@ -1480,7 +1550,21 @@ def _commons_media(query: str, outdir: Path, limit: int = 6) -> List[Dict[str, A
                 p=_normalize_image_file(raw,outdir,f"commons_{pge.get('pageid','x')}")
                 if not p:
                     continue
-                out.append({"kind":"image","path":str(p),"source":"Wikimedia Commons","source_url":pge.get("canonicalurl") or "https://commons.wikimedia.org","creator":creator,"license":lic or "Wikimedia Commons stated license","title":pge.get("title")})
+                source_url = str(pge.get("canonicalurl") or "").strip()
+                license_url = str((meta.get("LicenseUrl") or {}).get("value") or "").strip()
+                license_name = str(lic or "").strip()
+                commercial_state = _commercial_use_from_license(license_name, license_url)
+                title = str(pge.get("title") or "").strip()
+                complete = bool(source_url and license_url and license_name and title and (creator or commercial_state == "public_domain_cc0_1_0") and commercial_state in {"public_domain_cc0_1_0", "commercial_use_allowed_with_attribution"})
+                out.append({
+                    "kind": "image", "path": str(p), "source": "Wikimedia Commons",
+                    "source_id": pge.get("pageid"), "source_url": source_url or None,
+                    "creator": creator, "attribution": (meta.get("Credit") or {}).get("value"),
+                    "license": license_name or None, "license_url": license_url or None,
+                    "commercial_use_state": commercial_state,
+                    "rights_status": "license_metadata_present" if complete else "REVIEW_REQUIRED",
+                    "title": title, "license_terms": (meta.get("UsageTerms") or {}).get("value"),
+                })
             except Exception as exc:
                 _media_debug("wikimedia",exc)
                 raw.unlink(missing_ok=True)
@@ -2056,6 +2140,16 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
                 source_failures.append(f"{getter.__name__}:{type(exc).__name__}:{str(exc)[:180]}")
                 continue
             candidates=[x for x in items if x.get("kind") in {"video","image"}]
+            # Keep the source/license record linked to the exact downloaded file.
+            for candidate in candidates:
+                try:
+                    candidate_path = Path(str(candidate.get("path") or ""))
+                    if candidate_path.is_file():
+                        MEDIA_SOURCE_METADATA_BY_PATH[str(candidate_path.resolve())] = dict(candidate)
+                        while len(MEDIA_SOURCE_METADATA_BY_PATH) > 512:
+                            MEDIA_SOURCE_METADATA_BY_PATH.pop(next(iter(MEDIA_SOURCE_METADATA_BY_PATH)))
+                except Exception:
+                    pass
             for candidate in candidates:
                 selected=select_distinct_candidate(candidate)
                 if selected:
@@ -2088,6 +2182,14 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
                 continue
             if digest in used_visual_hashes:
                 continue
+            source_record = MEDIA_SOURCE_METADATA_BY_PATH.get(str(chosen.resolve()))
+            if not isinstance(source_record, dict):
+                # Lost source/license metadata is not sufficient for verified reuse.
+                continue
+            candidate = dict(source_record)
+            candidate["path"] = str(chosen)
+            if not candidate_media_is_usable(candidate) or not candidate_is_relevant(candidate):
+                continue
             suffix=chosen.suffix.lower()
             selected=outdir / f"selected_visual_{index:02d}{suffix}"
             try:
@@ -2095,9 +2197,9 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             except Exception:
                 continue
             used_visual_hashes.add(digest)
-            if suffix in {".mp4",".mov",".mkv",".webm"}:
-                return {"kind":"video","path":str(selected),"source":"verified-source-reuse","source_url":None,"creator":None,"license":"inherited from original source","rights_status":"inherited_source_evidence","reused_source":True,"quality_tier":"public_source_reuse","asset_sha256":digest}
-            return {"kind":"image","path":str(selected),"source":"verified-source-reuse","source_url":None,"creator":None,"license":"inherited from original source","rights_status":"inherited_source_evidence","reused_source":True,"quality_tier":"public_source_reuse","asset_sha256":digest}
+            selected_candidate = dict(candidate)
+            selected_candidate.update({"path": str(selected), "source_file": str(chosen), "asset_sha256": digest, "reused_source": True, "quality_tier": candidate.get("quality_tier") or "public_source_reuse"})
+            return selected_candidate
     except Exception:
         pass
 
@@ -4178,13 +4280,18 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 "asset": asset.get("path") or asset.get("kind"),
                 "kind": asset.get("kind"),
                 "source": asset.get("source"),
+                "source_id": asset.get("source_id") or asset.get("id"),
                 "source_url": asset.get("source_url"),
+                "title": asset.get("title"),
                 "creator": asset.get("creator"),
+                "attribution": asset.get("attribution"),
                 "license": asset.get("license"),
+                "license_url": asset.get("license_url") or asset.get("license_deed_url"),
                 "asset_sha256": asset.get("asset_sha256"),
                 "asset_size_bytes": asset.get("asset_size_bytes"),
                 "rights_status": asset.get("rights_status") or "REVIEW_REQUIRED",
                 "commercial_use_state": asset.get("commercial_use_state") or "UNKNOWN_REVIEW_REQUIRED",
+                "provider_restrictions": asset.get("provider_restrictions"),
             })
         rights_manifest.write_text(jdump({
             "schema": "ai-infinity-rights-manifest-v1",

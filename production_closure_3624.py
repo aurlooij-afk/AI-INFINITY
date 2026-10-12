@@ -28,6 +28,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 from fastapi import Request, Response
 
 CLOSURE_VERSION = "TARGET-2050.3624"
@@ -388,33 +389,78 @@ def _write_production_evidence(project_id: str, truth: Optional[Dict[str, Any]] 
     }
     (root / "asset_registry.json").write_text(json.dumps(registry_payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
-    # Visual-rights evidence is deliberately conservative: the system records
-    # the license/policy string supplied by the source adapter, but never calls
-    # an asset legally cleared when the source did not provide enough evidence.
+def _rights_evidence_state(meta: Dict[str, Any]) -> str:
+    """Fail closed unless source-specific asset, license and commercial-use evidence is present."""
+    if not isinstance(meta, dict):
+        return "unknown"
+    if bool(meta.get("fallback")):
+        return "blocked_fallback"
+    if not any(meta.get(k) for k in ("source", "source_url", "license", "license_url", "rights_status", "commercial_use_state")):
+        return "unknown"
+    source_url = str(meta.get("source_url") or "").strip()
+    license_url = str(meta.get("license_url") or meta.get("license_deed_url") or "").strip()
+    license_name = str(meta.get("license") or "").strip()
+    title = str(meta.get("title") or "").strip()
+    creator = str(meta.get("creator") or meta.get("attribution") or "").strip()
+    status = str(meta.get("rights_status") or "").strip().lower()
+    commercial = str(meta.get("commercial_use_state") or "").strip().lower()
+    license_text = (license_name + " " + license_url).lower()
+    if (
+        re.search(r"\bby[-_ ]?nc\b|non[- ]commercial|/by-nc(?:/|$)", license_text)
+        or re.search(r"\bby[-_ ]?nd\b|no[- ]derivatives|/by-nd(?:/|$)", license_text)
+    ):
+        return "review_required"
+    if any(token in status for token in ("review", "unknown", "inherited", "blocked", "not_verified", "policy_required", "source_specific")):
+        return "review_required"
+    allowed = {
+        "public_domain_cc0_1_0", "commercial_use_allowed_with_attribution",
+        "commercial_use_allowed_under_provider_terms", "commercial_use_allowed",
+        "cleared_for_commercial_use",
+    }
+    if commercial not in allowed:
+        return "review_required"
+    def specific_http_url(value: str) -> bool:
+        try:
+            parsed = urlsplit(value)
+            return parsed.scheme.lower() in {"https", "http"} and bool(parsed.netloc) and bool(parsed.path.strip("/"))
+        except Exception:
+            return False
+    if not (specific_http_url(source_url) and specific_http_url(license_url) and license_name and title and (creator or commercial == "public_domain_cc0_1_0")):
+        return "review_required"
+    return "cleared"
+
+
+    # Persist source-level rights evidence without silently promoting incomplete metadata.
     rights = []
     for row in _source_assets(s._get_project(project_id) or {}):
         meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
         source = str(meta.get("source") or "")
         source_url = str(meta.get("source_url") or "")
         license_name = str(meta.get("license") or "")
-        fallback = bool(meta.get("fallback"))
-        rights_state = "blocked_fallback" if fallback else ("evidence_present" if license_name or str(meta.get("rights_status") or "") else "unknown")
+        rights_state = _rights_evidence_state(meta)
         rights.append({
             "asset": Path(str(row.get("path") or "")).name,
             "source": source,
+            "source_id": meta.get("source_id") or meta.get("id"),
             "source_url": source_url,
+            "title": meta.get("title"),
             "license": license_name,
+            "license_url": meta.get("license_url") or meta.get("license_deed_url"),
             "creator": meta.get("creator"),
+            "attribution": meta.get("attribution"),
+            "commercial_use_state": meta.get("commercial_use_state") or "UNKNOWN_REVIEW_REQUIRED",
             "rights_state": rights_state,
-            "rights_status": meta.get("rights_status"),
+            "rights_status": meta.get("rights_status") or "REVIEW_REQUIRED",
             "truthful": True,
         })
     rights_report = {
         "version": CLOSURE_VERSION,
         "project_id": project_id,
         "asset_count": len(rights),
-        "evidence_present": sum(1 for x in rights if x["rights_state"] == "evidence_present"),
+        "evidence_present": sum(1 for x in rights if x["rights_state"] == "cleared"),
+        "cleared": sum(1 for x in rights if x["rights_state"] == "cleared"),
         "unknown": sum(1 for x in rights if x["rights_state"] == "unknown"),
+        "review_required": sum(1 for x in rights if x["rights_state"] == "review_required"),
         "fallback_blocked": sum(1 for x in rights if x["rights_state"] == "blocked_fallback"),
         "assets": rights,
         "policy": "Unknown rights are never asserted as cleared.",
@@ -779,10 +825,16 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
             rights_data = {}
     rights_assets = list(rights_data.get("assets") or []) if isinstance(rights_data, dict) else []
     rights_unknown = sum(1 for x in rights_assets if str(x.get("rights_state") or "") == "unknown")
-    checks["visual_rights_evidence_present"] = bool(rights_assets) and rights_unknown == 0
+    rights_review_required = sum(1 for x in rights_assets if str(x.get("rights_state") or "") in {"review_required", "blocked_fallback"})
+    rights_unresolved = sum(1 for x in rights_assets if str(x.get("rights_state") or "") != "cleared")
+    checks["visual_rights_evidence_present"] = bool(rights_assets) and rights_unresolved == 0
     checks["visual_rights_unknown_count"] = rights_unknown
-    if rights_unknown:
-        failures.append(f"visual-rights evidence missing for {rights_unknown} visual asset(s)")
+    checks["visual_rights_review_required_count"] = rights_review_required
+    checks["visual_rights_cleared_count"] = sum(1 for x in rights_assets if str(x.get("rights_state") or "") == "cleared")
+    if not rights_assets:
+        failures.append("visual-rights evidence missing for all visual assets")
+    elif rights_unresolved:
+        failures.append(f"commercial-use/attribution evidence unresolved for {rights_unresolved} visual asset(s)")
 
     fact_path = files.get("fact_check.json")
     fact_data = {}

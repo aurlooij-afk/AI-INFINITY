@@ -392,3 +392,88 @@ def test_ci_recovery_fixture_is_disabled_outside_ci_even_with_allowlisted_id(mon
         "heading": "This must not be generated",
         "_acceptance_fixture_id": "cc0-recovery-illustration-v1",
     }, tmp_path, 1) is None
+
+
+
+def test_rights_gate_requires_source_specific_license_and_commercial_use_evidence():
+    approved = {
+        "source": "Openverse", "source_id": "asset-123",
+        "source_url": "https://openverse.org/image/asset-123", "title": "Forest landscape",
+        "creator": "Example Creator", "license": "CC BY 4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "rights_status": "license_metadata_present",
+        "commercial_use_state": "commercial_use_allowed_with_attribution",
+    }
+    assert closure._rights_evidence_state(approved) == "cleared"
+
+
+def test_inherited_source_reuse_without_exact_provenance_is_review_required():
+    inherited = {
+        "source": "verified-source-reuse", "source_url": None, "title": None,
+        "creator": None, "license": "inherited from original source",
+        "rights_status": "inherited_source_evidence",
+        "commercial_use_state": "UNKNOWN_REVIEW_REQUIRED",
+    }
+    assert closure._rights_evidence_state(inherited) == "review_required"
+
+
+def test_rights_gate_rejects_missing_license_url_even_with_a_license_label():
+    incomplete = {
+        "source": "Wikimedia Commons",
+        "source_url": "https://commons.wikimedia.org/wiki/File:example.jpg",
+        "title": "Example image", "creator": "Example Creator", "license": "CC BY 4.0",
+        "rights_status": "license_metadata_present",
+        "commercial_use_state": "commercial_use_allowed_with_attribution",
+    }
+    assert closure._rights_evidence_state(incomplete) == "review_required"
+
+
+def test_rights_gate_rejects_noncommercial_and_no_derivatives_licenses():
+    for license_name, license_url in (
+        ("CC BY-NC 4.0", "https://creativecommons.org/licenses/by-nc/4.0/"),
+        ("CC BY-ND 4.0", "https://creativecommons.org/licenses/by-nd/4.0/"),
+    ):
+        row = {
+            "source": "Openverse", "source_url": "https://openverse.org/image/asset-123",
+            "title": "Example image", "creator": "Example Creator", "license": license_name,
+            "license_url": license_url, "rights_status": "license_metadata_present",
+            "commercial_use_state": "commercial_use_allowed_with_attribution",
+        }
+        assert closure._rights_evidence_state(row) == "review_required"
+
+
+def test_rights_gate_rejects_provider_policy_labels_without_exact_asset_metadata():
+    row = {
+        "source": "Pexels", "source_url": "https://www.pexels.com/",
+        "title": "Pexels video", "creator": "Example Creator", "license": "Pexels license",
+        "license_url": "https://www.pexels.com/license/",
+        "rights_status": "provider_license_metadata_present",
+        "commercial_use_state": "commercial_use_allowed_under_provider_terms",
+    }
+    assert closure._rights_evidence_state(row) == "review_required"
+
+
+def test_fallback_visual_can_never_pass_the_source_rights_gate():
+    fixture = {
+        "source": "AI Infinity deterministic CC0 recovery-test illustration",
+        "source_url": None, "title": "Recovery illustration", "creator": "AI Infinity",
+        "license": "CC0 1.0", "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "rights_status": "original_asset", "commercial_use_state": "public_domain_cc0_1_0", "fallback": True,
+    }
+    assert closure._rights_evidence_state(fixture) == "blocked_fallback"
+
+
+def test_license_classifier_does_not_treat_cc_by_nc_or_nd_as_cleared():
+    assert studio._commercial_use_from_license(
+        "CC BY-NC 4.0", "https://creativecommons.org/licenses/by-nc/4.0/"
+    ) == "not_permitted_for_commercial_use"
+    assert studio._commercial_use_from_license(
+        "CC BY-ND 4.0", "https://creativecommons.org/licenses/by-nd/4.0/"
+    ) == "not_cleared_for_derivative_editing"
+
+
+def test_license_classifier_requires_specific_known_license_family():
+    assert studio._commercial_use_from_license(
+        "CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/"
+    ) == "commercial_use_allowed_with_attribution"
+    assert studio._commercial_use_from_license("Unknown provider label", "") == "UNKNOWN_REVIEW_REQUIRED"
