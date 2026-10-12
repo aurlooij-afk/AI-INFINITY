@@ -570,3 +570,25 @@ def test_visual_acquisition_diagnostics_preserve_provider_failure_reasons_and_re
     assert "secret" not in result[0]["failure_reasons"][1]["reason"]
     assert "[REDACTED]" in result[0]["failure_reasons"][1]["reason"]
     assert closure._visual_acquisition_diagnostics([{"path": "real.jpg", "metadata": {"source": "Openverse"}}]) == []
+
+
+
+def test_diagnostic_redaction_masks_bare_sensitive_fields_not_just_urls():
+    result = closure._visual_acquisition_diagnostics([{
+        "path": "fallback.png",
+        "metadata": {
+            "fallback": True,
+            "fallback_record": {
+                "failure_reasons": [
+                    {"provider": "openverse", "reason": "token: top-secret"},
+                    {"provider": "pexels", "reason": "Authorization=Bearer hidden-value"},
+                    {"provider": "commons", "reason": "https://example.org/api?signature=private"},
+                ]
+            },
+        },
+    }])
+    joined = " ".join(x["reason"] for x in result[0]["failure_reasons"])
+    assert "top-secret" not in joined
+    assert "hidden-value" not in joined
+    assert "private" not in joined
+    assert joined.count("[REDACTED]") >= 3

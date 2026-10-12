@@ -20,3 +20,6 @@ Checked 2026-10-12 against PR #37 head 367b9db5dcf19114f9eaee6831bf5f7f568918da.
 
 
 8. **Acquisition diagnostics are now surfaced for the next acceptance attempt.** Run 38277808132 on 7686f7f94d2afe87174c1af63fcd5ef7f34865d0 still failed scenario 1 with three fallbacks, one cleared visual-rights record and 3 unresolved rights records. The next source patch adds sanitized per-scene provider failure reasons to production truth and tests the redaction. These diagnostics are for root-cause isolation; they do not relax VERIFIED.
+
+
+9. **Redaction regression caught an escaping error before release.** Visual Diversity run 38278893658 on dae3f1029c166ad7336855e3d1187d4b7816d46e had 37 passing tests and one failure in acquisition-diagnostic redaction: the result contained a literal `\\1` and retained the fake test token. The next patch replaces backreference replacements with lambda callbacks and single-escaped regex patterns, then adds separate query-string and bare credential redaction coverage. This is a reporting/security correctness fix; provider failure details remain sanitized.
