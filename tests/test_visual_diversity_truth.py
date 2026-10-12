@@ -4,6 +4,7 @@ from pathlib import Path
 
 import ai_infinity_canonical as canonical
 import production_closure_3624 as closure
+import studio_ultimate as studio
 
 
 class _FileHasher:
