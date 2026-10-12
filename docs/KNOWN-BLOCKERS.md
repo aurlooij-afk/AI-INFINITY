@@ -23,3 +23,6 @@ Checked 2026-10-12 against PR #37 head 367b9db5dcf19114f9eaee6831bf5f7f568918da.
 
 
 9. **Redaction regression caught an escaping error before release.** Visual Diversity run 38278893658 on dae3f1029c166ad7336855e3d1187d4b7816d46e had 37 passing tests and one failure in acquisition-diagnostic redaction: the result contained a literal `\\1` and retained the fake test token. The next patch replaces backreference replacements with lambda callbacks and single-escaped regex patterns, then adds separate query-string and bare credential redaction coverage. This is a reporting/security correctness fix; provider failure details remain sanitized.
+
+
+10. **Credential sanitizer follow-up.** Visual Diversity run 38279202973 (head ad30ab2bdd4dac09a0884b4a9e4c5456feb617ed) had 38 passed/1 failed: the sanitizer masked `Bearer` but left the following authorization token. This patch masks the complete optional-Bearer authorization value. The regression test must pass before release.

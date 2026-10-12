@@ -105,7 +105,17 @@ def _visual_acquisition_diagnostics(visual_rows: List[Dict[str, Any]]) -> List[D
             reason = str(item.get("reason") or "unknown")[:500]
             # Mask query strings first so URL tokens and signed parameters do not leak.
             reason = re.sub(r"(https?://[^\s?]+)\?[^\s]+", lambda m: m.group(1) + "?[REDACTED]", reason)
-            reason = re.sub(r"(?i)(api[_-]?key|token|authorization)(?:=|:|\s)+[^&\s]+", lambda m: m.group(1) + "=[REDACTED]", reason)
+            # Authorization values may be "Bearer <token>"; remove both words.
+            reason = re.sub(
+                r"(?i)(authorization)(?:=|:|\s)+(?:bearer\s+)?[^&\s]+(?:\s+[^&\s]+)?",
+                lambda m: m.group(1) + "=[REDACTED]",
+                reason,
+            )
+            reason = re.sub(
+                r"(?i)(api[_-]?key|token)(?:=|:|\s)+[^&\s]+",
+                lambda m: m.group(1) + "=[REDACTED]",
+                reason,
+            )
             sanitized.append({"provider": provider, "reason": reason})
         out.append({
             "asset": Path(str(row.get("path") or "")).name,
