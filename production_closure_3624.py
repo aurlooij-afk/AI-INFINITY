@@ -79,6 +79,15 @@ def _publish_gate() -> bool:
     return os.getenv("AI_INFINITY_REQUIRE_VERIFIED_PUBLISH", PUBLISH_GATE_DEFAULT).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _publish_quality_gate_passed(gate_enabled: bool, verified: bool, checks: Dict[str, Any]) -> bool:
+    """Report eligibility only when the configured gate and all safety prerequisites pass."""
+    factual_review_safe = (
+        not bool(checks.get("factual_review_required"))
+        or bool(checks.get("factual_review_auto_publish_safe"))
+    )
+    return bool(gate_enabled and verified and factual_review_safe)
+
+
 def _objective_media_qc(path: Path) -> Dict[str, Any]:
     """Independent media anomaly scan for prolonged black/frozen frames and clipping."""
     out: Dict[str, Any] = {
@@ -963,15 +972,8 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         "strict_visual_policy": strict_visual,
         "strict_research_policy": strict_research,
         "publish_gate_enabled": _publish_gate(),
-        "publish_gate": bool(
-            _publish_gate()
-            and verified
-            and (not checks.get("factual_review_required") or checks.get("factual_review_auto_publish_safe"))
-        ),
-        "publish_allowed_by_quality_gate": bool(
-            verified
-            and (not checks.get("factual_review_required") or checks.get("factual_review_auto_publish_safe"))
-        ),
+        "publish_gate": _publish_quality_gate_passed(_publish_gate(), verified, checks),
+        "publish_allowed_by_quality_gate": _publish_quality_gate_passed(True, verified, checks),
         "checks": checks,
         "failures": failures,
         "warnings": warnings,

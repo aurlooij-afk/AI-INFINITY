@@ -507,15 +507,20 @@ def test_visual_candidate_relevance_requires_scene_specific_metadata():
     )
 
 
-def test_publish_gate_truth_is_not_enabled_when_media_verification_fails():
-    # Directly exercises the output invariant by asserting the truth gate only
-    # exposes a true publish_gate when verification prerequisites pass.
-    truth = {
-        "verified": False,
-        "state": "REVIEW_REQUIRED",
-        "checks": {"visual_rights_evidence_present": False, "source_visual_policy_passed": False},
-    }
-    assert not truth["verified"]
-    assert truth["state"] == "REVIEW_REQUIRED"
-    assert truth["checks"]["visual_rights_evidence_present"] is False
-    assert truth["checks"]["source_visual_policy_passed"] is False
+def test_publish_quality_gate_blocks_fallback_or_unreviewed_factual_claims():
+    assert not closure._publish_quality_gate_passed(
+        True, False,
+        {"visual_rights_evidence_present": False, "source_visual_policy_passed": False},
+    )
+    assert not closure._publish_quality_gate_passed(
+        True, True,
+        {"factual_review_required": True, "factual_review_auto_publish_safe": False},
+    )
+    assert closure._publish_quality_gate_passed(
+        True, True,
+        {"factual_review_required": False, "visual_rights_evidence_present": True},
+    )
+    assert not closure._publish_quality_gate_passed(
+        False, True,
+        {"factual_review_required": False},
+    )

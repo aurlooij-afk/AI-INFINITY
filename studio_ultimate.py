@@ -1453,7 +1453,11 @@ def _visual_candidate_relevant(candidate: Dict[str, Any], search_subject: str, f
     for field in fields:
         value = candidate.get(field)
         if isinstance(value, list):
-            pieces.extend(str(item.get("name") or item.get("title") or item) for item in value)
+            pieces.extend(
+                str(item.get("name") or item.get("title") or "")
+                if isinstance(item, dict) else str(item)
+                for item in value
+            )
         elif value:
             pieces.append(str(value))
     text = re.sub(r"<[^>]+>", " ", " ".join(pieces)).lower()
