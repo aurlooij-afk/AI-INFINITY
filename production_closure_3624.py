@@ -360,35 +360,6 @@ def _artifact_registry(project_id: str) -> Dict[str, Dict[str, Any]]:
 
 
 
-def _write_production_evidence(project_id: str, truth: Optional[Dict[str, Any]] = None) -> None:
-    """Persist human-auditable closure artifacts after every production run."""
-    s = _studio()
-    root = s._project_dir(project_id)
-    root.mkdir(parents=True, exist_ok=True)
-
-    try:
-        events = s._timeline_rows(project_id)
-    except Exception:
-        events = []
-    timeline = {
-        "version": CLOSURE_VERSION,
-        "project_id": project_id,
-        "events": events,
-        "event_count": len(events),
-        "truthful": True,
-    }
-    (root / "timeline.json").write_text(json.dumps(timeline, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-
-    registry = _artifact_registry(project_id)
-    registry_payload = {
-        "version": CLOSURE_VERSION,
-        "project_id": project_id,
-        "integrity": "sha256",
-        "artifacts": sorted([dict(item) for item in registry.values()], key=lambda x: str(x.get("asset_name") or "")),
-        "truthful": True,
-    }
-    (root / "asset_registry.json").write_text(json.dumps(registry_payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-
 def _rights_evidence_state(meta: Dict[str, Any]) -> str:
     """Fail closed unless source-specific asset, license and commercial-use evidence is present."""
     if not isinstance(meta, dict):
@@ -430,6 +401,35 @@ def _rights_evidence_state(meta: Dict[str, Any]) -> str:
     return "cleared"
 
 
+def _write_production_evidence(project_id: str, truth: Optional[Dict[str, Any]] = None) -> None:
+    """Persist human-auditable closure artifacts after every production run."""
+    s = _studio()
+    root = s._project_dir(project_id)
+    root.mkdir(parents=True, exist_ok=True)
+
+    try:
+        events = s._timeline_rows(project_id)
+    except Exception:
+        events = []
+    timeline = {
+        "version": CLOSURE_VERSION,
+        "project_id": project_id,
+        "events": events,
+        "event_count": len(events),
+        "truthful": True,
+    }
+    (root / "timeline.json").write_text(json.dumps(timeline, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+    registry = _artifact_registry(project_id)
+    registry_payload = {
+        "version": CLOSURE_VERSION,
+        "project_id": project_id,
+        "integrity": "sha256",
+        "artifacts": sorted([dict(item) for item in registry.values()], key=lambda x: str(x.get("asset_name") or "")),
+        "truthful": True,
+    }
+    (root / "asset_registry.json").write_text(json.dumps(registry_payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
     # Persist source-level rights evidence without silently promoting incomplete metadata.
     rights = []
     for row in _source_assets(s._get_project(project_id) or {}):
@@ -470,6 +470,8 @@ def _rights_evidence_state(meta: Dict[str, Any]) -> str:
 
     if truth is not None:
         (root / "production_truth.json").write_text(json.dumps(truth, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+
 def _reconcile_artifacts(project_id: str) -> Dict[str, Any]:
     s = _studio()
     files = _project_files(project_id)
