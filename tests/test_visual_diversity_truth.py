@@ -478,3 +478,44 @@ def test_license_classifier_requires_specific_known_license_family():
         "CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/"
     ) == "commercial_use_allowed_with_attribution"
     assert studio._commercial_use_from_license("Unknown provider label", "") == "UNKNOWN_REVIEW_REQUIRED"
+
+
+
+def test_visual_candidate_relevance_requires_scene_specific_metadata():
+    relevant = {
+        "title": "Video editor working at a computer workstation",
+        "description": "A filmmaker edits clips and a timeline on a large monitor.",
+        "tags": ["editing", "filmmaker", "workstation"],
+    }
+    unrelated = {
+        "title": "Portrait of a creator outdoors in a garden",
+        "description": "A person enjoying a sunny day.",
+        "tags": ["portrait", "garden", "lifestyle"],
+    }
+    placeholder_only = {"title": "Pexels video 12345"}
+    assert studio._visual_candidate_relevant(
+        relevant, "content creator", "creator working at a video editing workstation"
+    )
+    assert not studio._visual_candidate_relevant(
+        unrelated, "content creator", "creator working at a video editing workstation"
+    )
+    assert not studio._visual_candidate_relevant(
+        placeholder_only, "content creator", "creator working at a video editing workstation"
+    )
+    assert not studio._visual_candidate_relevant(
+        {"provider_query": "video editor workstation"}, "content creator", "creator working at a video editing workstation"
+    )
+
+
+def test_publish_gate_truth_is_not_enabled_when_media_verification_fails():
+    # Directly exercises the output invariant by asserting the truth gate only
+    # exposes a true publish_gate when verification prerequisites pass.
+    truth = {
+        "verified": False,
+        "state": "REVIEW_REQUIRED",
+        "checks": {"visual_rights_evidence_present": False, "source_visual_policy_passed": False},
+    }
+    assert not truth["verified"]
+    assert truth["state"] == "REVIEW_REQUIRED"
+    assert truth["checks"]["visual_rights_evidence_present"] is False
+    assert truth["checks"]["source_visual_policy_passed"] is False

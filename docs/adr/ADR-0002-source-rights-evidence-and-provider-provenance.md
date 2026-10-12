@@ -31,3 +31,8 @@ Revert if unrelated regressions appear, but preserve fail-closed rights and meta
 ## Known limitation
 
 Generic metadata cannot resolve every third-party publicity, trademark, privacy or provider-policy issue. This is not legal advice or universal clearance.
+
+
+## Follow-up: visual relevance and publication status
+
+The acceptance artifact on 9fce34a603462e5b1714dd930f65a2663bef2dd7 correctly remained REVIEW_REQUIRED because three scenes used local illustrations and the remaining visual-rights evidence was not complete. Source review traced overly literal word matching in `studio_ultimate.py::acquire_scene_asset`: a relevant item titled “video editor at a computer workstation” could be rejected because the plan said “content creator working at a video editing workstation”, and the Pexels adapter manufactured a source title from provider plus ID. The new scene-focus matcher requires independent metadata concepts and never treats the search query alone as proof. Pexels keeps a missing source title missing. The truth response now distinguishes gate configuration from quality-gate permission and reports canonical state as REVIEW_REQUIRED until verification actually passes. Tests cover semantically relevant, unrelated and placeholder-only candidate metadata.

@@ -25,3 +25,5 @@ Checked 2026-10-12 against PR #37 head 86d65d7c604020412954bdfdb7e462eb63188428.
 - Unknown/incompatible rights, missing provenance and fallback visuals block professionally verified delivery and publishing.
 - No human-artistry/language claim without recorded reviewer evidence.
 - No durability claim without current read-back hash/size and clean-instance restore proof.
+
+8. **Scene-focus mapping and publish truth patch awaiting CI.** On head 9fce34a603462e5b1714dd930f65a2663bef2dd7, acceptance run 38248377597 correctly reported REVIEW_REQUIRED: technical media checks passed, but three illustrative fallback scenes and all four unresolved rights records blocked professional verification. Source review found scene relevance depended on literal word overlap, and Pexels manufactured a “title” from its provider and ID when the API does not provide one. The follow-up patch adds multi-concept scene relevance, query/retrieval provenance, actual title-presence truth, and makes publish/canonical truth reflect verification. It must pass tests and new acceptance evidence before any release claim.

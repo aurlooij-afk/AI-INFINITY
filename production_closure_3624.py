@@ -962,7 +962,16 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         "state": "VERIFIED" if verified else ("FAILED" if p.get("status") == "failed" else "REVIEW_REQUIRED"),
         "strict_visual_policy": strict_visual,
         "strict_research_policy": strict_research,
-        "publish_gate": _publish_gate(),
+        "publish_gate_enabled": _publish_gate(),
+        "publish_gate": bool(
+            _publish_gate()
+            and verified
+            and (not checks.get("factual_review_required") or checks.get("factual_review_auto_publish_safe"))
+        ),
+        "publish_allowed_by_quality_gate": bool(
+            verified
+            and (not checks.get("factual_review_required") or checks.get("factual_review_auto_publish_safe"))
+        ),
         "checks": checks,
         "failures": failures,
         "warnings": warnings,
@@ -974,7 +983,8 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
             "content_type": expected_req.get("content_type") or "video",
             "quality_preset": req.get("quality_preset") or "balanced",
         },
-        "canonical_state": _canonical_state(p),
+        "canonical_state": "VERIFIED" if verified else ("FAILED" if p.get("status") == "failed" else "REVIEW_REQUIRED"),
+        "recorded_project_state": _canonical_state(p),
         "artifact_paths": {name: _public_path(project_id, name) for name in sorted(files)},
         "timestamps": {
             "created_at": _iso(p.get("created_at")),

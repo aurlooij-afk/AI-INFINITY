@@ -1299,7 +1299,9 @@ def _pexels(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
             out.append({
                 "kind": "video", "path": str(p), "source": "Pexels",
                 "source_id": v.get("id"), "source_url": asset_url,
-                "title": f"Pexels video {v.get('id')}" if v.get("id") else asset_url,
+                # Pexels' video-search schema does not guarantee a human title;
+                # do not invent one from the provider/ID.
+                "title": str(v.get("title") or "").strip() or None,
                 "creator": creator or None, "attribution": f"{creator} / Pexels" if creator else None,
                 "license": "Pexels license", "license_url": "https://www.pexels.com/license/",
                 "commercial_use_state": "commercial_use_allowed_under_provider_terms",
@@ -1424,6 +1426,81 @@ def _nasa_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any
         _media_debug("nasa", exc)
         return []
 
+_VISUAL_CONCEPTS = {
+    "creator": r"\b(?:content creator|creator|filmmaker|video editor|videographer|photographer|producer|youtuber|camera operator|film crew)\b",
+    "editing": r"\b(?:edit(?:ing)?|post[- ]production|timeline|montage|cutting|clips?|video workflow)\b",
+    "workstation": r"\b(?:workstation|computer|desktop|laptop|monitor|screen|editing suite|desk|keyboard|display)\b",
+    "camera": r"\b(?:camera|camcorder|lens|tripod|filming|shooting|recording|cinematography)\b",
+    "studio": r"\b(?:studio|production room|recording room|video set|film set|broadcast booth|soundstage)\b",
+    "audio": r"\b(?:microphone|mic|headphones?|audio|sound|waveform|voiceover|mixing console)\b",
+    "captions": r"\b(?:captions?|subtitles?|closed caption|srt|subtitle track)\b",
+    "storyboard": r"\b(?:storyboard|script|screenplay|shot list|outline|production plan)\b",
+    "finished_video": r"\b(?:finished film|finished video|final cut|export|rendered video|playback|video player)\b",
+    "raw_final": r"\b(?:before[- ]and[- ]after|raw footage|unedited footage|finished edit|rough cut|final edit)\b",
+}
+
+
+def _visual_candidate_relevant(candidate: Dict[str, Any], search_subject: str, focus: str) -> bool:
+    """Require several independent, focus-specific signals from actual asset metadata.
+
+    Provider query terms are retained for provenance but do not substitute for
+    title/description/tags evidence. Empty or placeholder-only metadata is rejected.
+    """
+    if not isinstance(candidate, dict):
+        return False
+    fields = ("title", "description", "alt", "caption", "tags", "category", "fields_matched")
+    pieces = []
+    for field in fields:
+        value = candidate.get(field)
+        if isinstance(value, list):
+            pieces.extend(str(item.get("name") or item.get("title") or item) for item in value)
+        elif value:
+            pieces.append(str(value))
+    text = re.sub(r"<[^>]+>", " ", " ".join(pieces)).lower()
+    text = re.sub(r"\b(?:pexels video|pixabay video)\s+\d+\b", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return False
+
+    focus_text = str(focus or "").lower()
+    subject_text = str(search_subject or "").lower()
+    focus_concepts = {
+        key for key, pattern in _VISUAL_CONCEPTS.items()
+        if re.search(pattern, focus_text)
+    }
+    subject_concepts = {
+        key for key, pattern in _VISUAL_CONCEPTS.items()
+        if re.search(pattern, subject_text)
+    }
+    metadata_concepts = {
+        key for key, pattern in _VISUAL_CONCEPTS.items()
+        if re.search(pattern, text)
+    }
+    # Ignore a duplicated general subject concept when scoring focus-specific
+    # evidence; a source has to say something about the scene itself.
+    focus_specific = focus_concepts - subject_concepts
+    if focus_specific:
+        matches = focus_specific & metadata_concepts
+        required = 1 if len(focus_specific) == 1 else 2
+        if len(matches) >= required:
+            return True
+        # Some focus descriptions are ordinary phrases, not in the lexicon.
+        focus_terms = {
+            word for word in re.findall(r"[a-z0-9]{4,}", focus_text)
+            if word not in {"with", "from", "that", "this", "into", "view", "real", "world", "clear", "close", "wide", "showing", "about", "scene"}
+        }
+        metadata_terms = set(re.findall(r"[a-z0-9]{4,}", text))
+        overlap = focus_terms & metadata_terms
+        return len(overlap) >= 2 and len(matches) >= 1
+
+    subject_terms = {
+        word for word in re.findall(r"[a-z0-9]{4,}", subject_text)
+        if word not in {"professional", "editorial", "photography", "cinematic", "visual", "background", "content"}
+    }
+    metadata_terms = set(re.findall(r"[a-z0-9]{4,}", text))
+    return len(subject_terms & metadata_terms) >= 2
+
+
 def _commercial_use_from_license(license_name: Any, license_url: Any) -> str:
     """Classify known license URLs; ambiguous terms remain review-required."""
     name = str(license_name or "").strip().lower()
@@ -1479,12 +1556,20 @@ def _openverse_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str
             row = {
                 "kind": "image", "path": str(path), "source": "Openverse",
                 "source_id": item.get("id"), "source_url": source_url or None,
-                "creator": creator or None, "attribution": item.get("attribution"),
+                "provider": item.get("provider") or item.get("source") or "Openverse",
+                "creator": creator or None, "creator_url": item.get("creator_url"),
+                "attribution": item.get("attribution"),
                 "license": license_label, "license_url": license_url or None,
                 "license_version": license_version or None, "commercial_use_state": commercial_state,
                 "rights_status": "license_metadata_present" if complete_license_metadata else "REVIEW_REQUIRED",
-                "title": title, "description": item.get("description") or item.get("alt") or "",
+                "rights_status_reason": None if complete_license_metadata else "Openverse result is missing title/source/creator/license evidence required by this export profile",
+                "title": title or None, "description": item.get("description") or item.get("alt") or "",
                 "tags": " ".join(str(t.get("name") or t.get("title") or "") if isinstance(t, dict) else str(t) for t in (item.get("tags") or [])[:25]),
+                "fields_matched": item.get("fields_matched") or [],
+                "category": item.get("category"),
+                "resolution": [item.get("width"), item.get("height")] if item.get("width") and item.get("height") else None,
+                "mime_type": item.get("filetype"),
+                "indexed_on": item.get("indexed_on"),
             }
             out.append(row)
             if len(out) >= limit:
@@ -2068,21 +2153,9 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             pass
 
     def candidate_is_relevant(candidate: Dict[str, Any]) -> bool:
-        title_text=" ".join(str(candidate.get(k) or "") for k in ("title","description","alt","caption","tags")).lower()
-        if not title_text.strip():
-            # Some video APIs do not supply titles; their search query itself is
-            # the provider's relevance contract.
-            return True
-        words=set(re.findall(r"[a-z0-9]{4,}",title_text))
-        topic_words=set(re.findall(r"[a-z0-9]{4,}",core.lower()))
-        focus_words=set(re.findall(r"[a-z0-9]{4,}",focus_core.lower()))
-        topical={"professional","cinematic","photography","documentary","visual","scene","real","world","image","video","shot","stock","background","free"}
-        topic_words-=topical
-        focus_words-=topical
-        # At least one specific subject/focus term must appear in metadata. It
-        # is better to use a clearly-labelled local illustration than to claim a
-        # visually unrelated stock asset is relevant to the brief.
-        return not (topic_words or focus_words) or bool((topic_words|focus_words) & words)
+        # Use the storyboard's scene focus; provider query matches are provenance,
+        # not a replacement for substantive metadata evidence.
+        return _visual_candidate_relevant(candidate, search_subject or topic, focus or heading)
 
     def candidate_media_is_usable(candidate: Dict[str, Any]) -> bool:
         path=Path(str(candidate.get("path") or ""))
@@ -2140,6 +2213,11 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
                 source_failures.append(f"{getter.__name__}:{type(exc).__name__}:{str(exc)[:180]}")
                 continue
             candidates=[x for x in items if x.get("kind") in {"video","image"}]
+            # Record what query produced a candidate, without claiming this alone
+            # proves visual relevance or licenses.
+            for candidate in candidates:
+                candidate.setdefault("provider_query", q)
+                candidate.setdefault("retrieved_at", utc_iso())
             # Keep the source/license record linked to the exact downloaded file.
             for candidate in candidates:
                 try:
@@ -4292,6 +4370,12 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 "rights_status": asset.get("rights_status") or "REVIEW_REQUIRED",
                 "commercial_use_state": asset.get("commercial_use_state") or "UNKNOWN_REVIEW_REQUIRED",
                 "provider_restrictions": asset.get("provider_restrictions"),
+                "retrieved_at": asset.get("retrieved_at"),
+                "provider_query": asset.get("provider_query"),
+                "rights_status_reason": asset.get("rights_status_reason"),
+                "resolution": asset.get("resolution"),
+                "mime_type": asset.get("mime_type"),
+                "usable_bytes": asset.get("asset_size_bytes"),
             })
         rights_manifest.write_text(jdump({
             "schema": "ai-infinity-rights-manifest-v1",
