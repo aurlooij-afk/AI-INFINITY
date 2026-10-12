@@ -35,6 +35,8 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p "${GITHUB_WORKSPACE}/acceptance-evidence"
+          # The production image runs as UID 10001; only this disposable CI evidence mount is made writable.
+          chmod 0777 "${GITHUB_WORKSPACE}/acceptance-evidence"
           set +e
           docker run --rm --network host \
             -e CI \

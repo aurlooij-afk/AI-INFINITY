@@ -49,3 +49,12 @@ No post-fix pass is implied by this baseline record.
 - Test 10: a deliberately corrupted intermediate was recovered and decoded, retry/scene-completed audit evidence existed, and another project's scene SHA remained unchanged. The deterministic CC0 test illustration correctly kept truth at \`REVIEW_REQUIRED\` with five fallback-marked visual records; publish returned \`blocked_by_editorial_review\` and \`publish_ready=false\`. This is the expected fail-closed result, not a professional visual pass.
 
 This successful run proves the ten automated acceptance scenarios under their stated policy. It does **not** establish live deployment health, current B2 round-trip/clean-host restore, native-speaker approval, human editorial scores, 1080p professional-mode output, OpenTimelineIO export or comparative MLT performance. Those remain separate release gates.
+
+
+## Latest failure investigation: SHA c6491929732baf8d2d5f74420a8419dc7e6b7390
+
+- Full acceptance run: https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38182253435 — failed before scenario 1 completed.
+- First failing assertion: none. The runner raised an uncaught filesystem exception in `create_review_packet` at `tests/final_acceptance_suite.py:124` while saving `/evidence/studio_2ad9e15d3ad542b89679b16723e06dd9-contact-sheet.png`.
+- Exact exception: `PermissionError: [Errno 13] Permission denied`. The acceptance image runs as non-root UID 10001 while GitHub Actions mounted a host-created evidence directory that was not writable by that UID.
+- Intended fix: make only the disposable `acceptance-evidence` directory writable in the CI workflow before the Docker run. No production filesystem permissions, creative-quality gate, rights gate or publish behavior is changed.
+- Rollback: revert the workflow permission line if needed; do not skip contact-sheet generation or call the failed run a pass.
