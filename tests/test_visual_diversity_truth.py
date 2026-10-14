@@ -729,3 +729,10 @@ def test_launch_outcome_scene_targets_retrievable_editing_media():
     )
     assert "workstation" in outcome["visual_focus"].lower()
     assert "final cut" in outcome["visual_focus"].lower()
+
+
+def test_later_openverse_scenes_request_a_broader_free_candidate_pool():
+    assert studio._scene_asset_search_limit(2, "_openverse_images") == 4
+    assert studio._scene_asset_search_limit(3, "_openverse_images") == 8
+    assert studio._scene_asset_search_limit(4, "_openverse_images") == 8
+    assert studio._scene_asset_search_limit(4, "_commons_media") == 4

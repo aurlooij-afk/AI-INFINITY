@@ -53,7 +53,15 @@ def waitp(s,b,pid,timeout=600):
     while time.time()<end:
         last=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}")
         if str(last.get("status","")).lower() in {"completed","completed_with_qc_warnings","failed","cancelled"}:
-            assert str(last.get("status")).lower() == "completed",last
+            status = str(last.get("status") or "").lower()
+            if status != "completed":
+                try:
+                    diagnostic = capture_failed_project_evidence(s, b, pid, last)
+                    if diagnostic:
+                        print("NONPASSING_PROJECT_EVIDENCE=" + json.dumps(diagnostic, ensure_ascii=False, default=str))
+                except Exception as exc:
+                    print("NONPASSING_PROJECT_EVIDENCE_CAPTURE_FAILED=" + type(exc).__name__ + ": " + str(exc)[:1000])
+            assert status == "completed",last
             assert str(last.get("state") or "").upper() == "COMPLETED",last
             return last
         time.sleep(2)
@@ -176,6 +184,93 @@ def create_review_packet(project_id, files, truth, production, rights, media_pro
     return {"packet_name":packet.name,"packet_sha256":sha(packet),"packet_size_bytes":packet.stat().st_size,
             "contact_sheet_name":contact.name,"contact_sheet_sha256":sha(contact),
             "media_sha256":metadata["media_sha256"],"human_review_status":"PENDING"}
+
+
+
+def capture_failed_project_evidence(s, b, project_id, status_payload):
+    """Capture real media/provenance before a strict acceptance assertion stops the run."""
+    configured = os.getenv("AI_INFINITY_EVIDENCE_DIR", "").strip()
+    if not configured:
+        return None
+    evidence_dir = Path(configured).resolve()
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    project_dir = TMP / "base" / "creator_studio" / str(project_id)
+    final = project_dir / "final.mp4"
+    if not final.is_file():
+        matches = [p for p in TMP.rglob("final.mp4") if p.parent.name == str(project_id)]
+        final = matches[0] if matches else final
+    evidence = {
+        "schema": "ai-infinity-failed-production-evidence.v1",
+        "project_id": str(project_id),
+        "project_status": status_payload.get("status"),
+        "captured_at_epoch": time.time(),
+        "final_media": {"path": str(final), "exists": final.is_file()},
+        "truth_state": "NOT_CAPTURED",
+        "truth_verified": False,
+        "contact_sheet": "NOT_CREATED",
+        "human_review_status": "PENDING",
+    }
+    if not final.is_file():
+        evidence["capture_error"] = "The real local final.mp4 was not present in the test runtime."
+        (evidence_dir / (str(project_id) + "-failure-evidence.json")).write_text(
+            json.dumps(evidence, ensure_ascii=False, indent=2) + "\\n", encoding="utf-8"
+        )
+        return evidence
+
+    evidence["final_media"].update({"size_bytes": final.stat().st_size, "sha256": sha(final)})
+    media_probe = probe(final)
+    evidence["ffprobe"] = media_probe
+    files = {"final.mp4": final}
+    artifact_names = (
+        "thumbnail.jpg", "audio_master.mp3", "captions.srt", "script.md", "sources.json",
+        "manifest.json", "production_manifest.json", "rights_manifest.json", "provenance.json",
+        "fact_check.json", "visual_rights.json", "article.md", "seo.json",
+        "social_campaign.json", "accessibility.json",
+    )
+    for name in artifact_names:
+        path = project_dir / name
+        if path.is_file():
+            files[name] = path
+    for name in ("sources.json", "production_manifest.json", "rights_manifest.json"):
+        if name not in files:
+            try:
+                files[name] = dl(s, b, str(project_id), name)
+            except Exception as exc:
+                evidence.setdefault("artifact_retrieval_errors", {})[name] = type(exc).__name__ + ": " + str(exc)[:500]
+
+    truth = {}
+    try:
+        truth = req(s, b, f"/infinity/studio/project/{quote(str(project_id), safe='')}/truth")
+        evidence["truth_state"] = truth.get("state")
+        evidence["truth_verified"] = truth.get("verified") is True
+        evidence["truth_checks"] = truth.get("checks") or {}
+        evidence["truth_failures"] = truth.get("failures") or []
+    except Exception as exc:
+        evidence["truth_endpoint_error"] = type(exc).__name__ + ": " + str(exc)[:800]
+
+    def load_artifact(name):
+        path = files.get(name)
+        if not path or not Path(path).is_file():
+            return {}
+        try:
+            return json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    production = load_artifact("production_manifest.json")
+    rights = load_artifact("rights_manifest.json")
+    if "sources.json" in files and truth and production and rights:
+        try:
+            packet = create_review_packet(str(project_id), files, truth, production, rights, media_probe)
+            evidence["reviewer_packet"] = packet
+            evidence["contact_sheet"] = packet.get("contact_sheet_name", "CREATED")
+        except Exception as exc:
+            evidence["packet_creation_error"] = type(exc).__name__ + ": " + str(exc)[:1000]
+
+    (evidence_dir / (str(project_id) + "-failure-evidence.json")).write_text(
+        json.dumps(evidence, ensure_ascii=False, indent=2, default=str) + "\\n", encoding="utf-8"
+    )
+    return evidence
 
 
 def t1(s,b):

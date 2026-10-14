@@ -2259,6 +2259,15 @@ def _ci_test_visual(scene: Dict[str, Any], outdir: Path, index: int) -> Optional
         },
     }
 
+def _scene_asset_search_limit(index: int, getter_name: str) -> int:
+    """Use a wider free Openverse candidate page for later, easily-missed scenes."""
+    try:
+        scene_index = int(index)
+    except (TypeError, ValueError):
+        scene_index = 0
+    return 8 if getter_name == "_openverse_images" and scene_index >= 3 else 4
+
+
 def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_motion: bool = False, duration: float = 6.0) -> Dict[str, Any]:
     # Test fixture short-circuits external acquisition only when explicitly allow-listed by CI.
     ci_fixture = _ci_test_visual(scene, outdir, index)
@@ -2378,7 +2387,7 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         # at most twice per scene to reduce avoidable HTTP 429 bursts.
         for q in query_variants[:2]:
             try:
-                items=getter(q,outdir,limit=4)
+                items=getter(q,outdir,limit=_scene_asset_search_limit(index,getter.__name__))
             except Exception as exc:
                 source_failures.append(f"{getter.__name__}:{type(exc).__name__}:{str(exc)[:180]}")
                 continue
