@@ -741,44 +741,82 @@ def test_later_openverse_scenes_request_a_broader_free_candidate_pool():
 
 
 
-def test_curated_pexels_sources_are_scene_specific_and_rights_documented(monkeypatch, tmp_path):
-    scene = {
-        "heading": "What changes",
-        "visual_focus": "video editing workstation displaying a final cut on a computer monitor",
+def test_curated_pexels_sources_cover_four_distinct_creator_workflow_scenes(monkeypatch, tmp_path):
+    scenes = {
+        1: ("Hook", "content creator working at a video editing workstation", 14541040, "Alan Quirván"),
+        2: ("Why it matters", "creator recording a short video in a real studio with camera and microphone", 17196831, "Angel Moranchel"),
+        3: ("Practical example", "creator editing a vertical video timeline at a workstation, with camera microphone and lights nearby", 8102676, "Ron Lach"),
+        4: ("Takeaway", "finished edited video playing on a large studio display", 695730, "Francesco Paggiaro"),
     }
-    assert studio._curated_pexels_editorial_photo(scene, tmp_path, 2) is None
+    expected_pages = {
+        1: "https://www.pexels.com/photo/back-view-of-a-man-using-laptop-14541040/",
+        2: "https://www.pexels.com/photo/young-brunette-man-fixing-a-lavalier-microphone-to-his-shirt-17196831/",
+        3: "https://www.pexels.com/photo/man-sitting-at-the-desk-and-editing-footage-on-a-computer-8102676/",
+        4: "https://www.pexels.com/photo/computer-monitor-turned-on-695730/",
+    }
 
     def fake_download(url, path, **kwargs):
-        if "8102676" in url:
-            image = studio.Image.new("RGB", (1280, 720), (18, 35, 60))
-        elif "695730" in url:
-            image = studio.Image.new("RGB", (1280, 720), (70, 30, 15))
-        else:
-            raise AssertionError("Unexpected curated Pexels source: " + url)
-        image.save(path, "JPEG")
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        assert parsed.scheme == "https" and parsed.netloc == "images.pexels.com"
+        source_id = next((value for value in (14541040, 17196831, 8102676, 695730) if str(value) in url), None)
+        assert source_id in scenes, "Unexpected curated Pexels source: " + url
+        color = {
+            14541040: (18, 35, 60),
+            17196831: (110, 55, 95),
+            8102676: (70, 30, 15),
+            695730: (25, 115, 70),
+        }[source_id]
+        studio.Image.new("RGB", (1280, 720), color).save(path, "JPEG")
         return path
 
     monkeypatch.setattr(studio, "download", fake_download)
-    third_scene = studio._curated_pexels_editorial_photo(scene, tmp_path, 3)
-    assert third_scene is not None
-    assert studio._visual_candidate_relevant(third_scene, "content creator", scene["visual_focus"])
-    assert third_scene["source_url"] == "https://www.pexels.com/photo/man-sitting-at-the-desk-and-editing-footage-on-a-computer-8102676/"
-    assert third_scene["creator"] == "Ron Lach"
-    assert third_scene["source_id"] == 8102676
-    assert third_scene["license_url"] == "https://www.pexels.com/license/"
-    assert third_scene["commercial_use_state"] == "commercial_use_allowed_under_provider_terms"
-    assert third_scene["rights_status"] == "license_metadata_present"
+    results = []
+    for index, (heading, focus, source_id, creator) in scenes.items():
+        scene = {"heading": heading, "visual_focus": focus}
+        candidate = studio._curated_pexels_editorial_photo(scene, tmp_path, index)
+        assert candidate is not None, (index, scene)
+        assert studio._visual_candidate_relevant(candidate, "content creator", focus), candidate
+        assert candidate["source_id"] == source_id
+        assert candidate["creator"] == creator
+        assert candidate["source_url"] == expected_pages[index]
+        assert candidate["license_url"] == "https://www.pexels.com/license/"
+        assert candidate["commercial_use_state"] == "commercial_use_allowed_under_provider_terms"
+        assert candidate["rights_status"] == "license_metadata_present"
+        assert candidate["attribution"] == f"Photo by {creator} / Pexels"
+        results.append(candidate)
 
-    fourth_scene = studio._curated_pexels_editorial_photo(scene, tmp_path, 4)
-    assert fourth_scene is not None
-    assert studio._visual_candidate_relevant(fourth_scene, "content creator", scene["visual_focus"])
-    assert fourth_scene["source_url"] == "https://www.pexels.com/photo/computer-monitor-turned-on-695730/"
-    assert fourth_scene["creator"] == "Francesco Paggiaro"
-    assert fourth_scene["source_id"] == 695730
-    assert fourth_scene["license_url"] == "https://www.pexels.com/license/"
-    assert fourth_scene["commercial_use_state"] == "commercial_use_allowed_under_provider_terms"
-    assert fourth_scene["rights_status"] == "license_metadata_present"
-    assert studio.file_sha256(Path(third_scene["path"])) != studio.file_sha256(Path(fourth_scene["path"]))
+    assert len({studio.file_sha256(Path(row["path"])) for row in results}) == 4
+
+
+def test_uploaded_source_topic_inference_uses_extracted_text_and_preserves_explicit_topics():
+    request = {
+        "objective": (
+            "Turn the uploaded PDF into research-backed content: produce a podcast package, "
+            "video, article and social campaign with evidence and captions."
+        ),
+        "title": "Turn the uploaded PDF into",
+        "source_file_names": ["creator-brief.pdf"],
+    }
+    uploaded_sources = [{
+        "source": "user upload",
+        "title": "creator-brief.pdf",
+        "text_extracted": True,
+        "snippet": (
+            "Title: AI Infinity Creator Operating System\n"
+            "Brief: AI Infinity connects research, writing, visual selection and editing.\n"
+            "Delivery: Render narration, SRT captions, video, article, audio and social copy."
+        ),
+    }]
+    topic = studio._infer_uploaded_source_topic(request, uploaded_sources)
+    assert topic == "AI Infinity Creator Operating System", topic
+    research_request = {**request, "topic": topic, "title": topic}
+    assert studio._research_search_topic(research_request, topic) == (
+        "video editing workflow content creation captions subtitles accessibility creator software production"
+    )
+
+    explicit = {**request, "topic": "Renewable energy economics"}
+    assert studio._infer_uploaded_source_topic(explicit, uploaded_sources) == ""
 
 
 def test_raw_final_scene_gets_three_bounded_specific_search_queries():
