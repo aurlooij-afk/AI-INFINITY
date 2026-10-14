@@ -1650,22 +1650,37 @@ def _openverse_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str
         data = http_json(request_url, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 20))
         out = []
         for item in data.get("results", []):
-            image_url = item.get("url") or item.get("thumbnail")
-            if not image_url:
+            # Openverse's original media URL may have expired or be blocked while
+            # the indexed thumbnail remains available. Try both independently;
+            # a dead original must not discard a valid, same-record fallback.
+            image_urls = []
+            for candidate_url in (item.get("url"), item.get("thumbnail")):
+                candidate_url = str(candidate_url or "").strip()
+                if candidate_url and candidate_url not in image_urls:
+                    image_urls.append(candidate_url)
+            if not image_urls:
                 continue
-            raw_path = outdir / f"openverse_raw_{hashlib.sha256(str(image_url).encode()).hexdigest()[:12]}"
-            try:
-                download(
-                    image_url, raw_path,
-                    headers={"Accept":"image/avif,image/webp,image/apng,image/*,*/*;q=0.8"},
-                    timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 60), max_bytes=10_000_000
-                )
-                path = _normalize_image_file(raw_path, outdir, raw_path.stem.replace("openverse_raw_","openverse"))
-                if not path:
+            path = None
+            downloaded_url = None
+            for image_url in image_urls:
+                raw_path = outdir / f"openverse_raw_{hashlib.sha256(str(image_url).encode()).hexdigest()[:12]}"
+                try:
+                    download(
+                        image_url, raw_path,
+                        headers={"Accept":"image/avif,image/webp,image/apng,image/*,*/*;q=0.8"},
+                        timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 60), max_bytes=10_000_000
+                    )
+                    normalized = _normalize_image_file(raw_path, outdir, raw_path.stem.replace("openverse_raw_","openverse"))
+                    if normalized:
+                        path = normalized
+                        downloaded_url = image_url
+                        break
+                    raw_path.unlink(missing_ok=True)
+                except Exception as exc:
+                    _media_debug("openverse", exc)
+                    raw_path.unlink(missing_ok=True)
                     continue
-            except Exception as exc:
-                _media_debug("openverse", exc)
-                raw_path.unlink(missing_ok=True)
+            if path is None:
                 continue
             license_id = str(item.get("license") or "").strip()
             license_version = str(item.get("license_version") or "").strip()
@@ -1695,6 +1710,7 @@ def _openverse_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str
                 "category": item.get("category"),
                 "resolution": [item.get("width"), item.get("height")] if item.get("width") and item.get("height") else None,
                 "mime_type": item.get("filetype"),
+                "downloaded_media_url": downloaded_url,
                 "indexed_on": item.get("indexed_on"),
             }
             out.append(row)
