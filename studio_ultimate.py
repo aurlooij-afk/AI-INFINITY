@@ -757,6 +757,19 @@ def _infer_uploaded_source_topic(
     if not lines:
         return ""
 
+    # Prefer an explicit title label even when a PDF extractor returns the page
+    # as one line instead of preserving positioned text-line breaks.
+    labelled_heading = re.search(
+        r"\\b(?:document\\s+)?(?:title|subject)\\s*:\\s*([^\\n.!?]{5,140})",
+        text,
+        re.I,
+    )
+    if labelled_heading:
+        candidate = labelled_heading.group(1).strip(" .,:;-")
+        word_count = len(re.findall(r"[A-Za-z0-9][A-Za-z0-9'&+-]*", candidate))
+        if 2 <= word_count <= 14 and not _is_transform_derived_label(candidate):
+            return candidate[:140]
+
     # Prefer explicit document headings rather than summarizing production commands.
     for line in lines[:20]:
         match = re.match(r"^(?:title|subject|document title)\s*:\s*(.{5,180})$", line, re.I)
