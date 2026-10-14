@@ -2600,7 +2600,7 @@ def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: 
         return None
 
     heading = str(scene.get("heading") or "")
-    focus = re.sub(r"\\s+", " ", str(scene.get("visual_focus") or heading)).strip()
+    focus = re.sub(r"\s+", " ", str(scene.get("visual_focus") or heading)).strip()
     combined = (focus + " " + heading).lower()
     concepts = {
         key for key, pattern in _VISUAL_CONCEPTS.items()
