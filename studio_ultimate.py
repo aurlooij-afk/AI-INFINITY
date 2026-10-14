@@ -221,7 +221,7 @@ def _safe_open_get(url: str, headers: Optional[Dict[str, str]] = None, timeout: 
     if _external_providers_disabled():
         raise RuntimeError("external providers are disabled by runtime policy")
     current = str(url).strip()
-    hdrs = {"User-Agent": f"AI-Infinity/{VERSION}", **(headers or {})}
+    hdrs = {"User-Agent": f"AI-Infinity/{VERSION} (+https://github.com/aurlooij-afk/AI-INFINITY)", **(headers or {})}
     for _ in range(max(0, int(max_redirects)) + 1):
         if not url_host_safe(current):
             raise ValueError("remote URL must be HTTPS and resolve to a public host")
@@ -1285,7 +1285,7 @@ def _pexels(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
     if not key:
         return []
     try:
-        data = http_json("https://api.pexels.com/videos/search?" + urlencode({"query": query, "per_page": min(limit, 10), "orientation": "landscape"}), {"Authorization": key}, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 20))
+        data = http_json("https://api.pexels.com/v1/videos/search?" + urlencode({"query": query, "per_page": min(limit, 10), "orientation": "landscape"}), {"Authorization": key}, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 20))
         out = []
         for v in data.get("videos", []):
             files = sorted(v.get("video_files", []), key=lambda x: (x.get("width") or 0), reverse=True)
@@ -1488,6 +1488,11 @@ def _visual_search_query_variants(search_subject: str, focus: str, topic: str, r
     # differently from the user's brief. These are search hints, never relevance
     # or rights evidence.
     synonym_queries = (
+        # Prioritize compound concepts when captions/audio are part of the shot;
+        # broad "editor at computer" searches were missing the actual edit workflow.
+        ({"editing", "workstation", "captions"}, "video editing timeline captions subtitles computer monitor"),
+        ({"editing", "workstation", "audio"}, "video editing workstation audio waveform timeline"),
+        ({"editing", "captions"}, "video editing timeline subtitles caption track"),
         ({"editing", "workstation"}, "video editor computer workstation"),
         ({"editing"}, "video editing timeline editing software"),
         ({"camera", "studio"}, "filmmaker recording video studio camera"),
@@ -1497,7 +1502,7 @@ def _visual_search_query_variants(search_subject: str, focus: str, topic: str, r
         ({"captions"}, "video captions subtitles editing"),
         ({"storyboard"}, "film storyboard script shot list"),
         ({"creator"}, "content creator filming video studio"),
-        ({"finished_video"}, "finished video editing timeline playback"),
+        ({"finished_video"}, "finished video editing timeline playback computer monitor"),
     )
     for required, synonym in synonym_queries:
         if required.issubset(concepts):
