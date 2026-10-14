@@ -181,9 +181,9 @@ def create_review_packet(project_id, files, truth, production, rights, media_pro
 def t1(s,b):
     pid=create(s,b,"Create a professional 60-second AI Infinity launch video in English, 16:9, cinematic, research-backed, with voiceover, background music, captions, thumbnail, article, SEO metadata, social campaign package and production/rights manifests.",duration=60,format="long",aspect_ratio="16:9"); waitp(s,b,pid)
     reqd={"final.mp4","thumbnail.jpg","audio_master.mp3","captions.srt","article.md","seo.json","social_campaign.json","production_manifest.json","rights_manifest.json","package.zip"}; got=names(s,b,pid); assert reqd<=got,(reqd-got,got)
-    files={n:dl(s,b,pid,n) for n in reqd}; m=probe(files["final.mp4"]); dur=float((m.get("format")or{}).get("duration")or 0); assert 59<=dur<=61,m
-    assert any(x.get("codec_type")=="video" for x in m.get("streams",[])); assert any(x.get("codec_type")=="audio" for x in m.get("streams",[]))
     src=jart(s,b,pid,"sources.json"); assert int(src.get("source_count") or len(src.get("sources")or[]))>0,src
+    # Truth comes before final-file download: an unverified project must fail at
+    # the quality gate, not be reported as a misleading artifact-download error.
     truth=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/truth")
     assert truth.get("verified") is True and truth.get("state")=="VERIFIED", truth
     checks=truth.get("checks") or {}
@@ -192,6 +192,8 @@ def t1(s,b):
     assert checks.get("aspect_ratio_passed") is True and checks.get("requested_aspect_ratio") == "16:9", truth
     assert int(checks.get("actual_rendered_scene_count") or 0) >= int(checks.get("minimum_professional_scene_count") or 1), truth
     assert checks.get("visual_rights_evidence_present") is True, truth
+    files={n:dl(s,b,pid,n) for n in reqd}; m=probe(files["final.mp4"]); dur=float((m.get("format")or{}).get("duration")or 0); assert 59<=dur<=61,m
+    assert any(x.get("codec_type")=="video" for x in m.get("streams",[])); assert any(x.get("codec_type")=="audio" for x in m.get("streams",[]))
     production=jart(s,b,pid,"production_manifest.json")
     assert production.get("project_id")==pid and production.get("truthful") is True
     manifest_artifacts=production.get("artifacts") or []
