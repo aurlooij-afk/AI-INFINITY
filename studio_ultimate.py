@@ -2374,20 +2374,20 @@ def _parse_scene_visual_intent(
     topic = str(scene.get("topic") or scene.get("title") or "").strip()
     focus = str(scene.get("visual_focus") or "").strip()
     if not topic:
-        topic_match = re.search(r"\\babout\\s+(.+?)(?:;|\\.\\s|$)", ai_prompt, re.I)
+        topic_match = re.search(r"\babout\s+(.+?)(?:;|\.\s|$)", ai_prompt, re.I)
         topic = topic_match.group(1).strip(" .;,:") if topic_match else ""
     if not focus:
-        focus_match = re.search(r"\\bvisual focus\\s*:\\s*(.+?)(?:;|\\.\\s|$)", ai_prompt, re.I)
+        focus_match = re.search(r"\bvisual focus\s*:\s*(.+?)(?:;|\.\s|$)", ai_prompt, re.I)
         focus = focus_match.group(1).strip(" .;,:") if focus_match else ""
     if not topic:
         topic = re.split(
-            r"\\b(?:striking opening view|real-world context|close-up|concrete real-world example|resolved outcome|environment, setting|prototype, mechanism|process, tools|people using the idea|before-and-after|creator applying)\\b",
+            r"\b(?:striking opening view|real-world context|close-up|concrete real-world example|resolved outcome|environment, setting|prototype, mechanism|process, tools|people using the idea|before-and-after|creator applying)\b",
             raw_query,
             1,
             flags=re.I,
         )[0]
-    topic = re.sub(r"\\s+", " ", topic).strip(" .;,:")[:140] or heading or "documentary scene"
-    focus = re.sub(r"\\s+", " ", focus).strip(" .;,:")[:180]
+    topic = re.sub(r"\s+", " ", topic).strip(" .;,:")[:140] or heading or "documentary scene"
+    focus = re.sub(r"\s+", " ", focus).strip(" .;,:")[:180]
     return topic, focus
 
 
