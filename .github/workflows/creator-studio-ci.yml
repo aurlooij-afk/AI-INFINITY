@@ -68,8 +68,8 @@ jobs:
           AI_INFINITY_STUDIO_SMOKE: "1"
           AI_INFINITY_FAST_MODE: "1"
         run: |
-          python -m py_compile tests/live_creator_smoke.py
-          python -m pytest -q tests/test_storage_route_registration.py
+          python -m py_compile tests/live_creator_smoke.py tests/test_creator_entrypoint_truth_route.py
+          python -m pytest -q tests/test_storage_route_registration.py tests/test_creator_entrypoint_truth_route.py
       - name: Verify editorial scorecard and explicit human approval contract
         env:
           AI_INFINITY_DATA_DIR: "/tmp/ai-infinity-editorial-review-ci"
@@ -137,6 +137,7 @@ jobs:
               "/infinity/studio/open-source",
               "/infinity/studio/project/{project_id}/storyboard/apply",
               "/infinity/studio/project/{project_id}/transcript/clip",
+              "/infinity/studio/project/{project_id}/truth",
           }
           missing = sorted(required - production_paths)
           if missing:
