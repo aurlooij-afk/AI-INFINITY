@@ -683,3 +683,39 @@ def test_focus_lexical_overlap_can_resolve_unclassified_scene_concepts():
         unrelated, "AI Infinity launch", "software workflow dashboard"
     )
 
+def test_editing_workflow_queries_prefer_captions_and_waveform_specificity():
+    queries = studio._visual_search_query_variants(
+        search_subject="content creator",
+        focus="hands editing video clips audio waveforms and caption tracks on a workstation",
+        topic="AI Infinity launch",
+        raw_query="AI Infinity launch video",
+    )
+    assert len(queries) == 2
+    assert "infinity" not in " ".join(queries).lower()
+    assert "waveforms" in queries[0].lower()
+    assert "captions" in queries[1].lower()
+    assert "timeline" in queries[1].lower()
+    assert "monitor" in queries[1].lower()
+
+
+def test_pexels_video_adapter_uses_current_v1_endpoint(monkeypatch, tmp_path):
+    captured = {}
+    def fake_http_json(url, headers=None, timeout=20):
+        captured["url"] = url
+        captured["headers"] = headers or {}
+        return {"videos": [{
+            "id": 77, "url": "https://www.pexels.com/video/example/",
+            "user": {"name": "Example Creator"},
+            "video_files": [{"width": 1280, "height": 720, "link": "https://videos.pexels.com/example.mp4"}],
+        }]}
+    def fake_download(url, path, **kwargs):
+        Path(path).write_bytes(b"test video placeholder")
+        return Path(path)
+    monkeypatch.setenv("PEXELS_API_KEY", "test-api-key")
+    monkeypatch.setattr(studio, "http_json", fake_http_json)
+    monkeypatch.setattr(studio, "download", fake_download)
+    rows = studio._pexels("video editing timeline captions", tmp_path, limit=1)
+    assert "/v1/videos/search?" in captured["url"]
+    assert captured["headers"].get("Authorization") == "test-api-key"
+    assert len(rows) == 1
+    assert rows[0]["source_url"] == "https://www.pexels.com/video/example/"
