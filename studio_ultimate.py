@@ -1537,6 +1537,7 @@ def _visual_candidate_relevant(candidate: Dict[str, Any], search_subject: str, f
     text = re.sub(r"\s+", " ", text).strip()
     if not text:
         return False
+    metadata_terms = set(re.findall(r"[a-z0-9]{4,}", text))
 
     focus_text = str(focus or "").lower()
     subject_text = str(search_subject or "").lower()
