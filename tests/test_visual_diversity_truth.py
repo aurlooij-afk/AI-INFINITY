@@ -987,17 +987,20 @@ def test_library_of_congress_adapter_keeps_item_rights_review_required(monkeypat
 
 
 def test_caption_qc_uses_measured_narration_timeline_near_duration_boundary(monkeypatch, tmp_path):
-    """A 20.02s master with 20.00s speech needs four ≤5.75s cues, not five."""
+    """Equal-time cue timing avoids a >5.75s last cue after word balancing."""
     master = tmp_path / "master.mp4"
     master.write_bytes(b"x" * 12001)
     captions = tmp_path / "captions.srt"
-    captions.write_text(
-        "1\n00:00:00,000 --> 00:00:05,000\nFirst readable subtitle cue.\n\n"
-        "2\n00:00:05,000 --> 00:00:10,000\nSecond readable subtitle cue.\n\n"
-        "3\n00:00:10,000 --> 00:00:15,000\nThird readable subtitle cue.\n\n"
-        "4\n00:00:15,000 --> 00:00:20,000\nFourth readable subtitle cue.\n",
-        encoding="utf-8",
-    )
+    chapters = [{
+        "duration": 20.0,
+        "actual_duration": 20.0,
+        "narration": "Solar panels turn sunlight into electricity",
+    }]
+    studio.write_srt(chapters, captions)
+    srt_text = captions.read_text(encoding="utf-8")
+    assert sum(line.strip().isdigit() for line in srt_text.splitlines()) == 5
+    assert "00:00:16,000 --> 00:00:20,000" in srt_text
+
     monkeypatch.setattr(studio, "FAST_MODE", True)
     monkeypatch.setattr(studio, "SMOKE", True)
     monkeypatch.setattr(studio, "ffprobe_json", lambda path: {
@@ -1009,12 +1012,7 @@ def test_caption_qc_uses_measured_narration_timeline_near_duration_boundary(monk
     monkeypatch.setattr(studio, "probe_duration", lambda path: 20.02)
     monkeypatch.setattr(studio, "_audio_peak_db", lambda path: -15.0)
 
-    result = studio.quality_check(
-        master,
-        [{"duration": 20.0, "actual_duration": 20.0}],
-        [{"source": "test source"}],
-        captions,
-    )
+    result = studio.quality_check(master, chapters, [{"source": "test source"}], captions)
 
     assert result["checks"]["caption_count_matches_scenes"] is True
     assert result["checks"]["voice_video_duration_aligned"] is True
