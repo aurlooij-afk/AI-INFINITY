@@ -188,7 +188,30 @@ jobs:
               raise SystemExit("No project status returned")
           if final.get("status") not in {"completed","completed_with_qc_warnings"}:
               raise SystemExit("Real creator smoke production did not complete: " + str(final)[:4000])
-          required_artifacts = ["final.mp4","captions.srt","script.md","thumbnail.jpg","manifest.json","sources.json","audio_master.mp3"]
+          truth_response = client.get("/infinity/studio/project/" + project_id + "/truth")
+          if truth_response.status_code != 200:
+              raise SystemExit(f"Production truth unavailable: HTTP {truth_response.status_code}: {truth_response.text[:1000]}")
+          truth = truth_response.json() or {}
+          final_asset = client.get("/infinity/studio/project/" + project_id + "/asset/final.mp4")
+          if truth.get("verified") is True and truth.get("state") == "VERIFIED":
+              if final_asset.status_code != 200:
+                  raise SystemExit(f"Verified final artifact unavailable: HTTP {final_asset.status_code}: {final_asset.text[:500]}")
+              print("Smoke output independently verified; final.mp4 download allowed.")
+          else:
+              checks = truth.get("checks") or {}
+              if truth.get("publish_allowed_by_quality_gate") is True:
+                  raise SystemExit("Truth/quality gate contradiction: unverified project claims publishing permission")
+              if final_asset.status_code != 409:
+                  raise SystemExit(
+                      "Unverified final-delivery policy failed: expected HTTP 409, got "
+                      + str(final_asset.status_code) + ": " + final_asset.text[:500]
+                  )
+              print(
+                  "Smoke output correctly remains review-required; final.mp4 download blocked. "
+                  "source_visual_policy_passed=" + str(checks.get("source_visual_policy_passed"))
+                  + " fallback_visual_count=" + str(checks.get("fallback_visual_count"))
+              )
+          required_artifacts = ["captions.srt","script.md","thumbnail.jpg","manifest.json","sources.json","audio_master.mp3"]
           for name in required_artifacts:
               check = client.get("/infinity/studio/project/" + project_id + "/asset/" + name)
               if check.status_code != 200:
