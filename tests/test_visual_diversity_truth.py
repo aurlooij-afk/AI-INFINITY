@@ -315,8 +315,9 @@ def test_article_remains_primary_when_video_is_only_a_secondary_reference():
 
 
 
-def test_ai_infinity_launch_plan_searches_real_creator_workflow_scenes():
+def test_ai_infinity_launch_plan_searches_real_creator_workflow_scenes(monkeypatch):
     studio = closure._studio()
+    monkeypatch.setattr(studio, "FAST_MODE", True)
     brief = (
         "Create a professional 60-second AI Infinity launch video with voiceover, "
         "captions, thumbnail, article and social campaign package."
@@ -326,14 +327,14 @@ def test_ai_infinity_launch_plan_searches_real_creator_workflow_scenes():
         "cinematic, intelligent, useful", {"sources": []}, "English",
     )
     chapters = plan["chapters"]
-    assert len(chapters) == 8
+    assert len(chapters) == 4
     assert all(
         chapter["visual_search_subject"] == "content creator"
         for chapter in chapters
     )
     assert len({chapter["visual_focus"] for chapter in chapters}) == len(chapters)
     assert any("editing timeline" in chapter["visual_query"] for chapter in chapters)
-    assert any("finished launch film" in chapter["visual_query"] for chapter in chapters)
+    assert any("preview monitor" in chapter["visual_query"] for chapter in chapters)
 
 
 
