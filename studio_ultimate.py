@@ -3401,10 +3401,12 @@ def write_srt(chapters: List[Dict[str, Any]], path: Path) -> None:
                     balanced.append(words[left:right])
             chunks = balanced
 
-        total_weight = max(1, sum(len(chunk) for chunk in chunks))
         elapsed = 0.0
         for j, chunk in enumerate(chunks):
-            cue_duration = d - elapsed if j == len(chunks) - 1 else d * len(chunk) / total_weight
+            # The cues are already segmented by word count; give them equal
+            # intervals so one slightly longer final group cannot exceed the
+            # 5.75-second QC ceiling due to weighted timing.
+            cue_duration = d - elapsed if j == len(chunks) - 1 else d / max(1, len(chunks))
             wrapped = []
             line = ""
             for word in chunk:
