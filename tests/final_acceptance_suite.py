@@ -82,8 +82,24 @@ def sha(p):
 def probe(p):
     x=subprocess.run(["ffprobe","-v","error","-show_format","-show_streams","-of","json",str(p)],capture_output=True,text=True,timeout=120); assert x.returncode==0,x.stderr; return json.loads(x.stdout)
 def pdf(path):
-    text="AI Infinity acceptance source. Real PDF document for research, script, podcast, video, article and social packaging."
-    stream=f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode("ascii")
+    # A small but real, text-extractable source brief. The acceptance test should
+    # prove that upload content drives the project topic, not just that a PDF exists.
+    lines = [
+        "Title: AI Infinity Creator Operating System",
+        "Brief: AI Infinity connects research writing visual selection and editing.",
+        "Source rights: Record creator item page license terms and file SHA-256.",
+        "Delivery: Render narration captions video article audio and social copy.",
+        "Quality: Verify duration aspect ratio media decode and audio.",
+        "Recovery: Reload saved projects and confirm artifact checksums after restart.",
+    ]
+    def escape_pdf_string(value):
+        return value.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    operations = ["BT /F1 12 Tf 72 720 Td"]
+    for index, line in enumerate(lines):
+        if index:
+            operations.append("T*")
+        operations.append(f"({escape_pdf_string(line)}) Tj")
+    stream = (" ".join(operations) + " ET").encode("ascii")
     objs=[b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n",b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n",b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n",b"4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n",b"5 0 obj << /Length "+str(len(stream)).encode()+b" >> stream\n"+stream+b"\nendstream endobj\n"]
     out=bytearray(b"%PDF-1.4\n"); offs=[0]
     for o in objs:offs.append(len(out));out.extend(o)
@@ -360,8 +376,14 @@ def t3(s,b):
     assert up.json().get("text_extracted") is True,up.text
     pid=create(s,b,"Turn the uploaded PDF into research-backed content: produce a podcast package, video, article and social campaign with evidence, captions and a final production package.",source_file_names=[f.name],content_type="video",duration=20,format="short"); waitp(s,b,pid)
     got=names(s,b,pid); assert {"final.mp4","podcast_rss.xml","article.md","social_campaign.json","sources.json","captions.srt"}<=got,got
-    src=jart(s,b,pid,"sources.json"); assert any(str(x.get("title"))==f.name for x in src.get("sources",[])),src
-    return {"test":3,"project_id":pid,"pdf_executed":True}
+    src=jart(s,b,pid,"sources.json")
+    uploaded = [x for x in src.get("sources",[]) if str(x.get("title"))==f.name and x.get("source")=="user upload"]
+    assert uploaded and uploaded[0].get("text_extracted") is True,src
+    assert "AI Infinity Creator Operating System" in str(uploaded[0].get("snippet") or uploaded[0].get("summary") or ""),uploaded[0]
+    script=dl(s,b,pid,"script.md").read_text(encoding="utf-8")
+    assert script.startswith("# AI Infinity Creator Operating System"),script[:1200]
+    assert "source" in script.lower() and "captions" in script.lower(),script[:2000]
+    return {"test":3,"project_id":pid,"pdf_executed":True,"upload_topic_used":"AI Infinity Creator Operating System"}
 def t4(s,b):
     pid=create(s,b,"Create a 20-second research-backed video article package about Python's official website with evidence, captions, SEO and social copy.",duration=20,format="short",reference_urls=[PYURL]); waitp(s,b,pid)
     got=names(s,b,pid); assert {"final.mp4","thumbnail.jpg","captions.srt","article.md","seo.json","social_campaign.json","sources.json"}<=got,got
