@@ -777,3 +777,19 @@ def test_raw_final_scene_gets_three_bounded_specific_search_queries():
     assert len(queries) == 3, queries
     assert queries[1] == "video editing before after raw footage finished cut", queries
     assert queries[2] == "video editor reviewing completed edit preview monitor footage playback export", queries
+
+
+
+def test_visual_prompt_parsing_recovers_subject_and_scene_focus():
+    topic, focus = studio._parse_scene_visual_intent(
+        {},
+        (
+            "Premium editorial documentary image about AI Infinity launch; "
+            "visual focus: before-and-after comparison of raw footage and a finished "
+            "edited film on screens; realistic cinematic lighting"
+        ),
+        "content creator before-and-after comparison of raw footage",
+        "What comes next",
+    )
+    assert topic == "AI Infinity launch", topic
+    assert focus == "before-and-after comparison of raw footage and a finished edited film on screens", focus
