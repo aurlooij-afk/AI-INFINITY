@@ -1706,14 +1706,7 @@ def _visual_search_query_variants(search_subject: str, focus: str, topic: str, r
         ({"creator"}, "content creator filming video studio"),
     )
     if "raw_final" in concepts:
-        # Literal before/after stock clips are rare; search for the actual
-        # observable editorial context without relaxing source relevance checks.
-        add("video editing before after raw footage finished cut")
-        add("video editor reviewing completed edit preview monitor footage playback export")
-    elif "finished_video" in concepts:
-        add("finished video playback monitor preview screen editing")
-    else:
-        if "raw_final" in concepts:
+        # Raw-to-finished editing needs explicit editorial queries before generic terms.
         add("video editing before after raw footage finished cut")
         add("video editor reviewing completed edit preview monitor footage playback export")
         add("video editing timeline final cut preview screen captions")
