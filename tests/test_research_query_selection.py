@@ -33,3 +33,16 @@ def test_subject_is_extracted_when_title_and_topic_are_generic():
         "objective": "Create a useful 20-second explainer about renewable energy.",
     }
     assert studio_ultimate._research_query_from_request(request) == "renewable energy"
+
+
+
+def test_command_shaped_topic_does_not_override_a_clean_title():
+    request = {
+        "topic": (
+            "Create a professional 60-second AI Infinity launch video in English, "
+            "16:9, cinematic, research-backed, with voiceover, captions and SEO metadata."
+        ),
+        "title": "AI Infinity launch",
+        "objective": "Create a professional launch video.",
+    }
+    assert studio_ultimate._research_query_from_request(request) == "AI Infinity launch"

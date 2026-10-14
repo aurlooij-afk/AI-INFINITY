@@ -604,35 +604,53 @@ def download(url: str, path: Path, headers: Optional[Dict[str, str]] = None, tim
         raise
 
 def _research_query_from_request(req: Dict[str, Any], fallback: str = "") -> str:
-    """Choose the user's subject rather than a long production-instructions paragraph."""
+    """Prefer a clean subject/title over a command-shaped production brief."""
     generic = {
         "", "video", "film", "short", "reel", "podcast", "article", "blog", "social",
         "content", "ai content", "new project", "untitled", "untitled project",
         "creator project", "video project", "new video",
     }
-    topic = re.sub(r"\s+", " ", str(req.get("topic") or "")).strip()
-    if topic and topic.casefold() not in generic:
-        return topic[:500]
 
-    title = re.sub(r"\s+", " ", str(req.get("title") or "")).strip()
-    if title and title.casefold() not in generic:
+    def normalize(value: Any) -> str:
+        return re.sub(r"\\s+", " ", str(value or "")).strip()
+
+    def is_command(value: str) -> bool:
+        return bool(re.match(
+            r"^(?:please\\s+)?(?:create|make|generate|produce|build|write|draft|develop)\\b",
+            value,
+            re.I,
+        ))
+
+    def is_subject(value: str) -> bool:
+        return bool(value) and value.casefold() not in generic and not is_command(value)
+
+    topic = normalize(req.get("topic"))
+    title = normalize(req.get("title"))
+    objective = normalize(req.get("objective") or fallback)
+
+    # An explicit short subject wins. Canonical natural-language commands may
+    # populate topic with the entire instruction; do not send that paragraph to
+    # public search when a clean title is available.
+    if is_subject(topic):
+        return topic[:500]
+    if is_subject(title):
         return title[:500]
 
-    objective = re.sub(r"\s+", " ", str(req.get("objective") or fallback or "")).strip()
-    # Recover the subject from common natural-language briefs when no explicit
-    # topic/title exists; stop before production add-ons and delivery formats.
-    match = re.search(
-        r"\b(?:video|film|explainer|documentary|podcast|article|blog|post)\s+"
-        r"(?:about|on|covering|exploring)\s+(.+?)"
-        r"(?=,|;|\.|$|\s+(?:with|in|for|using|including)\s+)",
-        objective,
-        re.I,
-    )
-    if match:
-        subject = match.group(1).strip(" .,:;-")
-        if subject:
-            return subject[:500]
-    return (objective or title or fallback).strip()[:500]
+    # Extract a real subject if the caller has not supplied a meaningful title.
+    for candidate in (objective, topic):
+        match = re.search(
+            r"\\b(?:video|film|explainer|documentary|podcast|article|blog|post)\\s+"
+            r"(?:about|on|covering|exploring)\\s+(.+?)"
+            r"(?=,|;|\\.|$|\\s+(?:with|in|for|using|including)\\s+)",
+            candidate,
+            re.I,
+        )
+        if match:
+            subject = match.group(1).strip(" .,:;-")
+            if subject:
+                return subject[:500]
+
+    return (objective or topic or title or fallback).strip()[:500]
 
 
 def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
