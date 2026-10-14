@@ -236,6 +236,31 @@ def _canonical_state(p: Dict[str, Any]) -> str:
         return "GENERATING"
     return "DRAFT"
 
+def _persist_project_truth_status(s: Any, p: Dict[str, Any], verified: bool) -> None:
+    """Keep the persisted project state aligned with the independent truth gate.
+
+    Rendering can complete while professional verification fails. Such work is a
+    review-required draft, not a VERIFIED project. Conversely, a recovered project
+    may be promoted only after the independent truth contract passes.
+    """
+    status = str(p.get("status") or "").lower()
+    if status not in {"completed", "completed_with_qc_warnings"}:
+        return
+    desired = "completed" if verified else "completed_with_qc_warnings"
+    if status == desired:
+        return
+    stage = "completed" if verified else "quality_review_required"
+    with s.DB_LOCK, s._connect() as c:
+        c.execute(
+            "UPDATE studio_projects_3610 SET status=?,stage=?,updated_at=? "
+            "WHERE project_id=? AND status IN ('completed','completed_with_qc_warnings')",
+            (desired, stage, _now(), str(p.get("project_id") or "")),
+        )
+    # Keep this request's truth response consistent with the durable row write.
+    p["status"] = desired
+    p["stage"] = stage
+
+
 def _parse_blueprint(p: Dict[str, Any]) -> Dict[str, Any]:
     b = p.get("blueprint_json")
     if isinstance(b, dict):
@@ -1004,6 +1029,7 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         and checks["persisted_qc_passed"]
         and not failures
     )
+    _persist_project_truth_status(s, p, verified)
     return {
         "version": CLOSURE_VERSION,
         "truthful": True,
