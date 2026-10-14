@@ -1561,6 +1561,9 @@ def _visual_search_query_variants(search_subject: str, focus: str, topic: str, r
             add(synonym)
             break
 
+    if "raw_final" in concepts:
+        add("video editor reviewing completed edit preview monitor footage playback export")
+
     # If there is no known concept synonym, combine meaningful topic and focus
     # words. Never spend both per-provider query attempts on the product brand.
     add(" ".join((topic_terms[:3] + focus_terms[:4] + subject_terms[:2])[:7]))

@@ -706,8 +706,9 @@ def test_raw_final_scene_has_a_specific_editing_search_synonym():
         topic="AI Infinity launch",
         raw_query="content creator before-and-after comparison of raw footage and a finished edited film on screens documentary photography",
     )
-    assert len(queries) == 2, queries
-    assert "video editing before after raw footage finished cut" in queries, queries
+    assert len(queries) == 3, queries
+    assert queries[1] == "video editing before after raw footage finished cut", queries
+    assert queries[2] == "video editor reviewing completed edit preview monitor footage playback export", queries
 
 
 
