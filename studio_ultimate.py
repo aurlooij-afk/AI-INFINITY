@@ -4234,7 +4234,7 @@ def _update_project(project_id: str, **fields: Any) -> None:
     if not fields:
         return
     fields["updated_at"] = now()
-    allowed = {"title", "status", "blueprint_json", "result_json", "error", "updated_at", "progress", "stage", "current_scene", "total_scenes", "attempt"}
+    allowed = {"title", "status", "request_json", "blueprint_json", "result_json", "error", "updated_at", "progress", "stage", "current_scene", "total_scenes", "attempt"}
     clean = {k: v for k, v in fields.items() if k in allowed}
     sets = ",".join(f"{k}=?" for k in clean)
     vals = list(clean.values()) + [project_id]
