@@ -840,3 +840,171 @@ def test_fast_product_launch_plan_uses_four_complete_story_scenes(monkeypatch):
     assert len(script.split()) >= 60
     assert "research" in script.lower() and "captions" in script.lower()
     assert all(x["narration"].rstrip().endswith((".", "!", "?")) for x in chapters)
+
+
+
+def _write_test_jpeg(studio, path: Path, color=(35, 95, 145)):
+    """Write a real, decodable image so source adapter tests exercise normalization."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    studio.Image.new("RGB", (1280, 720), color).save(path, "JPEG")
+    return path
+
+
+def test_pexels_photo_adapter_preserves_asset_identity_and_license(monkeypatch, tmp_path):
+    monkeypatch.setenv("PEXELS_API_KEY", "test-pexels-key")
+
+    def fake_json(url, headers=None, timeout=20):
+        assert url.startswith("https://api.pexels.com/v1/search?")
+        assert headers == {"Authorization": "test-pexels-key"}
+        return {
+            "photos": [{
+                "id": 695730,
+                "url": "https://www.pexels.com/photo/computer-monitor-turned-on-695730/",
+                "photographer": "Francesco Paggiaro",
+                "alt": "computer monitor showing a video editing timeline",
+                "width": 1280,
+                "height": 720,
+                "src": {"large2x": "https://images.pexels.com/photos/695730/example.jpeg"},
+            }]
+        }
+
+    def fake_download(url, path, **kwargs):
+        assert url == "https://images.pexels.com/photos/695730/example.jpeg"
+        return _write_test_jpeg(studio, path)
+
+    monkeypatch.setattr(studio, "http_json", fake_json)
+    monkeypatch.setattr(studio, "download", fake_download)
+    rows = studio._pexels_photos("video editing timeline", tmp_path, limit=1)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["kind"] == "image"
+    assert row["source"] == "Pexels"
+    assert row["source_id"] == 695730
+    assert row["source_url"] == "https://www.pexels.com/photo/computer-monitor-turned-on-695730/"
+    assert row["creator"] == "Francesco Paggiaro"
+    assert row["license_url"] == "https://www.pexels.com/license/"
+    assert row["rights_status"] == "license_metadata_present"
+    assert row["commercial_use_state"] == "commercial_use_allowed_under_provider_terms"
+    assert studio.Image.open(row["path"]).size == (1280, 720)
+
+
+def test_pixabay_image_adapter_preserves_asset_identity_and_license(monkeypatch, tmp_path):
+    monkeypatch.setenv("PIXABAY_API_KEY", "test-pixabay-key")
+
+    def fake_json(url, headers=None, timeout=20):
+        from urllib.parse import parse_qs, urlparse
+        parsed = urlparse(url)
+        assert parsed.scheme == "https" and parsed.netloc == "pixabay.com"
+        assert parsed.path == "/api/"
+        params = parse_qs(parsed.query)
+        assert params["key"] == ["test-pixabay-key"]
+        assert params["q"] == ["solar panel farm"]
+        assert params["safesearch"] == ["true"]
+        return {
+            "hits": [{
+                "id": 123456,
+                "pageURL": "https://pixabay.com/photos/solar-panel-farm-123456/",
+                "user": "Example Photographer",
+                "tags": "solar panel, renewable energy, farm",
+                "imageWidth": 1280,
+                "imageHeight": 720,
+                "largeImageURL": "https://pixabay.com/get/example-large.jpg",
+            }]
+        }
+
+    def fake_download(url, path, **kwargs):
+        assert url == "https://pixabay.com/get/example-large.jpg"
+        return _write_test_jpeg(studio, path, color=(25, 115, 70))
+
+    monkeypatch.setattr(studio, "http_json", fake_json)
+    monkeypatch.setattr(studio, "download", fake_download)
+    rows = studio._pixabay_images("solar panel farm", tmp_path, limit=1)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["kind"] == "image"
+    assert row["source"] == "Pixabay"
+    assert row["source_id"] == 123456
+    assert row["creator"] == "Example Photographer"
+    assert "renewable energy" in row["tags"]
+    assert row["source_url"] == "https://pixabay.com/photos/solar-panel-farm-123456/"
+    assert row["license_url"] == "https://pixabay.com/service/license-summary/"
+    assert row["rights_status"] == "license_metadata_present"
+    assert row["commercial_use_state"] == "commercial_use_allowed_under_provider_terms"
+    assert studio.Image.open(row["path"]).size == (1280, 720)
+
+
+def test_library_of_congress_adapter_keeps_item_rights_review_required(monkeypatch, tmp_path):
+    def fake_json(url, headers=None, timeout=20):
+        assert url.startswith("https://www.loc.gov/photos/?")
+        return {
+            "results": [{
+                "id": "https://www.loc.gov/item/loc-test-1/",
+                "url": "https://www.loc.gov/item/loc-test-1/",
+                "title": "Solar panels at an energy research site",
+                "description": "Solar panels on a research facility.",
+                "contributor": ["Example Creator"],
+                "rights": "Rights Advisory: consult the individual item record.",
+                "image_url": [
+                    "https://tile.loc.gov/storage-services/small.jpg",
+                    "https://tile.loc.gov/storage-services/large.jpg",
+                ],
+            }]
+        }
+
+    def fake_download(url, path, **kwargs):
+        assert url == "https://tile.loc.gov/storage-services/large.jpg"
+        return _write_test_jpeg(studio, path, color=(145, 95, 25))
+
+    monkeypatch.setattr(studio, "http_json", fake_json)
+    monkeypatch.setattr(studio, "download", fake_download)
+    rows = studio._loc_images("solar panels", tmp_path, limit=1)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["source"] == "Library of Congress"
+    assert row["source_url"] == "https://www.loc.gov/item/loc-test-1/"
+    assert row["rights_advisory"].startswith("Rights Advisory:")
+    assert row["rights_status"] == "REVIEW_REQUIRED"
+    assert row["commercial_use_state"] == "UNKNOWN_REVIEW_REQUIRED"
+    assert row["license_url"] is None
+    assert closure._rights_evidence_state(row) == "review_required"
+    assert studio.Image.open(row["path"]).size == (1280, 720)
+
+
+def test_caption_qc_uses_measured_narration_timeline_near_duration_boundary(monkeypatch, tmp_path):
+    """A 20.02s master with 20.00s speech needs four ≤5.75s cues, not five."""
+    master = tmp_path / "master.mp4"
+    master.write_bytes(b"x" * 12001)
+    captions = tmp_path / "captions.srt"
+    captions.write_text(
+        "1\n00:00:00,000 --> 00:00:05,000\nFirst readable subtitle cue.\n\n"
+        "2\n00:00:05,000 --> 00:00:10,000\nSecond readable subtitle cue.\n\n"
+        "3\n00:00:10,000 --> 00:00:15,000\nThird readable subtitle cue.\n\n"
+        "4\n00:00:15,000 --> 00:00:20,000\nFourth readable subtitle cue.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(studio, "FAST_MODE", True)
+    monkeypatch.setattr(studio, "SMOKE", True)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda path: {
+        "streams": [
+            {"codec_type": "video", "codec_name": "h264", "width": 1080, "height": 1920},
+            {"codec_type": "audio", "codec_name": "aac", "duration": "20.000"},
+        ]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda path: 20.02)
+    monkeypatch.setattr(studio, "_audio_peak_db", lambda path: -15.0)
+
+    result = studio.quality_check(
+        master,
+        [{"duration": 20.0, "actual_duration": 20.0}],
+        [{"source": "test source"}],
+        captions,
+    )
+
+    assert result["checks"]["caption_count_matches_scenes"] is True
+    assert result["checks"]["voice_video_duration_aligned"] is True
+    assert result["checks"]["scene_count"] is True
+    assert result["checks"]["visual_assets_present"] is True
+    assert result["checks"]["fallback_visual_policy_passed"] is True
