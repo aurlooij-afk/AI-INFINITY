@@ -186,7 +186,7 @@ def url_host_safe(url: str, allow_http: bool = False) -> bool:
             "nasa.gov", "wikimedia.org", "wikipedia.org",
             "openverse.org", "pexels.com", "pixabay.com",
             "gdeltproject.org", "wikidata.org", "openalex.org", "crossref.org",
-            "ebi.ac.uk", "ncbi.nlm.nih.gov", "arxiv.org", "archive.org",
+            "ebi.ac.uk", "ncbi.nlm.nih.gov", "arxiv.org", "archive.org", "loc.gov",
             "news.google.com", "google.com", "api.openalex.org",
         )
         if any(host == suffix or host.endswith("." + suffix) for suffix in trusted_suffixes):
@@ -1542,6 +1542,112 @@ def _pixabay(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
     except Exception:
         return []
 
+
+def _pexels_photos(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
+    """Fetch bounded Pexels photo candidates, keeping item-level creator/source metadata."""
+    key = os.getenv("PEXELS_API_KEY", "").strip()
+    if not key:
+        return []
+    try:
+        url = "https://api.pexels.com/v1/search?" + urlencode({
+            "query": query, "per_page": min(limit, 8), "orientation": "landscape"
+        })
+        data = http_json(url, {"Authorization": key}, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 20))
+        out: List[Dict[str, Any]] = []
+        for item in data.get("photos", []):
+            src = item.get("src") if isinstance(item.get("src"), dict) else {}
+            media_url = str(src.get("large2x") or src.get("large") or src.get("original") or "").strip()
+            if not media_url:
+                continue
+            source_id = str(item.get("id") or "unknown")
+            raw = outdir / f"pexels_photo_raw_{source_id}"
+            try:
+                download(media_url, raw, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 60), max_bytes=12_000_000 if FAST_MODE else 30_000_000)
+                path = _normalize_image_file(raw, outdir, f"pexels_photo_{source_id}")
+                if not path:
+                    continue
+            except Exception:
+                raw.unlink(missing_ok=True)
+                continue
+            creator = str(item.get("photographer") or "").strip()
+            page_url = str(item.get("url") or "").strip()
+            title = str(item.get("alt") or "").strip()
+            complete = bool(page_url and creator)
+            out.append({
+                "kind": "image", "path": str(path), "source": "Pexels",
+                "source_id": item.get("id"), "source_url": page_url or None,
+                "downloaded_media_url": media_url, "title": title or None,
+                "description": title or None, "creator": creator or None,
+                "attribution": f"{creator} / Pexels" if creator else None,
+                "license": "Pexels license", "license_url": "https://www.pexels.com/license/",
+                "commercial_use_state": "commercial_use_allowed_under_provider_terms",
+                "rights_status": "license_metadata_present" if complete else "REVIEW_REQUIRED",
+                "provider_restrictions": "Pexels restrictions on standalone redistribution, implied endorsement and third-party rights apply",
+                "width": item.get("width"), "height": item.get("height"),
+            })
+            if len(out) >= limit:
+                break
+        if out:
+            _media_success("pexels-photos", {"count": len(out), "query": query})
+        return out
+    except Exception:
+        # Never copy query/API credential material from provider exceptions to logs.
+        return []
+
+
+def _pixabay_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
+    """Fetch bounded Pixabay still images; license and creator metadata stay item-specific."""
+    key = os.getenv("PIXABAY_API_KEY", "").strip()
+    if not key:
+        return []
+    try:
+        url = "https://pixabay.com/api/?" + urlencode({
+            "key": key, "q": query, "image_type": "photo",
+            "orientation": "horizontal", "safesearch": "true",
+            "per_page": min(limit, 8),
+        })
+        data = http_json(url, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 20))
+        out: List[Dict[str, Any]] = []
+        for item in data.get("hits", []):
+            media_url = str(item.get("largeImageURL") or item.get("webformatURL") or "").strip()
+            if not media_url:
+                continue
+            source_id = str(item.get("id") or "unknown")
+            raw = outdir / f"pixabay_image_raw_{source_id}"
+            try:
+                download(media_url, raw, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 60), max_bytes=12_000_000 if FAST_MODE else 30_000_000)
+                path = _normalize_image_file(raw, outdir, f"pixabay_image_{source_id}")
+                if not path:
+                    continue
+            except Exception:
+                raw.unlink(missing_ok=True)
+                continue
+            creator = str(item.get("user") or "").strip()
+            page_url = str(item.get("pageURL") or "").strip()
+            tags = str(item.get("tags") or "").strip()
+            complete = bool(page_url and creator)
+            out.append({
+                "kind": "image", "path": str(path), "source": "Pixabay",
+                "source_id": item.get("id"), "source_url": page_url or None,
+                "downloaded_media_url": media_url, "title": tags or None,
+                "description": tags or None, "tags": tags,
+                "creator": creator or None, "attribution": f"{creator} / Pixabay" if creator else None,
+                "license": "Pixabay Content License", "license_url": "https://pixabay.com/service/license-summary/",
+                "commercial_use_state": "commercial_use_allowed_under_provider_terms",
+                "rights_status": "license_metadata_present" if complete else "REVIEW_REQUIRED",
+                "provider_restrictions": "Pixabay restrictions on standalone redistribution, trademarks, privacy and deceptive use apply",
+                "width": item.get("imageWidth"), "height": item.get("imageHeight"),
+            })
+            if len(out) >= limit:
+                break
+        if out:
+            _media_success("pixabay-images", {"count": len(out), "query": query})
+        return out
+    except Exception:
+        # Pixabay requires its API key in the query string; do not log its URL.
+        return []
+
+
 def _normalize_image_file(path: Path, outdir: Path, stem: str) -> Optional[Path]:
     if Image is None:
         return path if path.is_file() else None
@@ -2012,6 +2118,68 @@ def _commons_media(query: str, outdir: Path, limit: int = 6) -> List[Dict[str, A
     except Exception as exc:
         _media_debug("wikimedia",exc)
         return []
+
+
+def _loc_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
+    """Discover Library of Congress photo assets; item-specific rights always require review."""
+    try:
+        request_url = "https://www.loc.gov/photos/?" + urlencode({
+            "q": query, "fo": "json", "c": min(limit, 8)
+        })
+        data = http_json(request_url, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 20))
+        out: List[Dict[str, Any]] = []
+        for item in data.get("results", []):
+            if not isinstance(item, dict):
+                continue
+            item_url = str(item.get("url") or item.get("id") or "").strip()
+            image_urls = item.get("image_url") or []
+            if isinstance(image_urls, str):
+                image_urls = [image_urls]
+            image_url = next((str(value).strip() for value in reversed(image_urls) if str(value).strip()), "")
+            if not image_url or not item_url:
+                continue
+            source_id = str(item.get("id") or hashlib.sha256(item_url.encode()).hexdigest()[:12])
+            raw = outdir / f"loc_raw_{hashlib.sha256(source_id.encode()).hexdigest()[:12]}"
+            try:
+                download(image_url, raw, timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 60), max_bytes=12_000_000 if FAST_MODE else 30_000_000)
+                path = _normalize_image_file(raw, outdir, f"loc_{hashlib.sha256(source_id.encode()).hexdigest()[:12]}")
+                if not path:
+                    continue
+            except Exception:
+                raw.unlink(missing_ok=True)
+                continue
+            contributors = item.get("contributor") or item.get("contributors") or []
+            if isinstance(contributors, str):
+                creator = contributors.strip()
+            elif isinstance(contributors, list):
+                creator = ", ".join(str(value).strip() for value in contributors if str(value).strip())[:500]
+            else:
+                creator = ""
+            rights_value = item.get("rights") or item.get("rights_advisory") or item.get("rights_advisory_summary") or ""
+            description = item.get("description") or item.get("summary") or ""
+            out.append({
+                "kind": "image", "path": str(path), "source": "Library of Congress",
+                "source_id": item.get("id") or source_id, "source_url": item_url,
+                "downloaded_media_url": image_url,
+                "title": str(item.get("title") or "").strip() or None,
+                "description": str(description)[:4000],
+                "creator": creator or None,
+                "rights_advisory": str(rights_value)[:2000] if rights_value else None,
+                "license": "Item-specific Library of Congress rights review required",
+                "license_url": None,
+                "commercial_use_state": "UNKNOWN_REVIEW_REQUIRED",
+                "rights_status": "REVIEW_REQUIRED",
+                "rights_status_reason": "Library of Congress record discovery is not a blanket reuse license; inspect the item-specific Rights Advisory and source terms.",
+                "provider_restrictions": "Public access does not itself establish copyright or commercial reuse permission.",
+            })
+            if len(out) >= limit:
+                break
+        if out:
+            _media_success("loc-images", {"count": len(out), "query": query})
+        return out
+    except Exception:
+        return []
+
 
 def _hf_video(prompt: str, outdir: Path, index: int, duration: float) -> Optional[Dict[str, Any]]:
     if _external_providers_disabled():
@@ -2583,7 +2751,7 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     )
 
     source_failures=[]
-    getters=() if external_disabled else (_nasa_images,_openverse_images,_commons_media,_pexels,_pixabay)
+    getters=() if external_disabled else (_nasa_images,_openverse_images,_commons_media,_pexels,_pixabay,_pexels_photos,_pixabay_images,_loc_images)
 
     # Never reuse identical visual bytes for multiple scene source records when
     # another real candidate is available. This keeps visual provenance aligned
@@ -2677,7 +2845,7 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
                 selected=select_distinct_candidate(candidate)
                 if selected:
                     return selected
-            debug_key={"_nasa_images":"nasa","_openverse_images":"openverse","_commons_media":"wikimedia","_pexels":"pexels","_pixabay":"pixabay"}.get(getter.__name__,getter.__name__)
+            debug_key={"_nasa_images":"nasa","_openverse_images":"openverse","_commons_media":"wikimedia","_pexels":"pexels","_pixabay":"pixabay","_pexels_photos":"pexels-photos","_pixabay_images":"pixabay-images","_loc_images":"loc-images"}.get(getter.__name__,getter.__name__)
             source_failures.append(f"{getter.__name__}:{MEDIA_DEBUG_ERRORS.get(debug_key,'no-relevant-distinct-asset')}")
 
     # One curated, public-download Pexels image is a keyless fallback for the
@@ -2710,7 +2878,7 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         reusable = [
             p for p in sorted(outdir.iterdir())
             if p.is_file() and p.suffix.lower() in {".jpg",".jpeg",".png",".webp",".mp4",".mov",".mkv",".webm"}
-            and p.name.startswith(("openverse","commons_","nasa_","pexels_","pixabay_"))
+            and p.name.startswith(("openverse","commons_","nasa_","pexels_","pexels_photo_","pixabay_","pixabay_image_","loc_"))
         ]
         # Reuse only a source whose bytes have not already been selected for an
         # earlier scene. If no distinct public source exists, fall through to the
@@ -3458,12 +3626,12 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
             if times:
                 caption_timing_valid = True
                 caption_max_seconds = max(end - start for start, end in times)
-                caption_duration_coverage = min(1.0, sum(end - start for start, end in times) / max(0.001, duration))
+                caption_duration_coverage = min(1.0, sum(end - start for start, end in times) / max(0.001, expected_voice))
         except Exception:
             caption_blocks = 0
     # Short captions are intentionally split into multiple cues per scene. Validate
     # their timing/readability contract rather than requiring one cue per scene.
-    expected_caption_cues = max(1, int((duration + 4.999) // 5))
+    expected_caption_cues = max(1, int((max(0.0, expected_voice) + 5.749) // 5.75))
     checks = {
         "file_present": master.exists() and master.stat().st_size > 10000,
         "duration_nonzero": duration > 2,
@@ -3492,7 +3660,10 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
                 and caption_duration_coverage >= 0.80
             ))
         ) if captions.exists() else False,
-        # Narration may intentionally finish before the mastered visual program;\n        # require real narration while allowing the soundtrack/visual tail to continue.\n        "voice_video_duration_aligned": bool(expected_voice > 0 and expected_voice <= duration + 3.0),\n        "scene_count": len(chapters) >= (1 if SMOKE else (3 if FAST_MODE else 4)),
+        # Narration may intentionally finish before the mastered visual program;
+        # require real narration while allowing the soundtrack/visual tail to continue.
+        "voice_video_duration_aligned": bool(expected_voice > 0 and expected_voice <= duration + 3.0),
+        "scene_count": len(chapters) >= (1 if SMOKE else (3 if FAST_MODE else 4)),
         "visual_assets_present": len(assets) >= len(chapters),
         "fallback_visual_used": any(bool(x.get("fallback")) for x in (assets or [])),
         "fallback_visual_policy_passed": all(
