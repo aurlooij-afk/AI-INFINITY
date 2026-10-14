@@ -760,7 +760,7 @@ def test_curated_pexels_sources_cover_four_distinct_creator_workflow_scenes(monk
         parsed = urlparse(url)
         assert parsed.scheme == "https" and parsed.netloc == "images.pexels.com"
         source_id = next((value for value in (14541040, 17196831, 8102676, 695730) if str(value) in url), None)
-        assert source_id in scenes, "Unexpected curated Pexels source: " + url
+        assert source_id in {row[2] for row in scenes.values()}, "Unexpected curated Pexels source: " + url
         color = {
             14541040: (18, 35, 60),
             17196831: (110, 55, 95),
