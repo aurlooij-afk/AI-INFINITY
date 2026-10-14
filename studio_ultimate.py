@@ -1360,7 +1360,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "Hook": "content creator working at a video editing workstation",
                 "Why it matters": "creator recording a short video in a real studio with camera and microphone",
                 "The key idea": "close-up computer monitor displaying a video editing timeline and subtitle tracks",
-                "Practical example": "creator editing a vertical video beside camera microphone and lights",
+                "Practical example": "creator editing a vertical video timeline at a workstation, with camera microphone and lights nearby",
                 "Takeaway": "finished edited video playing on a large studio display",
             }
         ratios = [0.16, 0.18, 0.28, 0.22, 0.16]
@@ -2610,13 +2610,13 @@ def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: 
         return None
 
     if int(index) == 3:
-        source_id = 24497392
-        source_url = "https://www.pexels.com/photo/a-computer-monitor-displaying-a-video-editing-program-24497392/"
-        media_url = "https://images.pexels.com/photos/24497392/pexels-photo-24497392.jpeg?cs=srgb&dl=pexels-alshreef-24497392.jpg&fm=jpg"
-        creator = "abdo alshreef"
-        title = "A computer monitor displaying a video editing program"
-        description = "Curved monitor displaying video editing software in a tech-savvy workspace with mood lighting."
-        tags = "video editing software video editing timeline monitor workstation computer display video production"
+        source_id = 8102676
+        source_url = "https://www.pexels.com/photo/man-sitting-at-the-desk-and-editing-footage-on-a-computer-8102676/"
+        media_url = "https://images.pexels.com/photos/8102676/pexels-photo-8102676.jpeg?cs=srgb&dl=pexels-ron-lach-8102676.jpg&fm=jpg"
+        creator = "Ron Lach"
+        title = "Man editing footage on dual monitors in a modern studio setting"
+        description = "Video editor reviewing footage and color grading on dual monitors."
+        tags = "video editor video editing editing footage dual monitors workstation video editing timeline color grading content creator studio"
     else:
         source_id = 695730
         source_url = "https://www.pexels.com/photo/computer-monitor-turned-on-695730/"
