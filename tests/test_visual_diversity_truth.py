@@ -696,3 +696,15 @@ def test_editing_workflow_queries_prefer_captions_and_waveform_specificity():
     assert "captions" in queries[1].lower()
     assert "timeline" in queries[1].lower()
     assert "monitor" in queries[1].lower()
+
+
+
+def test_raw_final_scene_has_a_specific_editing_search_synonym():
+    queries = studio._visual_search_query_variants(
+        search_subject="content creator",
+        focus="before-and-after comparison of raw footage and a finished edited film on screens",
+        topic="AI Infinity launch",
+        raw_query="content creator before-and-after comparison of raw footage and a finished edited film on screens documentary photography",
+    )
+    assert len(queries) == 2, queries
+    assert "video editing before after raw footage finished cut" in queries, queries
