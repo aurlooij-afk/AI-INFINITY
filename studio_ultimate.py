@@ -2692,16 +2692,60 @@ def _ci_test_visual(scene: Dict[str, Any], outdir: Path, index: int) -> Optional
     }
 
 def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: int) -> Optional[Dict[str, Any]]:
-    """Keyless Pexels rescue photographs for two distinct editing-workflow story beats.
+    """Keyless Pexels photographs for four specific creator-workflow story beats.
 
-    These item-specific assets are attempted only after indexed sources, only for
-    the matching scene slot and visual concepts, and still pass the normal relevance,
-    decoded-media, distinct-byte and rights-evidence checks.
+    The selected file still passes the same metadata-relevance, decoded-media,
+    distinct-byte and downstream rights-evidence gates as search results.
     """
     try:
-        if int(index) not in {3, 4}:
-            return None
+        scene_index = int(index)
     except (TypeError, ValueError):
+        return None
+
+    sources = {
+        1: {
+            "source_id": 14541040,
+            "source_url": "https://www.pexels.com/photo/back-view-of-a-man-using-laptop-14541040/",
+            "media_url": "https://images.pexels.com/photos/14541040/pexels-photo-14541040.jpeg?cs=srgb&dl=pexels-quirva-14541040.jpg&fm=jpg",
+            "creator": "Alan Quirván",
+            "title": "Man sitting at desk working on video editing software with dual monitors in an office",
+            "description": "Man sitting at a desk working on video editing software with dual monitors in an office.",
+            "tags": "video editing computer editor editing software dual monitors office desk workstation content creator video editing timeline person working color grading",
+            "required_concepts": {"editing", "workstation"},
+        },
+        2: {
+            "source_id": 17196831,
+            "source_url": "https://www.pexels.com/photo/young-brunette-man-fixing-a-lavalier-microphone-to-his-shirt-17196831/",
+            "media_url": "https://images.pexels.com/photos/17196831/pexels-photo-17196831.jpeg?cs=srgb&dl=pexels-angel-moranchel-212557293-17196831.jpg&fm=jpg",
+            "creator": "Angel Moranchel",
+            "title": "A young man adjusting his lapel mic in a studio with a ring light, preparing for a video shoot",
+            "description": "A young man adjusting his lapel microphone in a studio with a ring light, preparing for a video shoot.",
+            "tags": "content creator creator influencer studio microphone mic audio camera recording filming video shoot ring light production",
+            "required_concepts": {"studio", "audio"},
+        },
+        3: {
+            "source_id": 8102676,
+            "source_url": "https://www.pexels.com/photo/man-sitting-at-the-desk-and-editing-footage-on-a-computer-8102676/",
+            "media_url": "https://images.pexels.com/photos/8102676/pexels-photo-8102676.jpeg?cs=srgb&dl=pexels-ron-lach-8102676.jpg&fm=jpg",
+            "creator": "Ron Lach",
+            "title": "Man editing footage on dual monitors in a modern studio setting",
+            "description": "Video editor reviewing footage and color grading on dual monitors.",
+            "tags": "video editor video editing editing footage dual monitors workstation video editing timeline color grading content creator studio",
+            "required_concepts": {"editing", "workstation"},
+        },
+        4: {
+            "source_id": 695730,
+            "source_url": "https://www.pexels.com/photo/computer-monitor-turned-on-695730/",
+            "media_url": "https://images.pexels.com/photos/695730/pexels-photo-695730.jpeg?cs=srgb&dl=pexels-paggiarofrancesco-695730.jpg&fm=jpg",
+            "creator": "Francesco Paggiaro",
+            "title": "Computer monitor turned on showing a video-editing interface",
+            "description": "Detailed view of a video editing software interface showing a multi-track timeline and colorful design.",
+            "tags": "video editing timeline editing software computer monitor screen workstation video production finished edit video playback",
+            "required_concepts": {"editing", "workstation"},
+        },
+    }
+    item = sources.get(scene_index)
+    if item is None:
         return None
 
     heading = str(scene.get("heading") or "")
@@ -2711,32 +2755,16 @@ def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: 
         key for key, pattern in _VISUAL_CONCEPTS.items()
         if re.search(pattern, combined)
     }
-    if not {"editing", "workstation"}.issubset(concepts):
+    if not set(item["required_concepts"]).issubset(concepts):
         return None
 
-    if int(index) == 3:
-        source_id = 8102676
-        source_url = "https://www.pexels.com/photo/man-sitting-at-the-desk-and-editing-footage-on-a-computer-8102676/"
-        media_url = "https://images.pexels.com/photos/8102676/pexels-photo-8102676.jpeg?cs=srgb&dl=pexels-ron-lach-8102676.jpg&fm=jpg"
-        creator = "Ron Lach"
-        title = "Man editing footage on dual monitors in a modern studio setting"
-        description = "Video editor reviewing footage and color grading on dual monitors."
-        tags = "video editor video editing editing footage dual monitors workstation video editing timeline color grading content creator studio"
-    else:
-        source_id = 695730
-        source_url = "https://www.pexels.com/photo/computer-monitor-turned-on-695730/"
-        media_url = "https://images.pexels.com/photos/695730/pexels-photo-695730.jpeg?cs=srgb&dl=pexels-paggiarofrancesco-695730.jpg&fm=jpg"
-        creator = "Francesco Paggiaro"
-        title = "Computer monitor turned on showing a video-editing interface"
-        description = "Detailed view of a video editing software interface showing a multi-track timeline and colorful design."
-        tags = "video editing timeline editing software computer monitor screen workstation video production"
-
+    source_id = int(item["source_id"])
     normalized = outdir / f"pexels_curated_{source_id}.jpg"
     if not normalized.is_file() or normalized.stat().st_size <= 1000:
         raw = outdir / f"pexels_curated_{source_id}_raw.jpg"
         try:
             download(
-                media_url, raw,
+                str(item["media_url"]), raw,
                 headers={"Accept": "image/jpeg,image/*;q=0.8"},
                 timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 30),
                 max_bytes=20_000_000,
@@ -2761,16 +2789,15 @@ def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: 
     if min(width, height) < 320:
         return None
 
-    # The photo is embedded in a finished creative work, not rebundled as a
-    # standalone stock download. Third-party interface marks still need care.
+    creator = str(item["creator"])
     return {
         "kind": "image",
         "path": str(normalized),
         "source": "Pexels curated free editorial photo",
         "provider": "Pexels",
         "source_id": source_id,
-        "source_url": source_url,
-        "downloaded_media_url": media_url,
+        "source_url": str(item["source_url"]),
+        "downloaded_media_url": str(item["media_url"]),
         "creator": creator,
         "attribution": f"Photo by {creator} / Pexels",
         "license": "Pexels License",
@@ -2779,16 +2806,16 @@ def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: 
         "rights_status": "license_metadata_present",
         "provider_restrictions": (
             "Use within a finished creative work; do not redistribute the unmodified "
-            "photo as a standalone asset or imply contributor endorsement. Third-party "
-            "software interface marks shown in the image may have separate rights."
+            "photo as a standalone asset or imply contributor endorsement. Check "
+            "third-party rights and context-specific restrictions."
         ),
-        "title": title,
-        "description": description,
-        "tags": tags,
+        "title": str(item["title"]),
+        "description": str(item["description"]),
+        "tags": str(item["tags"]),
         "resolution": [width, height],
         "mime_type": "image/jpeg",
         "quality_tier": "curated_free_source",
-        "provider_query": "video editing timeline computer monitor workstation",
+        "provider_query": "creator video studio recording editing workstation",
         "retrieved_at": utc_iso(),
     }
 
