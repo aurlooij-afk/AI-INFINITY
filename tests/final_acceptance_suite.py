@@ -213,7 +213,7 @@ def capture_failed_project_evidence(s, b, project_id, status_payload):
     if not final.is_file():
         evidence["capture_error"] = "The real local final.mp4 was not present in the test runtime."
         (evidence_dir / (str(project_id) + "-failure-evidence.json")).write_text(
-            json.dumps(evidence, ensure_ascii=False, indent=2) + "\\n", encoding="utf-8"
+            json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         return evidence
 
@@ -268,7 +268,7 @@ def capture_failed_project_evidence(s, b, project_id, status_payload):
             evidence["packet_creation_error"] = type(exc).__name__ + ": " + str(exc)[:1000]
 
     (evidence_dir / (str(project_id) + "-failure-evidence.json")).write_text(
-        json.dumps(evidence, ensure_ascii=False, indent=2, default=str) + "\\n", encoding="utf-8"
+        json.dumps(evidence, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8"
     )
     return evidence
 
