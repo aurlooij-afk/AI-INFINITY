@@ -665,3 +665,21 @@ def test_persisted_project_status_tracks_truth_gate():
     assert params[0:2] == ("completed", "completed")
     assert params[3] == "project-recovered"
 
+def test_focus_lexical_overlap_can_resolve_unclassified_scene_concepts():
+    relevant = {
+        "title": "Software workflow dashboard on a computer screen",
+        "description": "A connected software workflow interface for creative teams.",
+        "tags": ["software", "workflow", "dashboard"],
+    }
+    unrelated = {
+        "title": "Mountain lake landscape photography",
+        "description": "A scenic outdoor view.",
+        "tags": ["mountain", "nature", "landscape"],
+    }
+    assert studio._visual_candidate_relevant(
+        relevant, "AI Infinity launch", "software workflow dashboard"
+    )
+    assert not studio._visual_candidate_relevant(
+        unrelated, "AI Infinity launch", "software workflow dashboard"
+    )
+
