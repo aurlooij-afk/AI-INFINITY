@@ -2587,15 +2587,14 @@ def _ci_test_visual(scene: Dict[str, Any], outdir: Path, index: int) -> Optional
     }
 
 def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: int) -> Optional[Dict[str, Any]]:
-    """Keyless, license-documented rescue photo for the late editing-workstation scene.
+    """Keyless Pexels rescue photographs for two distinct editing-workflow story beats.
 
-    This curated stock source is deliberately narrow: it is only eligible for a
-    later scene whose actual storyboard focus mentions both video editing and a
-    workstation/monitor. It is attempted after indexed providers, is still passed
-    through the normal relevance/bytes/duplicate checks, and never bypasses truth.
+    These item-specific assets are attempted only after indexed sources, only for
+    the matching scene slot and visual concepts, and still pass the normal relevance,
+    decoded-media, distinct-byte and rights-evidence checks.
     """
     try:
-        if int(index) < 4:
+        if int(index) not in {3, 4}:
             return None
     except (TypeError, ValueError):
         return None
@@ -2610,11 +2609,26 @@ def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: 
     if not {"editing", "workstation"}.issubset(concepts):
         return None
 
-    source_url = "https://www.pexels.com/photo/computer-monitor-turned-on-695730/"
-    media_url = "https://images.pexels.com/photos/695730/pexels-photo-695730.jpeg?cs=srgb&dl=pexels-paggiarofrancesco-695730.jpg&fm=jpg"
-    normalized = outdir / "pexels_curated_695730.jpg"
+    if int(index) == 3:
+        source_id = 24497392
+        source_url = "https://www.pexels.com/photo/a-computer-monitor-displaying-a-video-editing-program-24497392/"
+        media_url = "https://images.pexels.com/photos/24497392/pexels-photo-24497392.jpeg?cs=srgb&dl=pexels-alshreef-24497392.jpg&fm=jpg"
+        creator = "abdo alshreef"
+        title = "A computer monitor displaying a video editing program"
+        description = "Curved monitor displaying video editing software in a tech-savvy workspace with mood lighting."
+        tags = "video editing software video editing timeline monitor workstation computer display video production"
+    else:
+        source_id = 695730
+        source_url = "https://www.pexels.com/photo/computer-monitor-turned-on-695730/"
+        media_url = "https://images.pexels.com/photos/695730/pexels-photo-695730.jpeg?cs=srgb&dl=pexels-paggiarofrancesco-695730.jpg&fm=jpg"
+        creator = "Francesco Paggiaro"
+        title = "Computer monitor turned on showing a video-editing interface"
+        description = "Detailed view of a video editing software interface showing a multi-track timeline and colorful design."
+        tags = "video editing timeline editing software computer monitor screen workstation video production"
+
+    normalized = outdir / f"pexels_curated_{source_id}.jpg"
     if not normalized.is_file() or normalized.stat().st_size <= 1000:
-        raw = outdir / "pexels_curated_695730_raw.jpg"
+        raw = outdir / f"pexels_curated_{source_id}_raw.jpg"
         try:
             download(
                 media_url, raw,
@@ -2622,7 +2636,7 @@ def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: 
                 timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 30),
                 max_bytes=20_000_000,
             )
-            normalized_path = _normalize_image_file(raw, outdir, "pexels_curated_695730")
+            normalized_path = _normalize_image_file(raw, outdir, f"pexels_curated_{source_id}")
             if not normalized_path or not Path(normalized_path).is_file():
                 return None
             normalized = Path(normalized_path)
@@ -2642,20 +2656,18 @@ def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: 
     if min(width, height) < 320:
         return None
 
-    # Metadata follows the exact Pexels download page and license. Contributor
-    # credit is retained even though attribution is not mandatory under Pexels'
-    # standard license; the photo is embedded in a finished video, not rebundled
-    # as a standalone stock download.
+    # The photo is embedded in a finished creative work, not rebundled as a
+    # standalone stock download. Third-party interface marks still need care.
     return {
         "kind": "image",
         "path": str(normalized),
         "source": "Pexels curated free editorial photo",
         "provider": "Pexels",
-        "source_id": 695730,
+        "source_id": source_id,
         "source_url": source_url,
         "downloaded_media_url": media_url,
-        "creator": "Francesco Paggiaro",
-        "attribution": "Photo by Francesco Paggiaro / Pexels",
+        "creator": creator,
+        "attribution": f"Photo by {creator} / Pexels",
         "license": "Pexels License",
         "license_url": "https://www.pexels.com/license/",
         "commercial_use_state": "commercial_use_allowed_under_provider_terms",
@@ -2665,51 +2677,15 @@ def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: 
             "photo as a standalone asset or imply contributor endorsement. Third-party "
             "software interface marks shown in the image may have separate rights."
         ),
-        "title": "Computer monitor turned on showing a video-editing interface",
-        "description": "Detailed view of a video editing software interface showing a multi-track timeline and colorful design.",
-        "tags": "video editing timeline editing software computer monitor screen workstation video production",
+        "title": title,
+        "description": description,
+        "tags": tags,
         "resolution": [width, height],
         "mime_type": "image/jpeg",
         "quality_tier": "curated_free_source",
-        "provider_query": "video editing timeline computer monitor",
+        "provider_query": "video editing timeline computer monitor workstation",
         "retrieved_at": utc_iso(),
     }
-
-
-def _scene_asset_search_limit(index: int, getter_name: str) -> int:
-    """Use a wider free Openverse candidate page for later, easily-missed scenes."""
-    try:
-        scene_index = int(index)
-    except (TypeError, ValueError):
-        scene_index = 0
-    return 8 if getter_name == "_openverse_images" and scene_index >= 3 else 4
-
-
-def _parse_scene_visual_intent(
-    scene: Dict[str, Any],
-    ai_prompt: str,
-    raw_query: str,
-    heading: str = "",
-) -> Tuple[str, str]:
-    """Recover topic and scene focus from real prompt text using working regexes."""
-    topic = str(scene.get("topic") or scene.get("title") or "").strip()
-    focus = str(scene.get("visual_focus") or "").strip()
-    if not topic:
-        topic_match = re.search(r"\babout\s+(.+?)(?:;|\.\s|$)", ai_prompt, re.I)
-        topic = topic_match.group(1).strip(" .;,:") if topic_match else ""
-    if not focus:
-        focus_match = re.search(r"\bvisual focus\s*:\s*(.+?)(?:;|\.\s|$)", ai_prompt, re.I)
-        focus = focus_match.group(1).strip(" .;,:") if focus_match else ""
-    if not topic:
-        topic = re.split(
-            r"\b(?:striking opening view|real-world context|close-up|concrete real-world example|resolved outcome|environment, setting|prototype, mechanism|process, tools|people using the idea|before-and-after|creator applying)\b",
-            raw_query,
-            1,
-            flags=re.I,
-        )[0]
-    topic = re.sub(r"\s+", " ", topic).strip(" .;,:")[:140] or heading or "documentary scene"
-    focus = re.sub(r"\s+", " ", focus).strip(" .;,:")[:180]
-    return topic, focus
 
 
 def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_motion: bool = False, duration: float = 6.0) -> Dict[str, Any]:
