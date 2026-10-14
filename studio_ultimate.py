@@ -610,21 +610,21 @@ def _research_query_from_request(req: Dict[str, Any], fallback: str = "") -> str
         "content", "ai content", "new project", "untitled", "untitled project",
         "creator project", "video project", "new video",
     }
-    topic = re.sub(r"\\s+", " ", str(req.get("topic") or "")).strip()
+    topic = re.sub(r"\s+", " ", str(req.get("topic") or "")).strip()
     if topic and topic.casefold() not in generic:
         return topic[:500]
 
-    title = re.sub(r"\\s+", " ", str(req.get("title") or "")).strip()
+    title = re.sub(r"\s+", " ", str(req.get("title") or "")).strip()
     if title and title.casefold() not in generic:
         return title[:500]
 
-    objective = re.sub(r"\\s+", " ", str(req.get("objective") or fallback or "")).strip()
+    objective = re.sub(r"\s+", " ", str(req.get("objective") or fallback or "")).strip()
     # Recover the subject from common natural-language briefs when no explicit
     # topic/title exists; stop before production add-ons and delivery formats.
     match = re.search(
-        r"\\b(?:video|film|explainer|documentary|podcast|article|blog|post)\\s+"
-        r"(?:about|on|covering|exploring)\\s+(.+?)"
-        r"(?=,|;|\\.|$|\\s+(?:with|in|for|using|including)\\s+)",
+        r"\b(?:video|film|explainer|documentary|podcast|article|blog|post)\s+"
+        r"(?:about|on|covering|exploring)\s+(.+?)"
+        r"(?=,|;|\.|$|\s+(?:with|in|for|using|including)\s+)",
         objective,
         re.I,
     )
