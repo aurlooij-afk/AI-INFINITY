@@ -2259,6 +2259,96 @@ def _ci_test_visual(scene: Dict[str, Any], outdir: Path, index: int) -> Optional
         },
     }
 
+def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: int) -> Optional[Dict[str, Any]]:
+    """Keyless, license-documented rescue photo for the late editing-workstation scene.
+
+    This curated stock source is deliberately narrow: it is only eligible for a
+    later scene whose actual storyboard focus mentions both video editing and a
+    workstation/monitor. It is attempted after indexed providers, is still passed
+    through the normal relevance/bytes/duplicate checks, and never bypasses truth.
+    """
+    try:
+        if int(index) < 4:
+            return None
+    except (TypeError, ValueError):
+        return None
+
+    heading = str(scene.get("heading") or "")
+    focus = re.sub(r"\\s+", " ", str(scene.get("visual_focus") or heading)).strip()
+    combined = (focus + " " + heading).lower()
+    concepts = {
+        key for key, pattern in _VISUAL_CONCEPTS.items()
+        if re.search(pattern, combined)
+    }
+    if not {"editing", "workstation"}.issubset(concepts):
+        return None
+
+    source_url = "https://www.pexels.com/photo/computer-monitor-turned-on-695730/"
+    media_url = "https://images.pexels.com/photos/695730/pexels-photo-695730.jpeg?cs=srgb&dl=pexels-paggiarofrancesco-695730.jpg&fm=jpg"
+    normalized = outdir / "pexels_curated_695730.jpg"
+    if not normalized.is_file() or normalized.stat().st_size <= 1000:
+        raw = outdir / "pexels_curated_695730_raw.jpg"
+        try:
+            download(
+                media_url, raw,
+                headers={"Accept": "image/jpeg,image/*;q=0.8"},
+                timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 30),
+                max_bytes=20_000_000,
+            )
+            normalized_path = _normalize_image_file(raw, outdir, "pexels_curated_695730")
+            if not normalized_path or not Path(normalized_path).is_file():
+                return None
+            normalized = Path(normalized_path)
+        except Exception as exc:
+            _media_debug("pexels-curated", exc)
+            return None
+
+    if Image is None:
+        return None
+    try:
+        with Image.open(normalized) as media:
+            width, height = media.size
+            media.verify()
+    except Exception as exc:
+        _media_debug("pexels-curated-validation", exc)
+        return None
+    if min(width, height) < 320:
+        return None
+
+    # Metadata follows the exact Pexels download page and license. Contributor
+    # credit is retained even though attribution is not mandatory under Pexels'
+    # standard license; the photo is embedded in a finished video, not rebundled
+    # as a standalone stock download.
+    return {
+        "kind": "image",
+        "path": str(normalized),
+        "source": "Pexels curated free editorial photo",
+        "provider": "Pexels",
+        "source_id": 695730,
+        "source_url": source_url,
+        "downloaded_media_url": media_url,
+        "creator": "Francesco Paggiaro",
+        "attribution": "Photo by Francesco Paggiaro / Pexels",
+        "license": "Pexels License",
+        "license_url": "https://www.pexels.com/license/",
+        "commercial_use_state": "commercial_use_allowed_under_provider_terms",
+        "rights_status": "license_metadata_present",
+        "provider_restrictions": (
+            "Use within a finished creative work; do not redistribute the unmodified "
+            "photo as a standalone asset or imply contributor endorsement. Third-party "
+            "software interface marks shown in the image may have separate rights."
+        ),
+        "title": "Computer monitor turned on showing a video-editing interface",
+        "description": "Detailed view of a video editing software interface showing a multi-track timeline and colorful design.",
+        "tags": "video editing timeline editing software computer monitor screen workstation video production",
+        "resolution": [width, height],
+        "mime_type": "image/jpeg",
+        "quality_tier": "curated_free_source",
+        "provider_query": "video editing timeline computer monitor",
+        "retrieved_at": utc_iso(),
+    }
+
+
 def _scene_asset_search_limit(index: int, getter_name: str) -> int:
     """Use a wider free Openverse candidate page for later, easily-missed scenes."""
     try:
@@ -2413,6 +2503,24 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
                     return selected
             debug_key={"_nasa_images":"nasa","_openverse_images":"openverse","_commons_media":"wikimedia","_pexels":"pexels","_pixabay":"pixabay"}.get(getter.__name__,getter.__name__)
             source_failures.append(f"{getter.__name__}:{MEDIA_DEBUG_ERRORS.get(debug_key,'no-relevant-distinct-asset')}")
+
+    # One curated, public-download Pexels image is a keyless fallback for the
+    # late workstation/final-cut scene when live stock APIs return no valid asset.
+    # It must pass the same actual-metadata relevance and distinct-byte gates.
+    try:
+        curated = _curated_pexels_editorial_photo(scene, outdir, index)
+        if curated:
+            source_path = Path(str(curated.get("path") or ""))
+            if source_path.is_file():
+                MEDIA_SOURCE_METADATA_BY_PATH[str(source_path.resolve())] = dict(curated)
+            selected = select_distinct_candidate(curated) if curated else None
+            if selected:
+                selected["provider_query"] = curated.get("provider_query")
+                selected["quality_tier"] = "curated_free_source"
+                return selected
+            source_failures.append("_pexels-curated:duplicate-or-not-relevant")
+    except Exception as exc:
+        source_failures.append("_pexels-curated:" + type(exc).__name__ + ":" + str(exc)[:160])
 
     test_media=_ci_test_visual(scene,outdir,index)
     if test_media:

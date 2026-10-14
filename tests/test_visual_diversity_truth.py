@@ -736,3 +736,30 @@ def test_later_openverse_scenes_request_a_broader_free_candidate_pool():
     assert studio._scene_asset_search_limit(3, "_openverse_images") == 8
     assert studio._scene_asset_search_limit(4, "_openverse_images") == 8
     assert studio._scene_asset_search_limit(4, "_commons_media") == 4
+
+
+
+def test_curated_pexels_source_is_keyless_late_scene_only_and_rights_documented(monkeypatch, tmp_path):
+    scene = {
+        "heading": "What changes",
+        "visual_focus": "video editing workstation displaying a final cut on a computer monitor",
+    }
+    assert studio._curated_pexels_editorial_photo(scene, tmp_path, 3) is None
+
+    def fake_download(url, path, **kwargs):
+        assert "images.pexels.com/photos/695730/" in url
+        image = studio.Image.new("RGB", (1280, 720), (18, 35, 60))
+        image.save(path, "JPEG")
+        return path
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    candidate = studio._curated_pexels_editorial_photo(scene, tmp_path, 4)
+    assert candidate is not None
+    assert studio._visual_candidate_relevant(
+        candidate, "content creator", scene["visual_focus"]
+    )
+    assert candidate["source_url"] == "https://www.pexels.com/photo/computer-monitor-turned-on-695730/"
+    assert candidate["creator"] == "Francesco Paggiaro"
+    assert candidate["license_url"] == "https://www.pexels.com/license/"
+    assert candidate["commercial_use_state"] == "commercial_use_allowed_under_provider_terms"
+    assert candidate["rights_status"] == "license_metadata_present"
