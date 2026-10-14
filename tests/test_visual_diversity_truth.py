@@ -624,3 +624,44 @@ def test_visual_search_queries_prioritize_scene_focus_and_remove_brand_noise():
         for query in queries
     )
 
+def test_persisted_project_status_tracks_truth_gate():
+    import threading
+
+    class Connection:
+        def __init__(self):
+            self.statements = []
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def execute(self, statement, params):
+            self.statements.append((statement, params))
+            return self
+
+    class Studio:
+        def __init__(self):
+            self.DB_LOCK = threading.Lock()
+            self.connection = Connection()
+        def _connect(self):
+            return self.connection
+
+    studio_db = Studio()
+    project = {"project_id": "project-review", "status": "completed", "stage": "completed"}
+    closure._persist_project_truth_status(studio_db, project, verified=False)
+    assert project["status"] == "completed_with_qc_warnings"
+    assert project["stage"] == "quality_review_required"
+    sql, params = studio_db.connection.statements[-1]
+    assert "UPDATE studio_projects_3610 SET status=?,stage=?,updated_at=?" in sql
+    assert params[0:2] == ("completed_with_qc_warnings", "quality_review_required")
+    assert params[3] == "project-review"
+
+    # Promotion is permitted only when the independent truth gate passes.
+    studio_db = Studio()
+    project = {"project_id": "project-recovered", "status": "completed_with_qc_warnings", "stage": "quality_review_required"}
+    closure._persist_project_truth_status(studio_db, project, verified=True)
+    assert project["status"] == "completed"
+    assert project["stage"] == "completed"
+    sql, params = studio_db.connection.statements[-1]
+    assert params[0:2] == ("completed", "completed")
+    assert params[3] == "project-recovered"
+
