@@ -687,6 +687,111 @@ def _research_search_topic(request: Dict[str, Any], subject: str) -> str:
     return re.sub(r"\s+", " ", str(subject or "")).strip()[:500]
 
 
+
+def _is_uploaded_source_transform_request(request: Dict[str, Any]) -> bool:
+    """Recognize a source-to-content transformation without consuming explicit user topics."""
+    filenames = request.get("source_file_names")
+    if not isinstance(filenames, list) or not any(str(x or "").strip() for x in filenames):
+        return False
+    objective = re.sub(r"\s+", " ", str(request.get("objective") or "")).strip()
+    return bool(re.search(
+        r"^\s*(?:please\s+)?(?:turn|convert|transform|repurpose|summari[sz]e|adapt|"
+        r"make|create|produce|generate|extract)\b.{0,240}\b"
+        r"(?:uploaded|attached|this|the|my)\s+(?:pdf|document|file|report|paper|source|material)\b",
+        objective,
+        re.I,
+    ))
+
+
+def _is_transform_derived_label(value: Any) -> bool:
+    """Identify command echoes that must not masquerade as a document title/topic."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return True
+    if text.casefold() in {
+        "video", "film", "short", "reel", "podcast", "article", "content",
+        "ai content", "untitled", "untitled project", "new project",
+    }:
+        return True
+    return bool(re.search(
+        r"^\s*(?:please\s+)?(?:turn|convert|transform|repurpose|summari[sz]e|adapt|"
+        r"make|create|produce|generate|extract)\b.{0,180}\b"
+        r"(?:uploaded|attached|this|the|my)\s+(?:pdf|document|file|report|paper|source|material)\b",
+        text,
+        re.I,
+    ))
+
+
+def _infer_uploaded_source_topic(
+    request: Dict[str, Any],
+    reference_sources: List[Dict[str, Any]],
+) -> str:
+    """Infer a bounded topic from text actually extracted from a user's uploaded source.
+
+    This only runs for explicit source-transformation briefs and never overrides a
+    meaningful topic/title supplied separately by the user. No filename or upload
+    path is treated as factual content.
+    """
+    if not _is_uploaded_source_transform_request(request):
+        return ""
+    explicit_topic = str(request.get("topic") or "").strip()
+    explicit_title = str(request.get("title") or "").strip()
+    if explicit_topic and not _is_transform_derived_label(explicit_topic):
+        return ""
+    if explicit_title and not _is_transform_derived_label(explicit_title):
+        return ""
+
+    uploaded = [
+        row for row in reference_sources
+        if isinstance(row, dict)
+        and str(row.get("source") or "") == "user upload"
+        and row.get("text_extracted") is True
+    ]
+    text = "\n".join(str(row.get("snippet") or "") for row in uploaded).strip()
+    if not text:
+        return ""
+    text = re.sub(r"\r\n?", "\n", text)
+    text = re.sub(r"[\t ]+", " ", text)
+    lines = [re.sub(r"\s+", " ", line).strip(" #\t-*") for line in text.splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        return ""
+
+    # Prefer explicit document headings rather than summarizing production commands.
+    for line in lines[:20]:
+        match = re.match(r"^(?:title|subject|document title)\s*:\s*(.{5,180})$", line, re.I)
+        if not match:
+            match = re.match(r"^(.{5,160})$", line)
+            if match and (
+                len(match.group(1).split()) <= 10
+                and not re.search(r"[.!?]$", match.group(1))
+                and not re.match(r"^(?:workflow|overview|introduction|summary|abstract)\s*:", match.group(1), re.I)
+            ):
+                candidate = match.group(1).strip(" .,:;-")
+            else:
+                candidate = ""
+        else:
+            candidate = match.group(1).strip(" .,:;-")
+        if candidate:
+            words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'&+-]*", candidate)
+            if 2 <= len(words) <= 14 and not _is_transform_derived_label(candidate):
+                return candidate[:140]
+
+    # If the upload has no usable heading, produce a short subject from its opening
+    # sentence after removing common document boilerplate. Never promote raw boilerplate.
+    opening = re.split(r"(?<=[.!?])\s+|\n+", text, maxsplit=1)[0].strip(" .,:;-")
+    opening = re.sub(
+        r"^(?:this\s+(?:document|paper|report|pdf|file)\s+(?:describes|explains|covers|presents|introduces)\s+|"
+        r"(?:overview|introduction|summary)\s*:\s*)",
+        "",
+        opening,
+        flags=re.I,
+    ).strip(" .,:;-")
+    if len(opening.split()) >= 3 and not _is_transform_derived_label(opening):
+        return opening[:140]
+    return ""
+
+
 _RESEARCH_STOP_WORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in",
     "into", "is", "it", "of", "on", "or", "the", "to", "with", "without",
@@ -4552,21 +4657,16 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         autopilot_plan=_record_autopilot(project_id, autopilot_caps)
         checkpoint(project_id, "autopilot_ready", {"selected": [x.get("selected",{}).get("id") if x.get("selected") else None for x in autopilot_plan["plan"]], "automatic_failover": True, "free_first": True})
         _stage(project_id, "research", 5)
-        research_brief_topic = _research_query_from_request(req, topic)
-        research_query = _research_search_topic(req, research_brief_topic)
-        research = research_topic(research_query, limit=10)
-        research["brief_topic"] = research_brief_topic
-        research["research_scope"] = (
-            "independent creator/video-production practice sources; not independent proof of AI Infinity product claims"
-            if research_query != research_brief_topic else "requested topic"
-        )
+        # Resolve explicit user reference URLs and uploaded documents before choosing
+        # the research query. An upload-to-content command must be based on the actual
+        # extracted text, not on generic command words such as "turn the PDF into".
         reference_sources=[]
         for ref in (req.get("reference_urls") or [])[:12]:
             try:
                 if url_host_safe(str(ref)):
                     raw=http_get(str(ref),timeout=12,max_bytes=500_000)
                     body=re.sub(r"\s+"," ",re.sub(r"<[^>]+>"," ",raw.decode("utf-8","replace")))[:3000]
-                    reference_sources.append({"url":str(ref),"title":"Creator reference","snippet":body,"source":"user reference","retrieved_at":utc_iso()})
+                    reference_sources.append({"url":str(ref),"title":"Creator reference","snippet":body,"summary":body[:1200],"source":"user reference","retrieved_at":utc_iso()})
             except Exception:
                 continue
         # Uploaded source material becomes first-class research context. Files are
@@ -4580,9 +4680,51 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 if not candidate.is_file() or upload_root not in candidate.parents:
                     continue
                 body=_extract_source_text(candidate)
-                reference_sources.append({"url":"","title":safe,"snippet":body[:5000],"source":"user upload","retrieved_at":utc_iso(),"size_bytes":candidate.stat().st_size,"text_extracted":bool(body)})
+                if not body:
+                    continue
+                reference_sources.append({
+                    "url":"",
+                    "title":safe,
+                    "snippet":body[:5000],
+                    "summary":body[:1200],
+                    "source":"user upload",
+                    "retrieved_at":utc_iso(),
+                    "size_bytes":candidate.stat().st_size,
+                    "sha256":file_sha256(candidate),
+                    "text_extracted":True,
+                })
             except Exception:
                 continue
+
+        inferred_upload_topic = _infer_uploaded_source_topic(req, reference_sources)
+        if inferred_upload_topic:
+            req["topic"] = inferred_upload_topic
+            if _is_transform_derived_label(req.get("title")):
+                req["title"] = inferred_upload_topic
+            topic = inferred_upload_topic
+            _update_project(
+                project_id,
+                title=str(req.get("title") or inferred_upload_topic)[:180],
+                request_json=jdump(req),
+            )
+            audit_event(project_id, "uploaded_source_topic_inferred", {
+                "topic": inferred_upload_topic,
+                "source_count": sum(1 for row in reference_sources if row.get("source") == "user upload"),
+                "source_text_hashes": [
+                    row.get("sha256") for row in reference_sources
+                    if row.get("source") == "user upload" and row.get("sha256")
+                ],
+                "truthful": True,
+            })
+
+        research_brief_topic = _research_query_from_request(req, topic)
+        research_query = _research_search_topic(req, research_brief_topic)
+        research = research_topic(research_query, limit=10)
+        research["brief_topic"] = research_brief_topic
+        research["research_scope"] = (
+            "independent creator/video-production practice sources; not independent proof of AI Infinity product claims"
+            if research_query != research_brief_topic else "requested topic"
+        )
         if reference_sources:
             research.setdefault("sources",[]).extend(reference_sources)
             research["source_count"]=len(research.get("sources") or [])
