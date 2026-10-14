@@ -280,6 +280,22 @@ def t1(s,b):
     # Truth comes before final-file download: an unverified project must fail at
     # the quality gate, not be reported as a misleading artifact-download error.
     truth=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/truth")
+    if not (truth.get("verified") is True and truth.get("state")=="VERIFIED"):
+        # A completed render can still fail independent professional truth.
+        # Capture its actual MP4, FFprobe metadata, provenance, and reviewer
+        # contact sheet before preserving the strict acceptance failure.
+        try:
+            diagnostic = capture_failed_project_evidence(
+                s, b, pid,
+                {"status": "completed", "reason": "professional truth gate did not verify"},
+            )
+            if diagnostic:
+                print("NONPASSING_PROJECT_EVIDENCE=" + json.dumps(
+                    diagnostic, ensure_ascii=False, default=str
+                ))
+        except Exception as exc:
+            print("NONPASSING_PROJECT_EVIDENCE_CAPTURE_FAILED=" +
+                  type(exc).__name__ + ": " + str(exc)[:1000])
     assert truth.get("verified") is True and truth.get("state")=="VERIFIED", truth
     checks=truth.get("checks") or {}
     assert checks.get("source_visual_policy_passed") is True, truth
