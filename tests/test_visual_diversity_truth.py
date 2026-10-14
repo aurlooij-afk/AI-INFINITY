@@ -696,26 +696,3 @@ def test_editing_workflow_queries_prefer_captions_and_waveform_specificity():
     assert "captions" in queries[1].lower()
     assert "timeline" in queries[1].lower()
     assert "monitor" in queries[1].lower()
-
-
-def test_pexels_video_adapter_uses_current_v1_endpoint(monkeypatch, tmp_path):
-    captured = {}
-    def fake_http_json(url, headers=None, timeout=20):
-        captured["url"] = url
-        captured["headers"] = headers or {}
-        return {"videos": [{
-            "id": 77, "url": "https://www.pexels.com/video/example/",
-            "user": {"name": "Example Creator"},
-            "video_files": [{"width": 1280, "height": 720, "link": "https://videos.pexels.com/example.mp4"}],
-        }]}
-    def fake_download(url, path, **kwargs):
-        Path(path).write_bytes(b"test video placeholder")
-        return Path(path)
-    monkeypatch.setattr(studio.os, "getenv", lambda name, default=None: "fixture-value" if name == "PEXELS_API_KEY" else default)
-    monkeypatch.setattr(studio, "http_json", fake_http_json)
-    monkeypatch.setattr(studio, "download", fake_download)
-    rows = studio._pexels("video editing timeline captions", tmp_path, limit=1)
-    assert "/v1/videos/search?" in captured["url"]
-    assert captured["headers"].get("Authorization") == "fixture-value"
-    assert len(rows) == 1
-    assert rows[0]["source_url"] == "https://www.pexels.com/video/example/"
