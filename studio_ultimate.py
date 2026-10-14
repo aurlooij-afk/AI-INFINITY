@@ -603,6 +603,38 @@ def download(url: str, path: Path, headers: Optional[Dict[str, str]] = None, tim
         except Exception: pass
         raise
 
+def _research_query_from_request(req: Dict[str, Any], fallback: str = "") -> str:
+    """Choose the user's subject rather than a long production-instructions paragraph."""
+    generic = {
+        "", "video", "film", "short", "reel", "podcast", "article", "blog", "social",
+        "content", "ai content", "new project", "untitled", "untitled project",
+        "creator project", "video project", "new video",
+    }
+    topic = re.sub(r"\\s+", " ", str(req.get("topic") or "")).strip()
+    if topic and topic.casefold() not in generic:
+        return topic[:500]
+
+    title = re.sub(r"\\s+", " ", str(req.get("title") or "")).strip()
+    if title and title.casefold() not in generic:
+        return title[:500]
+
+    objective = re.sub(r"\\s+", " ", str(req.get("objective") or fallback or "")).strip()
+    # Recover the subject from common natural-language briefs when no explicit
+    # topic/title exists; stop before production add-ons and delivery formats.
+    match = re.search(
+        r"\\b(?:video|film|explainer|documentary|podcast|article|blog|post)\\s+"
+        r"(?:about|on|covering|exploring)\\s+(.+?)"
+        r"(?=,|;|\\.|$|\\s+(?:with|in|for|using|including)\\s+)",
+        objective,
+        re.I,
+    )
+    if match:
+        subject = match.group(1).strip(" .,:;-")
+        if subject:
+            return subject[:500]
+    return (objective or title or fallback).strip()[:500]
+
+
 def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
     """Multi-source public research with explicit provider outcomes and truthful degradation."""
     from urllib.parse import quote_plus
@@ -3975,7 +4007,8 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         autopilot_plan=_record_autopilot(project_id, autopilot_caps)
         checkpoint(project_id, "autopilot_ready", {"selected": [x.get("selected",{}).get("id") if x.get("selected") else None for x in autopilot_plan["plan"]], "automatic_failover": True, "free_first": True})
         _stage(project_id, "research", 5)
-        research = research_topic(topic, limit=10)
+        research_query = _research_query_from_request(req, topic)
+        research = research_topic(research_query, limit=10)
         reference_sources=[]
         for ref in (req.get("reference_urls") or [])[:12]:
             try:

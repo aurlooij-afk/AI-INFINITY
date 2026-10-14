@@ -68,8 +68,8 @@ jobs:
           AI_INFINITY_STUDIO_SMOKE: "1"
           AI_INFINITY_FAST_MODE: "1"
         run: |
-          python -m py_compile tests/live_creator_smoke.py tests/test_creator_entrypoint_truth_route.py
-          python -m pytest -q tests/test_storage_route_registration.py tests/test_creator_entrypoint_truth_route.py
+          python -m py_compile tests/live_creator_smoke.py tests/test_creator_entrypoint_truth_route.py tests/test_research_query_selection.py
+          python -m pytest -q tests/test_storage_route_registration.py tests/test_creator_entrypoint_truth_route.py tests/test_research_query_selection.py
       - name: Verify editorial scorecard and explicit human approval contract
         env:
           AI_INFINITY_DATA_DIR: "/tmp/ai-infinity-editorial-review-ci"
@@ -329,7 +329,23 @@ jobs:
               time.sleep(1)
           if not final or final.get("status") not in {"completed","completed_with_qc_warnings"}:
               raise SystemExit("Canonical runtime real production did not complete: "+str(final)[:4000])
-          for name in ["final.mp4","thumbnail.jpg","captions.srt","script.md","audio_master.mp3","manifest.json","sources.json"]:
+          truth_response=client.get("/infinity/studio/project/"+project_id+"/truth")
+          if truth_response.status_code != 200:
+              raise SystemExit("Canonical runtime truth unavailable: HTTP %s %s" % (truth_response.status_code,truth_response.text[:1000]))
+          truth=truth_response.json() or {}
+          final_asset=client.get("/infinity/studio/project/"+project_id+"/asset/final.mp4")
+          if truth.get("verified") is True and truth.get("state") == "VERIFIED":
+              if final_asset.status_code != 200:
+                  raise SystemExit("Verified canonical final artifact unavailable: HTTP %s %s" % (final_asset.status_code,final_asset.text[:500]))
+              print("Canonical runtime professional truth verified; final.mp4 download allowed.")
+          else:
+              checks=truth.get("checks") or {}
+              if truth.get("publish_allowed_by_quality_gate") is True:
+                  raise SystemExit("Canonical truth gate contradiction: unverified production claims publishing permission")
+              if final_asset.status_code != 409:
+                  raise SystemExit("Canonical unverified-final policy failed: expected HTTP 409, got %s: %s" % (final_asset.status_code,final_asset.text[:500]))
+              print("Canonical runtime truth gate correctly blocked unverified final.mp4; fallback_visual_count=%s" % checks.get("fallback_visual_count"))
+          for name in ["thumbnail.jpg","captions.srt","script.md","audio_master.mp3","manifest.json","sources.json"]:
               rr=client.get("/infinity/studio/project/"+project_id+"/asset/"+name)
               if rr.status_code != 200:
                   raise SystemExit("Canonical runtime artifact unavailable %s: HTTP %s" % (name,rr.status_code))
