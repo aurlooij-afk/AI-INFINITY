@@ -3029,36 +3029,84 @@ def tts(text: str, outdir: Path, index: int, voice: str, language: str = "Englis
 
 
 def _fit_audio_duration(source: Path, target_seconds: float, out: Path) -> Tuple[Path, float]:
-    """Fit narration to its scene duration without creating a video freeze hold."""
+    """Fit narration accurately, correcting encoder/probe drift before any silence pad."""
     target = max(2.0, float(target_seconds))
     actual = probe_duration(source)
     if actual <= 0:
         raise RuntimeError("narration duration is unavailable")
-    if abs(actual - target) <= 0.35:
+    if abs(actual - target) <= 0.20:
         return source, actual
-    ratio = actual / target
-    factors = []
-    remaining = float(ratio)
-    while remaining < 0.5:
-        factors.append(0.5)
-        remaining /= 0.5
-    while remaining > 2.0:
-        factors.append(2.0)
-        remaining /= 2.0
-    factors.append(remaining)
-    atempo_filter = ",".join(f"atempo={max(0.5, min(2.0, x)):.6f}" for x in factors)
+
+    def atempo_chain(ratio: float) -> str:
+        factors = []
+        remaining = float(ratio)
+        while remaining < 0.5:
+            factors.append(0.5)
+            remaining /= 0.5
+        while remaining > 2.0:
+            factors.append(2.0)
+            remaining /= 2.0
+        factors.append(remaining)
+        return ",".join(f"atempo={max(0.5, min(2.0, x)):.7f}" for x in factors)
+
+    def render_fit(input_path: Path, output_path: Path, ratio: float) -> None:
+        output_path.unlink(missing_ok=True)
+        ffmpeg(
+            "-i", input_path,
+            "-af", atempo_chain(ratio),
+            "-c:a", "libmp3lame", "-q:a", "2",
+            output_path,
+            timeout=max(60, int(target * 4)),
+        )
+        if not output_path.exists() or output_path.stat().st_size <= 5000:
+            raise RuntimeError("retimed narration artifact is invalid")
+
     out.unlink(missing_ok=True)
-    ffmpeg(
-        "-i", source,
-        "-af", atempo_filter,
-        "-c:a", "libmp3lame", "-q:a", "2",
-        out,
-        timeout=max(60, int(target * 4)),
-    )
-    if not out.exists() or out.stat().st_size <= 5000:
-        raise RuntimeError("retimed narration artifact is invalid")
+    render_fit(source, out, actual / target)
     fitted = probe_duration(out)
-    if abs(fitted - target) > 0.6:
+
+    # Re-probe and correct once using the measured output. This handles a TTS
+    # provider whose reported duration differs from its encoded file duration.
+    if fitted > 0 and abs(fitted - target) > 0.35:
+        corrected = out.with_name(out.stem + "-corrected" + out.suffix)
+        try:
+            render_fit(out, corrected, fitted / target)
+            corrected_duration = probe_duration(corrected)
+            if corrected_duration > 0 and abs(corrected_duration - target) <= 0.60:
+                corrected.replace(out)
+                fitted = corrected_duration
+            else:
+                corrected.unlink(missing_ok=True)
+        except Exception:
+            corrected.unlink(missing_ok=True)
+
+    # Last-resort duration normalization is bounded and only used after tempo
+    # correction. Silence is never the first-choice way to fit the narration.
+    if fitted <= 0 or abs(fitted - target) > 0.60:
+        normalized = out.with_name(out.stem + "-normalized" + out.suffix)
+        try:
+            render = f"apad=whole_dur={target:.6f},atrim=duration={target:.6f}"
+            normalized.unlink(missing_ok=True)
+            ffmpeg(
+                "-i", out,
+                "-af", render,
+                "-c:a", "libmp3lame", "-q:a", "2",
+                normalized,
+                timeout=max(60, int(target * 4)),
+            )
+            if not normalized.exists() or normalized.stat().st_size <= 5000:
+                raise RuntimeError("duration-normalized narration artifact is invalid")
+            normalized_duration = probe_duration(normalized)
+            if normalized_duration > 0 and abs(normalized_duration - target) <= 0.60:
+                normalized.replace(out)
+                fitted = normalized_duration
+            else:
+                normalized.unlink(missing_ok=True)
+        except Exception:
+            normalized.unlink(missing_ok=True)
+
+    fitted = probe_duration(out)
+    if fitted <= 0 or abs(fitted - target) > 0.60:
         raise RuntimeError(f"retimed narration is {fitted:.2f}s, expected {target:.2f}s")
     return out, fitted
 
