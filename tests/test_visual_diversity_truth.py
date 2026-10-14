@@ -592,3 +592,35 @@ def test_diagnostic_redaction_masks_bare_sensitive_fields_not_just_urls():
     assert "hidden-value" not in joined
     assert "private" not in joined
     assert joined.count("[REDACTED]") >= 3
+
+def test_product_brand_words_do_not_poison_scene_visual_relevance():
+    candidate = {
+        "title": "Content creator editing video at a computer workstation",
+        "description": "A filmmaker uses an editing timeline and large monitor.",
+        "tags": ["creator", "editing", "workstation"],
+    }
+    assert studio._visual_candidate_relevant(
+        candidate, "AI Infinity creator", "creator"
+    )
+    assert not studio._visual_candidate_relevant(
+        {"title": "Landscape at a mountain lake", "tags": ["nature", "mountain"]},
+        "AI Infinity creator", "creator",
+    )
+
+
+def test_visual_search_queries_prioritize_scene_focus_and_remove_brand_noise():
+    queries = studio._visual_search_query_variants(
+        search_subject="AI Infinity creator",
+        focus="Creator working at a video editing workstation",
+        topic="AI Infinity launch video",
+        raw_query="AI Infinity launch",
+    )
+    assert queries
+    assert "infinity" not in " ".join(queries).lower()
+    assert "editing" in queries[0].lower()
+    assert "workstation" in queries[0].lower()
+    assert any(
+        {"editor", "computer", "workstation"}.issubset(set(query.lower().split()))
+        for query in queries
+    )
+
