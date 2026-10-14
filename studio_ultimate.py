@@ -603,54 +603,131 @@ def download(url: str, path: Path, headers: Optional[Dict[str, str]] = None, tim
         except Exception: pass
         raise
 
+def _extract_brief_subject(value: str) -> str:
+    """Extract the actual subject from a command instead of indexing the whole instruction."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+    about = re.search(
+        r"\b(?:video|film|short|reel|documentary|explainer|podcast|article|blog|post)\s+"
+        r"(?:about|on|covering|exploring)\s+(.+?)"
+        r"(?=,|;|\.|$|\s+(?:with|in|for|using|including)\s+)",
+        text, re.I,
+    )
+    if about:
+        subject = about.group(1).strip(" .,:;-")
+        if subject:
+            return subject[:180]
+    commandless = re.sub(
+        r"^(?:please\s+)?(?:create|make|generate|produce|build|write|draft|develop)\s+",
+        "", text, flags=re.I,
+    ).strip()
+    commandless = re.sub(
+        r"^(?:(?:a|an|the)\s+)?(?:(?:professional|cinematic|premium|high[- ]quality|"
+        r"research[- ]backed|educational|engaging|compelling|polished|original|useful)\s+)*",
+        "", commandless, flags=re.I,
+    ).strip()
+    commandless = re.sub(
+        r"^\d+\s*[- ]?(?:second|seconds|minute|minutes|sec|secs|min|mins)\s+",
+        "", commandless, flags=re.I,
+    ).strip()
+    commandless = re.split(
+        r"\s+(?:video|film|short|reel|documentary|explainer|podcast|article|blog|social\s+campaign)\b",
+        commandless, maxsplit=1, flags=re.I,
+    )[0]
+    commandless = re.split(
+        r"\s+(?:in\s+(?:English|Urdu|Pashto|Dari|Arabic)|with\s+(?:voiceover|narration)|"
+        r"research[- ]backed|aspect ratio|SEO metadata|social campaign|production/rights)\b|[,;.]",
+        commandless, maxsplit=1, flags=re.I,
+    )[0]
+    return commandless.strip(" .,:;-")[:180]
+
+
 def _research_query_from_request(req: Dict[str, Any], fallback: str = "") -> str:
-    """Prefer a clean subject/title over a command-shaped production brief."""
+    """Prefer an explicit subject/title; never search the full production command."""
     generic = {
         "", "video", "film", "short", "reel", "podcast", "article", "blog", "social",
         "content", "ai content", "new project", "untitled", "untitled project",
         "creator project", "video project", "new video",
     }
-
     def normalize(value: Any) -> str:
         return re.sub(r"\s+", " ", str(value or "")).strip()
-
     def is_command(value: str) -> bool:
         return bool(re.match(
             r"^(?:please\s+)?(?:create|make|generate|produce|build|write|draft|develop)\b",
-            value,
-            re.I,
+            value, re.I,
         ))
-
-    def is_subject(value: str) -> bool:
-        return bool(value) and value.casefold() not in generic and not is_command(value)
-
-    topic = normalize(req.get("topic"))
-    title = normalize(req.get("title"))
-    objective = normalize(req.get("objective") or fallback)
-
-    # An explicit short subject wins. Canonical natural-language commands may
-    # populate topic with the entire instruction; do not send that paragraph to
-    # public search when a clean title is available.
-    if is_subject(topic):
-        return topic[:500]
-    if is_subject(title):
-        return title[:500]
-
-    # Extract a real subject if the caller has not supplied a meaningful title.
-    for candidate in (objective, topic):
-        match = re.search(
-            r"\b(?:video|film|explainer|documentary|podcast|article|blog|post)\s+"
-            r"(?:about|on|covering|exploring)\s+(.+?)"
-            r"(?=,|;|\.|$|\s+(?:with|in|for|using|including)\s+)",
-            candidate,
-            re.I,
-        )
-        if match:
-            subject = match.group(1).strip(" .,:;-")
-            if subject:
+    values = [
+        normalize(req.get("topic")), normalize(req.get("title")),
+        normalize(req.get("objective")), normalize(fallback),
+    ]
+    for value in values:
+        if value and value.casefold() not in generic and not is_command(value):
+            return value[:500]
+    for value in values:
+        if value and is_command(value):
+            subject = _extract_brief_subject(value)
+            if subject and subject.casefold() not in generic:
                 return subject[:500]
+    for value in values:
+        subject = _extract_brief_subject(value)
+        if subject and subject.casefold() not in generic:
+            return subject[:500]
+    return next((value[:500] for value in values if value), "video production")
 
-    return (objective or topic or title or fallback).strip()[:500]
+
+def _research_search_topic(request: Dict[str, Any], subject: str) -> str:
+    """Research the underlying craft for an obscure product launch, not unrelated brand-name hits."""
+    brief = " ".join(str(request.get(key) or "") for key in ("objective", "topic", "title"))
+    if (
+        re.search(r"\bAI\s+Infinity\b", brief, re.I)
+        and re.search(r"\b(launch|product|platform|studio|creator|software)\b", brief, re.I)
+    ):
+        return "video editing workflow content creation captions subtitles accessibility creator software production"
+    return re.sub(r"\s+", " ", str(subject or "")).strip()[:500]
+
+
+_RESEARCH_STOP_WORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in",
+    "into", "is", "it", "of", "on", "or", "the", "to", "with", "without",
+    "about", "using", "use", "how", "what", "why", "when", "where",
+}
+_RESEARCH_ALIASES = {
+    "edited": "edit", "editing": "edit", "editor": "edit", "editors": "edit",
+    "captions": "caption", "captioning": "caption", "subtitles": "caption",
+    "subtitle": "caption", "subtitling": "caption",
+    "creators": "creator", "creation": "create", "creating": "create",
+    "workflows": "workflow", "productions": "production", "producers": "production",
+    "accessible": "accessibility", "videos": "video", "films": "film",
+    "tools": "tool", "software": "software",
+}
+
+
+def _research_tokens(value: str) -> set:
+    tokens = set()
+    for word in re.findall(r"[a-z0-9]{3,}", str(value or "").lower()):
+        if word in _RESEARCH_STOP_WORDS:
+            continue
+        token = _RESEARCH_ALIASES.get(word, word)
+        if token.endswith("ies") and len(token) > 5:
+            token = token[:-3] + "y"
+        elif token.endswith("s") and len(token) > 4:
+            token = token[:-1]
+        tokens.add(token)
+    return tokens
+
+
+def _research_source_relevant(topic: str, source: Dict[str, Any]) -> bool:
+    """Reject retrieved results that do not substantively match the research topic."""
+    if not isinstance(source, dict):
+        return False
+    query_terms = _research_tokens(topic)
+    source_text = " ".join(str(source.get(key) or "") for key in ("title", "summary", "description", "abstract"))
+    source_terms = _research_tokens(source_text)
+    if not query_terms or not source_terms:
+        return False
+    return len(query_terms & source_terms) >= (2 if len(query_terms) >= 3 else 1)
+
 
 
 def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
@@ -820,10 +897,43 @@ def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
     for name,configured in optional.items():
         providers.setdefault(name,{"status":"configured" if configured else "config_required","count":0,"truthful":True})
 
-    valid=[x for x in sources if x.get("url") and x.get("title")]
-    family_count=len(set(str(x.get("source") or "") for x in valid))
-    status="READY" if valid else "DEGRADED"
-    return {"topic":clean_topic,"sources":valid[:per*2],"source_count":len(valid[:per*2]),"provider_count":family_count,"providers":providers,"degraded":not bool(valid),"status":status,"retrieved_at":utc_iso(),"truthful":True}
+    retrieved=[x for x in sources if x.get("url") and x.get("title")]
+    valid=[x for x in retrieved if _research_source_relevant(clean_topic, x)]
+    relevant_counts: Dict[str, int] = {}
+    for row in valid:
+        provider = str(row.get("source") or "unknown")
+        relevant_counts[provider] = relevant_counts.get(provider, 0) + 1
+    for provider, status_row in providers.items():
+        raw_count = int(status_row.get("count") or 0)
+        relevant_count = relevant_counts.get(provider, 0)
+        status_row["retrieved_count"] = raw_count
+        status_row["count"] = relevant_count
+        status_row["irrelevant_rejected_count"] = max(0, raw_count - relevant_count)
+        if relevant_count:
+            status_row["status"] = "ready"
+        elif raw_count:
+            status_row["status"] = "no_relevant_results"
+        status_row["truthful"] = True
+    valid = valid[:per * 2]
+    family_count = len(set(str(x.get("source") or "") for x in valid))
+    status = "READY" if valid else "DEGRADED"
+    return {
+        "topic": clean_topic,
+        "sources": valid,
+        "source_count": len(valid),
+        "provider_count": family_count,
+        "providers": providers,
+        "degraded": not bool(valid),
+        "status": status,
+        "retrieved_at": utc_iso(),
+        "truthful": True,
+        "relevance_policy": {
+            "version": "topic-overlap-v1",
+            "retrieved_sources": len(retrieved),
+            "accepted_sources": len(valid),
+            "rejected_irrelevant_sources": len(retrieved) - len(valid),
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1255,19 +1365,57 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             }
         ratios = [0.16, 0.18, 0.28, 0.22, 0.16]
     else:
-        names = ["Hook", "Context", "The core idea", "How it works", "Real-world examples", "What changes", "Practical takeaway", "Closing"]
-        ratios = [0.08, 0.10, 0.16, 0.18, 0.18, 0.12, 0.10, 0.08]
+        if FAST_MODE and int(duration or 0) <= 120:
+            names = ["Hook", "The core idea", "How it works", "Closing"]
+            ratios = [0.23, 0.25, 0.30, 0.22]
+        else:
+            names = ["Hook", "Context", "The core idea", "How it works", "Real-world examples", "What changes", "Practical takeaway", "Closing"]
+            ratios = [0.08, 0.10, 0.16, 0.18, 0.18, 0.12, 0.10, 0.08]
+
+    ai_infinity_launch_narration = {
+        "Hook": (
+            "Content work can fragment across research, writing, visuals, voice, captions and editing. "
+            "AI Infinity is designed to connect these steps around one clear creative brief."
+        ),
+        "The core idea": (
+            "Describe the result you need before production starts. Research informs the plan, and the plan guides each scene and its narration. "
+            "Optional articles and social posts must not change the requested main video."
+        ),
+        "How it works": (
+            "Choose a relevant visual for each scene and keep its source and licence attached. "
+            "Render voice and captions, then check timing, sound, frame shape and exported files. "
+            "Uncertain rights or relevance must remain visible for review."
+        ),
+        "Closing": (
+            "A playable MP4 alone does not prove quality. Inspect the scenes, captions and audio; retrieve the saved artifacts; "
+            "and repeat the checks after restart. Release only the output that passes."
+        ),
+    }
 
     def bounded_narration(name: str, seconds: float, source: Dict[str, Any]) -> str:
-        # Keep enough natural narration for short scenes; the execution layer may
-        # rebalance scene durations after low-memory mode reduces the scene count.
-        budget = max(14, int(max(4.0, seconds) * 2.3))
+        """Keep complete sentences; never create a fluent-looking fragment by cutting words."""
+        budget = max(8, int(max(3.5, seconds) * 2.3))
         localized = _localized_fallback_copy(language, name, clean_title, topic_label)
-        text = re.sub(r"\\s+", " ", str(localized["narration_by_name"].get(name) or localized["narration_by_name"].get("Closing") or localized["opening"])).strip()
-        words = text.split()
-        if len(words) > budget:
-            text = " ".join(words[:budget]).rstrip(" ,.;:،۔") + "."
-        return text
+        if ai_infinity_launch and str(language or "English").strip().lower() == "english":
+            raw_text = ai_infinity_launch_narration.get(name) or ai_infinity_launch_narration.get("Closing")
+        else:
+            raw_text = localized["narration_by_name"].get(name) or localized["narration_by_name"].get("Closing") or localized["opening"]
+        text = re.sub(r"\s+", " ", str(raw_text or "")).strip()
+        if len(text.split()) <= budget:
+            return text
+        sentences = [part.strip() for part in re.findall(r"[^.!?]+(?:[.!?]+|$)", text) if part.strip()]
+        selected = []
+        used = 0
+        for sentence in sentences:
+            count = len(sentence.split())
+            if selected and used + count > budget:
+                break
+            if not selected and count > budget:
+                selected.append(sentence)  # preserve one complete sentence if the minimum sentence is over budget
+                break
+            selected.append(sentence)
+            used += count
+        return " ".join(selected).strip() or text
 
     chapters = []
     for i, name in enumerate(names):
@@ -1293,7 +1441,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "Real-world examples": "creator filming a vertical video using camera lights and a microphone",
                 "What changes": "video editing workstation displaying a final cut on a computer monitor",
                 "Practical takeaway": "creator reviewing a script storyboard captions and video timeline at a desk",
-                "Closing": "finished launch film playing on a large studio display",
+                "Closing": "video editor reviewing the finished cut on a workstation preview monitor",
             }
         focus = (visual_focus if fmt == "short" else long_visual_focus).get(name, f"a purposeful real-world visual about {topic_label}")
         localized = _localized_fallback_copy(language, name, clean_title, topic_label)
@@ -1565,22 +1713,25 @@ def _visual_search_query_variants(search_subject: str, focus: str, topic: str, r
     elif "finished_video" in concepts:
         add("finished video playback monitor preview screen editing")
     else:
+        if "raw_final" in concepts:
+        add("video editing before after raw footage finished cut")
+        add("video editor reviewing completed edit preview monitor footage playback export")
+        add("video editing timeline final cut preview screen captions")
+    elif "finished_video" in concepts:
+        add("finished video editing timeline playback computer monitor")
+        add("video playback monitor preview screen editing workstation")
+        add("video editor reviewing final cut export preview monitor")
+    else:
         for required, synonym in synonym_queries:
             if required.issubset(concepts):
                 add(synonym)
                 break
 
-    if "raw_final" in concepts:
-        add("video editor reviewing completed edit preview monitor footage playback export")
-
-    # If there is no known concept synonym, combine meaningful topic and focus
-    # words. Never spend both per-provider query attempts on the product brand.
+    # General product/topic terms are only a final search option after exact scene concepts.
     add(" ".join((topic_terms[:3] + focus_terms[:4] + subject_terms[:2])[:7]))
     if len(variants) < 2:
         add(" ".join((focus_terms + subject_terms + topic_terms + raw_terms)[:7]))
-    # The final raw-to-finished scene gets one more independent free search query;
-    # ordinary scenes retain the bounded two-query request budget.
-    return variants[:3] if "raw_final" in concepts else variants[:2]
+    return variants[:3] if ({"raw_final", "finished_video"} & concepts) else variants[:2]
 
 
 def _visual_candidate_relevant(candidate: Dict[str, Any], search_subject: str, focus: str) -> bool:
@@ -2410,6 +2561,7 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     heading=str(scene.get("heading") or "").strip()
     topic, focus = _parse_scene_visual_intent(scene, ai_prompt, raw_query, heading)
     search_subject=str(scene.get("visual_search_subject") or topic).strip()[:180]
+    scene = {**scene, "topic": topic, "visual_focus": focus, "visual_search_subject": search_subject}
     query=" ".join(x for x in (search_subject,focus) if x).strip() or raw_query
     MEDIA_DEBUG_ERRORS.clear()
     external_disabled = _external_providers_disabled()
@@ -4174,8 +4326,14 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         autopilot_plan=_record_autopilot(project_id, autopilot_caps)
         checkpoint(project_id, "autopilot_ready", {"selected": [x.get("selected",{}).get("id") if x.get("selected") else None for x in autopilot_plan["plan"]], "automatic_failover": True, "free_first": True})
         _stage(project_id, "research", 5)
-        research_query = _research_query_from_request(req, topic)
+        research_brief_topic = _research_query_from_request(req, topic)
+        research_query = _research_search_topic(req, research_brief_topic)
         research = research_topic(research_query, limit=10)
+        research["brief_topic"] = research_brief_topic
+        research["research_scope"] = (
+            "independent creator/video-production practice sources; not independent proof of AI Infinity product claims"
+            if research_query != research_brief_topic else "requested topic"
+        )
         reference_sources=[]
         for ref in (req.get("reference_urls") or [])[:12]:
             try:
