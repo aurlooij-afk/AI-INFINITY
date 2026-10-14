@@ -749,7 +749,7 @@ def test_curated_pexels_sources_are_scene_specific_and_rights_documented(monkeyp
     assert studio._curated_pexels_editorial_photo(scene, tmp_path, 2) is None
 
     def fake_download(url, path, **kwargs):
-        if "24497392" in url:
+        if "8102676" in url:
             image = studio.Image.new("RGB", (1280, 720), (18, 35, 60))
         elif "695730" in url:
             image = studio.Image.new("RGB", (1280, 720), (70, 30, 15))
@@ -762,9 +762,9 @@ def test_curated_pexels_sources_are_scene_specific_and_rights_documented(monkeyp
     third_scene = studio._curated_pexels_editorial_photo(scene, tmp_path, 3)
     assert third_scene is not None
     assert studio._visual_candidate_relevant(third_scene, "content creator", scene["visual_focus"])
-    assert third_scene["source_url"] == "https://www.pexels.com/photo/a-computer-monitor-displaying-a-video-editing-program-24497392/"
-    assert third_scene["creator"] == "abdo alshreef"
-    assert third_scene["source_id"] == 24497392
+    assert third_scene["source_url"] == "https://www.pexels.com/photo/man-sitting-at-the-desk-and-editing-footage-on-a-computer-8102676/"
+    assert third_scene["creator"] == "Ron Lach"
+    assert third_scene["source_id"] == 8102676
     assert third_scene["license_url"] == "https://www.pexels.com/license/"
     assert third_scene["commercial_use_state"] == "commercial_use_allowed_under_provider_terms"
     assert third_scene["rights_status"] == "license_metadata_present"
