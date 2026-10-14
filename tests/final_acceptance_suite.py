@@ -382,7 +382,7 @@ def t3(s,b):
     assert "AI Infinity Creator Operating System" in str(uploaded[0].get("snippet") or uploaded[0].get("summary") or ""),uploaded[0]
     script=dl(s,b,pid,"script.md").read_text(encoding="utf-8")
     assert script.startswith("# AI Infinity Creator Operating System"),script[:1200]
-    assert "source" in script.lower() and "captions" in script.lower(),script[:2000]
+    assert "AI Infinity" in script and "captions" in script.lower() and "editing" in script.lower(),script[:2000]
     return {"test":3,"project_id":pid,"pdf_executed":True,"upload_topic_used":"AI Infinity Creator Operating System"}
 def t4(s,b):
     pid=create(s,b,"Create a 20-second research-backed video article package about Python's official website with evidence, captions, SEO and social copy.",duration=20,format="short",reference_urls=[PYURL]); waitp(s,b,pid)
