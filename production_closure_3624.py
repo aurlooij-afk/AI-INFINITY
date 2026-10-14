@@ -874,6 +874,36 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
             f"at least {required_script_words} are required for the requested runtime"
         )
 
+    narration_lines = []
+    if script_path and script_path.exists():
+        for line in script_body.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or re.match(r"^Hook\s*:", line, re.I):
+                continue
+            narration_lines.append(line)
+    dangling_endings = {
+        "a", "an", "and", "although", "as", "because", "but", "for", "from", "if",
+        "in", "into", "is", "of", "on", "or", "that", "the", "then", "these",
+        "this", "those", "to", "was", "were", "when", "where", "which", "while",
+        "who", "whom", "whose", "will", "with", "would", "you",
+    }
+    def sentence_is_complete(line: str) -> bool:
+        if not re.search(r"[.!?…۔؟]$", line):
+            return False
+        last_words = re.findall(r"[a-z]+", line.lower())
+        if last_words and last_words[-1] in dangling_endings:
+            return False
+        if re.search(r"\b(?:what|how|why)\s+(?:the\s+)?(?:available\s+)?(?:evidence|data|sources)\.$", line, re.I):
+            return False
+        return len(re.findall(r"\b[\w'-]+\b", line)) >= 6
+    checks["script_sentence_integrity_passed"] = (
+        not video_quality_gate_required
+        or bool(narration_lines) and all(sentence_is_complete(line) for line in narration_lines)
+    )
+    checks["script_narration_paragraph_count"] = len(narration_lines)
+    if not checks["script_sentence_integrity_passed"]:
+        failures.append("spoken script contains an incomplete, dangling, or underdeveloped narration paragraph")
+
     caption_metrics = _caption_timing_metrics(files.get("captions.srt"), float(checks.get("actual_duration") or 0))
     checks["caption_timing"] = caption_metrics
     expected_caption_cues = max(1, int((float(checks.get("actual_duration") or 0) + 4.999) // 5))
@@ -983,7 +1013,7 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         "visual_diversity_ok", "professional_scene_coverage_passed",
         "professional_visual_diversity_passed", "script_content_floor_passed",
         "caption_sync_passed", "professional_voice_present", "visual_rights_evidence_present",
-        "research_required_and_present", "fresh_evidence_ok", "fact_check_present",
+        "research_required_and_present", "script_sentence_integrity_passed", "fresh_evidence_ok", "fact_check_present",
         "provenance_present", "captions_present", "thumbnail_present", "manifest_present",
         "media_anomaly_scan_ok", "black_frame_ok", "freeze_ok", "audio_clipping_ok",
         "persisted_qc_passed",
@@ -1012,6 +1042,7 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         and checks["professional_scene_coverage_passed"]
         and checks["professional_visual_diversity_passed"]
         and checks["script_content_floor_passed"]
+        and checks["script_sentence_integrity_passed"]
         and checks["caption_sync_passed"]
         and checks["professional_voice_present"]
         and checks["visual_rights_evidence_present"]

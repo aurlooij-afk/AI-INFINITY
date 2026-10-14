@@ -187,6 +187,43 @@ def list_memories(user_id,project_id=None,limit=100):
         except Exception:r["value"]={}
     return rows
 
+def _derive_title_from_command(command):
+    text = clean(command)
+    if not text:
+        return "AI Infinity Creation"
+    about = re.search(
+        r"\b(?:video|film|short|reel|documentary|explainer|podcast|article|blog|post)\s+"
+        r"(?:about|on|covering|exploring)\s+(.+?)"
+        r"(?=,|;|\.|$|\s+(?:with|in|for|using|including)\s+)",
+        text, re.I,
+    )
+    if about:
+        subject = clean(about.group(1)).strip(" .,:;-")
+        if subject:
+            return subject[:150]
+    value = re.sub(
+        r"^(?:please\s+)?(?:create|make|generate|produce|build|write|draft|develop)\s+",
+        "", text, flags=re.I,
+    )
+    value = re.sub(
+        r"^(?:(?:a|an|the)\s+)?(?:(?:professional|cinematic|premium|high[- ]quality|"
+        r"research[- ]backed|educational|engaging|compelling|polished|original|useful)\s+)*",
+        "", value, flags=re.I,
+    )
+    value = re.sub(r"^\d+\s*[- ]?(?:second|seconds|minute|minutes|sec|secs|min|mins)\s+", "", value, flags=re.I)
+    value = re.split(
+        r"\s+(?:video|film|short|reel|documentary|explainer|podcast|article|blog|social\s+campaign)\b",
+        value, maxsplit=1, flags=re.I,
+    )[0]
+    value = re.split(
+        r"\s+(?:in\s+(?:English|Urdu|Pashto|Dari|Arabic)|with\s+(?:voiceover|narration)|"
+        r"research[- ]backed|aspect ratio|SEO metadata|social campaign|production/rights)\b|[,;.]",
+        value, maxsplit=1, flags=re.I,
+    )[0]
+    value = clean(value).strip(" .,:;-")
+    return value[:150] or text[:150]
+
+
 def compile_intent(command,raw):
     text=clean(command)
     if len(text)<8:raise HTTPException(422,"Describe what you want to bring to life.")
@@ -238,7 +275,7 @@ def compile_intent(command,raw):
     for x in ("English","Urdu","Hindi","Pashto","Dari","Arabic"):
         if re.search(rf"\b{re.escape(x)}\b",low,re.I):language=x;break
     title=clean(raw.get("title"),180)
-    if not title:title=re.split(r"[.!?\n]",text,maxsplit=1)[0][:150] or "AI Infinity Creation"
+    if not title:title=_derive_title_from_command(text)
     return {
       "schema":SCHEMA,"title":title,"objective":text,
       "audience":clean(raw.get("audience"),600) or "general audience",

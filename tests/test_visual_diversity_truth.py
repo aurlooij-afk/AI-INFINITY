@@ -814,3 +814,28 @@ def test_raw_final_scene_uses_specific_three_queries_before_generic_terms():
     assert len(queries) == 3, queries
     assert queries[1] == "video editing before after raw footage finished cut", queries
     assert queries[2] == "video editor reviewing completed edit preview monitor footage playback export", queries
+
+
+
+def test_fast_product_launch_plan_uses_four_complete_story_scenes(monkeypatch):
+    monkeypatch.setattr(studio, "FAST_MODE", True)
+    plan = studio._fallback_creative_plan(
+        title="Create a professional 60-second AI Infinity launch video in English",
+        objective=(
+            "Create a professional 60-second AI Infinity launch video in English, "
+            "16:9, research-backed, with voiceover, captions, and production manifests."
+        ),
+        fmt="long",
+        duration=60,
+        audience="general audience",
+        tone="clear and practical",
+        research={"sources": [], "source_count": 0},
+        language="English",
+        topic="Create a professional 60-second AI Infinity launch video in English",
+    )
+    chapters = plan["chapters"]
+    assert len(chapters) == 4
+    script = " ".join(x["narration"] for x in chapters)
+    assert len(script.split()) >= 60
+    assert "research" in script.lower() and "captions" in script.lower()
+    assert all(x["narration"].rstrip().endswith((".", "!", "?")) for x in chapters)
