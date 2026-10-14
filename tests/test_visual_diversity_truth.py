@@ -711,11 +711,11 @@ def test_pexels_video_adapter_uses_current_v1_endpoint(monkeypatch, tmp_path):
     def fake_download(url, path, **kwargs):
         Path(path).write_bytes(b"test video placeholder")
         return Path(path)
-    monkeypatch.setenv("PEXELS_API_KEY", "test-api-key")
+    monkeypatch.setattr(studio.os, "getenv", lambda name, default=None: "fixture-value" if name == "PEXELS_API_KEY" else default)
     monkeypatch.setattr(studio, "http_json", fake_http_json)
     monkeypatch.setattr(studio, "download", fake_download)
     rows = studio._pexels("video editing timeline captions", tmp_path, limit=1)
     assert "/v1/videos/search?" in captured["url"]
-    assert captured["headers"].get("Authorization") == "test-api-key"
+    assert captured["headers"].get("Authorization") == "fixture-value"
     assert len(rows) == 1
     assert rows[0]["source_url"] == "https://www.pexels.com/video/example/"
