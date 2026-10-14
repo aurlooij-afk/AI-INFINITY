@@ -1440,6 +1440,78 @@ _VISUAL_CONCEPTS = {
 }
 
 
+def _visual_search_query_variants(search_subject: str, focus: str, topic: str, raw_query: str) -> List[str]:
+    """Build stock-search queries around the scene, not the product's brand name.
+
+    Brand names commonly appear in a video brief but not in stock-media metadata.
+    Search for the visible action/setting first, then use a small concept-specific
+    synonym query. Candidate metadata must still pass _visual_candidate_relevant.
+    """
+    stop = {
+        "about", "after", "before", "being", "build", "building", "clear", "close",
+        "content", "create", "creator", "creators", "creating", "cinematic",
+        "concrete", "context", "documentary", "editorial", "example", "focus",
+        "generate", "generating", "infinity", "make", "making", "matters",
+        "opening", "people", "photography", "premium", "professional", "real",
+        "resolved", "scene", "show", "showing", "striking", "subject", "the",
+        "tools", "using", "video", "view", "visual", "world", "working",
+    }
+
+    def terms(value: str) -> List[str]:
+        out = []
+        for word in re.findall(r"[a-z0-9]{3,}", str(value or "").lower()):
+            if word in stop or word in out:
+                continue
+            out.append(word)
+        return out
+
+    focus_terms = terms(focus)
+    subject_terms = terms(search_subject)
+    topic_terms = terms(topic)
+    raw_terms = terms(raw_query)
+    primary = focus_terms or subject_terms or topic_terms or raw_terms
+    variants: List[str] = []
+
+    def add(value: str) -> None:
+        query = " ".join(str(value or "").split()).strip(" ,;:")
+        if query and query.lower() not in {x.lower() for x in variants}:
+            variants.append(query)
+
+    add(" ".join(primary[:7]))
+
+    combined_focus = (str(focus or "") + " " + str(search_subject or "")).lower()
+    concepts = {
+        key for key, pattern in _VISUAL_CONCEPTS.items()
+        if re.search(pattern, combined_focus)
+    }
+    # Use ordinary stock-library language for concepts that are usually described
+    # differently from the user's brief. These are search hints, never relevance
+    # or rights evidence.
+    synonym_queries = (
+        ({"editing", "workstation"}, "video editor computer workstation"),
+        ({"editing"}, "video editing timeline editing software"),
+        ({"camera", "studio"}, "filmmaker recording video studio camera"),
+        ({"camera"}, "camera operator filming production"),
+        ({"audio", "studio"}, "audio recording studio microphone"),
+        ({"audio"}, "microphone headphones audio recording"),
+        ({"captions"}, "video captions subtitles editing"),
+        ({"storyboard"}, "film storyboard script shot list"),
+        ({"creator"}, "content creator filming video studio"),
+        ({"finished_video"}, "finished video editing timeline playback"),
+    )
+    for required, synonym in synonym_queries:
+        if required.issubset(concepts):
+            add(synonym)
+            break
+
+    # If there is no known concept synonym, combine meaningful topic and focus
+    # words. Never spend both per-provider query attempts on the product brand.
+    add(" ".join((topic_terms[:3] + focus_terms[:4] + subject_terms[:2])[:7]))
+    if len(variants) < 2:
+        add(" ".join((focus_terms + subject_terms + topic_terms + raw_terms)[:7]))
+    return variants[:2]
+
+
 def _visual_candidate_relevant(candidate: Dict[str, Any], search_subject: str, focus: str) -> bool:
     """Require several independent, focus-specific signals from actual asset metadata.
 
@@ -1497,12 +1569,24 @@ def _visual_candidate_relevant(candidate: Dict[str, Any], search_subject: str, f
         overlap = focus_terms & metadata_terms
         return len(overlap) >= 2 and len(matches) >= 1
 
+    # Product/brand words like "Infinity" do not describe visible media and must
+    # not force an otherwise relevant stock asset to fail metadata matching.
     subject_terms = {
         word for word in re.findall(r"[a-z0-9]{4,}", subject_text)
-        if word not in {"professional", "editorial", "photography", "cinematic", "visual", "background", "content"}
+        if word not in {"professional", "editorial", "photography", "cinematic", "visual", "background", "content", "infinity"}
     }
     metadata_terms = set(re.findall(r"[a-z0-9]{4,}", text))
-    return len(subject_terms & metadata_terms) >= 2
+    overlap = subject_terms & metadata_terms
+    if len(overlap) >= 2:
+        return True
+    # If branding left exactly one meaningful subject concept (e.g. "creator"),
+    # accept one metadata-term match only when the metadata independently matches
+    # that known concept. Scene-specific focus checks above still take precedence.
+    return bool(
+        len(subject_terms) == 1
+        and len(overlap) == 1
+        and subject_concepts.intersection(metadata_concepts)
+    )
 
 
 def _commercial_use_from_license(license_name: Any, license_url: Any) -> str:
@@ -2123,35 +2207,12 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     if ai:
         return ai
 
-    def compact(s: str) -> str:
-        stop={"create","make","generate","produce","build","video","film","short","reel","cinematic","documentary","premium","editorial","about","real","world","photography","professional","opening","view","visual","focus","context","close","up","concrete","example","resolved","outcome","people","using","idea","process","tools","showing","clear","subject","matters","affected","central","mechanism","connected","purposeful","scene"}
-        words=[w for w in re.findall(r"[A-Za-z0-9]{3,}",s.lower()) if w not in stop]
-        return " ".join(words[:7])
-    core=compact(search_subject or topic or raw_query or heading)
-    focus_core=compact(focus or heading)
-    # Search only topic-specific phrases. Earlier generic "creator at a desk"
-    # queries repeatedly returned irrelevant visuals for energy/science/etc.
-    query_variants=[]
-    if scene.get("visual_search_subject"):
-        subject_words=re.findall(r"[A-Za-z0-9]{4,}",search_subject.lower())
-        focus_words_compact=re.findall(r"[A-Za-z0-9]{4,}",focus_core.lower())
-        # Long natural-language prompts often overconstrain public image search.
-        # Use short, scene-specific search phrases; candidate metadata is still
-        # checked for relevance and byte-distinctness before any asset is accepted.
-        subject_and_focus=[]
-        for word in subject_words[:2] + focus_words_compact[:4]:
-            if word not in subject_and_focus:
-                subject_and_focus.append(word)
-        focused_retry=" ".join(focus_words_compact[-4:])
-        for q in (" ".join(subject_and_focus), focused_retry):
-            q=" ".join(q.split()).strip()
-            if q and q.lower() not in {x.lower() for x in query_variants}:
-                query_variants.append(q)
-    else:
-        for q in (query, f"{core} {focus_core}"):
-            q=" ".join(q.split()).strip()
-            if q and q.lower() not in {x.lower() for x in query_variants}:
-                query_variants.append(q)
+    query_variants = _visual_search_query_variants(
+        search_subject=search_subject,
+        focus=focus or heading,
+        topic=topic,
+        raw_query=raw_query,
+    )
 
     source_failures=[]
     getters=() if external_disabled else (_nasa_images,_openverse_images,_commons_media,_pexels,_pixabay)
