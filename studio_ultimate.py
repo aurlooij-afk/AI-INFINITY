@@ -1291,7 +1291,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "The core idea": "close-up computer monitor displaying a video editing timeline and subtitle tracks",
                 "How it works": "hands editing video clips audio waveforms and caption tracks on a workstation",
                 "Real-world examples": "creator filming a vertical video using camera lights and a microphone",
-                "What changes": "before-and-after comparison of raw footage and a finished edited film on screens",
+                "What changes": "video editing workstation displaying a final cut on a computer monitor",
                 "Practical takeaway": "creator reviewing a script storyboard captions and video timeline at a desk",
                 "Closing": "finished launch film playing on a large studio display",
             }

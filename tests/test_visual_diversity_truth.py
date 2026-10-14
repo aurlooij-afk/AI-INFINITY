@@ -708,3 +708,24 @@ def test_raw_final_scene_has_a_specific_editing_search_synonym():
     )
     assert len(queries) == 2, queries
     assert "video editing before after raw footage finished cut" in queries, queries
+
+
+
+def test_launch_outcome_scene_targets_retrievable_editing_media():
+    plan = studio._fallback_creative_plan(
+        "AI Infinity launch",
+        "Create a professional 60-second AI Infinity launch video in English, research-backed.",
+        "long",
+        60,
+        "general audience",
+        "clear, intelligent, human",
+        {"sources": [], "source_count": 0},
+        "English",
+        "AI Infinity launch",
+    )
+    outcome = next(
+        scene for scene in plan["chapters"]
+        if str(scene.get("heading", "")).lower().startswith("what changes")
+    )
+    assert "workstation" in outcome["visual_focus"].lower()
+    assert "final cut" in outcome["visual_focus"].lower()
