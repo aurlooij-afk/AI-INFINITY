@@ -1553,6 +1553,7 @@ def _visual_search_query_variants(search_subject: str, focus: str, topic: str, r
         ({"storyboard"}, "film storyboard script shot list"),
         ({"finished_video"}, "finished video editing timeline playback computer monitor"),
         ({"raw_final"}, "video editing before after raw footage finished cut"),
+        ({"raw_final"}, "video editor reviewing completed edit preview monitor footage playback export"),
         ({"creator"}, "content creator filming video studio"),
     )
     for required, synonym in synonym_queries:
@@ -1565,7 +1566,9 @@ def _visual_search_query_variants(search_subject: str, focus: str, topic: str, r
     add(" ".join((topic_terms[:3] + focus_terms[:4] + subject_terms[:2])[:7]))
     if len(variants) < 2:
         add(" ".join((focus_terms + subject_terms + topic_terms + raw_terms)[:7]))
-    return variants[:2]
+    # The final raw-to-finished scene gets one more independent free search query;
+    # ordinary scenes retain the bounded two-query request budget.
+    return variants[:3] if "raw_final" in concepts else variants[:2]
 
 
 def _visual_candidate_relevant(candidate: Dict[str, Any], search_subject: str, focus: str) -> bool:
@@ -2472,10 +2475,10 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         return selected_candidate
 
     for getter in getters:
-        # First query is the exact scene brief; the second is a compact retry for
-        # rate-limited/over-constrained public search. Each provider is queried
-        # at most twice per scene to reduce avoidable HTTP 429 bursts.
-        for q in query_variants[:2]:
+        # First query is the exact scene brief; the second is the concept synonym.
+        # Only the final raw-to-finished scene gets a third targeted query; ordinary
+        # scenes remain at two calls per provider to reduce avoidable HTTP 429 bursts.
+        for q in query_variants:
             try:
                 items=getter(q,outdir,limit=_scene_asset_search_limit(index,getter.__name__))
             except Exception as exc:

@@ -763,3 +763,16 @@ def test_curated_pexels_source_is_keyless_late_scene_only_and_rights_documented(
     assert candidate["license_url"] == "https://www.pexels.com/license/"
     assert candidate["commercial_use_state"] == "commercial_use_allowed_under_provider_terms"
     assert candidate["rights_status"] == "license_metadata_present"
+
+
+
+def test_raw_final_scene_gets_three_bounded_specific_search_queries():
+    queries = studio._visual_search_query_variants(
+        search_subject="content creator",
+        focus="before-and-after comparison of raw footage and a finished edited film on screens",
+        topic="AI Infinity launch",
+        raw_query="content creator before-and-after comparison of raw footage and a finished edited film on screens documentary photography",
+    )
+    assert len(queries) == 3, queries
+    assert queries[1] == "video editing before after raw footage finished cut", queries
+    assert queries[2] == "video editor reviewing completed edit preview monitor footage playback export", queries
