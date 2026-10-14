@@ -1571,6 +1571,26 @@ def _visual_candidate_relevant(candidate: Dict[str, Any], search_subject: str, f
 
     # Product/brand words like "Infinity" do not describe visible media and must
     # not force an otherwise relevant stock asset to fail metadata matching.
+    # When no controlled visual concept matches the focus, compare meaningful words
+    # from the focus itself before resorting to the generic topic/brand. Require at
+    # least two independent terms so an accidental single-word match cannot pass.
+    if not focus_specific:
+        focus_stop = {
+            "about", "after", "before", "being", "build", "building", "clear", "close",
+            "content", "create", "creator", "creators", "creating", "cinematic",
+            "concrete", "context", "documentary", "editorial", "example", "focus",
+            "generate", "generating", "infinity", "make", "making", "matters",
+            "opening", "people", "photography", "premium", "professional", "real",
+            "resolved", "scene", "show", "showing", "striking", "subject", "the",
+            "tools", "using", "video", "view", "visual", "world", "working",
+        }
+        focus_terms = {
+            word for word in re.findall(r"[a-z0-9]{4,}", focus_text)
+            if word not in focus_stop
+        }
+        if len(focus_terms & metadata_terms) >= 2:
+            return True
+
     subject_terms = {
         word for word in re.findall(r"[a-z0-9]{4,}", subject_text)
         if word not in {"professional", "editorial", "photography", "cinematic", "visual", "background", "content", "infinity"}
