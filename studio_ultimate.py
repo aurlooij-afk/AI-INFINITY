@@ -1551,9 +1551,9 @@ def _visual_search_query_variants(search_subject: str, focus: str, topic: str, r
         ({"audio"}, "microphone headphones audio recording"),
         ({"captions"}, "video captions subtitles editing"),
         ({"storyboard"}, "film storyboard script shot list"),
-        ({"creator"}, "content creator filming video studio"),
         ({"finished_video"}, "finished video editing timeline playback computer monitor"),
         ({"raw_final"}, "video editing before after raw footage finished cut"),
+        ({"creator"}, "content creator filming video studio"),
     )
     for required, synonym in synonym_queries:
         if required.issubset(concepts):
