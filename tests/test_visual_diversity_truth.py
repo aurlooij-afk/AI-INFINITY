@@ -741,31 +741,44 @@ def test_later_openverse_scenes_request_a_broader_free_candidate_pool():
 
 
 
-def test_curated_pexels_source_is_keyless_late_scene_only_and_rights_documented(monkeypatch, tmp_path):
+def test_curated_pexels_sources_are_scene_specific_and_rights_documented(monkeypatch, tmp_path):
     scene = {
         "heading": "What changes",
         "visual_focus": "video editing workstation displaying a final cut on a computer monitor",
     }
-    assert studio._curated_pexels_editorial_photo(scene, tmp_path, 3) is None
+    assert studio._curated_pexels_editorial_photo(scene, tmp_path, 2) is None
 
     def fake_download(url, path, **kwargs):
-        assert "images.pexels.com/photos/695730/" in url
-        image = studio.Image.new("RGB", (1280, 720), (18, 35, 60))
+        if "24497392" in url:
+            image = studio.Image.new("RGB", (1280, 720), (18, 35, 60))
+        elif "695730" in url:
+            image = studio.Image.new("RGB", (1280, 720), (70, 30, 15))
+        else:
+            raise AssertionError("Unexpected curated Pexels source: " + url)
         image.save(path, "JPEG")
         return path
 
     monkeypatch.setattr(studio, "download", fake_download)
-    candidate = studio._curated_pexels_editorial_photo(scene, tmp_path, 4)
-    assert candidate is not None
-    assert studio._visual_candidate_relevant(
-        candidate, "content creator", scene["visual_focus"]
-    )
-    assert candidate["source_url"] == "https://www.pexels.com/photo/computer-monitor-turned-on-695730/"
-    assert candidate["creator"] == "Francesco Paggiaro"
-    assert candidate["license_url"] == "https://www.pexels.com/license/"
-    assert candidate["commercial_use_state"] == "commercial_use_allowed_under_provider_terms"
-    assert candidate["rights_status"] == "license_metadata_present"
+    third_scene = studio._curated_pexels_editorial_photo(scene, tmp_path, 3)
+    assert third_scene is not None
+    assert studio._visual_candidate_relevant(third_scene, "content creator", scene["visual_focus"])
+    assert third_scene["source_url"] == "https://www.pexels.com/photo/a-computer-monitor-displaying-a-video-editing-program-24497392/"
+    assert third_scene["creator"] == "abdo alshreef"
+    assert third_scene["source_id"] == 24497392
+    assert third_scene["license_url"] == "https://www.pexels.com/license/"
+    assert third_scene["commercial_use_state"] == "commercial_use_allowed_under_provider_terms"
+    assert third_scene["rights_status"] == "license_metadata_present"
 
+    fourth_scene = studio._curated_pexels_editorial_photo(scene, tmp_path, 4)
+    assert fourth_scene is not None
+    assert studio._visual_candidate_relevant(fourth_scene, "content creator", scene["visual_focus"])
+    assert fourth_scene["source_url"] == "https://www.pexels.com/photo/computer-monitor-turned-on-695730/"
+    assert fourth_scene["creator"] == "Francesco Paggiaro"
+    assert fourth_scene["source_id"] == 695730
+    assert fourth_scene["license_url"] == "https://www.pexels.com/license/"
+    assert fourth_scene["commercial_use_state"] == "commercial_use_allowed_under_provider_terms"
+    assert fourth_scene["rights_status"] == "license_metadata_present"
+    assert studio.file_sha256(Path(third_scene["path"])) != studio.file_sha256(Path(fourth_scene["path"]))
 
 
 def test_raw_final_scene_gets_three_bounded_specific_search_queries():
