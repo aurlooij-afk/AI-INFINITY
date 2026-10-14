@@ -612,11 +612,11 @@ def _research_query_from_request(req: Dict[str, Any], fallback: str = "") -> str
     }
 
     def normalize(value: Any) -> str:
-        return re.sub(r"\\s+", " ", str(value or "")).strip()
+        return re.sub(r"\s+", " ", str(value or "")).strip()
 
     def is_command(value: str) -> bool:
         return bool(re.match(
-            r"^(?:please\\s+)?(?:create|make|generate|produce|build|write|draft|develop)\\b",
+            r"^(?:please\s+)?(?:create|make|generate|produce|build|write|draft|develop)\b",
             value,
             re.I,
         ))
@@ -639,9 +639,9 @@ def _research_query_from_request(req: Dict[str, Any], fallback: str = "") -> str
     # Extract a real subject if the caller has not supplied a meaningful title.
     for candidate in (objective, topic):
         match = re.search(
-            r"\\b(?:video|film|explainer|documentary|podcast|article|blog|post)\\s+"
-            r"(?:about|on|covering|exploring)\\s+(.+?)"
-            r"(?=,|;|\\.|$|\\s+(?:with|in|for|using|including)\\s+)",
+            r"\b(?:video|film|explainer|documentary|podcast|article|blog|post)\s+"
+            r"(?:about|on|covering|exploring)\s+(.+?)"
+            r"(?=,|;|\.|$|\s+(?:with|in|for|using|including)\s+)",
             candidate,
             re.I,
         )
