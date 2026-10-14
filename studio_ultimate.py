@@ -1478,15 +1478,15 @@ def _nasa_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any
 
 _VISUAL_CONCEPTS = {
     "creator": r"\b(?:content creator|creator|filmmaker|video editor|videographer|photographer|producer|youtuber|camera operator|film crew)\b",
-    "editing": r"\b(?:edit(?:ing)?|post[- ]production|timeline|montage|cutting|clips?|video workflow)\b",
-    "workstation": r"\b(?:workstation|computer|desktop|laptop|monitor|screen|editing suite|desk|keyboard|display)\b",
+    "editing": r"\b(?:edit(?:s|ed|ing|ors?)?|post[- ]production|timeline|montage|cutting|clips?|video workflow)\b",
+    "workstation": r"\b(?:workstation|computer|desktop|laptop|monitors?|screens?|editing suite|suite|desk|keyboard|display)\b",
     "camera": r"\b(?:camera|camcorder|lens|tripod|filming|shooting|recording|cinematography)\b",
     "studio": r"\b(?:studio|production room|recording room|video set|film set|broadcast booth|soundstage)\b",
     "audio": r"\b(?:microphone|mic|headphones?|audio|sound|waveform|voiceover|mixing console)\b",
-    "captions": r"\b(?:captions?|subtitles?|closed caption|srt|subtitle track)\b",
+    "captions": r"\b(?:captions?|subtitles?|closed captions?|srt|subtitle tracks?)\b",
     "storyboard": r"\b(?:storyboard|script|screenplay|shot list|outline|production plan)\b",
-    "finished_video": r"\b(?:finished film|finished video|final cut|export|rendered video|playback|video player)\b",
-    "raw_final": r"\b(?:before[- ]and[- ]after|raw footage|unedited footage|finished edit|rough cut|final edit)\b",
+    "finished_video": r"\b(?:finished (?:film|video|edit|cut)|final (?:cut|edit|video)|export(?:ed)? video|rendered video|playback|video player|video playback|preview monitor)\b",
+    "raw_final": r"\b(?:before[- ]and[- ]after|before/after|raw footage|unedited footage|finished edit|rough cut|final edit)\b",
 }
 
 
@@ -1498,13 +1498,14 @@ def _visual_search_query_variants(search_subject: str, focus: str, topic: str, r
     synonym query. Candidate metadata must still pass _visual_candidate_relevant.
     """
     stop = {
-        "about", "after", "before", "being", "build", "building", "clear", "close",
-        "content", "create", "creator", "creators", "creating", "cinematic",
-        "concrete", "context", "documentary", "editorial", "example", "focus",
-        "generate", "generating", "infinity", "make", "making", "matters",
-        "opening", "people", "photography", "premium", "professional", "real",
-        "resolved", "scene", "show", "showing", "striking", "subject", "the",
-        "tools", "using", "video", "view", "visual", "world", "working",
+        "a", "about", "after", "and", "an", "as", "at", "before", "being", "build", "building",
+        "by", "clear", "close", "content", "create", "creator", "creators", "creating",
+        "cinematic", "concrete", "context", "documentary", "editorial", "example", "focus",
+        "for", "from", "generate", "generating", "in", "infinity", "into", "launch", "make",
+        "making", "matters", "of", "on", "or", "opening", "people", "photography", "premium",
+        "professional", "real", "resolved", "scene", "show", "showing", "striking", "subject",
+        "the", "their", "to", "tools", "using", "video", "view", "visual", "while", "with",
+        "without", "world", "working",
     }
 
     def terms(value: str) -> List[str]:
@@ -1556,10 +1557,18 @@ def _visual_search_query_variants(search_subject: str, focus: str, topic: str, r
         ({"raw_final"}, "video editor reviewing completed edit preview monitor footage playback export"),
         ({"creator"}, "content creator filming video studio"),
     )
-    for required, synonym in synonym_queries:
-        if required.issubset(concepts):
-            add(synonym)
-            break
+    if "raw_final" in concepts:
+        # Literal before/after stock clips are rare; search for the actual
+        # observable editorial context without relaxing source relevance checks.
+        add("video editing before after raw footage finished cut")
+        add("video editor reviewing completed edit preview monitor footage playback export")
+    elif "finished_video" in concepts:
+        add("finished video playback monitor preview screen editing")
+    else:
+        for required, synonym in synonym_queries:
+            if required.issubset(concepts):
+                add(synonym)
+                break
 
     if "raw_final" in concepts:
         add("video editor reviewing completed edit preview monitor footage playback export")

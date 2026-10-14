@@ -793,3 +793,24 @@ def test_visual_prompt_parsing_recovers_subject_and_scene_focus():
     )
     assert topic == "AI Infinity launch", topic
     assert focus == "before-and-after comparison of raw footage and a finished edited film on screens", focus
+
+
+
+def test_visual_concept_patterns_cover_real_editorial_metadata_variants():
+    patterns = studio._VISUAL_CONCEPTS
+    assert __import__("re").search(patterns["editing"], "Edit Suite 2 - edited footage")
+    assert __import__("re").search(patterns["workstation"], "editing monitors and screens")
+    assert __import__("re").search(patterns["captions"], "subtitle tracks and captions")
+    assert __import__("re").search(patterns["finished_video"], "finished edited film playback monitor")
+
+
+def test_raw_final_scene_uses_specific_three_queries_before_generic_terms():
+    queries = studio._visual_search_query_variants(
+        search_subject="content creator",
+        focus="before-and-after comparison of raw footage and a finished edited film on screens",
+        topic="AI Infinity launch",
+        raw_query="content creator before-and-after comparison of raw footage and a finished edited film on screens documentary photography",
+    )
+    assert len(queries) == 3, queries
+    assert queries[1] == "video editing before after raw footage finished cut", queries
+    assert queries[2] == "video editor reviewing completed edit preview monitor footage playback export", queries
