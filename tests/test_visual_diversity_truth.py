@@ -465,6 +465,41 @@ def test_fallback_visual_can_never_pass_the_source_rights_gate():
     assert closure._rights_evidence_state(fixture) == "blocked_fallback"
 
 
+def test_qualified_vector_fallback_has_separate_original_provenance_not_source_clearance():
+    original = {
+        "source": "AI Infinity original vector editorial fallback",
+        "source_url": None,
+        "creator": "AI Infinity",
+        "license": "Original generated illustrative asset",
+        "license_url": None,
+        "rights_status": "original_asset",
+        "rights_basis": "application_generated_original",
+        "commercial_use_state": "owner_attested_original_work",
+        "rights_evidence_method": "in_app_procedural_vector_renderer",
+        "rights_evidence_note": "Original vector artwork; no provider-sourced media is incorporated into this image.",
+        "rights_evidence_version": "3624.1",
+        "quality_tier": "original_vector_editorial_fallback",
+        "asset_kind": "illustrative_graphic_not_photograph",
+        "fallback": True,
+        "fallback_record": {
+            "truthful": True,
+            "execution_state": "DEGRADED",
+            "fallback_method": "Topic-led original vector/editorial illustration",
+            "quality_change": "Real-source visuals were unavailable; original illustration used",
+            "license_change": "provider/source-specific -> original generated illustrative asset",
+        },
+    }
+    # This is recorded as the application's own artwork, never as externally
+    # licensed source media. The independent source-visual gate remains false.
+    assert closure._rights_evidence_state(original) == "original_generated"
+    assert closure._rights_evidence_state({
+        **original, "rights_evidence_method": "unverified"
+    }) == "blocked_fallback"
+    assert closure._rights_evidence_state({
+        **original, "source_url": "https://example.test/external-image.jpg"
+    }) == "blocked_fallback"
+
+
 def test_license_classifier_does_not_treat_cc_by_nc_or_nd_as_cleared():
     assert studio._commercial_use_from_license(
         "CC BY-NC 4.0", "https://creativecommons.org/licenses/by-nc/4.0/"
