@@ -153,3 +153,34 @@ def test_uploaded_pdf_does_not_override_explicit_user_topic():
 
     assert studio_ultimate._infer_uploaded_source_topic(request, sources) == ""
 
+
+COMPOUND_DELIVERABLE_COMMAND = (
+    "Create a 20-second research-backed video article package about "
+    "Python's official website with evidence, captions, SEO and social copy."
+)
+
+
+def test_compound_deliverable_subject_does_not_become_quality_modifier():
+    assert studio_ultimate._extract_brief_subject(COMPOUND_DELIVERABLE_COMMAND) == (
+        "Python's official website"
+    )
+
+
+def test_research_query_uses_subject_not_brief_modifier():
+    request = {
+        "topic": COMPOUND_DELIVERABLE_COMMAND,
+        "title": "Python's official website",
+        "objective": COMPOUND_DELIVERABLE_COMMAND,
+    }
+    assert studio_ultimate._research_query_from_request(request) == (
+        "Python's official website"
+    )
+
+
+def test_canonical_title_uses_subject_from_compound_deliverable_command():
+    import ai_infinity_canonical
+
+    assert ai_infinity_canonical._derive_title_from_command(
+        COMPOUND_DELIVERABLE_COMMAND
+    ) == "Python's official website"
+
