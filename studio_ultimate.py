@@ -759,10 +759,16 @@ def _infer_uploaded_source_topic(
 
     # Prefer an explicit title label even when a PDF extractor returns the page
     # as one line instead of preserving positioned text-line breaks.
+    # PDF extractors sometimes flatten positioned text into one line and remove
+    # the whitespace between fields (for example, "...Operating SystemBrief: ...").
+    # Capture an explicit title only up to a recognized next metadata label; do not
+    # promote the title plus brief/rights/delivery metadata into the project topic.
     labelled_heading = re.search(
-        r"\\b(?:document\\s+)?(?:title|subject)\\s*:\\s*([^\\n.!?]{5,140})",
+        r"(?i)(?:^|[\r\n])\s*(?:document\s+)?(?:title|subject)\s*:\s*(.{2,180}?)"
+        r"(?=(?:\s*(?:brief|source\s+rights|delivery|quality|recovery|abstract|summary|"
+        r"keywords?|author|date|copyright|license|introduction|overview|objective|purpose)"
+        r"\s*:)|[\r\n]+|$)",
         text,
-        re.I,
     )
     if labelled_heading:
         candidate = labelled_heading.group(1).strip(" .,:;-")
