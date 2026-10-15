@@ -48,7 +48,7 @@ def stop(p,log):
     log.close()
 def create(s,b,cmd,**kw):
     x=req(s,b,"/infinity/canonical/create","POST",json={"command":cmd,**kw}); pid=str(x.get("project_id") or ""); assert pid,x; return pid
-def waitp(s,b,pid,timeout=600):
+def waitp(s,b,pid,timeout=600,allow_review_draft=False):
     end=time.time()+timeout; last={}
     while time.time()<end:
         last=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}")
@@ -61,7 +61,21 @@ def waitp(s,b,pid,timeout=600):
                         print("NONPASSING_PROJECT_EVIDENCE=" + json.dumps(diagnostic, ensure_ascii=False, default=str))
                 except Exception as exc:
                     print("NONPASSING_PROJECT_EVIDENCE_CAPTURE_FAILED=" + type(exc).__name__ + ": " + str(exc)[:1000])
-            assert status == "completed",last
+            if status == "completed_with_qc_warnings" and allow_review_draft:
+                truth = req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/truth")
+                checks = truth.get("checks") if isinstance(truth.get("checks"),dict) else {}
+                # A technically valid draft may be delivered only with a truthful,
+                # explicit REVIEW_REQUIRED state. This is not professional approval:
+                # fallback visuals must continue to block VERIFIED and publishing.
+                assert truth.get("verified") is False,truth
+                assert str(truth.get("state") or "").upper() == "REVIEW_REQUIRED",truth
+                assert checks.get("source_visual_policy_passed") is False,truth
+                assert int(checks.get("fallback_visual_count") or 0) > 0,truth
+                assert checks.get("visual_rights_evidence_present") is True,truth
+                assert checks.get("illustrative_fallback_delivery_eligible") is True,truth
+                assert truth.get("publish_allowed_by_quality_gate") is False,truth
+            else:
+                assert status == "completed",last
             assert str(last.get("state") or "").upper() == "COMPLETED",last
             return last
         time.sleep(2)
@@ -385,7 +399,7 @@ def t3(s,b):
     assert "AI Infinity" in script and "captions" in script.lower() and "editing" in script.lower(),script[:2000]
     return {"test":3,"project_id":pid,"pdf_executed":True,"upload_topic_used":"AI Infinity Creator Operating System"}
 def t4(s,b):
-    pid=create(s,b,"Create a 20-second research-backed video article package about Python's official website with evidence, captions, SEO and social copy.",duration=20,format="short",reference_urls=[PYURL]); waitp(s,b,pid)
+    pid=create(s,b,"Create a 20-second research-backed video article package about Python's official website with evidence, captions, SEO and social copy.",duration=20,format="short",reference_urls=[PYURL]); waitp(s,b,pid,allow_review_draft=True)
     got=names(s,b,pid); assert {"final.mp4","thumbnail.jpg","captions.srt","article.md","seo.json","social_campaign.json","sources.json"}<=got,got
     src=jart(s,b,pid,"sources.json"); assert any(str(x.get("url")or"")==PYURL for x in src.get("sources",[])),src
     return {"test":4,"project_id":pid,"reference_url":PYURL}
