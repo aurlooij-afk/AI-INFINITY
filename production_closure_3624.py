@@ -438,7 +438,34 @@ def _rights_evidence_state(meta: Dict[str, Any]) -> str:
     if not isinstance(meta, dict):
         return "unknown"
     if bool(meta.get("fallback")):
-        return "blocked_fallback"
+        # Generated motion-design artwork is not source footage. Preserve a
+        # separate ownership/provenance state only when the server's qualified
+        # fallback record identifies our own vector renderer and explicitly
+        # records the degradation. This can support an honest downloadable
+        # draft, but it never satisfies source_visual_policy_passed and cannot
+        # make the project professionally VERIFIED.
+        fallback_record = meta.get("fallback_record") if isinstance(meta.get("fallback_record"), dict) else {}
+        external_media_fields = (
+            "source_url", "source_id", "downloaded_media_url", "media_url",
+            "original_url", "license_url", "license_deed_url",
+        )
+        original_vector_is_evidenced = bool(
+            meta.get("source") == "AI Infinity original vector editorial fallback"
+            and meta.get("source_url") in (None, "")
+            and not any(meta.get(key) for key in external_media_fields)
+            and meta.get("creator") == "AI Infinity"
+            and meta.get("license") == "Original generated illustrative asset"
+            and meta.get("quality_tier") == "original_vector_editorial_fallback"
+            and meta.get("asset_kind") == "illustrative_graphic_not_photograph"
+            and meta.get("rights_status") == "original_asset"
+            and meta.get("rights_basis") == "application_generated_original"
+            and meta.get("commercial_use_state") == "owner_attested_original_work"
+            and meta.get("rights_evidence_method") == "in_app_procedural_vector_renderer"
+            and "no provider-sourced media is incorporated" in str(meta.get("rights_evidence_note") or "").lower()
+            and bool(str(meta.get("rights_evidence_version") or "").strip())
+            and _is_qualified_illustrative_fallback({"metadata": meta})
+        )
+        return "original_generated" if original_vector_is_evidenced else "blocked_fallback"
     if not any(meta.get(k) for k in ("source", "source_url", "license", "license_url", "rights_status", "commercial_use_state")):
         return "unknown"
     source_url = str(meta.get("source_url") or "").strip()
@@ -535,8 +562,13 @@ def _write_production_evidence(project_id: str, truth: Optional[Dict[str, Any]] 
         "unknown": sum(1 for x in rights if x["rights_state"] == "unknown"),
         "review_required": sum(1 for x in rights if x["rights_state"] == "review_required"),
         "fallback_blocked": sum(1 for x in rights if x["rights_state"] == "blocked_fallback"),
+        "original_generated": sum(1 for x in rights if x["rights_state"] == "original_generated"),
         "assets": rights,
-        "policy": "Unknown rights are never asserted as cleared.",
+        "policy": (
+            "Source-derived media require source-specific commercial-use evidence. "
+            "Qualified in-app vector artwork is separately marked original_generated; "
+            "it never satisfies the professional source-visual gate."
+        ),
         "truthful": True,
     }
     (root / "visual_rights.json").write_text(json.dumps(rights_report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
@@ -932,11 +964,17 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     rights_assets = list(rights_data.get("assets") or []) if isinstance(rights_data, dict) else []
     rights_unknown = sum(1 for x in rights_assets if str(x.get("rights_state") or "") == "unknown")
     rights_review_required = sum(1 for x in rights_assets if str(x.get("rights_state") or "") in {"review_required", "blocked_fallback"})
-    rights_unresolved = sum(1 for x in rights_assets if str(x.get("rights_state") or "") != "cleared")
+    rights_original_generated = sum(1 for x in rights_assets if str(x.get("rights_state") or "") == "original_generated")
+    rights_unresolved = sum(
+        1 for x in rights_assets
+        if str(x.get("rights_state") or "") not in {"cleared", "original_generated"}
+    )
     checks["visual_rights_evidence_present"] = bool(rights_assets) and rights_unresolved == 0
     checks["visual_rights_unknown_count"] = rights_unknown
     checks["visual_rights_review_required_count"] = rights_review_required
     checks["visual_rights_cleared_count"] = sum(1 for x in rights_assets if str(x.get("rights_state") or "") == "cleared")
+    checks["visual_rights_original_generated_count"] = rights_original_generated
+    checks["visual_rights_unresolved_count"] = rights_unresolved
     if not rights_assets:
         failures.append("visual-rights evidence missing for all visual assets")
     elif rights_unresolved:
