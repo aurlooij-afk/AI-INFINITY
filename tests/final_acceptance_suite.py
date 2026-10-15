@@ -428,7 +428,27 @@ def t6():
 def t7():
     d=TMP/"no-external";p,b,l=start(d,18081,{"AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS":"1","AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE":"0"});s=requests.Session()
     try:
-        pid=create(s,b,"Create a 20-second English cinematic video using only local/free execution.",duration=20,format="short");state=waitp(s,b,pid);bp=state.get("blueprint")or{};r=bp.get("research")or{};assert r.get("status")=="degraded",r;f=dl(s,b,pid,"final.mp4");m=probe(f);assert all(any(x.get("codec_type")==k for x in m.get("streams",[])) for k in ("video","audio"))
+        pid=create(s,b,"Create a 20-second English cinematic video using only local/free execution.",duration=20,format="short");state=waitp(s,b,pid,allow_review_draft=True);bp=state.get("blueprint")or{};r=bp.get("research")or{};assert r.get("status")=="degraded",r
+        # This environment deliberately disables external providers. A playable
+        # local illustration draft is allowed, but it must stay REVIEW_REQUIRED
+        # and the API must refuse to deliver it as professionally verified media.
+        truth=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/truth")
+        assert truth.get("verified") is False,truth
+        assert str(truth.get("state") or "").upper()=="REVIEW_REQUIRED",truth
+        assert truth.get("publish_allowed_by_quality_gate") is False,truth
+        final_url=b+f"/infinity/studio/project/{quote(pid,safe='')}/asset/final.mp4"
+        download=s.get(final_url,timeout=180)
+        assert download.status_code==409,("unverified final.mp4 must remain gated",download.status_code,download.text[:500])
+        final_path=d/"creator_studio"/pid/"final.mp4"
+        assert final_path.is_file() and final_path.stat().st_size>10000,final_path
+        m=probe(final_path)
+        assert all(any(x.get("codec_type")==k for x in m.get("streams",[])) for k in ("video","audio")),m
+        duration=float((m.get("format") or {}).get("duration") or 0)
+        assert abs(duration-20.0)<=1.0,("unexpected draft duration",duration)
+        decoded=subprocess.run(["ffmpeg","-v","error","-xerror","-i",str(final_path),"-f","null","-"],capture_output=True,text=True,timeout=180)
+        assert decoded.returncode==0,decoded.stderr[-2000:]
+        draft_sha256=sha(final_path)
+        return {"test":7,"project_id":pid,"research_status":"degraded","truth_state":"REVIEW_REQUIRED","final_download_blocked":True,"draft_media_sha256":draft_sha256,"draft_bytes":final_path.stat().st_size,"decoded":True}
         return {"test":7,"project_id":pid,"research_status":"degraded"}
     finally:stop(p,l)
 def t8():
