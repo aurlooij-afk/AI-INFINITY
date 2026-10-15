@@ -191,10 +191,14 @@ def _derive_title_from_command(command):
     text = clean(command)
     if not text:
         return "AI Infinity Creation"
+    # Handle compound phrases such as "video article package about Python's
+    # official website". Without the intermediate deliverable nouns, the old
+    # parser could promote "research-backed" or another modifier to the title.
     about = re.search(
-        r"\b(?:video|film|short|reel|documentary|explainer|podcast|article|blog|post)\s+"
-        r"(?:about|on|covering|exploring)\s+(.+?)"
-        r"(?=,|;|\.|$|\s+(?:with|in|for|using|including)\s+)",
+        r"\b(?:video|film|short|reel|documentary|explainer|podcast|article|blog|post)\b"
+        r"(?:\s+(?:article|package|campaign|content|clip|episode|show|story|series|video)){0,4}"
+        r"\s+(?:about|on|covering|exploring)\s+(.+?)"
+        r"(?=,|;|\.|$|\s+(?:with|in|for|using|including|featuring)\s+)",
         text, re.I,
     )
     if about:
