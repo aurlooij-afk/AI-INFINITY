@@ -3,6 +3,7 @@
 
 import re
 
+import re
 import studio_ultimate
 
 
@@ -209,4 +210,36 @@ def test_fallback_plan_uses_actual_subject_not_quality_modifier():
         narration = str(chapter.get("narration") or "").strip()
         assert re.search(r"[.!?…]$", narration), chapter
         assert len(re.findall(r"\b[\w'-]+\b", narration)) >= 6, chapter
+
+
+def test_software_website_brief_uses_retrievable_topic_specific_visuals():
+    command = (
+        "Create a 20-second research-backed video about Python's official website "
+        "with evidence, captions and a useful example."
+    )
+    plan = studio_ultimate._fallback_creative_plan(
+        "Python's official website",
+        command,
+        "long",
+        20,
+        "general audience",
+        "clear and informative",
+        {"sources": []},
+        "English",
+        topic=command,
+    )
+
+    assert plan["title"] == "Python's official website"
+    assert plan["chapters"]
+    for chapter in plan["chapters"]:
+        focus = str(chapter.get("visual_focus") or "").lower()
+        assert any(term in focus for term in ("developer", "programmer", "source code", "website", "browser")), chapter
+        queries = studio_ultimate._visual_search_query_variants(
+            search_subject="Python's official website",
+            focus=chapter["visual_focus"],
+            topic="Python's official website",
+            raw_query=chapter["visual_query"],
+        )
+        assert queries
+        assert any(term in " ".join(queries).lower() for term in ("developer", "programmer", "code", "coding")), queries
 
