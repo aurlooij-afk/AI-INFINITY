@@ -1,0 +1,695 @@
+{
+  "schema": "ai-infinity-pr37-execution-evidence.v1",
+  "generated_at_utc": "2026-10-15T20:47:59.302Z",
+  "repository": "aurlooij-afk/AI-INFINITY",
+  "pull_request": {
+    "number": 37,
+    "url": "https://github.com/aurlooij-afk/AI-INFINITY/pull/37",
+    "state": "open",
+    "merged": false,
+    "mergeable": true,
+    "draft": false,
+    "branch": "fix/pro-creative-scene-quality-gates",
+    "base_branch": "main",
+    "baseline_head_sha_before_fixes": "3f9401dd709e70fd38682909f4ccde5e4ba76d66",
+    "main_sha_at_baseline": "c59421d2da4b9b32eaccdee2ca71e2b9ccfd07ed",
+    "current_source_candidate_sha_at_capture": "e1791a83d7ac1f3afd5ac727b2f55a1a9d957bdd",
+    "recent_source_commits": [
+      {
+        "sha": "3679a8aec22d625cac715cf66425e0efc98373f2",
+        "scope": "acceptance test: explicit review-required draft handling",
+        "verification": "pending at time of evidence capture"
+      },
+      {
+        "sha": "d1a647080424f2964a69206cb44e1dd057b27874",
+        "scope": "truthful Full HD metadata predicate",
+        "verification": "pending at time of evidence capture"
+      },
+      {
+        "sha": "e1791a83d7ac1f3afd5ac727b2f55a1a9d957bdd",
+        "scope": "resolution regression test",
+        "verification": "pending at time of evidence capture"
+      }
+    ],
+    "working_tree": "Not inspectable from this session: no connected developer machine/local checkout was available; current remote PR branch was inspected through GitHub.",
+    "branch_protection": "UNAVAILABLE: installed GitHub connector did not expose a branch-protection/required-checks query.",
+    "review_threads": [],
+    "submitted_reviews": [],
+    "no_merge_or_deploy_performed": true
+  },
+  "execution_baseline": {
+    "baseline_source_sha": "3f9401dd709e70fd38682909f4ccde5e4ba76d66",
+    "baseline_checked_at_utc": "2026-10-15T19:06:43Z",
+    "actual_failure": {
+      "run_id": 38791211896,
+      "run_url": "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38791211896",
+      "run_number": 337,
+      "workflow": "AI Infinity — Final Complete Acceptance Suite",
+      "status": "completed",
+      "conclusion": "failure",
+      "job_id": 116616640594,
+      "job_name": "final-acceptance",
+      "failure_location": "tests/final_acceptance_suite.py::t7 via waitp",
+      "exact_assertion": "assert status == 'completed', last",
+      "observed_status": "completed_with_qc_warnings",
+      "observed_truth_state": "REVIEW_REQUIRED",
+      "observed_verified": false,
+      "observed_publish_allowed_by_quality_gate": false,
+      "root_cause_classification": "acceptance test expectation did not handle the documented review-required draft mode when external providers are disabled; test rejected a technically produced but unverified draft even though fail-closed professional delivery remained blocked.",
+      "record_note": "The failure is preserved as a baseline observation. The source test was subsequently changed to assert REVIEW_REQUIRED, blocked final download (HTTP 409), actual local bytes, FFprobe streams/duration, and full FFmpeg decode. Post-change evidence was pending when this record was captured."
+    },
+    "baseline_artifact_observation": {
+      "project_id": "studio_5a928cea11f0430c9628a6b4bdff6264",
+      "provenance": "captured by the acceptance harness in the failing workflow log; not separately retrieved as a raw file from GitHub",
+      "file": "final.mp4",
+      "reported_size_bytes": 1075059,
+      "reported_sha256": "3a5bd881f3fe6b30c5a2ced4df96e11c08e2a3a8c865ec2547cad50337fca546",
+      "sha256_status": "application/test-harness reported; raw bytes were not transferred here for independent recomputation",
+      "ffprobe_reported": {
+        "video_codec": "h264",
+        "width": 1280,
+        "height": 720,
+        "video_duration_seconds": 20.055556,
+        "audio_codec": "aac",
+        "total_container_duration_seconds": 20.073333,
+        "subtitle_stream": "mov_text",
+        "actual_rendered_scene_count": 4,
+        "unique_visual_hashes": 4,
+        "fallback_visual_count": 4,
+        "research_sources": 0
+      },
+      "truth_fail_closed": true,
+      "human_review_status": "PENDING",
+      "visual_rights_status": "original generated vector illustration; not source footage and not professional source-visual verification"
+    },
+    "other_baseline_workflows": [
+      {
+        "run_id": 38791211905,
+        "run_url": "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38791211905",
+        "workflow": "Visual Diversity Truth Regression",
+        "status": "completed",
+        "conclusion": "success",
+        "job_id": 116616013346,
+        "log_result": "python -m pytest -q tests/test_visual_diversity_truth.py — 59 passed in 1.49s",
+        "tested_sha": "3f9401dd709e70fd38682909f4ccde5e4ba76d66"
+      },
+      {
+        "run_id": 38791211878,
+        "run_url": "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38791211878",
+        "workflow": "Creator Studio Build Guard",
+        "status": "completed",
+        "conclusion": "success",
+        "jobs": [
+          {
+            "id": 116616630358,
+            "name": "Python syntax/runtime guard",
+            "conclusion": "success"
+          },
+          {
+            "id": 116617516909,
+            "name": "Docker image guard",
+            "conclusion": "success"
+          }
+        ],
+        "tested_sha": "3f9401dd709e70fd38682909f4ccde5e4ba76d66"
+      }
+    ],
+    "current_candidate_runs_at_capture": [
+      {
+        "run_id": 38803882852,
+        "name": "Visual Diversity Truth Regression",
+        "status": "completed",
+        "conclusion": "success",
+        "run_number": 117,
+        "jobs_url": "https://api.github.com/repos/aurlooij-afk/AI-INFINITY/actions/runs/38803882852/jobs",
+        "logs_url": "https://api.github.com/repos/aurlooij-afk/AI-INFINITY/actions/runs/38803882852/logs"
+      },
+      {
+        "run_id": 38803882859,
+        "name": "AI Infinity — Final Complete Acceptance Suite",
+        "status": "in_progress",
+        "conclusion": null,
+        "run_number": 340,
+        "jobs_url": "https://api.github.com/repos/aurlooij-afk/AI-INFINITY/actions/runs/38803882859/jobs",
+        "logs_url": "https://api.github.com/repos/aurlooij-afk/AI-INFINITY/actions/runs/38803882859/logs"
+      },
+      {
+        "run_id": 38803882849,
+        "name": "Creator Studio Build Guard",
+        "status": "completed",
+        "conclusion": "success",
+        "run_number": 672,
+        "jobs_url": "https://api.github.com/repos/aurlooij-afk/AI-INFINITY/actions/runs/38803882849/jobs",
+        "logs_url": "https://api.github.com/repos/aurlooij-afk/AI-INFINITY/actions/runs/38803882849/logs"
+      }
+    ]
+  },
+  "changes_committed_to_existing_pr": [
+    {
+      "path": "tests/final_acceptance_suite.py",
+      "commit_sha": "3679a8aec22d625cac715cf66425e0efc98373f2",
+      "change": "Scenario 7 now explicitly accepts only an eligible review-required draft and checks verified=false, REVIEW_REQUIRED, publishing denied, public final.mp4 download HTTP 409, internal draft bytes, video/audio streams, requested duration tolerance, full FFmpeg decode, and a locally computed SHA-256."
+    },
+    {
+      "path": "studio_ultimate.py",
+      "commit_sha": "d1a647080424f2964a69206cb44e1dd057b27874",
+      "change": "The advisory Full HD flag now requires at least 1920x1080 in either orientation; it no longer mislabels 1280x720 as Full HD. This does not disable the existing low-memory 720p profile or weaken the main truth gate."
+    },
+    {
+      "path": "tests/test_visual_diversity_truth.py",
+      "commit_sha": "e1791a83d7ac1f3afd5ac727b2f55a1a9d957bdd",
+      "change": "Added regression assertions for 1280x720 (false), 1920x1080 (true), 1080x1920 (true), and invalid zero-dimension inputs (false)."
+    }
+  ],
+  "requirements_registry": {
+    "schema": "ai-infinity-requirements-registry.v1",
+    "valid_states": [
+      "IMPLEMENTATION_MISSING",
+      "IMPLEMENTED_NOT_TESTED",
+      "TEST_FAILED",
+      "TEST_PASSED",
+      "INDEPENDENT_REVIEW_PENDING",
+      "INDEPENDENTLY_VERIFIED",
+      "BLOCKED_BY_ENVIRONMENT",
+      "BLOCKED_BY_PERMISSION",
+      "BLOCKED_BY_COST",
+      "BLOCKED_BY_UNAVAILABLE_EVIDENCE",
+      "ACCEPTED_LIMITATION"
+    ],
+    "records": [
+      {
+        "requirement_id": "AII-PR37-ACCEPTANCE-07",
+        "required_behavior": "The acceptance harness must accept a technically valid illustrative draft only when it remains REVIEW_REQUIRED and final delivery/publishing stay blocked.",
+        "implementation": "tests/final_acceptance_suite.py::t7 and waitp(..., allow_review_draft=True)",
+        "invariant": "A playable draft does not become professionally VERIFIED through test handling.",
+        "dependencies_assumptions": [
+          "The local no-external-provider scenario is expected to use a clearly disclosed fallback.",
+          "Truth endpoint and final asset route are registered in the tested application."
+        ],
+        "negative_tests": [
+          "Reject verified=true for fallback draft.",
+          "Reject state other than REVIEW_REQUIRED.",
+          "Reject publish_allowed_by_quality_gate=true.",
+          "Reject HTTP other than 409 for gated final.mp4 route."
+        ],
+        "adversarial_tests": [
+          "Try retrieving final.mp4 despite REVIEW_REQUIRED.",
+          "Attempt to pass an empty or malformed media artifact.",
+          "Inspect actual file with FFprobe and fully decode with FFmpeg."
+        ],
+        "test_command": "python tests/final_acceptance_suite.py (run under .github/workflows/final-acceptance-suite.yml Docker runtime)",
+        "expected_result": "All assertions pass; the no-provider scenario is labelled degraded/review-required and no public final delivery is permitted.",
+        "observed_result": "Before fix, workflow 38791211896 failed in t7 at status == completed while actual status was completed_with_qc_warnings. Updated test code committed; result not yet available in this captured record.",
+        "tested_source_sha": "Baseline failure: 3f9401dd709e70fd38682909f4ccde5e4ba76d66; candidate fix: 3679a8aec22d625cac715cf66425e0efc98373f2; candidate final test at capture: pending",
+        "independent_verifier": "CI workflow plus independent FFprobe/FFmpeg subprocess checks in the harness; final route 409 check is API-level, not independent human review.",
+        "evidence_references": [
+          "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38791211896",
+          "tests/final_acceptance_suite.py"
+        ],
+        "current_state": "IMPLEMENTED_NOT_TESTED",
+        "release_consequence": "Block release if the updated acceptance scenario fails or can download/publish the REVIEW_REQUIRED output."
+      },
+      {
+        "requirement_id": "AII-VIDEO-QC-FULL-HD",
+        "required_behavior": "The Full HD metadata flag must accurately distinguish 1280x720 HD from 1920x1080 Full HD and support portrait/landscape orientation.",
+        "implementation": "studio_ultimate.py::_is_full_hd_resolution; studio_ultimate.py::quality_check",
+        "invariant": "Metadata cannot overstate the measured resolution of the actual video stream.",
+        "dependencies_assumptions": [
+          "FFprobe returns actual stream width and height."
+        ],
+        "negative_tests": [
+          "1280x720 must be false.",
+          "Zero dimensions must be false.",
+          "1080x1920 must be true as rotated portrait Full HD."
+        ],
+        "adversarial_tests": [
+          "Inject swapped width/height and invalid zero dimensions."
+        ],
+        "test_command": "python -m pytest -q tests/test_visual_diversity_truth.py",
+        "expected_result": "Resolution cases all match the declared Full HD policy.",
+        "observed_result": "Baseline artifact truth recorded 1280x720 while quality_check.full_hd was true; fix and regression test are now committed and await execution.",
+        "tested_source_sha": "Baseline defect observation on 3f9401dd709e70fd38682909f4ccde5e4ba76d66; fix/test candidate e1791a83d7ac1f3afd5ac727b2f55a1a9d957bdd.",
+        "independent_verifier": "Focused GitHub Actions test run; actual file resolution derives from FFprobe. Awaiting post-change workflow.",
+        "evidence_references": [
+          "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38791211896",
+          "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38791211905"
+        ],
+        "current_state": "IMPLEMENTED_NOT_TESTED",
+        "release_consequence": "Do not claim Full HD output from 720p render. This metric correction does not independently prove production is 1080p."
+      },
+      {
+        "requirement_id": "AII-PROFESSIONAL-TRUTH",
+        "required_behavior": "Professional verification is fail-closed and requires media integrity, scene coverage/diversity, narration/captions, source/rights provenance, research requirements and persisted quality evidence.",
+        "implementation": "production_closure_3624.py::_professional_truth and final/share routes",
+        "invariant": "Unverified output cannot be presented as professionally verified or permitted for publishing.",
+        "dependencies_assumptions": [
+          "Project DB and generated artifacts correspond to the same project ID and version.",
+          "Current truth code is registered in the application entrypoint."
+        ],
+        "negative_tests": [
+          "Fallback visuals cannot meet source_visual_policy_passed.",
+          "Truth/legacy gate contradiction must reject publish.",
+          "Missing final or changed output bytes must fail verification."
+        ],
+        "adversarial_tests": [
+          "Manipulate old quality flags; remove artifact; change bytes after approval; call download/share/publish route while REVIEW_REQUIRED."
+        ],
+        "test_command": "python -m pytest -q tests/test_visual_diversity_truth.py; python tests/final_acceptance_suite.py",
+        "expected_result": "truth.verified=false and publish_allowed_by_quality_gate=false for unresolved draft; final.mp4 route fails closed.",
+        "observed_result": "In baseline acceptance log, fallback draft truth was REVIEW_REQUIRED, verified=false, publishing false, final route policy described by app; updated scenario now asserts route HTTP 409, awaiting CI.",
+        "tested_source_sha": "Baseline truth observation on 3f9401dd709e70fd38682909f4ccde5e4ba76d66; candidate source e1791a83d7ac1f3afd5ac727b2f55a1a9d957bdd.",
+        "independent_verifier": "Route assertion plus harness-side FFprobe/FFmpeg and file SHA-256. No human review evidence yet.",
+        "evidence_references": [
+          "production_closure_3624.py",
+          "tests/final_acceptance_suite.py",
+          "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38791211896"
+        ],
+        "current_state": "IMPLEMENTED_NOT_TESTED",
+        "release_consequence": "Release-blocking if any bypass allows unverified final media to be downloaded/published."
+      },
+      {
+        "requirement_id": "AII-REAL-SOURCE-AND-RIGHTS",
+        "required_behavior": "Every professional scene should use relevant source/generative media with actual provenance, eligible rights and hash evidence; unknown rights require review.",
+        "implementation": "studio_ultimate.py asset acquisition; production_closure_3624.py source visual and rights checks",
+        "invariant": "Original vector illustrations are not mislabeled as external footage or license-cleared professional visuals.",
+        "dependencies_assumptions": [
+          "A supported source provider is available and its terms permit the requested use.",
+          "Actual media bytes, source identity, and license metadata can be retrieved and reviewed."
+        ],
+        "negative_tests": [
+          "Forged license label, missing source URL, contradictory license, unknown provenance, duplicate bytes."
+        ],
+        "adversarial_tests": [
+          "Provider returns unrelated results, empty/bad URLs, unsafe redirect, fake provenance, mismatched downloaded hash."
+        ],
+        "test_command": "python -m pytest -q tests/test_visual_diversity_truth.py; tests/final_acceptance_suite.py scenario 1",
+        "expected_result": "Relevant non-fallback sources pass exact rights policy; no unsupported rights assumptions.",
+        "observed_result": "No-provider scenario deliberately produced four original illustrative fallback visuals and correctly stayed REVIEW_REQUIRED. It is not proof of the real-source scenario either way.",
+        "tested_source_sha": "Current failed acceptance suite 3f9401dd709e70fd38682909f4ccde5e4ba76d66 scenario 7.",
+        "independent_verifier": "Harness-side artifact provenance and per-file byte/hash inspection plus rights review; no human media rights review in this session.",
+        "evidence_references": [
+          "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38791211896",
+          "docs/adr/ADR-0002-source-rights-evidence-and-provider-provenance.md"
+        ],
+        "current_state": "BLOCKED_BY_UNAVAILABLE_EVIDENCE",
+        "release_consequence": "No professional or publishable claim until actual selected source files, relevant usage rights and their hashes are inspected."
+      },
+      {
+        "requirement_id": "AII-RESEARCH-INTEGRITY",
+        "required_behavior": "Research-backed output must include relevant, authentic source evidence and truthful degraded state when research is unavailable.",
+        "implementation": "tests/test_research_query_selection.py; source normalization/research pipeline; production_closure_3624.py truth gate",
+        "invariant": "Unrelated search results and no-source research cannot be claimed as successful evidence-backed research.",
+        "dependencies_assumptions": [
+          "Research sources are accessible in the test environment and can be assessed for relevance."
+        ],
+        "negative_tests": [
+          "Zero-source requested research fails verification.",
+          "Unrelated source must not count as relevant evidence."
+        ],
+        "adversarial_tests": [
+          "Hostile instructions inside document, forged URL/title, malformed source payload."
+        ],
+        "test_command": "python -m pytest -q tests/test_research_query_selection.py; python tests/final_acceptance_suite.py scenario 4/7",
+        "expected_result": "Required research returns relevant sources or truthful degraded/block state.",
+        "observed_result": "Scenario 7 brief did not request research and reported zero sources; t7 expected research status degraded. Current candidate research regression awaits final workflow.",
+        "tested_source_sha": "candidate e1791a83d7ac1f3afd5ac727b2f55a1a9d957bdd not yet fully verified when registry was captured.",
+        "independent_verifier": "Fixture assertions and independent URL/record inspections; no complete external research run in this evidence window.",
+        "evidence_references": [
+          "tests/test_research_query_selection.py",
+          "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38791211896"
+        ],
+        "current_state": "IMPLEMENTED_NOT_TESTED",
+        "release_consequence": "A research-required project with zero or irrelevant sources must remain unverified."
+      },
+      {
+        "requirement_id": "AII-PERSISTENCE-RESTORE",
+        "required_behavior": "Distinguish available local storage/process restart from artifact read-back, project-state durability, clean-instance restore, editable recovery, and end-to-end continuation.",
+        "implementation": "ai_infinity/persistence_truth.py; tests/test_persistence_truth.py; storage read-back code and tests",
+        "invariant": "Environment flags and a same-process/container SQLite restart cannot prove durable remote or clean-host restore.",
+        "dependencies_assumptions": [
+          "Configured backend credentials/permissions and independent clean restore environment are available."
+        ],
+        "negative_tests": [
+          "Fake persistent mount path with confirmation env vars.",
+          "Missing object, size mismatch, SHA mismatch, corrupted snapshot."
+        ],
+        "adversarial_tests": [
+          "Drop connection mid-write; corrupt readback; restart on fresh instance; restore references and render again."
+        ],
+        "test_command": "python -m pytest -q tests/test_persistence_truth.py tests/test_storage_artifact_readback.py; acceptance scenario 8",
+        "expected_result": "Each persistence label is only set by matching actual evidence.",
+        "observed_result": "Prior current branch focused guard passed persistence truth tests before the recent source fixes, but no live B2 PUT/HEAD/GET/SHA-256 canary or clean-instance project restore was performed in this run.",
+        "tested_source_sha": "focused guard run 38791211878 on 3f9401dd709e70fd38682909f4ccde5e4ba76d66; exact candidate re-run pending.",
+        "independent_verifier": "Storage backend's separate PUT/HEAD/GET size/hash test plus restart/recovery on clean instance; not complete.",
+        "evidence_references": [
+          "tests/test_persistence_truth.py",
+          "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38791211878"
+        ],
+        "current_state": "BLOCKED_BY_UNAVAILABLE_EVIDENCE",
+        "release_consequence": "Do not claim durable project recovery or end-to-end continuation until clean-instance restore is demonstrated."
+      },
+      {
+        "requirement_id": "AII-SECURITY-AUTHZ",
+        "required_behavior": "Protect project isolation, authorization-bound publishing, artifact delivery, upload parsing, provider egress, SSRF and secret-bearing diagnostics.",
+        "implementation": "existing API auth/project guards, publishing closures, source-adapter validation, sanitization tests",
+        "invariant": "Untrusted data/model output cannot override deterministic authorization or transmit secrets without authorization.",
+        "dependencies_assumptions": [
+          "The complete API route map and provider network boundaries can be tested in the production-like runtime."
+        ],
+        "negative_tests": [
+          "Cross-project read/write, unauthorized publish, stale artifact approval, path traversal, forged rights, SSRF private IP/redirect, token redaction."
+        ],
+        "adversarial_tests": [
+          "Fault injection across redirects, malformed archive/document, retries/cancel races, forged model claims, hash mismatch."
+        ],
+        "test_command": "python -m pytest -q tests/test_visual_diversity_truth.py tests/test_research_query_selection.py; dedicated security suite when available",
+        "expected_result": "Unauthorized/malformed/unsafe operations fail closed and sensitive credentials do not leak.",
+        "observed_result": "Existing relevant tests/guard existed, but this session has not executed a complete route-level adversarial security suite, fuzzing, or an independent penetration test.",
+        "tested_source_sha": "no complete security suite run on candidate SHA available at registry capture.",
+        "independent_verifier": "Separate route-level adversarial harness and independent code/security review; pending.",
+        "evidence_references": [
+          "tests/test_creator_entrypoint_truth_route.py",
+          "tests/test_research_query_selection.py",
+          "docs/KNOWN-BLOCKERS.md"
+        ],
+        "current_state": "BLOCKED_BY_UNAVAILABLE_EVIDENCE",
+        "release_consequence": "No claim of complete security audit. Required for production readiness according to deployment threat model."
+      },
+      {
+        "requirement_id": "AII-MUTATION-TEST",
+        "required_behavior": "Demonstrate key quality/persistence/authorization gates catch controlled isolated mutations.",
+        "implementation": "Not present as an executed result in current evidence package.",
+        "invariant": "Critical tests must detect bypassed gates, ignored hash mismatch, forged rights clearance, false durability and unauthorized publish.",
+        "dependencies_assumptions": [
+          "Isolated test copy and mutation tooling are available."
+        ],
+        "negative_tests": [
+          "Mutate each gate independently and require the appropriate test to fail."
+        ],
+        "adversarial_tests": [
+          "Bypass auth, set legacy verified flag, alter artifact after approval, forge persistent state."
+        ],
+        "test_command": "Mutation runner command to be defined only after checking supported repository tooling.",
+        "expected_result": "Every critical injected regression is detected or explicitly recorded as a survivor.",
+        "observed_result": "No mutation testing was run or evidenced in this session.",
+        "tested_source_sha": "none",
+        "independent_verifier": "Mutation runner output; pending.",
+        "evidence_references": [],
+        "current_state": "BLOCKED_BY_UNAVAILABLE_EVIDENCE",
+        "release_consequence": "Do not claim mutation score or formal proof."
+      },
+      {
+        "requirement_id": "AII-CREATIVE-EDITORIAL",
+        "required_behavior": "Bind creative/human approvals to exact media fingerprints and require review for applicable languages/rights.",
+        "implementation": "editorial review modules and reviewer packet artifact generation; details in current branch docs",
+        "invariant": "No invented human quality score; media edits invalidate approvals for prior fingerprints.",
+        "dependencies_assumptions": [
+          "Real human editorial and native-language reviewers must inspect exact artifact hashes."
+        ],
+        "negative_tests": [
+          "Stale approval after bytes change; forged/absent scorecard; Urdu/Pashto/Dari/Arabic rendering issues."
+        ],
+        "adversarial_tests": [
+          "Tamper with media after approval; submit incomplete reviewer form; check version/fingerprint mismatch."
+        ],
+        "test_command": "existing editorial scorecard tests plus human review of exact reviewer packet/media SHA.",
+        "expected_result": "Human approvals are explicitly version-bound; native language and creative quality scores are from actual review.",
+        "observed_result": "Acceptance evidence records `human_review_status=PENDING`; no actual human review was performed here.",
+        "tested_source_sha": "review media at baseline SHA 3f9401dd709e70fd38682909f4ccde5e4ba76d66 is only harness-captured and not retained raw in this session.",
+        "independent_verifier": "Named human reviewer(s) using exact artifact fingerprint; pending.",
+        "evidence_references": [
+          "docs/evidence/pr37-acceptance-success-0e50a1a.json"
+        ],
+        "current_state": "INDEPENDENT_REVIEW_PENDING",
+        "release_consequence": "No professional creative or native-language approval claim until real review exists."
+      },
+      {
+        "requirement_id": "AII-EDITABLE-CONTINUATION",
+        "required_behavior": "Restored project preserves editable media references and can be modified and rendered again.",
+        "implementation": "Project-state storage, media registry, retry/recovery and timeline metadata",
+        "invariant": "Existing MP4 or same-container restart alone does not prove editable project recovery.",
+        "dependencies_assumptions": [
+          "Clean instance, durable state backend and referenced media are available."
+        ],
+        "negative_tests": [
+          "Missing referenced source, corrupt intermediate, missing media after restore."
+        ],
+        "adversarial_tests": [
+          "Clean deploy/instance restore, change an edit, rerender, independently compare outputs and project references."
+        ],
+        "test_command": "acceptance scenarios 8 and 10 plus manual restore-and-rerender verification",
+        "expected_result": "Project opens with valid timeline/source references and a subsequent edit/render succeeds.",
+        "observed_result": "Process restart on same ephemeral test filesystem and a deterministic retry test are not equivalent to clean-instance continuation. Live clean-instance restore/render not proven.",
+        "tested_source_sha": "previous acceptance run 38181419443 at SHA 0e50a1a had scenario 8 process restart only and explicitly `clean_instance_restore=NOT_TESTED`; current candidate scenario pending.",
+        "independent_verifier": "Independent clean runtime, state snapshot hash comparison and successful edited rerender; pending.",
+        "evidence_references": [
+          "docs/evidence/pr37-acceptance-success-0e50a1a.json",
+          "tests/final_acceptance_suite.py"
+        ],
+        "current_state": "BLOCKED_BY_UNAVAILABLE_EVIDENCE",
+        "release_consequence": "End-to-end recovery claim blocked."
+      },
+      {
+        "requirement_id": "AII-PROFILE-1080P-OTIO-MLT",
+        "required_behavior": "Produce real target 1080p professional output and verified editable timeline interchange/render comparisons where claimed.",
+        "implementation": "FFmpeg renderer; OTIO/MLT candidates documented in resource registry; no successful exact-candidate production evidence attached here.",
+        "invariant": "Technical 720p output, title metadata or a package filename is not proof of 1080p/editorial interoperability.",
+        "dependencies_assumptions": [
+          "Sufficient memory/CPU/time and actual editing framework support are available in an isolated production-like runtime."
+        ],
+        "negative_tests": [
+          "720p labeled 1080p; timeline references unavailable; bad package checksums."
+        ],
+        "adversarial_tests": [
+          "Compare render duration/decode and timeline references independently for 20s/60s/3m samples."
+        ],
+        "test_command": "FFprobe/full decode plus OTIO read-back and three-case MLT comparison.",
+        "expected_result": "Actual stream dimensions meet requested profile and timeline package media references resolve and round-trip.",
+        "observed_result": "Current baseline artifact is 1280x720. No 1080p profile, OTIO read-back, or three-case MLT comparison completed in this session.",
+        "tested_source_sha": "baseline artifact from 3f9401dd709e70fd38682909f4ccde5e4ba76d66; profile work pending",
+        "independent_verifier": "FFprobe/FFmpeg plus an independent OTIO parser/MLT execution; pending.",
+        "evidence_references": [
+          "docs/research/CREATOR-RESOURCE-REGISTRY-AND-ENABLEMENT-2026-10-15.md",
+          "docs/KNOWN-BLOCKERS.md"
+        ],
+        "current_state": "BLOCKED_BY_UNAVAILABLE_EVIDENCE",
+        "release_consequence": "Do not claim professional output profile or editing framework interoperability until actual output and interchange checks pass."
+      },
+      {
+        "requirement_id": "AII-LIVE-DEPLOY-IDENTITY",
+        "required_behavior": "Independently establish live runtime health and exact deployed source revision before claiming deployment readiness.",
+        "implementation": "Existing live deployment metadata in Render; live route/health not verifiable in this session.",
+        "invariant": "A successful build or deploy metadata alone does not prove the public application health or current code's serving behavior.",
+        "dependencies_assumptions": [
+          "Render runtime endpoint is reachable and exposes stable release identity/health endpoints."
+        ],
+        "negative_tests": [
+          "Mismatched reported deployed SHA, HTTP failure, stale instance identity."
+        ],
+        "adversarial_tests": [
+          "Probe health/endpoints and match reported revision to the code artifact and service deployment."
+        ],
+        "test_command": "Live health/API checks, service/deploy metadata check, deployed revision endpoint check.",
+        "expected_result": "Public runtime is healthy and exact served revision equals an approved candidate.",
+        "observed_result": "Render metadata says service `srv-dallhl740ujc73eetgp0` is live at main SHA `c59421d2da4b9b32eaccdee2ca71e2b9ccfd07ed`; no health response/revision handshake was confirmed from live endpoint in this session.",
+        "tested_source_sha": "live deployment is c59421... not PR candidate e1791a...",
+        "independent_verifier": "Render deployment metadata plus external health endpoint and exact deployed identity; incomplete.",
+        "evidence_references": [
+          "https://dashboard.render.com/web/srv-dallhl740ujc73eetgp0",
+          "https://github.com/aurlooij-afk/AI-INFINITY/pull/37"
+        ],
+        "current_state": "BLOCKED_BY_UNAVAILABLE_EVIDENCE",
+        "release_consequence": "No claim that PR candidate is deployed, healthy, or production-verified."
+      }
+    ]
+  },
+  "threat_model_snapshot": {
+    "schema": "ai-infinity-threat-model-snapshot.v1",
+    "scope": "PR #37 static/code/test evidence and one current acceptance failure; not a complete penetration test or formal security audit.",
+    "areas": [
+      {
+        "id": "TM-AUTH-01",
+        "area": "Authentication and cross-project data isolation",
+        "verification": "Not independently run across all routes",
+        "state": "BLOCKED_BY_UNAVAILABLE_EVIDENCE",
+        "required_tests": [
+          "unauthorized read",
+          "cross-project read/write",
+          "unapproved publishing"
+        ]
+      },
+      {
+        "id": "TM-ARTIFACT-02",
+        "area": "Artifact fingerprint, approval staleness, package integrity",
+        "verification": "Acceptance test checks local SHA on candidate fix, but candidate not yet tested",
+        "state": "IMPLEMENTED_NOT_TESTED",
+        "required_tests": [
+          "tamper after approval",
+          "recompute hash from downloaded bytes",
+          "reject package/final mutation"
+        ]
+      },
+      {
+        "id": "TM-PUBLISH-03",
+        "area": "Publish gate and legacy Boolean bypass",
+        "verification": "Source closure statically inspected; route/ adversarial final run pending",
+        "state": "IMPLEMENTED_NOT_TESTED",
+        "required_tests": [
+          "missing project ID",
+          "legacy publish flag true",
+          "REVIEW_REQUIRED artifact"
+        ]
+      },
+      {
+        "id": "TM-SSRF-04",
+        "area": "SSRF, DNS/IP restriction, redirect handling",
+        "verification": "Full adversarial network test unavailable",
+        "state": "BLOCKED_BY_UNAVAILABLE_EVIDENCE",
+        "required_tests": [
+          "private IP and loopback",
+          "DNS rebinding",
+          "redirect to prohibited IP",
+          "non-HTTPS destination"
+        ]
+      },
+      {
+        "id": "TM-UPLOAD-05",
+        "area": "Document parsing, archive safety, traversal, malicious files",
+        "verification": "No full malicious-upload suite executed in captured workflow",
+        "state": "BLOCKED_BY_UNAVAILABLE_EVIDENCE",
+        "required_tests": [
+          "malformed PDF",
+          "traversal names",
+          "zip bomb",
+          "unsupported/corrupt file"
+        ]
+      },
+      {
+        "id": "TM-PROMPT-06",
+        "area": "Prompt injection and untrusted model/provider response",
+        "verification": "No complete external/provider injection test executed in this session",
+        "state": "BLOCKED_BY_UNAVAILABLE_EVIDENCE",
+        "required_tests": [
+          "hostile document instructions",
+          "forged source identity",
+          "model attempts to bypass authorization"
+        ]
+      },
+      {
+        "id": "TM-SECRETS-07",
+        "area": "Secret/authorization redaction",
+        "verification": "Focused historical regression exists but exact candidate run pending",
+        "state": "IMPLEMENTED_NOT_TESTED",
+        "required_tests": [
+          "query-string token",
+          "Bearer token",
+          "authorization header",
+          "log output scan"
+        ]
+      },
+      {
+        "id": "TM-RESOURCE-08",
+        "area": "Resource exhaustion, bounded downloads, cancellation, duplicate/retry races",
+        "verification": "Current full acceptance stopped before t8/t9; exact candidate rerun pending",
+        "state": "IMPLEMENTED_NOT_TESTED",
+        "required_tests": [
+          "timeout/cancel",
+          "duplicate idempotency",
+          "concurrent projects",
+          "corrupt intermediate recovery"
+        ]
+      },
+      {
+        "id": "TM-STORAGE-09",
+        "area": "False durability claims, snapshot corruption, object-store read-back",
+        "verification": "Unit tests have existed; no current live B2 canary or clean restore",
+        "state": "BLOCKED_BY_UNAVAILABLE_EVIDENCE",
+        "required_tests": [
+          "PUT-HEAD-GET",
+          "size/hash compare",
+          "clean-instance restore",
+          "corrupt snapshot"
+        ]
+      },
+      {
+        "id": "TM-RIGHTS-10",
+        "area": "Source rights/provenance spoofing",
+        "verification": "Original-vector fallbacks are disclosed; source-specific rights are not reviewed by human",
+        "state": "BLOCKED_BY_UNAVAILABLE_EVIDENCE",
+        "required_tests": [
+          "forged license",
+          "missing landing page",
+          "contradictory license fields",
+          "rights review"
+        ]
+      },
+      {
+        "id": "TM-LANG-11",
+        "area": "Native-language and creative review",
+        "verification": "PENDING; no actual independent human review",
+        "state": "INDEPENDENT_REVIEW_PENDING",
+        "required_tests": [
+          "Urdu/Pashto/Dari/Arabic native review",
+          "captions/pronunciation/readability",
+          "fingerprint-bound approval"
+        ]
+      },
+      {
+        "id": "TM-MUTATION-12",
+        "area": "Critical gate mutation detection",
+        "verification": "No mutation testing has been run",
+        "state": "BLOCKED_BY_UNAVAILABLE_EVIDENCE",
+        "required_tests": [
+          "bypass quality gate",
+          "ignore hash mismatch",
+          "forged durability",
+          "publish while review-required"
+        ]
+      }
+    ],
+    "limitations": [
+      "No claim of complete security audit.",
+      "No live endpoint or provider credential values were read.",
+      "No paid service, deployment, publish operation, or destructive operation performed.",
+      "No independent human review performed."
+    ]
+  },
+  "resource_discovery": {
+    "method": "Inspected the existing repository resource registry and available current CI/deployment evidence; no exhaustive global census was claimed.",
+    "registry_file": "docs/research/CREATOR-RESOURCE-REGISTRY-AND-ENABLEMENT-2026-10-15.md",
+    "no_spend": true,
+    "resources_not_reconfigured_in_this_execution": [
+      "Openverse",
+      "Wikimedia Commons",
+      "NASA Image and Video Library",
+      "Pexels",
+      "Pixabay",
+      "Hugging Face",
+      "Backblaze B2",
+      "FFmpeg/FFprobe",
+      "OpenTimelineIO",
+      "MLT"
+    ],
+    "constraint": "No new external provider credential was confirmed; the relevant acceptance scenario explicitly set AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS=1.",
+    "result": "Existing resource catalog and architecture were retained; no new provider was declared integrated or verified in this run."
+  },
+  "persistence_and_deployment": {
+    "render_service_id": "srv-dallhl740ujc73eetgp0",
+    "render_service_url": "https://ai-infinity-ca5e.onrender.com",
+    "render_deploy_id": "dep-db4v138u01pc73fohdh0",
+    "render_deployed_main_sha": "c59421d2da4b9b32eaccdee2ca71e2b9ccfd07ed",
+    "render_deploy_status": "live per Render service metadata",
+    "current_pr_candidate_deployed": false,
+    "live_health_verification": "NOT_ESTABLISHED in this session",
+    "live_b2_put_head_get_sha256_canary": "NOT_RUN",
+    "clean_instance_restore": "NOT_RUN",
+    "editable_recovery_after_clean_restore": "NOT_RUN",
+    "no_manual_deploy_or_merge": true
+  },
+  "limitations": [
+    "The working-tree state on a developer machine could not be inspected because no Remote Desktop Commander device was connected; all source changes were made directly against the existing remote PR branch after checking the head SHA before each write.",
+    "The pre-fix full-acceptance failure log contains an app/test-harness-reported SHA, not a separately downloaded raw media file for recomputation; candidate t7 now computes SHA-256 locally in CI.",
+    "The evidence package records baseline and pending candidate verification; it must be supplemented with terminal workflow results for the eventual final candidate SHA.",
+    "No protected documents were overwritten; the two original research documents remain unchanged and were not copied into this evidence package."
+  ]
+}
