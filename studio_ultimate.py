@@ -1500,6 +1500,14 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         for sentence in sentences:
             count = len(sentence.split())
             if selected and used + count > budget:
+                # A short first sentence must not become the whole narration just
+                # because the next complete sentence slightly exceeds the target.
+                # The independent truth gate requires at least six spoken words;
+                # preserve the next complete sentence rather than ship a dangling
+                # or underdeveloped narration paragraph.
+                if used < 6:
+                    selected.append(sentence)
+                    used += count
                 break
             if not selected and count > budget:
                 selected.append(sentence)  # preserve one complete sentence if the minimum sentence is over budget
