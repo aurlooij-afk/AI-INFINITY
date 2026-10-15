@@ -503,7 +503,15 @@ def t9(s,b):
     def one(label):
         q=requests.Session();q.cookies.set("ai_infinity_session",cookie);return create(q,b,f"Create a 20-second cinematic video for CONCURRENCY-{label} with a distinct narrative.",duration=20,format="short",idempotency_key=f"final-acceptance-{label}")
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:pids=list(ex.map(one,("ALPHA","BETA")))
-    assert len(set(pids))==2;p=[waitp(s,b,x) for x in pids];text=json.dumps(p,ensure_ascii=False);assert "CONCURRENCY-ALPHA" in text and "CONCURRENCY-BETA" in text;textitles={str(x.get("title")or"") for x in p};assert len(textitles)==2
+    assert len(set(pids))==2
+    # Provider/research degradation must not suppress the concurrency-isolation
+    # assertion. The helper permits it only when truth remains REVIEW_REQUIRED,
+    # publishing is denied, and the final download is HTTP 409.
+    p=[waitp(s,b,x,allow_review_required=True) for x in pids]
+    text=json.dumps(p,ensure_ascii=False)
+    assert "CONCURRENCY-ALPHA" in text and "CONCURRENCY-BETA" in text
+    textitles={str(x.get("title")or"") for x in p}
+    assert len(textitles)==2, f"concurrent briefs collapsed to duplicate titles: {textitles!r}"
     return {"test":9,"project_ids":pids,"isolated":True}
 def t10(s,b,d,other_project_id):
     pid=create(

@@ -1,0 +1,88 @@
+{
+  "schema": "ai-infinity-pr37-fresh-execution-baseline.v1",
+  "generated_at_utc": "2026-10-15T22:41:31.548Z",
+  "repository": "aurlooij-afk/AI-INFINITY",
+  "pull_request": {
+    "number": 37,
+    "url": "https://github.com/aurlooij-afk/AI-INFINITY/pull/37",
+    "state": "open",
+    "merged": false,
+    "branch": "fix/pro-creative-scene-quality-gates",
+    "head_sha_at_baseline": "7d0ba603105fa8a0e62fa32712375edeba20fa67",
+    "base_branch": "main",
+    "base_sha_at_baseline": "c59421d2da4b9b32eaccdee2ca71e2b9ccfd07ed",
+    "mergeable": true
+  },
+  "repository_state": {
+    "default_branch": "main",
+    "main_sha": "c59421d2da4b9b32eaccdee2ca71e2b9ccfd07ed",
+    "main_branch_protected": false,
+    "required_status_checks": "No required branch-protection checks exposed by the branch endpoint; branch protection reported disabled.",
+    "local_working_tree": "Not inspectable: no Desktop Commander device connected; remote source was inspected through GitHub API.",
+    "changes_before_edit": 23,
+    "commits_in_pr": 122
+  },
+  "current_candidate_workflows": [
+    {
+      "workflow": "Visual Diversity Truth Regression",
+      "run_id": 38806125947,
+      "job_id": 116667325363,
+      "conclusion": "success",
+      "tested_sha": "7d0ba603105fa8a0e62fa32712375edeba20fa67",
+      "url": "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38806125947"
+    },
+    {
+      "workflow": "Creator Studio Build Guard",
+      "run_id": 38806125956,
+      "jobs": [
+        {
+          "name": "Python syntax guard",
+          "conclusion": "success",
+          "job_id": 116667326274
+        },
+        {
+          "name": "Docker image guard",
+          "conclusion": "success",
+          "job_id": 116668293348
+        }
+      ],
+      "conclusion": "success",
+      "tested_sha": "7d0ba603105fa8a0e62fa32712375edeba20fa67",
+      "url": "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38806125956"
+    },
+    {
+      "workflow": "AI Infinity — Final Complete Acceptance Suite",
+      "run_id": 38806125917,
+      "job_id": 116667326213,
+      "conclusion": "failure",
+      "tested_sha": "7d0ba603105fa8a0e62fa32712375edeba20fa67",
+      "url": "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38806125917",
+      "failed_step": "Run ten-scenario real acceptance suite",
+      "failure_location": "tests/final_acceptance_suite.py:t9; the waitp call at line 506 rejected completed_with_qc_warnings before concurrency isolation assertions ran."
+    }
+  ],
+  "reproduced_failure": {
+    "category": "Acceptance-harness expectation + natural-language title parsing",
+    "exact_observed_status": "completed_with_qc_warnings",
+    "project_runtime_state": "DEGRADED",
+    "stage": "quality_review_required",
+    "truth_state": "REVIEW_REQUIRED",
+    "verified": false,
+    "publish_allowed_by_quality_gate": false,
+    "output_observation": "Captured project title was 'cinematic' for prompt form 'Create a 20-second cinematic video for CONCURRENCY-ALPHA/BETA ...'; the title parser split at 'video' before extracting the subject after 'for'.",
+    "provider_observation": "The same run recorded Hugging Face token missing, Openverse timeouts, and no relevant/distinct assets from multiple public-source adapters; original vector illustrations were marked DEGRADED. This is not evidence of professional source-visual quality.",
+    "immediate_failure": "The first waitp(s,b,x) in t9 required status == 'completed' and raised on the truthful completed_with_qc_warnings result; subsequent project-isolation and distinct-title assertions did not run."
+  },
+  "planned_fix_in_this_candidate": {
+    "production": "Recognize the subject phrase after 'video for ...' instead of falling back to the deliverable adjective.",
+    "regression": "Add ALPHA/BETA title extraction regression on compile_intent.",
+    "acceptance": "Run concurrency isolation even when provider/research gates correctly force REVIEW_REQUIRED; still require fail-closed truth, publishing denial and HTTP 409 final download."
+  },
+  "restrictions": {
+    "no_merge": true,
+    "no_deploy": true,
+    "no_external_provider_reconfiguration": true,
+    "no_secret_values_read": true,
+    "no_paid_service_or_billing_change": true
+  }
+}

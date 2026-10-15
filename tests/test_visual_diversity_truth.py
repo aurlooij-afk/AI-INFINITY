@@ -1101,3 +1101,12 @@ def test_full_hd_resolution_truth_requires_real_1080p_in_either_orientation():
     assert studio._is_full_hd_resolution(1080, 1920) is True
     assert studio._is_full_hd_resolution(0, 1920) is False
     assert studio._is_full_hd_resolution(1920, 0) is False
+
+
+def test_natural_language_title_uses_subject_after_video_for_clause():
+    for label in ("ALPHA", "BETA"):
+        intent = canonical.compile_intent(
+            f"Create a 20-second cinematic video for CONCURRENCY-{label} with a distinct narrative.",
+            {"duration": 20, "format": "short"},
+        )
+        assert intent["title"] == f"CONCURRENCY-{label}"

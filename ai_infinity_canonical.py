@@ -197,7 +197,7 @@ def _derive_title_from_command(command):
     about = re.search(
         r"\b(?:video|film|short|reel|documentary|explainer|podcast|article|blog|post)\b"
         r"(?:\s+(?:article|package|campaign|content|clip|episode|show|story|series|video)){0,4}"
-        r"\s+(?:about|on|covering|exploring)\s+(.+?)"
+        r"\s+(?:about|on|for|covering|exploring)\s+(.+?)"
         r"(?=,|;|\.|$|\s+(?:with|in|for|using|including|featuring)\s+)",
         text, re.I,
     )
