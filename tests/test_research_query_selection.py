@@ -184,3 +184,27 @@ def test_canonical_title_uses_subject_from_compound_deliverable_command():
         COMPOUND_DELIVERABLE_COMMAND
     ) == "Python's official website"
 
+
+def test_fallback_plan_uses_actual_subject_not_quality_modifier():
+    command = COMPOUND_DELIVERABLE_COMMAND
+    plan = studio_ultimate._fallback_creative_plan(
+        "Python's official website",
+        command,
+        "short",
+        20,
+        "general audience",
+        "clear and informative",
+        {"sources": []},
+        "English",
+        topic=command,
+    )
+    assert plan["title"] == "Python's official website"
+    assert plan["chapters"]
+    for chapter in plan["chapters"]:
+        visual_query = str(chapter.get("visual_query") or "").lower()
+        assert "python" in visual_query, chapter
+        assert "research-backed" not in visual_query, chapter
+        narration = str(chapter.get("narration") or "").strip()
+        assert re.search(r"[.!?…]$", narration), chapter
+        assert len(re.findall(r"\b[\w'-]+\b", narration)) >= 6, chapter
+
