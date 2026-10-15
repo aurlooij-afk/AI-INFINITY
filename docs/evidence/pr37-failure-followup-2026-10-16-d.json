@@ -1,0 +1,28 @@
+{
+  "schema": "ai-infinity-pr37-failure-followup.v1",
+  "recorded_at_utc": "2026-10-15T23:15:39.927Z",
+  "repository": "aurlooij-afk/AI-INFINITY",
+  "pull_request": 37,
+  "failed_candidate_sha": "0bbf9ed931b291af8905affeb8a74426443058c4",
+  "workflow": {
+    "id": 38821679053,
+    "job_id": 116719473844,
+    "url": "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38821679053",
+    "conclusion": "failure"
+  },
+  "failure": {
+    "step": "tests/final_acceptance_suite.py::t10",
+    "exact_assertion": "waitp(s,b,pid) default mode rejected the initial recovery-test project",
+    "observed": {
+      "status": "completed_with_qc_warnings",
+      "state": "COMPLETED",
+      "runtime_state": "COMPLETED",
+      "stage": "quality_review_required"
+    },
+    "cause": "The recovery test is explicitly permitted to create a deterministic CC0-labelled fixture, but the project still truthfully remained review-required and final delivery gated. The test invoked waitp in strict production-verified mode before checking fixture bytes, performing corruption/retry, or asserting isolation.",
+    "correction": "Invoke waitp(...,allow_review_required=True) for both the initial recovery-fixture render and its post-corruption retry. That mode still requires verified=false, REVIEW_REQUIRED, publish_allowed=false and HTTP 409 for final.mp4; subsequent assertions continue to verify actual fixture bytes, CC0 manifest, recovery render, audit entries and unrelated-project hashes."
+  },
+  "no_quality_gate_weakened": true,
+  "no_merge": true,
+  "no_deploy": true
+}

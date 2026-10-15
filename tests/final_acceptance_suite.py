@@ -544,7 +544,7 @@ def t10(s,b,d,other_project_id):
         duration=20,format="short",idempotency_key="final-acceptance-corruption",
         acceptance_fixture_id="cc0-recovery-illustration-v1",
     )
-    waitp(s,b,pid)
+    waitp(s,b,pid,allow_review_required=True)
     scene=d/"creator_studio"/pid/"scene_01.mp4"
     assert scene.is_file() and scene.stat().st_size>10000,scene
     got=names(s,b,pid)
@@ -576,7 +576,7 @@ def t10(s,b,d,other_project_id):
         c.commit()
     retry=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/retry","POST")
     assert retry.get("status")=="queued",retry
-    waitp(s,b,pid)
+    waitp(s,b,pid,allow_review_required=True)
     recovered=sha(scene)
     assert recovered!=corrupted and scene.stat().st_size>10000,(corrupted,recovered)
     media=probe(scene)
