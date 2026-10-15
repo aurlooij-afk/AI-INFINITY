@@ -48,7 +48,7 @@ def stop(p,log):
     log.close()
 def create(s,b,cmd,**kw):
     x=req(s,b,"/infinity/canonical/create","POST",json={"command":cmd,**kw}); pid=str(x.get("project_id") or ""); assert pid,x; return pid
-def waitp(s,b,pid,timeout=600,allow_review_draft=False):
+def waitp(s,b,pid,timeout=600,allow_review_draft=False,allow_review_required=False):
     end=time.time()+timeout; last={}
     while time.time()<end:
         last=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}")
@@ -64,9 +64,8 @@ def waitp(s,b,pid,timeout=600,allow_review_draft=False):
             if status == "completed_with_qc_warnings" and allow_review_draft:
                 truth = req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/truth")
                 checks = truth.get("checks") if isinstance(truth.get("checks"),dict) else {}
-                # A technically valid draft may be delivered only with a truthful,
-                # explicit REVIEW_REQUIRED state. This is not professional approval:
-                # fallback visuals must continue to block VERIFIED and publishing.
+                # Only a technically eligible illustrative draft may use this mode.
+                # It is still REVIEW_REQUIRED and final delivery/publishing stay blocked.
                 assert truth.get("verified") is False,truth
                 assert str(truth.get("state") or "").upper() == "REVIEW_REQUIRED",truth
                 assert checks.get("source_visual_policy_passed") is False,truth
@@ -74,6 +73,17 @@ def waitp(s,b,pid,timeout=600,allow_review_draft=False):
                 assert checks.get("visual_rights_evidence_present") is True,truth
                 assert checks.get("illustrative_fallback_delivery_eligible") is True,truth
                 assert truth.get("publish_allowed_by_quality_gate") is False,truth
+            elif status == "completed_with_qc_warnings" and allow_review_required:
+                # Recovery tests may exercise a completed-but-unverified project whose
+                # source rights or other gates remain unresolved. Continue testing the
+                # recovery behavior only when the application is truthful and fail-closed.
+                truth = req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/truth")
+                assert truth.get("verified") is False,truth
+                assert str(truth.get("state") or "").upper() == "REVIEW_REQUIRED",truth
+                assert truth.get("publish_allowed_by_quality_gate") is False,truth
+                final_url = b+f"/infinity/studio/project/{quote(pid,safe='')}/asset/final.mp4"
+                blocked = s.get(final_url,timeout=60)
+                assert blocked.status_code == 409,("unverified final.mp4 must remain gated",blocked.status_code,blocked.text[:500])
             else:
                 assert status == "completed",last
             assert str(last.get("state") or "").upper() == "COMPLETED",last
@@ -449,7 +459,6 @@ def t7():
         assert decoded.returncode==0,decoded.stderr[-2000:]
         draft_sha256=sha(final_path)
         return {"test":7,"project_id":pid,"research_status":"degraded","truth_state":"REVIEW_REQUIRED","final_download_blocked":True,"draft_media_sha256":draft_sha256,"draft_bytes":final_path.stat().st_size,"decoded":True}
-        return {"test":7,"project_id":pid,"research_status":"degraded"}
     finally:stop(p,l)
 def t8():
     # A process restart in the same ephemeral container is not a durable-volume proof.
@@ -466,13 +475,20 @@ def t8():
         c=req(s,b,"/infinity/canonical/capabilities")
         assert c.get("storage",{}).get("persistent") is False,c
         pid=create(s,b,"Create a 20-second English cinematic project for process-restart recovery.",duration=20,format="short")
-        waitp(s,b,pid)
+        waitp(s,b,pid,allow_review_required=True)
     finally:stop(p,l)
     p2,b2,l2=start(d,18082,extra)
     try:
         st=req(s,b2,f"/infinity/studio/project/{quote(pid,safe='')}")
         assert st.get("project_id")==pid and st.get("status") in {"completed","completed_with_qc_warnings"},st
         assert "final.mp4" in names(s,b2,pid)
+        truth=req(s,b2,f"/infinity/studio/project/{quote(pid,safe='')}/truth")
+        if truth.get("verified") is not True:
+            assert str(truth.get("state") or "").upper() == "REVIEW_REQUIRED",truth
+            assert truth.get("publish_allowed_by_quality_gate") is False,truth
+            final_url=b2+f"/infinity/studio/project/{quote(pid,safe='')}/asset/final.mp4"
+            blocked=s.get(final_url,timeout=60)
+            assert blocked.status_code==409,("unverified final.mp4 must remain gated after restart",blocked.status_code,blocked.text[:500])
         c2=req(s,b2,"/infinity/canonical/capabilities")
         assert c2.get("storage",{}).get("persistent") is False,c2
         return {
