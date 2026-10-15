@@ -1,6 +1,8 @@
 """Regression tests for compact, topic-led research queries."""
 
 
+import re
+
 import studio_ultimate
 
 
