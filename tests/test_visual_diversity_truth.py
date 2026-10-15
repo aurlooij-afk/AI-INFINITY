@@ -1092,3 +1092,12 @@ def test_caption_qc_uses_measured_narration_timeline_near_duration_boundary(monk
     assert result["checks"]["scene_count"] is True
     assert result["checks"]["visual_assets_present"] is True
     assert result["checks"]["fallback_visual_policy_passed"] is True
+
+def test_full_hd_resolution_truth_requires_real_1080p_in_either_orientation():
+    studio = closure._studio()
+
+    assert studio._is_full_hd_resolution(1280, 720) is False
+    assert studio._is_full_hd_resolution(1920, 1080) is True
+    assert studio._is_full_hd_resolution(1080, 1920) is True
+    assert studio._is_full_hd_resolution(0, 1920) is False
+    assert studio._is_full_hd_resolution(1920, 0) is False
