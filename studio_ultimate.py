@@ -1407,6 +1407,10 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
     ).strip() or topic_label
     stop_terms = {"create","make","generate","produce","build","video","film","short","reel","useful","original","content","high","retention","audience","general","premium","editorial"}
     topic_terms = {t for t in re.findall(r"[a-z0-9]{4,}", topic_label.lower()) if t not in stop_terms}
+    software_or_web_topic = bool(re.search(
+        r"\b(?:python|programming|software|website|web\s+site|coding|developer|web\s+development)\b",
+        topic_label, re.I,
+    ))
 
     usable_sources = []
     for src in (research.get("sources") or []):
@@ -1453,6 +1457,14 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "The key idea": "close-up computer monitor displaying a video editing timeline and subtitle tracks",
                 "Practical example": "creator editing a vertical video timeline at a workstation, with camera microphone and lights nearby",
                 "Takeaway": "finished edited video playing on a large studio display",
+            }
+        elif software_or_web_topic:
+            visual_focus = {
+                "Hook": "software developer writing code on a laptop at a desk",
+                "Why it matters": "software developer reading Python documentation in a web browser",
+                "The key idea": "close-up of source code in an editor on a computer monitor",
+                "Practical example": "programmer testing a website in a browser on a laptop",
+                "Takeaway": "developer reviewing a completed software project on a computer",
             }
         ratios = [0.16, 0.18, 0.28, 0.22, 0.16]
     else:
@@ -1514,7 +1526,14 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 break
             selected.append(sentence)
             used += count
-        return " ".join(selected).strip() or text
+        result = " ".join(selected).strip() or text
+        # Keep sentence boundaries, but do not allow a tiny complete sentence
+        # to pass as usable spoken narration. Add the next complete sentence
+        # when required rather than padding with labels or cutting a sentence.
+        while len(re.findall(r"\b[\w'-]+\b", result)) < 6 and len(selected) < len(sentences):
+            selected.append(sentences[len(selected)])
+            result = " ".join(selected).strip()
+        return result
 
     chapters = []
     for i, name in enumerate(names):
@@ -1541,6 +1560,17 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "What changes": "video editing workstation displaying a final cut on a computer monitor",
                 "Practical takeaway": "creator reviewing a script storyboard captions and video timeline at a desk",
                 "Closing": "video editor reviewing the finished cut on a workstation preview monitor",
+            }
+        elif software_or_web_topic:
+            long_visual_focus = {
+                "Hook": "software developer writing code on a laptop at a desk",
+                "Context": "software developer reading Python documentation in a web browser",
+                "The core idea": "close-up of Python source code in an editor on a computer monitor",
+                "How it works": "programmer testing a website in a browser on a laptop",
+                "Real-world examples": "software developer using Python code to build a web application",
+                "What changes": "working website running in a browser on a desktop monitor",
+                "Practical takeaway": "developer testing and refining a software project on a laptop",
+                "Closing": "software developer reviewing a completed application on a monitor",
             }
         focus = (visual_focus if fmt == "short" else long_visual_focus).get(name, f"a purposeful real-world visual about {topic_label}")
         localized = _localized_fallback_copy(language, name, clean_title, topic_label)
@@ -1836,6 +1866,7 @@ _VISUAL_CONCEPTS = {
     "camera": r"\b(?:camera|camcorder|lens|tripod|filming|shooting|recording|cinematography)\b",
     "studio": r"\b(?:studio|production room|recording room|video set|film set|broadcast booth|soundstage)\b",
     "audio": r"\b(?:microphone|mic|headphones?|audio|sound|waveform|voiceover|mixing console)\b",
+    "software_development": r"\b(?:programming|programmer|coding|coder|software developer|web developer|developer|source code|code editor|python code|web application|web app)\b",
     "captions": r"\b(?:captions?|subtitles?|closed captions?|srt|subtitle tracks?)\b",
     "storyboard": r"\b(?:storyboard|script|screenplay|shot list|outline|production plan)\b",
     "finished_video": r"\b(?:finished (?:film|video|edit|cut)|final (?:cut|edit|video)|export(?:ed)? video|rendered video|playback|video player|video playback|preview monitor)\b",
@@ -1905,6 +1936,8 @@ def _visual_search_query_variants(search_subject: str, focus: str, topic: str, r
         ({"audio"}, "microphone headphones audio recording"),
         ({"captions"}, "video captions subtitles editing"),
         ({"storyboard"}, "film storyboard script shot list"),
+        ({"software_development"}, "software developer coding laptop computer"),
+        ({"software_development"}, "programmer writing source code in a code editor"),
         ({"finished_video"}, "finished video editing timeline playback computer monitor"),
         ({"raw_final"}, "video editing before after raw footage finished cut"),
         ({"raw_final"}, "video editor reviewing completed edit preview monitor footage playback export"),
