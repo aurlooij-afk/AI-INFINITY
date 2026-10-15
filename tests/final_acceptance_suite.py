@@ -86,7 +86,13 @@ def waitp(s,b,pid,timeout=600,allow_review_draft=False,allow_review_required=Fal
                 assert blocked.status_code == 409,("unverified final.mp4 must remain gated",blocked.status_code,blocked.text[:500])
             else:
                 assert status == "completed",last
-            assert str(last.get("state") or "").upper() == "COMPLETED",last
+            runtime_state = str(last.get("state") or "").upper()
+            if status == "completed_with_qc_warnings" and (allow_review_draft or allow_review_required):
+                # A review-required completion must retain the truthful degraded state;
+                # the gates above independently verified that delivery/publishing remain blocked.
+                assert runtime_state == "DEGRADED", last
+            else:
+                assert runtime_state == "COMPLETED", last
             return last
         time.sleep(2)
     raise AssertionError(f"timeout {pid}: {last}")
