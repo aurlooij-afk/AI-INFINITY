@@ -79,3 +79,77 @@ def test_research_relevance_rejects_unrelated_scholarly_hits():
     }
     assert studio_ultimate._research_source_relevant(topic, unrelated) is False
     assert studio_ultimate._research_source_relevant(topic, relevant) is True
+
+
+def _upload_transform_request(**overrides):
+    command = (
+        "Turn the uploaded PDF into research-backed content: produce a podcast "
+        "package, video, article and social campaign with evidence, captions "
+        "and a final production package."
+    )
+    request = {
+        "objective": command,
+        "title": command,
+        "topic": command,
+        "source_file_names": ["acceptance-source.pdf"],
+    }
+    request.update(overrides)
+    return request
+
+
+def test_uploaded_pdf_title_isolated_from_flattened_metadata():
+    request = _upload_transform_request()
+    flattened_text = (
+        "Title: AI Infinity Creator Operating System"
+        "Brief: AI Infinity connects research writing visual selection and editing."
+        "Source rights: Record creator item page license terms and file SHA-256."
+        "Delivery: Render narration captions video article audio and social copy."
+    )
+    sources = [{
+        "title": "acceptance-source.pdf",
+        "source": "user upload",
+        "text_extracted": True,
+        "snippet": flattened_text,
+    }]
+
+    assert studio_ultimate._infer_uploaded_source_topic(request, sources) == (
+        "AI Infinity Creator Operating System"
+    )
+
+
+def test_uploaded_pdf_title_isolated_with_newline_separated_metadata():
+    request = _upload_transform_request()
+    extracted_text = (
+        "Title: AI Infinity Creator Operating System\n"
+        "Brief: AI Infinity connects research writing visual selection and editing.\n"
+        "Source rights: Record creator item page license terms and file SHA-256."
+    )
+    sources = [{
+        "title": "acceptance-source.pdf",
+        "source": "user upload",
+        "text_extracted": True,
+        "snippet": extracted_text,
+    }]
+
+    assert studio_ultimate._infer_uploaded_source_topic(request, sources) == (
+        "AI Infinity Creator Operating System"
+    )
+
+
+def test_uploaded_pdf_does_not_override_explicit_user_topic():
+    request = _upload_transform_request(
+        title="Renewable Energy",
+        topic="renewable energy",
+    )
+    sources = [{
+        "title": "acceptance-source.pdf",
+        "source": "user upload",
+        "text_extracted": True,
+        "snippet": (
+            "Title: AI Infinity Creator Operating System"
+            "Brief: AI Infinity connects research writing visual selection and editing."
+        ),
+    }]
+
+    assert studio_ultimate._infer_uploaded_source_topic(request, sources) == ""
+
