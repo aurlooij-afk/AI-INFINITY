@@ -608,10 +608,14 @@ def _extract_brief_subject(value: str) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     if not text:
         return ""
+    # Accept compound deliverable phrasing such as "video article package about X".
+    # The older parser only matched "video about X", so it mistook style/delivery
+    # modifiers (for example "research-backed") for the actual topic.
     about = re.search(
-        r"\b(?:video|film|short|reel|documentary|explainer|podcast|article|blog|post)\s+"
-        r"(?:about|on|covering|exploring)\s+(.+?)"
-        r"(?=,|;|\.|$|\s+(?:with|in|for|using|including)\s+)",
+        r"\b(?:video|film|short|reel|documentary|explainer|podcast|article|blog|post)\b"
+        r"(?:\s+(?:article|package|campaign|content|clip|episode|show|story|series|video)){0,4}"
+        r"\s+(?:about|on|covering|exploring)\s+(.+?)"
+        r"(?=,|;|\.|$|\s+(?:with|in|for|using|including|featuring)\s+)",
         text, re.I,
     )
     if about:
