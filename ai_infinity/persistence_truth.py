@@ -13,6 +13,44 @@ import os
 from pathlib import Path
 
 
+def _mountinfo_text() -> str:
+    try:
+        return Path("/proc/self/mountinfo").read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _has_confirmed_persistent_mount(root: Path | str, mountinfo: str | None = None) -> bool:
+    """Require an actual non-ephemeral mount; confirmation flags alone are not proof."""
+    try:
+        path = Path(root).resolve()
+    except Exception:
+        return False
+    if path == Path("/tmp") or Path("/tmp") in path.parents:
+        return False
+    text = _mountinfo_text() if mountinfo is None else mountinfo
+    ephemeral_fs = {"overlay", "tmpfs", "devtmpfs", "proc", "sysfs", "squashfs", "ramfs"}
+    for line in text.splitlines():
+        try:
+            left, right = line.split(" - ", 1)
+            left_fields = left.split()
+            right_fields = right.split()
+            if len(left_fields) < 5 or not right_fields:
+                continue
+            mount_point_text = left_fields[4]
+            for encoded, decoded in ((r"\040", " "), (r"\011", "\t"), (r"\134", "\\"), (r"\012", "\n")):
+                mount_point_text = mount_point_text.replace(encoded, decoded)
+            mount_point = Path(mount_point_text).resolve()
+            fs_type = right_fields[0].lower()
+            if fs_type in ephemeral_fs or mount_point == Path("/"):
+                continue
+            if path == mount_point or mount_point in path.parents:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 TRUE = {"1", "true", "yes", "on"}
 DURABLE_REMOTE_BACKENDS = {"cloudflare_r2", "backblaze_b2", "b2"}
 
@@ -54,11 +92,11 @@ def project_state_durability(root: Path | str) -> dict:
         and bool(backend_status.get("last_sha256"))
         and bool(backend_status.get("last_sync_at"))
     )
-    local_volume_ready = confirmed_volume and not str(path).startswith("/tmp")
+    local_volume_ready = confirmed_volume and _has_confirmed_persistent_mount(path)
 
     persistent = bool(backend_ready or (mode == "durable" and local_volume_ready))
     if persistent:
-        reason = "verified_durable_state_backend" if backend_ready else "explicit_persistent_volume_contract"
+        reason = "verified_durable_state_backend" if backend_ready else "actual_persistent_mount_confirmed"
     elif mode == "durable" and remote_backend:
         reason = "durable_mode_requested_but_backend_not_verified"
     elif mode == "durable":

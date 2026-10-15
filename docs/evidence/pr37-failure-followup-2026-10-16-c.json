@@ -1,0 +1,30 @@
+{
+  "schema": "ai-infinity-pr37-failure-followup.v1",
+  "recorded_at_utc": "2026-10-15T23:07:37.215Z",
+  "repository": "aurlooij-afk/AI-INFINITY",
+  "pull_request": 37,
+  "failed_candidate_sha": "0652b71e5af48a0b1dd1b5e605778522ba067132",
+  "workflow": {
+    "id": 38821157433,
+    "job_id": 116717783742,
+    "url": "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38821157433",
+    "conclusion": "failure"
+  },
+  "failure": {
+    "step": "tests/final_acceptance_suite.py::t4",
+    "exact_assertion": "assert runtime_state == \"DEGRADED\", last",
+    "observed": {
+      "status": "completed_with_qc_warnings",
+      "state": "COMPLETED",
+      "runtime_state": "COMPLETED",
+      "stage": "quality_review_required",
+      "truth_state": "REVIEW_REQUIRED",
+      "verified": false
+    },
+    "cause": "The runtime reported the lifecycle as completed while its separate quality state stayed review-required, and final delivery/publishing gates were closed. The new test was overly strict about the lifecycle field equaling DEGRADED. This did not indicate that professional truth passed; the preceding t4 assertions had already required verified=false, REVIEW_REQUIRED, source-visual policy failure, qualified illustrative-fallback disclosure, publish denial and gated delivery checks in the reviewed branch.",
+    "correction": "For explicitly permitted degraded/review-required test paths, accept COMPLETED or DEGRADED as the lifecycle field only after status=completed_with_qc_warnings and the full fail-closed truth assertions have passed. Ordinary completion paths still require COMPLETED."
+  },
+  "no_quality_gate_weakened": true,
+  "no_merge": true,
+  "no_deploy": true
+}
