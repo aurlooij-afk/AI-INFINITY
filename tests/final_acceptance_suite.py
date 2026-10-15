@@ -513,6 +513,21 @@ def t9(s,b):
     textitles={str(x.get("title")or"") for x in p}
     assert len(textitles)==2, f"concurrent briefs collapsed to duplicate titles: {textitles!r}"
     return {"test":9,"project_ids":pids,"isolated":True}
+def _assert_isolation_project_state(s,b,project_id,state):
+    """Accept degraded drafts only while every production-delivery gate stays closed."""
+    status=str(state.get("status") or "").lower()
+    if status == "completed":
+        return
+    assert status == "completed_with_qc_warnings", state
+    truth=req(s,b,f"/infinity/studio/project/{quote(project_id,safe='')}/truth")
+    assert truth.get("verified") is False, truth
+    assert str(truth.get("state") or "").upper() == "REVIEW_REQUIRED", truth
+    assert truth.get("publish_allowed_by_quality_gate") is False, truth
+    final_url=b+f"/infinity/studio/project/{quote(project_id,safe='')}/asset/final.mp4"
+    blocked=s.get(final_url,timeout=60)
+    assert blocked.status_code == 409, ("another project must remain gated during recovery",blocked.status_code,blocked.text[:500])
+
+
 def t10(s,b,d,other_project_id):
     pid=create(
         s,b,
@@ -540,7 +555,7 @@ def t10(s,b,d,other_project_id):
     assert other_scene.is_file() and other_scene.stat().st_size>10000,other_scene
     other_sha_before=sha(other_scene)
     other_state_before=req(s,b,f"/infinity/studio/project/{quote(other_project_id,safe='')}")
-    assert str(other_state_before.get("status") or "").lower()=="completed",other_state_before
+    _assert_isolation_project_state(s,b,other_project_id,other_state_before)
 
     scene.write_bytes(b"CORRUPTED-INTERMEDIATE")
     corrupted=sha(scene)
@@ -575,7 +590,7 @@ def t10(s,b,d,other_project_id):
     assert any(str(x.get("event") or "")=="scene_completed" for x in audit[retry_pos+1:]),audit
     assert sha(other_scene)==other_sha_before
     other_state_after=req(s,b,f"/infinity/studio/project/{quote(other_project_id,safe='')}")
-    assert str(other_state_after.get("status") or "").lower()=="completed",other_state_after
+    _assert_isolation_project_state(s,b,other_project_id,other_state_after)
     assert "final.mp4" in names(s,b,other_project_id)
 
     tr=req(s,b,f"/infinity/studio/project/{quote(pid,safe='')}/truth")

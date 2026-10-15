@@ -1,0 +1,31 @@
+{
+  "schema": "ai-infinity-pr37-failure-followup.v1",
+  "recorded_at_utc": "2026-10-15T22:52:18.852Z",
+  "repository": "aurlooij-afk/AI-INFINITY",
+  "pull_request": 37,
+  "failed_candidate_sha": "d798f15db4270b38510152e9b78521f3c835fdf8",
+  "workflow": {
+    "id": 38818853557,
+    "job_id": 116710198365,
+    "url": "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38818853557",
+    "conclusion": "failure"
+  },
+  "failure": {
+    "step": "tests/final_acceptance_suite.py::t10",
+    "exact_assertion": "assert str(other_state_before.get(\"status\") or \"\").lower() == \"completed\"",
+    "observed": {
+      "status": "completed_with_qc_warnings",
+      "state": "DEGRADED",
+      "stage": "quality_review_required",
+      "truth_state": "REVIEW_REQUIRED",
+      "verified": false,
+      "publish_allowed_by_quality_gate": false
+    },
+    "cause": "The cross-project recovery-isolation test incorrectly required the unrelated project to be professionally completed, even though the run had correctly preserved a degraded review-required draft because source-visual rights/relevance could not pass. The test stopped before its corruption/retry/isolation assertions, so it did not demonstrate a production cross-project mutation.",
+    "environment_observation": "The workflow recorded a missing Hugging Face image credential and intermittent Openverse timeouts. The observed project rendered an H.264/AAC 1280x720 MP4 (20.055556s) with illustrative fallback assets. Fallback visuals are marked DEGRADED; this is not professional sourcing evidence.",
+    "next_correction": "Accept only completed projects or completed_with_qc_warnings projects whose truth remains verified=false, REVIEW_REQUIRED, publishing denied, and final.mp4 HTTP 409. Apply the same assertion before and after fault-injection recovery."
+  },
+  "no_gate_weakened": true,
+  "no_merge": true,
+  "no_deploy": true
+}
