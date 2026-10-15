@@ -3770,6 +3770,15 @@ def make_thumbnail(master: Path, title: str, outdir: Path) -> Path:
         return frame if frame.exists() else p
 
 
+def _is_full_hd_resolution(width: int, height: int) -> bool:
+    """Return whether a frame is at least 1920x1080 in either orientation."""
+    try:
+        w, h = int(width or 0), int(height or 0)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return w > 0 and h > 0 and max(w, h) >= 1920 and min(w, h) >= 1080
+
+
 def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dict[str, Any]], captions: Path) -> Dict[str, Any]:
     probe = ffprobe_json(master)
     streams = probe.get("streams") or []
@@ -3814,7 +3823,7 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
     checks = {
         "file_present": master.exists() and master.stat().st_size > 10000,
         "duration_nonzero": duration > 2,
-        "full_hd": max(int(v.get("width") or 0), int(v.get("height") or 0)) >= 1080 and min(int(v.get("width") or 0), int(v.get("height") or 0)) >= 720,
+        "full_hd": _is_full_hd_resolution(int(v.get("width") or 0), int(v.get("height") or 0)),
         "profile_resolution": (
             max(int(v.get("width") or 0), int(v.get("height") or 0)) >= 1280
             and min(int(v.get("width") or 0), int(v.get("height") or 0)) >= 720
