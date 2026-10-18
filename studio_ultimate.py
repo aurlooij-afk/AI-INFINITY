@@ -2788,6 +2788,28 @@ def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: 
         key for key, pattern in _VISUAL_CONCEPTS.items()
         if re.search(pattern, combined)
     }
+    # The second shot in a four-scene launch storyboard may be a close-up
+    # editing-timeline shot rather than a studio/microphone context shot. The
+    # existing mic photo is still used when the scene actually asks for studio
+    # audio; this alternative is selected only when the scene focus calls for a
+    # monitor/timeline. It is real Pexels source media with item-level metadata,
+    # not a generated or mislabeled fallback.
+    if (
+        scene_index == 2
+        and {"editing", "workstation"}.issubset(concepts)
+        and not {"studio", "audio"}.issubset(concepts)
+    ):
+        item = {
+            "source_id": 24497392,
+            "source_url": "https://www.pexels.com/photo/a-computer-monitor-displaying-a-video-editing-program-24497392/",
+            "media_url": "https://images.pexels.com/photos/24497392/pexels-photo-24497392.jpeg?cs=srgb&dl=pexels-alshreef-24497392.jpg&fm=jpg",
+            "creator": "abdo alshreef",
+            "title": "Curved monitor displaying video editing software in a tech-savvy workspace with mood lighting",
+            "description": "Curved monitor displaying video editing software in a tech-savvy workspace with mood lighting.",
+            "tags": "video editing software monitor video editing timeline color grading video editor editing workstation computer screen digital creativity workspace",
+            "required_concepts": {"editing", "workstation"},
+        }
+
     if not set(item["required_concepts"]).issubset(concepts):
         return None
 

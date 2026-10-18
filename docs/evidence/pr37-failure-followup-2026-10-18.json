@@ -1,0 +1,52 @@
+{
+  "schema": "ai-infinity-pr37-failure-followup.v1",
+  "recorded_at_utc": "2026-10-18T18:29:16.719Z",
+  "repository": "aurlooij-afk/AI-INFINITY",
+  "pull_request": 37,
+  "failed_candidate_sha": "b7a4f1eec2af68a2cb01d8cddcdf7e5e2a187af1",
+  "workflow": {
+    "id": 39153481608,
+    "job_id": 117751756267,
+    "url": "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/39153481608",
+    "conclusion": "failure"
+  },
+  "failure": {
+    "step": "tests/final_acceptance_suite.py::t1",
+    "exact_assertion": "assert truth.get(\"verified\") is True and truth.get(\"state\") == \"VERIFIED\"",
+    "observed": {
+      "project_id": "studio_17ea50b64cbc4fa2bbf95724ca74a4fa",
+      "output_sha256": "af175cb27ee0d718d06fe0e3521c54158e814b59f2cae892a3b8d6122dcb9955",
+      "size_bytes": 3299607,
+      "duration_seconds": 60.055556,
+      "streams": [
+        "h264 video 1280x720",
+        "aac audio",
+        "mov_text subtitles"
+      ],
+      "truth_state": "REVIEW_REQUIRED",
+      "fallback_visual_count": 1,
+      "failing_scene_asset": "procedural_visual_02.png",
+      "reason": "No usable, relevant AI/public visual asset was reachable for this scene",
+      "visual_rights_evidence_present": true,
+      "visual_diversity_ok": true,
+      "research_sources": 20,
+      "factual_review_required": true,
+      "human_review_status": "PENDING"
+    },
+    "cause": "The long-form AI Infinity launch storyboard's second scene requests a close-up editing timeline/monitor, but the curated Pexels table only offered a studio microphone image at scene index 2. Its required-concept mismatch correctly rejected that image and all live providers timed out, lacked credentials or returned irrelevant assets, so a vector fallback was used. The strict truth gate correctly kept the project REVIEW_REQUIRED.",
+    "correction": "Add a real Pexels photo whose item page describes a curved monitor showing editing software, selected only when scene 2's focus requires editing/workstation and not studio/audio. Keep the original microphone photo for a true studio/audio scene. Add mocked source-identity, license-metadata and actual image-decoding regressions. Preserve all strict source-relevance, diversity and truth gates.",
+    "resource_evidence": {
+      "item_page": "https://www.pexels.com/photo/a-computer-monitor-displaying-a-video-editing-program-24497392/",
+      "direct_media_url": "https://images.pexels.com/photos/24497392/pexels-photo-24497392.jpeg?cs=srgb&dl=pexels-alshreef-24497392.jpg&fm=jpg",
+      "creator": "abdo alshreef",
+      "observed_page_summary": "Free photo page lists a curved monitor displaying video editing software; dimensions 6580x4387; Pexels license label shown.",
+      "source": "Pexels item page inspected during execution"
+    }
+  },
+  "protection": {
+    "preserved_existing_scene_relevance_gate": true,
+    "preserves_publish_gate": true,
+    "no_merge": true,
+    "no_deploy": true
+  }
+}

@@ -975,6 +975,43 @@ def test_pexels_photo_adapter_preserves_asset_identity_and_license(monkeypatch, 
     assert studio.Image.open(row["path"]).size == (1280, 720)
 
 
+def test_curated_pexels_uses_relevant_monitor_photo_for_editing_timeline_and_preserves_studio_shot(monkeypatch, tmp_path):
+    studio = closure._studio()
+    monitor_url = "https://images.pexels.com/photos/24497392/pexels-photo-24497392.jpeg?cs=srgb&dl=pexels-alshreef-24497392.jpg&fm=jpg"
+    microphone_url = "https://images.pexels.com/photos/17196831/pexels-photo-17196831.jpeg?cs=srgb&dl=pexels-angel-moranchel-212557293-17196831.jpg&fm=jpg"
+    downloaded = []
+
+    def fake_download(url, path, **kwargs):
+        downloaded.append(url)
+        return _write_test_jpeg(studio, path)
+
+    monkeypatch.setattr(studio, "download", fake_download)
+
+    timeline = studio._curated_pexels_editorial_photo({
+        "heading": "The core idea",
+        "visual_focus": "close-up computer monitor displaying a video editing timeline and subtitle tracks",
+    }, tmp_path / "timeline", 2)
+    assert timeline is not None
+    assert timeline["source_id"] == 24497392
+    assert timeline["source_url"] == "https://www.pexels.com/photo/a-computer-monitor-displaying-a-video-editing-program-24497392/"
+    assert timeline["creator"] == "abdo alshreef"
+    assert timeline["license_url"] == "https://www.pexels.com/license/"
+    assert timeline["rights_status"] == "license_metadata_present"
+    assert timeline["commercial_use_state"] == "commercial_use_allowed_under_provider_terms"
+    assert studio.Image.open(timeline["path"]).size == (1280, 720)
+
+    context = studio._curated_pexels_editorial_photo({
+        "heading": "Context",
+        "visual_focus": "wide view of a creative production studio with camera microphone and editing monitors",
+    }, tmp_path / "context", 2)
+    assert context is not None
+    assert context["source_id"] == 17196831
+    assert context["source_url"] == "https://www.pexels.com/photo/young-brunette-man-fixing-a-lavalier-microphone-to-his-shirt-17196831/"
+    assert context["creator"] == "Angel Moranchel"
+    assert studio.Image.open(context["path"]).size == (1280, 720)
+    assert downloaded == [monitor_url, microphone_url]
+
+
 def test_pixabay_image_adapter_preserves_asset_identity_and_license(monkeypatch, tmp_path):
     monkeypatch.setenv("PIXABAY_API_KEY", "test-pixabay-key")
 
