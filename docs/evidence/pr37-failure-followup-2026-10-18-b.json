@@ -1,0 +1,23 @@
+{
+  "schema": "ai-infinity-pr37-failure-followup.v1",
+  "recorded_at_utc": "2026-10-18T18:44:15.668Z",
+  "repository": "aurlooij-afk/AI-INFINITY",
+  "pull_request": 37,
+  "failed_candidate_sha": "8cff3b9c103bfd2da30518e5f1972f1a2abf40b6",
+  "workflow": {
+    "id": 39154392730,
+    "job_id": 117754486342,
+    "url": "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/39154392730",
+    "conclusion": "failure"
+  },
+  "failure": {
+    "step": "tests/final_acceptance_suite.py::t10 publication denial",
+    "exact_failure": "POST /infinity/studio/publish -> 409: {'detail': 'project is not finished; professional verification must pass'}",
+    "production_observation": "The recovery fixture's truth is REVIEW_REQUIRED and verified=false because its CC0 label does not satisfy original-work rights provenance. The publish route returns HTTP 409 before a provider upload or remote ID can be issued.",
+    "cause": "The acceptance test used the `req()` helper, which raises on non-2xx responses, then expected a structured JSON 'blocked_by_quality_gate' status. The live local API contract correctly rejects this specific unfinished/unverified project with HTTP 409 and a human-readable detail, so the test errored before asserting the denial.",
+    "correction": "Capture the actual POST response and accept HTTP 409 only when the response detail explicitly says professional verification must pass. Assert there is no URL/external URL and record `http_409_quality_gate`. Keep structured blocked statuses supported as a separate response mode; all other response codes remain failures.",
+    "not_a_production_bypass": true
+  },
+  "no_merge": true,
+  "no_deploy": true
+}
