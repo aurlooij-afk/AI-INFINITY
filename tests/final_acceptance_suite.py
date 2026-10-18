@@ -609,8 +609,14 @@ def t10(s,b,d,other_project_id):
         assert tr.get("verified") is False and tr.get("state")=="REVIEW_REQUIRED",tr
         assert checks.get("source_visual_policy_passed") is False,tr
         assert checks.get("qualified_illustrative_fallback") is True,tr
-        assert checks.get("illustrative_fallback_delivery_eligible") is True,tr
-        assert not (tr.get("failures") or []),tr
+        # The recovery fixture intentionally carries a CC0 label but lacks the
+        # application's complete original-work evidence contract. It must remain
+        # blocked for rights review even though it is useful for retry fault injection.
+        assert checks.get("visual_rights_evidence_present") is False,tr
+        assert int(checks.get("visual_rights_unresolved_count") or 0) > 0,tr
+        assert checks.get("illustrative_fallback_delivery_eligible") is False,tr
+        failures=[str(x).lower() for x in (tr.get("failures") or [])]
+        assert any("commercial-use/attribution evidence unresolved" in x for x in failures),tr
         publish=req(
             s,b,"/infinity/studio/publish","POST",
             json={"project_id":pid,"provider":"youtube","asset":"final"},

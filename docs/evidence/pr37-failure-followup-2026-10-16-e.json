@@ -1,0 +1,34 @@
+{
+  "schema": "ai-infinity-pr37-failure-followup.v1",
+  "recorded_at_utc": "2026-10-18T18:17:08.302Z",
+  "repository": "aurlooij-afk/AI-INFINITY",
+  "pull_request": 37,
+  "failed_candidate_sha": "40c88dccad7d872a1dc2ea6a9cf8618927bac6c5",
+  "workflow": {
+    "id": 38822525743,
+    "job_id": 116722214451,
+    "url": "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38822525743",
+    "conclusion": "failure"
+  },
+  "failure": {
+    "step": "tests/final_acceptance_suite.py::t10",
+    "exact_assertion": "assert checks.get(\"illustrative_fallback_delivery_eligible\") is True",
+    "observed": {
+      "truth_state": "REVIEW_REQUIRED",
+      "verified": false,
+      "source_visual_policy_passed": false,
+      "qualified_illustrative_fallback": true,
+      "illustrative_fallback_delivery_eligible": false,
+      "visual_rights_evidence_present": false,
+      "visual_rights_review_required_count": 5,
+      "visual_rights_unresolved_count": 5,
+      "failure": "commercial-use/attribution evidence unresolved for 5 visual asset(s)"
+    },
+    "cause": "The recovery fixture labels itself CC0 but is also marked fallback and does not satisfy the product's separate original-generated ownership-evidence contract. The production rights validator correctly classifies it as blocked_fallback; acceptance incorrectly demanded delivery eligibility and no failures. Changing the validator to accept the fixture would weaken the explicit fail-closed rights invariant.",
+    "correction": "Keep the production gate unchanged. Acceptance now requires the CC0-labelled fixture to remain rights-unresolved and ineligible for downloadable illustrative-draft delivery, while separately proving render/retry/recovery works and publish remains blocked. Add a focused unit regression for this exact rights classification."
+  },
+  "fix_classification": "ACCEPTANCE_EXPECTATION_CORRECTED; PRODUCTION_RIGHTS_GATE_PRESERVED",
+  "no_gate_weakened": true,
+  "no_merge": true,
+  "no_deploy": true
+}

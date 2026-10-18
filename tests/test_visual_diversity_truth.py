@@ -1110,3 +1110,28 @@ def test_natural_language_title_uses_subject_after_video_for_clause():
             {"duration": 20, "format": "short"},
         )
         assert intent["title"] == f"CONCURRENCY-{label}"
+
+def test_cc0_test_fixture_label_does_not_bypass_original_work_rights_evidence():
+    # A public-domain label on the recovery-test image is not, by itself,
+    # sufficient evidence for the application's original-vector ownership path.
+    fixture = {
+        "source": "AI Infinity deterministic CC0 recovery-test illustration",
+        "source_url": None,
+        "creator": "AI Infinity repository test fixture",
+        "license": "CC0 1.0 Universal Public Domain Dedication",
+        "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "rights_status": "original_asset",
+        "commercial_use_state": "public_domain_cc0_1_0",
+        "fallback": True,
+        "quality_tier": "original_vector_editorial_fallback",
+        "asset_kind": "illustrative_graphic_not_photograph",
+        "fallback_record": {
+            "truthful": True,
+            "execution_state": "DEGRADED",
+            "fallback_method": "Deterministic CC0 illustration used only in fault-injection acceptance tests",
+            "quality_change": "Real scene media replaced by a labelled test illustration; not source footage",
+            "license_change": "Provider-specific rights replaced by original CC0 1.0 test fixture",
+        },
+    }
+
+    assert closure._rights_evidence_state(fixture) == "blocked_fallback"
