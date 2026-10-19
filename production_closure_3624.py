@@ -188,7 +188,7 @@ def _objective_media_qc(path: Path) -> Dict[str, Any]:
         ]
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
         log = (p.stderr or "") + (p.stdout or "")
-        values = re.findall(r"(?m)^\\s*I:\\s*(-?[0-9]+(?:\\.[0-9]+)?)\\s*LUFS\\s*$", log)
+        values = re.findall(r"\bI:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*LUFS\b", log)
         if values:
             integrated = float(values[-1])
             out["audio_integrated_lufs"] = integrated
@@ -889,17 +889,6 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
 
     visual_rows = _source_assets(p)
     checks["visual_acquisition_failures"] = _visual_acquisition_diagnostics(visual_rows)
-    launch_profile_text = " ".join(
-        str(expected_req.get(k) or "") for k in ("objective", "topic", "title")
-    )
-    cinematic_launch_profile = bool(
-        video_quality_gate_required
-        and re.search(
-            r"\\b(?:launch|promotional? video|promo film|brand film|product film|product launch|trailer)\\b",
-            launch_profile_text, re.I,
-        )
-        and float(checks.get("requested_duration") or 0) >= 30
-    )
     scene_files = []
     try:
         scene_files = sorted(_studio()._project_dir(project_id).glob("scene_*.mp4"))
@@ -910,6 +899,17 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     minimum_scene_count = _minimum_professional_scene_count(expected_req)
     actual_rendered_scene_count = len(scene_files)
     checks["video_quality_gate_required"] = video_quality_gate_required
+    launch_profile_text = " ".join(
+        str(expected_req.get(k) or "") for k in ("objective", "topic", "title")
+    )
+    cinematic_launch_profile = bool(
+        video_quality_gate_required
+        and re.search(
+            r"\b(?:launch|promotional? video|promo film|brand film|product film|product launch|trailer)\b",
+            launch_profile_text, re.I,
+        )
+        and float(checks.get("requested_duration") or 0) >= 30
+    )
     checks["visual_source_count"] = len(visual_rows)
     checks["visual_scene_count"] = effective_scene_count
     checks["actual_rendered_scene_count"] = actual_rendered_scene_count
