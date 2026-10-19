@@ -3042,10 +3042,18 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
         lexical_overlap = len(focus_terms & metadata_terms)
         screen_focus = bool(re.search(r"\b(?:screen|display|monitor|playback|finished video|final cut)\b", focus, re.I))
         screen_evidence = bool(re.search(r"\b(?:screen|display|monitor|playback|video player|finished video|final cut)\b", metadata_text, re.I))
-        screen_bonus = 4 if screen_focus and screen_evidence else 0
+        # Treat a display/finished-playback match as stronger than a generic
+        # workstation match. "displaying" is common in photo/video metadata.
+        screen_specific_match = bool(re.search(
+            r"\b(?:screen|display(?:ing)?|playback|video player|finished video|final cut)\b",
+            metadata_text, re.I,
+        ))
+        screen_bonus = 6 if screen_focus and screen_specific_match else (2 if screen_focus and screen_evidence else 0)
         high_cost_uhd = bool(re.search(r"(?:3840|4096)_2160|uhd|60fps", str(candidate.get("media_url") or ""), re.I))
         resolution_penalty = 3 if FAST_MODE and high_cost_uhd else 0
-        preferred_bonus = 1 if source_index == preferred_index else 0
+        # Preserve an ordinal asset only when it independently passed the semantic
+        # matcher. A true exact-scene clip beats a merely cheaper generic alternative.
+        preferred_bonus = 12 if direct_match and source_index == preferred_index else 0
         score = len(required & scene_concepts) * 10 + lexical_overlap + screen_bonus + preferred_bonus - resolution_penalty
         ranked.append((score, source_index, candidate))
 
