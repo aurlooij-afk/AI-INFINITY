@@ -3050,7 +3050,11 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
         ))
         screen_bonus = 6 if screen_focus and screen_specific_match else (2 if screen_focus and screen_evidence else 0)
         high_cost_uhd = bool(re.search(r"(?:3840|4096)_2160|uhd|60fps", str(candidate.get("media_url") or ""), re.I))
-        resolution_penalty = 3 if FAST_MODE and high_cost_uhd else 0
+        # UHD/60fps source is not an automatic quality win for a 720p/1080p
+        # free-tier deliverable; prefer a similarly relevant HD shot to reduce
+        # download, decode and memory costs. An exact scene-index match can still
+        # win after it passes the semantic gate.
+        resolution_penalty = 8 if FAST_MODE and high_cost_uhd else 0
         # Preserve an ordinal asset only when it independently passed the semantic
         # matcher. A true exact-scene clip beats a merely cheaper generic alternative.
         preferred_bonus = 12 if direct_match and source_index == preferred_index else 0
