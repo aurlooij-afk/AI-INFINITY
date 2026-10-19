@@ -1,5 +1,6 @@
 """Regression tests for the professional production visual-diversity truth gate."""
 import hashlib
+import re
 from pathlib import Path
 
 import ai_infinity_canonical as canonical
