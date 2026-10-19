@@ -959,6 +959,81 @@ def test_fast_product_launch_plan_uses_eight_distinct_story_beats(monkeypatch):
 
 
 
+
+def test_uploaded_pdf_narration_points_are_extracted_from_user_content_only():
+    research = {
+        "sources": [
+            {
+                "source": "user upload",
+                "title": "acceptance-source.pdf",
+                "text_extracted": True,
+                "snippet": (
+                    "Title: AI Infinity Creator Operating System\n"
+                    "Brief: AI Infinity connects research writing visual selection and editing.\n"
+                    "Source rights: Record creator item page license terms and file SHA-256.\n"
+                    "Delivery: Render narration captions video article audio and social copy.\n"
+                    "Quality: Verify duration aspect ratio media decode and audio.\n"
+                    "Recovery: Reload saved projects and confirm artifact checksums after restart.\n"
+                ),
+                "summary": "",
+            },
+            # A web result is not the user's document and must not become narration.
+            {"source": "web", "title": "Unrelated article", "snippet": "unrelated advertisement language", "text_extracted": True},
+        ]
+    }
+    points = studio._uploaded_source_narration_points(research)
+    assert len(points) == 5, points
+    joined = " ".join(points).lower()
+    assert "ai infinity connects research, writing, visual selection, and editing" in joined
+    assert "license terms" in joined and "file sha-256" in joined
+    assert "captions" in joined and "social copy" in joined
+    assert "artifact checksums" in joined
+    assert "unrelated advertisement" not in joined
+    assert all(re.search(r"[.!?…۔؟]$", point) for point in points)
+
+
+def test_document_grounded_fallback_does_not_replace_uploaded_points_with_launch_boilerplate():
+    source_text = (
+        "Title: AI Infinity Creator Operating System\n"
+        "Brief: AI Infinity connects research writing visual selection and editing.\n"
+        "Source rights: Record creator item page license terms and file SHA-256.\n"
+        "Delivery: Render narration captions video article audio and social copy.\n"
+        "Quality: Verify duration aspect ratio media decode and audio.\n"
+        "Recovery: Reload saved projects and confirm artifact checksums after restart.\n"
+    )
+    plan = studio._fallback_creative_plan(
+        title="AI Infinity Creator Operating System",
+        objective="Turn the uploaded PDF into research-backed content: produce a podcast package, video, article and social campaign with evidence, captions and a final production package.",
+        fmt="short",
+        duration=20,
+        audience="general audience",
+        tone="clear, practical, human",
+        research={"sources":[{
+            "source":"user upload",
+            "title":"acceptance-source.pdf",
+            "snippet":source_text,
+            "summary":source_text[:1200],
+            "text_extracted":True,
+        }]},
+        language="English",
+        topic="AI Infinity Creator Operating System",
+    )
+    narration = " ".join(str(chapter.get("narration") or "") for chapter in plan["chapters"])
+    assert plan["source_context"]["mode"] == "uploaded_document_grounded", plan["source_context"]
+    assert plan["source_context"]["uploaded_source_point_count"] == 5, plan["source_context"]
+    assert plan["source_context"]["uploaded_source_points_used"] == 5, plan["source_context"]
+    assert "AI Infinity connects research, writing, visual selection, and editing" in narration
+    assert "captions" in narration.lower() and "editing" in narration.lower()
+    assert "A playable MP4 alone does not prove quality" not in narration
+    assert "Every strong video starts with a clear point of view" not in narration
+
+
+def test_creator_operating_system_topic_is_not_misclassified_as_launch_film():
+    assert studio._is_explicit_ai_infinity_launch_brief("AI Infinity Creator Operating System") is False
+    assert studio._is_explicit_ai_infinity_launch_brief("Create an AI Infinity launch video") is True
+    assert studio._is_explicit_ai_infinity_launch_brief("AI Infinity platform tutorials and creator tools") is False
+
+
 def _write_test_jpeg(studio, path: Path, color=(35, 95, 145)):
     """Write a real, decodable image so source adapter tests exercise normalization."""
     path.parent.mkdir(parents=True, exist_ok=True)

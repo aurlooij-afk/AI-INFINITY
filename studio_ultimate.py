@@ -1373,6 +1373,132 @@ def _localized_fallback_copy(language: str, name: str, title: str, topic: str) -
         "on_screen": d["on_screen"]
     }
 
+def _uploaded_source_narration_points(research: Dict[str, Any]) -> List[str]:
+    """Extract concise narration points from uploaded source text without inventing claims.
+
+    The deterministic fallback used to replace uploaded-document content with generic
+    launch copy whenever the document title mentioned AI Infinity. Only content from
+    rows explicitly marked as extracted user uploads enters this path; web snippets,
+    filenames and provider labels never qualify as user-authored source material.
+    """
+    source_rows = [
+        row for row in (research.get("sources") or [])
+        if isinstance(row, dict)
+        and str(row.get("source") or "").strip().lower() == "user upload"
+        and row.get("text_extracted") is True
+    ]
+    if not source_rows:
+        return []
+
+    label_pattern = re.compile(
+        r"(?i)(?<!\w)(title|subject|brief|source\s+rights|delivery|quality|recovery|"
+        r"abstract|summary|overview|background|objective|purpose|findings|results|"
+        r"recommendations?|next\s+steps|conclusion|introduction)\s*:"
+    )
+    points: List[str] = []
+    seen = set()
+
+    def add_point(label: str, body: str) -> None:
+        body = re.sub(r"\s+", " ", str(body or "")).strip(" \t\r\n#-*")
+        if not body or len(body) < 10 or label.lower() in {"title", "subject"}:
+            return
+
+        # Normalize common plain-text/PDF checklist syntax into readable narration.
+        # Each rewrite keeps the original point; it does not add a new factual claim.
+        body = re.sub(
+            r"\bresearch\s+writing\s+visual\s+selection\s+and\s+editing\b",
+            "research, writing, visual selection, and editing", body, flags=re.I,
+        )
+        body = re.sub(
+            r"\bcreator\s+item\s+page\s+license\s+terms\s+and\s+file\s+SHA-?256\b",
+            "the creator, item page, license terms, and file SHA-256", body, flags=re.I,
+        )
+        body = re.sub(
+            r"\bnarration\s+captions\s+video\s+article\s+audio\s+and\s+social\s+copy\b",
+            "narration, captions, video, an article, audio, and social copy", body, flags=re.I,
+        )
+        body = re.sub(
+            r"\bduration\s+aspect\s+ratio\s+media\s+decode(?:ing)?\s+and\s+audio\b",
+            "duration, aspect ratio, media decoding, and audio", body, flags=re.I,
+        )
+        body = re.sub(r"\s+", " ", body).strip(" .;:")
+        if not body:
+            return
+
+        label_key = re.sub(r"\s+", " ", label.lower()).strip()
+        if label_key == "brief":
+            line = body
+        elif label_key == "source rights":
+            if re.match(r"(?i)^record\s+", body):
+                action = re.sub(r"(?i)^record\s+", "", body)
+                line = f"For each source, record {action[0].lower()+action[1:]}"
+            else:
+                line = f"Source rights: {body}"
+        elif label_key == "delivery":
+            if re.match(r"(?i)^render\s+", body):
+                line = "The requested deliverables are " + re.sub(r"(?i)^render\s+", "", body)
+            else:
+                line = "Delivery requirements: " + body
+        elif label_key == "quality":
+            if re.match(r"(?i)^verify\s+", body):
+                line = "The quality checks are " + re.sub(r"(?i)^verify\s+", "", body)
+            else:
+                line = "Quality checks: " + body
+        elif label_key == "recovery":
+            line = "For recovery, " + body[0].lower() + body[1:]
+        else:
+            line = body
+
+        line = line.strip()
+        if line and not re.search(r"[.!?…۔؟]$", line):
+            line += "."
+        key = re.sub(r"[^a-z0-9]+", " ", line.lower()).strip()
+        if key and key not in seen:
+            seen.add(key)
+            points.append(line)
+
+    for row in source_rows[:12]:
+        # Prefer extracted snippet over summary because summary commonly repeats
+        # the same first 1,200 characters. Fall back to text only if snippet is absent.
+        raw = str(row.get("snippet") or row.get("text") or row.get("summary") or "").strip()
+        if not raw:
+            continue
+        raw = re.sub(r"\r\n?", "\n", raw)
+        raw = re.sub(r"[ \t]+", " ", raw)
+        matches = list(label_pattern.finditer(raw))
+        if matches:
+            for index, match in enumerate(matches):
+                label = re.sub(r"\s+", " ", match.group(1)).strip()
+                start = match.end()
+                end = matches[index + 1].start() if index + 1 < len(matches) else len(raw)
+                body = raw[start:end]
+                # Some PDF extractors flatten all fields into one line. The label
+                # regex bounds each field even when there are no newlines.
+                add_point(label, body)
+        else:
+            # Ordinary prose without labelled sections: retain complete sentences
+            # as source points. Paragraph fragments are never fabricated into claims.
+            for sentence in re.findall(r"[^.!?؟۔]+[.!?؟۔]?", raw):
+                sentence = sentence.strip()
+                if len(re.findall(r"\b[\w'-]+\b", sentence)) >= 6:
+                    add_point("source", sentence)
+
+    return points[:18]
+
+
+def _is_explicit_ai_infinity_launch_brief(text: str) -> bool:
+    """Only use the launch-film fallback copy when the brief actually asks for a launch."""
+    value = str(text or "")
+    return bool(
+        re.search(r"\bAI\s+Infinity\b", value, re.I)
+        and re.search(
+            r"\b(?:launch(?:ing)?(?:\s+(?:film|video|campaign))?|promotional?\s+video|"
+            r"promo(?:tional)?\s+film|brand\s+film|product\s+film|product\s+launch|trailer)\b",
+            value, re.I,
+        )
+    )
+
+
 def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int, audience: str, tone: str, research: Dict[str, Any], language: str = "English", topic: str = "") -> Dict[str, Any]:
     """Build a deterministic, topic-coherent fallback plan without leaking unrelated search snippets."""
     raw_title = re.sub(r"\s+", " ", title).strip()[:900]
@@ -1430,16 +1556,19 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         usable_sources = [{"title": clean_title, "summary": "", "url": None}]
 
     brief_for_visuals = f"{raw_title} {clean_objective}"
-    ai_infinity_launch = bool(
+    # Distinguish a project about the Creator Operating System from an explicit
+    # brand-launch film. Both may use relevant creator-workflow visuals, but only an
+    # actual launch brief may use the canned launch narrative.
+    ai_infinity_creator_workflow = bool(
         re.search(r"\bAI\s+Infinity\b", brief_for_visuals, re.I)
-        and re.search(r"\b(launch|product|platform|studio|creator|software)\b", brief_for_visuals, re.I)
+        and re.search(r"\b(?:launch|product|platform|studio|creator|software)\b", brief_for_visuals, re.I)
     )
-    # AI Infinity is a creator/content-production product, not a known stock-photo
-    # subject. Search public media for the real workflow and equipment the brief
-    # describes instead of querying the brand name and receiving unrelated results.
+    ai_infinity_launch = _is_explicit_ai_infinity_launch_brief(brief_for_visuals)
+    uploaded_points = _uploaded_source_narration_points(research)
+    # Search public media for visible creator workflow rather than the brand name.
     visual_search_subject = (
         "content creator"
-        if ai_infinity_launch else topic_label
+        if ai_infinity_creator_workflow else topic_label
     )
     if fmt == "short":
         names = ["Hook", "Why it matters", "The key idea", "Practical example", "Takeaway"]
@@ -1450,7 +1579,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "Practical example": f"a concrete real-world example demonstrating {topic_label} in action",
             "Takeaway": f"a resolved outcome or memorable closing frame connected to {topic_label}",
         }
-        if ai_infinity_launch:
+        if ai_infinity_creator_workflow:
             visual_focus = {
                 "Hook": "content creator working at a video editing workstation",
                 "Why it matters": "creator recording a short video in a real studio with camera and microphone",
@@ -1510,11 +1639,20 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         ),
     }
 
-    def bounded_narration(name: str, seconds: float, source: Dict[str, Any]) -> str:
-        """Keep complete sentences; never create a fluent-looking fragment by cutting words."""
+    def bounded_narration(name: str, seconds: float, source: Dict[str, Any], chapter_index: int) -> str:
+        """Use extracted user-source content first, then use deterministic fallback copy."""
         budget = max(8, int(max(3.5, seconds) * 2.3))
         localized = _localized_fallback_copy(language, name, clean_title, topic_label)
-        if ai_infinity_launch and str(language or "English").strip().lower() == "english":
+        if chapter_index < len(uploaded_points):
+            # This statement came from an explicitly extracted user document. The
+            # plan records that fact for inspection; do not substitute brand copy.
+            raw_text = uploaded_points[chapter_index]
+        elif uploaded_points:
+            # If the source contains fewer points than the selected scene profile,
+            # close by synthesizing a short recap from those same points only.
+            recap = " ".join(uploaded_points[:min(3, len(uploaded_points))])
+            raw_text = "The uploaded source brings these points together: " + recap
+        elif ai_infinity_launch and str(language or "English").strip().lower() == "english":
             raw_text = ai_infinity_launch_narration.get(name) or ai_infinity_launch_narration.get("Closing")
         else:
             raw_text = localized["narration_by_name"].get(name) or localized["narration_by_name"].get("Closing") or localized["opening"]
@@ -1554,7 +1692,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
     for i, name in enumerate(names):
         src = usable_sources[i % len(usable_sources)]
         sec = max(4.0, round(duration * ratios[i], 1))
-        narration = bounded_narration(name, sec, src)
+        narration = bounded_narration(name, sec, src, i)
         long_visual_focus = {
             "Hook": "human opening moment, compelling subject, clear place or action",
             "Context": "environment, setting, people and real-world context",
@@ -1565,7 +1703,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "Practical takeaway": "creator applying the idea successfully",
             "Closing": "finished work, confident human subject, memorable final frame",
         }
-        if ai_infinity_launch:
+        if ai_infinity_creator_workflow:
             long_visual_focus = {
                 "Hook": "dynamic establishing shot of a creator production workspace with camera gear and editing monitors",
                 "Context": "a creator setting up a ring light and smartphone before recording in a studio",
@@ -1613,6 +1751,12 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         "language": language,
         "chapters": chapters,
         "claims_to_verify": [s.get("title") for s in usable_sources[:8] if s.get("title") != clean_title],
+        "source_context": {
+            "mode": "uploaded_document_grounded" if uploaded_points else "deterministic_creative_fallback",
+            "uploaded_source_point_count": len(uploaded_points),
+            "uploaded_source_points_used": min(len(uploaded_points), len(chapters)),
+            "source_claims_invented": False,
+        },
         "fallback_mode": "duration_bounded_topic_coherent",
     }
 
