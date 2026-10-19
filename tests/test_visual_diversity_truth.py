@@ -79,7 +79,30 @@ def test_professional_scene_floor_scales_up_for_longer_video():
         "content_type": "video",
         "duration": 60,
         "objective": "Create an educational video",
+    }) == 8
+
+
+def test_professional_scene_floor_rejects_four_shot_sixty_second_launch_baseline():
+    brief = {
+        "content_type": "video",
+        "format": "long",
+        "duration": 60,
+        "objective": "Create a professional 60-second AI Infinity launch video",
+    }
+    required = closure._minimum_professional_scene_count(brief)
+    assert required == 8
+    assert 4 < required, "the previously passing four-shot launch artifact must now remain unverified"
+
+
+def test_professional_scene_floor_scales_launch_beats_to_requested_duration():
+    assert closure._minimum_professional_scene_count({
+        "content_type": "video", "format": "long", "duration": 30,
+        "objective": "Create a 30-second branded product launch film",
     }) == 4
+    assert closure._minimum_professional_scene_count({
+        "content_type": "video", "format": "long", "duration": 60,
+        "objective": "Create a 60-second branded product launch film",
+    }) == 8
 
 
 def test_professional_scene_floor_allows_explicit_single_shot_brief():
@@ -904,7 +927,7 @@ def test_raw_final_scene_uses_specific_three_queries_before_generic_terms():
 
 
 
-def test_fast_product_launch_plan_uses_four_complete_story_scenes(monkeypatch):
+def test_fast_product_launch_plan_uses_eight_distinct_story_beats(monkeypatch):
     monkeypatch.setattr(studio, "FAST_MODE", True)
     plan = studio._fallback_creative_plan(
         title="Create a professional 60-second AI Infinity launch video in English",
@@ -921,11 +944,17 @@ def test_fast_product_launch_plan_uses_four_complete_story_scenes(monkeypatch):
         topic="Create a professional 60-second AI Infinity launch video in English",
     )
     chapters = plan["chapters"]
-    assert len(chapters) == 4
+    assert len(chapters) == 8
+    assert [x["heading"].split("—")[0].split(":")[0].strip() for x in chapters] == [
+        "Opening question", "Context", "Core principle", "How it works",
+        "Real examples", "What changes", "Next step", "Closing",
+    ]
+    assert sum(float(x["duration"]) for x in chapters) == 60
     script = " ".join(x["narration"] for x in chapters)
-    assert len(script.split()) >= 60
-    assert "research" in script.lower() and "captions" in script.lower()
+    assert len(script.split()) >= 80
+    assert len({x["visual_focus"] for x in chapters}) == 8
     assert all(x["narration"].rstrip().endswith((".", "!", "?")) for x in chapters)
+    assert all("production/rights manifests" not in x["visual_query"].lower() for x in chapters)
 
 
 
@@ -1010,6 +1039,53 @@ def test_curated_pexels_uses_relevant_monitor_photo_for_editing_timeline_and_pre
     assert context["creator"] == "Angel Moranchel"
     assert studio.Image.open(context["path"]).size == (1280, 720)
     assert downloaded == [monitor_url, microphone_url]
+
+
+def test_curated_launch_video_adapter_preserves_motion_source_and_item_rights(monkeypatch, tmp_path):
+    studio_module = closure._studio()
+    target = tmp_path / "pexels_launch_video_15517230.mp4"
+    downloads = []
+
+    def fake_download(url, path, **kwargs):
+        downloads.append(url)
+        Path(path).write_bytes(b"mocked-but-nonempty-mp4-bytes" * 2000)
+        return Path(path)
+
+    def fake_probe(path):
+        return {
+            "format": {"duration": "12.0"},
+            "streams": [{
+                "codec_type": "video", "codec_name": "h264",
+                "width": 3840, "height": 2160, "avg_frame_rate": "60/1",
+            }],
+        }
+
+    monkeypatch.setattr(studio_module, "download", fake_download)
+    monkeypatch.setattr(studio_module, "ffprobe_json", fake_probe)
+    monkeypatch.setattr(studio_module, "probe_duration", lambda path: 12.0)
+    monkeypatch.setattr(studio_module, "FAST_MODE", True)
+
+    row = studio_module._curated_pexels_launch_video({
+        "topic": "AI Infinity launch",
+        "title": "AI Infinity launch",
+        "heading": "Core principle — AI Infinity launch",
+        "visual_focus": "close-up of an editing timeline moving across a computer screen",
+        "visual_query": "content creator editing timeline video editing workstation",
+    }, tmp_path, 3)
+
+    assert row is not None
+    assert row["kind"] == "video"
+    assert row["source"] == "Pexels curated free editorial video"
+    assert row["source_id"] == 15517230
+    assert row["source_url"] == "https://www.pexels.com/video/a-computer-screen-showing-a-video-editing-screen-15517230/"
+    assert row["creator"] == "Ludovic Delot"
+    assert row["license"] == "Pexels License"
+    assert row["license_url"] == "https://www.pexels.com/license/"
+    assert row["commercial_use_state"] == "commercial_use_allowed_under_provider_terms"
+    assert row["validated_media"] is True
+    assert row["resolution"] == [3840, 2160]
+    assert downloads == ["https://videos.pexels.com/video-files/15517230/15517230-uhd_3840_2160_60fps.mp4"]
+    assert target.is_file()
 
 
 def test_pixabay_image_adapter_preserves_asset_identity_and_license(monkeypatch, tmp_path):

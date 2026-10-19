@@ -136,6 +136,8 @@ def _objective_media_qc(path: Path) -> Dict[str, Any]:
         "freeze_ok": True,
         "audio_peak_db": None,
         "audio_clipping_ok": True,
+        "audio_integrated_lufs": None,
+        "audio_loudness_ok": False,
         "scan_ok": True,
         "truthful": True,
     }
@@ -175,6 +177,29 @@ def _objective_media_qc(path: Path) -> Dict[str, Any]:
     except Exception as exc:
         out["scan_ok"] = False
         out["audio_scan_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+    # Measure the completed mix using EBU R128 loudness analysis. A signal can
+    # avoid clipping and still be far too quiet; the previously inspected launch
+    # export measured about -27.8 LUFS. Keep a broad delivery window here and
+    # normalize in the render path rather than inventing a passing score.
+    try:
+        cmd = [
+            "ffmpeg", "-hide_banner", "-nostats", "-i", str(path),
+            "-vn", "-af", "ebur128=framelog=verbose", "-f", "null", "-",
+        ]
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        log = (p.stderr or "") + (p.stdout or "")
+        values = re.findall(r"(?m)^\\s*I:\\s*(-?[0-9]+(?:\\.[0-9]+)?)\\s*LUFS\\s*$", log)
+        if values:
+            integrated = float(values[-1])
+            out["audio_integrated_lufs"] = integrated
+            out["audio_loudness_ok"] = -22.0 <= integrated <= -12.0
+        else:
+            out["audio_loudness_ok"] = False
+            out["scan_ok"] = False
+    except Exception as exc:
+        out["audio_loudness_ok"] = False
+        out["scan_ok"] = False
+        out["audio_loudness_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
     return out
 
 def _public_path(project_id: str, asset_name: str) -> str:
@@ -309,6 +334,28 @@ def _minimum_professional_scene_count(req: Dict[str, Any]) -> int:
         duration = 0.0
     if duration < 8:
         return 1
+
+    output_format = str(req.get("format") or "").strip().lower()
+    if output_format in {"short", "shorts", "reel", "tiktok"}:
+        # A short-form piece still needs purposeful coverage, but does not inherit
+        # the longer branded-film profile.
+        return min(5, max(3, int((duration + 11.999) // 12)))
+
+    launch_profile = bool(re.search(
+        r"\b(?:launch|promotional? video|promo film|brand film|product film|product launch|trailer)\b",
+        brief, re.I,
+    ))
+    if launch_profile and duration >= 30:
+        # Branded launch work has eight distinct narrative beats at up to 60s.
+        # Longer requests remain capped at eight in the constrained renderer.
+        return min(8, max(4, int((duration + 7.499) // 7.5)))
+
+    # A normal 45-90 second landscape video cannot be VERIFIED on four scene
+    # masters: the previous 60-second example passed while holding four stills
+    # for roughly fifteen seconds each. Eight shots are the minimum for this
+    # duration band. The scene hash gate below still requires unique source bytes.
+    if duration >= 45:
+        return 8
     return min(8, max(3, int((duration + 14.999) // 15)))
 
 
@@ -739,6 +786,12 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
             checks["black_duration_max"] = float(media_qc.get("black_duration_max") or 0)
             checks["freeze_duration_max"] = float(media_qc.get("freeze_duration_max") or 0)
             checks["audio_peak_db"] = media_qc.get("audio_peak_db")
+            checks["audio_integrated_lufs"] = media_qc.get("audio_integrated_lufs")
+            checks["audio_loudness_ok"] = bool(media_qc.get("audio_loudness_ok"))
+            if not checks["audio_loudness_ok"]:
+                failures.append(
+                    f"integrated audio loudness outside accepted delivery range: {checks['audio_integrated_lufs']} LUFS"
+                )
             if not checks["black_frame_ok"]:
                 failures.append(f"prolonged black frame detected ({checks['black_duration_max']:.2f}s)")
             if not checks["freeze_ok"]:
@@ -766,6 +819,23 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
             minimum = 1280 if fast else 1920
             checks["resolution_ok"] = max(width, height) >= minimum and min(width, height) >= 720
             checks["resolution"] = [width, height]
+            try:
+                fps_parts = str(v.get("avg_frame_rate") or v.get("r_frame_rate") or "0/0").split("/", 1)
+                frame_rate = float(fps_parts[0]) / max(1e-9, float(fps_parts[1]))
+            except (TypeError, ValueError, ZeroDivisionError):
+                frame_rate = 0.0
+            checks["frame_rate_fps"] = round(frame_rate, 3)
+            checks["frame_rate_ok"] = frame_rate >= 23.9
+            checks["color_primaries"] = str(v.get("color_primaries") or "")
+            checks["color_transfer"] = str(v.get("color_transfer") or "")
+            checks["color_space"] = str(v.get("color_space") or "")
+            checks["bt709_sdr_declared"] = (
+                checks["color_primaries"] == "bt709"
+                and checks["color_transfer"] == "bt709"
+                and checks["color_space"] == "bt709"
+            )
+            if not checks["frame_rate_ok"]:
+                failures.append(f"final video frame rate below 24fps delivery profile: {frame_rate:.3f}fps")
             expected_ratio_name = str(expected_req.get("aspect_ratio") or "16:9").strip()
             expected_ratio = {"16:9": 16/9, "9:16": 9/16, "1:1": 1.0, "4:5": 4/5}.get(expected_ratio_name)
             actual_ratio = (width / height) if width > 0 and height > 0 else 0.0
@@ -819,6 +889,17 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
 
     visual_rows = _source_assets(p)
     checks["visual_acquisition_failures"] = _visual_acquisition_diagnostics(visual_rows)
+    launch_profile_text = " ".join(
+        str(expected_req.get(k) or "") for k in ("objective", "topic", "title")
+    )
+    cinematic_launch_profile = bool(
+        video_quality_gate_required
+        and re.search(
+            r"\\b(?:launch|promotional? video|promo film|brand film|product film|product launch|trailer)\\b",
+            launch_profile_text, re.I,
+        )
+        and float(checks.get("requested_duration") or 0) >= 30
+    )
     scene_files = []
     try:
         scene_files = sorted(_studio()._project_dir(project_id).glob("scene_*.mp4"))
@@ -881,6 +962,31 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         failures.append(
             f"professional visual diversity failed: {visual_diversity.get('unique_visual_hashes', 0)} unique "
             f"visual(s), {required_professional_unique} required across the rendered scenes"
+        )
+
+    # The branded launch profile must contain actual source-motion footage,
+    # not eight unique still images with a Ken Burns filter. Count only source
+    # video assets with complete item-level license/creator evidence.
+    motion_sources = 0
+    for row in visual_rows:
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        if (
+            str(metadata.get("kind") or "").lower() == "video"
+            and str(metadata.get("source_url") or "").strip()
+            and str(metadata.get("license_url") or "").strip()
+            and _rights_evidence_state(metadata) == "cleared"
+        ):
+            motion_sources += 1
+    checks["cinematic_launch_profile"] = cinematic_launch_profile
+    checks["verified_motion_source_count"] = motion_sources
+    checks["minimum_motion_source_count"] = minimum_scene_count if cinematic_launch_profile else 0
+    checks["professional_motion_coverage_passed"] = (
+        not cinematic_launch_profile or motion_sources >= minimum_scene_count
+    )
+    if cinematic_launch_profile and not checks["professional_motion_coverage_passed"]:
+        failures.append(
+            f"cinematic launch motion coverage failed: {motion_sources} source-motion scene(s), "
+            f"{minimum_scene_count} required; still-image animation is not a substitute"
         )
 
     script_path = files.get("script.md")

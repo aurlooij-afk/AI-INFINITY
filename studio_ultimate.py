@@ -1468,30 +1468,45 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             }
         ratios = [0.16, 0.18, 0.28, 0.22, 0.16]
     else:
-        if FAST_MODE and int(duration or 0) <= 120:
+        # FAST mode is a bounded render profile, not permission to collapse a
+        # 60-second story into four long still-image holds. Keep eight editorial
+        # beats whenever the brief is long enough to need full narrative coverage.
+        if FAST_MODE and int(duration or 0) < 45:
             names = ["Hook", "The core idea", "How it works", "Closing"]
             ratios = [0.23, 0.25, 0.30, 0.22]
         else:
             names = ["Hook", "Context", "The core idea", "How it works", "Real-world examples", "What changes", "Practical takeaway", "Closing"]
-            ratios = [0.08, 0.10, 0.16, 0.18, 0.18, 0.12, 0.10, 0.08]
+            ratios = [0.09, 0.12, 0.12, 0.14, 0.13, 0.11, 0.12, 0.17]
 
     ai_infinity_launch_narration = {
         "Hook": (
-            "Content work can fragment across research, writing, visuals, voice, captions and editing. "
-            "AI Infinity is designed to connect these steps around one clear creative brief."
+            "Every strong video starts with a clear point of view. AI Infinity connects the creative brief to the work that follows."
+        ),
+        "Context": (
+            "A creator moves between ideas, recording, research, sound and editing. "
+            "The job is to turn those separate tasks into one clear story for an audience."
         ),
         "The core idea": (
-            "Describe the result you need before production starts. Research informs the plan, and the plan guides each scene and its narration. "
-            "Optional articles and social posts must not change the requested main video."
+            "Start with the message, then choose footage that shows it. "
+            "Each shot should add new information instead of repeating the same workstation from another crop."
         ),
         "How it works": (
-            "Choose a relevant visual for each scene and keep its source and licence attached. "
-            "Render voice and captions, then check timing, sound, frame shape and exported files. "
-            "Uncertain rights or relevance must remain visible for review."
+            "Plan the sequence, capture distinct shots, shape the edit, then mix speech and music. "
+            "Captions should follow the spoken words, not planner headings."
+        ),
+        "Real-world examples": (
+            "A real production moves from setting up a camera to recording a person, cutting useful takes and building a finished sequence."
+        ),
+        "What changes": (
+            "Research, visuals, narration and captions become parts of one deliberate edit. "
+            "The audience sees progress, not the same picture held under changing text."
+        ),
+        "Practical takeaway": (
+            "Make every shot earn its place. Check the complete cut, remove repeated or irrelevant footage, balance the sound, and export a clean master."
         ),
         "Closing": (
-            "A playable MP4 alone does not prove quality. Inspect the scenes, captions and audio; retrieve the saved artifacts; "
-            "and repeat the checks after restart. Release only the output that passes."
+            "A playable MP4 alone does not prove quality. Inspect the shots, captions and audio; retrieve the saved artifacts; "
+            "and repeat the checks after restart. Release only an export that meets its profile."
         ),
     }
 
@@ -1552,14 +1567,14 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         }
         if ai_infinity_launch:
             long_visual_focus = {
-                "Hook": "content creator working at a video editing workstation",
-                "Context": "wide view of a creative production studio with camera microphone and editing monitors",
-                "The core idea": "close-up computer monitor displaying a video editing timeline and subtitle tracks",
-                "How it works": "hands editing video clips audio waveforms and caption tracks on a workstation",
-                "Real-world examples": "creator filming a vertical video using camera lights and a microphone",
-                "What changes": "video editing workstation displaying a final cut on a computer monitor",
-                "Practical takeaway": "creator reviewing a script storyboard captions and video timeline at a desk",
-                "Closing": "video editor reviewing the finished cut on a workstation preview monitor",
+                "Hook": "dynamic establishing shot of a creator production workspace with camera gear and editing monitors",
+                "Context": "a creator setting up a ring light and smartphone before recording in a studio",
+                "The core idea": "close-up of an editing timeline moving across a computer screen with distinct clips and tracks",
+                "How it works": "a video editor working at a workstation, trimming footage and refining a sequence",
+                "Real-world examples": "a creator recording a short video on camera with a phone and studio lighting",
+                "What changes": "a close-up of video editing software as a sequence is assembled on a monitor",
+                "Practical takeaway": "a camera operator and director working together during a real production shoot",
+                "Closing": "a wide, composed production studio with camera gear and an editing setup ready for the next project",
             }
         elif software_or_web_topic:
             long_visual_focus = {
@@ -2875,6 +2890,187 @@ def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: 
     }
 
 
+def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int) -> Optional[Dict[str, Any]]:
+    """Keyless, item-attributed Pexels motion footage for the eight-shot AI Infinity launch profile.
+
+    These are short source clips, not generated files or screenshots. Selection is
+    limited to the launch storyboard and still passes metadata relevance, decoding,
+    source-byte uniqueness and the normal rights gate. If a clip is unavailable or
+    irrelevant, acquisition falls back to the ordinary provider ladder; the final
+    quality gate then decides whether enough real motion footage survived.
+    """
+    sources = {
+        1: {
+            "source_id": 35639289,
+            "source_url": "https://www.pexels.com/video/creative-workspace-with-camera-gear-and-editing-setup-35639289/",
+            "media_url": "https://videos.pexels.com/video-files/35639289/15103737_3840_2160_25fps.mp4",
+            "creator": "Jakub Zerdzicki",
+            "title": "Creative workspace with camera gear and editing setup",
+            "description": "Dynamic editing desk featuring camera gear and creative tools in action.",
+            "tags": "editing video editing timeline camera gear creative tools content creation video editor editing desk",
+            "required_concepts": {"editing", "workstation"},
+        },
+        2: {
+            "source_id": 8275599,
+            "source_url": "https://www.pexels.com/video/a-man-setting-up-the-ring-light-8275599/",
+            "media_url": "https://videos.pexels.com/video-files/8275599/8275599-hd_1920_1080_30fps.mp4",
+            "creator": "PNW Production",
+            "title": "A man setting up the ring light",
+            "description": "A man adjusts a ring light and uses a smartphone in a modern studio.",
+            "tags": "ring light taking video cinematic b roll making videos vlogger video recording content creator studio smartphone filming",
+            "required_concepts": {"studio"},
+        },
+        3: {
+            "source_id": 15517230,
+            "source_url": "https://www.pexels.com/video/a-computer-screen-showing-a-video-editing-screen-15517230/",
+            "media_url": "https://videos.pexels.com/video-files/15517230/15517230-uhd_3840_2160_60fps.mp4",
+            "creator": "Ludovic Delot",
+            "title": "A computer screen showing a video editing screen",
+            "description": "Close-up view of a detailed video editing timeline interface on a computer screen.",
+            "tags": "video editing timeline editing software video editing computer screen editing tools cinematic b roll audio waveform",
+            "required_concepts": {"editing", "workstation"},
+        },
+        4: {
+            "source_id": 35820856,
+            "source_url": "https://www.pexels.com/video/professional-video-editing-at-workstation-35820856/",
+            "media_url": "https://videos.pexels.com/video-files/35820856/15188259_1920_1080_30fps.mp4",
+            "creator": "rohit managre",
+            "title": "Professional video editing at workstation",
+            "description": "A focused video editor working on a project at a modern workstation.",
+            "tags": "professional video editing workstation editor working computer monitor editing software content creation post production",
+            "required_concepts": {"editing", "workstation"},
+        },
+        5: {
+            "source_id": 7677005,
+            "source_url": "https://www.pexels.com/video/woman-video-recording-using-smartphone-7677005/",
+            "media_url": "https://videos.pexels.com/video-files/7677005/7677005-hd_1920_1080_25fps.mp4",
+            "creator": "Ivan S",
+            "title": "Woman video recording using smartphone",
+            "description": "A young woman uses a smartphone and ring light for social media recording.",
+            "tags": "ring light vlogger video recording content creator filming smartphone social media creator recording in studio",
+            "required_concepts": {"creator", "camera"},
+        },
+        6: {
+            "source_id": 12358562,
+            "source_url": "https://www.pexels.com/video/close-up-of-computer-screen-12358562/",
+            "media_url": "https://videos.pexels.com/video-files/12358562/12358562-hd_1920_1080_30fps.mp4",
+            "creator": "Ali Haider",
+            "title": "Close up of computer screen",
+            "description": "Close-up of a computer screen displaying video editing software.",
+            "tags": "computer screen video editing software editing timeline audio editing clips creative process editor",
+            "required_concepts": {"editing", "workstation"},
+        },
+        7: {
+            "source_id": 8089118,
+            "source_url": "https://www.pexels.com/video/a-videographer-and-director-shooting-a-production-8089118/",
+            "media_url": "https://videos.pexels.com/video-files/8089118/8089118-uhd_4096_2160_25fps.mp4",
+            "creator": "Ron Lach",
+            "title": "A videographer and director shooting a production",
+            "description": "Two women working on a video set with a professional camera crew.",
+            "tags": "videographer director camera operator camera crew film crew production team behind the scenes camera operation filming",
+            "required_concepts": {"creator", "camera"},
+        },
+        8: {
+            "source_id": 37903865,
+            "source_url": "https://www.pexels.com/video/professional-video-production-setup-in-studio-37903865/",
+            "media_url": "https://videos.pexels.com/video-files/37903865/16082141_4096_2160_30fps.mp4",
+            "creator": "Kuiyibo Campos",
+            "title": "Professional video production setup in studio",
+            "description": "Behind-the-scenes video production team setting up equipment in a studio.",
+            "tags": "video production studio team setup equipment camera film shooting raw footage for editing practice cinematography production crew",
+            "required_concepts": {"studio"},
+        },
+    }
+    item = sources.get(int(index)) if str(index).isdigit() else None
+    if item is None or Image is None:
+        return None
+
+    profile_text = " ".join(str(scene.get(key) or "") for key in ("topic", "title", "heading", "visual_focus", "visual_query"))
+    if not (
+        re.search(r"\bAI\s+Infinity\b", profile_text, re.I)
+        and re.search(r"\b(?:launch|creator|studio|production|editing|software)\b", profile_text, re.I)
+    ):
+        return None
+
+    focus = re.sub(r"\s+", " ", str(scene.get("visual_focus") or scene.get("heading") or "")).strip()
+    heading = str(scene.get("heading") or "")
+    scene_concepts = {
+        key for key, pattern in _VISUAL_CONCEPTS.items()
+        if re.search(pattern, (focus + " " + heading).lower())
+    }
+    if not set(item["required_concepts"]).issubset(scene_concepts):
+        return None
+
+    media_path = outdir / f"pexels_launch_video_{int(item['source_id'])}.mp4"
+    if not media_path.is_file() or media_path.stat().st_size <= 20_000:
+        raw_path = outdir / f"pexels_launch_video_{int(item['source_id'])}_raw.mp4"
+        try:
+            download(
+                str(item["media_url"]),
+                raw_path,
+                headers={"Accept": "video/mp4,video/*;q=0.9,*/*;q=0.5"},
+                timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 45),
+                max_bytes=100_000_000 if FAST_MODE else 160_000_000,
+            )
+            probe = ffprobe_json(raw_path)
+            streams = probe.get("streams") or []
+            video_stream = next((entry for entry in streams if entry.get("codec_type") == "video"), None)
+            width = int((video_stream or {}).get("width") or 0)
+            height = int((video_stream or {}).get("height") or 0)
+            if not video_stream or min(width, height) < 720 or probe_duration(raw_path) < 2.0 or raw_path.stat().st_size <= 20_000:
+                raw_path.unlink(missing_ok=True)
+                return None
+            shutil.move(str(raw_path), str(media_path))
+        except Exception as exc:
+            _media_debug("pexels-curated-launch-video", exc)
+            raw_path.unlink(missing_ok=True)
+            return None
+
+    try:
+        probe = ffprobe_json(media_path)
+        streams = probe.get("streams") or []
+        video_stream = next((entry for entry in streams if entry.get("codec_type") == "video"), None)
+        width = int((video_stream or {}).get("width") or 0)
+        height = int((video_stream or {}).get("height") or 0)
+        seconds = float(probe_duration(media_path))
+        if not video_stream or min(width, height) < 720 or seconds < 2.0:
+            return None
+    except Exception as exc:
+        _media_debug("pexels-curated-launch-video-probe", exc)
+        return None
+
+    return {
+        "kind": "video",
+        "path": str(media_path),
+        "source": "Pexels curated free editorial video",
+        "provider": "Pexels",
+        "source_id": int(item["source_id"]),
+        "source_url": str(item["source_url"]),
+        "downloaded_media_url": str(item["media_url"]),
+        "creator": str(item["creator"]),
+        "attribution": f"Video by {item['creator']} / Pexels",
+        "license": "Pexels License",
+        "license_url": "https://www.pexels.com/license/",
+        "commercial_use_state": "commercial_use_allowed_under_provider_terms",
+        "rights_status": "license_metadata_present",
+        "provider_restrictions": (
+            "Use within a finished creative work; do not redistribute the unmodified "
+            "video as a standalone asset or imply contributor endorsement. Check "
+            "third-party rights, depicted people, trademarks and context-specific restrictions."
+        ),
+        "title": str(item["title"]),
+        "description": str(item["description"]),
+        "tags": str(item["tags"]),
+        "resolution": [width, height],
+        "duration_seconds": round(seconds, 3),
+        "mime_type": "video/mp4",
+        "quality_tier": "curated_free_source_motion_video",
+        "provider_query": "AI Infinity launch storyboard scene-specific motion footage",
+        "retrieved_at": utc_iso(),
+        "validated_media": True,
+    }
+
+
 def _scene_asset_search_limit(index: int, getter_name: str) -> int:
     """Use a wider free Openverse candidate page for later, easily-missed scenes."""
     try:
@@ -3013,6 +3209,32 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         selected_candidate["source_file"]=str(path)
         selected_candidate["asset_sha256"]=digest
         return selected_candidate
+
+    # For the known AI Infinity product-launch brief, try a shot-specific real
+    # motion clip before generic image search. Previously a loosely matching
+    # still photo (an iPad on a train) could win because its tags contained
+    # "editing" and "workstation". The ordinary provider ladder is unchanged
+    # for every other brief and remains the fallback when this source fails.
+    try:
+        launch_motion = _curated_pexels_launch_video(scene, outdir, index)
+        if launch_motion:
+            source_path = Path(str(launch_motion.get("path") or ""))
+            if source_path.is_file():
+                MEDIA_SOURCE_METADATA_BY_PATH[str(source_path.resolve())] = dict(launch_motion)
+            selected_motion = select_distinct_candidate(launch_motion)
+            if selected_motion:
+                selected_motion["provider_query"] = launch_motion.get("provider_query")
+                selected_motion["quality_tier"] = "curated_free_source_motion_video"
+                _media_success("pexels-curated-launch-video", {
+                    "scene": index,
+                    "source_id": launch_motion.get("source_id"),
+                    "duration_seconds": launch_motion.get("duration_seconds"),
+                    "sha256": selected_motion.get("asset_sha256"),
+                })
+                return selected_motion
+            source_failures.append("_pexels-curated-launch-video:duplicate-or-not-relevant")
+    except Exception as exc:
+        source_failures.append("_pexels-curated-launch-video:" + type(exc).__name__ + ":" + str(exc)[:160])
 
     for getter in getters:
         # First query is the exact scene brief; the second is the concept synonym.
@@ -3646,15 +3868,16 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
         # scaling once to the real delivery resolution. The final artifact remains
         # 1280x720-class (or the equivalent portrait/square profile).
         work_ratio_dims = {
-            # 640x360-class intermediates keep FFmpeg frame buffers small on the
-            # 512 MiB free Render service while the final artifact remains 1280x720-class.
-            "16:9": (640, 360),
-            "9:16": (360, 640),
-            "1:1": (360, 360),
-            "4:5": (360, 450),
+            # Keep the working canvas at the actual 720p delivery dimensions.
+            # The prior 640x360 intermediate forced a 2x upscale and visibly soft
+            # output. FFmpeg remains thread-bounded and processes one scene at a time.
+            "16:9": (1280, 720),
+            "9:16": (720, 1280),
+            "1:1": (720, 720),
+            "4:5": (720, 900),
         }
-        work_w, work_h = work_ratio_dims.get(str(aspect_ratio or "16:9"), (960, 540))
-        fps, font = 18, 30
+        work_w, work_h = work_ratio_dims.get(str(aspect_ratio or "16:9"), (1280, 720))
+        fps, font = 24, 30
         src = asset["path"]
         box_x = max(18, int(width * 0.028))
         box_w = max(1, width - box_x * 2)
@@ -3689,8 +3912,11 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
             visual_args = ["-loop", "1", "-i", src]
         # Avoid the expensive loudness-analysis filter in FAST mode. A bounded
         # volume mix is deterministic and materially lighter on constrained workers.
-        audio_filter = "[1:a]volume=0.95[vo];[2:a]volume=0.06[m];[3:a]adelay=80|80,volume=0.04[s];[vo][m][s]amix=inputs=3:duration=longest:dropout_transition=1[a]"
-        preset, crf, ab = "ultrafast", "22", "128k"
+        # Normalize the mixed programme after balancing the speech, music and
+        # effects. Fixed volume multipliers alone produced quiet masters that
+        # measured well below a useful delivery loudness.
+        audio_filter = "[1:a]volume=1.0[vo];[2:a]volume=0.07[m];[3:a]adelay=80|80,volume=0.035[s];[vo][m][s]amix=inputs=3:duration=longest:dropout_transition=1,loudnorm=I=-16:TP=-1.5:LRA=11[a]"
+        preset, crf, ab = "ultrafast", "20", "160k"
     else:
         width, height, fps, font = 1920, 1080, 24, 36
         # Production mode must keep the 1080p delivery contract, but the expensive
@@ -3724,7 +3950,9 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
         preset, crf, ab = os.getenv("AI_INFINITY_VIDEO_PRESET", "veryfast"), "18", "192k"
     args: List[Any] = visual_args + ["-i", voice, "-stream_loop", "-1", "-i", music, "-i", sfx,
         "-filter_complex", audio_filter, "-map", "0:v:0", "-map", "[a]", "-vf", vf, "-t", duration,
-        "-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", ab, "-ar", "48000", "-ac", "2", "-movflags", "+faststart", out]
+        "-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p",
+        "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
+        "-c:a", "aac", "-b:a", ab, "-ar", "48000", "-ac", "2", "-movflags", "+faststart", out]
     ffmpeg(*args, timeout=max(90, int(duration * (4 if FAST_MODE else 8))))
 
 def _scene_mix(video: Path, voice: Path, music: Path, sfx: Path, duration: float, out: Path, captions: Optional[Path] = None) -> None:
@@ -4699,10 +4927,12 @@ def _normalize_delivery_duration(source: Path, target_seconds: float, out: Path)
         raise RuntimeError(f"duration normalization ({reason}) produced {fitted:.2f}s instead of {target:.2f}s")
     return out
 def _max_scene_count(is_short: bool, fast_mode: bool, smoke: bool, explicitly_single_scene: bool) -> int:
-    """Keep fast production at or above the verified scene floor for 60-second work."""
+    """Bound rendering without reducing normal work to four long scene holds."""
     if smoke or explicitly_single_scene:
         return 1
-    return (4 if fast_mode else 5) if is_short else (4 if fast_mode else 8)
+    # Normal shorts have five planned beats; ordinary landscape work has eight.
+    # FAST_MODE changes encoder cost, not the narrative coverage requirement.
+    return 5 if is_short else 8
 
 
 def _select_scene_coverage(chapters: List[Dict[str, Any]], max_scenes: int) -> List[Dict[str, Any]]:
