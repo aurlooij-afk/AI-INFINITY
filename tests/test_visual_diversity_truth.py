@@ -1029,6 +1029,28 @@ def test_document_grounded_fallback_does_not_replace_uploaded_points_with_launch
     assert "Every strong video starts with a clear point of view" not in narration
 
 
+
+def test_uploaded_source_parser_handles_pdf_extractors_that_concatenate_heading_boundaries():
+    # Some PDF extractors return "Operating SystemBrief:" with no whitespace.
+    # The title field must not consume and discard the source's first substantive section.
+    extracted = (
+        "Title: AI Infinity Creator Operating System"
+        "Brief: AI Infinity connects research writing visual selection and editing."
+        "Source rights: Record creator item page license terms and file SHA-256."
+        "Delivery: Render narration captions video article audio and social copy."
+        "Quality: Verify duration aspect ratio media decode and audio."
+        "Recovery: Reload saved projects and confirm artifact checksums after restart."
+    )
+    points = studio._uploaded_source_narration_points({"sources":[{
+        "source":"user upload","title":"acceptance-source.pdf",
+        "snippet":extracted,"text_extracted":True,
+    }]})
+    assert len(points) == 5, points
+    assert points[0] == "AI Infinity connects research, writing, visual selection, and editing.", points
+    assert any("captions" in point.lower() and "social copy" in point.lower() for point in points)
+
+
+
 def test_creator_operating_system_topic_is_not_misclassified_as_launch_film():
     assert studio._is_explicit_ai_infinity_launch_brief("AI Infinity Creator Operating System") is False
     assert studio._is_explicit_ai_infinity_launch_brief("Create an AI Infinity launch video") is True

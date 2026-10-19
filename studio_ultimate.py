@@ -1391,7 +1391,7 @@ def _uploaded_source_narration_points(research: Dict[str, Any]) -> List[str]:
         return []
 
     label_pattern = re.compile(
-        r"(?i)(?<!\w)(title|subject|brief|source\s+rights|delivery|quality|recovery|"
+        r"(?i)(title|subject|brief|source\s+rights|delivery|quality|recovery|"
         r"abstract|summary|overview|background|objective|purpose|findings|results|"
         r"recommendations?|next\s+steps|conclusion|introduction)\s*:"
     )

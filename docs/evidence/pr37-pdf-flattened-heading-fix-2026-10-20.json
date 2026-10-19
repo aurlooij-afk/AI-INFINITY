@@ -1,0 +1,22 @@
+{
+  "schema": "ai-infinity-pr37-pdf-flattened-heading-fix.v1",
+  "recorded_at_utc": "2026-10-19T23:27:39.021Z",
+  "repository": "aurlooij-afk/AI-INFINITY",
+  "pull_request": 37,
+  "parent_sha": "7212cd942c3c4768474d04baafacd386d96d84fa",
+  "failure": {
+    "workflow_run_id": 39340902073,
+    "job_id": 118361912251,
+    "scenario": "tests/final_acceptance_suite.py::t3",
+    "observed_script": "PDF output now used Source rights, Delivery, Quality and Recovery points, but omitted the first substantive Brief section. Acceptance therefore still did not find the word 'editing' in the spoken script.",
+    "root_cause": "The PDF text extractor concatenated '...Creator Operating SystemBrief:' without whitespace. The source-section regex required a non-word boundary before 'Brief', so the title matcher swallowed the brief section and the extractor discarded it as title metadata."
+  },
+  "fix": {
+    "file": "studio_ultimate.py",
+    "change": "Recognize explicit colon-terminated section labels even when PDF extraction removes the boundary space; this preserves the Brief content while still skipping Title/Subject labels.",
+    "regression": "test_uploaded_source_parser_handles_pdf_extractors_that_concatenate_heading_boundaries",
+    "no_assertion_weakened": true
+  },
+  "merge": false,
+  "deploy": false
+}
