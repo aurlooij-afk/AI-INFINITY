@@ -5359,6 +5359,60 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         if not chapters:
             raise RuntimeError("creative engine returned no chapters")
 
+        # Enforce uploaded-source use after whichever planner was selected. A model
+        # response can be structurally valid yet ignore the extracted document.
+        # Never override an explicit user storyboard; otherwise bind scene narration
+        # to distinct extracted source points and make the binding auditable by hash.
+        uploaded_points = _uploaded_source_narration_points({"sources": reference_sources})
+        if uploaded_points and not override_scenes:
+            grounded = 0
+            point_hashes = []
+            for point_index, chapter in enumerate(chapters):
+                chapter.pop("source_grounding", None)
+                if point_index >= len(uploaded_points):
+                    continue
+                source_point = re.sub(r"\\s+", " ", str(uploaded_points[point_index])).strip()
+                point_hash = hashlib.sha256(source_point.encode("utf-8")).hexdigest()
+                chapter["narration"] = source_point
+                chapter["source_grounding"] = {
+                    "origin": "user_upload",
+                    "point_index": point_index + 1,
+                    "point_sha256": point_hash,
+                }
+                point_hashes.append(point_hash)
+                grounded += 1
+            plan["chapters"] = chapters
+            plan["source_context"] = {
+                "mode": "uploaded_document_grounded",
+                "source_point_count": len(uploaded_points),
+                "uploaded_source_points_used": grounded,
+                "grounded_scene_count": grounded,
+                "scene_count": len(chapters),
+                "coverage_complete": bool(chapters) and grounded == len(chapters),
+                "source_point_sha256": point_hashes,
+                "source_file_count": sum(
+                    1 for row in reference_sources
+                    if str(row.get("source") or "").lower() == "user upload"
+                    and row.get("text_extracted") is True
+                ),
+                "source_file_sha256": [
+                    str(row.get("sha256")) for row in reference_sources
+                    if str(row.get("source") or "").lower() == "user upload"
+                    and row.get("text_extracted") is True and row.get("sha256")
+                ],
+                "source_claims_invented": False,
+            }
+            _update_project(project_id, blueprint_json=jdump(plan))
+            audit_event(project_id, "uploaded_source_narration_applied", {
+                "source_point_count": len(uploaded_points),
+                "grounded_scene_count": grounded,
+                "scene_count": len(chapters),
+                "coverage_complete": plan["source_context"]["coverage_complete"],
+                "source_point_sha256": point_hashes,
+                "source_file_sha256": plan["source_context"]["source_file_sha256"],
+                "truthful": True,
+            })
+
         # Avoid burning generic planner labels such as "Hook" into the media.
         # Use the selected language's concise editorial overlay instead.
         generic_labels = {
