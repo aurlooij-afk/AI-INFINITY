@@ -350,14 +350,15 @@ def test_ai_infinity_launch_plan_searches_real_creator_workflow_scenes(monkeypat
         "cinematic, intelligent, useful", {"sources": []}, "English",
     )
     chapters = plan["chapters"]
-    assert len(chapters) == 4
+    assert len(chapters) == 8
     assert all(
         chapter["visual_search_subject"] == "content creator"
         for chapter in chapters
     )
     assert len({chapter["visual_focus"] for chapter in chapters}) == len(chapters)
     assert any("editing timeline" in chapter["visual_query"] for chapter in chapters)
-    assert any("preview monitor" in chapter["visual_query"] for chapter in chapters)
+    assert any("camera" in chapter["visual_query"].lower() for chapter in chapters)
+    assert any("production" in chapter["visual_query"].lower() for chapter in chapters)
 
 
 
@@ -375,10 +376,10 @@ def test_explicit_short_form_selection_is_not_silently_rewritten():
 
 
 
-def test_fast_mode_scene_budget_meets_sixty_second_professional_floor():
+def test_fast_mode_scene_budget_keeps_professional_coverage_in_all_profiles():
     studio = closure._studio()
-    assert studio._max_scene_count(True, True, False, False) == 4
-    assert studio._max_scene_count(False, True, False, False) == 4
+    assert studio._max_scene_count(True, True, False, False) == 5
+    assert studio._max_scene_count(False, True, False, False) == 8
     assert studio._max_scene_count(True, False, False, False) == 5
     assert studio._max_scene_count(True, True, False, True) == 1
     assert studio._max_scene_count(True, True, True, False) == 1

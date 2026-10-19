@@ -1572,7 +1572,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "The core idea": "close-up of an editing timeline moving across a computer screen with distinct clips and tracks",
                 "How it works": "a video editor working at a workstation, trimming footage and refining a sequence",
                 "Real-world examples": "a creator recording a short video on camera with a phone and studio lighting",
-                "What changes": "a close-up of video editing software as a sequence is assembled on a monitor",
+                "What changes": "a close-up of video editing software on a workstation monitor as the final cut is assembled",
                 "Practical takeaway": "a camera operator and director working together during a real production shoot",
                 "Closing": "a wide, composed production studio with camera gear and an editing setup ready for the next project",
             }
