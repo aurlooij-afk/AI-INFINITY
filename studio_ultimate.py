@@ -1884,7 +1884,7 @@ _VISUAL_CONCEPTS = {
     "software_development": r"\b(?:programming|programmer|coding|coder|software developer|web developer|developer|source code|code editor|python code|web application|web app)\b",
     "captions": r"\b(?:captions?|subtitles?|closed captions?|srt|subtitle tracks?)\b",
     "storyboard": r"\b(?:storyboard|script|screenplay|shot list|outline|production plan)\b",
-    "finished_video": r"\b(?:finished (?:film|video|edit|cut)|final (?:cut|edit|video)|export(?:ed)? video|rendered video|playback|video player|video playback|preview monitor)\b",
+    "finished_video": r"\b(?:finished (?:(?:edited )?video|film|edit|cut)|final (?:cut|edit|video)|export(?:ed)? video|rendered video|playback|video player|video playback|preview monitor)\b",
     "raw_final": r"\b(?:before[- ]and[- ]after|before/after|raw footage|unedited footage|finished edit|rough cut|final edit)\b",
 }
 
@@ -2981,10 +2981,11 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
             "required_concepts": {"studio"},
         },
     }
-    item = sources.get(int(index)) if str(index).isdigit() else None
-    if item is None or Image is None:
+    # Scene ordinals are a hint, not an asset specification: a five-scene short's
+    # closing shot can mean finished playback while an eight-scene storyboard's
+    # scene 5 may mean a creator filming. Match source footage to the visible intent.
+    if not isinstance(scene, dict):
         return None
-
     profile_text = " ".join(str(scene.get(key) or "") for key in ("topic", "title", "heading", "visual_focus", "visual_query"))
     if not (
         re.search(r"\bAI\s+Infinity\b", profile_text, re.I)
@@ -2998,77 +2999,164 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
         key for key, pattern in _VISUAL_CONCEPTS.items()
         if re.search(pattern, (focus + " " + heading).lower())
     }
-    if not set(item["required_concepts"]).issubset(scene_concepts):
+    preferred_index = int(index) if str(index).isdigit() else None
+    search_subject = str(scene.get("visual_search_subject") or scene.get("topic") or "content creator")
+
+    focus_terms = {
+        token for token in re.findall(r"[a-z0-9]{4,}", focus.lower())
+        if token not in {
+            "about", "after", "also", "been", "being", "close", "from", "have",
+            "into", "large", "make", "making", "more", "near", "over", "scene",
+            "show", "showing", "that", "the", "their", "then", "this", "video",
+            "view", "with", "within", "your",
+        }
+    }
+    ranked = []
+    for source_index, candidate in sources.items():
+        required = set(candidate.get("required_concepts") or ())
+        direct_match = bool(required) and required.issubset(scene_concepts)
+        # A display/finished-playback brief can legitimately use a clip showing
+        # an editing workstation. This bridge is narrowly scoped to that explicit
+        # final-video intent; unrelated camera/studio clips still fail closed.
+        final_screen_bridge = (
+            "finished_video" in scene_concepts
+            and "workstation" in scene_concepts
+            and required == {"editing", "workstation"}
+        )
+        if not (direct_match or final_screen_bridge):
+            continue
+
+        metadata_text = " ".join((
+            str(candidate.get("title") or ""),
+            str(candidate.get("description") or ""),
+            str(candidate.get("tags") or ""),
+        ))
+        metadata_record = {
+            "title": candidate.get("title"),
+            "description": candidate.get("description"),
+            "tags": candidate.get("tags"),
+        }
+        if not _visual_candidate_relevant(metadata_record, search_subject, focus):
+            continue
+        metadata_terms = set(re.findall(r"[a-z0-9]{4,}", metadata_text.lower()))
+        lexical_overlap = len(focus_terms & metadata_terms)
+        screen_focus = bool(re.search(r"\b(?:screen|display|monitor|playback|finished video|final cut)\b", focus, re.I))
+        screen_evidence = bool(re.search(r"\b(?:screen|display|monitor|playback|video player|finished video|final cut)\b", metadata_text, re.I))
+        screen_bonus = 4 if screen_focus and screen_evidence else 0
+        high_cost_uhd = bool(re.search(r"(?:3840|4096)_2160|uhd|60fps", str(candidate.get("media_url") or ""), re.I))
+        resolution_penalty = 3 if FAST_MODE and high_cost_uhd else 0
+        preferred_bonus = 1 if source_index == preferred_index else 0
+        score = len(required & scene_concepts) * 10 + lexical_overlap + screen_bonus + preferred_bonus - resolution_penalty
+        ranked.append((score, source_index, candidate))
+
+    ranked.sort(key=lambda row: (-row[0], row[1]))
+    if not ranked:
+        MEDIA_DEBUG_ERRORS["pexels-curated-launch-video"] = "no_semantically_matching_curated_clip"
         return None
 
-    media_path = outdir / f"pexels_launch_video_{int(item['source_id'])}.mp4"
-    if not media_path.is_file() or media_path.stat().st_size <= 20_000:
-        raw_path = outdir / f"pexels_launch_video_{int(item['source_id'])}_raw.mp4"
+    # Skip source bytes already selected for another scene, then try the next
+    # relevant candidate on timeout or media validation failure instead of falling
+    # straight to a generated illustration after one bad URL.
+    used_hashes = set()
+    for selected_path in outdir.glob("selected_visual_*"):
         try:
-            download(
-                str(item["media_url"]),
-                raw_path,
-                headers={"Accept": "video/mp4,video/*;q=0.9,*/*;q=0.5"},
-                timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 45),
-                max_bytes=100_000_000 if FAST_MODE else 160_000_000,
-            )
-            probe = ffprobe_json(raw_path)
+            if selected_path.is_file():
+                used_hashes.add(file_sha256(selected_path))
+        except Exception:
+            continue
+
+    last_error = "no_valid_distinct_clip"
+    for _, source_index, item in ranked:
+        source_id = int(item["source_id"])
+        media_path = outdir / f"pexels_launch_video_{source_id}.mp4"
+        try:
+            if not media_path.is_file() or media_path.stat().st_size <= 20_000:
+                raw_path = outdir / f"pexels_launch_video_{source_id}_raw.mp4"
+                raw_path.unlink(missing_ok=True)
+                download(
+                    str(item["media_url"]),
+                    raw_path,
+                    headers={"Accept": "video/mp4,video/*;q=0.9,*/*;q=0.5"},
+                    timeout=(max(FAST_REMOTE_TIMEOUT, 25) if FAST_MODE else 45),
+                    max_bytes=100_000_000 if FAST_MODE else 160_000_000,
+                )
+                raw_probe = ffprobe_json(raw_path)
+                raw_streams = raw_probe.get("streams") or []
+                raw_video = next((row for row in raw_streams if row.get("codec_type") == "video"), None)
+                raw_width = int((raw_video or {}).get("width") or 0)
+                raw_height = int((raw_video or {}).get("height") or 0)
+                if (
+                    not raw_video
+                    or min(raw_width, raw_height) < 720
+                    or probe_duration(raw_path) < 2.0
+                    or raw_path.stat().st_size <= 20_000
+                ):
+                    raw_path.unlink(missing_ok=True)
+                    last_error = f"source_{source_id}_failed_media_validation"
+                    continue
+                shutil.move(str(raw_path), str(media_path))
+
+            probe = ffprobe_json(media_path)
             streams = probe.get("streams") or []
-            video_stream = next((entry for entry in streams if entry.get("codec_type") == "video"), None)
+            video_stream = next((row for row in streams if row.get("codec_type") == "video"), None)
             width = int((video_stream or {}).get("width") or 0)
             height = int((video_stream or {}).get("height") or 0)
-            if not video_stream or min(width, height) < 720 or probe_duration(raw_path) < 2.0 or raw_path.stat().st_size <= 20_000:
-                raw_path.unlink(missing_ok=True)
-                return None
-            shutil.move(str(raw_path), str(media_path))
+            seconds = float(probe_duration(media_path))
+            if not video_stream or min(width, height) < 720 or seconds < 2.0 or media_path.stat().st_size <= 20_000:
+                media_path.unlink(missing_ok=True)
+                last_error = f"source_{source_id}_failed_media_validation"
+                continue
+
+            media_hash = file_sha256(media_path)
+            if media_hash in used_hashes:
+                last_error = f"source_{source_id}_duplicates_prior_scene"
+                continue
+
+            creator = str(item["creator"])
+            MEDIA_DEBUG_ERRORS.pop("pexels-curated-launch-video", None)
+            return {
+                "kind": "video",
+                "path": str(media_path),
+                "source": "Pexels curated free editorial video",
+                "provider": "Pexels",
+                "source_id": source_id,
+                "source_url": str(item["source_url"]),
+                "downloaded_media_url": str(item["media_url"]),
+                "creator": creator,
+                "attribution": f"Video by {creator} / Pexels",
+                "license": "Pexels License",
+                "license_url": "https://www.pexels.com/license/",
+                "commercial_use_state": "commercial_use_allowed_under_provider_terms",
+                "rights_status": "license_metadata_present",
+                "provider_restrictions": (
+                    "Use within a finished creative work; do not redistribute the unmodified "
+                    "video as a standalone asset or imply contributor endorsement. Check "
+                    "third-party rights, depicted people, trademarks and context-specific restrictions."
+                ),
+                "title": str(item["title"]),
+                "description": str(item["description"]),
+                "tags": str(item["tags"]),
+                "resolution": [width, height],
+                "duration_seconds": round(seconds, 3),
+                "mime_type": "video/mp4",
+                "quality_tier": "curated_free_source_motion_video",
+                "provider_query": "AI Infinity launch storyboard scene-specific motion footage",
+                "retrieved_at": utc_iso(),
+                "validated_media": True,
+                "selection_reason": "scene_concepts_and_source_metadata_match",
+                "selection_scene_index": source_index,
+            }
         except Exception as exc:
+            last_error = f"source_{source_id}_unavailable:{type(exc).__name__}"
             _media_debug("pexels-curated-launch-video", exc)
-            raw_path.unlink(missing_ok=True)
-            return None
+            try:
+                (outdir / f"pexels_launch_video_{source_id}_raw.mp4").unlink(missing_ok=True)
+            except Exception:
+                pass
+            continue
 
-    try:
-        probe = ffprobe_json(media_path)
-        streams = probe.get("streams") or []
-        video_stream = next((entry for entry in streams if entry.get("codec_type") == "video"), None)
-        width = int((video_stream or {}).get("width") or 0)
-        height = int((video_stream or {}).get("height") or 0)
-        seconds = float(probe_duration(media_path))
-        if not video_stream or min(width, height) < 720 or seconds < 2.0:
-            return None
-    except Exception as exc:
-        _media_debug("pexels-curated-launch-video-probe", exc)
-        return None
-
-    return {
-        "kind": "video",
-        "path": str(media_path),
-        "source": "Pexels curated free editorial video",
-        "provider": "Pexels",
-        "source_id": int(item["source_id"]),
-        "source_url": str(item["source_url"]),
-        "downloaded_media_url": str(item["media_url"]),
-        "creator": str(item["creator"]),
-        "attribution": f"Video by {item['creator']} / Pexels",
-        "license": "Pexels License",
-        "license_url": "https://www.pexels.com/license/",
-        "commercial_use_state": "commercial_use_allowed_under_provider_terms",
-        "rights_status": "license_metadata_present",
-        "provider_restrictions": (
-            "Use within a finished creative work; do not redistribute the unmodified "
-            "video as a standalone asset or imply contributor endorsement. Check "
-            "third-party rights, depicted people, trademarks and context-specific restrictions."
-        ),
-        "title": str(item["title"]),
-        "description": str(item["description"]),
-        "tags": str(item["tags"]),
-        "resolution": [width, height],
-        "duration_seconds": round(seconds, 3),
-        "mime_type": "video/mp4",
-        "quality_tier": "curated_free_source_motion_video",
-        "provider_query": "AI Infinity launch storyboard scene-specific motion footage",
-        "retrieved_at": utc_iso(),
-        "validated_media": True,
-    }
+    MEDIA_DEBUG_ERRORS["pexels-curated-launch-video"] = last_error
+    return None
 
 
 def _scene_asset_search_limit(index: int, getter_name: str) -> int:

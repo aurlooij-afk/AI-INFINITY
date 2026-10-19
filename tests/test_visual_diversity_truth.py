@@ -1089,6 +1089,129 @@ def test_curated_launch_video_adapter_preserves_motion_source_and_item_rights(mo
     assert target.is_file()
 
 
+def test_curated_launch_video_selects_by_scene_semantics_not_ordinal(monkeypatch, tmp_path):
+    module = closure._studio()
+    downloads = []
+
+    def fake_download(url, path, **kwargs):
+        downloads.append(url)
+        Path(path).write_bytes(b"mocked valid motion source bytes " * 1400)
+        return Path(path)
+
+    def fake_probe(path):
+        return {
+            "format": {"duration": "12.0"},
+            "streams": [{
+                "codec_type": "video", "codec_name": "h264",
+                "width": 1920, "height": 1080, "avg_frame_rate": "30/1",
+            }],
+        }
+
+    monkeypatch.setattr(module, "download", fake_download)
+    monkeypatch.setattr(module, "ffprobe_json", fake_probe)
+    monkeypatch.setattr(module, "probe_duration", lambda path: 12.0)
+    monkeypatch.setattr(module, "FAST_MODE", True)
+
+    # Scene 5 of the five-scene short storyboard is final playback, not a
+    # creator-filming shot. The old index-only mapping chose source 7677005.
+    row = module._curated_pexels_launch_video({
+        "topic": "AI Infinity launch",
+        "title": "AI Infinity launch",
+        "heading": "Takeaway",
+        "visual_focus": "finished edited video playing on a large studio display",
+        "visual_query": "content creator finished edited video studio display",
+        "visual_search_subject": "content creator",
+    }, tmp_path, 5)
+
+    assert row is not None, module.MEDIA_DEBUG_ERRORS.get("pexels-curated-launch-video")
+    assert row["kind"] == "video"
+    assert row["quality_tier"] == "curated_free_source_motion_video"
+    assert row["source_id"] in {12358562, 35820856}
+    assert row["source_id"] != 7677005
+    assert row["selection_reason"] == "scene_concepts_and_source_metadata_match"
+    assert row["source_url"].startswith("https://www.pexels.com/video/")
+    assert row["license_url"] == "https://www.pexels.com/license/"
+    assert row["validated_media"] is True
+    assert row["resolution"] == [1920, 1080]
+    assert len(downloads) == 1
+
+
+def test_curated_launch_video_retries_another_relevant_clip_after_download_failure(monkeypatch, tmp_path):
+    module = closure._studio()
+    downloads = []
+
+    def fake_download(url, path, **kwargs):
+        downloads.append(url)
+        if "/12358562/" in url:
+            raise TimeoutError("simulated timeout for preferred matching source")
+        Path(path).write_bytes(b"mocked valid motion source bytes " * 1400)
+        return Path(path)
+
+    def fake_probe(path):
+        return {
+            "format": {"duration": "12.0"},
+            "streams": [{
+                "codec_type": "video", "codec_name": "h264",
+                "width": 1920, "height": 1080, "avg_frame_rate": "30/1",
+            }],
+        }
+
+    monkeypatch.setattr(module, "download", fake_download)
+    monkeypatch.setattr(module, "ffprobe_json", fake_probe)
+    monkeypatch.setattr(module, "probe_duration", lambda path: 12.0)
+    monkeypatch.setattr(module, "FAST_MODE", True)
+
+    row = module._curated_pexels_launch_video({
+        "topic": "AI Infinity launch",
+        "title": "AI Infinity launch",
+        "heading": "Takeaway",
+        "visual_focus": "finished edited video playing on a large studio display",
+        "visual_query": "content creator finished edited video studio display",
+        "visual_search_subject": "content creator",
+    }, tmp_path, 5)
+
+    assert row is not None, module.MEDIA_DEBUG_ERRORS.get("pexels-curated-launch-video")
+    assert row["source_id"] == 35820856
+    assert len(downloads) == 2, downloads
+    assert downloads[0].endswith("/12358562-hd_1920_1080_30fps.mp4")
+    assert downloads[1].endswith("/15188259_1920_1080_30fps.mp4")
+
+
+def test_curated_launch_video_keeps_creator_filming_clip_when_that_scene_is_requested(monkeypatch, tmp_path):
+    module = closure._studio()
+
+    def fake_download(url, path, **kwargs):
+        Path(path).write_bytes(b"mocked valid motion source bytes " * 1400)
+        return Path(path)
+
+    def fake_probe(path):
+        return {
+            "format": {"duration": "12.0"},
+            "streams": [{
+                "codec_type": "video", "codec_name": "h264",
+                "width": 1920, "height": 1080, "avg_frame_rate": "25/1",
+            }],
+        }
+
+    monkeypatch.setattr(module, "download", fake_download)
+    monkeypatch.setattr(module, "ffprobe_json", fake_probe)
+    monkeypatch.setattr(module, "probe_duration", lambda path: 12.0)
+    monkeypatch.setattr(module, "FAST_MODE", True)
+
+    row = module._curated_pexels_launch_video({
+        "topic": "AI Infinity launch",
+        "title": "AI Infinity launch",
+        "heading": "Real-world examples",
+        "visual_focus": "a creator recording a short video on camera with a phone and studio lighting",
+        "visual_query": "content creator filming camera studio",
+        "visual_search_subject": "content creator",
+    }, tmp_path, 5)
+
+    assert row is not None
+    assert row["source_id"] == 7677005
+    assert row["selection_scene_index"] == 5
+
+
 def test_pixabay_image_adapter_preserves_asset_identity_and_license(monkeypatch, tmp_path):
     monkeypatch.setenv("PIXABAY_API_KEY", "test-pixabay-key")
 
