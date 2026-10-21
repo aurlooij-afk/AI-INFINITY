@@ -936,7 +936,7 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
 
     narration_scene_indices = set()
     for asset_name, asset_path in files.items():
-        match = re.fullmatch(r"narration_(\\d+)(?:_fitted)?\\.mp3", str(asset_name), flags=re.I)
+        match = re.fullmatch(r"narration_(\d+)(?:_fitted)?\.mp3", str(asset_name), flags=re.I)
         if not match:
             continue
         try:
