@@ -275,8 +275,12 @@ def export_otio_bundle(
                 # adapters may omit zero-duration composition children during
                 # serialization. The gap retains the disabled scene's source
                 # identity/trim metadata for a faithful re-import.
+                # Encode the immutable scene identity in OTIO's standard
+                # item name as well as metadata. Some adapters strip custom
+                # Gap metadata; name survives round-trips through more editors.
                 gap = otio.schema.Gap(
-                    name="Disabled: " + (scene_meta["heading"] or asset),
+                    name="Disabled: " + (scene_meta["heading"] or asset)
+                    + f" [ai-infinity-disabled={asset}]",
                     source_range=_time_range(otio, 0, duration, fps),
                     metadata={"ai_infinity": scene_meta},
                 )
@@ -468,7 +472,23 @@ def import_otio_timeline(
                 # custom properties attached to Gap objects. Recover the gap
                 # only when the same ordered catalog position explicitly marks
                 # a disabled AI Infinity scene; unrelated edits fail closed.
-                candidate = catalog[item_position - 1] if item_position <= len(catalog) else None
+                name_match = re.search(r"\[ai-infinity-disabled=(scene_\d{2}\.mp4)\]$", str(item.name or ""))
+                candidate = None
+                if name_match:
+                    marker_asset = name_match.group(1)
+                    candidate = next(
+                        (row for row in catalog
+                         if hasattr(row, "get")
+                         and str(row.get("source_asset") or "") == marker_asset
+                         and row.get("enabled") is False),
+                        None,
+                    )
+                # Compatibility with earlier exports: only use ordered catalog
+                # recovery when the old explicit disabled marker is present.
+                if candidate is None and str(item.name or "").startswith("Disabled: "):
+                    fallback = catalog[item_position - 1] if item_position <= len(catalog) else None
+                    if hasattr(fallback, "get") and fallback.get("enabled") is False:
+                        candidate = fallback
                 if hasattr(candidate, "get") and candidate.get("enabled") is False:
                     scene_meta = candidate
                 elif float(otio.opentime.to_seconds(item.duration())) <= 0:
