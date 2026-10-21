@@ -133,6 +133,7 @@ def install(app: Any) -> None:
         tl = normalize(pid, payload)
         path = studio._project_dir(pid) / "timeline.json"
         path.write_text(json.dumps(tl, ensure_ascii=False, indent=2), encoding="utf-8")
+        studio._save_asset(pid, "timeline", path, "application/json", {"editor": VERSION})
         studio.register_artifact(pid, path, "application/json", {"editor": VERSION})
         studio.audit_event(pid, "professional_timeline_saved_corrected", {"scene_count": len(tl["scenes"])})
         return tl
@@ -141,6 +142,8 @@ def install(app: Any) -> None:
     def timeline(pid: str, request: Request):
         uid, p = owned(pid, request)
         path = studio._project_dir(pid) / "timeline.json"
+        if not path.is_file() or path.stat().st_size == 0:
+            studio._rehydrate_project_asset(pid, uid, "timeline.json")
         if path.exists():
             try:
                 stored = json.loads(path.read_text(encoding="utf-8"))
@@ -149,7 +152,17 @@ def install(app: Any) -> None:
                     stored["truthful"] = True
                     return stored
             except Exception:
-                pass
+                # A corrupt local timeline can be replaced only by a separately
+                # verified object-store copy. Never promote an unverified file.
+                studio._rehydrate_project_asset(pid, uid, "timeline.json", force=True)
+                try:
+                    stored = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(stored, dict) and stored.get("scenes"):
+                        stored["owner"] = uid
+                        stored["truthful"] = True
+                        return stored
+                except Exception:
+                    pass
         out = base._timeline(studio, p)
         out["owner"] = uid
         return out
@@ -198,8 +211,16 @@ def install(app: Any) -> None:
         if path.exists():
             try:
                 stored = json.loads(path.read_text(encoding="utf-8"))
-            except Exception as exc:
-                raise HTTPException(409, "saved timeline is unreadable; repair it before OTIO export") from exc
+            except Exception as first_exc:
+                # Try only a content-verified remote restore; if no independently
+                # verified copy exists, preserve the corrupt bytes and fail closed.
+                studio._rehydrate_project_asset(
+                    pid, str(project.get("user_id") or ""), "timeline.json", force=True
+                )
+                try:
+                    stored = json.loads(path.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    raise HTTPException(409, "saved timeline is unreadable and no verified recovery copy could be restored") from exc
             if not isinstance(stored, dict) or not isinstance(stored.get("scenes"), list) or not stored["scenes"]:
                 raise HTTPException(409, "saved timeline is invalid; repair it before OTIO export")
             source = stored
@@ -225,6 +246,14 @@ def install(app: Any) -> None:
         except TimelineInterchangeError as exc:
             status = 503 if "unavailable in this runtime" in str(exc) else 409
             raise HTTPException(status, str(exc)) from exc
+        timeline_storage = studio._save_asset(
+            pid, "editable_timeline", result["timeline_path"], "application/vnd.opentimelineio+json",
+            {"format": "otio", "sha256": result["timeline_sha256"], "truth_state": result["truth_state"]},
+        )
+        bundle_storage = studio._save_asset(
+            pid, "timeline_bundle", result["bundle_path"], "application/zip",
+            {"format": "otio_bundle", "sha256": result["bundle_sha256"], "truth_state": result["truth_state"]},
+        )
         studio.register_artifact(
             pid, result["timeline_path"], "application/vnd.opentimelineio+json",
             {"format": "otio", "sha256": result["timeline_sha256"], "truth_state": result["truth_state"]},
@@ -233,6 +262,25 @@ def install(app: Any) -> None:
             pid, result["bundle_path"], "application/zip",
             {"format": "otio_bundle", "sha256": result["bundle_sha256"], "truth_state": result["truth_state"]},
         )
+        def durability_summary(saved: Dict[str, Any], expected_sha: str, expected_size: int) -> Dict[str, Any]:
+            stored = (saved or {}).get("durable_storage") or {}
+            status = str(stored.get("status") or "not_persisted")
+            verified_statuses = {"primary_only", "durable_partial", "durable_multi_provider", "durable_5_provider"}
+            successful = list(stored.get("successful_providers") or [])
+            verified = (
+                status in verified_statuses
+                and len(successful) >= 1
+                and stored.get("sha256") == expected_sha
+                and int(stored.get("size_bytes") or -1) == int(expected_size)
+            )
+            return {
+                "status": status,
+                "verified": verified,
+                "sha256": stored.get("sha256"),
+                "size_bytes": stored.get("size_bytes"),
+                "successful_providers": successful,
+                "truthful": True,
+            }
         studio.audit_event(pid, "professional_timeline_otio_exported", {
             "scene_count": result["scene_count"],
             "media_files": result["media_files"],
@@ -260,6 +308,14 @@ def install(app: Any) -> None:
             "truth_verified": result["truth_verified"],
             "human_review_status": result["human_review_status"],
             "requires_human_review": True,
+            "durability": {
+                "timeline": durability_summary(
+                    timeline_storage, result["timeline_sha256"], result["timeline_path"].stat().st_size
+                ),
+                "bundle": durability_summary(
+                    bundle_storage, result["bundle_sha256"], result["bundle_size_bytes"]
+                ),
+            },
             "truthful": True,
         }
 
