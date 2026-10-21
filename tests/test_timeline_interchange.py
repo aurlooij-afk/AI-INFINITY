@@ -131,12 +131,19 @@ def test_otio_export_bundle_roundtrips_scene_order_trim_hashes_and_truth(tmp_pat
         assert "metadata/captions.srt" in names
         assert "metadata/sources.json" in names
         assert "metadata/rights.json" in names
+        assert "metadata/rights_manifest.json" in names
+        assert "metadata/production_manifest.json" in names
+        assert "metadata/provenance.json" in names
+        assert "metadata/article.md" in names
         manifest = json.loads(archive.read("metadata/timeline-export-manifest.json"))
         assert manifest["human_review_status"] == "PENDING"
         assert manifest["truth_state"] == "REVIEW_REQUIRED"
-        assert {item["path"] for item in manifest["files"]} == {
-            "media/scene_01.mp4", "media/scene_02.mp4", "media/audio_master.mp3"
-        }
+        paths = {item["path"] for item in manifest["files"]}
+        assert {"project.otio", "media/scene_01.mp4", "media/scene_02.mp4",
+                "media/audio_master.mp3", "media/narration_only.mp3"} <= paths
+        assert {"metadata/rights_manifest.json", "metadata/production_manifest.json",
+                "metadata/provenance.json", "metadata/article.md"} <= paths
+        assert "metadata/rights_manifest.json" in manifest["included_sidecars"]
         for item in manifest["files"]:
             content = archive.read(item["path"])
             assert len(content) == item["size_bytes"]
