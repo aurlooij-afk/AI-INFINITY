@@ -232,3 +232,21 @@ def test_export_preserves_preexisting_user_interchange_files(tmp_path: Path) -> 
     assert existing_zip.read_bytes() == existing_zip_bytes
     assert result["timeline_path"].name != "project.otio"
     assert result["bundle_path"].name != "timeline-export.zip"
+
+
+def test_disabled_scene_roundtrips_without_becoming_active(tmp_path: Path) -> None:
+    timeline, truth, project = _project(tmp_path)
+    timeline["scenes"][1]["enabled"] = False
+    result = export_otio_bundle(tmp_path, "project-test", project, timeline, truth)
+
+    restored = import_otio_timeline(
+        Path(result["timeline_path"]).read_bytes(),
+        tmp_path,
+        "project-test",
+        "Interchange acceptance",
+    )
+
+    assert [row["enabled"] for row in restored["scenes"]] == [True, False]
+    assert [row["source_asset"] for row in restored["scenes"]] == [
+        "scene_01.mp4", "scene_02.mp4"
+    ]
