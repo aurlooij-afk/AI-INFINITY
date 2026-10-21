@@ -661,11 +661,102 @@ def t10(s,b,d,other_project_id):
         "publish_blocked_when_fallback":bool(fallback_count),
         "publish_block_status":(publish_block_status if fallback_count else None),
     }
+
+def _production_profile_acceptance(label: str, duration: int, fast_mode: bool, port: int, fmt: str):
+    """Render a real source-grounded profile and independently probe the final bytes."""
+    data_dir = TMP / ("profile-" + label)
+    shutil.rmtree(data_dir, ignore_errors=True)
+    extra = {
+        "AI_INFINITY_FAST_MODE": "1" if fast_mode else "0",
+        "AI_INFINITY_REQUIRE_SOURCE_VISUALS": "1",
+        "AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE": "1",
+        "AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS": "0",
+    }
+    process, base, log = start(data_dir, port, extra)
+    session = requests.Session()
+    try:
+        brief = (
+            f"Create a professional {duration}-second AI Infinity product launch video in English, "
+            "16:9 landscape, with a clear story, relevant real-source visuals, neural voiceover, "
+            "readable synchronized captions, a complete package, source records and rights evidence."
+        )
+        project_id = create(
+            session, base, brief,
+            duration=duration, format=fmt, aspect_ratio="16:9", language="English",
+        )
+        state = waitp(session, base, project_id, timeout=1500)
+        truth = req(
+            session, base,
+            f"/infinity/studio/project/{quote(project_id, safe='')}/truth",
+        )
+        checks = truth.get("checks") or {}
+        assert truth.get("verified") is True and truth.get("state") == "VERIFIED", truth
+        assert checks.get("source_visual_policy_passed") is True, truth
+        assert int(checks.get("fallback_visual_count") or 0) == 0, truth
+        assert checks.get("visual_rights_evidence_present") is True, truth
+        assert checks.get("caption_sync_passed") is True, truth
+        assert checks.get("script_sentence_integrity_passed") is True, truth
+        assert checks.get("professional_scene_coverage_passed") is True, truth
+        assert checks.get("research_required_and_present") is True, truth
+
+        final_file = dl(session, base, project_id, "final.mp4", min_bytes=100_000)
+        media = probe(final_file)
+        streams = media.get("streams") or []
+        video = next((item for item in streams if item.get("codec_type") == "video"), {})
+        audio = next((item for item in streams if item.get("codec_type") == "audio"), {})
+        actual_duration = float((media.get("format") or {}).get("duration") or 0)
+        assert video.get("codec_name") == "h264", media
+        assert audio.get("codec_name") == "aac", media
+        assert abs(actual_duration - duration) <= 1.0, media
+        if fast_mode:
+            assert (int(video.get("width") or 0), int(video.get("height") or 0)) == (1280, 720), media
+        else:
+            assert (int(video.get("width") or 0), int(video.get("height") or 0)) == (1920, 1080), media
+        decode = subprocess.run(
+            ["ffmpeg", "-v", "error", "-xerror", "-i", str(final_file), "-f", "null", "-"],
+            capture_output=True, text=True, timeout=600,
+        )
+        assert decode.returncode == 0, decode.stderr[-3000:]
+
+        manifest = jart(session, base, project_id, "production_manifest.json")
+        assert manifest.get("truthful") is True and manifest.get("project_id") == project_id, manifest
+        entries = {str(item.get("name")): str(item.get("sha256")) for item in (manifest.get("artifacts") or [])}
+        assert entries.get("final.mp4") == sha(final_file), entries
+        return {
+            "test": 11 if label == "1080p-20s" else 12,
+            "profile": label,
+            "project_id": project_id,
+            "requested_duration_seconds": duration,
+            "actual_duration_seconds": actual_duration,
+            "resolution": [int(video.get("width") or 0), int(video.get("height") or 0)],
+            "scene_count": checks.get("actual_rendered_scene_count"),
+            "fallback_visual_count": checks.get("fallback_visual_count"),
+            "truth_verified": True,
+            "full_decode_passed": True,
+            "manifest_hash_verified": True,
+        }
+    finally:
+        stop(process, log)
+
+
+def t11():
+    # Exercise the non-fast production renderer on a real 20-second deliverable.
+    return _production_profile_acceptance("1080p-20s", 20, False, 18083, "short")
+
+
+def t12():
+    # Exercise the long-form timeline against a measured three-minute deliverable.
+    return _production_profile_acceptance("720p-180s", 180, True, 18084, "long")
+
 def main():
     d=TMP/"base";shutil.rmtree(d,ignore_errors=True);p,b,l=start(d,18080,{"AI_INFINITY_TEST_MEDIA":"1"});s=requests.Session();out=[]
     try:
         out += [t1(s,b),t2(s,b),t3(s,b),t4(s,b),t5(),t6(),t7(),t8(),t9(s,b)]
         out.append(t10(s,b,d,out[-1]["project_ids"][0]))
-    finally:stop(p,l)
+    finally:
+        stop(p,l)
+    # Run actual profile acceptance after shutting down the shared ten-scenario app.
+    out.append(t11())
+    out.append(t12())
     print(json.dumps({"passed":True,"tests":out},ensure_ascii=False,indent=2))
 if __name__=="__main__":main()
