@@ -1528,3 +1528,77 @@ def test_cc0_test_fixture_label_does_not_bypass_original_work_rights_evidence():
     }
 
     assert closure._rights_evidence_state(fixture) == "blocked_fallback"
+
+
+def test_edge_tts_candidates_map_canonical_language_keys_and_ignore_ui_placeholders():
+    studio = closure._studio()
+
+    assert studio._edge_tts_voice_candidates("English", "default") == [
+        "en-US-AriaNeural", "en-US-JennyNeural"
+    ]
+    assert studio._edge_tts_voice_candidates("Urdu", "default") == [
+        "ur-PK-AsadNeural", "ur-PK-UzmaNeural"
+    ]
+    assert studio._edge_tts_voice_candidates("Pashto", "default") == [
+        "ps-AF-LatifaNeural", "ps-AF-GulNawazNeural"
+    ]
+    assert studio._edge_tts_voice_candidates("Arabic", "default") == [
+        "ar-AE-FatimaNeural", "ar-SA-ZariyahNeural"
+    ]
+    # A voice from another language must not silently override the requested one.
+    assert studio._edge_tts_voice_candidates("Urdu", "en-US-AriaNeural") == [
+        "ur-PK-AsadNeural", "ur-PK-UzmaNeural"
+    ]
+    assert "default" not in studio._edge_tts_voice_candidates("English", "default")
+    assert studio._edge_tts_voice_candidates("Dari", "default") == []
+
+
+def test_voice_provider_quality_never_mislabels_local_synthetic_fallback_as_neural():
+    assert closure._voice_provider_quality_tier([
+        "edge-tts-neural:en-US-AriaNeural",
+        "edge-tts-neural:en-US-AriaNeural-retimed",
+    ]) == "neural_tts"
+    assert closure._voice_provider_quality_tier([
+        "local-espeak-fast-fallback",
+    ]) == "local_synthetic_fallback"
+    assert closure._voice_provider_quality_tier([
+        "edge-tts-neural:en-US-AriaNeural",
+    ], edge_tts_fallback_count=1) == "provider_fallback_or_mixed"
+    assert closure._voice_provider_quality_tier(["unknown"]) == "unknown_or_unverified"
+    assert closure._voice_provider_quality_tier(
+        ["edge-tts-neural:en-US-AriaNeural"], silent_fallback_count=1
+    ) == "silent_or_unavailable"
+
+
+def test_ai_infinity_launch_fallback_is_product_specific_and_uses_clear_overlays(monkeypatch):
+    studio = closure._studio()
+    monkeypatch.setattr(studio, "FAST_MODE", True)
+    brief = (
+        "Create a professional 60-second AI Infinity launch video with narration, "
+        "captions, a thumbnail and a complete creator package."
+    )
+    plan = studio._fallback_creative_plan(
+        brief, brief, "long", 60, "general audience",
+        "cinematic, confident, clear", {"sources": []}, "English",
+    )
+    chapters = plan["chapters"]
+
+    assert len(chapters) == 8
+    assert chapters[0]["narration"].startswith(
+        "AI Infinity turns a creative brief into connected, editable work"
+    )
+    assert "source records" in chapters[2]["narration"].lower()
+    assert "Every strong video starts with a clear point of view" not in " ".join(
+        chapter["narration"] for chapter in chapters
+    )
+    assert [chapter["on_screen"] for chapter in chapters] == [
+        "From brief to finished work",
+        "Define the creative brief",
+        "Evidence stays visible",
+        "Script, visuals, voice, captions",
+        "Inspect the rendered cut",
+        "Revise. Render. Review.",
+        "Export the complete package",
+        "Proof before publishing",
+    ]
+
