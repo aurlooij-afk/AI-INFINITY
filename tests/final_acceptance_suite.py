@@ -114,6 +114,14 @@ def sha(p):
     return h.hexdigest()
 def probe(p):
     x=subprocess.run(["ffprobe","-v","error","-show_format","-show_streams","-of","json",str(p)],capture_output=True,text=True,timeout=120); assert x.returncode==0,x.stderr; return json.loads(x.stdout)
+def integrated_lufs(p):
+    x=subprocess.run(
+        ["ffmpeg","-hide_banner","-nostats","-i",str(p),"-vn","-af","ebur128=framelog=verbose","-f","null","-"],
+        capture_output=True,text=True,timeout=180,
+    )
+    values=re.findall(r"\\bI:\\s*(-?[0-9]+(?:\\.[0-9]+)?)\\s*LUFS\\b",(x.stderr or "")+(x.stdout or ""))
+    assert x.returncode==0 and values, (x.returncode,x.stderr[-2000:])
+    return float(values[-1])
 def pdf(path):
     # A small but real, text-extractable source brief. The acceptance test should
     # prove that upload content drives the project topic, not just that a PDF exists.
@@ -324,7 +332,7 @@ def capture_failed_project_evidence(s, b, project_id, status_payload):
 
 def t1(s,b):
     pid=create(s,b,"Create a professional 60-second AI Infinity launch video in English, 16:9, cinematic, research-backed, with voiceover, background music, captions, thumbnail, article, SEO metadata, social campaign package and production/rights manifests.",duration=60,format="long",aspect_ratio="16:9"); waitp(s,b,pid)
-    reqd={"final.mp4","thumbnail.jpg","audio_master.mp3","captions.srt","article.md","seo.json","social_campaign.json","production_manifest.json","rights_manifest.json","package.zip"}; got=names(s,b,pid); assert reqd<=got,(reqd-got,got)
+    reqd={"final.mp4","thumbnail.jpg","audio_master.mp3","narration_only.mp3","captions.srt","article.md","seo.json","social_campaign.json","production_manifest.json","rights_manifest.json","package.zip"}; got=names(s,b,pid); assert reqd<=got,(reqd-got,got)
     src=jart(s,b,pid,"sources.json"); assert int(src.get("source_count") or len(src.get("sources")or[]))>0,src
     # Truth comes before final-file download: an unverified project must fail at
     # the quality gate, not be reported as a misleading artifact-download error.
@@ -354,6 +362,14 @@ def t1(s,b):
     assert checks.get("visual_rights_evidence_present") is True, truth
     files={n:dl(s,b,pid,n) for n in reqd}; m=probe(files["final.mp4"]); dur=float((m.get("format")or{}).get("duration")or 0); assert 59<=dur<=61,m
     assert any(x.get("codec_type")=="video" for x in m.get("streams",[])); assert any(x.get("codec_type")=="audio" for x in m.get("streams",[]))
+    audio_probe=probe(files["audio_master.mp3"]); audio_dur=float((audio_probe.get("format")or{}).get("duration")or 0)
+    assert any(x.get("codec_type")=="audio" for x in audio_probe.get("streams",[])),audio_probe
+    assert abs(audio_dur-dur)<=1.0,("programme audio master must match the final video mix",audio_dur,dur)
+    audio_lufs=integrated_lufs(files["audio_master.mp3"])
+    assert -22.0<=audio_lufs<=-12.0,("programme audio master loudness outside delivery range",audio_lufs)
+    voice_probe=probe(files["narration_only.mp3"])
+    assert any(x.get("codec_type")=="audio" for x in voice_probe.get("streams",[])),voice_probe
+    assert sha(files["audio_master.mp3"]) != sha(files["narration_only.mp3"]), "programme mix and isolated narration must remain distinct artifacts"
     production=jart(s,b,pid,"production_manifest.json")
     assert production.get("project_id")==pid and production.get("truthful") is True
     manifest_artifacts=production.get("artifacts") or []
@@ -373,7 +389,7 @@ def t1(s,b):
         assert reviewer_packet and reviewer_packet.get("packet_size_bytes",0)>100000,reviewer_packet
     with zipfile.ZipFile(files["package.zip"]) as z:
         package_names=set(z.namelist())
-        required_package={"final.mp4","thumbnail.jpg","audio_master.mp3","captions.srt","article.md","production_manifest.json","rights_manifest.json","provenance.json","seo.json","social_campaign.json"}
+        required_package={"final.mp4","thumbnail.jpg","audio_master.mp3","narration_only.mp3","captions.srt","article.md","production_manifest.json","rights_manifest.json","provenance.json","seo.json","social_campaign.json"}
         assert required_package<=package_names,(required_package-package_names,sorted(package_names))
     return {
         "test":1,"project_id":pid,"duration":dur,"truth_verified":True,
