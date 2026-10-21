@@ -23,7 +23,15 @@ MAX_OTIO_BYTES = 2 * 1024 * 1024
 MAX_BUNDLE_BYTES = 512 * 1024 * 1024
 MAX_SCENES = 40
 SCENE_NAME = re.compile(r"scene_(\d{2})\.mp4\Z")
-SIDE_CARS = ("captions.srt", "script.md", "sources.json", "rights.json", "manifest.json", "thumbnail.jpg")
+SIDE_CARS = (
+    "captions.srt", "script.md", "article.md", "sources.json", "rights.json",
+    "rights_manifest.json", "visual_rights.json", "manifest.json",
+    "production_manifest.json", "provenance.json", "fact_check.json",
+    "seo.json", "social_campaign.json", "platform_manifest.json",
+    "accessibility.json", "feature_execution.json", "creator_experiments.json",
+    "asset_registry.json", "timeline.json", "thumbnail.jpg",
+)
+AUDIO_STEMS = ("narration_only.mp3", "music_only.mp3", "music_bed.mp3", "background_music.mp3")
 
 
 class TimelineInterchangeError(ValueError):
@@ -177,9 +185,54 @@ def export_otio_bundle(
         timeline.metadata["ai_infinity"] = metadata
 
         inventory = []
+        inventory = []
+        audio_stem_inventory = []
+        stem_bytes = 0
+        for stem_name in AUDIO_STEMS:
+            stem = root / stem_name
+            if not stem.exists():
+                continue
+            if stem.is_symlink():
+                raise TimelineInterchangeError("refusing to package a symlinked audio stem")
+            stem = _inside(root, stem)
+            expected_size = stem.stat().st_size
+            expected_sha = _sha256(stem)
+            staged_stem = media_dir / stem_name
+            shutil.copyfile(stem, staged_stem)
+            stem_size = staged_stem.stat().st_size
+            stem_sha = _sha256(staged_stem)
+            if stem_size != expected_size or stem_sha != expected_sha:
+                raise TimelineInterchangeError(f"audio stem changed while exporting: {stem_name}")
+            stem_bytes += stem_size
+            if total_bytes + stem_bytes > MAX_BUNDLE_BYTES:
+                raise TimelineInterchangeError("timeline media and audio stems exceed the 512 MiB export safety limit")
+            inventory.append({
+                "path": f"media/{stem_name}",
+                "sha256": stem_sha,
+                "size_bytes": stem_size,
+                "enabled": False,
+                "kind": "audio_stem",
+                "referenced_by_timeline": False,
+            })
+            audio_stem_inventory.append({
+                "name": stem_name,
+                "path": f"media/{stem_name}",
+                "sha256": stem_sha,
+                "size_bytes": stem_size,
+                "included_as_editable_source": True,
+            })
+        metadata["available_audio_stems"] = audio_stem_inventory
+
         for row, source, digest, source_duration in scene_files:
             asset = source.name
-            shutil.copyfile(source, media_dir / asset)
+            expected_size = source.stat().st_size
+            staged_source = media_dir / asset
+            shutil.copyfile(source, staged_source)
+            copied_size = staged_source.stat().st_size
+            copied_sha = _sha256(staged_source)
+            if copied_size != expected_size or copied_sha != digest:
+                raise TimelineInterchangeError(f"scene source changed while exporting: {asset}")
+            digest = copied_sha
             duration = max(0.0, float(row.get("duration") or 0))
             trim_start = max(0.0, float(row.get("trim_start") or 0))
             trim_end = max(0.0, float(row.get("trim_end") or 0))
@@ -197,12 +250,12 @@ def export_otio_bundle(
                 "enabled": bool(row.get("enabled", True)),
                 "source_duration_seconds": round(source_duration, 6),
                 "sha256": digest,
-                "size_bytes": source.stat().st_size,
+                "size_bytes": copied_size,
             }
             reference = otio.schema.ExternalReference(
                 target_url=f"media/{asset}",
                 available_range=_time_range(otio, 0, source_duration, fps),
-                metadata={"ai_infinity": {"sha256": digest, "size_bytes": source.stat().st_size}},
+                metadata={"ai_infinity": {"sha256": digest, "size_bytes": copied_size}},
             )
             if scene_meta["enabled"]:
                 clip = otio.schema.Clip(
@@ -225,36 +278,52 @@ def export_otio_bundle(
             inventory.append({
                 "path": f"media/{asset}",
                 "sha256": digest,
-                "size_bytes": source.stat().st_size,
+                "size_bytes": copied_size,
                 "enabled": scene_meta["enabled"],
+                "kind": "scene_master",
+                "referenced_by_timeline": scene_meta["enabled"],
             })
 
-        shutil.copyfile(audio, media_dir / audio.name)
+        audio_digest = _sha256(audio)
+        audio_size = audio.stat().st_size
+        staged_audio = media_dir / audio.name
+        shutil.copyfile(audio, staged_audio)
+        if staged_audio.stat().st_size != audio_size or _sha256(staged_audio) != audio_digest:
+            raise TimelineInterchangeError("audio master changed while exporting")
         audio_ref = otio.schema.ExternalReference(
             target_url="media/audio_master.mp3",
             available_range=_time_range(otio, 0, audio_duration, fps),
-            metadata={"ai_infinity": {"sha256": _sha256(audio), "size_bytes": audio.stat().st_size}},
+            metadata={"ai_infinity": {"sha256": audio_digest, "size_bytes": audio_size}},
         )
         audio_clip = otio.schema.Clip(
             name="Narration and audio master",
             media_reference=audio_ref,
             source_range=_time_range(otio, 0, audio_duration, fps),
-            metadata={"ai_infinity": {"role": "audio_master", "sha256": _sha256(audio)}},
+            metadata={"ai_infinity": {"role": "audio_master", "sha256": audio_digest}},
         )
         audio_track.append(audio_clip)
         inventory.append({
             "path": "media/audio_master.mp3",
-            "sha256": _sha256(audio),
-            "size_bytes": audio.stat().st_size,
+            "sha256": audio_digest,
+            "size_bytes": audio_size,
             "enabled": True,
+            "kind": "programme_mix",
+            "referenced_by_timeline": True,
         })
 
         otio_path = work / "project.otio"
         otio.adapters.write_to_file(timeline, str(otio_path), adapter_name="otio_json")
+        timeline_digest = _sha256(otio_path)
         bundle_manifest = {
             **metadata,
-            "files": inventory,
+            "files": [{
+                "path": "project.otio",
+                "sha256": timeline_digest,
+                "size_bytes": otio_path.stat().st_size,
+                "kind": "timeline",
+            }, *inventory],
             "included_sidecars": [],
+            "manifest_self_hash_excluded": True,
             "export_is_not_human_approval": True,
         }
         with zipfile.ZipFile(work / "timeline-export.zip", "w", allowZip64=True) as archive:
@@ -266,15 +335,35 @@ def export_otio_bundle(
                     item["path"],
                     compress_type=zipfile.ZIP_STORED if source_path.suffix.lower() in {".mp4", ".mp3"} else zipfile.ZIP_DEFLATED,
                 )
-            bundle_bytes = total_bytes
+            bundle_bytes = total_bytes + stem_bytes + otio_path.stat().st_size
+            staged_metadata = work / "sidecars"
+            staged_metadata.mkdir()
             for name in SIDE_CARS:
                 candidate = root / name
-                if candidate.is_file() and _inside(root, candidate):
-                    bundle_bytes += candidate.stat().st_size
-                    if bundle_bytes > MAX_BUNDLE_BYTES:
-                        raise TimelineInterchangeError("timeline sidecars exceed the 512 MiB export safety limit")
-                    archive.write(candidate, f"metadata/{name}", compress_type=zipfile.ZIP_DEFLATED)
-                    bundle_manifest["included_sidecars"].append(name)
+                if not candidate.exists():
+                    continue
+                if candidate.is_symlink():
+                    raise TimelineInterchangeError(f"refusing to package a symlinked sidecar: {name}")
+                candidate = _inside(root, candidate)
+                expected_size = candidate.stat().st_size
+                expected_sha = _sha256(candidate)
+                staged_sidecar = staged_metadata / name
+                shutil.copyfile(candidate, staged_sidecar)
+                sidecar_size = staged_sidecar.stat().st_size
+                sidecar_sha = _sha256(staged_sidecar)
+                if sidecar_size != expected_size or sidecar_sha != expected_sha:
+                    raise TimelineInterchangeError(f"sidecar changed while exporting: {name}")
+                bundle_bytes += sidecar_size
+                if bundle_bytes > MAX_BUNDLE_BYTES:
+                    raise TimelineInterchangeError("timeline sidecars exceed the 512 MiB export safety limit")
+                archive.write(staged_sidecar, f"metadata/{name}", compress_type=zipfile.ZIP_DEFLATED)
+                bundle_manifest["included_sidecars"].append(f"metadata/{name}")
+                bundle_manifest["files"].append({
+                    "path": f"metadata/{name}",
+                    "sha256": sidecar_sha,
+                    "size_bytes": sidecar_size,
+                    "kind": "sidecar",
+                })
             archive.writestr(
                 "metadata/timeline-export-manifest.json",
                 json.dumps(bundle_manifest, ensure_ascii=False, indent=2) + "\n",
