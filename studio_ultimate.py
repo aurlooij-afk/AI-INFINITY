@@ -1609,28 +1609,36 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
 
     ai_infinity_launch_narration = {
         "Hook": (
-            "AI Infinity turns a creative brief into connected, editable work—not just a generated video."
+            "AI Infinity turns a creative brief into connected, editable work—not just a generated video. "
+            "Start with the goal, then keep every decision tied to what the audience needs to understand."
         ),
         "Context": (
-            "Describe the idea in plain language, then set its audience, duration, format and creative direction."
+            "Describe the idea in plain language, then set its audience, duration, format and creative direction. "
+            "A stronger brief names the intended outcome, constraints, tone and evidence that would support its claims."
         ),
         "The core idea": (
-            "When research sources are available, AI Infinity keeps source records with the plan; missing evidence stays visible."
+            "When research sources are available, AI Infinity keeps source records with the plan; missing evidence stays visible. "
+            "It should distinguish confirmed facts from assumptions and preserve each asset's origin and rights status."
         ),
         "How it works": (
-            "Create a scene-by-scene script, voice, visuals, sound and captions through one connected production workflow."
+            "Create a scene-by-scene script, voice, visuals, sound and captions through one connected production workflow. "
+            "Then refine the timings and transitions so each shot advances the story instead of repeating the last one."
         ),
         "Real-world examples": (
-            "Check rendered footage, scene variety, playback, sound and caption timing instead of trusting a progress bar."
+            "Inspect rendered footage, scene variety, playback, sound and caption timing instead of trusting a progress bar. "
+            "Source relevance and rights must be checked against the actual downloaded media before release."
         ),
         "What changes": (
-            "Edit a scene, revise the script, render again and compare the actual deliverables before approval."
+            "Edit a scene, revise the script, render again and compare the actual deliverables before approval. "
+            "Each revision should be recoverable, and the package must match the exact video and captions that were reviewed."
         ),
         "Practical takeaway": (
-            "Export a master alongside the script, captions, thumbnail, rights records and a complete creator package."
+            "Export a master alongside the script, captions, thumbnail, rights records and a complete creator package. "
+            "Verify hashes, make sure files open, and keep any unresolved source or quality issue visible to the creator."
         ),
         "Closing": (
-            "Automated checks measure technical quality; people judge story and facts, and publishing stays locked until authorized."
+            "Automated checks measure technical quality; people judge story and facts, and publishing stays locked until authorized. "
+            "Approve only the exact version that passed required checks and received the necessary human review."
         ),
     }
 
