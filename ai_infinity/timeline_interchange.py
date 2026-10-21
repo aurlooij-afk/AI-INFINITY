@@ -266,12 +266,13 @@ def export_otio_bundle(
                 )
                 video.append(clip)
             else:
+                # Keep a time-bearing Gap, not a zero-duration marker: OTIO
+                # adapters may omit zero-duration composition children during
+                # serialization. The gap retains the disabled scene's source
+                # identity/trim metadata for a faithful re-import.
                 gap = otio.schema.Gap(
                     name="Disabled: " + (scene_meta["heading"] or asset),
-                    source_range=otio.opentime.TimeRange(
-                        start_time=otio.opentime.RationalTime(0, fps),
-                        duration=otio.opentime.RationalTime(0, fps),
-                    ),
+                    source_range=_time_range(otio, 0, duration, fps),
                     metadata={"ai_infinity": scene_meta},
                 )
                 video.append(gap)
