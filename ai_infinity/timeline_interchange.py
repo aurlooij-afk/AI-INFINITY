@@ -182,6 +182,7 @@ def export_otio_bundle(
         audio_track = otio.schema.Track(name="Audio", kind=otio.schema.TrackKind.Audio)
         timeline.tracks.append(video)
         timeline.tracks.append(audio_track)
+        metadata["scene_catalog"] = []
         timeline.metadata["ai_infinity"] = metadata
 
         inventory = []
@@ -251,7 +252,11 @@ def export_otio_bundle(
                 "source_duration_seconds": round(source_duration, 6),
                 "sha256": digest,
                 "size_bytes": copied_size,
+                "timeline_position": len(timeline.metadata["ai_infinity"]["scene_catalog"]) + 1,
             }
+            # A root-level catalog preserves disabled-scene identity even when
+            # an OTIO adapter drops metadata attached directly to Gap objects.
+            timeline.metadata["ai_infinity"]["scene_catalog"].append(dict(scene_meta))
             reference = otio.schema.ExternalReference(
                 target_url=f"media/{asset}",
                 available_range=_time_range(otio, 0, source_duration, fps),
@@ -446,17 +451,31 @@ def import_otio_timeline(
         raise TimelineInterchangeError("OTIO import requires exactly one direct video track")
     rows = []
     seen = set()
-    for item in video_tracks[0]:
+    catalog = (info or {}).get("scene_catalog")
+    if not isinstance(catalog, list):
+        catalog = []
+    for item_position, item in enumerate(video_tracks[0], 1):
         if isinstance(item, otio.schema.Gap):
             scene_meta = item.metadata.get("ai_infinity") if isinstance(item.metadata, dict) else {}
             if not isinstance(scene_meta, dict) or not scene_meta.get("source_asset"):
-                if float(otio.opentime.to_seconds(item.duration())) <= 0:
+                # Some OTIO adapters preserve root timeline metadata but strip
+                # custom properties attached to Gap objects. Recover the gap
+                # only when the same ordered catalog position explicitly marks
+                # a disabled AI Infinity scene; unrelated edits fail closed.
+                candidate = catalog[item_position - 1] if item_position <= len(catalog) else None
+                if isinstance(candidate, dict) and candidate.get("enabled") is False:
+                    scene_meta = candidate
+                elif float(otio.opentime.to_seconds(item.duration())) <= 0:
                     continue
-                raise TimelineInterchangeError("timeline contains an unsupported gap without AI Infinity scene metadata")
+                else:
+                    raise TimelineInterchangeError("timeline contains an unsupported gap without matching disabled-scene metadata")
             asset = _scene_name(scene_meta.get("source_asset"))
             enabled = False
             trim_start = float(scene_meta.get("trim_start") or 0)
             duration = float(scene_meta.get("source_duration_seconds") or 0) - trim_start - float(scene_meta.get("trim_end") or 0)
+            actual_gap_duration = float(otio.opentime.to_seconds(item.duration()))
+            if abs(actual_gap_duration - duration) > max(1.0 / fps, 0.05):
+                raise TimelineInterchangeError("disabled-scene gap duration changed; re-import is ambiguous")
             clip_meta = scene_meta
         elif isinstance(item, otio.schema.Clip):
             ref = item.media_reference
