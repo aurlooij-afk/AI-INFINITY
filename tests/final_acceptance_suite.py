@@ -437,7 +437,56 @@ def t4(s,b):
     pid=create(s,b,"Create a 20-second research-backed video article package about Python's official website with evidence, captions, SEO and social copy.",duration=20,format="short",reference_urls=[PYURL]); waitp(s,b,pid,allow_review_draft=True)
     got=names(s,b,pid); assert {"final.mp4","thumbnail.jpg","captions.srt","article.md","seo.json","social_campaign.json","sources.json"}<=got,got
     src=jart(s,b,pid,"sources.json"); assert any(str(x.get("url")or"")==PYURL for x in src.get("sources",[])),src
-    return {"test":4,"project_id":pid,"reference_url":PYURL}
+
+    # Exercise the installed FastAPI routes against an actual completed project,
+    # not just isolated serializer helpers. The portable ZIP must carry the media
+    # and its source/rights records with verifiable byte hashes.
+    export=req(s,b,f"/infinity/pro2/project/{quote(pid,safe='')}/timeline/otio/export","POST")
+    assert export.get("status")=="exported" and export.get("truthful") is True,export
+    assert int(export.get("scene_count") or 0)>=1,export
+    assert export.get("human_review_status")=="PENDING" and export.get("requires_human_review") is True,export
+
+    timeline_response=s.get(b+export["timeline"]["download_url"],timeout=180)
+    assert timeline_response.status_code==200 and timeline_response.content,(timeline_response.status_code,timeline_response.text[:1000])
+    timeline_path=TMP/f"{pid}-{export['timeline']['name']}"
+    timeline_path.write_bytes(timeline_response.content)
+    assert sha(timeline_path)==export["timeline"]["sha256"],export
+
+    bundle_response=s.get(b+export["bundle"]["download_url"],timeout=180)
+    assert bundle_response.status_code==200 and bundle_response.content,(bundle_response.status_code,bundle_response.text[:1000])
+    bundle_path=TMP/f"{pid}-{export['bundle']['name']}"
+    bundle_path.write_bytes(bundle_response.content)
+    assert sha(bundle_path)==export["bundle"]["sha256"],export
+    with zipfile.ZipFile(bundle_path) as archive:
+        bundle_names=set(archive.namelist())
+        assert "project.otio" in bundle_names and "media/audio_master.mp3" in bundle_names,bundle_names
+        assert any(name.startswith("media/scene_") and name.endswith(".mp4") for name in bundle_names),bundle_names
+        manifest=json.loads(archive.read("metadata/timeline-export-manifest.json"))
+        assert manifest.get("human_review_status")=="PENDING",manifest
+        assert manifest.get("truth_state") in {"VERIFIED","REVIEW_REQUIRED"},manifest
+        for item in manifest.get("files") or []:
+            payload=archive.read(item["path"])
+            assert len(payload)==item["size_bytes"],item
+            assert hashlib.sha256(payload).hexdigest()==item["sha256"],item
+
+    imported_response=s.post(
+        b+f"/infinity/pro2/project/{quote(pid,safe='')}/timeline/otio/import",
+        data=timeline_path.read_bytes(),
+        headers={"Content-Type":"application/vnd.opentimelineio+json"},
+        timeout=180,
+    )
+    assert imported_response.status_code==200,(imported_response.status_code,imported_response.text[:2000])
+    imported=imported_response.json()
+    assert imported.get("status")=="imported" and imported.get("truthful") is True,imported
+    assert imported.get("render_required") is True and imported.get("truth_verified") is False,imported
+    assert imported.get("human_review_status")=="PENDING",imported
+    assert any(row.get("enabled") is True for row in (imported.get("timeline") or {}).get("scenes") or []),imported
+    return {
+        "test":4,"project_id":pid,"reference_url":PYURL,
+        "otio_routes_passed":True,"otio_scene_count":export["scene_count"],
+        "otio_bundle_bytes":bundle_path.stat().st_size,"otio_manifest_hashes_verified":True,
+        "otio_import_requires_rerender_and_human_review":True,
+    }
 def t5():
     import studio_ultimate as st
     out=TMP/"repurpose"; shutil.rmtree(out,ignore_errors=True);out.mkdir(); master=out/"input75s.mp4"
