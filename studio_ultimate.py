@@ -4843,10 +4843,17 @@ def _rehydrate_project_asset(
         asset_id = str(durable.get("asset_id") or "").strip()
         durable_status = str(durable.get("status") or "")
         successful_at_save = list(durable.get("successful_providers") or [])
+        recorded_sha = str(durable.get("sha256") or "")
+        try:
+            recorded_size = int(durable.get("size_bytes") or -1)
+        except (TypeError, ValueError):
+            recorded_size = -1
         if (
             not asset_id
             or durable_status not in {"primary_only", "durable_partial", "durable_multi_provider", "durable_5_provider"}
             or not successful_at_save
+            or not recorded_sha
+            or recorded_size < 0
         ):
             # The latest local revision was not proven durable. Never substitute
             # an older same-name object and misrepresent recovery as current.
@@ -4857,7 +4864,12 @@ def _rehydrate_project_asset(
                 "primary_only", "durable_partial", "durable_multi_provider", "durable_5_provider"
             }:
                 return None
-            if not asset.get("sha256") or int(asset.get("size_bytes") or -1) < 0:
+            if (
+                not asset.get("sha256")
+                or int(asset.get("size_bytes") or -1) < 0
+                or str(asset.get("sha256")) != recorded_sha
+                or int(asset.get("size_bytes") or -1) != recorded_size
+            ):
                 return None
         except Exception:
             return None
