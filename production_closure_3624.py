@@ -714,7 +714,7 @@ def _voice_provider_quality_tier(
     provider and neither a provider fallback nor a silent-voice fallback occurred.
     """
     labels = [str(value or "").strip().lower() for value in (providers or [])]
-    labels = [value for value in labels if value and value != "unknown"]
+    labels = [value for value in labels if value]
     if silent_fallback_count:
         return "silent_or_unavailable"
     if labels and all(value.startswith("edge-tts-neural:") for value in labels) and edge_tts_fallback_count == 0:
