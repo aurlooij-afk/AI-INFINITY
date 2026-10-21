@@ -4764,6 +4764,39 @@ def _project_dir(project_id: str) -> Path:
     return p
 
 
+def _project_artifact_integrity(project_id: str, path: Path) -> Optional[bool]:
+    """Compare local bytes to the latest registered artifact digest, when one exists.
+
+    None means this is a legacy/unregistered file with no local manifest row;
+    False means a recorded artifact is missing, unhashable, or differs in bytes.
+    """
+    try:
+        with DB_LOCK, _connect() as c:
+            row = c.execute(
+                "SELECT sha256,size_bytes FROM studio_artifacts_3614 "
+                "WHERE project_id=? AND asset_name=? LIMIT 1",
+                (project_id, path.name),
+            ).fetchone()
+    except Exception:
+        # The registry is part of the artifact integrity boundary. If it cannot
+        # be read, treat integrity as unproven rather than serving edited bytes.
+        return False
+    if row is None:
+        return None
+    try:
+        expected_sha = str(row["sha256"] or "")
+        expected_size = int(row["size_bytes"])
+        return bool(
+            expected_sha
+            and expected_size >= 0
+            and path.is_file()
+            and path.stat().st_size == expected_size
+            and file_sha256(path) == expected_sha
+        )
+    except Exception:
+        return False
+
+
 def _rehydrate_project_asset(
     project_id: str, user_id: str, filename: str, *, force: bool = False
 ) -> Optional[Path]:
@@ -4772,10 +4805,13 @@ def _rehydrate_project_asset(
     if not target_name:
         return None
     root = _project_dir(project_id)
-    # Fast path: local artifact is already present and non-empty.
+    # Fast path is allowed only when local bytes agree with the registered
+    # artifact manifest. A non-empty but modified file is not a verified hit.
     direct = root / target_name
     if not force and direct.is_file() and direct.stat().st_size > 0:
-        return direct
+        integrity = _project_artifact_integrity(project_id, direct)
+        if integrity is not False:
+            return direct
     try:
         import ai3704_storage_fabric as storage
         with DB_LOCK, _connect() as c:
