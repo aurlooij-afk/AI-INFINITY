@@ -171,6 +171,31 @@ def test_project_state_derives_endpoint_from_shared_b2_region(monkeypatch):
     assert cfg["region"] == "eu-central-003"
 
 
+def test_project_state_derives_signing_region_from_b2_endpoint_when_region_is_unset(monkeypatch):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _b2_env(monkeypatch)
+    monkeypatch.setenv("B2_ENDPOINT", "https://s3.us-east-005.backblazeb2.com")
+    monkeypatch.delenv("BACKBLAZE_B2_REGION", raising=False)
+    monkeypatch.delenv("B2_REGION", raising=False)
+
+    cfg = backend._cfg()
+
+    assert cfg["endpoint"] == "https://s3.us-east-005.backblazeb2.com"
+    assert cfg["region"] == "us-east-005", cfg
+
+
+def test_explicit_project_state_region_overrides_endpoint_inference(monkeypatch):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _b2_env(monkeypatch)
+    monkeypatch.setenv("BACKBLAZE_B2_ENDPOINT", "https://s3.us-east-005.backblazeb2.com")
+    monkeypatch.setenv("BACKBLAZE_B2_REGION", "eu-central-003")
+
+    cfg = backend._cfg()
+
+    assert cfg["endpoint"] == "https://s3.us-east-005.backblazeb2.com"
+    assert cfg["region"] == "eu-central-003", cfg
+
+
 def test_b2_canary_requires_exact_write_readback(monkeypatch):
     backend = importlib.import_module("ai_infinity.project_state_backend")
     _b2_env(monkeypatch)

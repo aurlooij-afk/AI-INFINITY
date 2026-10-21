@@ -19,6 +19,7 @@ Fail-closed rules:
 import atexit
 import hashlib
 import os
+import re
 import sqlite3
 import tempfile
 import threading
@@ -26,6 +27,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 try:
     import boto3
@@ -76,6 +78,19 @@ def _cfg() -> Dict[str, str]:
     )
     if not endpoint and region:
         endpoint = f"https://s3.{region}.backblazeb2.com"
+    # B2 endpoints encode the bucket's S3 signing region. When an operator has
+    # configured an endpoint but omitted both region aliases, the historical
+    # us-west-004 fallback can sign requests for the wrong region (B2 may reject
+    # HEAD/GET with 403 even though credentials and bucket are otherwise valid).
+    # Explicit region configuration remains authoritative.
+    if not region and endpoint:
+        try:
+            hostname = (urlsplit(endpoint).hostname or "").lower()
+        except ValueError:
+            hostname = ""
+        match = re.fullmatch(r"s3\.([a-z0-9-]+)\.backblazeb2\.com", hostname)
+        if match:
+            region = match.group(1)
     return {
         "endpoint": endpoint,
         "bucket": (
