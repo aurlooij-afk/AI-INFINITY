@@ -103,3 +103,51 @@ def test_user_facing_deliverable_kinds_enter_real_durable_storage(monkeypatch, t
     assert metadata["durable_storage"]["asset_id"] == "ast_test_master_asset"
     assert metadata["durable_storage"]["status"] == "primary_only"
     assert metadata["durable_storage"]["truthful"] is True
+
+
+
+def test_registered_artifact_digest_detects_local_byte_changes(monkeypatch, tmp_path: Path):
+    database = tmp_path / "artifact-index.db"
+    project_id = "artifact-integrity-test"
+    path = tmp_path / "timeline.json"
+    original = b'{"scenes":[{"heading":"original user edit"}]}'
+    path.write_bytes(original)
+    expected_sha = __import__("hashlib").sha256(original).hexdigest()
+
+    def connect():
+        db = sqlite3.connect(database, timeout=10)
+        db.row_factory = sqlite3.Row
+        return db
+
+    with connect() as db:
+        db.execute(
+            """
+            CREATE TABLE studio_artifacts_3614(
+                project_id TEXT NOT NULL,
+                asset_name TEXT NOT NULL,
+                sha256 TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                media_type TEXT,
+                metadata_json TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                PRIMARY KEY(project_id, asset_name)
+            )
+            """
+        )
+        db.execute(
+            "INSERT INTO studio_artifacts_3614(project_id,asset_name,sha256,size_bytes,media_type,metadata_json,created_at) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (project_id, path.name, expected_sha, len(original), "application/json", "{}", 1.0),
+        )
+    monkeypatch.setattr(studio, "_connect", connect)
+
+    assert studio._project_artifact_integrity(project_id, path) is True
+
+    # A valid-looking JSON edit is still a byte-level mismatch against the
+    # latest saved artifact proof; it cannot be silently treated as verified.
+    path.write_bytes(b'{"scenes":[{"heading":"tampered edit"}]}')
+    assert studio._project_artifact_integrity(project_id, path) is False
+
+    # Old files with no registry row remain distinguishable from a known
+    # artifact whose recorded bytes have changed.
+    assert studio._project_artifact_integrity("legacy-project", path) is None
