@@ -4784,24 +4784,48 @@ def _rehydrate_project_asset(
                 "WHERE project_id=? ORDER BY id DESC LIMIT 500",
                 (project_id,),
             ).fetchall()
-        candidates = []
+        # Recovery must restore the latest saved revision or fail closed. Silently
+        # falling back to an older object with the same filename would discard a
+        # user's most recent edit while presenting it as the current project.
+        latest = None
         for row in rows:
             path_value = Path(str(row["path"] or ""))
             if path_value.name != target_name:
                 continue
-            try:
-                meta = json.loads(row["metadata_json"] or "{}")
-            except Exception:
-                meta = {}
-            durable = meta.get("durable_storage") if isinstance(meta, dict) else {}
-            if not isinstance(durable, dict):
-                continue
-            asset_id = str(durable.get("asset_id") or "").strip()
-            if asset_id:
-                candidates.append((path_value, asset_id))
-        for path_value, asset_id in candidates:
+            latest = (path_value, row["metadata_json"])
+            break
+        if latest is None:
+            return None
+        path_value, metadata_json = latest
+        try:
+            meta = json.loads(metadata_json or "{}")
+        except Exception:
+            return None
+        durable = meta.get("durable_storage") if isinstance(meta, dict) else {}
+        if not isinstance(durable, dict):
+            return None
+        asset_id = str(durable.get("asset_id") or "").strip()
+        durable_status = str(durable.get("status") or "")
+        successful_at_save = list(durable.get("successful_providers") or [])
+        if (
+            not asset_id
+            or durable_status not in {"primary_only", "durable_partial", "durable_multi_provider", "durable_5_provider"}
+            or not successful_at_save
+        ):
+            # The latest local revision was not proven durable. Never substitute
+            # an older same-name object and misrepresent recovery as current.
+            return None
+        try:
             asset = storage._asset_row(asset_id, user_id)
-            replicas = list(asset.get("replicas") or [])
+            if str(asset.get("status") or "") not in {
+                "primary_only", "durable_partial", "durable_multi_provider", "durable_5_provider"
+            }:
+                return None
+            if not asset.get("sha256") or int(asset.get("size_bytes") or -1) < 0:
+                return None
+        except Exception:
+            return None
+        replicas = list(asset.get("replicas") or [])
             providers = []
             primary = str(asset.get("primary_provider") or "").strip()
             if primary:
@@ -4816,7 +4840,7 @@ def _rehydrate_project_asset(
                 if p and p not in ordered:
                     ordered.append(p)
             if not ordered:
-                continue
+                return None
             destination = root / safe_name(target_name)
             destination.parent.mkdir(parents=True, exist_ok=True)
             tmp = destination.with_name(destination.name + ".rehydrate-" + uuid.uuid4().hex)
@@ -4843,6 +4867,9 @@ def _rehydrate_project_asset(
                         tmp.unlink(missing_ok=True)
                     except Exception:
                         pass
+            # All verified replicas for the latest revision failed. Do not try
+            # an older asset row for this filename; that would silently roll back.
+            return None
     except Exception:
         return None
     return None
