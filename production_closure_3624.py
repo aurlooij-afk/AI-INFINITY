@@ -1080,7 +1080,10 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
             script_word_count = len(re.findall(r"\b[\w'-]+\b", script_body))
         except Exception:
             script_word_count = 0
-    required_script_words = max(12, int(float(checks.get("requested_duration") or 0) * 1.0))
+    # A video that is technically 180 seconds long but has only 180 spoken words
+    # is under-narrated for a normal professional voiceover. Require a conservative
+    # 120 words/minute floor; chapter-specific pace can still vary by creative intent.
+    required_script_words = max(12, int(float(checks.get("requested_duration") or 0) * 2.0))
     checks["spoken_script_word_count"] = script_word_count
     checks["required_spoken_script_words"] = required_script_words
     checks["script_content_floor_passed"] = (
