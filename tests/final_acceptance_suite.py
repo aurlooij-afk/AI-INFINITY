@@ -654,7 +654,7 @@ def t10(s,b,d,other_project_id):
     assert any(
         x.get("source")=="AI Infinity deterministic CC0 recovery-test illustration"
         and "CC0 1.0" in str(x.get("license") or "")
-        and x.get("rights_state")=="blocked_fallback"
+        and x.get("commercial_use_state")=="public_domain_cc0_1_0"
         for x in rights_assets
     ),rights
 
