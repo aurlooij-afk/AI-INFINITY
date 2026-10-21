@@ -485,7 +485,7 @@ def import_otio_timeline(
                     )
                 # Compatibility with earlier exports: only use ordered catalog
                 # recovery when the old explicit disabled marker is present.
-                if candidate is None and str(item.name or "").startswith("Disabled: "):
+                if not name_match and str(item.name or "").startswith("Disabled: "):
                     fallback = catalog[item_position - 1] if item_position <= len(catalog) else None
                     if hasattr(fallback, "get") and fallback.get("enabled") is False:
                         candidate = fallback
