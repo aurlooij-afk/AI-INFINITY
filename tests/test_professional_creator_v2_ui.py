@@ -40,3 +40,10 @@ def test_otio_actions_are_user_accessible_and_truthful() -> None:
     assert "renderEditedMaster()" not in import_body
     assert "human_review_status:r.human_review_status" in import_body
     assert "truth_verified:r.truth_verified" in import_body
+    assert "durability:r.durability" in import_body
+
+    export_start = source.index("async function exportOTIO()")
+    export_end = source.index("async function importOTIO(input)", export_start)
+    export_body = source[export_start:export_end]
+    assert "durability:r.durability" in export_body
+    assert "persistent storage is not verified" in export_body
