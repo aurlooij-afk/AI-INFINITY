@@ -5982,18 +5982,36 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         # deliverable for podcast/audio, editorial, and social workflows.
         content_type = str(req.get("content_type") or "video").lower()
         audio_master = None
+        narration_only = None
         article = None
         social = None
         if True:
-            audio_master = outdir / "audio_master.mp3"
+            # "audio_master" is the actual programme mix from the final video.
+            # Keep a separate narration-only stem so creators can still re-edit voice.
+            narration_only = outdir / "narration_only.mp3"
             narration_inputs = [outdir / f"narration_{i:02d}.mp3" for i in range(1, len(chapters)+1)]
             concat = outdir / "narration_concat.txt"
             if len(narration_inputs) != len([p for p in narration_inputs if p.exists()]):
                 raise RuntimeError("narration set incomplete; cannot master missing voice tracks")
             concat.write_text("\n".join(f"file '{p.as_posix()}'" for p in narration_inputs), encoding="utf-8")
-            ffmpeg("-f", "concat", "-safe", "0", "-i", concat, "-c:a", "libmp3lame", "-q:a", "2", audio_master, timeout=240)
+            ffmpeg("-f", "concat", "-safe", "0", "-i", concat, "-c:a", "libmp3lame", "-q:a", "2", "-ar", "48000", "-ac", "2", narration_only, timeout=240)
+            if not _valid_audio_file(narration_only, minimum_peak_db=-45.0):
+                raise RuntimeError("narration-only track is invalid or effectively silent")
+
+            audio_master = outdir / "audio_master.mp3"
+            ffmpeg(
+                "-i", captioned, "-map", "0:a:0", "-vn",
+                "-c:a", "libmp3lame", "-q:a", "2", "-ar", "48000", "-ac", "2",
+                audio_master, timeout=max(120, int(probe_duration(captioned) * 4)),
+            )
             if not _valid_audio_file(audio_master, minimum_peak_db=-45.0):
-                raise RuntimeError("audio master is invalid or effectively silent")
+                raise RuntimeError("programme audio master is invalid or effectively silent")
+            video_seconds = float(probe_duration(captioned))
+            audio_seconds = float(probe_duration(audio_master))
+            if abs(audio_seconds - video_seconds) > 1.0:
+                raise RuntimeError(
+                    f"programme audio master duration mismatch: {audio_seconds:.3f}s vs video {video_seconds:.3f}s"
+                )
         if True:
             article = outdir / "article.md"
             article_lines = [f"# {plan.get('title') or topic}", "", str(plan.get('hook') or ""), ""]
@@ -6150,7 +6168,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "actual_duration_seconds": round(float(probe_duration(captioned)), 3),
             "artifacts": [
                 {"name": p.name, "sha256": file_sha256(p), "bytes": p.stat().st_size}
-                for p in [captioned, script, captions, sources, manifest, audio_master, article, social]
+                for p in [captioned, script, captions, sources, manifest, audio_master, narration_only, article, social]
                 if p and Path(p).is_file()
             ],
             "research": {
@@ -6237,7 +6255,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         manifest.write_text(jdump(metadata), encoding="utf-8")
         named_package = outdir / f"{safe_name(plan.get('title') or topic)}-AI-Infinity-creator-package.zip"
         package = outdir / "package.zip"
-        bundle: List[Optional[Path]] = [captioned, script, captions, sources, manifest, production_manifest, rights_manifest, outdir / "feature_execution.json", outdir / "creator_experiments.json", shared_music, thumb if thumb and thumb.exists() else None, audio_master, article, social, outdir / "fact_check.json"]
+        bundle: List[Optional[Path]] = [captioned, script, captions, sources, manifest, production_manifest, rights_manifest, outdir / "feature_execution.json", outdir / "creator_experiments.json", shared_music, thumb if thumb and thumb.exists() else None, audio_master, narration_only, article, social, outdir / "fact_check.json"]
         bundle += [x for x in editorial.values() if x]
         bundle += [Path(x["path"]) for x in shorts if Path(x["path"]).exists()]
         bundle += [p for p in outdir.glob("narration_*.mp3") if p.exists()]
@@ -6253,7 +6271,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         except Exception as package_alias_exc:
             audit_event(project_id, "optional_named_package_alias_failed", {"error": str(package_alias_exc)[:500]})
         for kind, pth, mt in [
-            ("video", captioned, "video/mp4"), ("audio_master", audio_master, "audio/mpeg"), ("audio", audio_master, "audio/mpeg"), ("article", article, "text/markdown"), ("social_campaign", social, "application/json"), ("social_campaign_markdown", social_markdown, "text/markdown"),
+            ("video", captioned, "video/mp4"), ("audio_master", audio_master, "audio/mpeg"), ("audio", audio_master, "audio/mpeg"), ("narration_only", narration_only, "audio/mpeg"), ("article", article, "text/markdown"), ("social_campaign", social, "application/json"), ("social_campaign_markdown", social_markdown, "text/markdown"),
             ("script", script, "text/markdown"), ("captions", captions, "application/x-subrip"),
             ("sources", sources, "application/json"), ("manifest", manifest, "application/json"), ("production_manifest", production_manifest, "application/json"), ("rights_manifest", rights_manifest, "application/json"), ("feature_execution", outdir / "feature_execution.json", "application/json"), ("thumbnail", thumb, "image/jpeg"), ("package", package, "application/zip")
         ]:
@@ -6269,6 +6287,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             (package, "application/zip"),
             (thumb, "image/jpeg"),
             (audio_master, "audio/mpeg"),
+            (narration_only, "audio/mpeg"),
             (captions, "application/x-subrip"),
             (sources, "application/json"),
             (manifest, "application/json"),
@@ -6298,6 +6317,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 "captions": f"/infinity/studio/project/{project_id}/asset/captions.srt", "sources": f"/infinity/studio/project/{project_id}/asset/sources.json",
                 "manifest": f"/infinity/studio/project/{project_id}/asset/manifest.json", "production_manifest": f"/infinity/studio/project/{project_id}/asset/production_manifest.json", "rights_manifest": f"/infinity/studio/project/{project_id}/asset/rights_manifest.json", "feature_execution": f"/infinity/studio/project/{project_id}/asset/feature_execution.json",
                 "audio": f"/infinity/studio/project/{project_id}/asset/audio_master.mp3" if audio_master and audio_master.exists() else None,
+                "narration_only": f"/infinity/studio/project/{project_id}/asset/narration_only.mp3" if narration_only and narration_only.exists() else None,
                 "article": f"/infinity/studio/project/{project_id}/asset/article.md" if article and article.exists() else None,
                 "social_campaign": f"/infinity/studio/project/{project_id}/asset/social_campaign.json" if (outdir/"social_campaign.json").exists() else (f"/infinity/studio/project/{project_id}/asset/social_campaign.md" if social and social.exists() else None),
                 "seo": f"/infinity/studio/project/{project_id}/asset/seo.json", "accessibility": f"/infinity/studio/project/{project_id}/asset/accessibility.json",
