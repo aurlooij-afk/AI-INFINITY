@@ -285,17 +285,26 @@ def install(app: Any) -> None:
 
     def otio_timeline_source(pid: str, project: Dict[str, Any]) -> Dict[str, Any]:
         path = studio._project_dir(pid) / "timeline.json"
+        user_id = str(project.get("user_id") or "")
         if not path.is_file():
-            studio._rehydrate_project_asset(pid, str(project.get("user_id") or ""), "timeline.json")
-        if path.exists():
+            studio._rehydrate_project_asset(pid, user_id, "timeline.json")
+
+        if path.is_file() and path.stat().st_size > 0:
+            integrity = studio._project_artifact_integrity(pid, path)
+            if integrity is False:
+                studio._rehydrate_project_asset(pid, user_id, "timeline.json", force=True)
+                integrity = studio._project_artifact_integrity(pid, path)
+                if integrity is False:
+                    raise HTTPException(
+                        409,
+                        "saved timeline bytes do not match the latest manifest and no verified recovery copy is available",
+                    )
             try:
                 stored = json.loads(path.read_text(encoding="utf-8"))
             except Exception as first_exc:
                 # Try only a content-verified remote restore; if no independently
                 # verified copy exists, preserve the corrupt bytes and fail closed.
-                studio._rehydrate_project_asset(
-                    pid, str(project.get("user_id") or ""), "timeline.json", force=True
-                )
+                studio._rehydrate_project_asset(pid, user_id, "timeline.json", force=True)
                 try:
                     stored = json.loads(path.read_text(encoding="utf-8"))
                 except Exception as exc:
@@ -304,6 +313,20 @@ def install(app: Any) -> None:
                 raise HTTPException(409, "saved timeline is invalid; repair it before OTIO export")
             source = stored
         else:
+            try:
+                with studio.DB_LOCK, studio._connect() as conn:
+                    saved_row = conn.execute(
+                        "SELECT id FROM studio_assets_3610 "
+                        "WHERE project_id=? AND kind='timeline' ORDER BY id DESC LIMIT 1",
+                        (pid,),
+                    ).fetchone()
+            except Exception as exc:
+                raise HTTPException(503, "saved timeline availability could not be established") from exc
+            if saved_row:
+                raise HTTPException(
+                    409,
+                    "saved timeline is missing and no verified recovery copy is available; refusing to export a replacement",
+                )
             source = base._timeline(studio, project)
         try:
             return normalize(pid, source)
