@@ -20,6 +20,7 @@ import studio_ultimate as studio
         "provenance", "manifest", "production_manifest", "rights_manifest",
         "rights", "fact_check", "accessibility", "platform_manifest",
         "feature_execution", "short", "version", "edit", "editorial_scorecard",
+        "timeline", "editable_timeline", "timeline_bundle", "otio", "otio_bundle",
     ],
 )
 def test_user_facing_deliverable_kinds_enter_real_durable_storage(monkeypatch, tmp_path: Path, kind: str):
