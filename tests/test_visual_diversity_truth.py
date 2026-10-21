@@ -1649,3 +1649,54 @@ def test_pashto_ai_infinity_launch_fallback_has_runtime_sufficient_product_copy_
         "د ارزونې لپاره بشپړه بسته",
     ]
 
+def test_final_delivery_loudness_master_preserves_video_and_validates_streams(monkeypatch, tmp_path):
+    target_studio = closure._studio()
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source-video" * 1200)
+    captured = {}
+
+    def fake_ffmpeg(*args, **kwargs):
+        captured["args"] = [str(value) for value in args]
+        captured["timeout"] = kwargs.get("timeout")
+        Path(args[-1]).write_bytes(b"normalized-delivery" * 1200)
+
+    def fake_probe(path):
+        return {
+            "format": {"duration": "20.0"},
+            "streams": [
+                {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080},
+                {"codec_type": "audio", "codec_name": "aac"},
+                {"codec_type": "subtitle", "codec_name": "mov_text"},
+            ],
+        }
+
+    monkeypatch.setattr(target_studio, "ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(target_studio, "ffprobe_json", fake_probe)
+    monkeypatch.setattr(target_studio, "probe_duration", lambda path: 20.0)
+    out = tmp_path / "mastered.mp4"
+
+    result = target_studio._normalize_delivery_loudness(source, out, fast_mode=False)
+
+    args = captured["args"]
+    assert "-c:v" in args and args[args.index("-c:v") + 1] == "copy"
+    assert "-af" in args and args[args.index("-af") + 1] == "loudnorm=I=-16.0:TP=-1.5:LRA=11.0"
+    assert "0:s?" in args
+    assert result["status"] == "completed" and result["truthful"] is True
+    assert result["target_integrated_lufs"] == -16.0
+    assert result["video_stream_copied"] is True
+    assert result["subtitle_stream_count"] == 1
+    assert out.is_file() and out.stat().st_size > 10_000
+
+
+def test_final_delivery_loudness_master_rejects_invalid_targets(monkeypatch, tmp_path):
+    target_studio = closure._studio()
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source-video" * 1200)
+    monkeypatch.setenv("AI_INFINITY_DELIVERY_TARGET_LUFS", "-40")
+    try:
+        target_studio._normalize_delivery_loudness(source, tmp_path / "mastered.mp4")
+    except ValueError as exc:
+        assert "between -20 and -14 LUFS" in str(exc)
+    else:
+        raise AssertionError("unsafe loudness target should have been rejected")
+
