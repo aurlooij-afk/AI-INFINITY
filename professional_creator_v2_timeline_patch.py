@@ -9,6 +9,12 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 from fastapi import HTTPException, Request
+from ai_infinity.timeline_interchange import (
+    MAX_OTIO_BYTES,
+    TimelineInterchangeError,
+    export_otio_bundle,
+    import_otio_timeline,
+)
 
 VERSION = "TARGET-2050.PRO-CREATOR-TIMELINE.1"
 BUILD_NOTE = "stable-scene-identity-v1"
@@ -169,3 +175,111 @@ def install(app: Any) -> None:
             studio._update_project(pid, status="failed", stage="timeline_render_failed", error=str(exc)[:800])
             studio.audit_event(pid, "professional_timeline_render_failed", {"error": str(exc)[:1000]})
             raise HTTPException(500, "professional timeline render failed: " + str(exc)[:500])
+
+    def otio_timeline_source(pid: str, project: Dict[str, Any]) -> Dict[str, Any]:
+        path = studio._project_dir(pid) / "timeline.json"
+        if path.exists():
+            try:
+                stored = json.loads(path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise HTTPException(409, "saved timeline is unreadable; repair it before OTIO export") from exc
+            if not isinstance(stored, dict) or not isinstance(stored.get("scenes"), list) or not stored["scenes"]:
+                raise HTTPException(409, "saved timeline is invalid; repair it before OTIO export")
+            source = stored
+        else:
+            source = base._timeline(studio, project)
+        try:
+            return normalize(pid, source)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(409, "project timeline could not be normalized for interchange") from exc
+
+    @app.post("/infinity/pro2/project/{pid}/timeline/otio/export")
+    def export_timeline_otio(pid: str, request: Request):
+        uid, project = owned(pid, request)
+        if project.get("status") not in {"completed", "completed_with_qc_warnings"}:
+            raise HTTPException(409, "OTIO export requires completed scene masters")
+        root = studio._project_dir(pid)
+        timeline_data = otio_timeline_source(pid, project)
+        truth = base._truth(studio, studio._get_project(pid))
+        try:
+            result = export_otio_bundle(root, pid, project, timeline_data, truth)
+        except TimelineInterchangeError as exc:
+            status = 503 if "unavailable in this runtime" in str(exc) else 409
+            raise HTTPException(status, str(exc)) from exc
+        studio.register_artifact(
+            pid, result["timeline_path"], "application/vnd.opentimelineio+json",
+            {"format": "otio", "sha256": result["timeline_sha256"], "truth_state": result["truth_state"]},
+        )
+        studio.register_artifact(
+            pid, result["bundle_path"], "application/zip",
+            {"format": "otio_bundle", "sha256": result["bundle_sha256"], "truth_state": result["truth_state"]},
+        )
+        studio.audit_event(pid, "professional_timeline_otio_exported", {
+            "scene_count": result["scene_count"],
+            "media_files": result["media_files"],
+            "bundle_sha256": result["bundle_sha256"],
+            "truth_verified": result["truth_verified"],
+            "human_review_status": result["human_review_status"],
+        })
+        return {
+            "status": "exported",
+            "project_id": pid,
+            "timeline": {
+                "name": result["timeline_path"].name,
+                "download_url": f"/infinity/studio/project/{pid}/asset/project.otio",
+                "sha256": result["timeline_sha256"],
+            },
+            "bundle": {
+                "name": result["bundle_path"].name,
+                "download_url": f"/infinity/studio/project/{pid}/asset/timeline-export.zip",
+                "sha256": result["bundle_sha256"],
+                "size_bytes": result["bundle_size_bytes"],
+            },
+            "scene_count": result["scene_count"],
+            "media_files": result["media_files"],
+            "truth_state": result["truth_state"],
+            "truth_verified": result["truth_verified"],
+            "human_review_status": result["human_review_status"],
+            "requires_human_review": True,
+            "truthful": True,
+        }
+
+    @app.post("/infinity/pro2/project/{pid}/timeline/otio/import")
+    async def import_timeline_otio_route(pid: str, request: Request):
+        uid, project = owned(pid, request)
+        if project.get("status") not in {"completed", "completed_with_qc_warnings"}:
+            raise HTTPException(409, "OTIO import requires completed scene masters")
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > MAX_OTIO_BYTES:
+                raise HTTPException(413, "OTIO file exceeds the 2 MiB import limit")
+        if not body:
+            raise HTTPException(422, "OTIO JSON body is required")
+        try:
+            imported = import_otio_timeline(
+                bytes(body),
+                studio._project_dir(pid),
+                pid,
+                str(project.get("title") or "AI Infinity project"),
+            )
+            timeline_data = save(pid, imported)
+        except TimelineInterchangeError as exc:
+            status = 503 if "unavailable in this runtime" in str(exc) else 422
+            raise HTTPException(status, str(exc)) from exc
+        studio.audit_event(pid, "professional_timeline_otio_imported", {
+            "scene_count": len(timeline_data["scenes"]),
+            "source": "OpenTimelineIO JSON",
+            "render_required": True,
+        })
+        return {
+            "status": "imported",
+            "project_id": pid,
+            "timeline": timeline_data,
+            "render_required": True,
+            "truth_verified": False,
+            "human_review_status": "PENDING",
+            "truthful": True,
+        }
