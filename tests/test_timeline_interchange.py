@@ -156,6 +156,7 @@ def test_otio_export_bundle_roundtrips_scene_order_trim_hashes_and_truth(tmp_pat
         "Interchange acceptance",
     )
     assert imported["truthful"] is True
+    assert imported["fps"] == timeline["fps"]
     assert [scene["source_asset"] for scene in imported["scenes"]] == [
         "scene_01.mp4", "scene_02.mp4"
     ]
