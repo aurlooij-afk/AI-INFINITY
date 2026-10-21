@@ -4851,7 +4851,17 @@ def _save_asset(project_id: str, kind: str, path: Path, media_type: str, metadat
     # Persist only user-facing production artifacts when a real durable storage
     # provider is configured. Intermediate scene files remain local/temp to avoid
     # unnecessary copies and costs. Unconfigured storage is explicitly recorded.
-    durable_kinds = {"final","video","package","thumbnail","audio","audio_master","caption","captions","script","transcript","article","seo","social","social_campaign","social_campaign_markdown","sources","provenance","manifest","production_manifest","rights_manifest","rights","fact_check","accessibility","platform_manifest","feature_execution","short","version","edit","editorial_scorecard"}
+    durable_kinds = {
+        "final", "video", "package", "thumbnail", "audio", "audio_master",
+        "caption", "captions", "script", "transcript", "article", "seo",
+        "social", "social_campaign", "social_campaign_markdown", "sources",
+        "provenance", "manifest", "production_manifest", "rights_manifest",
+        "rights", "fact_check", "accessibility", "platform_manifest",
+        "feature_execution", "short", "version", "edit", "editorial_scorecard",
+        # Editable project state must survive restart alongside its source
+        # media, and portable interchange exports are user-facing deliverables.
+        "timeline", "editable_timeline", "timeline_bundle", "otio", "otio_bundle",
+    }
     if kind in durable_kinds and path.exists() and path.is_file():
         try:
             project = _get_project(project_id)
@@ -4880,6 +4890,7 @@ def _save_asset(project_id: str, kind: str, path: Path, media_type: str, metadat
             }
     with DB_LOCK, _connect() as c:
         c.execute("INSERT INTO studio_assets_3610(project_id,kind,path,media_type,metadata_json,created_at) VALUES(?,?,?,?,?,?)", (project_id, kind, str(path), media_type, jdump(redact(meta)), now()))
+    return redact(meta)
 
 
 def _get_project(project_id: str) -> Optional[Dict[str, Any]]:
