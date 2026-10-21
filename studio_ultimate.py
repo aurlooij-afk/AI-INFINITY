@@ -1656,7 +1656,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         # Long-form scenes need a higher word budget than short-form beats:
         # otherwise sentence-boundary truncation leaves the full 180s script below
         # the professional spoken-word floor even though the source copy is longer.
-        budget_rate = 2.8 if float(duration or 0) >= 120 else 2.3
+        budget_rate = 3.2 if float(duration or 0) >= 120 else 2.3
         budget = max(8, int(max(3.5, seconds) * budget_rate))
         localized = _localized_fallback_copy(language, name, clean_title, topic_label)
         if chapter_index < len(uploaded_points):
