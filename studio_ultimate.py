@@ -1651,12 +1651,70 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         ),
     }
 
+    # Product-launch copy for Pashto must be long enough for a real 60-second
+    # narration track and should explain the actual workflow, not generic slogans.
+    ai_infinity_launch_narration_pashto = {
+        "Hook": (
+            "AI Infinity ستاسو له ساده تشریح څخه د جوړولو منظم بهیر پیلوي. "
+            "موخه، مخاطب او ژبه وټاکئ، څو هره صحنه له اصلي پیغام سره تړلې وي."
+        ),
+        "Why it matters": (
+            "کله چې لیکنه، څېړنه، انځورونه، غږ او سرلیکونه جلا وي، د وخت او همغږۍ ستونزې پیدا کېږي. "
+            "یو تړلی بهیر دا برخې له یوه هدف سره برابروي."
+        ),
+        "The key idea": (
+            "باوري ادعاوې له اټکل څخه جلا کړئ. "
+            "سرچینې او د هرې رسنۍ د کارولو شرایط له پروژې سره وساتئ؛ "
+            "نا تایید شوې اجازه د بیاکتنې لپاره ښکاره کړئ."
+        ),
+        "Practical example": (
+            "د هرې صحنې لپاره ځانګړی پیغام وټاکئ، اړوند فوټېج غوره کړئ، غږ او سرلیکونه همغږي کړئ، بیا ویډیو وګورئ. "
+            "د غږ روښانتیا او د سرلیکونو وخت وازمویئ."
+        ),
+        "Takeaway": (
+            "ویډیو له لیکنې، سرلیکونو، تمبیل، سرچینو او د حقونو ریکارډونو سره صادره کړئ. "
+            "فایلونه وګورئ؛ تر ارزونې مخکې یې مه خپروئ."
+        ),
+        "Context": (
+            "لومړی د مخاطب اړتیاوې او د پروژې حدود معلوم کړئ. "
+            "بیا د هرې صحنې دنده وټاکئ، څو ترتیب د کیسې هدف روښانه کړي."
+        ),
+        "The core idea": (
+            "د پروژې سرچینې او د رسنیو د کارولو حقونه له فایلونو سره ثبت کړئ. "
+            "هغه معلومات چې لا نه دي تایید شوي، د یقیني حقیقت په توګه مه وړاندې کوئ."
+        ),
+        "How it works": (
+            "لیکنه، صحنې، غږ او سرلیکونه په یوه بهیر کې جوړ او سم کړئ. "
+            "د هر بدلون وروسته ویډیو بیا وګورئ، څو غږ او تصویر له یو بل سره برابر پاتې شي."
+        ),
+        "Real-world examples": (
+            "د صادر شوي فایل صحنې، غږ، سرلیکونه او د هرې صحنې تړاو وګورئ. "
+            "د پروګرام تخنیکي ازموینه د کیسې او ژبې د انساني ارزونې ځای نه نیسي."
+        ),
+        "What changes": (
+            "صحنه اصلاح کړئ، لیکنه تازه کړئ او نوی رینډر له پخوانۍ نسخې سره پرتله کړئ. "
+            "پخوانۍ ښه نسخه وساتئ، څو ناکامه بدلون د کار د بېرته راګرځولو مخه ونه نیسي."
+        ),
+        "Practical takeaway": (
+            "وروستۍ ویډیو له لیکنې، سرلیکونو، تمبیل، سرچینو او د حقونو له ریکارډونو سره صادره کړئ. "
+            "د فایلونو بشپړتیا وګورئ او د هرې ستونزې حالت ښکاره وساتئ."
+        ),
+        "Closing": (
+            "تخنیکي ازموینې د فایل کیفیت ښيي، خو کیسه او ژبه باید انسانان وارزوي. "
+            "یوازې هماغه نسخه تصویب کړئ چې اړینې ازموینې او انساني ارزونه یې بشپړه کړې وي."
+        ),
+    }
+
     def bounded_narration(name: str, seconds: float, source: Dict[str, Any], chapter_index: int) -> str:
         """Use extracted user-source content first, then use deterministic fallback copy."""
         # Long-form scenes need a higher word budget than short-form beats:
         # otherwise sentence-boundary truncation leaves the full 180s script below
         # the professional spoken-word floor even though the source copy is longer.
-        budget_rate = 3.2 if float(duration or 0) >= 120 else 2.3
+        long_form = float(duration or 0) >= 120
+        pashto_launch = ai_infinity_launch and str(language or "").strip().lower() in {"pashto", "ps", "ps-af"}
+        # Keep localized short-form copy within realistic spoken pacing while
+        # allowing enough complete sentences to satisfy the runtime truth gate.
+        budget_rate = 3.2 if long_form else (2.8 if pashto_launch and float(duration or 0) >= 60 else 2.3)
         budget = max(8, int(max(3.5, seconds) * budget_rate))
         localized = _localized_fallback_copy(language, name, clean_title, topic_label)
         if chapter_index < len(uploaded_points):
@@ -1670,6 +1728,8 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             raw_text = "The uploaded source brings these points together: " + recap
         elif ai_infinity_launch and str(language or "English").strip().lower() == "english":
             raw_text = ai_infinity_launch_narration.get(name) or ai_infinity_launch_narration.get("Closing")
+        elif pashto_launch:
+            raw_text = ai_infinity_launch_narration_pashto.get(name) or ai_infinity_launch_narration_pashto.get("Closing")
         else:
             raw_text = localized["narration_by_name"].get(name) or localized["narration_by_name"].get("Closing") or localized["opening"]
         text = re.sub(r"\s+", " ", str(raw_text or "")).strip()
@@ -1759,6 +1819,21 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "Closing": "Proof before publishing",
             }
             localized_screen = launch_overlays.get(name, localized_screen)
+        elif ai_infinity_launch and str(language or "").strip().lower() in {"pashto", "ps", "ps-af"}:
+            localized_screen = {
+                "Hook": "له نظره تر بشپړ کاره",
+                "Why it matters": "روښانه هدف، یو بهیر",
+                "The key idea": "شواهد او د حقونو ریکارډ",
+                "Practical example": "صحنه، غږ او سرلیکونه",
+                "Takeaway": "د ارزونې لپاره بشپړه بسته",
+                "Context": "د مخاطب او موخې ټاکل",
+                "The core idea": "باوري شواهد",
+                "How it works": "لیکنه، غږ او تصویر",
+                "Real-world examples": "صادر شوی فایل وازمویئ",
+                "What changes": "سمون، بیا رینډر، پرتله",
+                "Practical takeaway": "بشپړه بسته صادره کړئ",
+                "Closing": "تر اجازې مخکې خپرول مه کوئ",
+            }.get(name, localized_screen)
         chapters.append({
             "heading": f"{localized_heading} — {clean_title}" if name in {"Hook", "Closing"} else f"{localized_heading}: {clean_title}",
             "topic": topic_label,
@@ -1784,6 +1859,9 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "Describe the idea, inspect the actual deliverables, then revise or export "
             "when required quality and rights checks are complete."
         )
+    elif ai_infinity_launch and str(language or "").strip().lower() in {"pashto", "ps", "ps-af"}:
+        localized_hook = "یوه روښانه موخه، لیکنه، ویډیو، سرلیکونه او د سمون وړ بشپړه بسته."
+        localized_cta = "پایله وارزوئ، سرچینې او حقونه تایید کړئ، بیا د اړینو کتنو او څرګندې اجازې وروسته صادرول یا خپرول وټاکئ."
 
     return {
         "title": clean_title,
