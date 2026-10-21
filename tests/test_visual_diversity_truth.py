@@ -1637,7 +1637,7 @@ def test_pashto_ai_infinity_launch_fallback_has_runtime_sufficient_product_copy_
     assert len(chapters) == 5
     narration = " ".join(chapter["narration"] for chapter in chapters)
     # The production truth gate requires two spoken words per requested second.
-    assert len(re.findall(r"[\\w'-]+", narration)) >= 120, narration
+    assert len(re.findall(r"[\w'-]+", narration)) >= 120, narration
     assert any(char in narration for char in "ځښږڅټډړګڼ")
     assert plan["hook"].startswith("یوه روښانه موخه")
     assert "حقونه تایید کړئ" in plan["cta"]
