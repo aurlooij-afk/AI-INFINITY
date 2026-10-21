@@ -11,8 +11,10 @@ existing startup/shutdown hooks continue to run.
 from __future__ import annotations
 
 import main as foundation
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 
+import production_closure_3624
+import studio_ultimate
 from studio_ultimate import register as register_creator_studio
 
 foundation_app = foundation.app
@@ -24,6 +26,17 @@ creator_app = FastAPI(title="AI Infinity Creator Studio", docs_url=None, redoc_u
 # external providers honestly.
 model_fn = getattr(foundation, "_2700_model", None)
 register_creator_studio(creator_app, model_fn=model_fn)
+
+
+# The dispatcher serves /infinity/studio from creator_app rather than main:app.
+# Register the same production truth gate on this app so callers are not sent
+# to a route that exists only on foundation.app.
+@creator_app.get("/infinity/studio/project/{project_id}/truth")
+def creator_project_truth(project_id: str, request: Request, response: Response):
+    user_id = studio_ultimate._get_user_id(request)
+    studio_ultimate._set_session(response, request, user_id)
+    project = production_closure_3624._require_project(project_id, user_id)
+    return production_closure_3624._professional_truth(project, reconcile=True)
 
 
 class AIInfinityApplication:

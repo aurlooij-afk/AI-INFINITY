@@ -9,6 +9,12 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 from fastapi import HTTPException, Request
+from ai_infinity.timeline_interchange import (
+    MAX_OTIO_BYTES,
+    TimelineInterchangeError,
+    export_otio_bundle,
+    import_otio_timeline,
+)
 
 VERSION = "TARGET-2050.PRO-CREATOR-TIMELINE.1"
 BUILD_NOTE = "stable-scene-identity-v1"
@@ -16,6 +22,23 @@ BUILD_NOTE = "stable-scene-identity-v1"
 def install(app: Any) -> None:
     import studio_ultimate as studio
     import professional_creator_v2 as base
+
+    # Replace the base editor's three overlapping handlers rather than adding
+    # duplicate FastAPI routes. main.py installs the base UI first, then this
+    # correctness patch; keeping only these handlers also keeps OpenAPI stable.
+    replaced = {
+        ("/infinity/pro2/project/{pid}/timeline", "GET"),
+        ("/infinity/pro2/project/{pid}/timeline", "PUT"),
+        ("/infinity/pro2/project/{pid}/timeline/render", "POST"),
+    }
+    app.router.routes[:] = [
+        route for route in app.router.routes
+        if not any(
+            getattr(route, "path", "") == path
+            and method in (getattr(route, "methods", set()) or set())
+            for path, method in replaced
+        )
+    ]
 
     def owned(pid: str, request: Request):
         uid = studio._get_user_id(request)
@@ -106,27 +129,109 @@ def install(app: Any) -> None:
             "truthful": True,
         }
 
-    def save(pid: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def durability_summary(saved: Dict[str, Any], path: Path) -> Dict[str, Any]:
+        stored = (saved or {}).get("durable_storage") or {}
+        status = str(stored.get("status") or "not_persisted")
+        verified_statuses = {"primary_only", "durable_partial", "durable_multi_provider", "durable_5_provider"}
+        successful = list(stored.get("successful_providers") or [])
+        try:
+            actual_sha = studio.file_sha256(path)
+            actual_size = path.stat().st_size
+        except Exception:
+            actual_sha, actual_size = "", -1
+        verified = (
+            status in verified_statuses
+            and len(successful) >= 1
+            and stored.get("sha256") == actual_sha
+            and int(stored.get("size_bytes") or -1) == int(actual_size)
+        )
+        return {
+            "status": status,
+            "verified": verified,
+            "sha256": stored.get("sha256"),
+            "size_bytes": stored.get("size_bytes"),
+            "successful_providers": successful,
+            "truthful": True,
+        }
+
+    def save(pid: str, payload: Dict[str, Any]):
         tl = normalize(pid, payload)
         path = studio._project_dir(pid) / "timeline.json"
         path.write_text(json.dumps(tl, ensure_ascii=False, indent=2), encoding="utf-8")
+        storage = studio._save_asset(pid, "timeline", path, "application/json", {"editor": VERSION})
         studio.register_artifact(pid, path, "application/json", {"editor": VERSION})
         studio.audit_event(pid, "professional_timeline_saved_corrected", {"scene_count": len(tl["scenes"])})
-        return tl
+        return tl, storage
 
     @app.get("/infinity/pro2/project/{pid}/timeline")
     def timeline(pid: str, request: Request):
         uid, p = owned(pid, request)
         path = studio._project_dir(pid) / "timeline.json"
-        if path.exists():
+
+        if path.is_file() and path.stat().st_size > 0:
+            integrity = studio._project_artifact_integrity(pid, path)
+            if integrity is False:
+                studio._rehydrate_project_asset(pid, uid, "timeline.json", force=True)
+                integrity = studio._project_artifact_integrity(pid, path)
+                if integrity is False:
+                    raise HTTPException(
+                        409,
+                        "saved timeline bytes do not match the latest manifest and no verified recovery copy is available",
+                    )
+
+        def read_valid_saved_timeline() -> Dict[str, Any]:
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(stored, dict) or not isinstance(stored.get("scenes"), list) or not stored["scenes"]:
+                raise ValueError("saved timeline must contain a non-empty scenes array")
+            return stored
+
+        if not path.is_file() or path.stat().st_size == 0:
+            studio._rehydrate_project_asset(pid, uid, "timeline.json")
+        if path.is_file() and path.stat().st_size > 0:
             try:
-                stored = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(stored, dict) and stored.get("scenes"):
-                    stored["owner"] = uid
-                    stored["truthful"] = True
-                    return stored
-            except Exception:
-                pass
+                stored = read_valid_saved_timeline()
+            except Exception as original_error:
+                # A corrupt local timeline can be replaced only by a separately
+                # checksum-verified object-store copy. Do not silently reconstruct
+                # a new timeline and present it as the user's saved edit.
+                restored = studio._rehydrate_project_asset(
+                    pid, uid, "timeline.json", force=True
+                )
+                if restored is None or not path.is_file():
+                    raise HTTPException(
+                        409,
+                        "saved timeline is corrupt and no verified recovery copy is available; existing edit was preserved",
+                    ) from original_error
+                try:
+                    stored = read_valid_saved_timeline()
+                except Exception as exc:
+                    raise HTTPException(
+                        409,
+                        "saved timeline remains invalid after verified recovery; existing edit was preserved",
+                    ) from exc
+            stored["owner"] = uid
+            stored["truthful"] = True
+            return stored
+
+        # Missing local data is not the same as a never-saved project. If a
+        # timeline row exists, report loss of recovery rather than regenerate a
+        # different timeline and conceal that the latest edit was not preserved.
+        try:
+            with studio.DB_LOCK, studio._connect() as conn:
+                saved_row = conn.execute(
+                    "SELECT id FROM studio_assets_3610 "
+                    "WHERE project_id=? AND kind='timeline' ORDER BY id DESC LIMIT 1",
+                    (pid,),
+                ).fetchone()
+        except Exception as exc:
+            raise HTTPException(
+                503, "saved timeline availability could not be established; refusing to reconstruct it"
+            ) from exc
+        if saved_row:
+            raise HTTPException(
+                503,
+                "saved timeline is missing and no verified recovery copy is available; latest edit was not reconstructed",
+            )
         out = base._timeline(studio, p)
         out["owner"] = uid
         return out
@@ -138,8 +243,14 @@ def install(app: Any) -> None:
             raise HTTPException(409, "timeline requires completed scene masters")
         payload = await request.json()
         payload["project_id"] = pid
-        tl = save(pid, payload)
-        return {"status": "saved", "timeline": tl, "truthful": True}
+        tl, timeline_storage = save(pid, payload)
+        timeline_path = studio._project_dir(pid) / "timeline.json"
+        return {
+            "status": "saved",
+            "timeline": tl,
+            "durability": durability_summary(timeline_storage, timeline_path),
+            "truthful": True,
+        }
 
     @app.post("/infinity/pro2/project/{pid}/timeline/render")
     async def render_timeline(pid: str, request: Request):
@@ -148,7 +259,8 @@ def install(app: Any) -> None:
             raise HTTPException(409, "timeline render requires completed scene masters")
         payload = await request.json()
         payload["project_id"] = pid
-        tl = save(pid, payload)
+        tl, timeline_storage = save(pid, payload)
+        timeline_path = studio._project_dir(pid) / "timeline.json"
         try:
             rendered = base._render(studio, pid, tl)
             variants = base._variants(studio, pid, rendered["master"])
@@ -163,9 +275,195 @@ def install(app: Any) -> None:
                 "verified": bool(truth.get("verified")),
                 "truth": truth,
                 "download_url": f"/infinity/studio/project/{pid}/asset/final.mp4",
+                "timeline_durability": durability_summary(timeline_storage, timeline_path),
                 "truthful": True,
             }
         except Exception as exc:
             studio._update_project(pid, status="failed", stage="timeline_render_failed", error=str(exc)[:800])
             studio.audit_event(pid, "professional_timeline_render_failed", {"error": str(exc)[:1000]})
             raise HTTPException(500, "professional timeline render failed: " + str(exc)[:500])
+
+    def otio_timeline_source(pid: str, project: Dict[str, Any]) -> Dict[str, Any]:
+        path = studio._project_dir(pid) / "timeline.json"
+        user_id = str(project.get("user_id") or "")
+        if not path.is_file():
+            studio._rehydrate_project_asset(pid, user_id, "timeline.json")
+
+        if path.is_file() and path.stat().st_size > 0:
+            integrity = studio._project_artifact_integrity(pid, path)
+            if integrity is False:
+                studio._rehydrate_project_asset(pid, user_id, "timeline.json", force=True)
+                integrity = studio._project_artifact_integrity(pid, path)
+                if integrity is False:
+                    raise HTTPException(
+                        409,
+                        "saved timeline bytes do not match the latest manifest and no verified recovery copy is available",
+                    )
+            try:
+                stored = json.loads(path.read_text(encoding="utf-8"))
+            except Exception as first_exc:
+                # Try only a content-verified remote restore; if no independently
+                # verified copy exists, preserve the corrupt bytes and fail closed.
+                studio._rehydrate_project_asset(pid, user_id, "timeline.json", force=True)
+                try:
+                    stored = json.loads(path.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    raise HTTPException(409, "saved timeline is unreadable and no verified recovery copy could be restored") from exc
+            if not isinstance(stored, dict) or not isinstance(stored.get("scenes"), list) or not stored["scenes"]:
+                # Some completed legacy projects contain an empty editor scaffold
+                # created before scene masters were finalized. Recover a default
+                # timeline only when the scaffold has no scenes AND the project
+                # has real completed scene masters. Never replace a non-empty
+                # user-edited timeline or silently export a blank project.
+                completed_masters = sorted(
+                    p for p in studio._project_dir(pid).glob("scene_*.mp4")
+                    if p.is_file() and p.stat().st_size > 0
+                )
+                if completed_masters:
+                    source = base._timeline(studio, project)
+                    if not isinstance(source, dict) or not isinstance(source.get("scenes"), list) or not source["scenes"]:
+                        raise HTTPException(409, "saved timeline is empty and completed scene masters could not produce a recoverable timeline")
+                    source = normalize(pid, source)
+                    # Use the editor's normal save path so recovery also records
+                    # artifact durability/read-back evidence. Merely registering local
+                    # bytes would leave the asset manifest stale and make this recovery
+                    # disappear after a clean-instance restart.
+                    source, recovery_storage = save(pid, source)
+                    studio.audit_event(pid, "professional_timeline_recovered_from_completed_scene_masters", {
+                        "scene_count": len(source["scenes"]),
+                        "reason": "empty legacy timeline scaffold",
+                        "durability_status": str((recovery_storage or {}).get("durable_storage", {}).get("status") or "not_persisted"),
+                    })
+                    return source
+                raise HTTPException(409, "saved timeline is invalid; repair it before OTIO export")
+            source = stored
+        else:
+            try:
+                with studio.DB_LOCK, studio._connect() as conn:
+                    saved_row = conn.execute(
+                        "SELECT id FROM studio_assets_3610 "
+                        "WHERE project_id=? AND kind='timeline' ORDER BY id DESC LIMIT 1",
+                        (pid,),
+                    ).fetchone()
+            except Exception as exc:
+                raise HTTPException(503, "saved timeline availability could not be established") from exc
+            if saved_row:
+                raise HTTPException(
+                    409,
+                    "saved timeline is missing and no verified recovery copy is available; refusing to export a replacement",
+                )
+            source = base._timeline(studio, project)
+        try:
+            return normalize(pid, source)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(409, "project timeline could not be normalized for interchange") from exc
+
+    @app.post("/infinity/pro2/project/{pid}/timeline/otio/export")
+    def export_timeline_otio(pid: str, request: Request):
+        uid, project = owned(pid, request)
+        if project.get("status") not in {"completed", "completed_with_qc_warnings"}:
+            raise HTTPException(409, "OTIO export requires completed scene masters")
+        root = studio._project_dir(pid)
+        timeline_data = otio_timeline_source(pid, project)
+        truth = base._truth(studio, studio._get_project(pid))
+        try:
+            result = export_otio_bundle(root, pid, project, timeline_data, truth)
+        except TimelineInterchangeError as exc:
+            status = 503 if "unavailable in this runtime" in str(exc) else 409
+            raise HTTPException(status, str(exc)) from exc
+        timeline_storage = studio._save_asset(
+            pid, "editable_timeline", result["timeline_path"], "application/vnd.opentimelineio+json",
+            {"format": "otio", "sha256": result["timeline_sha256"], "truth_state": result["truth_state"]},
+        )
+        bundle_storage = studio._save_asset(
+            pid, "timeline_bundle", result["bundle_path"], "application/zip",
+            {"format": "otio_bundle", "sha256": result["bundle_sha256"], "truth_state": result["truth_state"]},
+        )
+        studio.register_artifact(
+            pid, result["timeline_path"], "application/vnd.opentimelineio+json",
+            {"format": "otio", "sha256": result["timeline_sha256"], "truth_state": result["truth_state"]},
+        )
+        studio.register_artifact(
+            pid, result["bundle_path"], "application/zip",
+            {"format": "otio_bundle", "sha256": result["bundle_sha256"], "truth_state": result["truth_state"]},
+        )
+        studio.audit_event(pid, "professional_timeline_otio_exported", {
+            "scene_count": result["scene_count"],
+            "media_files": result["media_files"],
+            "bundle_sha256": result["bundle_sha256"],
+            "truth_verified": result["truth_verified"],
+            "human_review_status": result["human_review_status"],
+        })
+        return {
+            "status": "exported",
+            "project_id": pid,
+            "timeline": {
+                "name": result["timeline_path"].name,
+                "download_url": f"/infinity/studio/project/{pid}/asset/{result['timeline_path'].name}",
+                "sha256": result["timeline_sha256"],
+            },
+            "bundle": {
+                "name": result["bundle_path"].name,
+                "download_url": f"/infinity/studio/project/{pid}/asset/{result['bundle_path'].name}",
+                "sha256": result["bundle_sha256"],
+                "size_bytes": result["bundle_size_bytes"],
+            },
+            "scene_count": result["scene_count"],
+            "media_files": result["media_files"],
+            "truth_state": result["truth_state"],
+            "truth_verified": result["truth_verified"],
+            "human_review_status": result["human_review_status"],
+            "requires_human_review": True,
+            "durability": {
+                "timeline": durability_summary(
+                    timeline_storage, result["timeline_path"]
+                ),
+                "bundle": durability_summary(
+                    bundle_storage, result["bundle_path"]
+                ),
+            },
+            "truthful": True,
+        }
+
+    @app.post("/infinity/pro2/project/{pid}/timeline/otio/import")
+    async def import_timeline_otio_route(pid: str, request: Request):
+        uid, project = owned(pid, request)
+        if project.get("status") not in {"completed", "completed_with_qc_warnings"}:
+            raise HTTPException(409, "OTIO import requires completed scene masters")
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > MAX_OTIO_BYTES:
+                raise HTTPException(413, "OTIO file exceeds the 2 MiB import limit")
+        if not body:
+            raise HTTPException(422, "OTIO JSON body is required")
+        try:
+            imported = import_otio_timeline(
+                bytes(body),
+                studio._project_dir(pid),
+                pid,
+                str(project.get("title") or "AI Infinity project"),
+            )
+            timeline_data, timeline_storage = save(pid, imported)
+        except TimelineInterchangeError as exc:
+            status = 503 if "unavailable in this runtime" in str(exc) else 422
+            raise HTTPException(status, str(exc)) from exc
+        studio.audit_event(pid, "professional_timeline_otio_imported", {
+            "scene_count": len(timeline_data["scenes"]),
+            "source": "OpenTimelineIO JSON",
+            "render_required": True,
+        })
+        return {
+            "status": "imported",
+            "project_id": pid,
+            "timeline": timeline_data,
+            "render_required": True,
+            "truth_verified": False,
+            "human_review_status": "PENDING",
+            "durability": durability_summary(
+                timeline_storage, studio._project_dir(pid) / "timeline.json"
+            ),
+            "truthful": True,
+        }

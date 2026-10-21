@@ -1,0 +1,31 @@
+{
+  "schema": "ai-infinity-pr37-failure-followup.v1",
+  "recorded_at_utc": "2026-10-15T23:02:49.137Z",
+  "repository": "aurlooij-afk/AI-INFINITY",
+  "pull_request": 37,
+  "failed_candidate_sha": "6345f7d04c8f866b14f08696ff780f8e082be9e5",
+  "workflow": {
+    "id": 38820031131,
+    "job_id": 116714091684,
+    "url": "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/38820031131",
+    "conclusion": "failure"
+  },
+  "failure": {
+    "step": "tests/final_acceptance_suite.py::t9",
+    "source_line": 89,
+    "exact_assertion": "assert str(last.get(\"state\") or \"\").upper() == \"COMPLETED\", last",
+    "observed": {
+      "status": "completed_with_qc_warnings",
+      "state": "DEGRADED",
+      "title": "CONCURRENCY-BETA",
+      "truth_state": "REVIEW_REQUIRED",
+      "verified": false,
+      "publish_allowed_by_quality_gate": false
+    },
+    "cause": "The test had correctly allowed a truthful REVIEW_REQUIRED project and confirmed the public final.mp4 route returned HTTP 409, but a later unconditional wrapper-state assertion still required COMPLETED. The actual API returned DEGRADED alongside completed_with_qc_warnings. The run therefore stopped before t10; this does not establish a production isolation failure.",
+    "correction": "When a caller explicitly opts to exercise review-required/degraded output, require the wrapper state to be DEGRADED after the fail-closed truth/publish/download assertions. All non-degraded completion paths must still be COMPLETED."
+  },
+  "no_quality_gate_weakened": true,
+  "no_merge": true,
+  "no_deploy": true
+}

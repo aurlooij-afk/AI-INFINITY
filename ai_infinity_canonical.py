@@ -187,16 +187,72 @@ def list_memories(user_id,project_id=None,limit=100):
         except Exception:r["value"]={}
     return rows
 
+def _derive_title_from_command(command):
+    text = clean(command)
+    if not text:
+        return "AI Infinity Creation"
+    # Handle compound phrases such as "video article package about Python's
+    # official website". Without the intermediate deliverable nouns, the old
+    # parser could promote "research-backed" or another modifier to the title.
+    about = re.search(
+        r"\b(?:video|film|short|reel|documentary|explainer|podcast|article|blog|post)\b"
+        r"(?:\s+(?:article|package|campaign|content|clip|episode|show|story|series|video)){0,4}"
+        r"\s+(?:about|on|for|covering|exploring)\s+(.+?)"
+        r"(?=,|;|\.|$|\s+(?:with|in|for|using|including|featuring)\s+)",
+        text, re.I,
+    )
+    if about:
+        subject = clean(about.group(1)).strip(" .,:;-")
+        if subject:
+            return subject[:150]
+    value = re.sub(
+        r"^(?:please\s+)?(?:create|make|generate|produce|build|write|draft|develop)\s+",
+        "", text, flags=re.I,
+    )
+    value = re.sub(
+        r"^(?:(?:a|an|the)\s+)?(?:(?:professional|cinematic|premium|high[- ]quality|"
+        r"research[- ]backed|educational|engaging|compelling|polished|original|useful)\s+)*",
+        "", value, flags=re.I,
+    )
+    value = re.sub(r"^\d+\s*[- ]?(?:second|seconds|minute|minutes|sec|secs|min|mins)\s+", "", value, flags=re.I)
+    value = re.split(
+        r"\s+(?:video|film|short|reel|documentary|explainer|podcast|article|blog|social\s+campaign)\b",
+        value, maxsplit=1, flags=re.I,
+    )[0]
+    value = re.split(
+        r"\s+(?:in\s+(?:English|Urdu|Pashto|Dari|Arabic)|with\s+(?:voiceover|narration)|"
+        r"research[- ]backed|aspect ratio|SEO metadata|social campaign|production/rights)\b|[,;.]",
+        value, maxsplit=1, flags=re.I,
+    )[0]
+    value = clean(value).strip(" .,:;-")
+    return value[:150] or text[:150]
+
+
 def compile_intent(command,raw):
     text=clean(command)
     if len(text)<8:raise HTTPException(422,"Describe what you want to bring to life.")
     low=text.lower()
-    ct=clean(raw.get("content_type"),30).lower()
-    if ct not in {"video","podcast","article","social"}:ct="video"
-    if ct=="video":
-        if re.search(r"\b(podcast|audio show)\b",low):ct="podcast"
-        elif re.search(r"\b(article|blog|essay)\b",low):ct="article"
-        elif re.search(r"\b(social|linkedin post|instagram post|tweet|x post)\b",low):ct="social"
+    # An explicitly selected deliverable always wins. When the user gives only
+    # a natural-language command, infer the primary deliverable from its first
+    # occurrence; collateral assets (e.g. article.md/social copy in a video pack)
+    # must not silently disable the primary video's verification gates.
+    allowed_types={"video","podcast","article","social"}
+    requested_type=clean(raw.get("content_type"),30).lower()
+    if requested_type in allowed_types:
+        ct=requested_type
+    else:
+        intent_patterns=(
+            (r"\b(?:video|film|reel|documentary|explainer)\b","video"),
+            (r"\b(?:podcast|audio show)\b","podcast"),
+            (r"\b(?:article|blog|essay)\b","article"),
+            (r"\b(?:social(?:\s+media)?\s+(?:post|campaign)|linkedin post|instagram post|tweet|x post)\b","social"),
+        )
+        intent_matches=[]
+        for pattern, inferred_type in intent_patterns:
+            match=re.search(pattern,low)
+            if match:
+                intent_matches.append((match.start(),inferred_type))
+        ct=min(intent_matches,key=lambda item:item[0])[1] if intent_matches else "video"
     fmt=clean(raw.get("format"),30).lower()
     if fmt not in {"long","short","shorts","reel","tiktok"}:fmt=""
     explicit_ratio=clean(raw.get("aspect_ratio"),10)
@@ -223,7 +279,7 @@ def compile_intent(command,raw):
     for x in ("English","Urdu","Hindi","Pashto","Dari","Arabic"):
         if re.search(rf"\b{re.escape(x)}\b",low,re.I):language=x;break
     title=clean(raw.get("title"),180)
-    if not title:title=re.split(r"[.!?\n]",text,maxsplit=1)[0][:150] or "AI Infinity Creation"
+    if not title:title=_derive_title_from_command(text)
     return {
       "schema":SCHEMA,"title":title,"objective":text,
       "audience":clean(raw.get("audience"),600) or "general audience",
@@ -551,8 +607,22 @@ def create_from_command(command,user_id,raw):
          "duration":c["duration_seconds"],"content_type":c["content_type"],"audience":intent["audience"],
          "tone":intent["tone"],"voice":intent["voice"],"language":c["language"],"platforms":c["platforms"],
          "brand_voice":intent["brand_voice"],"visual_style":intent["visual_style"],"call_to_action":intent["call_to_action"],
-         "quality_preset":intent["quality_preset"],"aspect_ratio":c["aspect_ratio"],"reference_urls":intent["reference_urls"],
+         "quality_preset":intent["quality_preset"],"aspect_ratio":c["aspect_ratio"],
+         # Preserve user-selected controls across downstream natural-language inference.
+         "_format_explicit": clean(raw.get("format"),30).lower() in {"long","short","shorts","reel","tiktok"},
+         "_aspect_ratio_explicit": clean(raw.get("aspect_ratio"),10) in {"16:9","9:16","1:1","4:5"},
+         "reference_urls":intent["reference_urls"],
          "source_file_names":intent["source_file_names"],"notes":intent["notes"],"idempotency_key":idem}
+    fixture_id = clean(raw.get("acceptance_fixture_id"), 80)
+    if fixture_id:
+        fixture_enabled = (
+            os.getenv("CI", "").strip().lower() == "true"
+            and os.getenv("AI_INFINITY_TEST_MEDIA", "0").strip().lower() in {"1", "true", "yes"}
+            and fixture_id == "cc0-recovery-illustration-v1"
+        )
+        if not fixture_enabled:
+            raise HTTPException(422, "acceptance media fixtures are available only in the explicitly enabled CI test harness")
+        req["_acceptance_fixture_id"] = fixture_id
     main=__import__("main")
     result=studio().enqueue(req,user_id,getattr(main,"_2700_model",None));pid=str(result.get("project_id") or "")
     if not pid:raise HTTPException(502,"creator engine did not return a project id")

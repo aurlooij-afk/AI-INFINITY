@@ -1,0 +1,44 @@
+{
+  "schema": "ai-infinity-pr37-semantic-motion-selection-fix.v1",
+  "recorded_at_utc": "2026-10-19T22:30:56.806Z",
+  "repository": "aurlooij-afk/AI-INFINITY",
+  "pull_request": 37,
+  "branch": "fix/pro-creative-scene-quality-gates",
+  "parent_sha": "3a837040fe935e3cc62547c282822a174d5d1b2f",
+  "baseline": {
+    "main_sha": "c59421d2da4b9b32eaccdee2ca71e2b9ccfd07ed",
+    "failing_workflow_run_id": 39327771402,
+    "failing_workflow_url": "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/39327771402",
+    "job_id": 118318050001,
+    "scenario": "tests/final_acceptance_suite.py::t2",
+    "observed": {
+      "request": "60-second AI Infinity launch video in Pashto, 9:16, format=short",
+      "state": "REVIEW_REQUIRED",
+      "verified": false,
+      "actual_rendered_scene_count": 5,
+      "minimum_professional_scene_count": 5,
+      "verified_motion_source_count": 4,
+      "minimum_motion_source_count": 5,
+      "fallback_visual_count": 1,
+      "failure": "cinematic launch motion coverage failed: 4 source-motion scene(s), 5 required; still-image animation is not a substitute",
+      "provider_blockers": [
+        "Hugging Face image credential absent",
+        "Openverse timed out on the failing scene"
+      ]
+    },
+    "root_cause": "The curated source-video selector used ordinal scene-index mapping. For a five-scene short, the closing focus was a finished video on a studio display, but source index 5 depicts a woman recording on a smartphone and requires creator+camera concepts. The production relevance gate correctly rejected it, and professional truth correctly kept the render unverified."
+  },
+  "changes": {
+    "production_file": "studio_ultimate.py",
+    "implementation": "Scene-aware curated motion selection now ranks the existing allow-listed source clips against actual focus concepts and source title/description/tags, prefers relevant HD assets on constrained FAST workers, excludes scene-duplicate source bytes and retries the next relevant clip after download or probe failure. The finished_video concept recognises 'finished edited video'.",
+    "regression_file": "tests/test_visual_diversity_truth.py",
+    "regression_tests": [
+      "wrong ordinal source is not selected for the final-screen shot",
+      "a timed-out matching clip retries another compatible clip",
+      "the creator-filming clip remains selected for a creator/camera scene"
+    ],
+    "invariant": "No quality gate, source-rights gate, distinct-source requirement or verification threshold is weakened."
+  },
+  "merge_authorized": false,
+  "deployment_authorized": false
+}

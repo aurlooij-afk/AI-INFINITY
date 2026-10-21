@@ -1,0 +1,82 @@
+{
+  "schema": "ai-infinity-pr37-professional-motion-quality-fix.v1",
+  "recorded_at_utc": "2026-10-19T21:16:56.493Z",
+  "repository": "aurlooij-afk/AI-INFINITY",
+  "pull_request": 37,
+  "branch": "fix/pro-creative-scene-quality-gates",
+  "parent_sha": "c37a3f1b4a9dca12913b20563ee66dda98bc73db",
+  "reproduced_baseline": {
+    "workflow_run_id": 39155545415,
+    "evidence_artifact_id": 12147400297,
+    "observed_mp4_sha256": "6479ec403aa5f6c9ddf74c0ad8acc30f17bac7788b0df6038fa8cc1a7f29f547",
+    "duration_seconds": 60.055556,
+    "dimensions": [
+      1280,
+      720
+    ],
+    "video_fps": 17.98,
+    "video_bitrate_bits_per_second": 398188,
+    "observed_integrated_loudness_lufs": -27.8,
+    "actual_rendered_scenes": 4,
+    "minimum_scenes_before_fix": 4,
+    "truth_before_fix": "VERIFIED",
+    "key_failure": "Four largely repeated still-source scenes held for roughly 15 seconds each passed the old truth contract."
+  },
+  "root_causes": [
+    "FAST fallback planning deliberately reduced long-form videos up to 120 seconds to four scenes.",
+    "The FAST scene renderer used a 640x360 intermediate before upscaling to 1280x720 and encoded at 18 fps.",
+    "The truth gate accepted the four distinct source files without checking the temporal motion-source coverage of the launch profile.",
+    "The FAST mix used fixed volume multipliers but no post-mix loudness normalization; the inspected export was extremely quiet."
+  ],
+  "corrective_changes": [
+    "Long-form 45-120 second output receives eight planned and rendered scenes; normal 60-second launch output has an eight-scene floor.",
+    "Launch profile uses scene-specific Pexels motion clips with item-page URLs, creator names, and Pexels license evidence; source bytes are decoded, hashed, checked for relevance, and prevented from duplicating a prior scene.",
+    "Launch truth requires eight source-motion assets with source URL, license URL and source-specific rights passing the existing rights gate; still-image animation alone cannot satisfy the motion contract.",
+    "FAST renders now process at delivery dimensions at 24 fps, use less destructive encoding settings, tag BT.709 SDR color metadata and normalize the final speech/music/effects mix.",
+    "Independent media QC measures integrated loudness and makes out-of-range audio a release-blocking failure.",
+    "Regressions preserve the previously failing four-scene launch brief as a negative benchmark."
+  ],
+  "resource_sources": [
+    {
+      "id": 35639289,
+      "url": "https://www.pexels.com/video/creative-workspace-with-camera-gear-and-editing-setup-35639289/",
+      "creator": "Jakub Zerdzicki"
+    },
+    {
+      "id": 8275599,
+      "url": "https://www.pexels.com/video/a-man-setting-up-the-ring-light-8275599/",
+      "creator": "PNW Production"
+    },
+    {
+      "id": 15517230,
+      "url": "https://www.pexels.com/video/a-computer-screen-showing-a-video-editing-screen-15517230/",
+      "creator": "Ludovic Delot"
+    },
+    {
+      "id": 35820856,
+      "url": "https://www.pexels.com/video/professional-video-editing-at-workstation-35820856/",
+      "creator": "rohit managre"
+    },
+    {
+      "id": 7677005,
+      "url": "https://www.pexels.com/video/woman-video-recording-using-smartphone-7677005/",
+      "creator": "Ivan S"
+    },
+    {
+      "id": 12358562,
+      "url": "https://www.pexels.com/video/close-up-of-computer-screen-12358562/",
+      "creator": "Ali Haider"
+    },
+    {
+      "id": 8089118,
+      "url": "https://www.pexels.com/video/a-videographer-and-director-shooting-a-production-8089118/",
+      "creator": "Ron Lach"
+    },
+    {
+      "id": 37903865,
+      "url": "https://www.pexels.com/video/professional-video-production-setup-in-studio-37903865/",
+      "creator": "Kuiyibo Campos"
+    }
+  ],
+  "verification": "Pending CI execution on the new candidate SHA; none of these fixes are considered verified until the focused tests, full acceptance run, actual rendered source-motion records, frame/audio inspection, and truth-gate negative benchmark complete."
+}

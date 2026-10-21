@@ -28,6 +28,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 from fastapi import Request, Response
 
 CLOSURE_VERSION = "TARGET-2050.3624"
@@ -78,6 +79,54 @@ def _publish_gate() -> bool:
     return os.getenv("AI_INFINITY_REQUIRE_VERIFIED_PUBLISH", PUBLISH_GATE_DEFAULT).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _publish_quality_gate_passed(verified: bool, checks: Dict[str, Any]) -> bool:
+    """Publishing always needs verified media and a safe factual-review outcome."""
+    factual_review_safe = (
+        not bool(checks.get("factual_review_required"))
+        or bool(checks.get("factual_review_auto_publish_safe"))
+    )
+    return bool(verified and factual_review_safe)
+
+
+def _visual_acquisition_diagnostics(visual_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Expose sanitized fallback causes in truth evidence for reproducible diagnosis."""
+    out: List[Dict[str, Any]] = []
+    for row in visual_rows:
+        meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        if not meta.get("fallback"):
+            continue
+        record = meta.get("fallback_record") if isinstance(meta.get("fallback_record"), dict) else {}
+        reasons = record.get("failure_reasons") if isinstance(record.get("failure_reasons"), list) else []
+        sanitized = []
+        for item in reasons[:20]:
+            if not isinstance(item, dict):
+                continue
+            provider = str(item.get("provider") or "unknown")[:80]
+            reason = str(item.get("reason") or "unknown")[:500]
+            # Mask query strings first so URL tokens and signed parameters do not leak.
+            reason = re.sub(r"(https?://[^\s?]+)\?[^\s]+", lambda m: m.group(1) + "?[REDACTED]", reason)
+            # Authorization values may be "Bearer <token>"; remove both words.
+            reason = re.sub(
+                r"(?i)(authorization)(?:=|:|\s)+(?:bearer\s+)?[^&\s]+(?:\s+[^&\s]+)?",
+                lambda m: m.group(1) + "=[REDACTED]",
+                reason,
+            )
+            reason = re.sub(
+                r"(?i)(api[_-]?key|token)(?:=|:|\s)+[^&\s]+",
+                lambda m: m.group(1) + "=[REDACTED]",
+                reason,
+            )
+            sanitized.append({"provider": provider, "reason": reason})
+        out.append({
+            "asset": Path(str(row.get("path") or "")).name,
+            "failed_providers": [str(x)[:80] for x in (record.get("failed_providers") or [])[:20]],
+            "failure_reasons": sanitized,
+            "fallback_reason": str(meta.get("fallback_reason") or "")[:300],
+            "truthful": True,
+        })
+    return out
+
+
 def _objective_media_qc(path: Path) -> Dict[str, Any]:
     """Independent media anomaly scan for prolonged black/frozen frames and clipping."""
     out: Dict[str, Any] = {
@@ -87,6 +136,8 @@ def _objective_media_qc(path: Path) -> Dict[str, Any]:
         "freeze_ok": True,
         "audio_peak_db": None,
         "audio_clipping_ok": True,
+        "audio_integrated_lufs": None,
+        "audio_loudness_ok": False,
         "scan_ok": True,
         "truthful": True,
     }
@@ -126,6 +177,29 @@ def _objective_media_qc(path: Path) -> Dict[str, Any]:
     except Exception as exc:
         out["scan_ok"] = False
         out["audio_scan_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+    # Measure the completed mix using EBU R128 loudness analysis. A signal can
+    # avoid clipping and still be far too quiet; the previously inspected launch
+    # export measured about -27.8 LUFS. Keep a broad delivery window here and
+    # normalize in the render path rather than inventing a passing score.
+    try:
+        cmd = [
+            "ffmpeg", "-hide_banner", "-nostats", "-i", str(path),
+            "-vn", "-af", "ebur128=framelog=verbose", "-f", "null", "-",
+        ]
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        log = (p.stderr or "") + (p.stdout or "")
+        values = re.findall(r"\bI:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*LUFS\b", log)
+        if values:
+            integrated = float(values[-1])
+            out["audio_integrated_lufs"] = integrated
+            out["audio_loudness_ok"] = -22.0 <= integrated <= -12.0
+        else:
+            out["audio_loudness_ok"] = False
+            out["scan_ok"] = False
+    except Exception as exc:
+        out["audio_loudness_ok"] = False
+        out["scan_ok"] = False
+        out["audio_loudness_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
     return out
 
 def _public_path(project_id: str, asset_name: str) -> str:
@@ -187,6 +261,31 @@ def _canonical_state(p: Dict[str, Any]) -> str:
         return "GENERATING"
     return "DRAFT"
 
+def _persist_project_truth_status(s: Any, p: Dict[str, Any], verified: bool) -> None:
+    """Keep the persisted project state aligned with the independent truth gate.
+
+    Rendering can complete while professional verification fails. Such work is a
+    review-required draft, not a VERIFIED project. Conversely, a recovered project
+    may be promoted only after the independent truth contract passes.
+    """
+    status = str(p.get("status") or "").lower()
+    if status not in {"completed", "completed_with_qc_warnings"}:
+        return
+    desired = "completed" if verified else "completed_with_qc_warnings"
+    if status == desired:
+        return
+    stage = "completed" if verified else "quality_review_required"
+    with s.DB_LOCK, s._connect() as c:
+        c.execute(
+            "UPDATE studio_projects_3610 SET status=?,stage=?,updated_at=? "
+            "WHERE project_id=? AND status IN ('completed','completed_with_qc_warnings')",
+            (desired, stage, _now(), str(p.get("project_id") or "")),
+        )
+    # Keep this request's truth response consistent with the durable row write.
+    p["status"] = desired
+    p["stage"] = stage
+
+
 def _parse_blueprint(p: Dict[str, Any]) -> Dict[str, Any]:
     b = p.get("blueprint_json")
     if isinstance(b, dict):
@@ -210,6 +309,123 @@ def _source_assets(p: Dict[str, Any]) -> List[Dict[str, Any]]:
     except Exception:
         rows = []
     return [r for r in rows if str(r.get("kind") or "").lower() == "visual"]
+
+
+def _minimum_professional_scene_count(req: Dict[str, Any]) -> int:
+    """Return the minimum real shot coverage for a normal video brief.
+
+    One scene is allowed only for an explicitly requested single-shot/loop, a
+    non-video deliverable, or a genuinely very short sub-8-second clip. A normal
+    20-second short needs at least three rendered scenes; longer works scale up
+    to eight. The target is a coverage floor, not a claim about artistic taste.
+    """
+    content_type = str(req.get("content_type") or "video").strip().lower()
+    if content_type not in {"video", "short", "reel", "film", "documentary"}:
+        return 1
+    brief = " ".join(str(req.get(k) or "") for k in ("objective", "topic", "title"))
+    if re.search(
+        r"\b(single[- ]scene|single[- ]shot|one[- ]shot|one continuous shot|static shot|still[- ]image video|looping background)\b",
+        brief, re.I
+    ):
+        return 1
+    try:
+        duration = max(0.0, float(req.get("duration") or 0))
+    except (TypeError, ValueError):
+        duration = 0.0
+    if duration < 8:
+        return 1
+
+    output_format = str(req.get("format") or "").strip().lower()
+    if output_format in {"short", "shorts", "reel", "tiktok"}:
+        # A short-form piece still needs purposeful coverage, but does not inherit
+        # the longer branded-film profile.
+        return min(5, max(3, int((duration + 11.999) // 12)))
+
+    launch_profile = bool(re.search(
+        r"\b(?:launch|promotional? video|promo film|brand film|product film|product launch|trailer)\b",
+        brief, re.I,
+    ))
+    if launch_profile and duration >= 30:
+        # Branded launch work has eight distinct narrative beats at up to 60s.
+        # Longer requests remain capped at eight in the constrained renderer.
+        return min(8, max(4, int((duration + 7.499) // 7.5)))
+
+    # A normal 45-90 second landscape video cannot be VERIFIED on four scene
+    # masters: the previous 60-second example passed while holding four stills
+    # for roughly fifteen seconds each. Eight shots are the minimum for this
+    # duration band. The scene hash gate below still requires unique source bytes.
+    if duration >= 45:
+        return 8
+    return min(8, max(3, int((duration + 14.999) // 15)))
+
+
+def _caption_timing_metrics(path: Optional[Path], media_duration: float) -> Dict[str, Any]:
+    """Check SRT cue syntax, order, bounds, and occupied time without pretending to judge transcription quality."""
+    result = {
+        "cue_count": 0,
+        "timing_valid": False,
+        "max_cue_duration_seconds": 0.0,
+        "coverage_ratio": 0.0,
+        "caption_word_count": 0,
+    }
+    if not path or not path.is_file():
+        return result
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except Exception:
+        return result
+
+    blocks = [block for block in re.split(r"\n\s*\n", text.strip()) if block.strip()]
+    cues = []
+    timing_re = re.compile(
+        r"^(\d{2,}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*"
+        r"(\d{2,}):(\d{2}):(\d{2}),(\d{3})$"
+    )
+    for block in blocks:
+        rows = [row.strip() for row in block.splitlines() if row.strip()]
+        timing_at = next((i for i, row in enumerate(rows) if "-->" in row), None)
+        if timing_at is None:
+            continue
+        match = timing_re.match(rows[timing_at])
+        caption_text = " ".join(rows[timing_at + 1:]).strip()
+        if not match or not caption_text:
+            return result
+        values = [int(x) for x in match.groups()]
+        start = values[0] * 3600 + values[1] * 60 + values[2] + values[3] / 1000.0
+        end = values[4] * 3600 + values[5] * 60 + values[6] + values[7] / 1000.0
+        if end <= start or start < 0 or end > max(0.0, float(media_duration)) + 0.75:
+            return result
+        cues.append({"start": start, "end": end, "text": caption_text})
+    if not cues:
+        return result
+    sequential = all(cues[i]["start"] >= cues[i - 1]["end"] - 0.03 for i in range(1, len(cues)))
+    total_active = sum(max(0.0, x["end"] - x["start"]) for x in cues)
+    duration = max(0.001, float(media_duration))
+    result.update({
+        "cue_count": len(cues),
+        "timing_valid": bool(sequential),
+        "max_cue_duration_seconds": round(max(x["end"] - x["start"] for x in cues), 3),
+        "coverage_ratio": round(min(1.0, total_active / duration), 3),
+        "caption_word_count": sum(len(re.findall(r"\b[\w'-]+\b", x["text"])) for x in cues),
+    })
+    return result
+
+
+def _is_qualified_illustrative_fallback(row: Dict[str, Any]) -> bool:
+    """Accept only our own signed-by-provenance, visibly labelled vector draft fallback."""
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else row
+    record = metadata.get("fallback_record") if isinstance(metadata.get("fallback_record"), dict) else {}
+    return bool(
+        metadata.get("fallback") is True
+        and metadata.get("quality_tier") == "original_vector_editorial_fallback"
+        and metadata.get("asset_kind") == "illustrative_graphic_not_photograph"
+        and metadata.get("rights_status") == "original_asset"
+        and record.get("truthful") is True
+        and str(record.get("execution_state") or "").upper() == "DEGRADED"
+        and bool(str(record.get("fallback_method") or "").strip())
+        and bool(str(record.get("quality_change") or "").strip())
+        and bool(str(record.get("license_change") or "").strip())
+    )
 
 
 def _visual_diversity_metrics(
@@ -264,6 +480,74 @@ def _artifact_registry(project_id: str) -> Dict[str, Dict[str, Any]]:
 
 
 
+def _rights_evidence_state(meta: Dict[str, Any]) -> str:
+    """Fail closed unless source-specific asset, license and commercial-use evidence is present."""
+    if not isinstance(meta, dict):
+        return "unknown"
+    if bool(meta.get("fallback")):
+        # Generated motion-design artwork is not source footage. Preserve a
+        # separate ownership/provenance state only when the server's qualified
+        # fallback record identifies our own vector renderer and explicitly
+        # records the degradation. This can support an honest downloadable
+        # draft, but it never satisfies source_visual_policy_passed and cannot
+        # make the project professionally VERIFIED.
+        fallback_record = meta.get("fallback_record") if isinstance(meta.get("fallback_record"), dict) else {}
+        external_media_fields = (
+            "source_url", "source_id", "downloaded_media_url", "media_url",
+            "original_url", "license_url", "license_deed_url",
+        )
+        original_vector_is_evidenced = bool(
+            meta.get("source") == "AI Infinity original vector editorial fallback"
+            and meta.get("source_url") in (None, "")
+            and not any(meta.get(key) for key in external_media_fields)
+            and meta.get("creator") == "AI Infinity"
+            and meta.get("license") == "Original generated illustrative asset"
+            and meta.get("quality_tier") == "original_vector_editorial_fallback"
+            and meta.get("asset_kind") == "illustrative_graphic_not_photograph"
+            and meta.get("rights_status") == "original_asset"
+            and meta.get("rights_basis") == "application_generated_original"
+            and meta.get("commercial_use_state") == "owner_attested_original_work"
+            and meta.get("rights_evidence_method") == "in_app_procedural_vector_renderer"
+            and "no provider-sourced media is incorporated" in str(meta.get("rights_evidence_note") or "").lower()
+            and bool(str(meta.get("rights_evidence_version") or "").strip())
+            and _is_qualified_illustrative_fallback({"metadata": meta})
+        )
+        return "original_generated" if original_vector_is_evidenced else "blocked_fallback"
+    if not any(meta.get(k) for k in ("source", "source_url", "license", "license_url", "rights_status", "commercial_use_state")):
+        return "unknown"
+    source_url = str(meta.get("source_url") or "").strip()
+    license_url = str(meta.get("license_url") or meta.get("license_deed_url") or "").strip()
+    license_name = str(meta.get("license") or "").strip()
+    title = str(meta.get("title") or "").strip()
+    creator = str(meta.get("creator") or meta.get("attribution") or "").strip()
+    status = str(meta.get("rights_status") or "").strip().lower()
+    commercial = str(meta.get("commercial_use_state") or "").strip().lower()
+    license_text = (license_name + " " + license_url).lower()
+    if (
+        re.search(r"\bby[-_ ]?nc\b|non[- ]commercial|/by-nc(?:/|$)", license_text)
+        or re.search(r"\bby[-_ ]?nd\b|no[- ]derivatives|/by-nd(?:/|$)", license_text)
+    ):
+        return "review_required"
+    if any(token in status for token in ("review", "unknown", "inherited", "blocked", "not_verified", "policy_required", "source_specific")):
+        return "review_required"
+    allowed = {
+        "public_domain_cc0_1_0", "commercial_use_allowed_with_attribution",
+        "commercial_use_allowed_under_provider_terms", "commercial_use_allowed",
+        "cleared_for_commercial_use",
+    }
+    if commercial not in allowed:
+        return "review_required"
+    def specific_http_url(value: str) -> bool:
+        try:
+            parsed = urlsplit(value)
+            return parsed.scheme.lower() in {"https", "http"} and bool(parsed.netloc) and bool(parsed.path.strip("/"))
+        except Exception:
+            return False
+    if not (specific_http_url(source_url) and specific_http_url(license_url) and license_name and title and (creator or commercial == "public_domain_cc0_1_0")):
+        return "review_required"
+    return "cleared"
+
+
 def _write_production_evidence(project_id: str, truth: Optional[Dict[str, Any]] = None) -> None:
     """Persist human-auditable closure artifacts after every production run."""
     s = _studio()
@@ -293,42 +577,53 @@ def _write_production_evidence(project_id: str, truth: Optional[Dict[str, Any]] 
     }
     (root / "asset_registry.json").write_text(json.dumps(registry_payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
-    # Visual-rights evidence is deliberately conservative: the system records
-    # the license/policy string supplied by the source adapter, but never calls
-    # an asset legally cleared when the source did not provide enough evidence.
+    # Persist source-level rights evidence without silently promoting incomplete metadata.
     rights = []
     for row in _source_assets(s._get_project(project_id) or {}):
         meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
         source = str(meta.get("source") or "")
         source_url = str(meta.get("source_url") or "")
         license_name = str(meta.get("license") or "")
-        fallback = bool(meta.get("fallback"))
-        rights_state = "blocked_fallback" if fallback else ("evidence_present" if license_name or str(meta.get("rights_status") or "") else "unknown")
+        rights_state = _rights_evidence_state(meta)
         rights.append({
             "asset": Path(str(row.get("path") or "")).name,
             "source": source,
+            "source_id": meta.get("source_id") or meta.get("id"),
             "source_url": source_url,
+            "title": meta.get("title"),
             "license": license_name,
+            "license_url": meta.get("license_url") or meta.get("license_deed_url"),
             "creator": meta.get("creator"),
+            "attribution": meta.get("attribution"),
+            "commercial_use_state": meta.get("commercial_use_state") or "UNKNOWN_REVIEW_REQUIRED",
             "rights_state": rights_state,
-            "rights_status": meta.get("rights_status"),
+            "rights_status": meta.get("rights_status") or "REVIEW_REQUIRED",
             "truthful": True,
         })
     rights_report = {
         "version": CLOSURE_VERSION,
         "project_id": project_id,
         "asset_count": len(rights),
-        "evidence_present": sum(1 for x in rights if x["rights_state"] == "evidence_present"),
+        "evidence_present": sum(1 for x in rights if x["rights_state"] == "cleared"),
+        "cleared": sum(1 for x in rights if x["rights_state"] == "cleared"),
         "unknown": sum(1 for x in rights if x["rights_state"] == "unknown"),
+        "review_required": sum(1 for x in rights if x["rights_state"] == "review_required"),
         "fallback_blocked": sum(1 for x in rights if x["rights_state"] == "blocked_fallback"),
+        "original_generated": sum(1 for x in rights if x["rights_state"] == "original_generated"),
         "assets": rights,
-        "policy": "Unknown rights are never asserted as cleared.",
+        "policy": (
+            "Source-derived media require source-specific commercial-use evidence. "
+            "Qualified in-app vector artwork is separately marked original_generated; "
+            "it never satisfies the professional source-visual gate."
+        ),
         "truthful": True,
     }
     (root / "visual_rights.json").write_text(json.dumps(rights_report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
     if truth is not None:
         (root / "production_truth.json").write_text(json.dumps(truth, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+
 def _reconcile_artifacts(project_id: str) -> Dict[str, Any]:
     s = _studio()
     files = _project_files(project_id)
@@ -408,6 +703,37 @@ def _reconcile_artifacts(project_id: str) -> Dict[str, Any]:
     return {"existing": len(existing), "files": len(files), "added": added, "repaired": repaired}
 
 
+def _voice_provider_quality_tier(
+    providers: List[str],
+    edge_tts_fallback_count: int = 0,
+    silent_fallback_count: int = 0,
+) -> str:
+    """Classify the weakest known voice-provider tier without inferring quality.
+
+    Neural delivery is only proven when every rendered scene names a neural
+    provider and neither a provider fallback nor a silent-voice fallback occurred.
+    """
+    labels = [str(value or "").strip().lower() for value in (providers or [])]
+    labels = [value for value in labels if value]
+    if silent_fallback_count:
+        return "silent_or_unavailable"
+    def is_neural_provider(value: str) -> bool:
+        # These provider labels are emitted only after a real audio artifact
+        # has been generated and validated by the corresponding synthesis path.
+        return value.startswith("edge-tts-neural:") or value == "elevenlabs" or value.startswith("elevenlabs-")
+
+    has_neural_provider = any(is_neural_provider(value) for value in labels)
+    if labels and all(is_neural_provider(value) for value in labels) and edge_tts_fallback_count == 0:
+        return "neural_tts"
+    if any(value.startswith("local-espeak") for value in labels):
+        if has_neural_provider:
+            return "mixed_neural_and_local_fallback"
+        return "local_synthetic_fallback"
+    if edge_tts_fallback_count:
+        return "provider_fallback_or_mixed"
+    return "unknown_or_unverified"
+
+
 def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, Any]:
     s = _studio()
     project_id = str(p["project_id"])
@@ -423,13 +749,33 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     plan = blueprint.get("plan") if isinstance(blueprint.get("plan"), dict) else blueprint
     chapters = list((plan or {}).get("chapters") or [])
     files = _project_files(project_id)
+    # Canonical contract is the source of user intent. Validate the rendered media
+    # against it even if a legacy worker or heuristic altered request_json later.
+    canonical_constraints = {}
+    contract_path = files.get("canonical_contract.json")
+    try:
+        contract_data = json.loads(contract_path.read_text(encoding="utf-8")) if contract_path and contract_path.is_file() else {}
+        contract_intent = contract_data.get("intent") if isinstance(contract_data.get("intent"), dict) else {}
+        canonical_constraints = contract_intent.get("constraints") if isinstance(contract_intent.get("constraints"), dict) else {}
+    except Exception:
+        canonical_constraints = {}
+    expected_req = dict(req)
+    for request_key, intent_key in (
+        ("format", "format"), ("content_type", "content_type"),
+        ("aspect_ratio", "aspect_ratio"), ("duration", "duration_seconds"),
+    ):
+        intent_value = canonical_constraints.get(intent_key)
+        if intent_value not in (None, ""):
+            expected_req[request_key] = intent_value
     strict_visual = _strict_visual()
     strict_research = _strict_research()
     final = files.get("final.mp4")
     checks: Dict[str, Any] = {
         "project_status_completed": p.get("status") in {"completed", "completed_with_qc_warnings"},
         "final_exists": bool(final and final.is_file() and final.stat().st_size > 10000),
-        "requested_duration": float(req.get("duration") or result.get("duration_seconds") or 0),
+        "requested_duration": float(expected_req.get("duration") or result.get("duration_seconds") or 0),
+        "requested_format": str(expected_req.get("format") or "long"),
+        "requested_aspect_ratio": str(expected_req.get("aspect_ratio") or "16:9"),
         "actual_duration": 0.0,
         "duration_within_1s": False,
         "video_stream": False,
@@ -437,6 +783,8 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         "h264": False,
         "audio_codec_ok": False,
         "resolution_ok": False,
+        "aspect_ratio_actual": None,
+        "aspect_ratio_passed": False,
         "media_anomaly_scan_ok": False,
         "black_frame_ok": False,
         "freeze_ok": False,
@@ -469,6 +817,12 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
             checks["black_duration_max"] = float(media_qc.get("black_duration_max") or 0)
             checks["freeze_duration_max"] = float(media_qc.get("freeze_duration_max") or 0)
             checks["audio_peak_db"] = media_qc.get("audio_peak_db")
+            checks["audio_integrated_lufs"] = media_qc.get("audio_integrated_lufs")
+            checks["audio_loudness_ok"] = bool(media_qc.get("audio_loudness_ok"))
+            if not checks["audio_loudness_ok"]:
+                failures.append(
+                    f"integrated audio loudness outside accepted delivery range: {checks['audio_integrated_lufs']} LUFS"
+                )
             if not checks["black_frame_ok"]:
                 failures.append(f"prolonged black frame detected ({checks['black_duration_max']:.2f}s)")
             if not checks["freeze_ok"]:
@@ -496,6 +850,36 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
             minimum = 1280 if fast else 1920
             checks["resolution_ok"] = max(width, height) >= minimum and min(width, height) >= 720
             checks["resolution"] = [width, height]
+            try:
+                fps_parts = str(v.get("avg_frame_rate") or v.get("r_frame_rate") or "0/0").split("/", 1)
+                frame_rate = float(fps_parts[0]) / max(1e-9, float(fps_parts[1]))
+            except (TypeError, ValueError, ZeroDivisionError):
+                frame_rate = 0.0
+            checks["frame_rate_fps"] = round(frame_rate, 3)
+            checks["frame_rate_ok"] = frame_rate >= 23.9
+            checks["color_primaries"] = str(v.get("color_primaries") or "")
+            checks["color_transfer"] = str(v.get("color_transfer") or "")
+            checks["color_space"] = str(v.get("color_space") or "")
+            checks["bt709_sdr_declared"] = (
+                checks["color_primaries"] == "bt709"
+                and checks["color_transfer"] == "bt709"
+                and checks["color_space"] == "bt709"
+            )
+            if not checks["frame_rate_ok"]:
+                failures.append(f"final video frame rate below 24fps delivery profile: {frame_rate:.3f}fps")
+            expected_ratio_name = str(expected_req.get("aspect_ratio") or "16:9").strip()
+            expected_ratio = {"16:9": 16/9, "9:16": 9/16, "1:1": 1.0, "4:5": 4/5}.get(expected_ratio_name)
+            actual_ratio = (width / height) if width > 0 and height > 0 else 0.0
+            checks["aspect_ratio_actual"] = round(actual_ratio, 5) if actual_ratio else None
+            checks["aspect_ratio_passed"] = bool(
+                expected_ratio and actual_ratio > 0
+                and abs(actual_ratio - expected_ratio) / expected_ratio <= 0.03
+            )
+            if not checks["aspect_ratio_passed"]:
+                failures.append(
+                    f"aspect ratio mismatch: requested {expected_ratio_name}, "
+                    f"rendered {width}x{height} ({actual_ratio:.4f}:1)"
+                )
         except Exception as exc:
             failures.append(f"final media inspection failed: {type(exc).__name__}: {str(exc)[:220]}")
 
@@ -529,38 +913,235 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     except Exception:
         timeline_rows = []
     voice_fallback_events = [x for x in timeline_rows if str(x.get("event") or "") == "voice_fallback"]
+    edge_tts_fallback_events = [x for x in timeline_rows if str(x.get("event") or "") == "edge_tts_fallback"]
     checks["voice_fallback_count"] = len(voice_fallback_events)
-    checks["professional_voice_present"] = len(voice_fallback_events) == 0
-    if voice_fallback_events and str(req.get("content_type") or "video").lower() == "video":
-        failures.append(f"silent narration fallback detected in {len(voice_fallback_events)} scene(s)")
+    checks["neural_voice_fallback_count"] = len(edge_tts_fallback_events)
 
-    visual_rows = _source_assets(p)
+    manifest_data = {}
+    try:
+        manifest_path = files.get("manifest.json")
+        if manifest_path and manifest_path.is_file():
+            manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        manifest_data = {}
+    provider_rows = manifest_data.get("voice_providers_by_scene")
+    if isinstance(provider_rows, list) and provider_rows:
+        provider_names = [
+            str(row.get("provider") or "unknown")
+            for row in provider_rows
+            if isinstance(row, dict)
+        ]
+    else:
+        provider_names = [str(manifest_data.get("voice_provider") or "unknown")]
+    checks["voice_providers"] = sorted(set(provider_names))
+    checks["voice_provider_tier"] = _voice_provider_quality_tier(
+        provider_names,
+        edge_tts_fallback_count=len(edge_tts_fallback_events),
+        silent_fallback_count=len(voice_fallback_events),
+    )
+
+    narration_scene_indices = set()
+    for asset_name, asset_path in files.items():
+        match = re.fullmatch(r"narration_(\d+)(?:_fitted)?\.mp3", str(asset_name), flags=re.I)
+        if not match:
+            continue
+        try:
+            if asset_path.is_file() and asset_path.stat().st_size > 1000:
+                narration_scene_indices.add(int(match.group(1)))
+        except Exception:
+            continue
+    checks["narration_audio_scene_count"] = len(narration_scene_indices)
+
     scene_files = []
     try:
-        scene_files = sorted(_studio()._project_dir(project_id).glob("scene_*.mp4"))
+        scene_files = sorted(s._project_dir(project_id).glob("scene_*.mp4"))
     except Exception:
         scene_files = []
+    expected_voice_scenes = len(scene_files) or max(1, len(chapters))
+    checks["voice_track_present"] = bool(checks.get("audio_stream")) and not voice_fallback_events and len(narration_scene_indices) >= expected_voice_scenes
+    checks["professional_voice_present"] = checks["voice_track_present"] and checks["voice_provider_tier"] == "neural_tts"
+    if str(req.get("content_type") or "video").lower() == "video":
+        if not checks["voice_track_present"]:
+            failures.append(
+                f"narration audio coverage incomplete: {len(narration_scene_indices)} scene audio asset(s), "
+                f"{expected_voice_scenes} rendered scene(s) expected"
+            )
+        elif not checks["professional_voice_present"]:
+            warnings.append(
+                "professional neural voice not proven for every scene "
+                f"(provider tier: {checks['voice_provider_tier']}); keep the result review-required"
+            )
+
+    visual_rows = _source_assets(p)
+    checks["visual_acquisition_failures"] = _visual_acquisition_diagnostics(visual_rows)
     effective_scene_count = len(scene_files) if scene_files else (len(chapters) if chapters else 1)
+    video_quality_gate_required = str(expected_req.get("content_type") or "video").strip().lower() in {"video", "short", "reel", "film", "documentary"}
+    minimum_scene_count = _minimum_professional_scene_count(expected_req)
+    actual_rendered_scene_count = len(scene_files)
+    checks["video_quality_gate_required"] = video_quality_gate_required
+    launch_profile_text = " ".join(
+        str(expected_req.get(k) or "") for k in ("objective", "topic", "title")
+    )
+    cinematic_launch_profile = bool(
+        video_quality_gate_required
+        and re.search(
+            r"\b(?:launch|promotional? video|promo film|brand film|product film|product launch|trailer)\b",
+            launch_profile_text, re.I,
+        )
+        and float(checks.get("requested_duration") or 0) >= 30
+    )
     checks["visual_source_count"] = len(visual_rows)
     checks["visual_scene_count"] = effective_scene_count
+    checks["actual_rendered_scene_count"] = actual_rendered_scene_count
+    checks["minimum_professional_scene_count"] = minimum_scene_count
+    checks["professional_scene_coverage_passed"] = (
+        not video_quality_gate_required or actual_rendered_scene_count >= minimum_scene_count
+    )
+    if video_quality_gate_required and not checks["professional_scene_coverage_passed"]:
+        failures.append(
+            f"professional scene coverage failed: {actual_rendered_scene_count} rendered scene(s), "
+            f"{minimum_scene_count} required for this video brief"
+        )
     # Compare source evidence to the actual rendered scene masters, not to a
     # stale or pre-recovery storyboard chapter count. Reused verified sources
     # still create one visual evidence row per rendered scene.
     checks["visual_sources_present"] = len(visual_rows) >= max(1, effective_scene_count)
     fallback_rows = [x for x in visual_rows if bool((x.get("metadata") or {}).get("fallback"))]
+    qualified_vector_fallbacks = bool(fallback_rows) and all(_is_qualified_illustrative_fallback(x) for x in fallback_rows)
     checks["fallback_visual_count"] = len(fallback_rows)
-    checks["source_visual_policy_passed"] = (not fallback_rows) if strict_visual else True
-    if fallback_rows and strict_visual:
-        failures.append(f"placeholder/fallback visuals blocked: {len(fallback_rows)} scene assets")
+    checks["qualified_illustrative_fallback"] = qualified_vector_fallbacks
+    # Any fallback prevents professional verification, even when it is an
+    # honest original illustration. It can only be delivered as a review-required
+    # draft after all technical, rights, duration, script and caption gates pass.
+    checks["source_visual_policy_passed"] = not fallback_rows
+    if fallback_rows and qualified_vector_fallbacks:
+        warnings.append(
+            f"{len(fallback_rows)} scene(s) use original illustrative vector artwork; "
+            "delivery is a review-required draft, not a professionally verified visual edit"
+        )
+    elif fallback_rows and strict_visual:
+        failures.append(f"unqualified placeholder/fallback visuals blocked: {len(fallback_rows)} scene assets")
     elif fallback_rows:
-        warnings.append(f"{len(fallback_rows)} scenes used local original-motion fallback")
+        warnings.append(f"{len(fallback_rows)} unverified fallback visual(s) used; professional verification remains blocked")
 
     visual_diversity = _visual_diversity_metrics(visual_rows, effective_scene_count)
     checks["unique_visual_hashes"] = visual_diversity["unique_visual_hashes"]
     checks["visual_diversity_required_unique_hashes"] = visual_diversity["required_unique_visual_hashes"]
     checks["visual_diversity_ok"] = visual_diversity["visual_diversity_ok"]
-    if effective_scene_count > 1 and not checks["visual_diversity_ok"]:
+    required_professional_unique = min(minimum_scene_count, actual_rendered_scene_count) if actual_rendered_scene_count else minimum_scene_count
+    checks["professional_unique_visuals_required"] = required_professional_unique
+    checks["professional_visual_diversity_passed"] = (
+        not video_quality_gate_required or (
+            actual_rendered_scene_count >= minimum_scene_count
+            and int(visual_diversity.get("unique_visual_hashes") or 0) >= required_professional_unique
+        )
+    )
+    if actual_rendered_scene_count > 1 and not checks["visual_diversity_ok"]:
         failures.append("visual diversity check failed: the edit reuses too few distinct visual assets")
+    if video_quality_gate_required and not checks["professional_visual_diversity_passed"]:
+        failures.append(
+            f"professional visual diversity failed: {visual_diversity.get('unique_visual_hashes', 0)} unique "
+            f"visual(s), {required_professional_unique} required across the rendered scenes"
+        )
+
+    # The branded launch profile must contain actual source-motion footage,
+    # not eight unique still images with a Ken Burns filter. Count only source
+    # video assets with complete item-level license/creator evidence.
+    motion_sources = 0
+    for row in visual_rows:
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        if (
+            str(metadata.get("kind") or "").lower() == "video"
+            and str(metadata.get("source_url") or "").strip()
+            and str(metadata.get("license_url") or "").strip()
+            and _rights_evidence_state(metadata) == "cleared"
+        ):
+            motion_sources += 1
+    checks["cinematic_launch_profile"] = cinematic_launch_profile
+    checks["verified_motion_source_count"] = motion_sources
+    checks["minimum_motion_source_count"] = minimum_scene_count if cinematic_launch_profile else 0
+    checks["professional_motion_coverage_passed"] = (
+        not cinematic_launch_profile or motion_sources >= minimum_scene_count
+    )
+    if cinematic_launch_profile and not checks["professional_motion_coverage_passed"]:
+        failures.append(
+            f"cinematic launch motion coverage failed: {motion_sources} source-motion scene(s), "
+            f"{minimum_scene_count} required; still-image animation is not a substitute"
+        )
+
+    script_path = files.get("script.md")
+    script_word_count = 0
+    if script_path and script_path.is_file():
+        try:
+            script_text = script_path.read_text(encoding="utf-8")
+            # Do not count title/metadata headings or the unspoken planner hook;
+            # count the narration paragraphs that actually enter the spoken script.
+            script_body = re.sub(r"(?m)^\s*#{1,6}\s+.*$|^\s*Hook:\s*.*$", "", script_text)
+            script_word_count = len(re.findall(r"\b[\w'-]+\b", script_body))
+        except Exception:
+            script_word_count = 0
+    # A video that is technically 180 seconds long but has only 180 spoken words
+    # is under-narrated for a normal professional voiceover. Require a conservative
+    # 120 words/minute floor; chapter-specific pace can still vary by creative intent.
+    required_script_words = max(12, int(float(checks.get("requested_duration") or 0) * 2.0))
+    checks["spoken_script_word_count"] = script_word_count
+    checks["required_spoken_script_words"] = required_script_words
+    checks["script_content_floor_passed"] = (
+        not video_quality_gate_required or script_word_count >= required_script_words
+    )
+    if not checks["script_content_floor_passed"]:
+        failures.append(
+            f"spoken script is underfilled: {script_word_count} words; "
+            f"at least {required_script_words} are required for the requested runtime"
+        )
+
+    narration_lines = []
+    if script_path and script_path.exists():
+        for line in script_body.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or re.match(r"^Hook\s*:", line, re.I):
+                continue
+            narration_lines.append(line)
+    dangling_endings = {
+        "a", "an", "and", "although", "as", "because", "but", "for", "from", "if",
+        "in", "into", "is", "of", "on", "or", "that", "the", "then", "these",
+        "this", "those", "to", "was", "were", "when", "where", "which", "while",
+        "who", "whom", "whose", "will", "with", "would", "you",
+    }
+    def sentence_is_complete(line: str) -> bool:
+        if not re.search(r"[.!?…۔؟]$", line):
+            return False
+        last_words = re.findall(r"[a-z]+", line.lower())
+        if last_words and last_words[-1] in dangling_endings:
+            return False
+        if re.search(r"\b(?:what|how|why)\s+(?:the\s+)?(?:available\s+)?(?:evidence|data|sources)\.$", line, re.I):
+            return False
+        return len(re.findall(r"\b[\w'-]+\b", line)) >= 6
+    checks["script_sentence_integrity_passed"] = (
+        not video_quality_gate_required
+        or bool(narration_lines) and all(sentence_is_complete(line) for line in narration_lines)
+    )
+    checks["script_narration_paragraph_count"] = len(narration_lines)
+    if not checks["script_sentence_integrity_passed"]:
+        failures.append("spoken script contains an incomplete, dangling, or underdeveloped narration paragraph")
+
+    caption_metrics = _caption_timing_metrics(files.get("captions.srt"), float(checks.get("actual_duration") or 0))
+    checks["caption_timing"] = caption_metrics
+    expected_caption_cues = max(1, int((float(checks.get("actual_duration") or 0) + 4.999) // 5))
+    checks["minimum_caption_cues"] = expected_caption_cues
+    checks["caption_sync_passed"] = (
+        not video_quality_gate_required or float(checks.get("actual_duration") or 0) < 15 or bool(
+            caption_metrics["timing_valid"]
+            and caption_metrics["cue_count"] >= expected_caption_cues
+            and caption_metrics["max_cue_duration_seconds"] <= 5.75
+            and caption_metrics["coverage_ratio"] >= 0.80
+        )
+    )
+    if video_quality_gate_required and float(checks.get("actual_duration") or 0) >= 15 and not checks["caption_sync_passed"]:
+        failures.append(
+            "caption timing failed: cues must remain synchronized, cover the programme, "
+            "and avoid a single prolonged subtitle"
+        )
 
     rights_path = files.get("visual_rights.json")
     rights_data = {}
@@ -571,10 +1152,22 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
             rights_data = {}
     rights_assets = list(rights_data.get("assets") or []) if isinstance(rights_data, dict) else []
     rights_unknown = sum(1 for x in rights_assets if str(x.get("rights_state") or "") == "unknown")
-    checks["visual_rights_evidence_present"] = bool(rights_assets) and rights_unknown == 0
+    rights_review_required = sum(1 for x in rights_assets if str(x.get("rights_state") or "") in {"review_required", "blocked_fallback"})
+    rights_original_generated = sum(1 for x in rights_assets if str(x.get("rights_state") or "") == "original_generated")
+    rights_unresolved = sum(
+        1 for x in rights_assets
+        if str(x.get("rights_state") or "") not in {"cleared", "original_generated"}
+    )
+    checks["visual_rights_evidence_present"] = bool(rights_assets) and rights_unresolved == 0
     checks["visual_rights_unknown_count"] = rights_unknown
-    if rights_unknown:
-        failures.append(f"visual-rights evidence missing for {rights_unknown} visual asset(s)")
+    checks["visual_rights_review_required_count"] = rights_review_required
+    checks["visual_rights_cleared_count"] = sum(1 for x in rights_assets if str(x.get("rights_state") or "") == "cleared")
+    checks["visual_rights_original_generated_count"] = rights_original_generated
+    checks["visual_rights_unresolved_count"] = rights_unresolved
+    if not rights_assets:
+        failures.append("visual-rights evidence missing for all visual assets")
+    elif rights_unresolved:
+        failures.append(f"commercial-use/attribution evidence unresolved for {rights_unresolved} visual asset(s)")
 
     fact_path = files.get("fact_check.json")
     fact_data = {}
@@ -640,6 +1233,24 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     if not checks["persisted_qc_passed"] and p.get("status") == "completed":
         failures.append("project reports completed while persisted QC is not passed")
 
+    draft_quality_keys = (
+        "project_status_completed", "final_exists", "duration_within_1s",
+        "video_stream", "audio_stream", "h264", "audio_codec_ok", "resolution_ok", "aspect_ratio_passed",
+        "required_artifacts_present", "artifact_registry_consistent", "visual_sources_present",
+        "visual_diversity_ok", "professional_scene_coverage_passed",
+        "professional_visual_diversity_passed", "script_content_floor_passed",
+        "caption_sync_passed", "voice_track_present", "visual_rights_evidence_present",
+        "research_required_and_present", "script_sentence_integrity_passed", "fresh_evidence_ok", "fact_check_present",
+        "provenance_present", "captions_present", "thumbnail_present", "manifest_present",
+        "media_anomaly_scan_ok", "black_frame_ok", "freeze_ok", "audio_clipping_ok",
+        "persisted_qc_passed",
+    )
+    checks["illustrative_fallback_delivery_eligible"] = bool(
+        qualified_vector_fallbacks
+        and all(bool(checks.get(key)) for key in draft_quality_keys)
+        and not failures
+    )
+
     verified = bool(
         checks["project_status_completed"]
         and checks["final_exists"]
@@ -649,11 +1260,17 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         and checks["h264"]
         and checks["audio_codec_ok"]
         and checks["resolution_ok"]
+        and checks["aspect_ratio_passed"]
         and checks["required_artifacts_present"]
         and checks["artifact_registry_consistent"]
         and checks["visual_sources_present"]
         and checks["source_visual_policy_passed"]
         and checks["visual_diversity_ok"]
+        and checks["professional_scene_coverage_passed"]
+        and checks["professional_visual_diversity_passed"]
+        and checks["script_content_floor_passed"]
+        and checks["script_sentence_integrity_passed"]
+        and checks["caption_sync_passed"]
         and checks["professional_voice_present"]
         and checks["visual_rights_evidence_present"]
         and checks["research_required_and_present"]
@@ -670,6 +1287,7 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         and checks["persisted_qc_passed"]
         and not failures
     )
+    _persist_project_truth_status(s, p, verified)
     return {
         "version": CLOSURE_VERSION,
         "truthful": True,
@@ -677,13 +1295,22 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         "state": "VERIFIED" if verified else ("FAILED" if p.get("status") == "failed" else "REVIEW_REQUIRED"),
         "strict_visual_policy": strict_visual,
         "strict_research_policy": strict_research,
-        "publish_gate": _publish_gate(),
+        "publish_gate_enabled": _publish_gate(),
+        "publish_gate": bool(_publish_gate() and _publish_quality_gate_passed(verified, checks)),
+        "publish_allowed_by_quality_gate": _publish_quality_gate_passed(verified, checks),
         "checks": checks,
         "failures": failures,
         "warnings": warnings,
         "missing_artifacts": missing,
-        "requested": {"duration_seconds": checks["requested_duration"], "content_type": req.get("content_type") or "video", "quality_preset": req.get("quality_preset") or "balanced"},
-        "canonical_state": _canonical_state(p),
+        "requested": {
+            "duration_seconds": checks["requested_duration"],
+            "format": checks["requested_format"],
+            "aspect_ratio": checks["requested_aspect_ratio"],
+            "content_type": expected_req.get("content_type") or "video",
+            "quality_preset": req.get("quality_preset") or "balanced",
+        },
+        "canonical_state": "VERIFIED" if verified else ("FAILED" if p.get("status") == "failed" else "REVIEW_REQUIRED"),
+        "recorded_project_state": _canonical_state(p),
         "artifact_paths": {name: _public_path(project_id, name) for name in sorted(files)},
         "timestamps": {
             "created_at": _iso(p.get("created_at")),
@@ -724,7 +1351,19 @@ def _patch_functions():
         def acquire_scene_asset_closure(scene, outdir, index, prefer_motion=False, duration=6.0):
             result = original_acquire(scene, outdir, index, prefer_motion=prefer_motion, duration=duration)
             if _strict_visual() and bool((result or {}).get("fallback")):
-                raise RuntimeError("professional visual gate: remote/public source unavailable; fallback visual is not eligible for final delivery")
+                if _is_qualified_illustrative_fallback(result):
+                    project_id = str(getattr(s.ACTIVE_PROJECT, "project_id", "") or "")
+                    try:
+                        s.audit_event(project_id, "qualified_illustrative_fallback_used", {
+                            "scene": int(index),
+                            "quality_tier": "original_vector_editorial_fallback",
+                            "delivery_state": "REVIEW_REQUIRED",
+                            "truthful": True,
+                        })
+                    except Exception:
+                        pass
+                    return result
+                raise RuntimeError("professional visual gate: unqualified fallback visual is not eligible for delivery")
             return result
         acquire_scene_asset_closure.__aii_closure_wrapped__ = True
         s.acquire_scene_asset = acquire_scene_asset_closure
@@ -867,17 +1506,22 @@ def _patch_functions():
     if not getattr(original_youtube, "__aii_closure_wrapped__", False):
         def youtube_upload_closure(user_id: str, video: Path, metadata: Dict[str, Any]):
             project_id = str(metadata.get("project_id") or "")
-            if _publish_gate() and project_id:
-                p = s._get_project(project_id)
-                truth = _professional_truth(p, reconcile=True) if p else None
-                if not truth or not truth.get("verified"):
-                    return {
-                        "status": "blocked_by_quality_gate",
-                        "provider": "youtube",
-                        "project_id": project_id,
-                        "truthful": True,
-                        "error": _gate_error_report(project_id, truth or {}),
-                    }
+            if not project_id:
+                return {
+                    "status": "blocked_by_quality_gate", "provider": "youtube",
+                    "truthful": True,
+                    "error": "A project ID is required to prove production and editorial eligibility.",
+                }
+            p = s._get_project(project_id)
+            truth = _professional_truth(p, reconcile=True) if p else None
+            if not truth or not truth.get("publish_allowed_by_quality_gate"):
+                return {
+                    "status": "blocked_by_quality_gate",
+                    "provider": "youtube",
+                    "project_id": project_id,
+                    "truthful": True,
+                    "error": _gate_error_report(project_id, truth or {}),
+                }
             return original_youtube(user_id, video, metadata)
         youtube_upload_closure.__aii_closure_wrapped__ = True
         s.youtube_upload = youtube_upload_closure
@@ -886,17 +1530,22 @@ def _patch_functions():
     if not getattr(original_webhook, "__aii_closure_wrapped__", False):
         def webhook_publish_closure(user_id: str, video: Path, metadata: Dict[str, Any]):
             project_id = str(metadata.get("project_id") or "")
-            if _publish_gate() and project_id:
-                p = s._get_project(project_id)
-                truth = _professional_truth(p, reconcile=True) if p else None
-                if not truth or not truth.get("verified"):
-                    return {
-                        "status": "blocked_by_quality_gate",
-                        "provider": "webhook",
-                        "project_id": project_id,
-                        "truthful": True,
-                        "error": _gate_error_report(project_id, truth or {}),
-                    }
+            if not project_id:
+                return {
+                    "status": "blocked_by_quality_gate", "provider": "webhook",
+                    "truthful": True,
+                    "error": "A project ID is required to prove production and editorial eligibility.",
+                }
+            p = s._get_project(project_id)
+            truth = _professional_truth(p, reconcile=True) if p else None
+            if not truth or not truth.get("publish_allowed_by_quality_gate"):
+                return {
+                    "status": "blocked_by_quality_gate",
+                    "provider": "webhook",
+                    "project_id": project_id,
+                    "truthful": True,
+                    "error": _gate_error_report(project_id, truth or {}),
+                }
             return original_webhook(user_id, video, metadata)
         webhook_publish_closure.__aii_closure_wrapped__ = True
         s.webhook_publish = webhook_publish_closure
@@ -925,22 +1574,49 @@ def _patch_functions():
                 # artifact is itself backed by the same final state we report.
                 smoke_closure_override = (getattr(s, "SMOKE", False) and os.getenv("AI_INFINITY_SMOKE_ALLOW_UNVERIFIED_DELIVERY","0").strip().lower() in {"1","true","yes","on"}) or (os.getenv("CI","").strip().lower() == "true" and getattr(s, "FAST_MODE", False))
                 if p.get("status") in {"completed", "completed_with_qc_warnings"} and not truth.get("verified") and not smoke_closure_override:
-                    error = _gate_error_report(project_id, truth)
-                    s.audit_event(project_id, "professional_gate_blocked", {"failures": truth.get("failures"), "warnings": truth.get("warnings")})
-                    s._update_project(
-                        project_id,
-                        status="failed",
-                        error=error[:1200],
-                        stage="quality_blocked",
-                        progress=min(99.0, float(p.get("progress") or 99)),
-                        result_json=s.jdump({
-                            "status": "failed",
+                    if bool((truth.get("checks") or {}).get("illustrative_fallback_delivery_eligible")):
+                        warning = (
+                            "Editable draft created with clearly labelled original vector illustrations. "
+                            "Professional visual verification and auto-publishing remain blocked until real "
+                            "sourced/generative visuals are available and the edit receives review."
+                        )
+                        draft_result = _parse_result(p)
+                        draft_result["status"] = "completed_with_qc_warnings"
+                        draft_result["truthful"] = True
+                        draft_result["quality_warning"] = warning
+                        draft_result["professional_gate"] = truth
+                        draft_result["professional_visual_verification"] = "REVIEW_REQUIRED"
+                        s.audit_event(project_id, "illustrative_draft_delivered_review_required", {
+                            "warnings": truth.get("warnings"),
+                            "verified": False,
+                            "auto_publish_blocked": True,
                             "truthful": True,
-                            "professional_gate": truth,
-                            "blocked": True,
-                            "reason": error[:1200],
-                        }),
-                    )
+                        })
+                        s._update_project(
+                            project_id,
+                            status="completed_with_qc_warnings",
+                            error=warning[:1200],
+                            stage="quality_review_required",
+                            progress=99.0,
+                            result_json=s.jdump(draft_result),
+                        )
+                    else:
+                        error = _gate_error_report(project_id, truth)
+                        s.audit_event(project_id, "professional_gate_blocked", {"failures": truth.get("failures"), "warnings": truth.get("warnings")})
+                        s._update_project(
+                            project_id,
+                            status="failed",
+                            error=error[:1200],
+                            stage="quality_blocked",
+                            progress=min(99.0, float(p.get("progress") or 99)),
+                            result_json=s.jdump({
+                                "status": "failed",
+                                "truthful": True,
+                                "professional_gate": truth,
+                                "blocked": True,
+                                "reason": error[:1200],
+                            }),
+                        )
             finally:
                 try:
                     _reconcile_artifacts(project_id)

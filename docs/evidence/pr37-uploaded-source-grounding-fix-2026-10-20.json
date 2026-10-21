@@ -1,0 +1,49 @@
+{
+  "schema": "ai-infinity-pr37-uploaded-source-grounding-fix.v1",
+  "recorded_at_utc": "2026-10-19T23:00:47.562Z",
+  "repository": "aurlooij-afk/AI-INFINITY",
+  "pull_request": 37,
+  "branch": "fix/pro-creative-scene-quality-gates",
+  "parent_sha": "a72e6250abd667e4027dfb24a8d05cc26bb1aed7",
+  "failure": {
+    "workflow_run_id": 39336279670,
+    "workflow_url": "https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/39336279670",
+    "job_id": 118346567457,
+    "scenario": "tests/final_acceptance_suite.py::t3",
+    "actual_traceback": "AssertionError at final_acceptance_suite.py line 418: 'AI Infinity' in script and 'captions' in script.lower() and 'editing' in script.lower()",
+    "actual_script_excerpt": [
+      "# AI Infinity Creator Operating System",
+      "Hook: What changes when the usual approach stops working, and what can we test instead?",
+      "Every strong video starts with a clear point of view.",
+      "A playable MP4 alone does not prove quality."
+    ],
+    "root_cause": "The deterministic creative fallback had a broad AI Infinity launch boolean that treated any title containing 'creator' or 'software' as a launch film. It selected canned launch narration and did not consume the extracted user-upload snippets that were already present in research.sources. This silently replaced the PDF's actual topic with generic copy.",
+    "source_pdf_fixture_labels": [
+      "Title",
+      "Brief",
+      "Source rights",
+      "Delivery",
+      "Quality",
+      "Recovery"
+    ]
+  },
+  "fix": {
+    "production_file": "studio_ultimate.py",
+    "changes": [
+      "Add a source-aware narration-point extractor restricted to rows explicitly marked source=user upload and text_extracted=true.",
+      "Convert labelled extracted document points into readable narration while preserving the source meaning and recording source_context evidence in the plan.",
+      "Prioritize uploaded-source points over deterministic canned copy. When fewer points exist, use only a recap of those points rather than invent new factual claims.",
+      "Separate creator-workflow visual direction from the narrower explicit AI Infinity launch-narration profile."
+    ],
+    "regression_file": "tests/test_visual_diversity_truth.py",
+    "regression_tests": [
+      "uploaded PDF points are actually extracted; unrelated web results are excluded",
+      "PDF-grounded fallback narration contains source claims and not generic launch boilerplate",
+      "Creator Operating System is not misclassified as a launch-film brief"
+    ],
+    "no_acceptance_assertions_weakened": true,
+    "no_quality_gate_weakened": true
+  },
+  "no_merge": true,
+  "no_deploy": true
+}
