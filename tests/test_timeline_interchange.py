@@ -263,9 +263,12 @@ def test_disabled_gap_identity_survives_nle_reordering(tmp_path: Path) -> None:
     editable = otio.adapters.read_from_file(str(path), adapter_name="otio_json")
     video = next(track for track in editable.tracks if track.kind == otio.schema.TrackKind.Video)
     assert isinstance(video[1], otio.schema.Gap)
-    # Simulate an NLE reordering the clip after the gap. Its metadata can be
-    # lost, so the exported stable item-name marker must still recover scene 02.
-    video[0], video[1] = video[1], video[0]
+    # Simulate an NLE stripping custom Gap metadata, then reordering it. Its
+    # identity marker in the standard item name must recover scene 02.
+    disabled_gap = video[1]
+    disabled_gap.metadata = {}
+    del video[1]
+    video.insert(0, disabled_gap)
     reordered = otio.adapters.write_to_string(editable, adapter_name="otio_json")
     restored = import_otio_timeline(
         reordered.encode("utf-8"), tmp_path, "project-test", "Interchange acceptance"
