@@ -84,6 +84,27 @@ def test_b2_artifact_storage_reuses_configured_state_credentials(monkeypatch, tm
     assert cfg["secret"] == "unit-test-secret"
 
 
+def test_b2_artifact_storage_derives_signing_region_from_endpoint(monkeypatch, tmp_path: Path):
+    storage, _ = _load_storage_fabric(tmp_path, monkeypatch)
+    monkeypatch.setenv("B2_ENDPOINT", "https://s3.us-east-005.backblazeb2.com")
+    monkeypatch.delenv("BACKBLAZE_B2_REGION", raising=False)
+    monkeypatch.delenv("B2_REGION", raising=False)
+
+    cfg = storage["_config"]("backblaze_b2")
+    assert cfg["endpoint"] == "https://s3.us-east-005.backblazeb2.com"
+    assert cfg["region"] == "us-east-005", cfg
+
+
+def test_explicit_b2_artifact_signing_region_remains_authoritative(monkeypatch, tmp_path: Path):
+    storage, _ = _load_storage_fabric(tmp_path, monkeypatch)
+    monkeypatch.setenv("B2_ENDPOINT", "https://s3.us-east-005.backblazeb2.com")
+    monkeypatch.setenv("B2_REGION", "eu-central-003")
+    monkeypatch.delenv("BACKBLAZE_B2_REGION", raising=False)
+
+    cfg = storage["_config"]("backblaze_b2")
+    assert cfg["region"] == "eu-central-003", cfg
+
+
 def test_artifact_is_verified_only_after_actual_bytes_are_read_back(monkeypatch, tmp_path: Path):
     storage, objects = _load_storage_fabric(tmp_path, monkeypatch)
     source = tmp_path / "final.mp4"
