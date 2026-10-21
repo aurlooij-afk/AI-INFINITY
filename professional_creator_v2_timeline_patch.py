@@ -167,27 +167,60 @@ def install(app: Any) -> None:
     def timeline(pid: str, request: Request):
         uid, p = owned(pid, request)
         path = studio._project_dir(pid) / "timeline.json"
+
+        def read_valid_saved_timeline() -> Dict[str, Any]:
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(stored, dict) or not isinstance(stored.get("scenes"), list) or not stored["scenes"]:
+                raise ValueError("saved timeline must contain a non-empty scenes array")
+            return stored
+
         if not path.is_file() or path.stat().st_size == 0:
             studio._rehydrate_project_asset(pid, uid, "timeline.json")
-        if path.exists():
+        if path.is_file() and path.stat().st_size > 0:
             try:
-                stored = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(stored, dict) and stored.get("scenes"):
-                    stored["owner"] = uid
-                    stored["truthful"] = True
-                    return stored
-            except Exception:
+                stored = read_valid_saved_timeline()
+            except Exception as original_error:
                 # A corrupt local timeline can be replaced only by a separately
-                # verified object-store copy. Never promote an unverified file.
-                studio._rehydrate_project_asset(pid, uid, "timeline.json", force=True)
+                # checksum-verified object-store copy. Do not silently reconstruct
+                # a new timeline and present it as the user's saved edit.
+                restored = studio._rehydrate_project_asset(
+                    pid, uid, "timeline.json", force=True
+                )
+                if restored is None or not path.is_file():
+                    raise HTTPException(
+                        409,
+                        "saved timeline is corrupt and no verified recovery copy is available; existing edit was preserved",
+                    ) from original_error
                 try:
-                    stored = json.loads(path.read_text(encoding="utf-8"))
-                    if isinstance(stored, dict) and stored.get("scenes"):
-                        stored["owner"] = uid
-                        stored["truthful"] = True
-                        return stored
-                except Exception:
-                    pass
+                    stored = read_valid_saved_timeline()
+                except Exception as exc:
+                    raise HTTPException(
+                        409,
+                        "saved timeline remains invalid after verified recovery; existing edit was preserved",
+                    ) from exc
+            stored["owner"] = uid
+            stored["truthful"] = True
+            return stored
+
+        # Missing local data is not the same as a never-saved project. If a
+        # timeline row exists, report loss of recovery rather than regenerate a
+        # different timeline and conceal that the latest edit was not preserved.
+        try:
+            with studio.DB_LOCK, studio._connect() as conn:
+                saved_row = conn.execute(
+                    "SELECT id FROM studio_assets_3610 "
+                    "WHERE project_id=? AND kind='timeline' ORDER BY id DESC LIMIT 1",
+                    (pid,),
+                ).fetchone()
+        except Exception as exc:
+            raise HTTPException(
+                503, "saved timeline availability could not be established; refusing to reconstruct it"
+            ) from exc
+        if saved_row:
+            raise HTTPException(
+                503,
+                "saved timeline is missing and no verified recovery copy is available; latest edit was not reconstructed",
+            )
         out = base._timeline(studio, p)
         out["owner"] = uid
         return out
