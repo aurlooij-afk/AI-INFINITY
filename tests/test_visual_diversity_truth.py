@@ -201,6 +201,18 @@ def test_scene_render_cache_signature_changes_when_caption_relevant_inputs_chang
     assert studio._scene_render_signature(changed_narration, request, 1) != baseline
 
 
+
+def test_creator_ui_uses_production_truth_for_master_delivery_and_keeps_mobile_navigation_single_row():
+    ui = studio.CREATOR_STUDIO_UI
+    assert 'api(projectUrl+"/truth").catch(function(){return null;})' in ui
+    assert 'truth&&truth.verified===true' in ui
+    assert 'x.status==="completed_with_qc_warnings"' in ui
+    assert 'return "review-required"' in ui
+    assert '.nav{display:flex;flex:0 0 auto;gap:4px;width:auto}' in ui
+    assert "Evidence per project" in ui
+    assert "Fallback labelled per run" in ui
+
+
 def test_fallback_brief_extracts_subject_instead_of_delivery_metadata():
     studio = closure._studio()
     brief = (
