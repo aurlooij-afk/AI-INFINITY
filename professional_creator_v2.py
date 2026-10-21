@@ -197,8 +197,9 @@ async function exportOTIO(){
  try{
   const r=await api("/infinity/pro2/project/"+encodeURIComponent(pid)+"/timeline/otio/export",{method:"POST"});
   $("otioDownloads").innerHTML="<a class='btn' href='"+esc(r.timeline.download_url)+"' download='"+esc(r.timeline.name)+"'>Download .otio</a><a class='btn' href='"+esc(r.bundle.download_url)+"' download='"+esc(r.bundle.name)+"'>Download portable ZIP</a>";
-  $("otioHint").textContent="Exported "+r.scene_count+" scenes. Human review remains "+r.human_review_status+".";
-  $("out").textContent=JSON.stringify({status:r.status,project_id:r.project_id,scene_count:r.scene_count,media_files:r.media_files,truth_state:r.truth_state,truth_verified:r.truth_verified,human_review_status:r.human_review_status,requires_human_review:r.requires_human_review,truthful:r.truthful},null,2)
+  const durable=!!(r.durability&&r.durability.timeline&&r.durability.timeline.verified&&r.durability.bundle&&r.durability.bundle.verified);
+  $("otioHint").textContent="Exported "+r.scene_count+" scenes. Human review remains "+r.human_review_status+". "+(durable?"Timeline and bundle storage are hash-verified.":"Downloads are ready locally; persistent storage is not verified.");
+  $("out").textContent=JSON.stringify({status:r.status,project_id:r.project_id,scene_count:r.scene_count,media_files:r.media_files,truth_state:r.truth_state,truth_verified:r.truth_verified,human_review_status:r.human_review_status,requires_human_review:r.requires_human_review,durability:r.durability,truthful:r.truthful},null,2)
  }catch(e){$("out").textContent="OTIO export failed: "+e.message}
 }
 async function importOTIO(input){
@@ -211,7 +212,7 @@ async function importOTIO(input){
   const r=await api("/infinity/pro2/project/"+encodeURIComponent(pid)+"/timeline/otio/import",{method:"POST",headers:{"content-type":"application/vnd.opentimelineio+json"},body:payload});
   window.tlData=r.timeline;renderTimelineView();
   $("otioHint").textContent="Imported "+r.timeline.scenes.length+" scenes. Render and verify the edited master; approval remains pending.";
-  $("out").textContent=JSON.stringify({status:r.status,project_id:r.project_id,scene_count:r.timeline.scenes.length,render_required:r.render_required,truth_verified:r.truth_verified,human_review_status:r.human_review_status,truthful:r.truthful},null,2)
+  $("out").textContent=JSON.stringify({status:r.status,project_id:r.project_id,scene_count:r.timeline.scenes.length,render_required:r.render_required,truth_verified:r.truth_verified,human_review_status:r.human_review_status,durability:r.durability,truthful:r.truthful},null,2)
  }catch(e){$("out").textContent="OTIO import failed: "+e.message}
  finally{input.value=""}
 }
