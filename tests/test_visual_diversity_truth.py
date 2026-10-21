@@ -1592,6 +1592,10 @@ def test_ai_infinity_launch_fallback_is_product_specific_and_uses_clear_overlays
         "AI Infinity turns a creative brief into connected, editable work"
     )
     assert "source records" in chapters[2]["narration"].lower()
+    assert plan["hook"].startswith("One clear brief.")
+    assert "actual deliverables" in plan["cta"]
+    assert "quality and rights checks" in plan["cta"]
+    assert "What changes when the usual approach stops working" not in plan["hook"]
     assert "Every strong video starts with a clear point of view" not in " ".join(
         chapter["narration"] for chapter in chapters
     )
