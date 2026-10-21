@@ -1609,33 +1609,28 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
 
     ai_infinity_launch_narration = {
         "Hook": (
-            "Every strong video starts with a clear point of view. AI Infinity connects the creative brief to the work that follows."
+            "AI Infinity turns a creative brief into connected, editable work—not just a generated video."
         ),
         "Context": (
-            "A creator moves between ideas, recording, research, sound and editing. "
-            "The job is to turn those separate tasks into one clear story for an audience."
+            "Describe the idea in plain language, then set its audience, duration, format and creative direction."
         ),
         "The core idea": (
-            "Start with the message, then choose footage that shows it. "
-            "Each shot should add new information instead of repeating the same workstation from another crop."
+            "When research sources are available, AI Infinity keeps source records with the plan; missing evidence stays visible."
         ),
         "How it works": (
-            "Plan the sequence, capture distinct shots, shape the edit, then mix speech and music. "
-            "Captions should follow the spoken words, not planner headings."
+            "Create a scene-by-scene script, voice, visuals, sound and captions through one connected production workflow."
         ),
         "Real-world examples": (
-            "A real production moves from setting up a camera to recording a person, cutting useful takes and building a finished sequence."
+            "Check rendered footage, scene variety, playback, sound and caption timing instead of trusting a progress bar."
         ),
         "What changes": (
-            "Research, visuals, narration and captions become parts of one deliberate edit. "
-            "The audience sees progress, not the same picture held under changing text."
+            "Edit a scene, revise the script, render again and compare the actual deliverables before approval."
         ),
         "Practical takeaway": (
-            "Make every shot earn its place. Check the complete cut, remove repeated or irrelevant footage, balance the sound, and export a clean master."
+            "Export a master alongside the script, captions, thumbnail, rights records and a complete creator package."
         ),
         "Closing": (
-            "A playable MP4 alone does not prove quality. Inspect the shots, captions and audio; retrieve the saved artifacts; "
-            "and repeat the checks after restart. Release only an export that meets its profile."
+            "Automated checks measure technical quality; people judge story and facts, and publishing stays locked until authorized."
         ),
     }
 
@@ -1729,6 +1724,20 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         localized = _localized_fallback_copy(language, name, clean_title, topic_label)
         localized_heading = localized["name"]
         localized_screen = localized["on_screen"].get(name, localized_heading).format(topic=topic_label, title=clean_title)
+        if ai_infinity_launch and str(language or "English").strip().lower() == "english":
+            # Brand-launch overlays describe the product workflow, not planner
+            # chapter labels or generic motivational copy.
+            launch_overlays = {
+                "Hook": "From brief to finished work",
+                "Context": "Define the creative brief",
+                "The core idea": "Evidence stays visible",
+                "How it works": "Script, visuals, voice, captions",
+                "Real-world examples": "Inspect the rendered cut",
+                "What changes": "Revise. Render. Review.",
+                "Practical takeaway": "Export the complete package",
+                "Closing": "Proof before publishing",
+            }
+            localized_screen = launch_overlays.get(name, localized_screen)
         chapters.append({
             "heading": f"{localized_heading} — {clean_title}" if name in {"Hook", "Closing"} else f"{localized_heading}: {clean_title}",
             "topic": topic_label,
@@ -3695,22 +3704,42 @@ def _default_tts_voice(language: str) -> str:
 
 
 def _edge_tts_voice_candidates(language: str, requested_voice: str = "") -> List[str]:
+    """Return real neural voice IDs for the requested language, never UI placeholders.
+
+    _canonical_tts_language() returns provider locale keys (for example en-us and
+    ps), while the preset table uses language names. Mixing those key spaces
+    silently emptied the candidate list for English and other defaults, causing
+    local synthetic fallback to be selected without attempting neural TTS.
+    """
     lang_key = _canonical_tts_language(language)
-    requested = str(requested_voice or "").strip()
+    language_key = {
+        "en-us": "english",
+        "ur": "urdu",
+        "ps": "pashto",
+        "ar": "arabic",
+    }.get(lang_key, lang_key)
     exact = {
         "english": ["en-US-AriaNeural", "en-US-JennyNeural"],
         "urdu": ["ur-PK-AsadNeural", "ur-PK-UzmaNeural"],
         "pashto": ["ps-AF-LatifaNeural", "ps-AF-GulNawazNeural"],
         "arabic": ["ar-AE-FatimaNeural", "ar-SA-ZariyahNeural"],
-    }.get(lang_key, [])
+    }.get(language_key, [])
     candidates = []
-    if requested:
-        req_lang = requested.lower().split("-", 1)[0]
-        if lang_key == "english" or req_lang == lang_key:
+    requested = str(requested_voice or "").strip()
+    # Values such as default, auto and offline are UI choices, not provider voice
+    # IDs. Only accept an explicitly named Neural voice in the requested language.
+    if requested and requested.lower() not in {"default", "auto", "offline", "local", "system"}:
+        match = re.fullmatch(
+            r"([a-z]{2,3})-([a-z]{2})-([a-z0-9]+neural)",
+            requested,
+            flags=re.I,
+        )
+        target_language = lang_key.split("-", 1)[0]
+        if match and match.group(1).lower() == target_language:
             candidates.append(requested)
     candidates.extend(exact)
-    # Last-resort discovery is exact-locale constrained, never cross-language.
-    seen=set()
+    # Keep order while removing duplicate IDs.
+    seen = set()
     return [v for v in candidates if v and not (v in seen or seen.add(v))]
 
 
@@ -3798,7 +3827,9 @@ def tts(text: str, outdir: Path, index: int, voice: str, language: str = "Englis
     candidates = _edge_tts_voice_candidates(language, voice)
 
     configured_edge_timeout = float(os.getenv("AI_INFINITY_EDGE_TTS_TIMEOUT", "15"))
-    edge_timeout = min(configured_edge_timeout, 10.0) if FAST_MODE else min(configured_edge_timeout, 20.0)
+    # Give neural TTS a bounded but usable window on constrained workers. The old
+    # 10-second FAST cap caused otherwise available voices to fall through to eSpeak.
+    edge_timeout = min(configured_edge_timeout, 15.0) if FAST_MODE else min(configured_edge_timeout, 20.0)
     edge_failures = []
 
     for candidate_voice in candidates:
@@ -5562,6 +5593,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         assets_meta: List[Dict[str, Any]] = []
         scene_paths: List[Path] = []
         voice_provider = None
+        voice_providers_by_scene: List[Dict[str, Any]] = []
         actual_total = 0.0
         # Shared music bed avoids repeatedly generating the same soundtrack.
         music_seconds = max(12.0, min(600.0, float(target) + 12.0))
@@ -5607,7 +5639,9 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             ):
                 if cached.get("duration"): ch["actual_duration"] = float(cached["duration"])
                 if cached.get("asset"): assets_meta.append(redact(cached["asset"]))
-                voice_provider = voice_provider or cached.get("voice_provider")
+                cached_voice_provider = str(cached.get("voice_provider") or "unknown")
+                voice_provider = voice_provider or cached_voice_provider
+                voice_providers_by_scene.append({"scene": i, "provider": cached_voice_provider, "resumed": True})
                 actual_total += float(ch.get("actual_duration") or 0)
                 scene_paths.append(existing_scene)
                 _stage(project_id, "visuals_and_voice_resume", 22 + (i-1) / max(1, len(chapters) * 2) * 36, current_scene=i)
@@ -5631,6 +5665,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                     f"{req.get('language') or 'English'} voice generation unavailable: {safe_reason[:500]}"
                 ) from voice_exc
             voice_provider = voice_provider or provider
+            voice_providers_by_scene.append({"scene": i, "provider": str(provider or "unknown"), "resumed": False})
             scene_duration = max(0.5, min(90.0, float(ch.get("duration") or voice_duration)))
             if abs(float(voice_duration) - scene_duration) > 0.35:
                 retimed = outdir / f"narration_{i:02d}_fitted.mp3"
@@ -5984,7 +6019,9 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "target_duration_seconds": target, "actual_duration_seconds": probe_duration(captioned),
             "render_profile": "720p-fast-enhanced" if FAST_MODE else "1080p-production",
             "visual_policy": "connected-ai-or-real-public-media-only; no-placeholder-video",
-            "ai_provider": ai_provider, "voice_provider": voice_provider, "research": research, "quality": qc,
+            "ai_provider": ai_provider, "voice_provider": voice_provider,
+            "voice_providers_by_scene": voice_providers_by_scene,
+            "research": research, "quality": qc,
             "assets": assets_meta, "shorts": [{k: v for k, v in x.items() if k != "path"} for x in shorts],
             "self_upgrade": True, "truthful": True,
             "production_profile": _project_meta(project_id),
