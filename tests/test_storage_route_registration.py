@@ -30,6 +30,20 @@ def test_storage_routes_are_registered_on_the_serving_asgi_app():
     assert "/infinity/storage/v1/status" in schema["paths"]
     assert "/infinity/storage/v1/verify/{asset_id}" in schema["paths"]
 
+    # OpenTimelineIO is exposed by the same ASGI app that serves Creator UI;
+    # module-level helper tests alone would miss an unregistered route/patch.
+    otio_export = "/infinity/pro2/project/{pid}/timeline/otio/export"
+    otio_import = "/infinity/pro2/project/{pid}/timeline/otio/import"
+    route_methods = {
+        (str(getattr(route, "path", "")), method)
+        for route in main.app.router.routes
+        for method in getattr(route, "methods", ())
+    }
+    assert (otio_export, "POST") in route_methods
+    assert (otio_import, "POST") in route_methods
+    assert otio_export in schema["paths"]
+    assert otio_import in schema["paths"]
+
     from fastapi.testclient import TestClient
 
     response = TestClient(main.app).get("/infinity/storage/v1/status")
