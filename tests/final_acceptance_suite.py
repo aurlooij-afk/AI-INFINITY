@@ -647,7 +647,8 @@ def t10(s,b,d,other_project_id):
     scene=d/"creator_studio"/pid/"scene_01.mp4"
     assert scene.is_file() and scene.stat().st_size>10000,scene
     got=names(s,b,pid)
-    assert "ci_fixture_01.png" in got,got
+    fixture = d/"creator_studio"/pid/"ci_fixture_01.png"
+    assert fixture.is_file() and fixture.stat().st_size > 1000, {"fixture":str(fixture),"registered_artifacts":sorted(got)}
     rights=jart(s,b,pid,"visual_rights.json")
     rights_assets=rights.get("assets") or []
     assert any(
