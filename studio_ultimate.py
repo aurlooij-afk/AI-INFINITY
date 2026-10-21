@@ -8205,6 +8205,17 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
             path = _project_dir(project_id) / name
         if not path.exists():
             raise HTTPException(404, "asset not found")
+        integrity = _project_artifact_integrity(project_id, path)
+        if integrity is False:
+            # A changed artifact must not be served just because the filename
+            # still exists. Rehydrate only from the latest hash-verified object.
+            _rehydrate_project_asset(project_id, user_id, path.name, force=True)
+            integrity = _project_artifact_integrity(project_id, path)
+            if integrity is False:
+                raise HTTPException(
+                    409,
+                    "asset bytes do not match the latest registered SHA-256/size and no verified recovery copy is available",
+                )
         return FileResponse(path, media_type=media_type, filename=Path(path).name)
 
     @app.get("/infinity/studio/share/{project_id}/{asset_name}")
@@ -8212,7 +8223,13 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         verified = _verify_share_token(token)
         if not verified or verified.get("project_id") != project_id or verified.get("asset") != Path(asset_name).name:
             raise HTTPException(403, "share link is invalid or expired")
+        project = _get_project(project_id)
+        if not project:
+            raise HTTPException(404, "project not found")
+        user_id = str(project.get("user_id") or "")
         path = _project_dir(project_id) / Path(asset_name).name
+        if not path.is_file() or path.stat().st_size == 0:
+            _rehydrate_project_asset(project_id, user_id, path.name)
         if Path(asset_name).name in {"final.mp4", "package.zip"}:
             p = _get_project(project_id)
             gate = globals().get("_professional_truth")
@@ -8226,6 +8243,15 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
             found = next((r.get("path") for r in rows if Path(str(r.get("path") or "")).name == Path(asset_name).name), None)
             if found: path = Path(found)
         if not path.exists(): raise HTTPException(404, "asset not found")
+        integrity = _project_artifact_integrity(project_id, path)
+        if integrity is False:
+            _rehydrate_project_asset(project_id, user_id, path.name, force=True)
+            integrity = _project_artifact_integrity(project_id, path)
+            if integrity is False:
+                raise HTTPException(
+                    409,
+                    "shared asset bytes do not match the registered SHA-256/size and no verified recovery copy is available",
+                )
         mt = "video/mp4" if path.suffix.lower()==".mp4" else "application/zip" if path.suffix.lower()==".zip" else "application/octet-stream"
         return FileResponse(path, media_type=mt, filename=path.name)
 
