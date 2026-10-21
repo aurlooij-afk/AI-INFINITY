@@ -265,8 +265,11 @@ def test_disabled_gap_identity_survives_nle_reordering(tmp_path: Path) -> None:
     assert isinstance(video[1], otio.schema.Gap)
     # Simulate an NLE stripping custom Gap metadata, then reordering it. Its
     # identity marker in the standard item name must recover scene 02.
-    disabled_gap = video[1]
-    disabled_gap.metadata = {}
+    original_gap = video[1]
+    disabled_gap = otio.schema.Gap(
+        name=original_gap.name,
+        source_range=original_gap.source_range,
+    )
     del video[1]
     video.insert(0, disabled_gap)
     reordered = otio.adapters.write_to_string(editable, adapter_name="otio_json")
