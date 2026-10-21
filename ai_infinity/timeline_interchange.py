@@ -215,7 +215,10 @@ def export_otio_bundle(
             else:
                 gap = otio.schema.Gap(
                     name="Disabled: " + (scene_meta["heading"] or asset),
-                    source_range=_time_range(otio, 0, 0, fps),
+                    source_range=otio.opentime.TimeRange(
+                        start_time=otio.opentime.RationalTime(0, fps),
+                        duration=otio.opentime.RationalTime(0, fps),
+                    ),
                     metadata={"ai_infinity": scene_meta},
                 )
                 video.append(gap)
@@ -339,7 +342,7 @@ def import_otio_timeline(
         if isinstance(item, otio.schema.Gap):
             scene_meta = item.metadata.get("ai_infinity") if isinstance(item.metadata, dict) else {}
             if not isinstance(scene_meta, dict) or not scene_meta.get("source_asset"):
-                if float(item.duration().to_seconds()) <= 0:
+                if float(otio.opentime.to_seconds(item.duration())) <= 0:
                     continue
                 raise TimelineInterchangeError("timeline contains an unsupported gap without AI Infinity scene metadata")
             asset = _scene_name(scene_meta.get("source_asset"))
