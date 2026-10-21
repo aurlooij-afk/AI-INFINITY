@@ -1619,5 +1619,6 @@ def test_ai_infinity_launch_fallback_is_product_specific_and_uses_clear_overlays
     )
     long_words = sum(len(chapter["narration"].split()) for chapter in long_plan["chapters"])
     assert len(long_plan["chapters"]) >= 6
-    assert long_words >= 180, (long_words, long_plan["chapters"])
+    assert long_words >= 360, (long_words, long_plan["chapters"])
+    assert sum(len(chapter["narration"].split()) for chapter in chapters) >= 60
 
