@@ -703,6 +703,31 @@ def _reconcile_artifacts(project_id: str) -> Dict[str, Any]:
     return {"existing": len(existing), "files": len(files), "added": added, "repaired": repaired}
 
 
+def _voice_provider_quality_tier(
+    providers: List[str],
+    edge_tts_fallback_count: int = 0,
+    silent_fallback_count: int = 0,
+) -> str:
+    """Classify the weakest known voice-provider tier without inferring quality.
+
+    Neural delivery is only proven when every rendered scene names a neural
+    provider and neither a provider fallback nor a silent-voice fallback occurred.
+    """
+    labels = [str(value or "").strip().lower() for value in (providers or [])]
+    labels = [value for value in labels if value and value != "unknown"]
+    if silent_fallback_count:
+        return "silent_or_unavailable"
+    if labels and all(value.startswith("edge-tts-neural:") for value in labels) and edge_tts_fallback_count == 0:
+        return "neural_tts"
+    if any(value.startswith("local-espeak") for value in labels):
+        if any(value.startswith("edge-tts-neural:") for value in labels):
+            return "mixed_neural_and_local_fallback"
+        return "local_synthetic_fallback"
+    if edge_tts_fallback_count:
+        return "provider_fallback_or_mixed"
+    return "unknown_or_unverified"
+
+
 def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, Any]:
     s = _studio()
     project_id = str(p["project_id"])
@@ -882,18 +907,67 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     except Exception:
         timeline_rows = []
     voice_fallback_events = [x for x in timeline_rows if str(x.get("event") or "") == "voice_fallback"]
+    edge_tts_fallback_events = [x for x in timeline_rows if str(x.get("event") or "") == "edge_tts_fallback"]
     checks["voice_fallback_count"] = len(voice_fallback_events)
-    checks["professional_voice_present"] = len(voice_fallback_events) == 0
-    if voice_fallback_events and str(req.get("content_type") or "video").lower() == "video":
-        failures.append(f"silent narration fallback detected in {len(voice_fallback_events)} scene(s)")
+    checks["neural_voice_fallback_count"] = len(edge_tts_fallback_events)
+
+    manifest_data = {}
+    try:
+        manifest_path = files.get("manifest.json")
+        if manifest_path and manifest_path.is_file():
+            manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        manifest_data = {}
+    provider_rows = manifest_data.get("voice_providers_by_scene")
+    if isinstance(provider_rows, list) and provider_rows:
+        provider_names = [
+            str(row.get("provider") or "unknown")
+            for row in provider_rows
+            if isinstance(row, dict)
+        ]
+    else:
+        provider_names = [str(manifest_data.get("voice_provider") or "unknown")]
+    checks["voice_providers"] = sorted(set(provider_names))
+    checks["voice_provider_tier"] = _voice_provider_quality_tier(
+        provider_names,
+        edge_tts_fallback_count=len(edge_tts_fallback_events),
+        silent_fallback_count=len(voice_fallback_events),
+    )
+
+    narration_scene_indices = set()
+    for asset_name, asset_path in files.items():
+        match = re.fullmatch(r"narration_(\\d+)(?:_fitted)?\\.mp3", str(asset_name), flags=re.I)
+        if not match:
+            continue
+        try:
+            if asset_path.is_file() and asset_path.stat().st_size > 1000:
+                narration_scene_indices.add(int(match.group(1)))
+        except Exception:
+            continue
+    checks["narration_audio_scene_count"] = len(narration_scene_indices)
+
+    scene_files = []
+    try:
+        scene_files = sorted(s._project_dir(project_id).glob("scene_*.mp4"))
+    except Exception:
+        scene_files = []
+    expected_voice_scenes = len(scene_files) or max(1, len(chapters))
+    checks["voice_track_present"] = bool(checks.get("audio_stream")) and not voice_fallback_events and len(narration_scene_indices) >= expected_voice_scenes
+    checks["professional_voice_present"] = checks["voice_track_present"] and checks["voice_provider_tier"] == "neural_tts"
+    if str(req.get("content_type") or "video").lower() == "video":
+        if not checks["voice_track_present"]:
+            failures.append(
+                f"narration audio coverage incomplete: {len(narration_scene_indices)} scene audio asset(s), "
+                f"{expected_voice_scenes} rendered scene(s) expected"
+            )
+        elif not checks["professional_voice_present"]:
+            warnings.append(
+                "professional neural voice not proven for every scene "
+                f"(provider tier: {checks['voice_provider_tier']}); keep the result review-required"
+            )
 
     visual_rows = _source_assets(p)
     checks["visual_acquisition_failures"] = _visual_acquisition_diagnostics(visual_rows)
-    scene_files = []
-    try:
-        scene_files = sorted(_studio()._project_dir(project_id).glob("scene_*.mp4"))
-    except Exception:
-        scene_files = []
     effective_scene_count = len(scene_files) if scene_files else (len(chapters) if chapters else 1)
     video_quality_gate_required = str(expected_req.get("content_type") or "video").strip().lower() in {"video", "short", "reel", "film", "documentary"}
     minimum_scene_count = _minimum_professional_scene_count(expected_req)
@@ -1156,7 +1230,7 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         "required_artifacts_present", "artifact_registry_consistent", "visual_sources_present",
         "visual_diversity_ok", "professional_scene_coverage_passed",
         "professional_visual_diversity_passed", "script_content_floor_passed",
-        "caption_sync_passed", "professional_voice_present", "visual_rights_evidence_present",
+        "caption_sync_passed", "voice_track_present", "visual_rights_evidence_present",
         "research_required_and_present", "script_sentence_integrity_passed", "fresh_evidence_ok", "fact_check_present",
         "provenance_present", "captions_present", "thumbnail_present", "manifest_present",
         "media_anomaly_scan_ok", "black_frame_ok", "freeze_ok", "audio_clipping_ok",
