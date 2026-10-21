@@ -48,6 +48,7 @@ def _project(tmp_path: Path) -> tuple[dict, dict, dict]:
         "-ac", "1", "-c:a", "libmp3lame", "-q:a", "9",
         str(tmp_path / "audio_master.mp3"),
     )
+    shutil.copyfile(tmp_path / "audio_master.mp3", tmp_path / "narration_only.mp3")
     rows = []
     for index, filename in enumerate(("scene_01.mp4", "scene_02.mp4"), 1):
         actual_duration = _duration_seconds(tmp_path / filename)
@@ -79,6 +80,16 @@ def _project(tmp_path: Path) -> tuple[dict, dict, dict]:
     (tmp_path / "manifest.json").write_text(
         json.dumps({"artifacts": []}), encoding="utf-8"
     )
+    (tmp_path / "rights_manifest.json").write_text(
+        json.dumps({"assets": [], "state": "REVIEW_REQUIRED"}), encoding="utf-8"
+    )
+    (tmp_path / "production_manifest.json").write_text(
+        json.dumps({"artifacts": [], "truthful": True}), encoding="utf-8"
+    )
+    (tmp_path / "provenance.json").write_text(
+        json.dumps({"sources": [], "truthful": True}), encoding="utf-8"
+    )
+    (tmp_path / "article.md").write_text("# Article\n", encoding="utf-8")
     timeline = {
         "version": "test",
         "project_id": "project-test",
@@ -105,7 +116,7 @@ def test_otio_export_bundle_roundtrips_scene_order_trim_hashes_and_truth(tmp_pat
     assert result["truth_verified"] is False
     assert result["human_review_status"] == "PENDING"
     assert result["scene_count"] == 2
-    assert result["media_files"] == 3
+    assert result["media_files"] == 4
     assert result["timeline_sha256"] == hashlib.sha256(
         Path(result["timeline_path"]).read_bytes()
     ).hexdigest()
@@ -116,6 +127,7 @@ def test_otio_export_bundle_roundtrips_scene_order_trim_hashes_and_truth(tmp_pat
         assert "media/scene_01.mp4" in names
         assert "media/scene_02.mp4" in names
         assert "media/audio_master.mp3" in names
+        assert "media/narration_only.mp3" in names
         assert "metadata/captions.srt" in names
         assert "metadata/sources.json" in names
         assert "metadata/rights.json" in names
@@ -194,6 +206,8 @@ def test_otio_bundle_contains_only_project_relative_media_references(tmp_path: P
     assert "media/scene_02.mp4" in payload
     assert "file://" not in payload
     assert "https://" not in payload
+    parsed = __import__("opentimelineio").adapters.read_from_file(result["timeline_path"], adapter_name="otio_json")
+    assert parsed.metadata["ai_infinity"]["available_audio_stems"][0]["name"] == "narration_only.mp3"
 
 
 def test_export_preserves_preexisting_user_interchange_files(tmp_path: Path) -> None:
