@@ -1,28 +1,59 @@
-# AI Infinity known blockers
+# AI Infinity — Known Production Blockers
 
-Checked 2026-10-12 against PR #37 head 367b9db5dcf19114f9eaee6831bf5f7f568918da. Close blockers only with current workflow and artifact evidence.
+Last evidence refresh: 2026-10-21 UTC  
+Repository: `aurlooij-afk/AI-INFINITY`  
+Primary workstream: PR [#37](https://github.com/aurlooij-afk/AI-INFINITY/pull/37), branch `fix/pro-creative-scene-quality-gates`.
 
-## Current release blockers
+This file is a live release checklist, not a claim that the product is complete. A blocker is closed only by fresh evidence from the exact tested/deployed revision.
 
-1. **Real-source professional production is still the first acceptance gate.** Earlier runs on this branch produced a 60-second 1280x720 H.264/AAC render with three illustrative fallbacks and no cleared source rights. Current code includes a semantic scene-focus matcher; this follow-up filters Openverse to CC0/CC BY commercial/modification-compatible records and still locally verifies each license. The ten-scenario suite must prove zero fallback scenes, relevant source metadata, requested resolution and matching artifact hashes before professional verification.
-2. **Publishing must be fail-closed regardless of the legacy toggle.** The previous truth response exposed publish_gate=true while the actual state was REVIEW_REQUIRED. This commit makes YouTube and webhook paths always require a project ID and publish_allowed_by_quality_gate, including the factual-review outcome. CI must validate this exact change.
-3. **Live endpoint/revision remains unverified.** The available probe saw https://ai-infinity.blitz.cloud/ return HTTP 503 on 2026-10-12. Render metadata identifies https://ai-infinity-ca5e.onrender.com (service srv-dallhl740ujc73eetgp0); the latest recorded live deployment remains main commit c59421d2da4b9b32eaccdee2ca71e2b9ccfd07ed. Do not assume current health or revision.
-4. **Storage durability and restore are incomplete.** A current isolated B2 PUT/HEAD/GET/size/SHA-256 canary and clean-instance project-state restore have not been run.
-5. **Editorial and native-language approval remains pending.** Reviewer packet templates are not review evidence. Pashto pronunciation, intelligibility, caption readability and cultural fit require actual native-speaker review; two reviewer scorecards remain unrecorded.
-6. **Production profile/edit interchange remain unproved.** Real 1080p output, 20s/60s/3m modes, the three-case MLT comparison and an OpenTimelineIO package with referenced media have not passed on the exact deployed revision.
-7. **Preserved originals remain unchanged.** Both original research documents were found in the Project Library. The connector denied raw-byte materialization; neither was overwritten or reconstructed. They remain absent from the current PR tree, so no byte-for-byte copy into Git is claimed.
+## Baseline evidence
 
-## Recent workflows
+At commit `7bc5a5bb102733ca2a18c26d7797b52ed012265c`, these GitHub Actions checks passed:
 
-- Visual Diversity Truth Regression — run 38277290751: success on 367b9db5dcf19114f9eaee6831bf5f7f568918da.
-- Final Complete Acceptance Suite — run 38277290770: in progress at the latest observed check; report its final result separately.
-- Creator Studio Build Guard — run 38277290750: in progress at the latest observed check.
+- [Visual Diversity Truth Regression #148](https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/39525438722) — 79 tests passed.
+- [Creator Studio Build Guard #703](https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/39525438917) — passed.
+- [Final Complete Acceptance Suite #371](https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/39525438817) — the then-current ten scenarios passed and uploaded artifact evidence.
 
+That acceptance artifact proves a 60-second, 1280×720 H.264/AAC launch-video path with real source records, no fallback visuals, verified asset-manifest hashes, neural English speech and cleared source-rights checks; a Pashto voice path; user-uploaded PDF extraction; reference-URL grounding; three short-form variants; honest offline degradation; same-container process restart without a false durability claim; isolation; and recovery retry with fail-closed publishing.
 
-8. **Acquisition diagnostics are now surfaced for the next acceptance attempt.** Run 38277808132 on 7686f7f94d2afe87174c1af63fcd5ef7f34865d0 still failed scenario 1 with three fallbacks, one cleared visual-rights record and 3 unresolved rights records. The next source patch adds sanitized per-scene provider failure reasons to production truth and tests the redaction. These diagnostics are for root-cause isolation; they do not relax VERIFIED.
+**That baseline does not prove full production closure.** The PR head has since been extended with real 1080p and 180-second production checks. The CI result for the latest commit must be read separately before those profile gates can be marked passed.
 
+## Open release blockers
 
-9. **Redaction regression caught an escaping error before release.** Visual Diversity run 38278893658 on dae3f1029c166ad7336855e3d1187d4b7816d46e had 37 passing tests and one failure in acquisition-diagnostic redaction: the result contained a literal `\\1` and retained the fake test token. The next patch replaces backreference replacements with lambda callbacks and single-escaped regex patterns, then adds separate query-string and bare credential redaction coverage. This is a reporting/security correctness fix; provider failure details remain sanitized.
+### 1. Latest production profile matrix must pass on one exact SHA
 
+The earlier acceptance suite exercised a real 60-second 720p production. It did not prove a real 1920×1080 production or an actual 180-second deliverable. The expanded suite now adds both and measures requested/actual duration, dimensions, H.264/AAC streams, captions, scene coverage, research, rights, zero fallback visuals, full decode and manifest SHA-256. Keep these gates open until the final suite on the latest PR head completes successfully.
 
-10. **Credential sanitizer follow-up.** Visual Diversity run 38279202973 (head ad30ab2bdd4dac09a0884b4a9e4c5456feb617ed) had 38 passed/1 failed: the sanitizer masked `Bearer` but left the following authorization token. This patch masks the complete optional-Bearer authorization value. The regression test must pass before release.
+### 2. Live Render deployment is on the old `main` revision
+
+Render service `srv-dallhl740ujc73eetgp0` uses the `main` branch. The latest deployment metadata observed on 2026-10-21 points to `c59421d2da4b9b32eaccdee2ca71e2b9ccfd07ed`, while PR #37 contains newer code. A passing PR build is not live-deployment evidence. After an authorized merge/deploy, verify exact deployed commit identity, health routes, one real production request and the resulting artifacts on the deployed revision. Do not claim that PR code is already live.
+
+### 3. Durable project-state storage and clean-instance restore remain unverified
+
+The application contains an S3-compatible Backblaze B2 SQLite snapshot adapter with a unique canary, PUT/HEAD/GET read-back, SHA-256/size checks and startup restore validation. In acceptance CI, backend status reported `configured=false`, `active=false`, `verified=false`; process-restart persistence was correctly tested while `persistent=false`. Render metadata shows a free web-service plan, not a verified persistent volume. Neither confirmation flags nor a same-container restart can close this blocker.
+
+Closure evidence required from a real owner-configured backend: credentials present only as protected environment secrets; isolated canary PUT → HEAD → GET with identical bytes and SHA-256; project-state snapshot round-trip; restart or fresh-instance restore; project and artifact reload; and recorded exact revision/backend state. Do not add paid infrastructure or place secrets in source code to bypass this limitation.
+
+### 4. Source-media availability is not guaranteed for every brief
+
+At least one real launch production passed with zero fallbacks and cleared rights. Other scenarios intentionally disable external providers or inject recovery fixtures; those outputs correctly remain `REVIEW_REQUIRED`, have final download blocked, and cannot publish. This is correct failure behavior, not proof that arbitrary topics always have available source footage. Keep provider failures, rights uncertainty and fallback use visible. A professional verification claim requires scene-specific relevance, source metadata and rights evidence for the actual assets in that production.
+
+### 5. Human editorial and native-language approval remain pending
+
+Reviewer packets and contact sheets are generated, but a packet is not a human review. The recorded human review state is `PENDING`. Story clarity, visual composition, edit rhythm, voice pronunciation/intelligibility, caption legibility, factual support, rights/attribution and brand fit must be evaluated by real reviewers. Pashto TTS output has automated script/provider/media checks; it does not prove human or native-speaker approval. No human score or approval may be inferred.
+
+### 6. Timeline interchange and operational scale are not proven
+
+The current acceptance suite does not establish a successful OpenTimelineIO media-reference round-trip, a measured MLT-versus-FFmpeg comparison, or a representative concurrency/load benchmark across 20-second, 60-second and 180-second jobs. Keep FFmpeg as the known baseline; adopt OTIO/MLT only when round-trip, referenced-media resolution, re-render and resource measurements pass on real artifacts. Distinguish supported features from roadmap candidates.
+
+### 7. External platforms are not universally feature-complete
+
+AI Infinity has working local creation and a set of provider adapters, but it has not demonstrated exact feature parity with every AI creation platform. For each named provider/capability, record whether the adapter exists, what credentials/scopes it needs, whether a live call succeeded, whether returned bytes validated, source/license restrictions, quota handling, and whether the capability is production-tested. YouTube publishing remains authorization- and quality-gate-dependent; TikTok/Meta/API analytics cannot be represented as connected or working without their actual authorized integration and returned remote evidence.
+
+### 8. Protected research documents must remain untouched
+
+Do not rewrite, regenerate or reconstruct the separately maintained `AI_Infinity_Creator_Benchmark_and_Reuse_Plan.md` or `AI_Infinity_10_Method_Deep_Research_and_Master_Command.md` as part of this closure. Continue the existing PR and preserve both documents byte-for-byte wherever they reside in the user's source-of-truth library. If the raw bytes cannot be read, state that; do not claim a byte comparison was performed.
+
+## Release decision rule
+
+PR #37 remains open and unmerged until its latest code revision has green focused regression, build guard and full acceptance checks. A production release also requires authorized deployment, live exact-revision verification, actual durable storage/restore proof where durability is promised, and human review for creative/native-language release. A green CI suite alone cannot close these external and human gates.
