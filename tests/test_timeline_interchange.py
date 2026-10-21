@@ -194,3 +194,20 @@ def test_otio_bundle_contains_only_project_relative_media_references(tmp_path: P
     assert "media/scene_02.mp4" in payload
     assert "file://" not in payload
     assert "https://" not in payload
+
+
+def test_export_preserves_preexisting_user_interchange_files(tmp_path: Path) -> None:
+    timeline, truth, project = _project(tmp_path)
+    existing_otio = tmp_path / "project.otio"
+    existing_zip = tmp_path / "timeline-export.zip"
+    existing_otio_bytes = b"existing user timeline must not be overwritten"
+    existing_zip_bytes = b"existing user bundle must not be overwritten"
+    existing_otio.write_bytes(existing_otio_bytes)
+    existing_zip.write_bytes(existing_zip_bytes)
+
+    result = export_otio_bundle(tmp_path, "project-test", project, timeline, truth)
+
+    assert existing_otio.read_bytes() == existing_otio_bytes
+    assert existing_zip.read_bytes() == existing_zip_bytes
+    assert result["timeline_path"].name != "project.otio"
+    assert result["bundle_path"].name != "timeline-export.zip"
