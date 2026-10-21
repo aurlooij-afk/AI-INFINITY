@@ -1611,7 +1611,8 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         "Hook": (
             "AI Infinity turns a creative brief into connected, editable work—not just a generated video. "
             "Start with the goal, then keep every decision tied to what the audience needs to understand. "
-            "Every scene should earn its place by moving the story forward."
+            "Every scene should earn its place by moving the story forward. "
+            "This makes the brief actionable, not just visually polished."
         ),
         "Context": (
             "Describe the idea in plain language, then set its audience, duration, format and creative direction. "
