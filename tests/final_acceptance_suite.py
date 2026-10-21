@@ -649,7 +649,7 @@ def t10(s,b,d,other_project_id):
     got=names(s,b,pid)
     fixture = d/"creator_studio"/pid/"ci_fixture_01.png"
     assert fixture.is_file() and fixture.stat().st_size > 1000, {"fixture":str(fixture),"registered_artifacts":sorted(got)}
-    rights=jart(s,b,pid,"visual_rights.json")
+    rights=jart(s,b,pid,"rights_manifest.json")
     rights_assets=rights.get("assets") or []
     assert any(
         x.get("source")=="AI Infinity deterministic CC0 recovery-test illustration"
