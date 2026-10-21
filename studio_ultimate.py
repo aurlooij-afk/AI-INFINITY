@@ -4332,7 +4332,7 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
                 f"x=75:y=915:fontsize={font}:fontcolor=white"
             )
             visual_args = ["-loop", "1", "-i", src]
-        audio_filter = "[1:a]loudnorm=I=-18:TP=-1.5:LRA=7[vo];[2:a]volume=0.10[m];[3:a]adelay=80|80,volume=0.10[s];[vo][m][s]amix=inputs=3:duration=longest:dropout_transition=2[a]"
+        audio_filter = "[1:a]volume=1.0[vo];[2:a]volume=0.10[m];[3:a]adelay=80|80,volume=0.10[s];[vo][m][s]amix=inputs=3:duration=longest:dropout_transition=2,loudnorm=I=-16:TP=-1.5:LRA=11[a]"
         # Keep encoder buffering bounded on the free tier without changing the
         # actual 1080p output dimensions or codecs.
         preset, crf, ab = os.getenv("AI_INFINITY_VIDEO_PRESET", "veryfast"), "18", "192k"
@@ -4345,7 +4345,7 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
 
 def _scene_mix(video: Path, voice: Path, music: Path, sfx: Path, duration: float, out: Path, captions: Optional[Path] = None) -> None:
     args: List[Any] = ["-i", video, "-i", voice, "-stream_loop", "-1", "-i", music, "-i", sfx]
-    audio = "[1:a]loudnorm=I=-18:TP=-1.5:LRA=7[vo];[2:a]volume=0.10[m];[3:a]adelay=80|80,volume=0.10[s];[vo][m][s]amix=inputs=3:duration=longest:dropout_transition=2[a]"
+    audio = "[1:a]volume=1.0[vo];[2:a]volume=0.10[m];[3:a]adelay=80|80,volume=0.10[s];[vo][m][s]amix=inputs=3:duration=longest:dropout_transition=2,loudnorm=I=-16:TP=-1.5:LRA=11[a]"
     args += ["-filter_complex", audio, "-map", "0:v:0", "-map", "[a]"]
     if captions:
         sub = str(captions).replace("\\", "/").replace(":", "\\:")
