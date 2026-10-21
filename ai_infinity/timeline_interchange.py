@@ -170,7 +170,6 @@ def export_otio_bundle(
         media_dir = work / "media"
         media_dir.mkdir()
         timeline = otio.schema.Timeline(name=metadata["title"])
-        timeline.tracks = otio.schema.Stack(name="Tracks")
         video = otio.schema.Track(name="Video", kind=otio.schema.TrackKind.Video)
         audio_track = otio.schema.Track(name="Audio", kind=otio.schema.TrackKind.Audio)
         timeline.tracks.append(video)
@@ -216,7 +215,7 @@ def export_otio_bundle(
             else:
                 gap = otio.schema.Gap(
                     name="Disabled: " + (scene_meta["heading"] or asset),
-                    duration=otio.opentime.RationalTime(0, fps),
+                    source_range=_time_range(otio, 0, 0, fps),
                     metadata={"ai_infinity": scene_meta},
                 )
                 video.append(gap)
@@ -248,7 +247,7 @@ def export_otio_bundle(
         })
 
         otio_path = work / "project.otio"
-        timeline.to_json_file(str(otio_path), indent=2)
+        otio.adapters.write_to_file(timeline, str(otio_path), adapter_name="otio_json")
         bundle_manifest = {
             **metadata,
             "files": inventory,
@@ -357,8 +356,8 @@ def import_otio_timeline(
             source_range = item.source_range
             if source_range is None:
                 raise TimelineInterchangeError("OTIO scene clip has no source range")
-            trim_start = float(source_range.start_time.to_seconds())
-            duration = float(source_range.duration.to_seconds())
+            trim_start = float(otio.opentime.to_seconds(source_range.start_time))
+            duration = float(otio.opentime.to_seconds(source_range.duration))
             enabled = bool(clip_meta.get("enabled", True))
         else:
             raise TimelineInterchangeError("OTIO video track contains an unsupported item; only clips and exported disabled-scene gaps are supported")
