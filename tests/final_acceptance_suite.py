@@ -445,6 +445,25 @@ def t4(s,b):
     assert export.get("status")=="exported" and export.get("truthful") is True,export
     assert int(export.get("scene_count") or 0)>=1,export
     assert export.get("human_review_status")=="PENDING" and export.get("requires_human_review") is True,export
+    durability=export.get("durability") or {}
+    assert {"timeline","bundle"} <= set(durability),export
+    verified_statuses={"primary_only","durable_partial","durable_multi_provider","durable_5_provider"}
+    for label,expected_sha,expected_size in (
+        ("timeline",export["timeline"]["sha256"],None),
+        ("bundle",export["bundle"]["sha256"],int(export["bundle"]["size_bytes"])),
+    ):
+        report=durability[label]
+        assert report.get("truthful") is True,report
+        status=str(report.get("status") or "")
+        assert status in verified_statuses | {"unconfigured","failed","not_persisted","uploaded_unverified"},report
+        if report.get("verified") is True:
+            assert status in verified_statuses,report
+            assert report.get("sha256")==expected_sha,report
+            if expected_size is not None:
+                assert int(report.get("size_bytes") or -1)==expected_size,report
+            assert report.get("successful_providers"),report
+        else:
+            assert status not in verified_statuses,report
 
     timeline_response=s.get(b+export["timeline"]["download_url"],timeout=180)
     assert timeline_response.status_code==200 and timeline_response.content,(timeline_response.status_code,timeline_response.text[:1000])
