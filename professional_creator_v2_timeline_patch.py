@@ -23,6 +23,23 @@ def install(app: Any) -> None:
     import studio_ultimate as studio
     import professional_creator_v2 as base
 
+    # Replace the base editor's three overlapping handlers rather than adding
+    # duplicate FastAPI routes. main.py installs the base UI first, then this
+    # correctness patch; keeping only these handlers also keeps OpenAPI stable.
+    replaced = {
+        ("/infinity/pro2/project/{pid}/timeline", "GET"),
+        ("/infinity/pro2/project/{pid}/timeline", "PUT"),
+        ("/infinity/pro2/project/{pid}/timeline/render", "POST"),
+    }
+    app.router.routes[:] = [
+        route for route in app.router.routes
+        if not any(
+            getattr(route, "path", "") == path
+            and method in (getattr(route, "methods", set()) or set())
+            for path, method in replaced
+        )
+    ]
+
     def owned(pid: str, request: Request):
         uid = studio._get_user_id(request)
         p = studio._get_project(pid)
