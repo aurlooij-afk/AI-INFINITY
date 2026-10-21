@@ -438,7 +438,11 @@ def import_otio_timeline(
     if not isinstance(value, otio.schema.Timeline):
         raise TimelineInterchangeError("OTIO file must contain a Timeline root object")
     root = Path(project_root).resolve()
-    info = value.metadata.get("ai_infinity") if isinstance(value.metadata, dict) else {}
+    # OpenTimelineIO wraps nested metadata in AnyDictionary/AnyVector
+    # proxies; these support mapping access but are not guaranteed to be native
+    # Python dict/list instances.
+    info_value = value.metadata.get("ai_infinity") if hasattr(value.metadata, "get") else {}
+    info = info_value if hasattr(info_value, "get") else {}
     try:
         fps = int((info or {}).get("fps") or 30)
     except (TypeError, ValueError):
@@ -451,19 +455,21 @@ def import_otio_timeline(
         raise TimelineInterchangeError("OTIO import requires exactly one direct video track")
     rows = []
     seen = set()
-    catalog = (info or {}).get("scene_catalog")
-    if not isinstance(catalog, list):
+    catalog_value = info.get("scene_catalog")
+    try:
+        catalog = list(catalog_value) if catalog_value is not None else []
+    except TypeError:
         catalog = []
     for item_position, item in enumerate(video_tracks[0], 1):
         if isinstance(item, otio.schema.Gap):
-            scene_meta = item.metadata.get("ai_infinity") if isinstance(item.metadata, dict) else {}
-            if not isinstance(scene_meta, dict) or not scene_meta.get("source_asset"):
+            scene_meta = item.metadata.get("ai_infinity") if hasattr(item.metadata, "get") else {}
+            if not hasattr(scene_meta, "get") or not scene_meta.get("source_asset"):
                 # Some OTIO adapters preserve root timeline metadata but strip
                 # custom properties attached to Gap objects. Recover the gap
                 # only when the same ordered catalog position explicitly marks
                 # a disabled AI Infinity scene; unrelated edits fail closed.
                 candidate = catalog[item_position - 1] if item_position <= len(catalog) else None
-                if isinstance(candidate, dict) and candidate.get("enabled") is False:
+                if hasattr(candidate, "get") and candidate.get("enabled") is False:
                     scene_meta = candidate
                 elif float(otio.opentime.to_seconds(item.duration())) <= 0:
                     continue
@@ -482,8 +488,8 @@ def import_otio_timeline(
             if not isinstance(ref, otio.schema.ExternalReference):
                 raise TimelineInterchangeError("OTIO clip must reference an external scene master")
             asset = _scene_name(ref.target_url)
-            clip_meta = item.metadata.get("ai_infinity") if isinstance(item.metadata, dict) else {}
-            if not isinstance(clip_meta, dict):
+            clip_meta = item.metadata.get("ai_infinity") if hasattr(item.metadata, "get") else {}
+            if not hasattr(clip_meta, "get"):
                 clip_meta = {}
             source_range = item.source_range
             if source_range is None:
