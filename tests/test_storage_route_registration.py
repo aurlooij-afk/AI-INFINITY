@@ -103,3 +103,78 @@ def test_live_render_heredocs_compile_and_import_sys_before_sys_exit():
     assert "command -v ffmpeg" in workflow
     assert "command -v ffprobe" in workflow
     assert "timeout=180" in blocks[1]
+
+
+
+def test_timeline_get_never_hides_lost_or_corrupt_saved_edits(monkeypatch, tmp_path: Path):
+    import sqlite3
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import professional_creator_v2_timeline_patch as timeline_patch
+    import studio_ultimate as studio
+
+    project_id = "timeline-recovery-contract"
+    user_id = "timeline-owner"
+    root = tmp_path / project_id
+    root.mkdir()
+    timeline_path = root / "timeline.json"
+    database = tmp_path / "timeline-state.db"
+
+    def connect():
+        db = sqlite3.connect(database, timeout=10)
+        db.row_factory = sqlite3.Row
+        return db
+
+    with connect() as db:
+        db.execute(
+            """
+            CREATE TABLE studio_assets_3610(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                path TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                created_at REAL NOT NULL
+            )
+            """
+        )
+        db.execute(
+            "INSERT INTO studio_assets_3610(project_id,kind,path,media_type,metadata_json,created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (project_id, "timeline", str(timeline_path), "application/json",
+             json.dumps({"durable_storage": {"status": "not_persisted", "truthful": True}}), 1.0),
+        )
+
+    corrupt_bytes = b'{"scenes": [{"heading": "latest edit, but corrupt"}]'
+    @pytest.mark.parametrize("local_state,expected_status", [
+        ("missing", 503),
+        ("corrupt", 409),
+    ])
+    def exercise(local_state: str, expected_status: int):
+        if local_state == "corrupt":
+            timeline_path.write_bytes(corrupt_bytes)
+        else:
+            timeline_path.unlink(missing_ok=True)
+        monkeypatch.setattr(studio, "_connect", connect)
+        monkeypatch.setattr(studio, "_get_user_id", lambda request: user_id)
+        monkeypatch.setattr(studio, "_get_project", lambda pid: {
+            "project_id": pid, "user_id": user_id, "title": "Recovery contract",
+            "status": "completed",
+        })
+        monkeypatch.setattr(studio, "_project_dir", lambda pid: root)
+        monkeypatch.setattr(studio, "_rehydrate_project_asset", lambda *args, **kwargs: None)
+
+        app = FastAPI()
+        timeline_patch.install(app)
+        response = TestClient(app).get(
+            f"/infinity/pro2/project/{project_id}/timeline"
+        )
+        assert response.status_code == expected_status, response.text
+        assert "timeline" in response.json().get("detail", "").lower()
+        if local_state == "corrupt":
+            assert timeline_path.read_bytes() == corrupt_bytes, "corrupt user bytes must be preserved"
+
+    exercise("missing", 503)
+    exercise("corrupt", 409)
