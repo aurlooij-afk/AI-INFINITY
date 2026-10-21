@@ -4764,7 +4764,9 @@ def _project_dir(project_id: str) -> Path:
     return p
 
 
-def _rehydrate_project_asset(project_id: str, user_id: str, filename: str) -> Optional[Path]:
+def _rehydrate_project_asset(
+    project_id: str, user_id: str, filename: str, *, force: bool = False
+) -> Optional[Path]:
     """Restore a user-facing artifact from verified object storage when local disk is empty."""
     target_name = Path(str(filename or "")).name
     if not target_name:
@@ -4772,7 +4774,7 @@ def _rehydrate_project_asset(project_id: str, user_id: str, filename: str) -> Op
     root = _project_dir(project_id)
     # Fast path: local artifact is already present and non-empty.
     direct = root / target_name
-    if direct.is_file() and direct.stat().st_size > 0:
+    if not force and direct.is_file() and direct.stat().st_size > 0:
         return direct
     try:
         import ai3704_storage_fabric as storage
@@ -4846,7 +4848,7 @@ def _rehydrate_project_asset(project_id: str, user_id: str, filename: str) -> Op
     return None
 
 
-def _save_asset(project_id: str, kind: str, path: Path, media_type: str, metadata: Dict[str, Any]) -> None:
+def _save_asset(project_id: str, kind: str, path: Path, media_type: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
     meta = dict(metadata or {})
     # Persist only user-facing production artifacts when a real durable storage
     # provider is configured. Intermediate scene files remain local/temp to avoid
