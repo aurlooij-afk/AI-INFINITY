@@ -228,12 +228,12 @@ def install(app: Any) -> None:
             "project_id": pid,
             "timeline": {
                 "name": result["timeline_path"].name,
-                "download_url": f"/infinity/studio/project/{pid}/asset/project.otio",
+                "download_url": f"/infinity/studio/project/{pid}/asset/{result['timeline_path'].name}",
                 "sha256": result["timeline_sha256"],
             },
             "bundle": {
                 "name": result["bundle_path"].name,
-                "download_url": f"/infinity/studio/project/{pid}/asset/timeline-export.zip",
+                "download_url": f"/infinity/studio/project/{pid}/asset/{result['bundle_path'].name}",
                 "sha256": result["bundle_sha256"],
                 "size_bytes": result["bundle_size_bytes"],
             },
