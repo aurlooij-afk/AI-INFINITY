@@ -324,18 +324,15 @@ def install(app: Any) -> None:
                     if not isinstance(source, dict) or not isinstance(source.get("scenes"), list) or not source["scenes"]:
                         raise HTTPException(409, "saved timeline is empty and completed scene masters could not produce a recoverable timeline")
                     source = normalize(pid, source)
-                    recovered_path = studio._project_dir(pid) / "timeline.json"
-                    recovered_path.write_text(
-                        json.dumps(source, ensure_ascii=False, indent=2),
-                        encoding="utf-8",
-                    )
-                    studio.register_artifact(
-                        pid, recovered_path, "application/json",
-                        {"recovery": "empty_legacy_editor_scaffold", "source": "completed_scene_masters"},
-                    )
+                    # Use the editor's normal save path so recovery also records
+                    # artifact durability/read-back evidence. Merely registering local
+                    # bytes would leave the asset manifest stale and make this recovery
+                    # disappear after a clean-instance restart.
+                    source, recovery_storage = save(pid, source)
                     studio.audit_event(pid, "professional_timeline_recovered_from_completed_scene_masters", {
                         "scene_count": len(source["scenes"]),
                         "reason": "empty legacy timeline scaffold",
+                        "durability_status": str((recovery_storage or {}).get("durable_storage", {}).get("status") or "not_persisted"),
                     })
                     return source
                 raise HTTPException(409, "saved timeline is invalid; repair it before OTIO export")
