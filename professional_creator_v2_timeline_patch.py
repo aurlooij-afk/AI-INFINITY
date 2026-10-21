@@ -129,14 +129,39 @@ def install(app: Any) -> None:
             "truthful": True,
         }
 
-    def save(pid: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def durability_summary(saved: Dict[str, Any], path: Path) -> Dict[str, Any]:
+        stored = (saved or {}).get("durable_storage") or {}
+        status = str(stored.get("status") or "not_persisted")
+        verified_statuses = {"primary_only", "durable_partial", "durable_multi_provider", "durable_5_provider"}
+        successful = list(stored.get("successful_providers") or [])
+        try:
+            actual_sha = studio.file_sha256(path)
+            actual_size = path.stat().st_size
+        except Exception:
+            actual_sha, actual_size = "", -1
+        verified = (
+            status in verified_statuses
+            and len(successful) >= 1
+            and stored.get("sha256") == actual_sha
+            and int(stored.get("size_bytes") or -1) == int(actual_size)
+        )
+        return {
+            "status": status,
+            "verified": verified,
+            "sha256": stored.get("sha256"),
+            "size_bytes": stored.get("size_bytes"),
+            "successful_providers": successful,
+            "truthful": True,
+        }
+
+    def save(pid: str, payload: Dict[str, Any]):
         tl = normalize(pid, payload)
         path = studio._project_dir(pid) / "timeline.json"
         path.write_text(json.dumps(tl, ensure_ascii=False, indent=2), encoding="utf-8")
-        studio._save_asset(pid, "timeline", path, "application/json", {"editor": VERSION})
+        storage = studio._save_asset(pid, "timeline", path, "application/json", {"editor": VERSION})
         studio.register_artifact(pid, path, "application/json", {"editor": VERSION})
         studio.audit_event(pid, "professional_timeline_saved_corrected", {"scene_count": len(tl["scenes"])})
-        return tl
+        return tl, storage
 
     @app.get("/infinity/pro2/project/{pid}/timeline")
     def timeline(pid: str, request: Request):
@@ -174,8 +199,14 @@ def install(app: Any) -> None:
             raise HTTPException(409, "timeline requires completed scene masters")
         payload = await request.json()
         payload["project_id"] = pid
-        tl = save(pid, payload)
-        return {"status": "saved", "timeline": tl, "truthful": True}
+        tl, timeline_storage = save(pid, payload)
+        timeline_path = studio._project_dir(pid) / "timeline.json"
+        return {
+            "status": "saved",
+            "timeline": tl,
+            "durability": durability_summary(timeline_storage, timeline_path),
+            "truthful": True,
+        }
 
     @app.post("/infinity/pro2/project/{pid}/timeline/render")
     async def render_timeline(pid: str, request: Request):
@@ -184,7 +215,8 @@ def install(app: Any) -> None:
             raise HTTPException(409, "timeline render requires completed scene masters")
         payload = await request.json()
         payload["project_id"] = pid
-        tl = save(pid, payload)
+        tl, timeline_storage = save(pid, payload)
+        timeline_path = studio._project_dir(pid) / "timeline.json"
         try:
             rendered = base._render(studio, pid, tl)
             variants = base._variants(studio, pid, rendered["master"])
@@ -199,6 +231,7 @@ def install(app: Any) -> None:
                 "verified": bool(truth.get("verified")),
                 "truth": truth,
                 "download_url": f"/infinity/studio/project/{pid}/asset/final.mp4",
+                "timeline_durability": durability_summary(timeline_storage, timeline_path),
                 "truthful": True,
             }
         except Exception as exc:
@@ -208,6 +241,8 @@ def install(app: Any) -> None:
 
     def otio_timeline_source(pid: str, project: Dict[str, Any]) -> Dict[str, Any]:
         path = studio._project_dir(pid) / "timeline.json"
+        if not path.is_file():
+            studio._rehydrate_project_asset(pid, str(project.get("user_id") or ""), "timeline.json")
         if path.exists():
             try:
                 stored = json.loads(path.read_text(encoding="utf-8"))
@@ -262,25 +297,6 @@ def install(app: Any) -> None:
             pid, result["bundle_path"], "application/zip",
             {"format": "otio_bundle", "sha256": result["bundle_sha256"], "truth_state": result["truth_state"]},
         )
-        def durability_summary(saved: Dict[str, Any], expected_sha: str, expected_size: int) -> Dict[str, Any]:
-            stored = (saved or {}).get("durable_storage") or {}
-            status = str(stored.get("status") or "not_persisted")
-            verified_statuses = {"primary_only", "durable_partial", "durable_multi_provider", "durable_5_provider"}
-            successful = list(stored.get("successful_providers") or [])
-            verified = (
-                status in verified_statuses
-                and len(successful) >= 1
-                and stored.get("sha256") == expected_sha
-                and int(stored.get("size_bytes") or -1) == int(expected_size)
-            )
-            return {
-                "status": status,
-                "verified": verified,
-                "sha256": stored.get("sha256"),
-                "size_bytes": stored.get("size_bytes"),
-                "successful_providers": successful,
-                "truthful": True,
-            }
         studio.audit_event(pid, "professional_timeline_otio_exported", {
             "scene_count": result["scene_count"],
             "media_files": result["media_files"],
@@ -310,10 +326,10 @@ def install(app: Any) -> None:
             "requires_human_review": True,
             "durability": {
                 "timeline": durability_summary(
-                    timeline_storage, result["timeline_sha256"], result["timeline_path"].stat().st_size
+                    timeline_storage, result["timeline_path"]
                 ),
                 "bundle": durability_summary(
-                    bundle_storage, result["bundle_sha256"], result["bundle_size_bytes"]
+                    bundle_storage, result["bundle_path"]
                 ),
             },
             "truthful": True,
@@ -338,7 +354,7 @@ def install(app: Any) -> None:
                 pid,
                 str(project.get("title") or "AI Infinity project"),
             )
-            timeline_data = save(pid, imported)
+            timeline_data, timeline_storage = save(pid, imported)
         except TimelineInterchangeError as exc:
             status = 503 if "unavailable in this runtime" in str(exc) else 422
             raise HTTPException(status, str(exc)) from exc
@@ -354,5 +370,8 @@ def install(app: Any) -> None:
             "render_required": True,
             "truth_verified": False,
             "human_review_status": "PENDING",
+            "durability": durability_summary(
+                timeline_storage, studio._project_dir(pid) / "timeline.json"
+            ),
             "truthful": True,
         }
