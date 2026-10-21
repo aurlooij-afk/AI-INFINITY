@@ -168,6 +168,17 @@ def install(app: Any) -> None:
         uid, p = owned(pid, request)
         path = studio._project_dir(pid) / "timeline.json"
 
+        if path.is_file() and path.stat().st_size > 0:
+            integrity = studio._project_artifact_integrity(pid, path)
+            if integrity is False:
+                studio._rehydrate_project_asset(pid, uid, "timeline.json", force=True)
+                integrity = studio._project_artifact_integrity(pid, path)
+                if integrity is False:
+                    raise HTTPException(
+                        409,
+                        "saved timeline bytes do not match the latest manifest and no verified recovery copy is available",
+                    )
+
         def read_valid_saved_timeline() -> Dict[str, Any]:
             stored = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(stored, dict) or not isinstance(stored.get("scenes"), list) or not stored["scenes"]:
