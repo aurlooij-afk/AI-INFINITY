@@ -119,7 +119,7 @@ def integrated_lufs(p):
         ["ffmpeg","-hide_banner","-nostats","-i",str(p),"-vn","-af","ebur128=framelog=verbose","-f","null","-"],
         capture_output=True,text=True,timeout=180,
     )
-    values=re.findall(r"\\bI:\\s*(-?[0-9]+(?:\\.[0-9]+)?)\\s*LUFS\\b",(x.stderr or "")+(x.stdout or ""))
+    values=re.findall(r"\bI:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*LUFS\b",(x.stderr or "")+(x.stdout or ""))
     assert x.returncode==0 and values, (x.returncode,x.stderr[-2000:])
     return float(values[-1])
 def pdf(path):
