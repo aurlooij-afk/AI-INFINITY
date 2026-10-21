@@ -12,6 +12,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 from fastapi import File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
@@ -105,6 +106,17 @@ def _config(provider: str) -> Dict[str, Any]:
         )
         if not endpoint and region:
             endpoint = f"https://s3.{region}.backblazeb2.com"
+        # Artifact storage and project-state snapshots must sign against the
+        # same B2 bucket region. If a deployment provides only the S3 endpoint,
+        # do not silently use us-west-004 for a bucket hosted elsewhere.
+        if not region and endpoint:
+            try:
+                hostname = (urlsplit(endpoint).hostname or "").lower()
+            except ValueError:
+                hostname = ""
+            match = re.fullmatch(r"s3\.([a-z0-9-]+)\.backblazeb2\.com", hostname)
+            if match:
+                region = match.group(1)
         return {
             "name": p,
             "label": "Backblaze B2",
