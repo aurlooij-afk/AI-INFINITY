@@ -310,6 +310,34 @@ def install(app: Any) -> None:
                 except Exception as exc:
                     raise HTTPException(409, "saved timeline is unreadable and no verified recovery copy could be restored") from exc
             if not isinstance(stored, dict) or not isinstance(stored.get("scenes"), list) or not stored["scenes"]:
+                # Some completed legacy projects contain an empty editor scaffold
+                # created before scene masters were finalized. Recover a default
+                # timeline only when the scaffold has no scenes AND the project
+                # has real completed scene masters. Never replace a non-empty
+                # user-edited timeline or silently export a blank project.
+                completed_masters = sorted(
+                    p for p in studio._project_dir(pid).glob("scene_*.mp4")
+                    if p.is_file() and p.stat().st_size > 0
+                )
+                if completed_masters:
+                    source = base._timeline(studio, project)
+                    if not isinstance(source, dict) or not isinstance(source.get("scenes"), list) or not source["scenes"]:
+                        raise HTTPException(409, "saved timeline is empty and completed scene masters could not produce a recoverable timeline")
+                    source = normalize(pid, source)
+                    recovered_path = studio._project_dir(pid) / "timeline.json"
+                    recovered_path.write_text(
+                        json.dumps(source, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    studio.register_artifact(
+                        pid, recovered_path, "application/json",
+                        {"recovery": "empty_legacy_editor_scaffold", "source": "completed_scene_masters"},
+                    )
+                    studio.audit_event(pid, "professional_timeline_recovered_from_completed_scene_masters", {
+                        "scene_count": len(source["scenes"]),
+                        "reason": "empty legacy timeline scaffold",
+                    })
+                    return source
                 raise HTTPException(409, "saved timeline is invalid; repair it before OTIO export")
             source = stored
         else:
