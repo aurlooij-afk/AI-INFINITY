@@ -107,6 +107,7 @@ def test_live_render_heredocs_compile_and_import_sys_before_sys_exit():
 
 
 def test_timeline_get_never_hides_lost_or_corrupt_saved_edits(monkeypatch, tmp_path: Path):
+    import json
     import sqlite3
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -148,10 +149,6 @@ def test_timeline_get_never_hides_lost_or_corrupt_saved_edits(monkeypatch, tmp_p
         )
 
     corrupt_bytes = b'{"scenes": [{"heading": "latest edit, but corrupt"}]'
-    @pytest.mark.parametrize("local_state,expected_status", [
-        ("missing", 503),
-        ("corrupt", 409),
-    ])
     def exercise(local_state: str, expected_status: int):
         if local_state == "corrupt":
             timeline_path.write_bytes(corrupt_bytes)
