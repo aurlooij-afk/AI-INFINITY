@@ -717,10 +717,16 @@ def _voice_provider_quality_tier(
     labels = [value for value in labels if value]
     if silent_fallback_count:
         return "silent_or_unavailable"
-    if labels and all(value.startswith("edge-tts-neural:") for value in labels) and edge_tts_fallback_count == 0:
+    def is_neural_provider(value: str) -> bool:
+        # These provider labels are emitted only after a real audio artifact
+        # has been generated and validated by the corresponding synthesis path.
+        return value.startswith("edge-tts-neural:") or value == "elevenlabs" or value.startswith("elevenlabs-")
+
+    has_neural_provider = any(is_neural_provider(value) for value in labels)
+    if labels and all(is_neural_provider(value) for value in labels) and edge_tts_fallback_count == 0:
         return "neural_tts"
     if any(value.startswith("local-espeak") for value in labels):
-        if any(value.startswith("edge-tts-neural:") for value in labels):
+        if has_neural_provider:
             return "mixed_neural_and_local_fallback"
         return "local_synthetic_fallback"
     if edge_tts_fallback_count:
