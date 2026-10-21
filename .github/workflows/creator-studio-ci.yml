@@ -6,6 +6,8 @@ on:
     branches: ["main"]
     paths:
       - "*.py"
+      - "ai_infinity/**"
+      - "tests/test_timeline_interchange.py"
       - "Dockerfile"
       - "requirements.txt"
       - "bridge-requirements.txt"
@@ -18,6 +20,8 @@ on:
   pull_request:
     paths:
       - "*.py"
+      - "ai_infinity/**"
+      - "tests/test_timeline_interchange.py"
       - "Dockerfile"
       - "requirements.txt"
       - "bridge-requirements.txt"
