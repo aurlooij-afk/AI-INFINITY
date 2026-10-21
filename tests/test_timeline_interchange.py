@@ -33,7 +33,7 @@ def _run(*args: str) -> None:
     assert result.returncode == 0, result.stderr[-2000:]
 
 
-def _project(tmp_path: Path) -> tuple[dict, dict]:
+def _project(tmp_path: Path) -> tuple[dict, dict, dict]:
     for filename, color, duration in (
         ("scene_01.mp4", "red", "1.25"),
         ("scene_02.mp4", "blue", "1.50"),
