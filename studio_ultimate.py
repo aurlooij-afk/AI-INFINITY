@@ -5314,6 +5314,82 @@ def _normalize_delivery_duration(source: Path, target_seconds: float, out: Path)
     if abs(fitted - target) > 0.75:
         raise RuntimeError(f"duration normalization ({reason}) produced {fitted:.2f}s instead of {target:.2f}s")
     return out
+def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = False) -> Dict[str, Any]:
+    """Master the actual delivered programme to a measurable dialogue-safe target.
+
+    Scene-level normalization alone is insufficient: concatenation, duration
+    fitting and subtitle muxing can leave the final programme quieter than its
+    scene intermediates. This final audio-only mastering pass copies the already
+    verified video stream, normalizes the finished mix, and preserves embedded
+    subtitle tracks. The caller still runs independent EBU R128 truth checks.
+    """
+    if not source.is_file() or source.stat().st_size <= 10_000:
+        raise RuntimeError("final loudness mastering requires a real completed video")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.unlink(missing_ok=True)
+    target_i = float(os.getenv("AI_INFINITY_DELIVERY_TARGET_LUFS", "-16"))
+    target_tp = float(os.getenv("AI_INFINITY_DELIVERY_TRUE_PEAK_DBTP", "-1.5"))
+    target_lra = float(os.getenv("AI_INFINITY_DELIVERY_LRA", "11"))
+    if not (-20.0 <= target_i <= -14.0):
+        raise ValueError("AI_INFINITY_DELIVERY_TARGET_LUFS must remain between -20 and -14 LUFS")
+    if not (-3.0 <= target_tp <= -1.0):
+        raise ValueError("AI_INFINITY_DELIVERY_TRUE_PEAK_DBTP must remain between -3 and -1 dBTP")
+    if not (5.0 <= target_lra <= 20.0):
+        raise ValueError("AI_INFINITY_DELIVERY_LRA must remain between 5 and 20 LU")
+    rate = "96k" if fast_mode else "192k"
+    ffmpeg(
+        "-i", source,
+        "-map", "0:v:0",
+        "-map", "0:a:0",
+        "-map", "0:s?",
+        "-c:v", "copy",
+        "-af", f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}",
+        "-c:a", "aac",
+        "-b:a", rate,
+        "-ar", "48000",
+        "-ac", "2",
+        "-c:s", "mov_text",
+        "-metadata:s:s:0", "language=eng",
+        "-disposition:s:0", "default",
+        "-movflags", "+faststart",
+        out,
+        timeout=max(120, int(probe_duration(source) * (4 if fast_mode else 6))),
+    )
+    if not out.is_file() or out.stat().st_size <= 10_000:
+        raise RuntimeError("final loudness mastering produced an invalid delivery artifact")
+    source_probe = ffprobe_json(source)
+    output_probe = ffprobe_json(out)
+    source_streams = source_probe.get("streams") or []
+    output_streams = output_probe.get("streams") or []
+    source_video = next((row for row in source_streams if row.get("codec_type") == "video"), {})
+    output_video = next((row for row in output_streams if row.get("codec_type") == "video"), {})
+    output_audio = next((row for row in output_streams if row.get("codec_type") == "audio"), {})
+    source_duration = float((source_probe.get("format") or {}).get("duration") or 0)
+    output_duration = float((output_probe.get("format") or {}).get("duration") or 0)
+    if not source_video or not output_video or not output_audio:
+        raise RuntimeError("final loudness mastering dropped a required media stream")
+    if (int(source_video.get("width") or 0), int(source_video.get("height") or 0)) != (
+        int(output_video.get("width") or 0), int(output_video.get("height") or 0)
+    ):
+        raise RuntimeError("final loudness mastering unexpectedly changed video dimensions")
+    if abs(output_duration - source_duration) > 0.5:
+        raise RuntimeError(
+            f"final loudness mastering changed duration from {source_duration:.3f}s to {output_duration:.3f}s"
+        )
+    return {
+        "status": "completed",
+        "target_integrated_lufs": target_i,
+        "target_true_peak_dbtp": target_tp,
+        "target_loudness_range_lu": target_lra,
+        "source_duration_seconds": round(source_duration, 3),
+        "output_duration_seconds": round(output_duration, 3),
+        "video_stream_copied": True,
+        "audio_codec": str(output_audio.get("codec_name") or ""),
+        "subtitle_stream_count": sum(row.get("codec_type") == "subtitle" for row in output_streams),
+        "truthful": True,
+    }
+
+
 def _max_scene_count(is_short: bool, fast_mode: bool, smoke: bool, explicitly_single_scene: bool) -> int:
     """Bound rendering without reducing normal work to four long scene holds."""
     if smoke or explicitly_single_scene:
@@ -5877,6 +5953,23 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 else "trimmed_real_media" if float(before_duration) > float(target)
                 else "none"
             ),
+        })
+
+        # Run one final programme-level audio master after assembly, subtitle muxing,
+        # and exact-duration fitting. Preserve the video bitstream, so this adds no
+        # extra video generation loss, and then verify the finished mix separately.
+        mastered_final = outdir / "final_loudness_mastered.mp4"
+        loudness_master = _normalize_delivery_loudness(captioned, mastered_final, FAST_MODE)
+        os.replace(mastered_final, captioned)
+        final_duration_after_loudness = probe_duration(captioned)
+        if abs(float(final_duration_after_loudness) - float(target)) > 1.0:
+            raise RuntimeError(
+                f"final audio mastering violated requested duration: {final_duration_after_loudness:.3f}s vs {float(target):.3f}s"
+            )
+        checkpoint(project_id, "delivery_loudness_mastered", {
+            **loudness_master,
+            "final_duration_seconds": round(float(final_duration_after_loudness), 3),
+            "final_media_sha256": file_sha256(captioned),
         })
 
         script = outdir / "script.md"
