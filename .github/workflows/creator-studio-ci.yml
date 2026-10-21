@@ -25,6 +25,8 @@ on:
       - "ai_infinity/**"
       - "tests/test_timeline_interchange.py"
       - "tests/test_mlt_comparison.py"
+      - "tests/test_professional_creator_v2_ui.py"
+      - "tests/test_mlt_comparison.py"
       - "Dockerfile"
       - "requirements.txt"
       - "bridge-requirements.txt"
