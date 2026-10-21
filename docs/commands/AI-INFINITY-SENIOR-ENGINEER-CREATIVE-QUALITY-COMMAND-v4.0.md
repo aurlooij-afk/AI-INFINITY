@@ -87,7 +87,7 @@ Run all applicable tests once after the final code edits, without parallel write
 5. Final acceptance suite, covering successful creation, degraded/offline fallback, source-grounding, package integrity, download gating, and restart/recovery scenarios.
 6. Security tests relevant to touched upload, path, URL, authorization, storage, and publishing logic.
 7. UI/browser smoke checks for the real interaction path and small-screen layout.
-8. Real production smoke tests for representative 20-second and 60-second work; exercise portrait and landscape when supported. Probe and decode the resulting media rather than trusting only the API status.
+8. Real production smoke tests for 20-second 1080p, 60-second baseline, and 180-second long-form work; exercise portrait and landscape when supported. Probe the actual resolution, duration, codecs, audio/video streams, captions, fallback/rights truth, manifest SHA-256, and full decode rather than trusting only an API status.
 9. Storage read-back and restart tests against the actual configured backend. Never substitute ephemeral-container restart evidence for persistent-volume or object-storage evidence.
 10. CI checks on the exact final commit SHA. If any gate fails, inspect logs, make a root-cause correction, then rerun the affected regression and the acceptance suite. A pending/running check is not a pass.
 
