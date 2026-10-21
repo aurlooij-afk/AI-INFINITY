@@ -251,3 +251,27 @@ def test_disabled_scene_roundtrips_without_becoming_active(tmp_path: Path) -> No
     assert [row["source_asset"] for row in restored["scenes"]] == [
         "scene_01.mp4", "scene_02.mp4"
     ]
+
+
+def test_disabled_gap_identity_survives_nle_reordering(tmp_path: Path) -> None:
+    import opentimelineio as otio
+
+    timeline, truth, project = _project(tmp_path)
+    timeline["scenes"][1]["enabled"] = False
+    result = export_otio_bundle(tmp_path, "project-test", project, timeline, truth)
+    path = Path(result["timeline_path"])
+    editable = otio.adapters.read_from_file(str(path), adapter_name="otio_json")
+    video = next(track for track in editable.tracks if track.kind == otio.schema.TrackKind.Video)
+    assert isinstance(video[1], otio.schema.Gap)
+    # Simulate an NLE reordering the clip after the gap. Its metadata can be
+    # lost, so the exported stable item-name marker must still recover scene 02.
+    video[0], video[1] = video[1], video[0]
+    reordered = otio.adapters.write_to_string(editable, adapter_name="otio_json")
+    restored = import_otio_timeline(
+        reordered.encode("utf-8"), tmp_path, "project-test", "Interchange acceptance"
+    )
+
+    assert [row["source_asset"] for row in restored["scenes"]] == [
+        "scene_02.mp4", "scene_01.mp4"
+    ]
+    assert [row["enabled"] for row in restored["scenes"]] == [False, True]
