@@ -263,10 +263,12 @@ def export_otio_bundle(
                     item["path"],
                     compress_type=zipfile.ZIP_STORED if source_path.suffix.lower() in {".mp4", ".mp3"} else zipfile.ZIP_DEFLATED,
                 )
+            bundle_bytes = total_bytes
             for name in SIDE_CARS:
                 candidate = root / name
                 if candidate.is_file() and _inside(root, candidate):
-                    if candidate.stat().st_size + total_bytes > MAX_BUNDLE_BYTES:
+                    bundle_bytes += candidate.stat().st_size
+                    if bundle_bytes > MAX_BUNDLE_BYTES:
                         raise TimelineInterchangeError("timeline sidecars exceed the 512 MiB export safety limit")
                     archive.write(candidate, f"metadata/{name}", compress_type=zipfile.ZIP_DEFLATED)
                     bundle_manifest["included_sidecars"].append(name)
