@@ -1622,3 +1622,30 @@ def test_ai_infinity_launch_fallback_is_product_specific_and_uses_clear_overlays
     assert long_words >= 360, (long_words, long_plan["chapters"])
     assert sum(len(chapter["narration"].split()) for chapter in chapters) >= 60
 
+def test_pashto_ai_infinity_launch_fallback_has_runtime_sufficient_product_copy_and_local_overlays(monkeypatch):
+    studio = closure._studio()
+    monkeypatch.setattr(studio, "FAST_MODE", True)
+    brief = (
+        "Create a professional 60-second AI Infinity launch video in Pashto, "
+        "9:16 vertical, with natural voiceover, captions and music."
+    )
+    plan = studio._fallback_creative_plan(
+        brief, brief, "short", 60, "general audience",
+        "cinematic, confident, clear", {"sources": []}, "Pashto",
+    )
+    chapters = plan["chapters"]
+    assert len(chapters) == 5
+    narration = " ".join(chapter["narration"] for chapter in chapters)
+    # The production truth gate requires two spoken words per requested second.
+    assert len(re.findall(r"[\\w'-]+", narration)) >= 120, narration
+    assert any(char in narration for char in "ځښږڅټډړګڼ")
+    assert plan["hook"].startswith("یوه روښانه موخه")
+    assert "حقونه تایید کړئ" in plan["cta"]
+    assert [chapter["on_screen"] for chapter in chapters] == [
+        "له نظره تر بشپړ کاره",
+        "روښانه هدف، یو بهیر",
+        "شواهد او د حقونو ریکارډ",
+        "صحنه، غږ او سرلیکونه",
+        "د ارزونې لپاره بشپړه بسته",
+    ]
+
