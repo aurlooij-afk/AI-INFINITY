@@ -13,12 +13,12 @@ def test_timeline_view_and_master_render_have_distinct_entry_points() -> None:
     assert "function renderTL()" not in source
     assert 'onclick="renderEditedMaster()"' in source
 
-    load_timeline = re.search(r"async function loadTL\\(\\)\\{.*?\\}", source)
+    load_timeline = re.search(r"async function loadTL\(\)\{.*?\}", source)
     assert load_timeline is not None
     assert "renderTimelineView()" in load_timeline.group(0)
     assert "/timeline/render" not in load_timeline.group(0)
 
-    move_scene = re.search(r"function mv\\(i,d\\)\\{.*?\\}", source)
+    move_scene = re.search(r"function mv\(i,d\)\{.*?\}", source)
     assert move_scene is not None
     assert "renderTimelineView()" in move_scene.group(0)
     assert "/timeline/render" not in move_scene.group(0)
