@@ -155,6 +155,52 @@ def test_long_scene_subtitles_are_split_into_time_bounded_cues(tmp_path):
     assert metrics["timing_valid"] is True
 
 
+def test_scene_duration_allocation_keeps_caption_timeline_inside_requested_runtime(tmp_path):
+    # These planned weights used to be independently clamped to four seconds:
+    # 2 + 2 + 6 + 6 + 4 became 4 + 4 + 6 + 6 + 4 = 24 seconds, then the
+    # final video was trimmed to 20 seconds while the subtitle file stayed 24s.
+    planned = [
+        {"heading": "Opening", "duration": 2.0, "narration": "Introduce the core creative challenge and its audience."},
+        {"heading": "Context", "duration": 2.0, "narration": "Explain the practical context before considering solutions."},
+        {"heading": "Core idea", "duration": 6.0, "narration": "Show how a clear creative decision changes the resulting work."},
+        {"heading": "Application", "duration": 6.0, "narration": "Apply the approach to a specific example that viewers can follow."},
+        {"heading": "Takeaway", "duration": 4.0, "narration": "End with one concrete next step the audience can use."},
+    ]
+
+    allocated = studio._allocate_scene_durations(planned, 20.0)
+    durations = [float(scene["duration"]) for scene in allocated]
+    assert len(allocated) == 5
+    assert all(duration >= 4.0 for duration in durations), durations
+    assert abs(sum(durations) - 20.0) <= 0.001, durations
+
+    captions = tmp_path / "captions.srt"
+    studio.write_srt(allocated, captions)
+    metrics = closure._caption_timing_metrics(captions, 20.0)
+    assert metrics["timing_valid"] is True, metrics
+    assert metrics["cue_count"] >= 4, metrics
+    assert metrics["max_cue_duration_seconds"] <= 5.75, metrics
+    assert metrics["coverage_ratio"] >= 0.80, metrics
+
+
+def test_scene_render_cache_signature_changes_when_caption_relevant_inputs_change():
+    request = {"language": "English", "voice": "default", "aspect_ratio": "16:9"}
+    scene = {
+        "heading": "The core idea",
+        "narration": "Explain the subject clearly and give the viewer a useful next step.",
+        "on_screen": "A useful next step",
+        "visual_query": "creator editing a video timeline",
+        "duration": 4.0,
+    }
+    baseline = studio._scene_render_signature(scene, request, 1)
+    assert studio._scene_render_signature(dict(scene), dict(request), 1) == baseline
+
+    changed_duration = dict(scene, duration=5.0)
+    assert studio._scene_render_signature(changed_duration, request, 1) != baseline
+
+    changed_narration = dict(scene, narration="Explain the subject differently and give a concrete example.")
+    assert studio._scene_render_signature(changed_narration, request, 1) != baseline
+
+
 def test_fallback_brief_extracts_subject_instead_of_delivery_metadata():
     studio = closure._studio()
     brief = (

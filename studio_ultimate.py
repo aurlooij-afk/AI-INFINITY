@@ -5179,6 +5179,102 @@ def _max_scene_count(is_short: bool, fast_mode: bool, smoke: bool, explicitly_si
     return 5 if is_short else 8
 
 
+def _allocate_scene_durations(
+    chapters: List[Dict[str, Any]],
+    target_seconds: float,
+    minimum_scene_seconds: float = 4.0,
+) -> List[Dict[str, Any]]:
+    """Allocate one exact programme-duration budget across the selected scenes.
+
+    Each scene receives a minimum useful duration first; only remaining time is
+    distributed by the planner's relative weights. If a brief is too short to
+    support every selected scene, downsample the storyboard instead of rendering
+    an overlong edit and trimming captions afterward.
+    """
+    try:
+        target = float(target_seconds)
+        floor = max(0.1, float(minimum_scene_seconds))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("Scene timing requires a finite positive target and floor.") from exc
+    if target <= 0 or target != target or target == float("inf"):
+        raise ValueError("Scene timing target must be finite and positive.")
+    if floor != floor or floor == float("inf"):
+        raise ValueError("Minimum scene duration must be finite.")
+
+    selected = [dict(scene) for scene in (chapters or []) if isinstance(scene, dict)]
+    if not selected:
+        return []
+    target = round(target, 3)
+    if target < floor:
+        floor = target
+
+    # A chapter cannot satisfy the minimum-scene contract if its minimum times
+    # alone exceed the requested programme. Preserve the narrative arc while
+    # reducing the number of scenes to the available duration budget.
+    capacity = max(1, int(target // floor)) if target >= floor else 1
+    if len(selected) > capacity:
+        selected = _select_scene_coverage(selected, capacity)
+
+    floor_budget = floor * len(selected)
+    if floor_budget > target + 1e-6:
+        raise ValueError("Selected scenes exceed the available duration budget.")
+
+    weights = []
+    for scene in selected:
+        try:
+            weight = float(scene.get("duration") or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            weight = 0.0
+        weights.append(weight if weight > 0 and weight < float("inf") else 1.0)
+    weight_total = sum(weights) or float(len(weights))
+    distributable = max(0.0, target - floor_budget)
+
+    durations = []
+    for index, weight in enumerate(weights):
+        if index == len(weights) - 1:
+            duration = round(target - sum(durations), 3)
+            durations.append(duration)
+        else:
+            durations.append(round(floor + distributable * weight / weight_total, 3))
+
+    if any(duration + 1e-6 < floor for duration in durations):
+        raise ValueError("Duration rounding violated the minimum scene duration.")
+    if abs(sum(durations) - target) > 0.001:
+        raise ValueError("Allocated scene durations do not equal the requested programme duration.")
+
+    for scene, duration in zip(selected, durations):
+        scene["duration"] = duration
+    return selected
+
+
+def _scene_render_signature(
+    chapter: Dict[str, Any],
+    request: Dict[str, Any],
+    scene_index: int,
+) -> str:
+    """Version the render cache against all scene inputs that change its output."""
+    try:
+        planned_duration = round(float(chapter.get("duration") or 0.0), 3)
+    except (TypeError, ValueError, OverflowError):
+        planned_duration = 0.0
+    payload = {
+        "schema": "ai-infinity-scene-render-cache.v2",
+        "scene_index": int(scene_index),
+        "heading": str(chapter.get("heading") or ""),
+        "narration": str(chapter.get("narration") or ""),
+        "on_screen": str(chapter.get("on_screen") or ""),
+        "image_prompt": str(chapter.get("image_prompt") or ""),
+        "visual_query": str(chapter.get("visual_query") or ""),
+        "visual_focus": str(chapter.get("visual_focus") or ""),
+        "duration_seconds": planned_duration,
+        "language": str(request.get("language") or "English"),
+        "voice": str(request.get("voice") or ""),
+        "aspect_ratio": str(request.get("aspect_ratio") or "16:9"),
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _select_scene_coverage(chapters: List[Dict[str, Any]], max_scenes: int) -> List[Dict[str, Any]]:
     """Downsample long storyboards across the complete narrative arc, not just the opening."""
     scenes = list(chapters or [])
@@ -5457,15 +5553,10 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         if FAST_MODE and not SMOKE:
             target = min(target, 180 if is_short else 900)
         chapters = _select_scene_coverage(chapters, max_chapters)
-        raw_durations = []
-        for ch in chapters:
-            try:
-                raw_durations.append(max(2.0, float(ch.get("duration") or 0)))
-            except Exception:
-                raw_durations.append(2.0)
-        duration_basis = sum(raw_durations) or float(len(chapters) * 2)
-        for idx, ch in enumerate(chapters):
-            ch["duration"] = round(float(target) * raw_durations[idx] / duration_basis, 3)
+        # Allocate the runtime before rendering. Scene-level clamping after the
+        # fact caused short jobs to render longer than requested, then trim the
+        # video without trimming the captions to the same timeline.
+        chapters = _allocate_scene_durations(chapters, float(target))
         _stage(project_id, "production_ready", 22, total_scenes=len(chapters), current_scene=0)
 
         assets_meta: List[Dict[str, Any]] = []
@@ -5499,7 +5590,21 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 return
             existing_scene = outdir / f"scene_{i:02d}.mp4"
             cached = checkpoint_get(project_id, f"scene_{i:04d}")
-            if existing_scene.exists() and existing_scene.stat().st_size > 10000 and cached.get("sha256") == file_sha256(existing_scene):
+            scene_signature = _scene_render_signature(ch, req, i)
+            expected_scene_duration = float(ch.get("duration") or 0.0)
+            try:
+                cached_scene_duration = float(cached.get("duration") or 0.0)
+            except (TypeError, ValueError, OverflowError):
+                cached_scene_duration = 0.0
+            # Old checkpoints without a signature are invalidated because they
+            # may predate the current render-duration and caption-timeline rules.
+            if (
+                existing_scene.exists()
+                and existing_scene.stat().st_size > 10000
+                and cached.get("sha256") == file_sha256(existing_scene)
+                and cached.get("scene_signature") == scene_signature
+                and abs(cached_scene_duration - expected_scene_duration) <= 0.35
+            ):
                 if cached.get("duration"): ch["actual_duration"] = float(cached["duration"])
                 if cached.get("asset"): assets_meta.append(redact(cached["asset"]))
                 voice_provider = voice_provider or cached.get("voice_provider")
@@ -5526,7 +5631,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                     f"{req.get('language') or 'English'} voice generation unavailable: {safe_reason[:500]}"
                 ) from voice_exc
             voice_provider = voice_provider or provider
-            scene_duration = max(4.0, min(90.0, float(ch.get("duration") or voice_duration)))
+            scene_duration = max(0.5, min(90.0, float(ch.get("duration") or voice_duration)))
             if abs(float(voice_duration) - scene_duration) > 0.35:
                 retimed = outdir / f"narration_{i:02d}_fitted.mp3"
                 voice, fitted_duration = _fit_audio_duration(voice, scene_duration, retimed)
@@ -5561,7 +5666,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             mixed = outdir / f"scene_{i:02d}.mp4"
             _render_scene(asset, voice, shared_music, sfx, ch["actual_duration"], mixed, str(ch.get("on_screen") or ch.get("heading") or topic), str(req.get("aspect_ratio") or "16:9"))
             scene_paths.append(mixed)
-            checkpoint(project_id, f"scene_{i:04d}", {"scene":i,"path":str(mixed),"sha256":file_sha256(mixed) if mixed.exists() else None,"duration":ch.get("actual_duration"),"voice_provider":provider,"asset":redact({k:v for k,v in asset.items() if k != "path"})})
+            checkpoint(project_id, f"scene_{i:04d}", {"scene":i,"path":str(mixed),"sha256":file_sha256(mixed) if mixed.exists() else None,"duration":ch.get("actual_duration"),"scene_signature":scene_signature,"voice_provider":provider,"asset":redact({k:v for k,v in asset.items() if k != "path"})})
             audit_event(project_id, "scene_completed", {"scene": i, "duration": ch.get("actual_duration"), "asset_source": asset.get("source"), "asset_kind": asset.get("kind")})
             _update_project(project_id, current_scene=i)
 
