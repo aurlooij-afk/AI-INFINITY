@@ -203,6 +203,7 @@ async function exportOTIO(){
 }
 async function importOTIO(input){
  const file=input&&input.files&&input.files[0];if(!file)return;
+ if(!pid){$("out").textContent="Select a completed project first.";input.value="";return}
  try{
   if(file.size>2*1024*1024)throw Error("OTIO JSON must be 2 MiB or smaller.");
   if(!file.name.toLowerCase().endsWith(".otio")&&!/json|opentimelineio/i.test(file.type))throw Error("Choose an OpenTimelineIO JSON file (.otio or JSON).");
