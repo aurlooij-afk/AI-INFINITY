@@ -281,10 +281,28 @@ def export_otio_bundle(
                 compress_type=zipfile.ZIP_DEFLATED,
             )
 
-        final_otio = _inside(root, root / "project.otio")
-        final_zip = _inside(root, root / "timeline-export.zip")
-        os.replace(otio_path, final_otio)
-        os.replace(work / "timeline-export.zip", final_zip)
+        staged_zip = work / "timeline-export.zip"
+        otio_digest = _sha256(otio_path)
+        bundle_digest = _sha256(staged_zip)
+        final_otio_candidate = root / f"project-{otio_digest[:16]}.otio"
+        final_zip_candidate = root / f"timeline-export-{bundle_digest[:16]}.zip"
+        if final_otio_candidate.is_symlink() or final_zip_candidate.is_symlink():
+            raise TimelineInterchangeError("refusing to replace a symlink at an export destination")
+        final_otio = _inside(root, final_otio_candidate)
+        final_zip = _inside(root, final_zip_candidate)
+        for staged, destination, digest in (
+            (otio_path, final_otio, otio_digest),
+            (staged_zip, final_zip, bundle_digest),
+        ):
+            try:
+                # Both paths are under the same project filesystem. A hard link
+                # provides create-only semantics so concurrent exports and
+                # pre-existing files cannot silently overwrite one another.
+                os.link(staged, destination)
+                staged.unlink()
+            except FileExistsError:
+                if not destination.is_file() or _sha256(destination) != digest:
+                    raise TimelineInterchangeError("export destination collision; existing user data was preserved")
 
     return {
         "timeline_path": final_otio,
