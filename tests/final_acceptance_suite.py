@@ -525,19 +525,34 @@ def t8():
     finally:stop(p2,l2)
 def t9(s,b):
     cookie=s.cookies.get("ai_infinity_session");assert cookie
+    labels=("ALPHA","BETA","GAMMA","DELTA")
     def one(label):
-        q=requests.Session();q.cookies.set("ai_infinity_session",cookie);return create(q,b,f"Create a 20-second cinematic video for CONCURRENCY-{label} with a distinct narrative.",duration=20,format="short",idempotency_key=f"final-acceptance-{label}")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:pids=list(ex.map(one,("ALPHA","BETA")))
-    assert len(set(pids))==2
-    # Provider/research degradation must not suppress the concurrency-isolation
-    # assertion. The helper permits it only when truth remains REVIEW_REQUIRED,
-    # publishing is denied, and the final download is HTTP 409.
+        q=requests.Session();q.cookies.set("ai_infinity_session",cookie)
+        return create(q,b,f"Create a 20-second cinematic video for CONCURRENCY-{label} with a distinct narrative.",duration=20,format="short",idempotency_key=f"final-acceptance-{label}")
+    started=time.monotonic()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+        pids=list(ex.map(one,labels))
+    assert len(set(pids))==4
+    # Submit four real projects at once, then observe every independent project
+    # through completion. Provider degradation is acceptable only if each
+    # unverified final download remains quality-gated.
     p=[waitp(s,b,x,allow_review_required=True) for x in pids]
-    text=json.dumps(p,ensure_ascii=False)
-    assert "CONCURRENCY-ALPHA" in text and "CONCURRENCY-BETA" in text
-    textitles={str(x.get("title")or"") for x in p}
-    assert len(textitles)==2, f"concurrent briefs collapsed to duplicate titles: {textitles!r}"
-    return {"test":9,"project_ids":pids,"isolated":True}
+    elapsed=round(time.monotonic()-started,3)
+    combined=json.dumps(p,ensure_ascii=False)
+    for label in labels:
+        assert "CONCURRENCY-"+label in combined, (label,combined[:4000])
+    titles={str(x.get("title")or"") for x in p}
+    assert len(titles)==4, f"concurrent briefs collapsed to duplicate titles: {titles!r}"
+    return {
+        "test":9,
+        "project_ids":pids,
+        "concurrency_level":4,
+        "requested_duration_seconds":20,
+        "end_to_end_elapsed_seconds":elapsed,
+        "individual_titles":sorted(titles),
+        "isolated":True,
+        "measured_scope":"four concurrent 20-second project submissions through final status",
+    }
 def _assert_isolation_project_state(s,b,project_id,state):
     """Accept degraded drafts only while every production-delivery gate stays closed."""
     status=str(state.get("status") or "").lower()
