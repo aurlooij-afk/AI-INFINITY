@@ -170,7 +170,7 @@ def export_otio_bundle(
         "publish_allowed_by_quality_gate": truth.get("publish_allowed_by_quality_gate") is True,
         "human_review_status": "PENDING",
         "media_references": "project-relative",
-        "rights_and_source_records_included": True,
+        "included_sidecars_recorded_in_bundle_manifest": True,
     }
 
     with tempfile.TemporaryDirectory(prefix=".aii-otio-", dir=str(root)) as work_value:
@@ -184,7 +184,6 @@ def export_otio_bundle(
         timeline.tracks.append(audio_track)
         timeline.metadata["ai_infinity"] = metadata
 
-        inventory = []
         inventory = []
         audio_stem_inventory = []
         stem_bytes = 0
@@ -222,6 +221,7 @@ def export_otio_bundle(
                 "included_as_editable_source": True,
             })
         metadata["available_audio_stems"] = audio_stem_inventory
+        timeline.metadata["ai_infinity"]["available_audio_stems"] = audio_stem_inventory
 
         for row, source, digest, source_duration in scene_files:
             asset = source.name
@@ -400,7 +400,7 @@ def export_otio_bundle(
         "bundle_sha256": _sha256(final_zip),
         "bundle_size_bytes": final_zip.stat().st_size,
         "scene_count": len(scene_files),
-        "media_files": len(scene_files) + 1,
+        "media_files": len(inventory),
         "fps": fps,
         "truth_state": metadata["truth_state"],
         "truth_verified": metadata["truth_verified"],
