@@ -4826,50 +4826,50 @@ def _rehydrate_project_asset(
         except Exception:
             return None
         replicas = list(asset.get("replicas") or [])
-            providers = []
-            primary = str(asset.get("primary_provider") or "").strip()
-            if primary:
-                providers.append(primary)
-            providers.extend(
-                str(r.get("provider") or "").strip()
-                for r in replicas
-                if str(r.get("status") or "") == "verified"
-            )
-            ordered = []
-            for p in providers:
-                if p and p not in ordered:
-                    ordered.append(p)
-            if not ordered:
-                return None
-            destination = root / safe_name(target_name)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            tmp = destination.with_name(destination.name + ".rehydrate-" + uuid.uuid4().hex)
-            for provider in ordered:
-                try:
-                    storage._download_to(provider, asset["object_key"], tmp)
-                    size_ok = tmp.stat().st_size == int(asset.get("size_bytes") or 0)
-                    sha_ok = file_sha256(tmp) == str(asset.get("sha256") or "")
-                    if not (size_ok and sha_ok):
-                        raise RuntimeError("rehydrated artifact checksum or size mismatch")
-                    tmp.replace(destination)
-                    # Keep the DB-reported path authoritative only within the
-                    # current project directory; never materialize outside it.
-                    if destination != path_value:
-                        try:
-                            if path_value.parent.resolve() == root.resolve():
-                                destination.replace(path_value)
-                                destination = path_value
-                        except Exception:
-                            pass
-                    return destination
-                except Exception:
+        providers = []
+        primary = str(asset.get("primary_provider") or "").strip()
+        if primary:
+            providers.append(primary)
+        providers.extend(
+            str(r.get("provider") or "").strip()
+            for r in replicas
+            if str(r.get("status") or "") == "verified"
+        )
+        ordered = []
+        for p in providers:
+            if p and p not in ordered:
+                ordered.append(p)
+        if not ordered:
+            return None
+        destination = root / safe_name(target_name)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        tmp = destination.with_name(destination.name + ".rehydrate-" + uuid.uuid4().hex)
+        for provider in ordered:
+            try:
+                storage._download_to(provider, asset["object_key"], tmp)
+                size_ok = tmp.stat().st_size == int(asset.get("size_bytes") or 0)
+                sha_ok = file_sha256(tmp) == str(asset.get("sha256") or "")
+                if not (size_ok and sha_ok):
+                    raise RuntimeError("rehydrated artifact checksum or size mismatch")
+                tmp.replace(destination)
+                # Keep the DB-reported path authoritative only within the
+                # current project directory; never materialize outside it.
+                if destination != path_value:
                     try:
-                        tmp.unlink(missing_ok=True)
+                        if path_value.parent.resolve() == root.resolve():
+                            destination.replace(path_value)
+                            destination = path_value
                     except Exception:
                         pass
-            # All verified replicas for the latest revision failed. Do not try
-            # an older asset row for this filename; that would silently roll back.
-            return None
+                return destination
+            except Exception:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        # All verified replicas for the latest revision failed. Do not try
+        # an older asset row for this filename; that would silently roll back.
+        return None
     except Exception:
         return None
     return None
