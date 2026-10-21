@@ -1750,13 +1750,27 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "duration": sec,
             "proof_needed": [src.get("title")] if src.get("title") and src.get("title") != clean_title else [],
         })
+    localized_hook = _localized_fallback_copy(language, "Hook", clean_title, topic_label)["hook"]
+    localized_cta = _localized_fallback_copy(language, "Closing", clean_title, topic_label)["cta"]
+    if ai_infinity_launch and str(language or "English").strip().lower() == "english":
+        # The launch hook flows into the editable script, article, social copy,
+        # and experiment package; keep every derivative on the actual product story.
+        localized_hook = (
+            "One clear brief. A connected script, scene-by-scene video, captions, "
+            "and a package you can inspect and revise."
+        )
+        localized_cta = (
+            "Describe the idea, inspect the actual deliverables, then revise or export "
+            "when required quality and rights checks are complete."
+        )
+
     return {
         "title": clean_title,
-        "hook": _localized_fallback_copy(language, "Hook", clean_title, topic_label)["hook"],
+        "hook": localized_hook,
         "premise": clean_objective,
         "audience": audience,
         "tone": tone,
-        "cta": _localized_fallback_copy(language, "Closing", clean_title, topic_label)["cta"],
+        "cta": localized_cta,
         "language": language,
         "chapters": chapters,
         "claims_to_verify": [s.get("title") for s in usable_sources[:8] if s.get("title") != clean_title],
