@@ -44,6 +44,17 @@ def test_storage_routes_are_registered_on_the_serving_asgi_app():
     assert otio_export in schema["paths"]
     assert otio_import in schema["paths"]
 
+    route_counts = {}
+    for route in main.app.router.routes:
+        path = str(getattr(route, "path", ""))
+        methods = getattr(route, "methods", ()) or ()
+        for method in methods:
+            key = (path, method)
+            route_counts[key] = route_counts.get(key, 0) + 1
+    assert route_counts[("/infinity/pro2/project/{pid}/timeline", "GET")] == 1
+    assert route_counts[("/infinity/pro2/project/{pid}/timeline", "PUT")] == 1
+    assert route_counts[("/infinity/pro2/project/{pid}/timeline/render", "POST")] == 1
+
     from fastapi.testclient import TestClient
 
     response = TestClient(main.app).get("/infinity/storage/v1/status")
