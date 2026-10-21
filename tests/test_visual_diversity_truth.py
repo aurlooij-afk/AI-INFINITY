@@ -1558,6 +1558,10 @@ def test_voice_provider_quality_never_mislabels_local_synthetic_fallback_as_neur
         "edge-tts-neural:en-US-AriaNeural",
         "edge-tts-neural:en-US-AriaNeural-retimed",
     ]) == "neural_tts"
+    # The optional configured ElevenLabs adapter returns this exact provider label
+    # after validating its real audio artifact; it must not be marked unknown.
+    assert closure._voice_provider_quality_tier(["elevenlabs"]) == "neural_tts"
+    assert closure._voice_provider_quality_tier(["elevenlabs-retimed"]) == "neural_tts"
     assert closure._voice_provider_quality_tier([
         "local-espeak-fast-fallback",
     ]) == "local_synthetic_fallback"
