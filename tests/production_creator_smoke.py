@@ -116,7 +116,7 @@ def main():
         "/infinity/canonical/create",
         "POST",
         {
-            "command": "Create a 20 second cinematic video about resilient creativity",
+            "command": "Create a 20 second cinematic documentary video about Earth from space, using relevant NASA or public-domain imagery, with narration and captions",
             "duration": 20,
             "format": "short",
             "aspect_ratio": "16:9",
