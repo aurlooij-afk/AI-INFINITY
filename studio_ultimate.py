@@ -2111,25 +2111,32 @@ def _nasa_rights_evidence(data_block: Dict[str, Any]) -> Dict[str, Any]:
     title = html.unescape(str(data.get("title") or "")).strip()
     description = html.unescape(re.sub(r"<[^>]+>", " ", str(data.get("description") or "")))
     creator = str(data.get("creator") or data.get("center") or "NASA").strip()
-    full_text = re.sub(r"\s+", " ", f"{title} {description}").strip()
+    metadata_fields = (
+        "copyright", "copyright_notice", "copyright_status", "rights",
+        "license", "credit", "secondary_creator",
+    )
+    rights_metadata = " ".join(str(data.get(key) or "") for key in metadata_fields)
+    full_text = re.sub(r"\s+", " ", f"{title} {description} {creator} {rights_metadata}").strip()
     lower = full_text.lower()
 
     reasons = []
     if re.search(r"(?:©|\bcopyright(?:ed)?\b|all rights reserved|permission of the copyright holder)", lower, re.I):
         reasons.append("NASA metadata contains an explicit copyright or rights restriction")
-    third_party = re.search(
+    third_party_pattern = (
         r"\b(?:ESA|European Space Agency|JAXA|Japan Aerospace Exploration Agency|ASI|Italian Space Agency|"
         r"STScI|Space Telescope Science Institute|Getty Images|Reuters|Associated Press|Shutterstock|"
-        r"Hubble European Space Agency|Hubble/ESA)\b",
-        full_text,
-        re.I,
+        r"Hubble European Space Agency|Hubble/ESA)\b"
     )
+    third_party_in_creator = bool(re.search(third_party_pattern, creator, re.I))
+    third_party = re.search(third_party_pattern, full_text, re.I)
     explicit_credit = re.search(
         r"\b(?:credit|image credit|courtesy of|copyright(?:ed)? by|provided by|data (?:were|was) provided by)\b",
         full_text,
         re.I,
     )
-    if third_party and explicit_credit:
+    if third_party_in_creator:
+        reasons.append("NASA item metadata names a third-party creator or agency")
+    elif third_party and explicit_credit:
         reasons.append("NASA metadata identifies third-party credit or supplied media")
     if re.search(r"\b(?:astronaut|portrait|group photo|identifiable person|crew portrait|NASA employee)\b", title, re.I):
         reasons.append("the NASA item title indicates identifiable people; use-specific clearance may be required")
