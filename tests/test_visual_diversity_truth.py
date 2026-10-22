@@ -784,6 +784,226 @@ def test_persisted_project_status_tracks_truth_gate():
     assert params[0:2] == ("completed", "completed")
     assert params[3] == "project-recovered"
 
+def test_earth_from_space_search_prioritizes_subject_and_rejects_incidental_word_overlap():
+    queries = studio._visual_search_query_variants(
+        search_subject="earth space",
+        focus="the clearest subject that communicates the idea of earth",
+        topic="Earth from space",
+        raw_query="earth space clearest that earth documentary photography",
+    )
+    assert queries == [
+        "Earth from space",
+        "Earth globe seen from orbit satellite image",
+        "Blue Marble Earth satellite view",
+    ]
+
+    # The long description can mention "Earth" and "space" without describing
+    # an Earth-from-space image. Candidate identity metadata must carry both.
+    assert studio._visual_candidate_relevant(
+        {
+            "title": "Earth from Space — Blue Marble view of the planet",
+            "description": "A high resolution view of Earth against space.",
+            "tags": ["Earth", "space", "globe"],
+        },
+        "earth space",
+        "the clearest subject that communicates the idea of earth",
+    )
+    assert not studio._visual_candidate_relevant(
+        {
+            "title": "A Hubble Study of the Peculiar Asymmetry of NGC 949",
+            "description": "From our point of view, the galaxy is seen through dust in space. This gives Earth's light a reddish hue at dusk.",
+        },
+        "earth space",
+        "the clearest subject that communicates the idea of earth",
+    )
+    assert not studio._visual_candidate_relevant(
+        {
+            "title": "Spacelab",
+            "description": "Astronauts performed this experiment in space and returned to Earth.",
+        },
+        "earth space",
+        "why earth space affected",
+    )
+    assert not studio._visual_candidate_relevant(
+        {
+            "title": "NASA-Produced Maps Help Gauge Italy Earthquake Damage",
+            "description": "Satellite imagery of earthquake damage on Earth's surface.",
+        },
+        "earth space",
+        "demonstrating earth space action",
+    )
+
+
+def test_nasa_item_rights_are_attributed_and_exceptions_remain_review_required():
+    allowed = studio._nasa_rights_evidence({
+        "title": "Earth from Space — Blue Marble",
+        "description": "A view of the planet Earth and its oceans from orbit. Credit: NASA.",
+        "creator": "NASA",
+        "center": "NASA",
+    })
+    assert allowed["license_url"] == "https://www.nasa.gov/nasa-brand-center/images-and-media/"
+    assert allowed["commercial_use_state"] == "commercial_use_allowed_under_provider_terms"
+    assert allowed["rights_status"] == "license_metadata_present"
+    assert "NASA" in allowed["attribution"]
+    assert "do not imply endorsement" in allowed["rights_status_reason"]
+
+    third_party = studio._nasa_rights_evidence({
+        "title": "A Hubble view of Earth and nearby stars",
+        "description": "Credit: ESA/Hubble & NASA. Copyright holder terms apply.",
+        "creator": "ESA/Hubble & NASA",
+    })
+    assert third_party["commercial_use_state"] == "UNKNOWN_REVIEW_REQUIRED"
+    assert third_party["rights_status"] == "REVIEW_REQUIRED"
+    assert "copyright" in third_party["rights_status_reason"].lower()
+
+    people = studio._nasa_rights_evidence({
+        "title": "Astronaut portrait from the International Space Station",
+        "description": "NASA media use policy applies.",
+        "creator": "NASA",
+    })
+    assert people["commercial_use_state"] == "UNKNOWN_REVIEW_REQUIRED"
+    assert people["rights_status"] == "REVIEW_REQUIRED"
+
+    # Third-party creator attribution must be screened even when the description
+    # omits the literal word "credit".
+    third_party_creator = studio._nasa_rights_evidence({
+        "title": "Earth imagery from orbit",
+        "description": "The Earth and nearby stars viewed from space.",
+        "creator": "ESA/Hubble & NASA",
+    })
+    assert third_party_creator["commercial_use_state"] == "UNKNOWN_REVIEW_REQUIRED"
+    assert third_party_creator["rights_status"] == "REVIEW_REQUIRED"
+    assert "third-party creator" in third_party_creator["rights_status_reason"].lower()
+
+    explicit_rights_field = studio._nasa_rights_evidence({
+        "title": "Earth from orbit",
+        "description": "Earth viewed from the International Space Station.",
+        "creator": "NASA",
+        "copyright_status": "third-party copyright; permission required",
+    })
+    assert explicit_rights_field["commercial_use_state"] == "UNKNOWN_REVIEW_REQUIRED"
+    assert explicit_rights_field["rights_status"] == "REVIEW_REQUIRED"
+
+
+def test_full_production_context_keeps_brand_launch_nasa_use_review_required():
+    assert studio._scene_is_explicitly_promotional({
+        "heading": "A world connected by possibility",
+        "visual_query": "Earth from space documentary photo",
+        "_production_context": {
+            "title": "AI Infinity launch video",
+            "content_type": "video",
+            "format": "short",
+        },
+    })
+
+
+def test_nasa_policy_only_auto_clears_editorial_context_not_explicit_brand_promotion():
+    base = {
+        "source": "NASA Image and Video Library",
+        **studio._nasa_rights_evidence({
+            "title": "Earth from Space — Blue Marble",
+            "description": "The planet Earth seen from orbit. Credit: NASA.",
+            "creator": "NASA",
+        }),
+    }
+    editorial = studio._apply_nasa_scene_usage_policy(
+        base,
+        {"topic": "Earth from space", "visual_query": "Earth from space documentary"},
+    )
+    assert editorial["commercial_use_state"] == "commercial_use_allowed_under_provider_terms"
+    assert editorial["rights_status"] == "license_metadata_present"
+
+    promotional = studio._apply_nasa_scene_usage_policy(
+        base,
+        {
+            "title": "AI Infinity product launch video",
+            "topic": "Earth from space",
+            "objective": "Create an AI Infinity launch film for the product",
+        },
+    )
+    assert promotional["commercial_use_state"] == "UNKNOWN_REVIEW_REQUIRED"
+    assert promotional["rights_status"] == "REVIEW_REQUIRED"
+    assert "promotional/advertising use" in promotional["rights_status_reason"]
+
+
+def test_nasa_adapter_exports_asset_level_policy_url_and_rights_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(studio, "FAST_MODE", True)
+    json_calls = []
+
+    def fake_json(url, headers=None, timeout=20):
+        json_calls.append(url)
+        assert url.startswith("https://images-api.nasa.gov/search?")
+        assert "Earth+from+space" in url or "Earth%20from%20space" in url
+        return {
+            "collection": {
+                "items": [{
+                    "href": "https://images-assets.nasa.gov/image/earth-001/collection.json",
+                    "data": [{
+                        "title": "Earth from Space — Blue Marble",
+                        "description": "The planet Earth and its oceans seen from orbit. Credit: NASA.",
+                        "creator": "NASA",
+                        "center": "NASA",
+                        "keywords": ["Earth", "space", "Blue Marble"],
+                    }],
+                    "links": [{
+                        "rel": "preview",
+                        "href": "https://images-assets.nasa.gov/image/earth-001/earth-001~thumb.jpg",
+                    }],
+                }]
+            }
+        }
+
+    def fake_download(url, path, **kwargs):
+        assert "earth-001" in url
+        _write_test_jpeg(studio, Path(path), color=(25, 80, 140))
+        return Path(path)
+
+    monkeypatch.setattr(studio, "http_json", fake_json)
+    monkeypatch.setattr(studio, "download", fake_download)
+    rows = studio._nasa_images("Earth from space", tmp_path, limit=1)
+
+    assert len(rows) == 1, {
+        "media_debug_errors": dict(studio.MEDIA_DEBUG_ERRORS),
+        "outdir_files": sorted(x.name for x in tmp_path.iterdir()),
+        "json_calls": json_calls,
+        "adapter_module": studio._nasa_images.__module__,
+    }
+    row = rows[0]
+    assert row["source_url"] == "https://images-assets.nasa.gov/image/earth-001/collection.json"
+    assert row["license_url"] == "https://www.nasa.gov/nasa-brand-center/images-and-media/"
+    assert row["rights_status"] == "license_metadata_present"
+    assert row["commercial_use_state"] == "commercial_use_allowed_under_provider_terms"
+    assert row["tags"] == ["Earth", "space", "Blue Marble"]
+    assert studio._visual_candidate_relevant(row, "earth space", "clearest view of Earth from space")
+
+
+def test_transient_visual_provider_failure_is_cooled_down_but_irrelevant_results_are_not():
+    with studio._MEDIA_PROVIDER_COOLDOWN_LOCK:
+        studio._MEDIA_PROVIDER_COOLDOWNS.clear()
+    try:
+        assert studio._trip_media_provider_cooldown(
+            "_openverse_images", "TimeoutError: The read operation timed out"
+        ) is True
+        reason = studio._media_provider_cooldown_reason("_openverse_images")
+        assert reason and "TimeoutError" in reason
+
+        # A provider returning an irrelevant candidate is not a network failure;
+        # it must remain eligible for the next scene-specific query.
+        assert studio._media_provider_failure_is_circuit_worthy(
+            "HTTP 429 Too Many Requests"
+        ) is True
+        assert studio._media_provider_failure_is_circuit_worthy(
+            "no-relevant-distinct-asset"
+        ) is False
+
+        with studio._MEDIA_PROVIDER_COOLDOWN_LOCK:
+            studio._MEDIA_PROVIDER_COOLDOWNS["_openverse_images"]["until_monotonic"] = 0
+        assert studio._media_provider_cooldown_reason("_openverse_images") is None
+    finally:
+        with studio._MEDIA_PROVIDER_COOLDOWN_LOCK:
+            studio._MEDIA_PROVIDER_COOLDOWNS.clear()
+
+
 def test_focus_lexical_overlap_can_resolve_unclassified_scene_concepts():
     relevant = {
         "title": "Software workflow dashboard on a computer screen",

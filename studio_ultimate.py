@@ -2095,6 +2095,69 @@ def _normalize_image_file(path: Path, outdir: Path, stem: str) -> Optional[Path]
         return None
 
 
+NASA_MEDIA_USAGE_GUIDELINES_URL = "https://www.nasa.gov/nasa-brand-center/images-and-media/"
+
+
+def _nasa_rights_evidence(data_block: Dict[str, Any]) -> Dict[str, Any]:
+    """Record NASA's actual reuse policy without turning every NASA result into a blanket clearance.
+
+    NASA media is generally reusable under its media-use guidelines, but those
+    guidelines do not grant rights to third-party copyrighted content and call
+    for extra care around identifiable people and promotional/endorsement use.
+    Mark item-level exceptions for review instead of copying a generic NASA
+    label into a false rights-clearance result.
+    """
+    data = data_block if isinstance(data_block, dict) else {}
+    title = html.unescape(str(data.get("title") or "")).strip()
+    description = html.unescape(re.sub(r"<[^>]+>", " ", str(data.get("description") or "")))
+    creator = str(data.get("creator") or data.get("center") or "NASA").strip()
+    metadata_fields = (
+        "copyright", "copyright_notice", "copyright_status", "rights",
+        "license", "credit", "secondary_creator",
+    )
+    rights_metadata = " ".join(str(data.get(key) or "") for key in metadata_fields)
+    full_text = re.sub(r"\s+", " ", f"{title} {description} {creator} {rights_metadata}").strip()
+    lower = full_text.lower()
+
+    reasons = []
+    if re.search(r"(?:©|\bcopyright(?:ed)?\b|all rights reserved|permission of the copyright holder)", lower, re.I):
+        reasons.append("NASA metadata contains an explicit copyright or rights restriction")
+    third_party_pattern = (
+        r"\b(?:ESA|European Space Agency|JAXA|Japan Aerospace Exploration Agency|ASI|Italian Space Agency|"
+        r"STScI|Space Telescope Science Institute|Getty Images|Reuters|Associated Press|Shutterstock|"
+        r"Hubble European Space Agency|Hubble/ESA)\b"
+    )
+    third_party_in_creator = bool(re.search(third_party_pattern, creator, re.I))
+    third_party = re.search(third_party_pattern, full_text, re.I)
+    explicit_credit = re.search(
+        r"\b(?:credit|image credit|courtesy of|copyright(?:ed)? by|provided by|data (?:were|was) provided by)\b",
+        full_text,
+        re.I,
+    )
+    if third_party_in_creator:
+        reasons.append("NASA item metadata names a third-party creator or agency")
+    elif third_party and explicit_credit:
+        reasons.append("NASA metadata identifies third-party credit or supplied media")
+    if re.search(r"\b(?:astronaut|portrait|group photo|identifiable person|crew portrait|NASA employee)\b", title, re.I):
+        reasons.append("the NASA item title indicates identifiable people; use-specific clearance may be required")
+
+    cleared_under_policy = not reasons
+    return {
+        "license": "NASA media-use guidelines (not a blanket license)",
+        "license_url": NASA_MEDIA_USAGE_GUIDELINES_URL,
+        "commercial_use_state": "commercial_use_allowed_under_provider_terms" if cleared_under_policy else "UNKNOWN_REVIEW_REQUIRED",
+        "rights_status": "license_metadata_present" if cleared_under_policy else "REVIEW_REQUIRED",
+        "rights_status_reason": (
+            "NASA media-use guidelines recorded; no copyright, third-party-credit, or identifiable-person signal "
+            "was found in the returned item metadata. Attribute NASA and do not imply endorsement."
+            if cleared_under_policy else "; ".join(reasons)
+        ),
+        "rights_basis": "nasa_media_usage_guidelines",
+        "rights_evidence_method": "nasa_item_metadata_exception_screen",
+        "attribution": creator or "NASA",
+    }
+
+
 def _nasa_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
     try:
         data = http_json("https://images-api.nasa.gov/search?" + urlencode({
@@ -2123,18 +2186,31 @@ def _nasa_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any
                 _media_debug("nasa", exc)
                 raw_path.unlink(missing_ok=True)
                 continue
-            item_url = item.get("href") or "https://images.nasa.gov/"
+            item_url = str(item.get("href") or "").strip()
+            if not item_url:
+                # A synthetic base page is not item-level provenance.
+                _media_debug("nasa", "NASA result omitted the exact collection/source URL")
+                path.unlink(missing_ok=True)
+                continue
+            rights = _nasa_rights_evidence(data_block)
+            keywords = data_block.get("keywords") or []
             row = {
-                "kind":"image","path":str(path),"source":"NASA Image and Video Library",
-                "source_url":item_url,"creator":data_block.get("creator") or data_block.get("center") or "NASA",
-                "license":"NASA media-use policy applies","title":data_block.get("title"),
-                "description":data_block.get("description"),
+                "kind": "image",
+                "path": str(path),
+                "source": "NASA Image and Video Library",
+                "source_url": item_url,
+                "creator": data_block.get("creator") or data_block.get("center") or "NASA",
+                "title": data_block.get("title"),
+                "description": data_block.get("description"),
+                "tags": keywords if isinstance(keywords, list) else [str(keywords)],
+                "nasa_center": data_block.get("center"),
+                **rights,
             }
             out.append(row)
             if len(out) >= limit:
                 break
         if out:
-            _media_success("nasa", {"count":len(out),"query":query})
+            _media_success("nasa", {"count": len(out), "query": query})
         return out
     except Exception as exc:
         _media_debug("nasa", exc)
@@ -2185,7 +2261,6 @@ def _visual_search_query_variants(search_subject: str, focus: str, topic: str, r
     subject_terms = terms(search_subject)
     topic_terms = terms(topic)
     raw_terms = terms(raw_query)
-    primary = focus_terms or subject_terms or topic_terms or raw_terms
     variants: List[str] = []
 
     def add(value: str) -> None:
@@ -2193,6 +2268,23 @@ def _visual_search_query_variants(search_subject: str, focus: str, topic: str, r
         if query and query.lower() not in {x.lower() for x in variants}:
             variants.append(query)
 
+    # Broad, generated focus phrases such as "the clearest subject that
+    # communicates the idea" previously outranked the actual topic. On the
+    # Earth-from-space workflow this produced queries like "clearest earth"
+    # and returned unrelated galaxy/astronaut/earthquake material. Search the
+    # user's subject with stable photographic language first.
+    intent_subject = (str(search_subject or "") + " " + str(topic or "")).lower()
+    is_earth_from_space = bool(
+        re.search(r"\bearth\b", intent_subject)
+        and re.search(r"\b(?:space|orbit|orbital|satellite|astronaut|earth observation|blue marble)\b", intent_subject)
+    )
+    if is_earth_from_space:
+        add("Earth from space")
+        add("Earth globe seen from orbit satellite image")
+        add("Blue Marble Earth satellite view")
+        return variants[:3]
+
+    primary = focus_terms or subject_terms or topic_terms or raw_terms
     add(" ".join(primary[:7]))
 
     combined_focus = (str(focus or "") + " " + str(search_subject or "")).lower()
@@ -2254,6 +2346,39 @@ def _visual_candidate_relevant(candidate: Dict[str, Any], search_subject: str, f
     """
     if not isinstance(candidate, dict):
         return False
+
+    subject_text = str(search_subject or "").lower()
+    is_earth_from_space = bool(
+        re.search(r"\bearth\b", subject_text)
+        and re.search(r"\b(?:space|orbit|orbital|satellite|astronaut|earth observation|blue marble)\b", subject_text)
+    )
+    if is_earth_from_space:
+        # An ordinary long description often mentions Earth/space in passing
+        # (for example, an article about Spacelab, a galaxy or an earthquake).
+        # For this topic, the item's title/alt/caption must themselves describe
+        # Earth viewed from space/orbit. Keywords alone cannot rescue an unrelated
+        # record such as Spacelab that merely mentions Earth in its description.
+        identity_fields = ("title", "alt", "caption", "category", "fields_matched")
+        identity_parts = []
+        for field in identity_fields:
+            value = candidate.get(field)
+            if isinstance(value, list):
+                identity_parts.extend(
+                    str(item.get("name") or item.get("title") or "")
+                    if isinstance(item, dict) else str(item)
+                    for item in value
+                )
+            elif value:
+                identity_parts.append(str(value))
+        identity = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", " ".join(identity_parts))).lower()
+        earth_signal = bool(re.search(r"\b(?:earth|planet|globe|blue marble|earthrise)\b", identity))
+        space_view_signal = bool(re.search(
+            r"\b(?:space|orbit|orbital|satellite|astronaut|iss|space station|earth observation|"
+            r"earth from space|from orbit|blue marble|earthrise)\b",
+            identity,
+        ))
+        return earth_signal and space_view_signal
+
     fields = ("title", "description", "alt", "caption", "tags", "category", "fields_matched")
     pieces = []
     for field in fields:
@@ -3473,6 +3598,106 @@ def _parse_scene_visual_intent(
     return topic, focus
 
 
+_MEDIA_PROVIDER_COOLDOWN_LOCK = threading.RLock()
+_MEDIA_PROVIDER_COOLDOWNS: Dict[str, Dict[str, Any]] = {}
+
+
+def _scene_is_explicitly_promotional(scene: Dict[str, Any]) -> bool:
+    values = []
+    for key in ("title", "topic", "objective", "command", "brief", "heading", "visual_query", "image_prompt"):
+        value = scene.get(key)
+        if value:
+            values.append(str(value))
+    # Whole-project intent is passed explicitly to acquisition. Scene headings
+    # frequently omit the brand/campaign purpose, so scene-only matching would
+    # miss commercial launch work and silently reuse editorial-only clearance.
+    context = scene.get("_production_context")
+    if isinstance(context, dict):
+        for key in ("title", "objective", "command", "brief", "content_type", "format", "brand", "campaign"):
+            value = context.get(key)
+            if value:
+                values.append(str(value))
+    text = " ".join(values).lower()
+    return bool(re.search(
+        r"\b(?:advertisement|advertising|promotional|promotion|marketing campaign|sales campaign|"
+        r"commercial campaign|product launch|brand launch|launch film|launch video|brand film|"
+        r"brand awareness|sponsored content|commercial)\b",
+        text,
+    ))
+
+
+def _apply_nasa_scene_usage_policy(candidate: Dict[str, Any], scene: Dict[str, Any]) -> Dict[str, Any]:
+    """Require additional review where NASA imagery would appear in explicit promotion."""
+    row = dict(candidate)
+    if (
+        str(row.get("source") or "").strip().lower() == "nasa image and video library"
+        and _scene_is_explicitly_promotional(scene)
+        and row.get("commercial_use_state") == "commercial_use_allowed_under_provider_terms"
+    ):
+        row["rights_status"] = "REVIEW_REQUIRED"
+        row["commercial_use_state"] = "UNKNOWN_REVIEW_REQUIRED"
+        row["rights_status_reason"] = (
+            "NASA media-use guidelines distinguish editorial use from promotional/advertising use; "
+            "obtain source-specific clearance and confirm the material does not imply NASA endorsement."
+        )
+    return row
+
+
+def _media_provider_debug_key(getter_name: str) -> str:
+    return {
+        "_nasa_images": "nasa",
+        "_openverse_images": "openverse",
+        "_commons_media": "wikimedia",
+        "_pexels": "pexels",
+        "_pixabay": "pixabay",
+        "_pexels_photos": "pexels-photos",
+        "_pixabay_images": "pixabay-images",
+        "_loc_images": "loc-images",
+    }.get(getter_name, getter_name)
+
+
+def _media_provider_failure_is_circuit_worthy(reason: Any) -> bool:
+    value = str(reason or "").lower()
+    return bool(re.search(
+        r"timeout|timed out|connection|unreachable|rate.?limit|too many requests|"
+        r"\b(?:401|403|429|502|503|504)\b|forbidden|unauthorized|not configured|"
+        r"missing.{0,30}(?:key|token)|temporarily unavailable|ssl error|certificate verify",
+        value,
+    ))
+
+
+def _media_provider_cooldown_seconds() -> int:
+    try:
+        value = int(os.getenv("AI_INFINITY_MEDIA_FAILURE_COOLDOWN_SECONDS", "180").strip())
+    except (TypeError, ValueError):
+        value = 180
+    return max(30, min(900, value))
+
+
+def _media_provider_cooldown_reason(getter_name: str) -> Optional[str]:
+    now = time.monotonic()
+    with _MEDIA_PROVIDER_COOLDOWN_LOCK:
+        entry = _MEDIA_PROVIDER_COOLDOWNS.get(getter_name)
+        if not entry:
+            return None
+        if now >= float(entry.get("until_monotonic") or 0):
+            _MEDIA_PROVIDER_COOLDOWNS.pop(getter_name, None)
+            return None
+        return str(entry.get("reason") or "a previous provider request failed")[:220]
+
+
+def _trip_media_provider_cooldown(getter_name: str, reason: Any) -> bool:
+    message = str(reason or "provider request failed")[:220]
+    if not _media_provider_failure_is_circuit_worthy(message):
+        return False
+    with _MEDIA_PROVIDER_COOLDOWN_LOCK:
+        _MEDIA_PROVIDER_COOLDOWNS[getter_name] = {
+            "until_monotonic": time.monotonic() + _media_provider_cooldown_seconds(),
+            "reason": message,
+        }
+    return True
+
+
 def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_motion: bool = False, duration: float = 6.0) -> Dict[str, Any]:
     # Test fixture short-circuits external acquisition only when explicitly allow-listed by CI.
     ci_fixture = _ci_test_visual(scene, outdir, index)
@@ -3574,7 +3799,7 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         selected_candidate["path"]=str(selected)
         selected_candidate["source_file"]=str(path)
         selected_candidate["asset_sha256"]=digest
-        return selected_candidate
+        return _apply_nasa_scene_usage_policy(selected_candidate, scene)
 
     # For the known AI Infinity product-launch brief, try a shot-specific real
     # motion clip before generic image search. Previously a loosely matching
@@ -3603,16 +3828,42 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         source_failures.append("_pexels-curated-launch-video:" + type(exc).__name__ + ":" + str(exc)[:160])
 
     for getter in getters:
-        # First query is the exact scene brief; the second is the concept synonym.
-        # Only the final raw-to-finished scene gets a third targeted query; ordinary
-        # scenes remain at two calls per provider to reduce avoidable HTTP 429 bursts.
+        debug_key = _media_provider_debug_key(getter.__name__)
+        cooldown_reason = _media_provider_cooldown_reason(getter.__name__)
+        if cooldown_reason:
+            source_failures.append(
+                f"{getter.__name__}:temporarily-skipped-after-provider-failure:{cooldown_reason}"
+            )
+            continue
+        # First query is the exact scene brief; the next one(s) are subject-led
+        # synonyms. A transient provider failure opens a bounded cooldown so the
+        # same slow/dead public endpoint is not called again for every scene.
         for q in query_variants:
+            cooldown_reason = _media_provider_cooldown_reason(getter.__name__)
+            if cooldown_reason:
+                source_failures.append(
+                    f"{getter.__name__}:temporarily-skipped-after-provider-failure:{cooldown_reason}"
+                )
+                break
+            # Drop stale diagnostics before each real call. Otherwise an old
+            # timeout can incorrectly open a new cooldown after a later successful
+            # provider response that simply returned no relevant results.
+            MEDIA_DEBUG_ERRORS.pop(debug_key, None)
             try:
                 items=getter(q,outdir,limit=_scene_asset_search_limit(index,getter.__name__))
             except Exception as exc:
-                source_failures.append(f"{getter.__name__}:{type(exc).__name__}:{str(exc)[:180]}")
+                reason = f"{type(exc).__name__}: {str(exc)[:180]}"
+                source_failures.append(f"{getter.__name__}:{reason}")
+                _trip_media_provider_cooldown(getter.__name__, reason)
                 continue
             candidates=[x for x in items if x.get("kind") in {"video","image"}]
+            if not candidates:
+                provider_error = MEDIA_DEBUG_ERRORS.get(debug_key, "")
+                if _trip_media_provider_cooldown(getter.__name__, provider_error):
+                    source_failures.append(
+                        f"{getter.__name__}:provider-cooldown-opened:{str(provider_error)[:180]}"
+                    )
+                    break
             # Record what query produced a candidate, without claiming this alone
             # proves visual relevance or licenses.
             for candidate in candidates:
@@ -3632,7 +3883,6 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
                 selected=select_distinct_candidate(candidate)
                 if selected:
                     return selected
-            debug_key={"_nasa_images":"nasa","_openverse_images":"openverse","_commons_media":"wikimedia","_pexels":"pexels","_pixabay":"pixabay","_pexels_photos":"pexels-photos","_pixabay_images":"pixabay-images","_loc_images":"loc-images"}.get(getter.__name__,getter.__name__)
             source_failures.append(f"{getter.__name__}:{MEDIA_DEBUG_ERRORS.get(debug_key,'no-relevant-distinct-asset')}")
 
     # One curated, public-download Pexels image is a keyless fallback for the
@@ -5952,10 +6202,19 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             ch["actual_duration"] = scene_duration
             actual_total += scene_duration
             try:
-                scene_for_acquisition = ch
+                scene_for_acquisition = dict(ch)
+                scene_for_acquisition["_production_context"] = {
+                    "title": str(plan.get("title") or req.get("title") or ""),
+                    "objective": str(req.get("objective") or ""),
+                    "command": str(req.get("command") or ""),
+                    "brief": str(req.get("brief") or req.get("topic") or ""),
+                    "content_type": str(req.get("content_type") or ""),
+                    "format": str(req.get("format") or ""),
+                    "brand": str(req.get("brand") or ""),
+                    "campaign": str(req.get("campaign") or ""),
+                }
                 fixture_id = str(req.get("_acceptance_fixture_id") or "")
                 if fixture_id == "cc0-recovery-illustration-v1":
-                    scene_for_acquisition = dict(ch)
                     scene_for_acquisition["_acceptance_fixture_id"] = fixture_id
                 asset = acquire_scene_asset(scene_for_acquisition, outdir, i, prefer_motion=(i <= max_ai_video_scenes), duration=scene_duration)
             except Exception as asset_exc:
@@ -9079,25 +9338,47 @@ def _project_list(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
 
 def _project_public(p: Dict[str, Any]) -> Dict[str, Any]:
     runtime_state = _runtime_state_for_status(p.get("status"))
-    # COMPLETED is a release claim, so reconcile it against the independent
-    # Reality Kernel before exposing that state to the creator UI.
+    # COMPLETED is a release claim, but project-status polling is a hot path.
+    # Never run an expensive filesystem/hash/ffprobe reconciliation from this
+    # GET handler: it can race the worker's own finalization, hold shared DB locks,
+    # and make the status endpoint time out exactly when production reaches QC.
+    # Use only a fresh finalized proof here. While that proof is absent or stale,
+    # return an explicit non-terminal verification state and keep final delivery
+    # behind the independent truth route.
     if str(p.get("status") or "").lower() == "completed":
         try:
             kernel = __import__("reality_first_3901")
-            proof = kernel.truth_for_project(p["project_id"])
-            refreshed = kernel._studio()._get_project(p["project_id"])
-            if refreshed:
-                p = refreshed
-            proof_state = str(proof.get("state") or "").upper()
-            runtime_state = {
-                "VERIFIED": "COMPLETED",
-                "DEGRADED": "DEGRADED",
-                "DELIVERED_WITH_QC_WARNINGS": "DEGRADED",
-                "FAILED": "FAILED",
-                "BLOCKED": "BLOCKED",
-            }.get(proof_state, "BLOCKED")
+            proof = kernel.cached_truth_for_project(str(p["project_id"]))
         except Exception:
-            runtime_state = "BLOCKED"
+            proof = None
+
+        if proof is None:
+            p = dict(p)
+            p["status"] = "producing"
+            p["stage"] = "quality_control"
+            p["progress"] = max(94.0, min(99.0, float(p.get("progress") or 94.0)))
+            runtime_state = "RUNNING"
+        else:
+            proof_state = str(proof.get("state") or "").upper()
+            proof_verified = proof.get("verified") is True and proof_state == "VERIFIED"
+            if proof_verified:
+                runtime_state = "COMPLETED"
+            elif proof_state in {"DEGRADED", "DELIVERED_WITH_QC_WARNINGS"}:
+                p = dict(p)
+                p["status"] = "completed_with_qc_warnings"
+                p["error"] = str(proof.get("error") or "Independent verification did not pass; review is required.")[:1200]
+                runtime_state = "DEGRADED"
+            elif proof_state in {"FAILED", "BLOCKED", "UNKNOWN"}:
+                p = dict(p)
+                p["status"] = "failed"
+                p["error"] = str(proof.get("error") or "Independent verification failed; final delivery remains blocked.")[:1200]
+                runtime_state = "FAILED" if proof_state == "FAILED" else "BLOCKED"
+            else:
+                p = dict(p)
+                p["status"] = "producing"
+                p["stage"] = "quality_control"
+                p["progress"] = max(94.0, min(99.0, float(p.get("progress") or 94.0)))
+                runtime_state = "RUNNING"
     out = {"project_id": p["project_id"], "title": p.get("title"), "status": p.get("status"),
            "state": runtime_state, "runtime_state": runtime_state,
            "stage": p.get("stage") or p.get("status"),

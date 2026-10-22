@@ -208,6 +208,56 @@ jobs:
                   if missing_package:
                       raise SystemExit(f"package.zip missing entries: {missing_package}")
 
+                  # A complete creative artifact is not a durable production release
+                  # until the running instance proves its project-state recovery point.
+                  # Check the real deployed /health payload after the job has finished;
+                  # local CI mocks and artifact-storage flags are not substitutes.
+                  try:
+                      with urllib.request.urlopen(base + "/health", timeout=30) as health_response:
+                          health = json.loads(health_response.read().decode("utf-8"))
+                  except Exception as exc:
+                      raise SystemExit(
+                          "durable project-state verification could not read live /health: "
+                          + type(exc).__name__ + ": " + str(exc)[:600]
+                      )
+                  capabilities = health.get("capabilities") if isinstance(health, dict) else {}
+                  storage_state = capabilities.get("storage") if isinstance(capabilities, dict) else {}
+                  storage_state = storage_state if isinstance(storage_state, dict) else {}
+                  backend_state = storage_state.get("project_state_backend_status")
+                  backend_state = backend_state if isinstance(backend_state, dict) else {}
+                  durable_evidence = {
+                      "persistent": storage_state.get("persistent") is True,
+                      "mode": storage_state.get("mode"),
+                      "reason": storage_state.get("reason"),
+                      "backend": backend_state.get("backend"),
+                      "configured": backend_state.get("configured") is True,
+                      "active": backend_state.get("active") is True,
+                      "verified": backend_state.get("verified") is True,
+                      "snapshot_verified": backend_state.get("snapshot_verified") is True,
+                      "last_sync_present": bool(backend_state.get("last_sync_at")),
+                      "sha256_present": bool(backend_state.get("last_sha256")),
+                      "last_error_kind": str(backend_state.get("last_error") or "").split(":", 1)[0] or None,
+                  }
+                  print("LIVE_PROJECT_STATE_DURABILITY", json.dumps(durable_evidence, sort_keys=True))
+                  if durable_evidence["reason"] == "verified_durable_state_backend":
+                      required_state = (
+                          "configured", "active", "verified", "snapshot_verified",
+                          "last_sync_present", "sha256_present",
+                      )
+                      missing_state = [key for key in required_state if not durable_evidence[key]]
+                      if missing_state:
+                          raise SystemExit(
+                              "project-state backend claims verified durability but lacks: "
+                              + ", ".join(missing_state)
+                          )
+                  elif durable_evidence["reason"] != "actual_persistent_mount_confirmed":
+                      raise SystemExit(
+                          "live project state is not durably recoverable: "
+                          + str(durable_evidence["reason"] or "no verified backend/mount evidence")
+                      )
+                  if durable_evidence["persistent"] is not True:
+                      raise SystemExit("live project-state persistence truth is not persistent")
+
                   print("LIVE_ARTIFACT_SET",json.dumps(required))
                   print("LIVE_FFPROBE_OK",json.dumps({"streams":len(streams),"duration":media.get("format",{}).get("duration")}))
                   print("LIVE_PACKAGE_OK",json.dumps(sorted(package_required)))

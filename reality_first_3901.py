@@ -1025,6 +1025,20 @@ def _guarded_run_project(project_id: str, model_fn: Any) -> None:
             _event(project_id, "reconciliation", "FAILED", 1, str(exc)[:1200])
 
 
+def _reconcile_if_stale(project_id: str) -> Dict[str, Any]:
+    """Reinspect a terminal project only when its cached proof is absent or stale."""
+    cached = cached_truth_for_project(project_id)
+    if cached is not None:
+        return {
+            "project_id": project_id,
+            "state": str(cached.get("state") or "UNKNOWN"),
+            "verified": bool(cached.get("verified")),
+            "skipped": True,
+            "truthful": True,
+        }
+    return reconcile_project(project_id)
+
+
 def _guard_loop() -> None:
     while True:
         time.sleep(20)
@@ -1040,7 +1054,10 @@ def _guard_loop() -> None:
                 ).fetchall()]
             for row in rows:
                 try:
-                    reconcile_project(str(row["project_id"]))
+                    # Fresh reports require no repeated FFprobe/SHA filesystem
+                    # scan. A changed project row invalidates its cache and is
+                    # re-inspected on the next pass.
+                    _reconcile_if_stale(str(row["project_id"]))
                 except Exception:
                     pass
         except Exception:
@@ -1079,6 +1096,51 @@ def runtime_health() -> Dict[str, Any]:
 
 def truth_for_project(project_id: str) -> Dict[str, Any]:
     return reconcile_project(project_id)
+
+
+def cached_truth_for_project(project_id: str) -> Optional[Dict[str, Any]]:
+    """Read the last finalized truth report without rerunning media inspection.
+
+    Project-status polling is a hot path. It must not trigger duplicate FFprobe,
+    SHA, filesystem scans, proof-chain writes, or a second concurrent reconciliation
+    while the production worker is finalizing the same project.
+    A cached report is usable only when it is newer than the current project row;
+    otherwise callers must show a non-terminal verification state and keep delivery
+    gated until the authoritative reconciler publishes a fresh report.
+    """
+    try:
+        s = _studio()
+        project = s._get_project(project_id)
+        if not project:
+            return None
+        _ensure_schema()
+        with _DB_LOCK, s.DB_LOCK, s._connect() as c:
+            row = c.execute(
+                "SELECT state,verified,qc_passed,last_report_json,updated_at "
+                "FROM reality_projects_3901 WHERE project_id=? LIMIT 1",
+                (project_id,),
+            ).fetchone()
+        if not row or not row["last_report_json"]:
+            return None
+        report = json.loads(row["last_report_json"])
+        if not isinstance(report, dict) or str(report.get("project_id") or "") != project_id:
+            return None
+        try:
+            project_updated = float(project.get("updated_at") or 0)
+            truth_updated = float(row["updated_at"] or 0)
+        except (TypeError, ValueError):
+            return None
+        if truth_updated < project_updated:
+            return None
+        if str(report.get("state") or "").upper() != str(row["state"] or "").upper():
+            return None
+        if bool(report.get("verified")) != bool(row["verified"]):
+            return None
+        return report
+    except Exception:
+        # Cache failure is not truth failure or truth success; status callers must
+        # remain non-terminal and must not turn an unreadable cache into VERIFIED.
+        return None
 
 
 def register(app: Any) -> None:
