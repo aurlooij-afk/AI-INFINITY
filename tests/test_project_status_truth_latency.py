@@ -82,3 +82,41 @@ def test_cached_degraded_truth_cannot_be_promoted_to_completed(monkeypatch):
     assert result["state"] == "DEGRADED"
     assert result["runtime_state"] == "DEGRADED"
     assert "rights review" in result["error"]
+
+def test_terminal_guard_skips_deep_reinspection_when_cached_truth_is_fresh(monkeypatch):
+    fresh = {
+        "project_id": "status-latency-test",
+        "state": "VERIFIED",
+        "verified": True,
+        "truthful": True,
+    }
+    monkeypatch.setattr(kernel, "cached_truth_for_project", lambda project_id: fresh)
+
+    def forbidden_reconciliation(project_id):
+        raise AssertionError("unchanged terminal projects must not be re-probed every 20 seconds")
+
+    monkeypatch.setattr(kernel, "reconcile_project", forbidden_reconciliation)
+
+    result = kernel._reconcile_if_stale("status-latency-test")
+
+    assert result["skipped"] is True
+    assert result["verified"] is True
+    assert result["state"] == "VERIFIED"
+
+
+def test_terminal_guard_reconciles_when_cached_truth_is_stale(monkeypatch):
+    monkeypatch.setattr(kernel, "cached_truth_for_project", lambda project_id: None)
+    expected = {
+        "project_id": "status-latency-test",
+        "state": "DEGRADED",
+        "verified": False,
+        "truthful": True,
+    }
+    calls = []
+    monkeypatch.setattr(kernel, "reconcile_project", lambda project_id: calls.append(project_id) or expected)
+
+    result = kernel._reconcile_if_stale("status-latency-test")
+
+    assert calls == ["status-latency-test"]
+    assert result is expected
+
