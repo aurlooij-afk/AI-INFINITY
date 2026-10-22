@@ -865,6 +865,35 @@ def test_nasa_item_rights_are_attributed_and_exceptions_remain_review_required()
     assert people["rights_status"] == "REVIEW_REQUIRED"
 
 
+def test_nasa_policy_only_auto_clears_editorial_context_not_explicit_brand_promotion():
+    base = {
+        "source": "NASA Image and Video Library",
+        **studio._nasa_rights_evidence({
+            "title": "Earth from Space — Blue Marble",
+            "description": "The planet Earth seen from orbit. Credit: NASA.",
+            "creator": "NASA",
+        }),
+    }
+    editorial = studio._apply_nasa_scene_usage_policy(
+        base,
+        {"topic": "Earth from space", "visual_query": "Earth from space documentary"},
+    )
+    assert editorial["commercial_use_state"] == "commercial_use_allowed_under_provider_terms"
+    assert editorial["rights_status"] == "license_metadata_present"
+
+    promotional = studio._apply_nasa_scene_usage_policy(
+        base,
+        {
+            "title": "AI Infinity product launch video",
+            "topic": "Earth from space",
+            "objective": "Create an AI Infinity launch film for the product",
+        },
+    )
+    assert promotional["commercial_use_state"] == "UNKNOWN_REVIEW_REQUIRED"
+    assert promotional["rights_status"] == "REVIEW_REQUIRED"
+    assert "promotional/advertising use" in promotional["rights_status_reason"]
+
+
 def test_nasa_adapter_exports_asset_level_policy_url_and_rights_state(monkeypatch, tmp_path):
     monkeypatch.setattr(studio, "FAST_MODE", True)
 
