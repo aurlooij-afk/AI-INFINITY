@@ -206,11 +206,29 @@ def test_default_b2_canary_uses_the_configured_snapshot_key_prefix(monkeypatch):
     monkeypatch.delenv("AI_INFINITY_PROJECT_STATE_CANARY_KEY", raising=False)
 
     class TrackingMemoryB2(_MemoryB2):
+        allowed_prefix = "tenant/project-state/current.snapshot"
         last_put_key = None
 
+        def _require_allowed_prefix(self, key):
+            if not key.startswith(self.allowed_prefix):
+                raise PermissionError("outside the test B2 key-name prefix")
+
         def put_object(self, Bucket, Key, Body, ContentType, Metadata):
+            self._require_allowed_prefix(Key)
             self.last_put_key = Key
             return super().put_object(Bucket, Key, Body, ContentType, Metadata)
+
+        def head_object(self, Bucket, Key):
+            self._require_allowed_prefix(Key)
+            return super().head_object(Bucket, Key)
+
+        def get_object(self, Bucket, Key):
+            self._require_allowed_prefix(Key)
+            return super().get_object(Bucket, Key)
+
+        def delete_object(self, Bucket, Key):
+            self._require_allowed_prefix(Key)
+            return super().delete_object(Bucket, Key)
 
     client = TrackingMemoryB2()
     monkeypatch.setattr(backend, "_client", lambda: client)
