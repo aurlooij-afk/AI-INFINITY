@@ -865,6 +865,18 @@ def test_nasa_item_rights_are_attributed_and_exceptions_remain_review_required()
     assert people["rights_status"] == "REVIEW_REQUIRED"
 
 
+def test_full_production_context_keeps_brand_launch_nasa_use_review_required():
+    assert studio._scene_is_explicitly_promotional({
+        "heading": "A world connected by possibility",
+        "visual_query": "Earth from space documentary photo",
+        "_production_context": {
+            "title": "AI Infinity launch video",
+            "content_type": "video",
+            "format": "short",
+        },
+    })
+
+
 def test_nasa_policy_only_auto_clears_editorial_context_not_explicit_brand_promotion():
     base = {
         "source": "NASA Image and Video Library",
