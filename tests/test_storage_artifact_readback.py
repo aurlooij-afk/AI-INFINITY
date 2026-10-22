@@ -145,6 +145,39 @@ def test_s3_storage_timeout_settings_are_clamped(monkeypatch, tmp_path: Path):
     assert storage["_bounded_storage_int"]("AI_INFINITY_STORAGE_MAX_ATTEMPTS", 2, 1, 4) == 4
 
 
+def test_failed_provider_is_circuited_for_later_artifacts_without_fake_durability(monkeypatch, tmp_path: Path):
+    storage, _ = _load_storage_fabric(tmp_path, monkeypatch)
+    calls = []
+
+    def denied(provider, key, path, content_type, digest):
+        calls.append((provider, key))
+        raise PermissionError("HTTP 403 Forbidden")
+
+    storage["_put_provider"] = denied
+    monkeypatch.setenv("AI_INFINITY_STORAGE_FAILURE_COOLDOWN_SECONDS", "300")
+    source = tmp_path / "scene.mp4"
+    source.write_bytes(b"production artifact bytes" * 200)
+
+    first = storage["_persist_path"](
+        source, "storage-test-user", "scene.mp4", "video/mp4",
+        {"project_id": "circuit-breaker-test", "kind": "video"},
+    )
+    second = storage["_persist_path"](
+        source, "storage-test-user", "package.zip", "application/zip",
+        {"project_id": "circuit-breaker-test", "kind": "package"},
+    )
+
+    assert first["status"] == "failed", first
+    assert second["status"] == "failed", second
+    assert first["successful_providers"] == []
+    assert second["successful_providers"] == []
+    assert len(calls) == 1, "a known failing provider must not be retried for every artifact"
+    skipped = second["replica_results"]["backblaze_b2"]
+    assert skipped["status"] == "failed"
+    assert skipped["circuit_open"] is True
+    assert "temporarily skipped" in skipped["error"]
+
+
 def test_artifact_is_verified_only_after_actual_bytes_are_read_back(monkeypatch, tmp_path: Path):
     storage, objects = _load_storage_fabric(tmp_path, monkeypatch)
     source = tmp_path / "final.mp4"
