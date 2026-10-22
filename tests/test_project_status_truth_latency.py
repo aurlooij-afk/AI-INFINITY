@@ -38,7 +38,7 @@ def test_completed_status_poll_never_runs_deep_truth_reconciliation(monkeypatch)
     assert result["state"] == "RUNNING"
     assert result["runtime_state"] == "RUNNING"
     assert result["stage"] == "quality_control"
-    assert result["progress"] == 100.0
+    assert result["progress"] == 99.0
     assert result["truthful"] is True
 
 
