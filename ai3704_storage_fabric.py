@@ -165,16 +165,39 @@ def _configured(cfg: Dict[str, Any]) -> bool:
         return all([cfg.get("base"), cfg.get("bucket"), cfg.get("key")])
     return False
 
+def _bounded_storage_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    """Read a bounded storage timeout/retry setting without letting bad env values crash startup."""
+    try:
+        value = int(os.getenv(name, str(default)).strip())
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _storage_http_timeouts() -> tuple[int, int]:
+    """Return explicit bounded connect/read deadlines for HTTP object-store calls."""
+    connect_timeout = _bounded_storage_int("AI_INFINITY_STORAGE_CONNECT_TIMEOUT", 8, 2, 30)
+    read_timeout = _bounded_storage_int("AI_INFINITY_STORAGE_READ_TIMEOUT", 30, 5, 120)
+    return connect_timeout, read_timeout
+
+
 def _client(cfg: Dict[str, Any]):
     if boto3 is None or BotoConfig is None:
         raise RuntimeError("boto3 is not installed")
+    connect_timeout, read_timeout = _storage_http_timeouts()
+    max_attempts = _bounded_storage_int("AI_INFINITY_STORAGE_MAX_ATTEMPTS", 2, 1, 4)
     return boto3.client(
         "s3",
         endpoint_url=cfg["endpoint"],
         region_name=cfg.get("region") or "auto",
         aws_access_key_id=cfg["access"],
         aws_secret_access_key=cfg["secret"],
-        config=BotoConfig(signature_version="s3v4", retries={"max_attempts": 4, "mode": "standard"}),
+        config=BotoConfig(
+            signature_version="s3v4",
+            connect_timeout=connect_timeout,
+            read_timeout=read_timeout,
+            retries={"max_attempts": max_attempts, "mode": "standard"},
+        ),
     )
 
 def _storage_key(user_id: str, asset_id: str, filename: str) -> str:
@@ -267,7 +290,8 @@ def _supabase_put(cfg: Dict[str, Any], key: str, path: Path, content_type: str):
     headers["Content-Type"] = content_type or "application/octet-stream"
     headers["x-upsert"] = "true"
     with path.open("rb") as fh:
-        resp = requests.post(url, headers=headers, data=fh, timeout=300)
+        connect_timeout, read_timeout = _storage_http_timeouts()
+        resp = requests.post(url, headers=headers, data=fh, timeout=(connect_timeout, read_timeout))
     if resp.status_code >= 300:
         raise RuntimeError(f"Supabase upload failed: HTTP {resp.status_code} {resp.text[:300]}")
     size = path.stat().st_size
@@ -527,7 +551,8 @@ def _download_to(provider: str, key: str, destination: Path) -> Dict[str, Any]:
                 release()
         return {"size_bytes": destination.stat().st_size}
     url = cfg["base"] + _supabase_path(cfg["bucket"], key)
-    with requests.get(url, headers=_supabase_headers(cfg), stream=True, timeout=300) as resp:
+    connect_timeout, read_timeout = _storage_http_timeouts()
+    with requests.get(url, headers=_supabase_headers(cfg), stream=True, timeout=(connect_timeout, read_timeout)) as resp:
         if resp.status_code >= 300:
             raise RuntimeError(f"Supabase download failed: HTTP {resp.status_code}")
         with destination.open("wb") as f:
