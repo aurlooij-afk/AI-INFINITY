@@ -909,6 +909,33 @@ def test_nasa_adapter_exports_asset_level_policy_url_and_rights_state(monkeypatc
     assert studio._visual_candidate_relevant(row, "earth space", "clearest view of Earth from space")
 
 
+def test_transient_visual_provider_failure_is_cooled_down_but_irrelevant_results_are_not():
+    with studio._MEDIA_PROVIDER_COOLDOWN_LOCK:
+        studio._MEDIA_PROVIDER_COOLDOWNS.clear()
+    try:
+        assert studio._trip_media_provider_cooldown(
+            "_openverse_images", "TimeoutError: The read operation timed out"
+        ) is True
+        reason = studio._media_provider_cooldown_reason("_openverse_images")
+        assert reason and "TimeoutError" in reason
+
+        # A provider returning an irrelevant candidate is not a network failure;
+        # it must remain eligible for the next scene-specific query.
+        assert studio._media_provider_failure_is_circuit_worthy(
+            "HTTP 429 Too Many Requests"
+        ) is True
+        assert studio._media_provider_failure_is_circuit_worthy(
+            "no-relevant-distinct-asset"
+        ) is False
+
+        with studio._MEDIA_PROVIDER_COOLDOWN_LOCK:
+            studio._MEDIA_PROVIDER_COOLDOWNS["_openverse_images"]["until_monotonic"] = 0
+        assert studio._media_provider_cooldown_reason("_openverse_images") is None
+    finally:
+        with studio._MEDIA_PROVIDER_COOLDOWN_LOCK:
+            studio._MEDIA_PROVIDER_COOLDOWNS.clear()
+
+
 def test_focus_lexical_overlap_can_resolve_unclassified_scene_concepts():
     relevant = {
         "title": "Software workflow dashboard on a computer screen",
