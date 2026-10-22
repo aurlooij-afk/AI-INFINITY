@@ -196,6 +196,32 @@ def test_explicit_project_state_region_overrides_endpoint_inference(monkeypatch)
     assert cfg["region"] == "eu-central-003", cfg
 
 
+def test_default_b2_canary_uses_the_configured_snapshot_key_prefix(monkeypatch):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _b2_env(monkeypatch)
+    monkeypatch.setenv(
+        "AI_INFINITY_PROJECT_STATE_OBJECT_KEY",
+        "tenant/project-state/current.snapshot",
+    )
+    monkeypatch.delenv("AI_INFINITY_PROJECT_STATE_CANARY_KEY", raising=False)
+
+    class TrackingMemoryB2(_MemoryB2):
+        last_put_key = None
+
+        def put_object(self, Bucket, Key, Body, ContentType, Metadata):
+            self.last_put_key = Key
+            return super().put_object(Bucket, Key, Body, ContentType, Metadata)
+
+    client = TrackingMemoryB2()
+    monkeypatch.setattr(backend, "_client", lambda: client)
+
+    assert backend._verify_roundtrip() is True
+    assert client.last_put_key.startswith(
+        "tenant/project-state/current.snapshot.canary."
+    )
+    assert client.objects == {}, "successful canary verification should clean up its unique object"
+
+
 def test_b2_canary_requires_exact_write_readback(monkeypatch):
     backend = importlib.import_module("ai_infinity.project_state_backend")
     _b2_env(monkeypatch)
