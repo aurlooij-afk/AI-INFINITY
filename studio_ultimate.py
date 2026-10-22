@@ -2095,6 +2095,62 @@ def _normalize_image_file(path: Path, outdir: Path, stem: str) -> Optional[Path]
         return None
 
 
+NASA_MEDIA_USAGE_GUIDELINES_URL = "https://www.nasa.gov/nasa-brand-center/images-and-media/"
+
+
+def _nasa_rights_evidence(data_block: Dict[str, Any]) -> Dict[str, Any]:
+    """Record NASA's actual reuse policy without turning every NASA result into a blanket clearance.
+
+    NASA media is generally reusable under its media-use guidelines, but those
+    guidelines do not grant rights to third-party copyrighted content and call
+    for extra care around identifiable people and promotional/endorsement use.
+    Mark item-level exceptions for review instead of copying a generic NASA
+    label into a false rights-clearance result.
+    """
+    data = data_block if isinstance(data_block, dict) else {}
+    title = html.unescape(str(data.get("title") or "")).strip()
+    description = html.unescape(re.sub(r"<[^>]+>", " ", str(data.get("description") or "")))
+    creator = str(data.get("creator") or data.get("center") or "NASA").strip()
+    full_text = re.sub(r"\s+", " ", f"{title} {description}").strip()
+    lower = full_text.lower()
+
+    reasons = []
+    if re.search(r"(?:©|\bcopyright(?:ed)?\b|all rights reserved|permission of the copyright holder)", lower, re.I):
+        reasons.append("NASA metadata contains an explicit copyright or rights restriction")
+    third_party = re.search(
+        r"\b(?:ESA|European Space Agency|JAXA|Japan Aerospace Exploration Agency|ASI|Italian Space Agency|"
+        r"STScI|Space Telescope Science Institute|Getty Images|Reuters|Associated Press|Shutterstock|"
+        r"Hubble European Space Agency|Hubble/ESA)\b",
+        full_text,
+        re.I,
+    )
+    explicit_credit = re.search(
+        r"\b(?:credit|image credit|courtesy of|copyright(?:ed)? by|provided by|data (?:were|was) provided by)\b",
+        full_text,
+        re.I,
+    )
+    if third_party and explicit_credit:
+        reasons.append("NASA metadata identifies third-party credit or supplied media")
+    if re.search(r"\b(?:astronaut|portrait|group photo|identifiable person|crew portrait|NASA employee)\b", title, re.I):
+        reasons.append("the NASA item title indicates identifiable people; use-specific clearance may be required")
+
+    cleared_under_policy = not reasons
+    return {
+        "license": "NASA media-use guidelines (not a blanket license)",
+        "license_url": NASA_MEDIA_USAGE_GUIDELINES_URL,
+        "commercial_use_state": "commercial_use_allowed_under_provider_terms" if cleared_under_policy else "UNKNOWN_REVIEW_REQUIRED",
+        "rights_status": "license_metadata_present" if cleared_under_policy else "REVIEW_REQUIRED",
+        "rights_status_reason": (
+            "NASA media-use guidelines recorded; no copyright, third-party-credit, or identifiable-person signal "
+            "was found in the returned item metadata. Attribute NASA and do not imply endorsement."
+            if cleared_under_policy else "; ".join(reasons)
+        ),
+        "rights_basis": "nasa_media_usage_guidelines",
+        "rights_evidence_method": "nasa_item_metadata_exception_screen",
+        "attribution": creator or "NASA",
+    }
+
+
 def _nasa_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
     try:
         data = http_json("https://images-api.nasa.gov/search?" + urlencode({
@@ -2123,18 +2179,31 @@ def _nasa_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any
                 _media_debug("nasa", exc)
                 raw_path.unlink(missing_ok=True)
                 continue
-            item_url = item.get("href") or "https://images.nasa.gov/"
+            item_url = str(item.get("href") or "").strip()
+            if not item_url:
+                # A synthetic base page is not item-level provenance.
+                _media_debug("nasa", "NASA result omitted the exact collection/source URL")
+                path.unlink(missing_ok=True)
+                continue
+            rights = _nasa_rights_evidence(data_block)
+            keywords = data_block.get("keywords") or []
             row = {
-                "kind":"image","path":str(path),"source":"NASA Image and Video Library",
-                "source_url":item_url,"creator":data_block.get("creator") or data_block.get("center") or "NASA",
-                "license":"NASA media-use policy applies","title":data_block.get("title"),
-                "description":data_block.get("description"),
+                "kind": "image",
+                "path": str(path),
+                "source": "NASA Image and Video Library",
+                "source_url": item_url,
+                "creator": data_block.get("creator") or data_block.get("center") or "NASA",
+                "title": data_block.get("title"),
+                "description": data_block.get("description"),
+                "tags": keywords if isinstance(keywords, list) else [str(keywords)],
+                "nasa_center": data_block.get("center"),
+                **rights,
             }
             out.append(row)
             if len(out) >= limit:
                 break
         if out:
-            _media_success("nasa", {"count":len(out),"query":query})
+            _media_success("nasa", {"count": len(out), "query": query})
         return out
     except Exception as exc:
         _media_debug("nasa", exc)
