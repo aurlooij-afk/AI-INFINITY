@@ -186,12 +186,19 @@ def _head(key: Optional[str] = None) -> Optional[Dict[str, Any]]:
 def _verify_roundtrip() -> bool:
     """Prove credentials support a real write/read-back using an isolated canary key."""
     cfg = _cfg()
+    # Keep the default canary under the configured snapshot key prefix. B2
+    # application keys may be restricted to a name prefix that covers the
+    # snapshot object but not a sibling ".canary" path. Appending the canary
+    # suffix lets the startup read/write probe exercise the same grant without
+    # changing the durable snapshot object itself. Operators can still override
+    # the canary path explicitly when their key policy requires a separate prefix.
+    default_canary_key = f"{object_key()}.canary"
     base_key = (
         os.getenv(
             "AI_INFINITY_PROJECT_STATE_CANARY_KEY",
-            "ai-infinity/project-state/.canary",
+            default_canary_key,
         ).strip()
-        or "ai-infinity/project-state/.canary"
+        or default_canary_key
     )
     # Never overwrite or delete an operator-managed canary object.
     key = f"{base_key}.{uuid.uuid4().hex}"
