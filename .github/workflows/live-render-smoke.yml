@@ -110,7 +110,7 @@ jobs:
           import io, json, os, sys, time, urllib.request, urllib.parse, urllib.error
           import http.cookiejar, zipfile, hashlib, subprocess
           base=os.environ["BASE_URL"].rstrip("/")
-          cmd="Create a 20-second English cinematic video using only local/free execution, with voiceover, captions, thumbnail and a real final package."
+          cmd="Create a 20-second English cinematic documentary about Earth from space using relevant NASA or public-domain visuals, with voiceover, readable captions, thumbnail and a complete creator package. Use free-first execution; do not use paid providers."
           jar=http.cookiejar.CookieJar()
           opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
@@ -215,5 +215,19 @@ jobs:
 
               time.sleep(4)
 
-          raise SystemExit("deployed real production timed out")
+          # Capture the last real server truth and storage state before failing. These
+          # diagnostics do not turn a timed-out production into a pass.
+          print("LIVE_TIMEOUT_LAST_STATE", json.dumps(state, ensure_ascii=False, default=str))
+          for diagnostic_path in (
+              "/infinity/studio/project/" + urllib.parse.quote(pid, safe="") + "/truth",
+              "/infinity/studio/project/" + urllib.parse.quote(pid, safe="") + "/artifacts",
+              "/infinity/storage/v1/status",
+          ):
+              try:
+                  with opener.open(base + diagnostic_path, timeout=20) as r:
+                      payload = r.read(200_000).decode("utf-8", "replace")
+                  print("LIVE_TIMEOUT_DIAGNOSTIC", diagnostic_path, payload[:12000])
+              except Exception as exc:
+                  print("LIVE_TIMEOUT_DIAGNOSTIC_FAILED", diagnostic_path, type(exc).__name__, str(exc)[:800])
+          raise SystemExit("deployed real production timed out; diagnostic truth captured above")
           PY
