@@ -896,8 +896,10 @@ def test_nasa_policy_only_auto_clears_editorial_context_not_explicit_brand_promo
 
 def test_nasa_adapter_exports_asset_level_policy_url_and_rights_state(monkeypatch, tmp_path):
     monkeypatch.setattr(studio, "FAST_MODE", True)
+    json_calls = []
 
     def fake_json(url, headers=None, timeout=20):
+        json_calls.append(url)
         assert url.startswith("https://images-api.nasa.gov/search?")
         assert "Earth+from+space" in url or "Earth%20from%20space" in url
         return {
@@ -928,7 +930,12 @@ def test_nasa_adapter_exports_asset_level_policy_url_and_rights_state(monkeypatc
     monkeypatch.setattr(studio, "download", fake_download)
     rows = studio._nasa_images("Earth from space", tmp_path, limit=1)
 
-    assert len(rows) == 1, {"media_debug_errors": dict(studio.MEDIA_DEBUG_ERRORS), "outdir_files": sorted(x.name for x in tmp_path.iterdir())}
+    assert len(rows) == 1, {
+        "media_debug_errors": dict(studio.MEDIA_DEBUG_ERRORS),
+        "outdir_files": sorted(x.name for x in tmp_path.iterdir()),
+        "json_calls": json_calls,
+        "adapter_module": studio._nasa_images.__module__,
+    }
     row = rows[0]
     assert row["source_url"] == "https://images-assets.nasa.gov/image/earth-001/collection.json"
     assert row["license_url"] == "https://www.nasa.gov/nasa-brand-center/images-and-media/"
