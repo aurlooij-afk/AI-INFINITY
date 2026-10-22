@@ -1025,6 +1025,20 @@ def _guarded_run_project(project_id: str, model_fn: Any) -> None:
             _event(project_id, "reconciliation", "FAILED", 1, str(exc)[:1200])
 
 
+def _reconcile_if_stale(project_id: str) -> Dict[str, Any]:
+    """Reinspect a terminal project only when its cached proof is absent or stale."""
+    cached = cached_truth_for_project(project_id)
+    if cached is not None:
+        return {
+            "project_id": project_id,
+            "state": str(cached.get("state") or "UNKNOWN"),
+            "verified": bool(cached.get("verified")),
+            "skipped": True,
+            "truthful": True,
+        }
+    return reconcile_project(project_id)
+
+
 def _guard_loop() -> None:
     while True:
         time.sleep(20)
@@ -1040,7 +1054,10 @@ def _guard_loop() -> None:
                 ).fetchall()]
             for row in rows:
                 try:
-                    reconcile_project(str(row["project_id"]))
+                    # Fresh reports require no repeated FFprobe/SHA filesystem
+                    # scan. A changed project row invalidates its cache and is
+                    # re-inspected on the next pass.
+                    _reconcile_if_stale(str(row["project_id"]))
                 except Exception:
                     pass
         except Exception:
