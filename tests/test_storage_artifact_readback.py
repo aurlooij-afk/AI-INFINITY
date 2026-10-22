@@ -120,8 +120,8 @@ def test_s3_storage_client_has_bounded_connect_read_and_retry_settings(monkeypat
             captured.update(kwargs)
             return object()
 
-    monkeypatch.setattr(storage, "BotoConfig", FakeConfig)
-    monkeypatch.setattr(storage, "boto3", FakeBoto3)
+    storage["BotoConfig"] = FakeConfig
+    storage["boto3"] = FakeBoto3
     monkeypatch.setenv("AI_INFINITY_STORAGE_CONNECT_TIMEOUT", "6")
     monkeypatch.setenv("AI_INFINITY_STORAGE_READ_TIMEOUT", "17")
     monkeypatch.setenv("AI_INFINITY_STORAGE_MAX_ATTEMPTS", "2")
