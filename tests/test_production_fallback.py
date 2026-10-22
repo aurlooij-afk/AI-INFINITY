@@ -28,11 +28,24 @@ def test_scene_asset_has_real_local_fallback(monkeypatch, tmp_path):
     path = Path(asset["path"])
 
     assert path.is_file()
-    assert path.stat().st_size > 20_000
+    assert path.stat().st_size > 1_000
+
+    # Validate the actual fallback pixels, not an arbitrary encoded-file byte threshold.
+    from PIL import Image
+
+    with Image.open(path) as image:
+        assert image.format == "PNG"
+        assert image.width >= 320 and image.height >= 240
+        extrema = image.convert("RGB").getextrema()
+        assert any(low < high for low, high in extrema), "fallback image must contain real visual variation"
+
     assert asset.get("fallback") is True
-    assert asset.get("quality_tier") == "original_motion_design_fallback"
+    assert asset.get("quality_tier") == "original_vector_editorial_fallback"
+    assert asset.get("asset_kind") == "illustrative_graphic_not_photograph"
     assert asset.get("rights_status") == "original_asset"
-    assert asset.get("source") == "AI Infinity motion-design generator"
+    assert asset.get("source") == "AI Infinity original vector editorial fallback"
+    assert asset.get("fallback_record", {}).get("execution_state") == "DEGRADED"
+    assert asset.get("fallback_record", {}).get("truthful") is True
 
 
 def test_command_language_inference_is_explicit():
