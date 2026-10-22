@@ -3,6 +3,8 @@ name: AI Infinity Standalone Runtime Verification
 on:
   push:
     branches: [main, ai-infinity-canonical-divine]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -213,7 +215,7 @@ jobs:
 
       - name: Run real creator production smoke test
         env:
-          AI_INFINITY_REQUIRE_SOURCE_VISUALS: "0"
+          AI_INFINITY_REQUIRE_SOURCE_VISUALS: "1"
           AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE: "0"
           AI_INFINITY_FAST_MODE: "1"
           AI_INFINITY_3601_BACKGROUND: "false"
@@ -223,9 +225,9 @@ jobs:
           python - <<'PY'
           import json
           p = {
-            "title": "AI Infinity Production Smoke Test",
-            "objective": "Create a short cinematic motivational video about perseverance and building a better future.",
-            "topic": "perseverance",
+            "title": "AI Infinity Earth-from-Space Production Smoke Test",
+            "objective": "Create a 20-second cinematic documentary about Earth from space using relevant NASA or public-domain imagery, with topic-matched visuals, narration and captions.",
+            "topic": "Earth from space",
             "format": "short",
             "duration": 20,
             "content_type": "video",
@@ -299,6 +301,9 @@ jobs:
               f"http://127.0.0.1:10000/infinity/reality/project/{reality_project_id}"
           ], text=True)
           reality=json.loads(reality_response)
+          open("/tmp/reality-proof.json","w",encoding="utf-8").write(
+              json.dumps(reality,indent=2,sort_keys=True)+"\n"
+          )
           print("REALITY_PROOF_REPORT", json.dumps(reality, indent=2, sort_keys=True))
           proof_checks = {
               "truthful_bool": (reality.get("truthful") is True),
@@ -352,6 +357,22 @@ jobs:
           PY
           echo "END_TO_END_CREATOR_ARTIFACT_TEST_PASSED"
 
+
+      - name: Upload standalone production closure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-infinity-standalone-production-evidence
+          path: |
+            /tmp/create-response.json
+            /tmp/project.json
+            /tmp/artifacts.json
+            /tmp/verify.json
+            /tmp/reality-proof.json
+            /tmp/final-probe.json
+            /tmp/ai-infinity-real-smoke/**/*.json
+            /tmp/ai-infinity-real-smoke/**/*.md
+          if-no-files-found: warn
 
       - name: Stop test container
         if: always()
