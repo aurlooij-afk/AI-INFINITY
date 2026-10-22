@@ -28,7 +28,8 @@ on:
       - "overlay_final_3700.py"
       - "creator_final_3800.py"
       - "ui_3800.html"
-      - ".github/workflows/creator-studio-ci.yml"
+      - ".github/workflows/creator-studio-ci.yml
+      - ".github/workflows/creator-runtime-verify.yml""
   pull_request:
     paths:
       - "*.py"
