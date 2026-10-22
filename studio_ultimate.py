@@ -9309,25 +9309,47 @@ def _project_list(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
 
 def _project_public(p: Dict[str, Any]) -> Dict[str, Any]:
     runtime_state = _runtime_state_for_status(p.get("status"))
-    # COMPLETED is a release claim, so reconcile it against the independent
-    # Reality Kernel before exposing that state to the creator UI.
+    # COMPLETED is a release claim, but project-status polling is a hot path.
+    # Never run an expensive filesystem/hash/ffprobe reconciliation from this
+    # GET handler: it can race the worker's own finalization, hold shared DB locks,
+    # and make the status endpoint time out exactly when production reaches QC.
+    # Use only a fresh finalized proof here. While that proof is absent or stale,
+    # return an explicit non-terminal verification state and keep final delivery
+    # behind the independent truth route.
     if str(p.get("status") or "").lower() == "completed":
         try:
             kernel = __import__("reality_first_3901")
-            proof = kernel.truth_for_project(p["project_id"])
-            refreshed = kernel._studio()._get_project(p["project_id"])
-            if refreshed:
-                p = refreshed
-            proof_state = str(proof.get("state") or "").upper()
-            runtime_state = {
-                "VERIFIED": "COMPLETED",
-                "DEGRADED": "DEGRADED",
-                "DELIVERED_WITH_QC_WARNINGS": "DEGRADED",
-                "FAILED": "FAILED",
-                "BLOCKED": "BLOCKED",
-            }.get(proof_state, "BLOCKED")
+            proof = kernel.cached_truth_for_project(str(p["project_id"]))
         except Exception:
-            runtime_state = "BLOCKED"
+            proof = None
+
+        if proof is None:
+            p = dict(p)
+            p["status"] = "producing"
+            p["stage"] = "quality_control"
+            p["progress"] = max(94.0, min(99.0, float(p.get("progress") or 94.0)))
+            runtime_state = "RUNNING"
+        else:
+            proof_state = str(proof.get("state") or "").upper()
+            proof_verified = proof.get("verified") is True and proof_state == "VERIFIED"
+            if proof_verified:
+                runtime_state = "COMPLETED"
+            elif proof_state in {"DEGRADED", "DELIVERED_WITH_QC_WARNINGS"}:
+                p = dict(p)
+                p["status"] = "completed_with_qc_warnings"
+                p["error"] = str(proof.get("error") or "Independent verification did not pass; review is required.")[:1200]
+                runtime_state = "DEGRADED"
+            elif proof_state in {"FAILED", "BLOCKED", "UNKNOWN"}:
+                p = dict(p)
+                p["status"] = "failed"
+                p["error"] = str(proof.get("error") or "Independent verification failed; final delivery remains blocked.")[:1200]
+                runtime_state = "FAILED" if proof_state == "FAILED" else "BLOCKED"
+            else:
+                p = dict(p)
+                p["status"] = "producing"
+                p["stage"] = "quality_control"
+                p["progress"] = max(94.0, min(99.0, float(p.get("progress") or 94.0)))
+                runtime_state = "RUNNING"
     out = {"project_id": p["project_id"], "title": p.get("title"), "status": p.get("status"),
            "state": runtime_state, "runtime_state": runtime_state,
            "stage": p.get("stage") or p.get("status"),
