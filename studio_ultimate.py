@@ -3838,6 +3838,10 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
                     f"{getter.__name__}:temporarily-skipped-after-provider-failure:{cooldown_reason}"
                 )
                 break
+            # Drop stale diagnostics before each real call. Otherwise an old
+            # timeout can incorrectly open a new cooldown after a later successful
+            # provider response that simply returned no relevant results.
+            MEDIA_DEBUG_ERRORS.pop(debug_key, None)
             try:
                 items=getter(q,outdir,limit=_scene_asset_search_limit(index,getter.__name__))
             except Exception as exc:
