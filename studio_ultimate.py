@@ -2348,9 +2348,10 @@ def _visual_candidate_relevant(candidate: Dict[str, Any], search_subject: str, f
     if is_earth_from_space:
         # An ordinary long description often mentions Earth/space in passing
         # (for example, an article about Spacelab, a galaxy or an earthquake).
-        # For this topic, the item's identity fields must themselves describe
-        # Earth viewed from space/orbit or a satellite Earth-observation image.
-        identity_fields = ("title", "alt", "caption", "tags", "category", "fields_matched", "keywords")
+        # For this topic, the item's title/alt/caption must themselves describe
+        # Earth viewed from space/orbit. Keywords alone cannot rescue an unrelated
+        # record such as Spacelab that merely mentions Earth in its description.
+        identity_fields = ("title", "alt", "caption", "category", "fields_matched")
         identity_parts = []
         for field in identity_fields:
             value = candidate.get(field)
@@ -3594,6 +3595,38 @@ _MEDIA_PROVIDER_COOLDOWN_LOCK = threading.RLock()
 _MEDIA_PROVIDER_COOLDOWNS: Dict[str, Dict[str, Any]] = {}
 
 
+def _scene_is_explicitly_promotional(scene: Dict[str, Any]) -> bool:
+    values = []
+    for key in ("title", "topic", "objective", "command", "brief", "heading", "visual_query", "image_prompt"):
+        value = scene.get(key)
+        if value:
+            values.append(str(value))
+    text = " ".join(values).lower()
+    return bool(re.search(
+        r"\b(?:advertisement|advertising|promotional|promotion|marketing campaign|sales campaign|"
+        r"commercial campaign|product launch|brand launch|launch film|launch video|brand film|"
+        r"brand awareness|sponsored content|commercial)\b",
+        text,
+    ))
+
+
+def _apply_nasa_scene_usage_policy(candidate: Dict[str, Any], scene: Dict[str, Any]) -> Dict[str, Any]:
+    """Require additional review where NASA imagery would appear in explicit promotion."""
+    row = dict(candidate)
+    if (
+        str(row.get("source") or "").strip().lower() == "nasa image and video library"
+        and _scene_is_explicitly_promotional(scene)
+        and row.get("commercial_use_state") == "commercial_use_allowed_under_provider_terms"
+    ):
+        row["rights_status"] = "REVIEW_REQUIRED"
+        row["commercial_use_state"] = "UNKNOWN_REVIEW_REQUIRED"
+        row["rights_status_reason"] = (
+            "NASA media-use guidelines distinguish editorial use from promotional/advertising use; "
+            "obtain source-specific clearance and confirm the material does not imply NASA endorsement."
+        )
+    return row
+
+
 def _media_provider_debug_key(getter_name: str) -> str:
     return {
         "_nasa_images": "nasa",
@@ -3750,7 +3783,7 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         selected_candidate["path"]=str(selected)
         selected_candidate["source_file"]=str(path)
         selected_candidate["asset_sha256"]=digest
-        return selected_candidate
+        return _apply_nasa_scene_usage_policy(selected_candidate, scene)
 
     # For the known AI Infinity product-launch brief, try a shot-specific real
     # motion clip before generic image search. Previously a loosely matching
