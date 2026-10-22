@@ -105,6 +105,46 @@ def test_explicit_b2_artifact_signing_region_remains_authoritative(monkeypatch, 
     assert cfg["region"] == "eu-central-003", cfg
 
 
+def test_s3_storage_client_has_bounded_connect_read_and_retry_settings(monkeypatch, tmp_path: Path):
+    storage, _ = _load_storage_fabric(tmp_path, monkeypatch)
+    captured = {}
+
+    class FakeConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeBoto3:
+        @staticmethod
+        def client(service, **kwargs):
+            captured["service"] = service
+            captured.update(kwargs)
+            return object()
+
+    monkeypatch.setattr(storage, "BotoConfig", FakeConfig)
+    monkeypatch.setattr(storage, "boto3", FakeBoto3)
+    monkeypatch.setenv("AI_INFINITY_STORAGE_CONNECT_TIMEOUT", "6")
+    monkeypatch.setenv("AI_INFINITY_STORAGE_READ_TIMEOUT", "17")
+    monkeypatch.setenv("AI_INFINITY_STORAGE_MAX_ATTEMPTS", "2")
+
+    storage["_client"](storage["_config"]("backblaze_b2"))
+
+    cfg = captured["config"].kwargs
+    assert captured["service"] == "s3"
+    assert cfg["connect_timeout"] == 6
+    assert cfg["read_timeout"] == 17
+    assert cfg["retries"] == {"max_attempts": 2, "mode": "standard"}
+
+
+def test_s3_storage_timeout_settings_are_clamped(monkeypatch, tmp_path: Path):
+    storage, _ = _load_storage_fabric(tmp_path, monkeypatch)
+    monkeypatch.setenv("AI_INFINITY_STORAGE_CONNECT_TIMEOUT", "999")
+    monkeypatch.setenv("AI_INFINITY_STORAGE_READ_TIMEOUT", "0")
+    monkeypatch.setenv("AI_INFINITY_STORAGE_MAX_ATTEMPTS", "99")
+
+    assert storage["_storage_http_timeouts"]() == (30, 5)
+    assert storage["_bounded_storage_int"]("AI_INFINITY_STORAGE_MAX_ATTEMPTS", 2, 1, 4) == 4
+
+
 def test_artifact_is_verified_only_after_actual_bytes_are_read_back(monkeypatch, tmp_path: Path):
     storage, objects = _load_storage_fabric(tmp_path, monkeypatch)
     source = tmp_path / "final.mp4"
