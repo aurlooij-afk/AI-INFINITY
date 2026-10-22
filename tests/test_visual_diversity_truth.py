@@ -928,7 +928,7 @@ def test_nasa_adapter_exports_asset_level_policy_url_and_rights_state(monkeypatc
     monkeypatch.setattr(studio, "download", fake_download)
     rows = studio._nasa_images("Earth from space", tmp_path, limit=1)
 
-    assert len(rows) == 1
+    assert len(rows) == 1, {"media_debug_errors": dict(studio.MEDIA_DEBUG_ERRORS), "outdir_files": sorted(x.name for x in tmp_path.iterdir())}
     row = rows[0]
     assert row["source_url"] == "https://images-assets.nasa.gov/image/earth-001/collection.json"
     assert row["license_url"] == "https://www.nasa.gov/nasa-brand-center/images-and-media/"
