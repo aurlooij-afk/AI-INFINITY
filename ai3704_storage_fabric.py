@@ -10,6 +10,7 @@ import tempfile
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlsplit
@@ -46,6 +47,42 @@ REPLICAS = [x.strip().lower() for x in os.getenv(
 ).split(",") if x.strip()]
 PROVIDERS = ["cloudflare_r2", "oracle_object_storage", "backblaze_b2", "tigris", "supabase"]
 S3_PROVIDERS = {"cloudflare_r2", "oracle_object_storage", "backblaze_b2", "tigris"}
+
+# A failed shared storage credential/endpoint must not stall every artifact in the
+# same production. Open a short, truthful circuit after a failed transfer/read-back,
+# record failed replicas for later assets, and let subsequent requests retry after
+# the cooldown. This never changes a failed upload to a successful/durable status.
+_PROVIDER_CIRCUIT_LOCK = threading.RLock()
+_PROVIDER_CIRCUITS: Dict[str, Dict[str, Any]] = {}
+
+
+def _provider_failure_cooldown_seconds() -> int:
+    return _bounded_storage_int("AI_INFINITY_STORAGE_FAILURE_COOLDOWN_SECONDS", 300, 30, 900)
+
+
+def _provider_circuit_open(provider: str) -> Optional[str]:
+    now = time.monotonic()
+    with _PROVIDER_CIRCUIT_LOCK:
+        item = _PROVIDER_CIRCUITS.get(provider)
+        if not item:
+            return None
+        if now >= float(item.get("until_monotonic") or 0):
+            _PROVIDER_CIRCUITS.pop(provider, None)
+            return None
+        return str(item.get("reason") or "previous storage operation failed")[:240]
+
+
+def _trip_provider_circuit(provider: str, reason: str) -> None:
+    with _PROVIDER_CIRCUIT_LOCK:
+        _PROVIDER_CIRCUITS[provider] = {
+            "until_monotonic": time.monotonic() + _provider_failure_cooldown_seconds(),
+            "reason": str(reason or "storage verification failed")[:240],
+        }
+
+
+def _clear_provider_circuit(provider: str) -> None:
+    with _PROVIDER_CIRCUIT_LOCK:
+        _PROVIDER_CIRCUITS.pop(provider, None)
 
 def _j(x: Any) -> str:
     return json.dumps(x, ensure_ascii=False, separators=(",", ":"), default=str)
@@ -480,35 +517,63 @@ def _persist_path(path: Path, user_id: str, filename: str, content_type: str,
     metadata.update({"filename": filename, "source": "ai-infinity", "provider_count": len(configured)})
 
     results: Dict[str, Dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=min(5, len(order)), thread_name_prefix="ai-storage") as pool:
-        future_map = {
-            pool.submit(_put_provider, provider, key, path, content_type, digest): provider
-            for provider in order
-        }
-        for fut in as_completed(future_map):
-            provider = future_map[fut]
-            uploaded = False
-            try:
-                out = fut.result()
-                uploaded = True
-                verification = _verify_provider_content(provider, key, size, digest)
-                verified = bool(verification.get("readback_verified"))
-                results[provider] = {
-                    "status": "verified" if verified else "uploaded_unverified",
-                    **out,
-                    "verification": verification,
-                    "readback_verified": verified,
-                }
-                if not verified:
-                    results[provider]["error"] = str(
-                        verification.get("error") or "actual object read-back did not match"
-                    )[:800]
-            except Exception as exc:
-                results[provider] = {
-                    "status": "uploaded_unverified" if uploaded else "failed",
-                    "readback_verified": False,
-                    "error": f"{type(exc).__name__}: {str(exc)[:800]}",
-                }
+    attempted_order = []
+    for provider in order:
+        circuit_reason = _provider_circuit_open(provider)
+        if circuit_reason:
+            results[provider] = {
+                "status": "failed",
+                "readback_verified": False,
+                "circuit_open": True,
+                "error": (
+                    "Storage provider temporarily skipped after a previous failed "
+                    f"upload/read-back: {circuit_reason}"
+                )[:800],
+            }
+        else:
+            attempted_order.append(provider)
+
+    # Do not re-hit a known failing provider for every file in the same package.
+    # Every skipped replica is still persisted as failed, never as durable.
+    if attempted_order:
+        with ThreadPoolExecutor(
+            max_workers=min(5, len(attempted_order)),
+            thread_name_prefix="ai-storage",
+        ) as pool:
+            future_map = {
+                pool.submit(_put_provider, provider, key, path, content_type, digest): provider
+                for provider in attempted_order
+            }
+            for fut in as_completed(future_map):
+                provider = future_map[fut]
+                uploaded = False
+                try:
+                    out = fut.result()
+                    uploaded = True
+                    verification = _verify_provider_content(provider, key, size, digest)
+                    verified = bool(verification.get("readback_verified"))
+                    results[provider] = {
+                        "status": "verified" if verified else "uploaded_unverified",
+                        **out,
+                        "verification": verification,
+                        "readback_verified": verified,
+                    }
+                    if verified:
+                        _clear_provider_circuit(provider)
+                    else:
+                        error = str(
+                            verification.get("error") or "actual object read-back did not match"
+                        )[:800]
+                        results[provider]["error"] = error
+                        _trip_provider_circuit(provider, error)
+                except Exception as exc:
+                    reason = f"{type(exc).__name__}: {str(exc)[:500]}"
+                    results[provider] = {
+                        "status": "uploaded_unverified" if uploaded else "failed",
+                        "readback_verified": False,
+                        "error": reason[:800],
+                    }
+                    _trip_provider_circuit(provider, reason)
 
     status = _durability_status(results, configured)
     _record_asset(asset_id, user_id, key, filename, content_type, size, digest, primary, status, metadata)
