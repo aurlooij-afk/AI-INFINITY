@@ -3601,6 +3601,15 @@ def _scene_is_explicitly_promotional(scene: Dict[str, Any]) -> bool:
         value = scene.get(key)
         if value:
             values.append(str(value))
+    # Whole-project intent is passed explicitly to acquisition. Scene headings
+    # frequently omit the brand/campaign purpose, so scene-only matching would
+    # miss commercial launch work and silently reuse editorial-only clearance.
+    context = scene.get("_production_context")
+    if isinstance(context, dict):
+        for key in ("title", "objective", "command", "brief", "content_type", "format", "brand", "campaign"):
+            value = context.get(key)
+            if value:
+                values.append(str(value))
     text = " ".join(values).lower()
     return bool(re.search(
         r"\b(?:advertisement|advertising|promotional|promotion|marketing campaign|sales campaign|"
@@ -6182,10 +6191,19 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             ch["actual_duration"] = scene_duration
             actual_total += scene_duration
             try:
-                scene_for_acquisition = ch
+                scene_for_acquisition = dict(ch)
+                scene_for_acquisition["_production_context"] = {
+                    "title": str(plan.get("title") or req.get("title") or ""),
+                    "objective": str(req.get("objective") or ""),
+                    "command": str(req.get("command") or ""),
+                    "brief": str(req.get("brief") or req.get("topic") or ""),
+                    "content_type": str(req.get("content_type") or ""),
+                    "format": str(req.get("format") or ""),
+                    "brand": str(req.get("brand") or ""),
+                    "campaign": str(req.get("campaign") or ""),
+                }
                 fixture_id = str(req.get("_acceptance_fixture_id") or "")
                 if fixture_id == "cc0-recovery-illustration-v1":
-                    scene_for_acquisition = dict(ch)
                     scene_for_acquisition["_acceptance_fixture_id"] = fixture_id
                 asset = acquire_scene_asset(scene_for_acquisition, outdir, i, prefer_motion=(i <= max_ai_video_scenes), duration=scene_duration)
             except Exception as asset_exc:
