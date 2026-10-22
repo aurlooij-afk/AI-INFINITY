@@ -864,6 +864,26 @@ def test_nasa_item_rights_are_attributed_and_exceptions_remain_review_required()
     assert people["commercial_use_state"] == "UNKNOWN_REVIEW_REQUIRED"
     assert people["rights_status"] == "REVIEW_REQUIRED"
 
+    # Third-party creator attribution must be screened even when the description
+    # omits the literal word "credit".
+    third_party_creator = studio._nasa_rights_evidence({
+        "title": "Earth imagery from orbit",
+        "description": "The Earth and nearby stars viewed from space.",
+        "creator": "ESA/Hubble & NASA",
+    })
+    assert third_party_creator["commercial_use_state"] == "UNKNOWN_REVIEW_REQUIRED"
+    assert third_party_creator["rights_status"] == "REVIEW_REQUIRED"
+    assert "third-party creator" in third_party_creator["rights_status_reason"].lower()
+
+    explicit_rights_field = studio._nasa_rights_evidence({
+        "title": "Earth from orbit",
+        "description": "Earth viewed from the International Space Station.",
+        "creator": "NASA",
+        "copyright_status": "third-party copyright; permission required",
+    })
+    assert explicit_rights_field["commercial_use_state"] == "UNKNOWN_REVIEW_REQUIRED"
+    assert explicit_rights_field["rights_status"] == "REVIEW_REQUIRED"
+
 
 def test_full_production_context_keeps_brand_launch_nasa_use_review_required():
     assert studio._scene_is_explicitly_promotional({
