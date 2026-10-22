@@ -2254,7 +2254,6 @@ def _visual_search_query_variants(search_subject: str, focus: str, topic: str, r
     subject_terms = terms(search_subject)
     topic_terms = terms(topic)
     raw_terms = terms(raw_query)
-    primary = focus_terms or subject_terms or topic_terms or raw_terms
     variants: List[str] = []
 
     def add(value: str) -> None:
@@ -2262,6 +2261,23 @@ def _visual_search_query_variants(search_subject: str, focus: str, topic: str, r
         if query and query.lower() not in {x.lower() for x in variants}:
             variants.append(query)
 
+    # Broad, generated focus phrases such as "the clearest subject that
+    # communicates the idea" previously outranked the actual topic. On the
+    # Earth-from-space workflow this produced queries like "clearest earth"
+    # and returned unrelated galaxy/astronaut/earthquake material. Search the
+    # user's subject with stable photographic language first.
+    intent_subject = (str(search_subject or "") + " " + str(topic or "")).lower()
+    is_earth_from_space = bool(
+        re.search(r"\bearth\b", intent_subject)
+        and re.search(r"\b(?:space|orbit|orbital|satellite|astronaut|earth observation|blue marble)\b", intent_subject)
+    )
+    if is_earth_from_space:
+        add("Earth from space")
+        add("Earth globe seen from orbit satellite image")
+        add("Blue Marble Earth satellite view")
+        return variants[:3]
+
+    primary = focus_terms or subject_terms or topic_terms or raw_terms
     add(" ".join(primary[:7]))
 
     combined_focus = (str(focus or "") + " " + str(search_subject or "")).lower()
@@ -2323,6 +2339,38 @@ def _visual_candidate_relevant(candidate: Dict[str, Any], search_subject: str, f
     """
     if not isinstance(candidate, dict):
         return False
+
+    subject_text = str(search_subject or "").lower()
+    is_earth_from_space = bool(
+        re.search(r"\bearth\b", subject_text)
+        and re.search(r"\b(?:space|orbit|orbital|satellite|astronaut|earth observation|blue marble)\b", subject_text)
+    )
+    if is_earth_from_space:
+        # An ordinary long description often mentions Earth/space in passing
+        # (for example, an article about Spacelab, a galaxy or an earthquake).
+        # For this topic, the item's identity fields must themselves describe
+        # Earth viewed from space/orbit or a satellite Earth-observation image.
+        identity_fields = ("title", "alt", "caption", "tags", "category", "fields_matched", "keywords")
+        identity_parts = []
+        for field in identity_fields:
+            value = candidate.get(field)
+            if isinstance(value, list):
+                identity_parts.extend(
+                    str(item.get("name") or item.get("title") or "")
+                    if isinstance(item, dict) else str(item)
+                    for item in value
+                )
+            elif value:
+                identity_parts.append(str(value))
+        identity = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", " ".join(identity_parts))).lower()
+        earth_signal = bool(re.search(r"\b(?:earth|planet|globe|blue marble|earthrise)\b", identity))
+        space_view_signal = bool(re.search(
+            r"\b(?:space|orbit|orbital|satellite|astronaut|iss|space station|earth observation|"
+            r"earth from space|from orbit|blue marble|earthrise)\b",
+            identity,
+        ))
+        return earth_signal and space_view_signal
+
     fields = ("title", "description", "alt", "caption", "tags", "category", "fields_matched")
     pieces = []
     for field in fields:
@@ -3542,6 +3590,65 @@ def _parse_scene_visual_intent(
     return topic, focus
 
 
+_MEDIA_PROVIDER_COOLDOWN_LOCK = threading.RLock()
+_MEDIA_PROVIDER_COOLDOWNS: Dict[str, Dict[str, Any]] = {}
+
+
+def _media_provider_debug_key(getter_name: str) -> str:
+    return {
+        "_nasa_images": "nasa",
+        "_openverse_images": "openverse",
+        "_commons_media": "wikimedia",
+        "_pexels": "pexels",
+        "_pixabay": "pixabay",
+        "_pexels_photos": "pexels-photos",
+        "_pixabay_images": "pixabay-images",
+        "_loc_images": "loc-images",
+    }.get(getter_name, getter_name)
+
+
+def _media_provider_failure_is_circuit_worthy(reason: Any) -> bool:
+    value = str(reason or "").lower()
+    return bool(re.search(
+        r"timeout|timed out|connection|unreachable|rate.?limit|too many requests|"
+        r"\b(?:401|403|429|502|503|504)\b|forbidden|unauthorized|not configured|"
+        r"missing.{0,30}(?:key|token)|temporarily unavailable|ssl error|certificate verify",
+        value,
+    ))
+
+
+def _media_provider_cooldown_seconds() -> int:
+    try:
+        value = int(os.getenv("AI_INFINITY_MEDIA_FAILURE_COOLDOWN_SECONDS", "180").strip())
+    except (TypeError, ValueError):
+        value = 180
+    return max(30, min(900, value))
+
+
+def _media_provider_cooldown_reason(getter_name: str) -> Optional[str]:
+    now = time.monotonic()
+    with _MEDIA_PROVIDER_COOLDOWN_LOCK:
+        entry = _MEDIA_PROVIDER_COOLDOWNS.get(getter_name)
+        if not entry:
+            return None
+        if now >= float(entry.get("until_monotonic") or 0):
+            _MEDIA_PROVIDER_COOLDOWNS.pop(getter_name, None)
+            return None
+        return str(entry.get("reason") or "a previous provider request failed")[:220]
+
+
+def _trip_media_provider_cooldown(getter_name: str, reason: Any) -> bool:
+    message = str(reason or "provider request failed")[:220]
+    if not _media_provider_failure_is_circuit_worthy(message):
+        return False
+    with _MEDIA_PROVIDER_COOLDOWN_LOCK:
+        _MEDIA_PROVIDER_COOLDOWNS[getter_name] = {
+            "until_monotonic": time.monotonic() + _media_provider_cooldown_seconds(),
+            "reason": message,
+        }
+    return True
+
+
 def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_motion: bool = False, duration: float = 6.0) -> Dict[str, Any]:
     # Test fixture short-circuits external acquisition only when explicitly allow-listed by CI.
     ci_fixture = _ci_test_visual(scene, outdir, index)
@@ -3672,16 +3779,38 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         source_failures.append("_pexels-curated-launch-video:" + type(exc).__name__ + ":" + str(exc)[:160])
 
     for getter in getters:
-        # First query is the exact scene brief; the second is the concept synonym.
-        # Only the final raw-to-finished scene gets a third targeted query; ordinary
-        # scenes remain at two calls per provider to reduce avoidable HTTP 429 bursts.
+        debug_key = _media_provider_debug_key(getter.__name__)
+        cooldown_reason = _media_provider_cooldown_reason(getter.__name__)
+        if cooldown_reason:
+            source_failures.append(
+                f"{getter.__name__}:temporarily-skipped-after-provider-failure:{cooldown_reason}"
+            )
+            continue
+        # First query is the exact scene brief; the next one(s) are subject-led
+        # synonyms. A transient provider failure opens a bounded cooldown so the
+        # same slow/dead public endpoint is not called again for every scene.
         for q in query_variants:
+            cooldown_reason = _media_provider_cooldown_reason(getter.__name__)
+            if cooldown_reason:
+                source_failures.append(
+                    f"{getter.__name__}:temporarily-skipped-after-provider-failure:{cooldown_reason}"
+                )
+                break
             try:
                 items=getter(q,outdir,limit=_scene_asset_search_limit(index,getter.__name__))
             except Exception as exc:
-                source_failures.append(f"{getter.__name__}:{type(exc).__name__}:{str(exc)[:180]}")
+                reason = f"{type(exc).__name__}: {str(exc)[:180]}"
+                source_failures.append(f"{getter.__name__}:{reason}")
+                _trip_media_provider_cooldown(getter.__name__, reason)
                 continue
             candidates=[x for x in items if x.get("kind") in {"video","image"}]
+            if not candidates:
+                provider_error = MEDIA_DEBUG_ERRORS.get(debug_key, "")
+                if _trip_media_provider_cooldown(getter.__name__, provider_error):
+                    source_failures.append(
+                        f"{getter.__name__}:provider-cooldown-opened:{str(provider_error)[:180]}"
+                    )
+                    break
             # Record what query produced a candidate, without claiming this alone
             # proves visual relevance or licenses.
             for candidate in candidates:
@@ -3701,7 +3830,6 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
                 selected=select_distinct_candidate(candidate)
                 if selected:
                     return selected
-            debug_key={"_nasa_images":"nasa","_openverse_images":"openverse","_commons_media":"wikimedia","_pexels":"pexels","_pixabay":"pixabay","_pexels_photos":"pexels-photos","_pixabay_images":"pixabay-images","_loc_images":"loc-images"}.get(getter.__name__,getter.__name__)
             source_failures.append(f"{getter.__name__}:{MEDIA_DEBUG_ERRORS.get(debug_key,'no-relevant-distinct-asset')}")
 
     # One curated, public-download Pexels image is a keyless fallback for the
