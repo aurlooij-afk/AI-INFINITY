@@ -1081,6 +1081,51 @@ def truth_for_project(project_id: str) -> Dict[str, Any]:
     return reconcile_project(project_id)
 
 
+def cached_truth_for_project(project_id: str) -> Optional[Dict[str, Any]]:
+    """Read the last finalized truth report without rerunning media inspection.
+
+    Project-status polling is a hot path. It must not trigger duplicate FFprobe,
+    SHA, filesystem scans, proof-chain writes, or a second concurrent reconciliation
+    while the production worker is finalizing the same project.
+    A cached report is usable only when it is newer than the current project row;
+    otherwise callers must show a non-terminal verification state and keep delivery
+    gated until the authoritative reconciler publishes a fresh report.
+    """
+    try:
+        s = _studio()
+        project = s._get_project(project_id)
+        if not project:
+            return None
+        _ensure_schema()
+        with _DB_LOCK, s.DB_LOCK, s._connect() as c:
+            row = c.execute(
+                "SELECT state,verified,qc_passed,last_report_json,updated_at "
+                "FROM reality_projects_3901 WHERE project_id=? LIMIT 1",
+                (project_id,),
+            ).fetchone()
+        if not row or not row["last_report_json"]:
+            return None
+        report = json.loads(row["last_report_json"])
+        if not isinstance(report, dict) or str(report.get("project_id") or "") != project_id:
+            return None
+        try:
+            project_updated = float(project.get("updated_at") or 0)
+            truth_updated = float(row["updated_at"] or 0)
+        except (TypeError, ValueError):
+            return None
+        if truth_updated < project_updated:
+            return None
+        if str(report.get("state") or "").upper() != str(row["state"] or "").upper():
+            return None
+        if bool(report.get("verified")) != bool(row["verified"]):
+            return None
+        return report
+    except Exception:
+        # Cache failure is not truth failure or truth success; status callers must
+        # remain non-terminal and must not turn an unreadable cache into VERIFIED.
+        return None
+
+
 def register(app: Any) -> None:
     """Expose independent proof endpoints without replacing the main creator UI."""
     @app.get("/infinity/reality/health")
