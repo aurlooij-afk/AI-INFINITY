@@ -846,15 +846,31 @@ def _research_tokens(value: str) -> set:
 
 
 def _research_source_relevant(topic: str, source: Dict[str, Any]) -> bool:
-    """Reject retrieved results that do not substantively match the research topic."""
+    """Reject results that only mention one word of a short, specific subject."""
     if not isinstance(source, dict):
         return False
     query_terms = _research_tokens(topic)
-    source_text = " ".join(str(source.get(key) or "") for key in ("title", "summary", "description", "abstract"))
+    title_terms = _research_tokens(str(source.get("title") or ""))
+    source_text = " ".join(
+        str(source.get(key) or "")
+        for key in ("title", "summary", "description", "abstract")
+    )
     source_terms = _research_tokens(source_text)
     if not query_terms or not source_terms:
         return False
-    return len(query_terms & source_terms) >= (2 if len(query_terms) >= 3 else 1)
+
+    matched = query_terms & source_terms
+    # For concise subjects such as "Earth from space" or "renewable energy",
+    # matching only "Earth" or "space" admits entire unrelated subject areas.
+    # Require every meaningful subject token and a title that shares at least
+    # one of those terms. A summary alone cannot rescue an unrelated headline.
+    if len(query_terms) <= 2:
+        return len(matched) == len(query_terms) and bool(query_terms & title_terms)
+
+    # Expanded craft queries intentionally span related skills and formats.
+    # Require meaningful overlap while scaling the threshold for longer queries.
+    required = max(2, (len(query_terms) + 3) // 4)
+    return len(matched) >= required
 
 
 
@@ -1579,7 +1595,9 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         "", topic_label, flags=re.I
     ).strip() or topic_label
     stop_terms = {"create","make","generate","produce","build","video","film","short","reel","useful","original","content","high","retention","audience","general","premium","editorial"}
-    topic_terms = {t for t in re.findall(r"[a-z0-9]{4,}", topic_label.lower()) if t not in stop_terms}
+    # Use the research tokenizer so stop words such as "from" cannot count
+    # as topical evidence and singular/plural aliases are handled consistently.
+    topic_terms = _research_tokens(topic_label)
     software_or_web_topic = bool(re.search(
         r"\b(?:python|programming|software|website|web\s+site|coding|developer|web\s+development)\b",
         topic_label, re.I,
@@ -1589,16 +1607,19 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
     for src in (research.get("sources") or []):
         if src.get("error") or not src.get("title"):
             continue
-        blob = " ".join([
-            str(src.get("title") or ""),
-            str(src.get("summary") or ""),
-        ]).lower()
-        source_terms = set(re.findall(r"[a-z0-9]{4,}", blob))
-        overlap = len(topic_terms.intersection(source_terms))
-        if not topic_terms:
-            continue
-        if overlap >= (2 if len(topic_terms) >= 2 else 1):
+        if topic_terms and _research_source_relevant(topic_label, src):
             usable_sources.append(src)
+
+    # Prefer sources whose titles actually name the subject. Otherwise a
+    # coincidental mention in a long abstract can make an unrelated source lead
+    # the script even though a closer source is already available.
+    usable_sources.sort(
+        key=lambda src: (
+            len(topic_terms & _research_tokens(str(src.get("title") or ""))),
+            len(topic_terms & _research_tokens(str(src.get("summary") or ""))),
+        ),
+        reverse=True,
+    )
     if not usable_sources:
         usable_sources = [{"title": clean_title, "summary": "", "url": None}]
 
@@ -1610,39 +1631,50 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
     english_target = str(language or "English").strip().lower() in {"english", "en", "en-us", "en-gb"}
     if english_target:
         seen_research_sentences = set()
+        minimum_topic_overlap = (
+            len(topic_terms) if len(topic_terms) <= 2
+            else max(2, (len(topic_terms) + 2) // 3)
+        )
         for source_record in usable_sources:
             summary = re.sub(r"\s+", " ", str(source_record.get("summary") or "")).strip()
+            title = re.sub(r"\s+", " ", str(source_record.get("title") or "")).strip()
             if not summary:
                 continue
+            normalize_headline = lambda value: re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+            normalized_title = normalize_headline(title)
+            normalized_summary = normalize_headline(summary)
+            # Search RSS and some open datasets return a headline as both the
+            # title and "summary". Do not read a headline fragment as narration.
+            if normalized_title and (
+                normalized_summary == normalized_title
+                or (
+                    normalized_summary.startswith(normalized_title)
+                    and len(normalized_summary.split()) <= len(normalized_title.split()) + 3
+                )
+            ):
+                continue
+
             sentences = [
                 re.sub(r"\s+", " ", part).strip()
                 for part in re.findall(r"[^.!?]+(?:[.!?]+|$)", summary)
                 if part.strip()
             ]
-            source_added = False
             for sentence in sentences:
+                # A source point must be a complete sentence and must support the
+                # subject, not merely share a generic word with it.
+                if not re.search(r"[.!?…]$", sentence):
+                    continue
                 sentence_words = re.findall(r"\b[\w'-]+\b", sentence)
                 if not 7 <= len(sentence_words) <= 36:
                     continue
-                sentence_terms = {word.casefold() for word in sentence_words if len(word) >= 4}
-                if topic_terms and not topic_terms.intersection(sentence_terms):
+                sentence_terms = _research_tokens(sentence)
+                if topic_terms and len(topic_terms & sentence_terms) < minimum_topic_overlap:
                     continue
                 normalized_sentence = " ".join(sentence.casefold().split())
                 if normalized_sentence in seen_research_sentences:
                     continue
                 seen_research_sentences.add(normalized_sentence)
                 research_narration_sources.append({**source_record, "narration_point": sentence})
-                source_added = True
-            # A source can be relevant overall even when its first summary sentence
-            # uses a pronoun instead of repeating the topic word. Keep one concise
-            # sentence from that already topic-filtered source rather than discard it.
-            if not source_added and sentences:
-                sentence = sentences[0]
-                sentence_words = re.findall(r"\b[\w'-]+\b", sentence)
-                normalized_sentence = " ".join(sentence.casefold().split())
-                if 7 <= len(sentence_words) <= 30 and normalized_sentence not in seen_research_sentences:
-                    seen_research_sentences.add(normalized_sentence)
-                    research_narration_sources.append({**source_record, "narration_point": sentence})
 
     brief_for_visuals = f"{raw_title} {clean_objective}"
     # Distinguish a project about the Creator Operating System from an explicit
