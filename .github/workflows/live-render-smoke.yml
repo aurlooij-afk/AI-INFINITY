@@ -93,24 +93,18 @@ jobs:
           raise SystemExit(f"live Render verification failed or never stabilized: {last}")
           PY
 
-      - name: Verify or install FFmpeg and FFprobe
-        shell: bash
+      - name: Set up pinned static FFmpeg and FFprobe
+        uses: FedericoCarboni/setup-ffmpeg@37062fbf7149fc5578d6c57e08aed62458b375d6
+        with:
+          ffmpeg-version: "7.1.1"
+          linking-type: static
+      - name: Verify FFmpeg and FFprobe
         run: |
           set -euo pipefail
-          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
-            ffmpeg -version | head -n 1
-            ffprobe -version | head -n 1
-            exit 0
-          fi
-          apt_opts=(-o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
-          if ! sudo env DEBIAN_FRONTEND=noninteractive timeout 240s apt-get "${apt_opts[@]}" install -y --no-install-recommends ffmpeg; then
-            sudo timeout 180s apt-get "${apt_opts[@]}" update
-            sudo env DEBIAN_FRONTEND=noninteractive timeout 240s apt-get "${apt_opts[@]}" install -y --no-install-recommends ffmpeg
-          fi
           command -v ffmpeg
           command -v ffprobe
-
-
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
       - name: Run a real deployed creator production
         env:
           BASE_URL: https://ai-infinity-ca5e.onrender.com
@@ -218,55 +212,61 @@ jobs:
                   if missing_package:
                       raise SystemExit(f"package.zip missing entries: {missing_package}")
 
-                  # A complete creative artifact is not a durable production release
-                  # until the running instance proves its project-state recovery point.
-                  # Check the real deployed /health payload after the job has finished;
-                  # local CI mocks and artifact-storage flags are not substitutes.
-                  try:
-                      with urllib.request.urlopen(base + "/health", timeout=30) as health_response:
-                          health = json.loads(health_response.read().decode("utf-8"))
-                  except Exception as exc:
+                  # Snapshot verification is asynchronous by design: project
+                  # completion can race the final SQLite checkpoint to object
+                  # storage. Poll the real health endpoint until the current
+                  # snapshot is PUT/HEAD/GET/SHA-verified; never accept a stale
+                  # or merely configured backend.
+                  durability_deadline = time.time() + 60
+                  durable_evidence = {}
+                  last_health_error = None
+                  while time.time() < durability_deadline:
+                      try:
+                          with urllib.request.urlopen(base + "/health", timeout=20) as health_response:
+                              health = json.loads(health_response.read().decode("utf-8"))
+                          capabilities = health.get("capabilities") if isinstance(health, dict) else {}
+                          storage_state = capabilities.get("storage") if isinstance(capabilities, dict) else {}
+                          storage_state = storage_state if isinstance(storage_state, dict) else {}
+                          backend_state = storage_state.get("project_state_backend_status")
+                          backend_state = backend_state if isinstance(backend_state, dict) else {}
+                          durable_evidence = {
+                              "persistent": storage_state.get("persistent") is True,
+                              "mode": storage_state.get("mode"),
+                              "reason": storage_state.get("reason"),
+                              "backend": backend_state.get("backend"),
+                              "configured": backend_state.get("configured") is True,
+                              "active": backend_state.get("active") is True,
+                              "verified": backend_state.get("verified") is True,
+                              "snapshot_verified": backend_state.get("snapshot_verified") is True,
+                              "last_sync_present": bool(backend_state.get("last_sync_at")),
+                              "sha256_present": bool(backend_state.get("last_sha256")),
+                              "last_error_kind": str(backend_state.get("last_error") or "").split(":", 1)[0] or None,
+                          }
+                          print("LIVE_PROJECT_STATE_DURABILITY_ATTEMPT", json.dumps(durable_evidence, sort_keys=True), flush=True)
+                          if durable_evidence["persistent"] is True:
+                              if durable_evidence["reason"] == "verified_durable_state_backend":
+                                  required_state = (
+                                      "configured", "active", "verified", "snapshot_verified",
+                                      "last_sync_present", "sha256_present",
+                                  )
+                                  missing_state = [key for key in required_state if not durable_evidence[key]]
+                                  if not missing_state:
+                                      break
+                              elif durable_evidence["reason"] == "actual_persistent_mount_confirmed":
+                                  break
+                      except Exception as exc:
+                          last_health_error = type(exc).__name__ + ": " + str(exc)[:300]
+                          print("LIVE_PROJECT_STATE_HEALTH_RETRY", last_health_error, flush=True)
+                      time.sleep(2)
+                  else:
                       raise SystemExit(
-                          "durable project-state verification could not read live /health: "
-                          + type(exc).__name__ + ": " + str(exc)[:600]
+                          "live project-state persistence did not become verified within 60s: "
+                          + json.dumps(durable_evidence, sort_keys=True)
+                          + ("; last_health_error=" + last_health_error if last_health_error else "")
                       )
-                  capabilities = health.get("capabilities") if isinstance(health, dict) else {}
-                  storage_state = capabilities.get("storage") if isinstance(capabilities, dict) else {}
-                  storage_state = storage_state if isinstance(storage_state, dict) else {}
-                  backend_state = storage_state.get("project_state_backend_status")
-                  backend_state = backend_state if isinstance(backend_state, dict) else {}
-                  durable_evidence = {
-                      "persistent": storage_state.get("persistent") is True,
-                      "mode": storage_state.get("mode"),
-                      "reason": storage_state.get("reason"),
-                      "backend": backend_state.get("backend"),
-                      "configured": backend_state.get("configured") is True,
-                      "active": backend_state.get("active") is True,
-                      "verified": backend_state.get("verified") is True,
-                      "snapshot_verified": backend_state.get("snapshot_verified") is True,
-                      "last_sync_present": bool(backend_state.get("last_sync_at")),
-                      "sha256_present": bool(backend_state.get("last_sha256")),
-                      "last_error_kind": str(backend_state.get("last_error") or "").split(":", 1)[0] or None,
-                  }
-                  print("LIVE_PROJECT_STATE_DURABILITY", json.dumps(durable_evidence, sort_keys=True))
-                  if durable_evidence["reason"] == "verified_durable_state_backend":
-                      required_state = (
-                          "configured", "active", "verified", "snapshot_verified",
-                          "last_sync_present", "sha256_present",
-                      )
-                      missing_state = [key for key in required_state if not durable_evidence[key]]
-                      if missing_state:
-                          raise SystemExit(
-                              "project-state backend claims verified durability but lacks: "
-                              + ", ".join(missing_state)
-                          )
-                  elif durable_evidence["reason"] != "actual_persistent_mount_confirmed":
-                      raise SystemExit(
-                          "live project state is not durably recoverable: "
-                          + str(durable_evidence["reason"] or "no verified backend/mount evidence")
-                      )
-                  if durable_evidence["persistent"] is not True:
+                  if durable_evidence.get("persistent") is not True:
                       raise SystemExit("live project-state persistence truth is not persistent")
+
 
                   print("LIVE_ARTIFACT_SET",json.dumps(required))
                   print("LIVE_FFPROBE_OK",json.dumps({"streams":len(streams),"duration":media.get("format",{}).get("duration")}))
