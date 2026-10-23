@@ -96,7 +96,7 @@ jobs:
       - name: Set up pinned static FFmpeg and FFprobe
         uses: FedericoCarboni/setup-ffmpeg@37062fbf7149fc5578d6c57e08aed62458b375d6
         with:
-          ffmpeg-version: "7.1.1"
+          ffmpeg-version: "release"
           linking-type: static
       - name: Verify FFmpeg and FFprobe
         run: |
