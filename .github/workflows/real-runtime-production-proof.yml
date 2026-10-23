@@ -31,22 +31,17 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - name: Verify or install FFmpeg and FFprobe
-        shell: bash
+      - name: Set up pinned static FFmpeg and FFprobe
+        uses: AnimMouse/setup-ffmpeg@178e0b4a408f06ce40d896c3cd79f50fa6f8b0c3
+        with:
+          version: release
+      - name: Verify FFmpeg and FFprobe
         run: |
           set -euo pipefail
-          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
-            ffmpeg -version | head -n 1
-            ffprobe -version | head -n 1
-            exit 0
-          fi
-          apt_opts=(-o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
-          if ! sudo env DEBIAN_FRONTEND=noninteractive timeout 240s apt-get "${apt_opts[@]}" install -y --no-install-recommends ffmpeg; then
-            sudo timeout 180s apt-get "${apt_opts[@]}" update
-            sudo env DEBIAN_FRONTEND=noninteractive timeout 240s apt-get "${apt_opts[@]}" install -y --no-install-recommends ffmpeg
-          fi
           command -v ffmpeg
           command -v ffprobe
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
 
       - name: Install audio and document tools
         shell: bash
