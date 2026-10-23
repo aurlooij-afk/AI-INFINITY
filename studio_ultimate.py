@@ -1611,17 +1611,17 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
     if english_target:
         seen_research_sentences = set()
         for source_record in usable_sources:
-            summary = re.sub(r"\\s+", " ", str(source_record.get("summary") or "")).strip()
+            summary = re.sub(r"\s+", " ", str(source_record.get("summary") or "")).strip()
             if not summary:
                 continue
             sentences = [
-                re.sub(r"\\s+", " ", part).strip()
+                re.sub(r"\s+", " ", part).strip()
                 for part in re.findall(r"[^.!?]+(?:[.!?]+|$)", summary)
                 if part.strip()
             ]
             source_added = False
             for sentence in sentences:
-                sentence_words = re.findall(r"\\b[\\w'-]+\\b", sentence)
+                sentence_words = re.findall(r"\b[\w'-]+\b", sentence)
                 if not 7 <= len(sentence_words) <= 36:
                     continue
                 sentence_terms = {word.casefold() for word in sentence_words if len(word) >= 4}
@@ -1638,7 +1638,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             # sentence from that already topic-filtered source rather than discard it.
             if not source_added and sentences:
                 sentence = sentences[0]
-                sentence_words = re.findall(r"\\b[\\w'-]+\\b", sentence)
+                sentence_words = re.findall(r"\b[\w'-]+\b", sentence)
                 normalized_sentence = " ".join(sentence.casefold().split())
                 if 7 <= len(sentence_words) <= 30 and normalized_sentence not in seen_research_sentences:
                     seen_research_sentences.add(normalized_sentence)
@@ -2932,7 +2932,7 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
     if Image is None:
         return None
     outdir.mkdir(parents=True, exist_ok=True)
-    raw = re.sub(r"\\s+", " ", str(prompt or "")).strip()
+    raw = re.sub(r"\s+", " ", str(prompt or "")).strip()
     subject_match = re.search(r"\babout\\s+(.+?)(?:;|\\.\\s|$)", raw, re.I)
     subject = subject_match.group(1).strip(" .;,:") if subject_match else raw
     subject = re.split(
@@ -2940,11 +2940,11 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
         subject, maxsplit=1, flags=re.I
     )[0].strip(" .;,:")
     subject = re.sub(r"^(?:premium|original|cinematic|editorial|documentary|image|visuals?)\\s+", "", subject, flags=re.I)
-    subject = re.sub(r"\\s+", " ", subject).strip()[:100] or "Ideas into real creative work"
+    subject = re.sub(r"\s+", " ", subject).strip()[:100] or "Ideas into real creative work"
 
     focus_match = re.search(r"\bvisual focus\\s*:\\s*(.+?)(?:;|\\.\\s|$)", raw, re.I)
     focus = focus_match.group(1).strip(" .;,:") if focus_match else ""
-    focus = re.sub(r"\\s+", " ", focus)[:115]
+    focus = re.sub(r"\s+", " ", focus)[:115]
     seed = int(hashlib.sha256(f"{subject}|{focus}|{index}".encode("utf-8")).hexdigest()[:12], 16)
     variant = (seed ^ (index * 7919)) % 5
 
@@ -6117,7 +6117,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                     dur=6
                 normalized.append({
                     "heading": str(raw.get("heading") or "Scene").strip()[:240],
-                    "narration": re.sub(r"\\s+"," ",str(raw.get("narration") or "")).strip()[:6000],
+                    "narration": re.sub(r"\s+"," ",str(raw.get("narration") or "")).strip()[:6000],
                     "image_prompt": str(raw.get("image_prompt") or raw.get("heading") or "cinematic documentary scene").strip()[:900],
                     "on_screen": str(raw.get("on_screen") or raw.get("heading") or "").strip()[:500],
                     "duration": max(1.0,min(600.0,dur)),
@@ -6142,7 +6142,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 chapter.pop("source_grounding", None)
                 if point_index >= len(uploaded_points):
                     continue
-                source_point = re.sub(r"\\s+", " ", str(uploaded_points[point_index])).strip()
+                source_point = re.sub(r"\s+", " ", str(uploaded_points[point_index])).strip()
                 point_hash = hashlib.sha256(source_point.encode("utf-8")).hexdigest()
                 chapter["narration"] = source_point
                 chapter["source_grounding"] = {
@@ -7419,7 +7419,7 @@ TREND_PLATFORMS_3624 = {
 }
 
 def _trend_intelligence(topic: str, platforms: Optional[List[str]] = None) -> Dict[str, Any]:
-    topic = re.sub(r"\\s+", " ", str(topic or "").strip())[:300]
+    topic = re.sub(r"\s+", " ", str(topic or "").strip())[:300]
     if not topic:
         topic = "AI content creation"
     selected = [p for p in (platforms or []) if p in TREND_PLATFORMS_3624] or list(TREND_PLATFORMS_3624.keys())
