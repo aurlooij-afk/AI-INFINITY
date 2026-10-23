@@ -104,7 +104,7 @@ def test_live_render_heredocs_compile_and_import_sys_before_sys_exit():
     setup_is_pinned = (
         (
             "uses: AnimMouse/setup-ffmpeg@178e0b4a408f06ce40d896c3cd79f50fa6f8b0c3" in workflow
-            and 'version: "7.1"' in workflow
+            and "version: release" in workflow
         )
         or (
             "uses: FedericoCarboni/setup-ffmpeg@37062fbf7149fc5578d6c57e08aed62458b375d6" in workflow
