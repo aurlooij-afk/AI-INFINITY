@@ -1657,7 +1657,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
     if english_target:
         seen_research_sentences = set()
         minimum_topic_overlap = (
-            len(topic_terms) if len(topic_terms) <= 2
+            1 if len(topic_terms) <= 2
             else max(2, (len(topic_terms) + 2) // 3)
         )
         for source_record in usable_sources:
@@ -1916,8 +1916,11 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
 
     chapters = []
     for i, name in enumerate(names):
-        source_pool = research_narration_sources or usable_sources
-        src = source_pool[i % len(source_pool)]
+        # Consume each source-backed narration point at most once. When a topic
+        # only has one or two usable sentences, the remaining scenes use the
+        # deterministic topic-specific fallback copy rather than repeating one
+        # fact across the whole video or attaching an unrelated source as proof.
+        src = research_narration_sources[i] if i < len(research_narration_sources) else {}
         sec = max(4.0, round(duration * ratios[i], 1))
         narration = bounded_narration(name, sec, src, i)
         long_visual_focus = {
@@ -2018,7 +2021,11 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "image_prompt": f"Premium editorial documentary image about {topic_label}; visual focus: {focus}; realistic people, locations, objects or processes, natural cinematic lighting, coherent composition, strong subject separation, no logos, no text, visually distinct from other scenes",
             "on_screen": localized_screen,
             "duration": sec,
-            "proof_needed": [src.get("title")] if src.get("title") and src.get("title") != clean_title else [],
+            "proof_needed": (
+                [src.get("title")]
+                if src.get("narration_point") and src.get("title") and src.get("title") != clean_title
+                else []
+            ),
         })
     localized_hook = _localized_fallback_copy(language, "Hook", clean_title, topic_label)["hook"]
     localized_cta = _localized_fallback_copy(language, "Closing", clean_title, topic_label)["cta"]
