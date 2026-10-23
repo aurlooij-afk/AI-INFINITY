@@ -125,3 +125,78 @@ def test_fallback_creative_plan_uses_topic_filtered_research_for_narration():
     assert len(set(overlays)) == len(overlays)
     assert all(overlay.casefold() not in {"a clear problem", "know the stakes", "one useful principle", "show the process", "test and improve"} for overlay in overlays)
     assert plan["source_context"]["research_narration_points_used"] == 5
+
+def test_earth_from_space_fallback_does_not_read_unrelated_search_hits_as_script():
+    sources = [
+        {
+            "title": "Timeline of first images of Earth from space",
+            "summary": "The first images of Earth from space came from suborbital rockets before later spacecraft photographed the planet from orbit.",
+            "url": "https://example.org/earth-space/timeline",
+        },
+        {
+            "title": "Earth from space photographs reveal cloud systems",
+            "summary": "Images of Earth from space show cloud bands, coastlines and city lights under different lighting conditions.",
+            "url": "https://example.org/earth-space/photographs",
+        },
+        {
+            "title": "Astronaut photographs of Earth from orbit",
+            "summary": "Astronauts photograph Earth from space, revealing cloud systems and coastlines that look different under changing sunlight.",
+            "url": "https://example.org/earth-space/astronauts",
+        },
+        {
+            "title": "Earth observation from orbit",
+            "summary": "Satellites in space photograph Earth repeatedly, helping scientists compare cloud cover and surface changes over time.",
+            "url": "https://example.org/earth-space/observation",
+        },
+        {
+            "title": "Earth's horizon from orbit",
+            "summary": "From orbit, Earth's curved horizon separates the bright atmosphere from the darkness of space.",
+            "url": "https://example.org/earth-space/horizon",
+        },
+        {
+            "title": "Asteroid mining",
+            "summary": "Asteroid mining is the hypothetical extraction of materials from asteroids and near-Earth objects. As of 2024, around 127 grams of asteroid material have been brought to Earth from space.",
+            "url": "https://example.org/asteroid-mining",
+        },
+        {
+            "title": "Earth in culture",
+            "summary": "The cultural perspective on Earth varies across societies and historical periods.",
+            "url": "https://example.org/earth-culture",
+        },
+        {
+            "title": "Earth from Space: The pink city - European Space Agency",
+            "summary": "Earth from Space: The pink city - European Space Agency",
+            "url": "https://example.org/esa/pink-city",
+        },
+    ]
+    plan = studio._fallback_creative_plan(
+        "Earth from space",
+        "Create a 20 second documentary short about Earth from space",
+        "short",
+        20,
+        "general audience",
+        "clear and informative",
+        {"sources": sources},
+        "English",
+        "Earth from space",
+    )
+
+    chapters = plan["chapters"]
+    narration = " ".join(chapter["narration"] for chapter in chapters).lower()
+    overlays = [chapter["on_screen"] for chapter in chapters]
+
+    assert len(chapters) == 5
+    assert "first images of earth from space" in narration
+    assert "cloud bands" in narration
+    assert "asteroid material" not in narration
+    assert "cultural perspective" not in narration
+    assert "pink city" not in narration
+    assert plan["source_context"]["research_narration_points_used"] == 5
+    assert all(len(chapter["narration"].split()) >= 7 for chapter in chapters)
+    assert all(chapter["narration"].rstrip().endswith((".", "!", "?", "…")) for chapter in chapters)
+    assert len(set(overlays)) == len(overlays)
+    assert all(overlay.casefold() not in {
+        "a clear problem", "know the stakes", "one useful principle",
+        "show the process", "test and improve"
+    } for overlay in overlays)
+
