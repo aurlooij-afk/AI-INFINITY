@@ -104,8 +104,11 @@ jobs:
           SH
           chmod +x "$RUNNER_TEMP/mlt-bin/melt"
           echo "$RUNNER_TEMP/mlt-bin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/mlt-bin/melt" -query producers >/tmp/ai-infinity-mlt-producers.txt
-          test -s /tmp/ai-infinity-mlt-producers.txt
+          test -x "$RUNNER_TEMP/mlt-bin/melt"
+          # Do not run an unbounded full plugin-registry query at setup: it hung
+          # for 20 minutes in the previous CI attempt before any tests started.
+          # The real MLT CLI is exercised by test_mlt_and_ffmpeg_render_same_two_scene_reference
+          # with a 120-second subprocess timeout, so media behavior stays verified.
 
       - name: Install runtime Python dependencies
         run: |
