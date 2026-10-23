@@ -196,6 +196,60 @@ def test_explicit_project_state_region_overrides_endpoint_inference(monkeypatch)
     assert cfg["region"] == "eu-central-003", cfg
 
 
+def test_configure_retries_transient_startup_canary_error(monkeypatch, tmp_path: Path):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _b2_env(monkeypatch)
+    calls = []
+    delays = []
+
+    def transient_canary():
+        calls.append(True)
+        if len(calls) == 1:
+            raise RuntimeError("temporary B2 service error")
+        return True
+
+    monkeypatch.setattr(backend, "_verify_roundtrip", transient_canary)
+    monkeypatch.setattr(
+        backend,
+        "restore_on_startup",
+        lambda: {"restored": False, "reason": "local_database_present", "truthful": True},
+    )
+    monkeypatch.setattr(backend.time, "sleep", lambda delay: delays.append(delay))
+
+    result = backend.configure(tmp_path / "state.db")
+
+    assert len(calls) == 2, result
+    assert delays == [1.0]
+    assert result["configured"] is True
+    assert result["active"] is True
+    assert result["verified"] is True
+    assert result["last_error"] is None
+    assert result["snapshot_verified"] is False, "canary verification alone is not a saved snapshot"
+
+
+def test_configure_fails_closed_after_bounded_startup_canary_errors(monkeypatch, tmp_path: Path):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _b2_env(monkeypatch)
+    calls = []
+    delays = []
+
+    def persistent_canary_failure():
+        calls.append(True)
+        raise RuntimeError("B2 permissions or service failure")
+
+    monkeypatch.setattr(backend, "_verify_roundtrip", persistent_canary_failure)
+    monkeypatch.setattr(backend.time, "sleep", lambda delay: delays.append(delay))
+
+    result = backend.configure(tmp_path / "state.db")
+
+    assert len(calls) == backend._MAX_CANARY_VERIFY_ATTEMPTS, result
+    assert delays == [1.0, 2.0]
+    assert result["configured"] is True
+    assert result["active"] is False
+    assert result["verified"] is False
+    assert "B2 permissions or service failure" in str(result["last_error"])
+
+
 def test_configure_reports_verified_startup_restore(monkeypatch, tmp_path: Path):
     backend = importlib.import_module("ai_infinity.project_state_backend")
     _b2_env(monkeypatch)
