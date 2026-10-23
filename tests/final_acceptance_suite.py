@@ -593,22 +593,42 @@ def t8():
     finally:stop(p2,l2)
 def t9(s,b):
     cookie=s.cookies.get("ai_infinity_session");assert cookie
-    labels=("ALPHA","BETA","GAMMA","DELTA")
-    def one(label):
+    # Each concurrent job needs a real, retrievable subject and a public primary
+    # reference. Synthetic labels such as "CONCURRENCY-ALPHA" are useful IDs but
+    # are not research topics; requiring research for those labels made this
+    # acceptance scenario fail correctly at 5% before media production began.
+    # Keep the real research gate strict and exercise concurrency with explicit,
+    # independently retrievable public source pages instead of weakening the gate.
+    briefs=(
+        ("Apollo 11 lunar landing","https://en.wikipedia.org/wiki/Apollo_11","ALPHA"),
+        ("Python programming language","https://en.wikipedia.org/wiki/Python_(programming_language)","BETA"),
+        ("Renewable energy","https://en.wikipedia.org/wiki/Renewable_energy","GAMMA"),
+        ("Coral reef ecosystems","https://en.wikipedia.org/wiki/Coral_reef","DELTA"),
+    )
+    def one(brief):
+        topic,reference_url,label=brief
         q=requests.Session();q.cookies.set("ai_infinity_session",cookie)
-        return create(q,b,f"Create a 20-second cinematic video for CONCURRENCY-{label} with a distinct narrative.",duration=20,format="short",idempotency_key=f"final-acceptance-{label}")
+        command=f"Create a 20-second cinematic video about {topic} with a distinct narrative for concurrency exercise {label}."
+        return create(
+            q,b,command,
+            title=topic,
+            reference_urls=[reference_url],
+            duration=20,
+            format="short",
+            idempotency_key=f"final-acceptance-{label}",
+        )
     started=time.monotonic()
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
-        pids=list(ex.map(one,labels))
+        pids=list(ex.map(one,briefs))
     assert len(set(pids))==4
     # Submit four real projects at once, then observe every independent project
     # through completion. Provider degradation is acceptable only if each
     # unverified final download remains quality-gated.
     p=[waitp(s,b,x,allow_review_required=True) for x in pids]
     elapsed=round(time.monotonic()-started,3)
-    combined=json.dumps(p,ensure_ascii=False)
-    for label in labels:
-        assert "CONCURRENCY-"+label in combined, (label,combined[:4000])
+    combined=json.dumps(p,ensure_ascii=False).casefold()
+    for topic,reference_url,label in briefs:
+        assert topic.casefold() in combined, (topic,combined[:4000])
     titles={str(x.get("title")or"") for x in p}
     assert len(titles)==4, f"concurrent briefs collapsed to duplicate titles: {titles!r}"
     return {
@@ -618,8 +638,9 @@ def t9(s,b):
         "requested_duration_seconds":20,
         "end_to_end_elapsed_seconds":elapsed,
         "individual_titles":sorted(titles),
+        "source_references":{label:reference_url for topic,reference_url,label in briefs},
         "isolated":True,
-        "measured_scope":"four concurrent 20-second project submissions through final status",
+        "measured_scope":"four concurrent 20-second source-backed project submissions through final status",
     }
 def _assert_isolation_project_state(s,b,project_id,state):
     """Accept degraded drafts only while every production-delivery gate stays closed."""
