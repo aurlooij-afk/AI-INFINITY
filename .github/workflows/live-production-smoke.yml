@@ -18,13 +18,18 @@ jobs:
   live-smoke:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - name: Install FFmpeg
+      - name: Set up FFmpeg and FFprobe
+        uses: FedericoCarboni/setup-ffmpeg@37062fbf7149fc5578d6c57e08aed62458b375d6
+        with:
+          ffmpeg-version: release
+          linking-type: static
+
+      - name: Verify FFmpeg and FFprobe
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          set -euo pipefail
           command -v ffmpeg
           command -v ffprobe
       - name: Wait for live deployment
