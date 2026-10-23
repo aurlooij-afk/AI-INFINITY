@@ -1602,6 +1602,48 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
     if not usable_sources:
         usable_sources = [{"title": clean_title, "summary": "", "url": None}]
 
+    # The deterministic planner already filters research records for topic overlap.
+    # Carry concise statements from those records into the actual voice script:
+    # previously the selected source was passed to bounded_narration but ignored,
+    # so the fallback spoke generic advice while merely attaching researched links.
+    research_narration_sources = []
+    english_target = str(language or "English").strip().lower() in {"english", "en", "en-us", "en-gb"}
+    if english_target:
+        seen_research_sentences = set()
+        for source_record in usable_sources:
+            summary = re.sub(r"\\s+", " ", str(source_record.get("summary") or "")).strip()
+            if not summary:
+                continue
+            sentences = [
+                re.sub(r"\\s+", " ", part).strip()
+                for part in re.findall(r"[^.!?]+(?:[.!?]+|$)", summary)
+                if part.strip()
+            ]
+            source_added = False
+            for sentence in sentences:
+                sentence_words = re.findall(r"\\b[\\w'-]+\\b", sentence)
+                if not 7 <= len(sentence_words) <= 36:
+                    continue
+                sentence_terms = {word.casefold() for word in sentence_words if len(word) >= 4}
+                if topic_terms and not topic_terms.intersection(sentence_terms):
+                    continue
+                normalized_sentence = " ".join(sentence.casefold().split())
+                if normalized_sentence in seen_research_sentences:
+                    continue
+                seen_research_sentences.add(normalized_sentence)
+                research_narration_sources.append({**source_record, "narration_point": sentence})
+                source_added = True
+            # A source can be relevant overall even when its first summary sentence
+            # uses a pronoun instead of repeating the topic word. Keep one concise
+            # sentence from that already topic-filtered source rather than discard it.
+            if not source_added and sentences:
+                sentence = sentences[0]
+                sentence_words = re.findall(r"\\b[\\w'-]+\\b", sentence)
+                normalized_sentence = " ".join(sentence.casefold().split())
+                if 7 <= len(sentence_words) <= 30 and normalized_sentence not in seen_research_sentences:
+                    seen_research_sentences.add(normalized_sentence)
+                    research_narration_sources.append({**source_record, "narration_point": sentence})
+
     brief_for_visuals = f"{raw_title} {clean_objective}"
     # Distinguish a project about the Creator Operating System from an explicit
     # brand-launch film. Both may use relevant creator-workflow visuals, but only an
@@ -1777,6 +1819,10 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             raw_text = ai_infinity_launch_narration.get(name) or ai_infinity_launch_narration.get("Closing")
         elif pashto_launch:
             raw_text = ai_infinity_launch_narration_pashto.get(name) or ai_infinity_launch_narration_pashto.get("Closing")
+        elif english_target and source.get("narration_point"):
+            # Speak a concise, topic-matched research statement instead of default
+            # motivational filler. The source title remains attached for provenance.
+            raw_text = str(source["narration_point"])
         else:
             raw_text = localized["narration_by_name"].get(name) or localized["narration_by_name"].get("Closing") or localized["opening"]
         text = re.sub(r"\s+", " ", str(raw_text or "")).strip()
@@ -1813,7 +1859,8 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
 
     chapters = []
     for i, name in enumerate(names):
-        src = usable_sources[i % len(usable_sources)]
+        source_pool = research_narration_sources or usable_sources
+        src = source_pool[i % len(source_pool)]
         sec = max(4.0, round(duration * ratios[i], 1))
         narration = bounded_narration(name, sec, src, i)
         long_visual_focus = {
@@ -1852,6 +1899,29 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         localized = _localized_fallback_copy(language, name, clean_title, topic_label)
         localized_heading = localized["name"]
         localized_screen = localized["on_screen"].get(name, localized_heading).format(topic=topic_label, title=clean_title)
+        generic_english_overlays = {
+            "a clear problem", "know the stakes", "one useful principle", "show the process",
+            "test and improve", "set the context", "make it clear", "see the steps",
+            "evidence matters", "the outcome", "one next step", "what comes next",
+        }
+        if (
+            english_target
+            and not ai_infinity_launch
+            and source.get("narration_point")
+            and localized_screen.strip().casefold() in generic_english_overlays
+        ):
+            # Prefer a meaningful, scene-linked source title over canned planner
+            # labels such as "A clear problem" or "Test and improve".
+            overlay_title = str(source.get("title") or "").strip()
+            overlay_words = [
+                word for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]*", overlay_title)
+                if word.casefold() not in {"a", "an", "the", "of", "for", "from", "to", "and", "in", "on", "with", "how", "why"}
+            ]
+            if overlay_words:
+                localized_screen = " ".join(
+                    word if word.isupper() else word.capitalize()
+                    for word in overlay_words[:5]
+                )[:60]
         if ai_infinity_launch and str(language or "English").strip().lower() == "english":
             # Brand-launch overlays describe the product workflow, not planner
             # chapter labels or generic motivational copy.
