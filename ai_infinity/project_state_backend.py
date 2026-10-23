@@ -43,6 +43,8 @@ _DB_PATH: Optional[Path] = None
 _SYNC_TIMER: Optional[threading.Timer] = None
 _CHANGE_GENERATION = 0
 _SYNC_DIRTY = False
+_SYNC_FAILURES = 0
+_MAX_SNAPSHOT_RETRIES = 3
 
 _STATUS: Dict[str, Any] = {
     "configured": False,
@@ -249,8 +251,10 @@ def _verify_roundtrip() -> bool:
 
 def configure(db_path: Path | str) -> Dict[str, Any]:
     """Attach the backend and restore remote state before local schema init."""
-    global _DB_PATH
+    global _DB_PATH, _SYNC_FAILURES
     path = Path(db_path).resolve()
+    with _LOCK:
+        _SYNC_FAILURES = 0
     path.parent.mkdir(parents=True, exist_ok=True)
 
     with _LOCK:
@@ -437,7 +441,7 @@ def _sha256_path(path: Path) -> str:
 
 def snapshot_now() -> Dict[str, Any]:
     """Publish a consistent SQLite snapshot only after verified object-store read-back."""
-    global _SYNC_DIRTY
+    global _SYNC_DIRTY, _SYNC_FAILURES
     with _SNAPSHOT_LOCK:
         with _LOCK:
             active = bool(_STATUS.get("active") and _STATUS.get("verified"))
@@ -504,6 +508,7 @@ def snapshot_now() -> Dict[str, Any]:
                 _STATUS["last_sha256"] = digest
                 _STATUS["last_error"] = None
                 _SYNC_DIRTY = False
+                _SYNC_FAILURES = 0
 
             return {"status": "verified", "size_bytes": size, "sha256": digest, "snapshot_at": stamp, "truthful": True}
         except Exception as exc:
@@ -517,31 +522,53 @@ def snapshot_now() -> Dict[str, Any]:
 
 
 def _snapshot_timer_job() -> None:
-    global _SYNC_TIMER, _SYNC_DIRTY
+    """Run one checkpoint and retry transient failures with bounded backoff."""
+    global _SYNC_TIMER, _SYNC_DIRTY, _SYNC_FAILURES
     with _LOCK:
         generation = _CHANGE_GENERATION
         _SYNC_DIRTY = False
+
+    result: Dict[str, Any] = {"status": "failed", "truthful": True}
     try:
-        snapshot_now()
+        result = snapshot_now()
     finally:
         with _LOCK:
             changed_while_running = _CHANGE_GENERATION != generation or _SYNC_DIRTY
             _SYNC_TIMER = None
             active = bool(_STATUS.get("active") and _STATUS.get("verified"))
+            retry_delay: Optional[float] = None
+
             if changed_while_running and active:
+                # A stale snapshot is never declared durable. The changed
+                # generation needs an immediate fresh checkpoint.
                 _SYNC_DIRTY = False
-                _SYNC_TIMER = threading.Timer(0.25, _snapshot_timer_job)
+                _SYNC_FAILURES = 0
+                retry_delay = 0.25
+            elif active and str(result.get("status") or "").lower() == "failed":
+                # B2/network errors can be transient even when no further
+                # SQLite write arrives to reschedule the debounced timer.
+                # Retry a bounded number of times; after that, remain fail-closed
+                # until the next committed write requests a new checkpoint.
+                if _SYNC_FAILURES < _MAX_SNAPSHOT_RETRIES:
+                    _SYNC_FAILURES += 1
+                    retry_delay = float(min(8, 1 << (_SYNC_FAILURES - 1)))
+            elif str(result.get("status") or "").lower() == "verified":
+                _SYNC_FAILURES = 0
+
+            if retry_delay is not None:
+                _SYNC_TIMER = threading.Timer(retry_delay, _snapshot_timer_job)
                 _SYNC_TIMER.daemon = True
                 _SYNC_TIMER.start()
 
 
 def schedule_sync(delay: float = 0.75) -> None:
     """Debounce committed writes and schedule another checkpoint for concurrent changes."""
-    global _SYNC_TIMER, _CHANGE_GENERATION, _SYNC_DIRTY
+    global _SYNC_TIMER, _CHANGE_GENERATION, _SYNC_DIRTY, _SYNC_FAILURES
     with _LOCK:
         if not (_STATUS.get("active") and _STATUS.get("verified")):
             return
         _CHANGE_GENERATION += 1
+        _SYNC_FAILURES = 0
         _STATUS["snapshot_verified"] = False
         _SYNC_DIRTY = True
         if _SYNC_TIMER is not None and _SYNC_TIMER.is_alive():
