@@ -1326,8 +1326,8 @@ def _localized_fallback_copy(language: str, name: str, title: str, topic: str) -
     # advice as if it were a finished documentary script.
     combined_subject = f"{title} {topic}".casefold()
     earth_space_topic = (
-        bool(re.search(r"\b(?:earth|earthrise|blue marble)\\b", combined_subject))
-        and bool(re.search(r"\b(?:space|orbit|earthrise|blue marble|planet|astronaut|nasa)\\b", combined_subject))
+        bool(re.search(r"\b(?:earth|earthrise|blue marble)\b", combined_subject))
+        and bool(re.search(r"\b(?:space|orbit|earthrise|blue marble|planet|astronaut|nasa)\b", combined_subject))
     )
     if lang in {"english", "en", "en-us", "en-gb"} and earth_space_topic:
         earth_narration = {
@@ -2866,7 +2866,7 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
     subject_match = re.search(r"\babout\\s+(.+?)(?:;|\\.\\s|$)", raw, re.I)
     subject = subject_match.group(1).strip(" .;,:") if subject_match else raw
     subject = re.split(
-        r"\b(?:visual focus|visual emphasis|composition|photorealistic|professional editorial)\\b",
+        r"\b(?:visual focus|visual emphasis|composition|photorealistic|professional editorial)\b",
         subject, maxsplit=1, flags=re.I
     )[0].strip(" .;,:")
     subject = re.sub(r"^(?:premium|original|cinematic|editorial|documentary|image|visuals?)\\s+", "", subject, flags=re.I)
