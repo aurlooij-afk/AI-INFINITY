@@ -864,11 +864,29 @@ def _research_source_relevant(topic: str, source: Dict[str, Any]) -> bool:
     # matching only "Earth" or "space" admits entire unrelated subject areas.
     # Require every meaningful subject token and a title that shares at least
     # one of those terms. A summary alone cannot rescue an unrelated headline.
+    if query_terms == {"earth", "space"}:
+        # "From orbit" is a genuine title-level equivalent of "from space",
+        # but merely sharing Earth/space in the abstract is not. For this
+        # visually specific brief, require Earth + orbital context + a visual
+        # evidence concept in the headline itself.
+        title_has_earth = bool(title_terms & {"earth", "earthrise"})
+        title_has_orbit = bool(title_terms & {"space", "orbit", "orbital", "earthrise"})
+        title_has_visual_evidence = bool(title_terms & {
+            "image", "images", "imagery", "photo", "photos", "photograph",
+            "photographs", "photography", "picture", "pictures", "observation",
+            "horizon", "view", "views", "camera", "capture", "captured",
+            "earthrise", "satellite",
+        })
+        return (
+            len(matched) == len(query_terms)
+            and title_has_earth
+            and title_has_orbit
+            and title_has_visual_evidence
+        )
+
     if len(query_terms) <= 2:
-        # For a compact topic, every meaningful concept must be present in the
-        # headline itself. A long abstract can mention "Earth" and "space" while
-        # actually discussing weapons, architecture, or a general definition of
-        # outer space; that is not evidence about photographs of Earth from orbit.
+        # In other concise subjects, every topic term must appear in the title.
+        # Otherwise a long abstract can rescue a headline about another topic.
         return (
             len(matched) == len(query_terms)
             and len(query_terms & title_terms) == len(query_terms)
