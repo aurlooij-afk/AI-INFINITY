@@ -1912,7 +1912,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         ):
             # Prefer a meaningful, scene-linked source title over canned planner
             # labels such as "A clear problem" or "Test and improve".
-            overlay_title = str(source.get("title") or "").strip()
+            overlay_title = str(src.get("title") or "").strip()
             overlay_words = [
                 word for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]*", overlay_title)
                 if word.casefold() not in {"a", "an", "the", "of", "for", "from", "to", "and", "in", "on", "with", "how", "why"}
