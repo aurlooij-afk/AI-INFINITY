@@ -241,3 +241,22 @@ def test_software_website_brief_uses_retrievable_topic_specific_visuals():
         assert queries
         assert any(term in " ".join(queries).lower() for term in ("developer", "programmer", "code", "coding")), queries
 
+def test_short_specific_subject_requires_title_context_and_all_subject_terms():
+    topic = "Earth from space"
+    exact = {
+        "title": "Timeline of first images of Earth from space",
+        "summary": "The first images of Earth from space came from early rockets and later spacecraft.",
+    }
+    one_term_only = {
+        "title": "Earth in culture",
+        "summary": "The cultural perspective on Earth varies across societies and historical periods.",
+    }
+    matching_words_but_unrelated_title = {
+        "title": "Asteroid mining",
+        "summary": "Asteroid material has been brought to Earth from space by several sample-return missions.",
+    }
+
+    assert studio_ultimate._research_source_relevant(topic, exact) is True
+    assert studio_ultimate._research_source_relevant(topic, one_term_only) is False
+    assert studio_ultimate._research_source_relevant(topic, matching_words_but_unrelated_title) is False
+
