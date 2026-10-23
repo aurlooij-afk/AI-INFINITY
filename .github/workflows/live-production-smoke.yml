@@ -95,7 +95,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ai-infinity-live-creator-proof-${{ github.sha }}
+          name: ai-infinity-live-creator-proof-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: |
             /tmp/live-ai-infinity/*.mp4
             /tmp/live-ai-infinity/*.json
