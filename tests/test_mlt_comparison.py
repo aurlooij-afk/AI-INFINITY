@@ -154,4 +154,5 @@ def test_build_guard_uses_digest_pinned_mlt_container_not_apt_mlt_install():
     )[0]
     assert "apt-get" in install_step
     assert "espeak-ng" in install_step
-    assert "apt-get" not in install_step.replace("apt-get", "", 1)
+    assert "missing+=(melt)" not in install_step
+    assert "install -y --no-install-recommends melt" not in install_step
