@@ -146,7 +146,10 @@ def test_build_guard_uses_digest_pinned_mlt_container_not_apt_mlt_install():
     assert "Set up pinned MLT runtime container" in workflow
     assert 'echo "$RUNNER_TEMP/mlt-bin" >> "$GITHUB_PATH"' in workflow
     assert "--volume /tmp:/tmp" in workflow
-    assert "--entrypoint /usr/bin/xvfb-run" in workflow
+    assert 'exec docker run --rm --volume /tmp:/tmp "$image" "$@"' in workflow
+    # Preserve the pinned image's own dumb-init -> xvfb-run -> melt entrypoint.
+    # Overriding it caused real MLT renders to hang until the subprocess timeout.
+    assert "--entrypoint /usr/bin/xvfb-run" not in workflow
     # MLT's large GUI/GDAL/plugin dependency tree must not be installed into
     # the ephemeral CI host. The real MLT CLI is invoked inside the image.
     install_step = workflow.split("      - name: Install offline voice runtime", 1)[1].split(

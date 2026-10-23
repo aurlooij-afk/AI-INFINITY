@@ -100,7 +100,7 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
           image='ghcr.io/mltframework/mlt/melt:v7.42.0@sha256:d24d0e8c18348a6d099f2fb6c8e0cabd25fcdc66e656bc3840d98fd92b431268'
-          exec docker run --rm --volume /tmp:/tmp --entrypoint /usr/bin/xvfb-run "$image" -a /usr/local/bin/melt "$@"
+          exec docker run --rm --volume /tmp:/tmp "$image" "$@"
           SH
           chmod +x "$RUNNER_TEMP/mlt-bin/melt"
           echo "$RUNNER_TEMP/mlt-bin" >> "$GITHUB_PATH"
