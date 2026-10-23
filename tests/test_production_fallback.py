@@ -85,3 +85,43 @@ def test_earth_from_space_specialization_does_not_leak_into_unrelated_topics():
 
     assert copy["on_screen"]["Hook"] != "Earth, seen from orbit"
     assert "city lights" not in " ".join(copy["narration_by_name"].values()).lower()
+
+def test_fallback_creative_plan_uses_topic_filtered_research_for_narration():
+    sources = [
+        {
+            "title": f"Volcanic eruptions: {topic}",
+            "summary": statement,
+            "url": f"https://example.org/volcano/{index}",
+        }
+        for index, (topic, statement) in enumerate([
+            ("ash columns", "Volcanic eruptions send ash high into the atmosphere, and winds can carry fine particles beyond the vent."),
+            ("gas monitoring", "Volcanic eruptions may release changing gas mixtures as magma moves underground before a surface event."),
+            ("seismic activity", "Volcanic eruptions are monitored with seismic signals that help scientists track movement beneath the ground."),
+            ("ground deformation", "Volcanic eruptions can be preceded by measurable ground deformation as pressure changes within a volcanic system."),
+            ("ash hazards", "Volcanic eruptions can spread ash across nearby communities and disrupt air travel far beyond the crater."),
+        ], start=1)
+    ]
+    plan = studio._fallback_creative_plan(
+        "Volcanic eruptions",
+        "Create a 20 second documentary short about volcanic eruptions",
+        "short",
+        20,
+        "general audience",
+        "clear and evidence-led",
+        {"sources": sources},
+        "English",
+        "Volcanic eruptions",
+    )
+
+    chapters = plan["chapters"]
+    narration = " ".join(chapter["narration"] for chapter in chapters).lower()
+    overlays = [chapter["on_screen"] for chapter in chapters]
+
+    assert len(chapters) == 5
+    assert "ash high into the atmosphere" in narration
+    assert "gas mixtures" in narration
+    assert "audience needs and practical limits" not in narration
+    assert all(chapter["proof_needed"] for chapter in chapters)
+    assert len(set(overlays)) == len(overlays)
+    assert all(overlay.casefold() not in {"a clear problem", "know the stakes", "one useful principle", "show the process", "test and improve"} for overlay in overlays)
+    assert plan["source_context"]["research_narration_points_used"] == 5
