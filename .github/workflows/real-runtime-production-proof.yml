@@ -51,10 +51,10 @@ jobs:
           command -v espeak-ng >/dev/null 2>&1 || packages+=(espeak-ng)
           dpkg-query -W -f='${Status}' libsndfile1 2>/dev/null | grep -q 'install ok installed' || packages+=(libsndfile1)
           command -v pdftotext >/dev/null 2>&1 || packages+=(poppler-utils)
-          if (\${#packages[@]} > 0); then
-            if ! sudo env DEBIAN_FRONTEND=noninteractive timeout 240s apt-get "\${apt_opts[@]}" install -y --no-install-recommends "\${packages[@]}"; then
-              sudo timeout 180s apt-get "\${apt_opts[@]}" update
-              sudo env DEBIAN_FRONTEND=noninteractive timeout 240s apt-get "\${apt_opts[@]}" install -y --no-install-recommends "\${packages[@]}"
+          if ((${#packages[@]} > 0)); then
+            if ! sudo env DEBIAN_FRONTEND=noninteractive timeout 240s apt-get "${apt_opts[@]}" install -y --no-install-recommends "${packages[@]}"; then
+              sudo timeout 180s apt-get "${apt_opts[@]}" update
+              sudo env DEBIAN_FRONTEND=noninteractive timeout 240s apt-get "${apt_opts[@]}" install -y --no-install-recommends "${packages[@]}"
             fi
           fi
       - name: Python dependencies
