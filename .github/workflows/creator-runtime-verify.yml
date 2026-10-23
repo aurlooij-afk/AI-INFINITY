@@ -28,13 +28,17 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Host media dependencies
+      - name: Set up FFmpeg and FFprobe
+        uses: FedericoCarboni/setup-ffmpeg@37062fbf7149fc5578d6c57e08aed62458b375d6
+        with:
+          ffmpeg-version: release
+          linking-type: static
+
+      - name: Verify FFmpeg and FFprobe
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
-          ffmpeg -version | head -n 1
-          ffprobe -version | head -n 1
+          command -v ffmpeg
+          command -v ffprobe
 
       - name: Install Python dependencies
         run: |
