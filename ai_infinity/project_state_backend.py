@@ -45,6 +45,7 @@ _CHANGE_GENERATION = 0
 _SYNC_DIRTY = False
 _SYNC_FAILURES = 0
 _MAX_SNAPSHOT_RETRIES = 3
+_MAX_CANARY_VERIFY_ATTEMPTS = 3
 
 _STATUS: Dict[str, Any] = {
     "configured": False,
@@ -285,18 +286,31 @@ def configure(db_path: Path | str) -> Dict[str, Any]:
     if not _STATUS["active"]:
         return status()
 
-    try:
-        verified = _verify_roundtrip()
-        with _LOCK:
-            _STATUS["verified"] = bool(verified)
-            _STATUS["active"] = bool(verified)
-            if not verified:
-                _STATUS["last_error"] = "B2 canary verification failed"
-    except Exception as exc:
-        with _LOCK:
-            _STATUS["verified"] = False
-            _STATUS["active"] = False
-            _STATUS["last_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+    # A transient startup network/5xx failure must not permanently disable
+    # durable state for the lifetime of this process. Keep the backend fail-closed
+    # while retrying its real PUT/HEAD/GET canary a small, bounded number of times.
+    # Once verified, restore the last remote snapshot before any app schema init.
+    last_error: Optional[str] = None
+    verified = False
+    for attempt in range(_MAX_CANARY_VERIFY_ATTEMPTS):
+        try:
+            verified = bool(_verify_roundtrip())
+            if verified:
+                break
+            last_error = "B2 canary verification failed"
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {str(exc)[:300]}"
+        if attempt + 1 < _MAX_CANARY_VERIFY_ATTEMPTS:
+            time.sleep(float(min(2 ** attempt, 4)))
+
+    with _LOCK:
+        _STATUS["verified"] = verified
+        _STATUS["active"] = verified
+        if not verified:
+            _STATUS["last_error"] = last_error or "B2 canary verification failed"
+
+    if not verified:
+        # Do not claim persistence or restore from an unverified backend.
         return status()
 
     restore_result = restore_on_startup()
