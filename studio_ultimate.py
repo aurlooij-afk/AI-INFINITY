@@ -865,7 +865,14 @@ def _research_source_relevant(topic: str, source: Dict[str, Any]) -> bool:
     # Require every meaningful subject token and a title that shares at least
     # one of those terms. A summary alone cannot rescue an unrelated headline.
     if len(query_terms) <= 2:
-        return len(matched) == len(query_terms) and bool(query_terms & title_terms)
+        # For a compact topic, every meaningful concept must be present in the
+        # headline itself. A long abstract can mention "Earth" and "space" while
+        # actually discussing weapons, architecture, or a general definition of
+        # outer space; that is not evidence about photographs of Earth from orbit.
+        return (
+            len(matched) == len(query_terms)
+            and len(query_terms & title_terms) == len(query_terms)
+        )
 
     # Expanded craft queries intentionally span related skills and formats.
     # Require meaningful overlap while scaling the threshold for longer queries.
