@@ -84,10 +84,17 @@ jobs:
           curl -fsS http://127.0.0.1:10000/health
           curl -fsS http://127.0.0.1:10000/infinity/canonical/health
 
-      - name: Install host media inspection tools
+      - name: Set up FFmpeg and FFprobe
+        uses: FedericoCarboni/setup-ffmpeg@37062fbf7149fc5578d6c57e08aed62458b375d6
+        with:
+          ffmpeg-version: release
+          linking-type: static
+
+      - name: Verify FFmpeg and FFprobe
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          set -euo pipefail
+          command -v ffmpeg
+          command -v ffprobe
 
       - name: Real creator end-to-end smoke test
         env:
