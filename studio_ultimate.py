@@ -1994,6 +1994,11 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "mode": "uploaded_document_grounded" if uploaded_points else "deterministic_creative_fallback",
             "uploaded_source_point_count": len(uploaded_points),
             "uploaded_source_points_used": min(len(uploaded_points), len(chapters)),
+            "research_narration_point_count": len(research_narration_sources),
+            "research_narration_points_used": (
+                min(len(research_narration_sources), len(chapters))
+                if english_target and not ai_infinity_launch and not uploaded_points else 0
+            ),
             "source_claims_invented": False,
         },
         "fallback_mode": "duration_bounded_topic_coherent",
