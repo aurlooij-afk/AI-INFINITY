@@ -615,6 +615,7 @@ def t9(s,b):
             reference_urls=[reference_url],
             duration=20,
             format="short",
+            aspect_ratio="16:9",
             idempotency_key=f"final-acceptance-{label}",
         )
     started=time.monotonic()
