@@ -56,3 +56,32 @@ def test_command_language_inference_is_explicit():
     )
     assert lang == "Pashto"
     assert voice == "ps-AF-LatifaNeural"
+
+
+def test_english_earth_from_space_fallback_uses_specific_narration_and_overlays():
+    copy = studio._localized_fallback_copy(
+        "English",
+        "Hook",
+        "Earth from space",
+        "Earth from space",
+    )
+    narration = " ".join(copy["narration_by_name"].values()).lower()
+
+    assert "audience needs and practical limits" not in narration
+    assert "city lights" in narration
+    assert "mission notes" in copy["cta"].lower()
+    assert copy["on_screen"]["Hook"] == "Earth, seen from orbit"
+    assert copy["on_screen"]["Practical example"] == "City lights after dark"
+    assert len(set(copy["on_screen"].values())) == len(copy["on_screen"])
+
+
+def test_earth_from_space_specialization_does_not_leak_into_unrelated_topics():
+    copy = studio._localized_fallback_copy(
+        "English",
+        "Hook",
+        "Python programming",
+        "Python programming",
+    )
+
+    assert copy["on_screen"]["Hook"] != "Earth, seen from orbit"
+    assert "city lights" not in " ".join(copy["narration_by_name"].values()).lower()
