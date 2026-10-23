@@ -78,7 +78,7 @@ jobs:
           missing=()
           command -v espeak-ng >/dev/null 2>&1 || missing+=(espeak-ng)
           command -v melt >/dev/null 2>&1 || missing+=(melt)
-          if (("${#missing[@]}" > 0)); then
+          if ((${#missing[@]} > 0)); then
             if ! sudo env DEBIAN_FRONTEND=noninteractive timeout 240s apt-get "${apt_opts[@]}" install -y --no-install-recommends "${missing[@]}"; then
               sudo timeout 180s apt-get "${apt_opts[@]}" update
               sudo env DEBIAN_FRONTEND=noninteractive timeout 240s apt-get "${apt_opts[@]}" install -y --no-install-recommends "${missing[@]}"
