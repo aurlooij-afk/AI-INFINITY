@@ -126,6 +126,60 @@ def test_fallback_creative_plan_uses_topic_filtered_research_for_narration():
     assert all(overlay.casefold() not in {"a clear problem", "know the stakes", "one useful principle", "show the process", "test and improve"} for overlay in overlays)
     assert plan["source_context"]["research_narration_points_used"] == 5
 
+def test_sparse_earth_space_research_does_not_repeat_one_fact_or_misattribute_sources():
+    sources = [
+        {
+            "title": "Timeline of first images of Earth from space",
+            "summary": (
+                "Photography and other imagery of planet Earth from outer space started in the 1940s. "
+                "Initially the images were taken from rockets in suborbital flight, subsequently from satellites around Earth, "
+                "and eventually from spacecraft beyond Earth's orbit."
+            ),
+            "url": "https://en.wikipedia.org/wiki/Timeline_of_first_images_of_Earth_from_space",
+        },
+        {
+            "title": "10 Iconic Photos of Earth From Space - Star Walk",
+            "summary": "10 Iconic Photos of Earth From Space - Star Walk",
+            "url": "https://example.org/earth-space/headline",
+        },
+        {
+            "title": "Nighttime Images of the Earth from Space",
+            "summary": "Scholarly work",
+            "url": "https://example.org/earth-space/nighttime-images",
+        },
+        {
+            "title": "View of the Earth from Space",
+            "summary": "Scholarly work",
+            "url": "https://example.org/earth-space/view",
+        },
+        {
+            "title": "Outer space",
+            "summary": "Outer space is the expanse beyond Earth's atmosphere and between celestial bodies.",
+            "url": "https://example.org/outer-space",
+        },
+    ]
+    plan = studio._fallback_creative_plan(
+        "Earth from space",
+        "Create a 20 second documentary short about Earth from space",
+        "short",
+        20,
+        "general audience",
+        "clear and informative",
+        {"sources": sources},
+        "English",
+        "Earth from space",
+    )
+    chapters = plan["chapters"]
+    narrations = [str(chapter.get("narration") or "").strip() for chapter in chapters]
+
+    assert len(chapters) == 5
+    assert len(set(narrations)) == 5, narrations
+    assert plan["source_context"]["research_narration_points_used"] == 2
+    assert sum(bool(chapter.get("proof_needed")) for chapter in chapters) == 2
+    assert "city lights" in narrations[3].lower()
+    assert "mission notes" in narrations[4].lower()
+
+
 def test_earth_from_space_fallback_does_not_read_unrelated_search_hits_as_script():
     sources = [
         {
