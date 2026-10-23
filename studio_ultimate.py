@@ -1321,6 +1321,53 @@ def _localized_fallback_copy(language: str, name: str, title: str, topic: str) -
             "on_screen":{"Hook":"A clear problem","Why it matters":"Know the stakes","The key idea":"One useful principle","Practical example":"Show the process","Takeaway":"Test and improve","Context":"Set the context","The core idea":"Make it clear","How it works":"See the steps","Real-world examples":"Evidence matters","What changes":"The outcome","Practical takeaway":"One next step","Closing":"What comes next"},
         }
     }
+    # Keep deterministic fallback narration grounded in the requested subject.
+    # A useful topic-specific fallback is safer than presenting generic planning
+    # advice as if it were a finished documentary script.
+    combined_subject = f"{title} {topic}".casefold()
+    earth_space_topic = (
+        bool(re.search(r"\\b(?:earth|earthrise|blue marble)\\b", combined_subject))
+        and bool(re.search(r"\\b(?:space|orbit|earthrise|blue marble|planet|astronaut|nasa)\\b", combined_subject))
+    )
+    if lang in {"english", "en", "en-us", "en-gb"} and earth_space_topic:
+        earth_narration = {
+            "Hook": "From orbit, Earth's curved horizon reveals blue oceans and cloud bands.",
+            "Why it matters": "Cloud bands and coastlines show weather moving across a connected planet.",
+            "The key idea": "Every image records one viewpoint, lighting condition and moment in time.",
+            "Practical example": "After dark, city lights reveal settled regions on the surface.",
+            "Takeaway": "Check mission notes and dates before interpreting a single image.",
+            "Context": "An orbital photograph captures the side, angle and lighting visible at that moment.",
+            "The core idea": "Land, ocean, clouds and light form one connected view of Earth.",
+            "How it works": "Sun angle, weather and camera direction change what an orbital image shows.",
+            "Real-world examples": "Images from orbit record different parts of Earth under changing light and weather.",
+            "What changes": "Daylight, darkness and cloud cover create different views of the same planet.",
+            "Practical takeaway": "Compare the source, capture date and viewpoint before drawing a conclusion.",
+            "Closing": "Look beyond one frame: compare sourced views to understand what has changed.",
+        }
+        earth_overlays = {
+            "Hook": "Earth, seen from orbit",
+            "Why it matters": "Our planet, in perspective",
+            "The key idea": "Every image has a viewpoint",
+            "Practical example": "City lights after dark",
+            "Takeaway": "Compare views over time",
+            "Context": "Earth's curved horizon",
+            "The core idea": "Land, ocean, cloud and light",
+            "How it works": "Light shapes what we see",
+            "Real-world examples": "Images captured from orbit",
+            "What changes": "Day, night and weather",
+            "Practical takeaway": "Check the source and date",
+            "Closing": "Our world, seen differently",
+        }
+        return {
+            "name": "Earth from space",
+            "hook": "Explore Earth from orbit through cloud bands, coastlines, city lights and changing daylight.",
+            "cta": "Explore the source imagery, check the mission notes and compare another view before drawing a conclusion.",
+            "opening": "Earth from orbit reveals details that vary with viewpoint, lighting and weather.",
+            "focus": "Earth's curved horizon, oceans, cloud bands and land seen from orbit.",
+            "narration_by_name": earth_narration,
+            "on_screen": earth_overlays,
+        }
+
     if lang not in local:
         tails = {
             "Hook": "Here is the useful idea.",
