@@ -29,6 +29,7 @@ on:
       - "creator_final_3800.py"
       - "ui_3800.html"
       - ".github/workflows/creator-studio-ci.yml"
+      - ".github/workflows/creator-runtime-verify.yml"
   pull_request:
     paths:
       - "*.py"
@@ -44,6 +45,7 @@ on:
       - "tests/test_storage_artifact_readback.py"
       - "tests/test_project_state_backend.py"
       - "tests/production_creator_smoke.py"
+      - ".github/workflows/creator-runtime-verify.yml"
       - "Dockerfile"
       - "requirements.txt"
       - "bridge-requirements.txt"
