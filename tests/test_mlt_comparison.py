@@ -138,3 +138,20 @@ def test_mlt_and_ffmpeg_render_same_two_scene_reference(tmp_path: Path) -> None:
         "human_editorial_quality_reviewed": False,
     }
     print("MLT_FFMPEG_BENCHMARK=" + json.dumps(evidence, sort_keys=True))
+
+def test_build_guard_uses_digest_pinned_mlt_container_not_apt_mlt_install():
+    workflow = Path(".github/workflows/creator-studio-ci.yml").read_text(encoding="utf-8")
+    image = "ghcr.io/mltframework/mlt/melt:v7.42.0@sha256:d24d0e8c18348a6d099f2fb6c8e0cabd25fcdc66e656bc3840d98fd92b431268"
+    assert image in workflow
+    assert "Set up pinned MLT runtime container" in workflow
+    assert 'echo "$RUNNER_TEMP/mlt-bin" >> "$GITHUB_PATH"' in workflow
+    assert "--volume /tmp:/tmp" in workflow
+    assert "--entrypoint /usr/bin/xvfb-run" in workflow
+    # MLT's large GUI/GDAL/plugin dependency tree must not be installed into
+    # the ephemeral CI host. The real MLT CLI is invoked inside the image.
+    install_step = workflow.split("      - name: Install offline voice runtime", 1)[1].split(
+        "      - name: Set up pinned MLT runtime container", 1
+    )[0]
+    assert "apt-get" in install_step
+    assert "espeak-ng" in install_step
+    assert "apt-get" not in install_step.replace("apt-get", "", 1)
