@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   real-runtime:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       AI_INFINITY_FAST_MODE: "1"

@@ -60,7 +60,7 @@ permissions:
 jobs:
   python-syntax:
     name: Python syntax guard
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -463,7 +463,7 @@ jobs:
 
   docker-build:
     name: Docker image guard
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     needs: python-syntax
     steps:
