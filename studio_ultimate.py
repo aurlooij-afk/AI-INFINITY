@@ -875,7 +875,7 @@ def _research_source_relevant(topic: str, source: Dict[str, Any]) -> bool:
             "image", "images", "imagery", "photo", "photos", "photograph",
             "photographs", "photography", "picture", "pictures", "observation",
             "horizon", "view", "views", "camera", "capture", "captured",
-            "earthrise", "satellite",
+            "earthrise",
         })
         return (
             len(matched) == len(query_terms)
