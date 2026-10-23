@@ -196,6 +196,44 @@ def test_explicit_project_state_region_overrides_endpoint_inference(monkeypatch)
     assert cfg["region"] == "eu-central-003", cfg
 
 
+def test_configure_reports_verified_startup_restore(monkeypatch, tmp_path: Path):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _b2_env(monkeypatch)
+
+    source_db = tmp_path / "remote-seed.db"
+    with sqlite3.connect(source_db) as con:
+        con.execute("CREATE TABLE projects (id INTEGER PRIMARY KEY, title TEXT)")
+        con.execute("INSERT INTO projects(title) VALUES(?)", ("restored project",))
+    payload = source_db.read_bytes()
+    digest = hashlib.sha256(payload).hexdigest()
+
+    client = _MemoryB2()
+    client.objects[("unit-test-bucket", backend.object_key())] = {
+        "body": payload,
+        "metadata": {
+            "ai-infinity-sha256": digest,
+            "ai-infinity-snapshot-at": "1792756000.0",
+            "ai-infinity-schema": "studio-state-v1",
+        },
+    }
+    monkeypatch.setattr(backend, "_client", lambda: client)
+
+    target = tmp_path / "fresh-instance" / "state.db"
+    result = backend.configure(target)
+
+    assert result["active"] is True, result
+    assert result["snapshot_verified"] is True, result
+    restore = result["last_restore"]
+    assert restore["attempted"] is True, restore
+    assert restore["restored"] is True, restore
+    assert restore["status"] == "restored", restore
+    assert restore["sha256"] == digest, restore
+    assert restore["size_bytes"] == len(payload), restore
+    with sqlite3.connect(target) as con:
+        assert con.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        assert con.execute("SELECT title FROM projects").fetchone()[0] == "restored project"
+
+
 def test_default_b2_canary_uses_the_configured_snapshot_key_prefix(monkeypatch):
     backend = importlib.import_module("ai_infinity.project_state_backend")
     _b2_env(monkeypatch)

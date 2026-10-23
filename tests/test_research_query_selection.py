@@ -241,3 +241,59 @@ def test_software_website_brief_uses_retrievable_topic_specific_visuals():
         assert queries
         assert any(term in " ".join(queries).lower() for term in ("developer", "programmer", "code", "coding")), queries
 
+def test_short_specific_subject_requires_title_context_and_all_subject_terms():
+    topic = "Earth from space"
+    exact = {
+        "title": "Timeline of first images of Earth from space",
+        "summary": "The first images of Earth from space came from early rockets and later spacecraft.",
+    }
+    one_term_only = {
+        "title": "Earth in culture",
+        "summary": "The cultural perspective on Earth varies across societies and historical periods.",
+    }
+    matching_words_but_unrelated_title = {
+        "title": "Asteroid mining",
+        "summary": "Asteroid material has been brought to Earth from space by several sample-return missions.",
+    }
+    broad_definition = {
+        "title": "Outer space",
+        "summary": "Outer space is the expanse beyond Earth's atmosphere and between celestial bodies.",
+    }
+    unrelated_space_object = {
+        "title": "Artificial structures visible from space",
+        "summary": "Artificial structures visible from space include buildings and walls; Earth has many human-made structures.",
+    }
+    unrelated_weapons = {
+        "title": "Anti-satellite weapons tested in Earth orbit",
+        "summary": "Anti-satellite weapons tested in Earth orbit can destroy spacecraft, even from space.",
+    }
+
+    assert studio_ultimate._research_source_relevant(topic, exact) is True
+    assert studio_ultimate._research_source_relevant(topic, one_term_only) is False
+    assert studio_ultimate._research_source_relevant(topic, matching_words_but_unrelated_title) is False
+    assert studio_ultimate._research_source_relevant(topic, broad_definition) is False
+    assert studio_ultimate._research_source_relevant(topic, unrelated_space_object) is False
+    assert studio_ultimate._research_source_relevant(topic, unrelated_weapons) is False
+
+def test_aspect_ratio_inference_does_not_read_integer_eleven_as_square():
+    import ai_infinity_canonical
+
+    intent = ai_infinity_canonical.compile_intent(
+        "Create a 20-second cinematic video about Apollo 11 lunar landing.",
+        {"duration": 20},
+    )
+    assert intent["constraints"]["aspect_ratio"] == "16:9"
+
+
+def test_aspect_ratio_inference_requires_explicit_ratio_separator():
+    import ai_infinity_canonical
+
+    cases = [
+        ("Create a 20-second video about Apollo 11.", "16:9"),
+        ("Create a 20-second square video about coral reefs.", "1:1"),
+        ("Create a 20-second 9:16 video about renewable energy.", "9:16"),
+        ("Create a 20-second 4:5 video about Python.", "4:5"),
+    ]
+    for command, expected in cases:
+        intent = ai_infinity_canonical.compile_intent(command, {"duration": 20})
+        assert intent["constraints"]["aspect_ratio"] == expected, (command, intent["constraints"])

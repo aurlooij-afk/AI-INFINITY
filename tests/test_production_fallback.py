@@ -56,3 +56,201 @@ def test_command_language_inference_is_explicit():
     )
     assert lang == "Pashto"
     assert voice == "ps-AF-LatifaNeural"
+
+
+def test_english_earth_from_space_fallback_uses_specific_narration_and_overlays():
+    copy = studio._localized_fallback_copy(
+        "English",
+        "Hook",
+        "Earth from space",
+        "Earth from space",
+    )
+    narration = " ".join(copy["narration_by_name"].values()).lower()
+
+    assert "audience needs and practical limits" not in narration
+    assert "city lights" in narration
+    assert "mission notes" in copy["cta"].lower()
+    assert copy["on_screen"]["Hook"] == "Earth, seen from orbit"
+    assert copy["on_screen"]["Practical example"] == "City lights after dark"
+    assert len(set(copy["on_screen"].values())) == len(copy["on_screen"])
+
+
+def test_earth_from_space_specialization_does_not_leak_into_unrelated_topics():
+    copy = studio._localized_fallback_copy(
+        "English",
+        "Hook",
+        "Python programming",
+        "Python programming",
+    )
+
+    assert copy["on_screen"]["Hook"] != "Earth, seen from orbit"
+    assert "city lights" not in " ".join(copy["narration_by_name"].values()).lower()
+
+def test_fallback_creative_plan_uses_topic_filtered_research_for_narration():
+    sources = [
+        {
+            "title": f"Volcanic eruptions: {topic}",
+            "summary": statement,
+            "url": f"https://example.org/volcano/{index}",
+        }
+        for index, (topic, statement) in enumerate([
+            ("ash columns", "Volcanic eruptions send ash high into the atmosphere, and winds can carry fine particles beyond the vent."),
+            ("gas monitoring", "Volcanic eruptions may release changing gas mixtures as magma moves underground before a surface event."),
+            ("seismic activity", "Volcanic eruptions are monitored with seismic signals that help scientists track movement beneath the ground."),
+            ("ground deformation", "Volcanic eruptions can be preceded by measurable ground deformation as pressure changes within a volcanic system."),
+            ("ash hazards", "Volcanic eruptions can spread ash across nearby communities and disrupt air travel far beyond the crater."),
+        ], start=1)
+    ]
+    plan = studio._fallback_creative_plan(
+        "Volcanic eruptions",
+        "Create a 20 second documentary short about volcanic eruptions",
+        "short",
+        20,
+        "general audience",
+        "clear and evidence-led",
+        {"sources": sources},
+        "English",
+        "Volcanic eruptions",
+    )
+
+    chapters = plan["chapters"]
+    narration = " ".join(chapter["narration"] for chapter in chapters).lower()
+    overlays = [chapter["on_screen"] for chapter in chapters]
+
+    assert len(chapters) == 5
+    assert "ash high into the atmosphere" in narration
+    assert "gas mixtures" in narration
+    assert "audience needs and practical limits" not in narration
+    assert all(chapter["proof_needed"] for chapter in chapters)
+    assert len(set(overlays)) == len(overlays)
+    assert all(overlay.casefold() not in {"a clear problem", "know the stakes", "one useful principle", "show the process", "test and improve"} for overlay in overlays)
+    assert plan["source_context"]["research_narration_points_used"] == 5
+
+def test_sparse_earth_space_research_does_not_repeat_one_fact_or_misattribute_sources():
+    sources = [
+        {
+            "title": "Timeline of first images of Earth from space",
+            "summary": (
+                "Photography and other imagery of planet Earth from outer space started in the 1940s. "
+                "Initially the images were taken from rockets in suborbital flight, subsequently from satellites around Earth, "
+                "and eventually from spacecraft beyond Earth's orbit."
+            ),
+            "url": "https://en.wikipedia.org/wiki/Timeline_of_first_images_of_Earth_from_space",
+        },
+        {
+            "title": "10 Iconic Photos of Earth From Space - Star Walk",
+            "summary": "10 Iconic Photos of Earth From Space - Star Walk",
+            "url": "https://example.org/earth-space/headline",
+        },
+        {
+            "title": "Nighttime Images of the Earth from Space",
+            "summary": "Scholarly work",
+            "url": "https://example.org/earth-space/nighttime-images",
+        },
+        {
+            "title": "View of the Earth from Space",
+            "summary": "Scholarly work",
+            "url": "https://example.org/earth-space/view",
+        },
+        {
+            "title": "Outer space",
+            "summary": "Outer space is the expanse beyond Earth's atmosphere and between celestial bodies.",
+            "url": "https://example.org/outer-space",
+        },
+    ]
+    plan = studio._fallback_creative_plan(
+        "Earth from space",
+        "Create a 20 second documentary short about Earth from space",
+        "short",
+        20,
+        "general audience",
+        "clear and informative",
+        {"sources": sources},
+        "English",
+        "Earth from space",
+    )
+    chapters = plan["chapters"]
+    narrations = [str(chapter.get("narration") or "").strip() for chapter in chapters]
+
+    assert len(chapters) == 5
+    assert len(set(narrations)) == 5, narrations
+    assert plan["source_context"]["research_narration_points_used"] == 2
+    assert sum(bool(chapter.get("proof_needed")) for chapter in chapters) == 2
+    assert "city lights" in narrations[3].lower()
+    assert "mission notes" in narrations[4].lower()
+
+
+def test_earth_from_space_fallback_does_not_read_unrelated_search_hits_as_script():
+    sources = [
+        {
+            "title": "Timeline of first images of Earth from space",
+            "summary": "The first images of Earth from space came from suborbital rockets before later spacecraft photographed the planet from orbit.",
+            "url": "https://example.org/earth-space/timeline",
+        },
+        {
+            "title": "Earth from space photographs reveal cloud systems",
+            "summary": "Images of Earth from space show cloud bands, coastlines and city lights under different lighting conditions.",
+            "url": "https://example.org/earth-space/photographs",
+        },
+        {
+            "title": "Astronaut photographs of Earth from orbit",
+            "summary": "Astronauts photograph Earth from space, revealing cloud systems and coastlines that look different under changing sunlight.",
+            "url": "https://example.org/earth-space/astronauts",
+        },
+        {
+            "title": "Earth observation from orbit",
+            "summary": "Satellites in space photograph Earth repeatedly, helping scientists compare cloud cover and surface changes over time.",
+            "url": "https://example.org/earth-space/observation",
+        },
+        {
+            "title": "Earth's horizon from orbit",
+            "summary": "From orbit, Earth's curved horizon separates the bright atmosphere from the darkness of space.",
+            "url": "https://example.org/earth-space/horizon",
+        },
+        {
+            "title": "Asteroid mining",
+            "summary": "Asteroid mining is the hypothetical extraction of materials from asteroids and near-Earth objects. As of 2024, around 127 grams of asteroid material have been brought to Earth from space.",
+            "url": "https://example.org/asteroid-mining",
+        },
+        {
+            "title": "Earth in culture",
+            "summary": "The cultural perspective on Earth varies across societies and historical periods.",
+            "url": "https://example.org/earth-culture",
+        },
+        {
+            "title": "Earth from Space: The pink city - European Space Agency",
+            "summary": "Earth from Space: The pink city - European Space Agency",
+            "url": "https://example.org/esa/pink-city",
+        },
+    ]
+    plan = studio._fallback_creative_plan(
+        "Earth from space",
+        "Create a 20 second documentary short about Earth from space",
+        "short",
+        20,
+        "general audience",
+        "clear and informative",
+        {"sources": sources},
+        "English",
+        "Earth from space",
+    )
+
+    chapters = plan["chapters"]
+    narration = " ".join(chapter["narration"] for chapter in chapters).lower()
+    overlays = [chapter["on_screen"] for chapter in chapters]
+
+    assert len(chapters) == 5
+    assert "first images of earth from space" in narration
+    assert "cloud bands" in narration
+    assert "asteroid material" not in narration
+    assert "cultural perspective" not in narration
+    assert "pink city" not in narration
+    assert plan["source_context"]["research_narration_points_used"] == 5
+    assert all(len(chapter["narration"].split()) >= 7 for chapter in chapters)
+    assert all(chapter["narration"].rstrip().endswith((".", "!", "?", "…")) for chapter in chapters)
+    assert len(set(overlays)) == len(overlays)
+    assert all(overlay.casefold() not in {
+        "a clear problem", "know the stakes", "one useful principle",
+        "show the process", "test and improve"
+    } for overlay in overlays)
+

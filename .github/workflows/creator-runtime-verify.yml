@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   runtime:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -28,13 +28,23 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Host media dependencies
+      - name: Verify or install FFmpeg and FFprobe
+        shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
-          ffmpeg -version | head -n 1
-          ffprobe -version | head -n 1
+          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+            ffmpeg -version | head -n 1
+            ffprobe -version | head -n 1
+            exit 0
+          fi
+          apt_opts=(-o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+          if ! sudo env DEBIAN_FRONTEND=noninteractive timeout 240s apt-get "${apt_opts[@]}" install -y --no-install-recommends ffmpeg; then
+            sudo timeout 180s apt-get "${apt_opts[@]}" update
+            sudo env DEBIAN_FRONTEND=noninteractive timeout 240s apt-get "${apt_opts[@]}" install -y --no-install-recommends ffmpeg
+          fi
+          command -v ffmpeg
+          command -v ffprobe
+
 
       - name: Install Python dependencies
         run: |

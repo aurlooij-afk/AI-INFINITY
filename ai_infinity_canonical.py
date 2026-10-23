@@ -258,9 +258,12 @@ def compile_intent(command,raw):
     explicit_ratio=clean(raw.get("aspect_ratio"),10)
     if explicit_ratio not in {"16:9","9:16","1:1","4:5"}:explicit_ratio=""
     if explicit_ratio:ratio=explicit_ratio
-    elif re.search(r"\b9\s*:?\s*16\b|\bvertical\b|\bportrait\b|\breel\b|\bshorts?\b|\btiktok\b",low):ratio="9:16"
-    elif re.search(r"\b1\s*:?\s*1\b|\bsquare\b",low):ratio="1:1"
-    elif re.search(r"\b4\s*:?\s*5\b",low):ratio="4:5"
+    # Ratio expressions must contain an explicit separator. The previous optional
+    # colon let ordinary integers be misread as aspect ratios (e.g. "Apollo 11"
+    # matched 1:1), silently changing both the render profile and QC contract.
+    elif re.search(r"\b9\s*:\s*16\b|\bvertical\b|\bportrait\b|\breel\b|\bshorts?\b|\btiktok\b",low):ratio="9:16"
+    elif re.search(r"\b1\s*:\s*1\b|\bsquare\b",low):ratio="1:1"
+    elif re.search(r"\b4\s*:\s*5\b",low):ratio="4:5"
     else:ratio="16:9"
     if not fmt:fmt="short" if ratio=="9:16" or re.search(r"\bshorts?|reel|tiktok\b",low) else "long"
     try:duration=int(raw.get("duration") or 0)

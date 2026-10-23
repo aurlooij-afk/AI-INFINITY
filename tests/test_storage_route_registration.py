@@ -99,7 +99,21 @@ def test_live_render_heredocs_compile_and_import_sys_before_sys_exit():
         for node in ast.walk(second)
     ), "the regression guard must exercise the actual sys.exit call path"
 
-    assert "sudo apt-get install -y --no-install-recommends ffmpeg" in workflow
+    # Accept either the pinned static binary setup or the bounded apt fallback.
+    # The current runner prefers preinstalled tools, then uses explicit deadlines.
+    setup_is_pinned = (
+        "uses: FedericoCarboni/setup-ffmpeg@37062fbf7149fc5578d6c57e08aed62458b375d6" in workflow
+        and "ffmpeg-version: release" in workflow
+        and "linking-type: static" in workflow
+    )
+    setup_is_bounded = (
+        "Verify or install FFmpeg and FFprobe" in workflow
+        and "Acquire::Retries=1" in workflow
+        and "timeout 240s apt-get" in workflow
+        and "command -v ffmpeg" in workflow
+        and "command -v ffprobe" in workflow
+    )
+    assert setup_is_pinned or setup_is_bounded, "live media workflow must install or reuse verifiable FFmpeg tools without unbounded setup"
     assert "command -v ffmpeg" in workflow
     assert "command -v ffprobe" in workflow
     assert "timeout=180" in blocks[1]

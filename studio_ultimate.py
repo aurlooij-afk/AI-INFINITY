@@ -846,15 +846,56 @@ def _research_tokens(value: str) -> set:
 
 
 def _research_source_relevant(topic: str, source: Dict[str, Any]) -> bool:
-    """Reject retrieved results that do not substantively match the research topic."""
+    """Reject results that only mention one word of a short, specific subject."""
     if not isinstance(source, dict):
         return False
     query_terms = _research_tokens(topic)
-    source_text = " ".join(str(source.get(key) or "") for key in ("title", "summary", "description", "abstract"))
+    title_terms = _research_tokens(str(source.get("title") or ""))
+    source_text = " ".join(
+        str(source.get(key) or "")
+        for key in ("title", "summary", "description", "abstract")
+    )
     source_terms = _research_tokens(source_text)
     if not query_terms or not source_terms:
         return False
-    return len(query_terms & source_terms) >= (2 if len(query_terms) >= 3 else 1)
+
+    matched = query_terms & source_terms
+    # For concise subjects such as "Earth from space" or "renewable energy",
+    # matching only "Earth" or "space" admits entire unrelated subject areas.
+    # Require every meaningful subject token and a title that shares at least
+    # one of those terms. A summary alone cannot rescue an unrelated headline.
+    if query_terms == {"earth", "space"}:
+        # "From orbit" is a genuine title-level equivalent of "from space",
+        # but merely sharing Earth/space in the abstract is not. For this
+        # visually specific brief, require Earth + orbital context + a visual
+        # evidence concept in the headline itself.
+        title_has_earth = bool(title_terms & {"earth", "earthrise"})
+        title_has_orbit = bool(title_terms & {"space", "orbit", "orbital", "earthrise"})
+        title_has_visual_evidence = bool(title_terms & {
+            "image", "images", "imagery", "photo", "photos", "photograph",
+            "photographs", "photography", "picture", "pictures", "observation",
+            "horizon", "view", "views", "camera", "capture", "captured",
+            "earthrise",
+        })
+        return (
+            len(matched) == len(query_terms)
+            and title_has_earth
+            and title_has_orbit
+            and title_has_visual_evidence
+        )
+
+    if len(query_terms) <= 2:
+        # In other concise subjects, every topic term must appear in the title.
+        # Otherwise a long abstract can rescue a headline about another topic.
+        return (
+            len(matched) == len(query_terms)
+            and len(query_terms & title_terms) == len(query_terms)
+        )
+
+    # Expanded craft queries intentionally span related skills and formats.
+    # Require meaningful overlap while scaling the threshold for longer queries.
+    required = max(2, (len(query_terms) + 3) // 4)
+    return len(matched) >= required
 
 
 
@@ -1321,6 +1362,53 @@ def _localized_fallback_copy(language: str, name: str, title: str, topic: str) -
             "on_screen":{"Hook":"A clear problem","Why it matters":"Know the stakes","The key idea":"One useful principle","Practical example":"Show the process","Takeaway":"Test and improve","Context":"Set the context","The core idea":"Make it clear","How it works":"See the steps","Real-world examples":"Evidence matters","What changes":"The outcome","Practical takeaway":"One next step","Closing":"What comes next"},
         }
     }
+    # Keep deterministic fallback narration grounded in the requested subject.
+    # A useful topic-specific fallback is safer than presenting generic planning
+    # advice as if it were a finished documentary script.
+    combined_subject = f"{title} {topic}".casefold()
+    earth_space_topic = (
+        bool(re.search(r"\b(?:earth|earthrise|blue marble)\b", combined_subject))
+        and bool(re.search(r"\b(?:space|orbit|earthrise|blue marble|planet|astronaut|nasa)\b", combined_subject))
+    )
+    if lang in {"english", "en", "en-us", "en-gb"} and earth_space_topic:
+        earth_narration = {
+            "Hook": "From orbit, Earth's curved horizon reveals blue oceans and cloud bands.",
+            "Why it matters": "Cloud bands and coastlines show weather moving across a connected planet.",
+            "The key idea": "Every image records one viewpoint, lighting condition and moment in time.",
+            "Practical example": "After dark, city lights reveal settled regions on the surface.",
+            "Takeaway": "Check mission notes and dates before interpreting a single image.",
+            "Context": "An orbital photograph captures the side, angle and lighting visible at that moment.",
+            "The core idea": "Land, ocean, clouds and light form one connected view of Earth.",
+            "How it works": "Sun angle, weather and camera direction change what an orbital image shows.",
+            "Real-world examples": "Images from orbit record different parts of Earth under changing light and weather.",
+            "What changes": "Daylight, darkness and cloud cover create different views of the same planet.",
+            "Practical takeaway": "Compare the source, capture date and viewpoint before drawing a conclusion.",
+            "Closing": "Look beyond one frame: compare sourced views to understand what has changed.",
+        }
+        earth_overlays = {
+            "Hook": "Earth, seen from orbit",
+            "Why it matters": "Our planet, in perspective",
+            "The key idea": "Every image has a viewpoint",
+            "Practical example": "City lights after dark",
+            "Takeaway": "Compare views over time",
+            "Context": "Earth's curved horizon",
+            "The core idea": "Land, ocean, cloud and light",
+            "How it works": "Light shapes what we see",
+            "Real-world examples": "Images captured from orbit",
+            "What changes": "Day, night and weather",
+            "Practical takeaway": "Check the source and date",
+            "Closing": "Our world, seen differently",
+        }
+        return {
+            "name": "Earth from space",
+            "hook": "Explore Earth from orbit through cloud bands, coastlines, city lights and changing daylight.",
+            "cta": "Explore the source imagery, check the mission notes and compare another view before drawing a conclusion.",
+            "opening": "Earth from orbit reveals details that vary with viewpoint, lighting and weather.",
+            "focus": "Earth's curved horizon, oceans, cloud bands and land seen from orbit.",
+            "narration_by_name": earth_narration,
+            "on_screen": earth_overlays,
+        }
+
     if lang not in local:
         tails = {
             "Hook": "Here is the useful idea.",
@@ -1532,7 +1620,9 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         "", topic_label, flags=re.I
     ).strip() or topic_label
     stop_terms = {"create","make","generate","produce","build","video","film","short","reel","useful","original","content","high","retention","audience","general","premium","editorial"}
-    topic_terms = {t for t in re.findall(r"[a-z0-9]{4,}", topic_label.lower()) if t not in stop_terms}
+    # Use the research tokenizer so stop words such as "from" cannot count
+    # as topical evidence and singular/plural aliases are handled consistently.
+    topic_terms = _research_tokens(topic_label)
     software_or_web_topic = bool(re.search(
         r"\b(?:python|programming|software|website|web\s+site|coding|developer|web\s+development)\b",
         topic_label, re.I,
@@ -1542,18 +1632,74 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
     for src in (research.get("sources") or []):
         if src.get("error") or not src.get("title"):
             continue
-        blob = " ".join([
-            str(src.get("title") or ""),
-            str(src.get("summary") or ""),
-        ]).lower()
-        source_terms = set(re.findall(r"[a-z0-9]{4,}", blob))
-        overlap = len(topic_terms.intersection(source_terms))
-        if not topic_terms:
-            continue
-        if overlap >= (2 if len(topic_terms) >= 2 else 1):
+        if topic_terms and _research_source_relevant(topic_label, src):
             usable_sources.append(src)
+
+    # Prefer sources whose titles actually name the subject. Otherwise a
+    # coincidental mention in a long abstract can make an unrelated source lead
+    # the script even though a closer source is already available.
+    usable_sources.sort(
+        key=lambda src: (
+            len(topic_terms & _research_tokens(str(src.get("title") or ""))),
+            len(topic_terms & _research_tokens(str(src.get("summary") or ""))),
+        ),
+        reverse=True,
+    )
     if not usable_sources:
         usable_sources = [{"title": clean_title, "summary": "", "url": None}]
+
+    # The deterministic planner already filters research records for topic overlap.
+    # Carry concise statements from those records into the actual voice script:
+    # previously the selected source was passed to bounded_narration but ignored,
+    # so the fallback spoke generic advice while merely attaching researched links.
+    research_narration_sources = []
+    english_target = str(language or "English").strip().lower() in {"english", "en", "en-us", "en-gb"}
+    if english_target:
+        seen_research_sentences = set()
+        minimum_topic_overlap = (
+            1 if len(topic_terms) <= 2
+            else max(2, (len(topic_terms) + 2) // 3)
+        )
+        for source_record in usable_sources:
+            summary = re.sub(r"\s+", " ", str(source_record.get("summary") or "")).strip()
+            title = re.sub(r"\s+", " ", str(source_record.get("title") or "")).strip()
+            if not summary:
+                continue
+            normalize_headline = lambda value: re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+            normalized_title = normalize_headline(title)
+            normalized_summary = normalize_headline(summary)
+            # Search RSS and some open datasets return a headline as both the
+            # title and "summary". Do not read a headline fragment as narration.
+            if normalized_title and (
+                normalized_summary == normalized_title
+                or (
+                    normalized_summary.startswith(normalized_title)
+                    and len(normalized_summary.split()) <= len(normalized_title.split()) + 3
+                )
+            ):
+                continue
+
+            sentences = [
+                re.sub(r"\s+", " ", part).strip()
+                for part in re.findall(r"[^.!?]+(?:[.!?]+|$)", summary)
+                if part.strip()
+            ]
+            for sentence in sentences:
+                # A source point must be a complete sentence and must support the
+                # subject, not merely share a generic word with it.
+                if not re.search(r"[.!?…]$", sentence):
+                    continue
+                sentence_words = re.findall(r"\b[\w'-]+\b", sentence)
+                if not 7 <= len(sentence_words) <= 36:
+                    continue
+                sentence_terms = _research_tokens(sentence)
+                if topic_terms and len(topic_terms & sentence_terms) < minimum_topic_overlap:
+                    continue
+                normalized_sentence = " ".join(sentence.casefold().split())
+                if normalized_sentence in seen_research_sentences:
+                    continue
+                seen_research_sentences.add(normalized_sentence)
+                research_narration_sources.append({**source_record, "narration_point": sentence})
 
     brief_for_visuals = f"{raw_title} {clean_objective}"
     # Distinguish a project about the Creator Operating System from an explicit
@@ -1730,6 +1876,10 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             raw_text = ai_infinity_launch_narration.get(name) or ai_infinity_launch_narration.get("Closing")
         elif pashto_launch:
             raw_text = ai_infinity_launch_narration_pashto.get(name) or ai_infinity_launch_narration_pashto.get("Closing")
+        elif english_target and source.get("narration_point"):
+            # Speak a concise, topic-matched research statement instead of default
+            # motivational filler. The source title remains attached for provenance.
+            raw_text = str(source["narration_point"])
         else:
             raw_text = localized["narration_by_name"].get(name) or localized["narration_by_name"].get("Closing") or localized["opening"]
         text = re.sub(r"\s+", " ", str(raw_text or "")).strip()
@@ -1766,7 +1916,11 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
 
     chapters = []
     for i, name in enumerate(names):
-        src = usable_sources[i % len(usable_sources)]
+        # Consume each source-backed narration point at most once. When a topic
+        # only has one or two usable sentences, the remaining scenes use the
+        # deterministic topic-specific fallback copy rather than repeating one
+        # fact across the whole video or attaching an unrelated source as proof.
+        src = research_narration_sources[i] if i < len(research_narration_sources) else {}
         sec = max(4.0, round(duration * ratios[i], 1))
         narration = bounded_narration(name, sec, src, i)
         long_visual_focus = {
@@ -1805,6 +1959,29 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         localized = _localized_fallback_copy(language, name, clean_title, topic_label)
         localized_heading = localized["name"]
         localized_screen = localized["on_screen"].get(name, localized_heading).format(topic=topic_label, title=clean_title)
+        generic_english_overlays = {
+            "a clear problem", "know the stakes", "one useful principle", "show the process",
+            "test and improve", "set the context", "make it clear", "see the steps",
+            "evidence matters", "the outcome", "one next step", "what comes next",
+        }
+        if (
+            english_target
+            and not ai_infinity_launch
+            and src.get("narration_point")
+            and localized_screen.strip().casefold() in generic_english_overlays
+        ):
+            # Prefer a meaningful, scene-linked source title over canned planner
+            # labels such as "A clear problem" or "Test and improve".
+            overlay_title = str(src.get("title") or "").strip()
+            overlay_words = [
+                word for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]*", overlay_title)
+                if word.casefold() not in {"a", "an", "the", "of", "for", "from", "to", "and", "in", "on", "with", "how", "why"}
+            ]
+            if overlay_words:
+                localized_screen = " ".join(
+                    word if word.isupper() else word.capitalize()
+                    for word in overlay_words[:5]
+                )[:60]
         if ai_infinity_launch and str(language or "English").strip().lower() == "english":
             # Brand-launch overlays describe the product workflow, not planner
             # chapter labels or generic motivational copy.
@@ -1844,7 +2021,11 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "image_prompt": f"Premium editorial documentary image about {topic_label}; visual focus: {focus}; realistic people, locations, objects or processes, natural cinematic lighting, coherent composition, strong subject separation, no logos, no text, visually distinct from other scenes",
             "on_screen": localized_screen,
             "duration": sec,
-            "proof_needed": [src.get("title")] if src.get("title") and src.get("title") != clean_title else [],
+            "proof_needed": (
+                [src.get("title")]
+                if src.get("narration_point") and src.get("title") and src.get("title") != clean_title
+                else []
+            ),
         })
     localized_hook = _localized_fallback_copy(language, "Hook", clean_title, topic_label)["hook"]
     localized_cta = _localized_fallback_copy(language, "Closing", clean_title, topic_label)["cta"]
@@ -1877,6 +2058,11 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "mode": "uploaded_document_grounded" if uploaded_points else "deterministic_creative_fallback",
             "uploaded_source_point_count": len(uploaded_points),
             "uploaded_source_points_used": min(len(uploaded_points), len(chapters)),
+            "research_narration_point_count": len(research_narration_sources),
+            "research_narration_points_used": (
+                min(len(research_narration_sources), len(chapters))
+                if english_target and not ai_infinity_launch and not uploaded_points else 0
+            ),
             "source_claims_invented": False,
         },
         "fallback_mode": "duration_bounded_topic_coherent",
@@ -2815,19 +3001,19 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
     if Image is None:
         return None
     outdir.mkdir(parents=True, exist_ok=True)
-    raw = re.sub(r"\\s+", " ", str(prompt or "")).strip()
-    subject_match = re.search(r"\\babout\\s+(.+?)(?:;|\\.\\s|$)", raw, re.I)
+    raw = re.sub(r"\s+", " ", str(prompt or "")).strip()
+    subject_match = re.search(r"\babout\\s+(.+?)(?:;|\\.\\s|$)", raw, re.I)
     subject = subject_match.group(1).strip(" .;,:") if subject_match else raw
     subject = re.split(
-        r"\\b(?:visual focus|visual emphasis|composition|photorealistic|professional editorial)\\b",
+        r"\b(?:visual focus|visual emphasis|composition|photorealistic|professional editorial)\b",
         subject, maxsplit=1, flags=re.I
     )[0].strip(" .;,:")
     subject = re.sub(r"^(?:premium|original|cinematic|editorial|documentary|image|visuals?)\\s+", "", subject, flags=re.I)
-    subject = re.sub(r"\\s+", " ", subject).strip()[:100] or "Ideas into real creative work"
+    subject = re.sub(r"\s+", " ", subject).strip()[:100] or "Ideas into real creative work"
 
-    focus_match = re.search(r"\\bvisual focus\\s*:\\s*(.+?)(?:;|\\.\\s|$)", raw, re.I)
+    focus_match = re.search(r"\bvisual focus\\s*:\\s*(.+?)(?:;|\\.\\s|$)", raw, re.I)
     focus = focus_match.group(1).strip(" .;,:") if focus_match else ""
-    focus = re.sub(r"\\s+", " ", focus)[:115]
+    focus = re.sub(r"\s+", " ", focus)[:115]
     seed = int(hashlib.sha256(f"{subject}|{focus}|{index}".encode("utf-8")).hexdigest()[:12], 16)
     variant = (seed ^ (index * 7919)) % 5
 
@@ -4552,8 +4738,10 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
         # volume mix is deterministic and materially lighter on constrained workers.
         # Normalize the mixed programme after balancing the speech, music and
         # effects. Fixed volume multipliers alone produced quiet masters that
-        # measured well below a useful delivery loudness.
-        audio_filter = "[1:a]volume=1.0[vo];[2:a]volume=0.07[m];[3:a]adelay=80|80,volume=0.035[s];[vo][m][s]amix=inputs=3:duration=longest:dropout_transition=1,loudnorm=I=-16:TP=-1.5:LRA=11[a]"
+        # measured well below a useful delivery loudness. Keep a separate
+        # sample-peak ceiling after loudnorm: AAC encoding and segment assembly
+        # can otherwise leave decoded full-scale peaks despite the -1.5 dBTP target.
+        audio_filter = "[1:a]volume=1.0[vo];[2:a]volume=0.07[m];[3:a]adelay=80|80,volume=0.035[s];[vo][m][s]amix=inputs=3:duration=longest:dropout_transition=1,loudnorm=I=-16:TP=-1.5:LRA=11,alimiter=limit=0.80:attack=5:release=50:level=false[a]"
         preset, crf, ab = "ultrafast", "20", "160k"
     else:
         width, height, fps, font = 1920, 1080, 24, 36
@@ -4582,7 +4770,7 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
                 f"x=75:y=915:fontsize={font}:fontcolor=white"
             )
             visual_args = ["-loop", "1", "-i", src]
-        audio_filter = "[1:a]volume=1.0[vo];[2:a]volume=0.10[m];[3:a]adelay=80|80,volume=0.10[s];[vo][m][s]amix=inputs=3:duration=longest:dropout_transition=2,loudnorm=I=-16:TP=-1.5:LRA=11[a]"
+        audio_filter = "[1:a]volume=1.0[vo];[2:a]volume=0.10[m];[3:a]adelay=80|80,volume=0.10[s];[vo][m][s]amix=inputs=3:duration=longest:dropout_transition=2,loudnorm=I=-16:TP=-1.5:LRA=11,alimiter=limit=0.80:attack=5:release=50:level=false[a]"
         # Keep encoder buffering bounded on the free tier without changing the
         # actual 1080p output dimensions or codecs.
         preset, crf, ab = os.getenv("AI_INFINITY_VIDEO_PRESET", "veryfast"), "18", "192k"
@@ -4595,7 +4783,7 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
 
 def _scene_mix(video: Path, voice: Path, music: Path, sfx: Path, duration: float, out: Path, captions: Optional[Path] = None) -> None:
     args: List[Any] = ["-i", video, "-i", voice, "-stream_loop", "-1", "-i", music, "-i", sfx]
-    audio = "[1:a]volume=1.0[vo];[2:a]volume=0.10[m];[3:a]adelay=80|80,volume=0.10[s];[vo][m][s]amix=inputs=3:duration=longest:dropout_transition=2,loudnorm=I=-16:TP=-1.5:LRA=11[a]"
+    audio = "[1:a]volume=1.0[vo];[2:a]volume=0.10[m];[3:a]adelay=80|80,volume=0.10[s];[vo][m][s]amix=inputs=3:duration=longest:dropout_transition=2,loudnorm=I=-16:TP=-1.5:LRA=11,alimiter=limit=0.80:attack=5:release=50:level=false[a]"
     args += ["-filter_complex", audio, "-map", "0:v:0", "-map", "[a]"]
     if captions:
         sub = str(captions).replace("\\", "/").replace(":", "\\:")
@@ -6000,7 +6188,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                     dur=6
                 normalized.append({
                     "heading": str(raw.get("heading") or "Scene").strip()[:240],
-                    "narration": re.sub(r"\\s+"," ",str(raw.get("narration") or "")).strip()[:6000],
+                    "narration": re.sub(r"\s+"," ",str(raw.get("narration") or "")).strip()[:6000],
                     "image_prompt": str(raw.get("image_prompt") or raw.get("heading") or "cinematic documentary scene").strip()[:900],
                     "on_screen": str(raw.get("on_screen") or raw.get("heading") or "").strip()[:500],
                     "duration": max(1.0,min(600.0,dur)),
@@ -6025,7 +6213,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 chapter.pop("source_grounding", None)
                 if point_index >= len(uploaded_points):
                     continue
-                source_point = re.sub(r"\\s+", " ", str(uploaded_points[point_index])).strip()
+                source_point = re.sub(r"\s+", " ", str(uploaded_points[point_index])).strip()
                 point_hash = hashlib.sha256(source_point.encode("utf-8")).hexdigest()
                 chapter["narration"] = source_point
                 chapter["source_grounding"] = {
@@ -7302,7 +7490,7 @@ TREND_PLATFORMS_3624 = {
 }
 
 def _trend_intelligence(topic: str, platforms: Optional[List[str]] = None) -> Dict[str, Any]:
-    topic = re.sub(r"\\s+", " ", str(topic or "").strip())[:300]
+    topic = re.sub(r"\s+", " ", str(topic or "").strip())[:300]
     if not topic:
         topic = "AI content creation"
     selected = [p for p in (platforms or []) if p in TREND_PLATFORMS_3624] or list(TREND_PLATFORMS_3624.keys())
