@@ -61,13 +61,34 @@ jobs:
   python-syntax:
     name: Python syntax guard
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - name: Install runtime dependencies
+      - name: Set up FFmpeg and FFprobe
+        uses: FedericoCarboni/setup-ffmpeg@37062fbf7149fc5578d6c57e08aed62458b375d6
+        with:
+          ffmpeg-version: release
+          linking-type: static
+
+      - name: Install MLT and offline voice dependencies
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg espeak-ng melt
+          set -euo pipefail
+          apt_opts=(-o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+          missing=()
+          command -v espeak-ng >/dev/null 2>&1 || missing+=(espeak-ng)
+          command -v melt >/dev/null 2>&1 || missing+=(melt)
+          if (("${#missing[@]}" > 0)); then
+            if ! sudo env DEBIAN_FRONTEND=noninteractive timeout 240s apt-get "${apt_opts[@]}" install -y --no-install-recommends "${missing[@]}"; then
+              sudo timeout 180s apt-get "${apt_opts[@]}" update
+              sudo env DEBIAN_FRONTEND=noninteractive timeout 240s apt-get "${apt_opts[@]}" install -y --no-install-recommends "${missing[@]}"
+            fi
+          fi
+          command -v espeak-ng
+          command -v melt
+
+      - name: Install runtime Python dependencies
+        run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
       - name: Compile all runtime Python modules
