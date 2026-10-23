@@ -325,6 +325,122 @@ def test_snapshot_requires_readback_and_marks_verified_only_on_exact_bytes(monke
     assert backend.status()["snapshot_verified"] is False
 
 
+def test_snapshot_timer_retries_a_transient_object_store_failure(monkeypatch):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    monkeypatch.setattr(backend, "_STATUS", {
+        "configured": True, "active": True, "verified": True,
+        "snapshot_verified": False, "backend": "backblaze_b2",
+        "last_sync_at": None, "last_sha256": None, "last_error": None,
+    })
+    monkeypatch.setattr(backend, "_CHANGE_GENERATION", 0)
+    monkeypatch.setattr(backend, "_SYNC_DIRTY", False)
+    monkeypatch.setattr(backend, "_SYNC_FAILURES", 0)
+    monkeypatch.setattr(backend, "_SYNC_TIMER", None)
+
+    scheduled = []
+
+    class FakeTimer:
+        def __init__(self, interval, callback, *args, **kwargs):
+            self.interval = interval
+            self.callback = callback
+            self.args = args
+            self.kwargs = kwargs
+            self.daemon = False
+            self.started = False
+
+        def start(self):
+            self.started = True
+            scheduled.append(self)
+
+        def is_alive(self):
+            return self.started
+
+    monkeypatch.setattr(backend.threading, "Timer", FakeTimer)
+    calls = []
+
+    def transient_then_verified():
+        calls.append(True)
+        if len(calls) == 1:
+            backend._STATUS["snapshot_verified"] = False
+            backend._STATUS["last_error"] = "ClientError: temporary B2 failure"
+            return {"status": "failed", "truthful": True}
+        backend._STATUS["snapshot_verified"] = True
+        backend._STATUS["last_sync_at"] = "2026-10-23T14:00:00Z"
+        backend._STATUS["last_sha256"] = "b" * 64
+        backend._STATUS["last_error"] = None
+        return {"status": "verified", "truthful": True}
+
+    monkeypatch.setattr(backend, "snapshot_now", transient_then_verified)
+    backend._snapshot_timer_job()
+
+    assert len(calls) == 1
+    assert backend.status()["snapshot_verified"] is False
+    assert backend._SYNC_FAILURES == 1
+    assert len(scheduled) == 1
+    retry = scheduled.pop(0)
+    assert retry.interval == 1.0
+    retry.callback()
+
+    assert len(calls) == 2
+    assert backend.status()["snapshot_verified"] is True
+    assert backend._SYNC_FAILURES == 0
+    assert backend._SYNC_TIMER is None
+
+
+def test_snapshot_timer_stops_after_bounded_transient_failures(monkeypatch):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    monkeypatch.setattr(backend, "_STATUS", {
+        "configured": True, "active": True, "verified": True,
+        "snapshot_verified": False, "backend": "backblaze_b2",
+        "last_sync_at": None, "last_sha256": None, "last_error": None,
+    })
+    monkeypatch.setattr(backend, "_CHANGE_GENERATION", 0)
+    monkeypatch.setattr(backend, "_SYNC_DIRTY", False)
+    monkeypatch.setattr(backend, "_SYNC_FAILURES", 0)
+    monkeypatch.setattr(backend, "_SYNC_TIMER", None)
+
+    scheduled = []
+    delays = []
+
+    class FakeTimer:
+        def __init__(self, interval, callback, *args, **kwargs):
+            self.interval = interval
+            self.callback = callback
+            self.args = args
+            self.kwargs = kwargs
+            self.daemon = False
+            self.started = False
+
+        def start(self):
+            self.started = True
+            scheduled.append(self)
+            delays.append(self.interval)
+
+        def is_alive(self):
+            return self.started
+
+    monkeypatch.setattr(backend.threading, "Timer", FakeTimer)
+    calls = []
+
+    def always_fails():
+        calls.append(True)
+        backend._STATUS["snapshot_verified"] = False
+        backend._STATUS["last_error"] = "ClientError: persistent B2 failure"
+        return {"status": "failed", "truthful": True}
+
+    monkeypatch.setattr(backend, "snapshot_now", always_fails)
+    backend._snapshot_timer_job()
+    while scheduled:
+        timer = scheduled.pop(0)
+        timer.callback()
+
+    assert len(calls) == backend._MAX_SNAPSHOT_RETRIES + 1
+    assert delays == [1.0, 2.0, 4.0]
+    assert backend._SYNC_FAILURES == backend._MAX_SNAPSHOT_RETRIES
+    assert backend._SYNC_TIMER is None
+    assert backend.status()["snapshot_verified"] is False
+
+
 def test_b2_backend_is_not_persistent_until_a_real_snapshot_is_verified(monkeypatch, tmp_path: Path):
     _b2_env(monkeypatch)
     truth = importlib.import_module("ai_infinity.persistence_truth")
