@@ -1907,7 +1907,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         if (
             english_target
             and not ai_infinity_launch
-            and source.get("narration_point")
+            and src.get("narration_point")
             and localized_screen.strip().casefold() in generic_english_overlays
         ):
             # Prefer a meaningful, scene-linked source title over canned planner
