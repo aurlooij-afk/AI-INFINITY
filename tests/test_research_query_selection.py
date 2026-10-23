@@ -275,3 +275,25 @@ def test_short_specific_subject_requires_title_context_and_all_subject_terms():
     assert studio_ultimate._research_source_relevant(topic, unrelated_space_object) is False
     assert studio_ultimate._research_source_relevant(topic, unrelated_weapons) is False
 
+def test_aspect_ratio_inference_does_not_read_integer_eleven_as_square():
+    import ai_infinity_canonical
+
+    intent = ai_infinity_canonical.compile_intent(
+        "Create a 20-second cinematic video about Apollo 11 lunar landing.",
+        {"duration": 20},
+    )
+    assert intent["constraints"]["aspect_ratio"] == "16:9"
+
+
+def test_aspect_ratio_inference_requires_explicit_ratio_separator():
+    import ai_infinity_canonical
+
+    cases = [
+        ("Create a 20-second video about Apollo 11.", "16:9"),
+        ("Create a 20-second square video about coral reefs.", "1:1"),
+        ("Create a 20-second 9:16 video about renewable energy.", "9:16"),
+        ("Create a 20-second 4:5 video about Python.", "4:5"),
+    ]
+    for command, expected in cases:
+        intent = ai_infinity_canonical.compile_intent(command, {"duration": 20})
+        assert intent["constraints"]["aspect_ratio"] == expected, (command, intent["constraints"])
