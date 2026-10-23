@@ -106,6 +106,43 @@ else:
     raise AssertionError(f"live deployment revision mismatch: expected {expected_revision}, got {canonical.get('deployment_revision') or health.get('deployment_revision')}")
 assert health.get("canonical") is True,health
 assert canonical.get("truthful") is True,canonical
+
+# Re-run attempt 2 is reserved for the clean-instance restart proof. The first
+# successful attempt writes the verified remote snapshot; after a deliberate
+# same-revision Render redeploy, rerunning this job must observe a real restore
+# before it creates any new project or checkpoint.
+try:
+    run_attempt = int(os.environ.get("GITHUB_RUN_ATTEMPT", "1") or "1")
+except (TypeError, ValueError):
+    run_attempt = 1
+if run_attempt > 1:
+    startup_storage = (canonical.get("capabilities") or {}).get("storage") or {}
+    startup_backend = startup_storage.get("project_state_backend_status") or {}
+    startup_restore = startup_backend.get("last_restore") or {}
+    assert startup_storage.get("persistent") is True, {
+        "persistent": startup_storage.get("persistent"),
+        "reason": startup_storage.get("reason"),
+        "backend": startup_backend,
+    }
+    assert startup_restore.get("attempted") is True, startup_restore
+    assert startup_restore.get("restored") is True, {
+        "restore": startup_restore,
+        "backend": startup_backend,
+    }
+    startup_restore_sha = str(startup_restore.get("sha256") or "")
+    assert len(startup_restore_sha) == 64, startup_restore
+    assert startup_restore_sha == str(startup_backend.get("last_sha256") or ""), {
+        "restore": startup_restore,
+        "backend": startup_backend,
+    }
+    print("LIVE_STARTUP_RESTORE_PROOF", json.dumps({
+        "restored": True,
+        "sha256": startup_restore_sha,
+        "size_bytes": startup_restore.get("size_bytes"),
+        "status": startup_restore.get("status"),
+        "reason": startup_restore.get("reason"),
+    }, sort_keys=True), flush=True)
+
 studio_health,_=ok("/infinity/studio/health")
 assert studio_health.get("fast_mode") is True, studio_health
 providers,_=ok("/infinity/studio/providers")
@@ -116,7 +153,7 @@ assert contract.get("version")=="TARGET-2050.3624", contract
 assert contract.get("contract",{}).get("no_fake_completion") is True, contract
 pre,_=ok("/infinity/canonical/preflight","POST",{"command":"Create a 20 second cinematic video about Earth from space"}); assert pre.get("ready") is True,pre
 
-created,_=ok("/infinity/canonical/create","POST",{"command":"Create a 20 second cinematic video about Earth from space","duration":20,"format":"short","aspect_ratio":"16:9","idempotency_key":"live-production-proof-" + (os.environ.get("GITHUB_RUN_ID") or uuid.uuid4().hex)})
+created,_=ok("/infinity/canonical/create","POST",{"command":"Create a 20 second cinematic video about Earth from space","duration":20,"format":"short","aspect_ratio":"16:9","idempotency_key":"live-production-proof-" + (os.environ.get("GITHUB_RUN_ID") or uuid.uuid4().hex) + "-attempt-" + (os.environ.get("GITHUB_RUN_ATTEMPT") or "1")})
 pid=created["project_id"]; v1=created["version"]["version_id"]
 state=wait(pid); assert state["status"] in {"completed","completed_with_qc_warnings"},state
 
