@@ -53,6 +53,16 @@ _STATUS: Dict[str, Any] = {
     "last_sync_at": None,
     "last_sha256": None,
     "last_error": None,
+    "last_restore": {
+        "attempted": False,
+        "restored": False,
+        "status": "not_attempted",
+        "reason": "startup_restore_not_attempted",
+        "size_bytes": None,
+        "sha256": None,
+        "completed_at": None,
+        "truthful": True,
+    },
 }
 
 TRUE = {"1", "true", "yes", "on"}
@@ -255,6 +265,16 @@ def configure(db_path: Path | str) -> Dict[str, Any]:
                 "last_sync_at": None,
                 "last_sha256": None,
                 "last_error": None,
+                "last_restore": {
+                    "attempted": False,
+                    "restored": False,
+                    "status": "not_attempted",
+                    "reason": "backend_not_active",
+                    "size_bytes": None,
+                    "sha256": None,
+                    "completed_at": None,
+                    "truthful": True,
+                },
             }
         )
 
@@ -275,7 +295,19 @@ def configure(db_path: Path | str) -> Dict[str, Any]:
             _STATUS["last_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
         return status()
 
-    restore_on_startup()
+    restore_result = restore_on_startup()
+    restored = bool(restore_result.get("restored"))
+    with _LOCK:
+        _STATUS["last_restore"] = {
+            "attempted": True,
+            "restored": restored,
+            "status": "restored" if restored else "not_restored",
+            "reason": None if restored else str(restore_result.get("reason") or "not_restored")[:100],
+            "size_bytes": int(restore_result.get("size_bytes") or 0) if restored else None,
+            "sha256": str(restore_result.get("sha256") or "") if restored else None,
+            "completed_at": time.time(),
+            "truthful": True,
+        }
     return status()
 
 
