@@ -1326,8 +1326,8 @@ def _localized_fallback_copy(language: str, name: str, title: str, topic: str) -
     # advice as if it were a finished documentary script.
     combined_subject = f"{title} {topic}".casefold()
     earth_space_topic = (
-        bool(re.search(r"\\b(?:earth|earthrise|blue marble)\\b", combined_subject))
-        and bool(re.search(r"\\b(?:space|orbit|earthrise|blue marble|planet|astronaut|nasa)\\b", combined_subject))
+        bool(re.search(r"\b(?:earth|earthrise|blue marble)\\b", combined_subject))
+        and bool(re.search(r"\b(?:space|orbit|earthrise|blue marble|planet|astronaut|nasa)\\b", combined_subject))
     )
     if lang in {"english", "en", "en-us", "en-gb"} and earth_space_topic:
         earth_narration = {
@@ -2863,16 +2863,16 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
         return None
     outdir.mkdir(parents=True, exist_ok=True)
     raw = re.sub(r"\\s+", " ", str(prompt or "")).strip()
-    subject_match = re.search(r"\\babout\\s+(.+?)(?:;|\\.\\s|$)", raw, re.I)
+    subject_match = re.search(r"\babout\\s+(.+?)(?:;|\\.\\s|$)", raw, re.I)
     subject = subject_match.group(1).strip(" .;,:") if subject_match else raw
     subject = re.split(
-        r"\\b(?:visual focus|visual emphasis|composition|photorealistic|professional editorial)\\b",
+        r"\b(?:visual focus|visual emphasis|composition|photorealistic|professional editorial)\\b",
         subject, maxsplit=1, flags=re.I
     )[0].strip(" .;,:")
     subject = re.sub(r"^(?:premium|original|cinematic|editorial|documentary|image|visuals?)\\s+", "", subject, flags=re.I)
     subject = re.sub(r"\\s+", " ", subject).strip()[:100] or "Ideas into real creative work"
 
-    focus_match = re.search(r"\\bvisual focus\\s*:\\s*(.+?)(?:;|\\.\\s|$)", raw, re.I)
+    focus_match = re.search(r"\bvisual focus\\s*:\\s*(.+?)(?:;|\\.\\s|$)", raw, re.I)
     focus = focus_match.group(1).strip(" .;,:") if focus_match else ""
     focus = re.sub(r"\\s+", " ", focus)[:115]
     seed = int(hashlib.sha256(f"{subject}|{focus}|{index}".encode("utf-8")).hexdigest()[:12], 16)
