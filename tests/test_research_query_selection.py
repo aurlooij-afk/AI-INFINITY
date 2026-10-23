@@ -255,8 +255,18 @@ def test_short_specific_subject_requires_title_context_and_all_subject_terms():
         "title": "Asteroid mining",
         "summary": "Asteroid material has been brought to Earth from space by several sample-return missions.",
     }
+    broad_definition = {
+        "title": "Outer space",
+        "summary": "Outer space is the expanse beyond Earth's atmosphere and between celestial bodies.",
+    }
+    unrelated_space_object = {
+        "title": "Artificial structures visible from space",
+        "summary": "Artificial structures visible from space include buildings and walls; Earth has many human-made structures.",
+    }
 
     assert studio_ultimate._research_source_relevant(topic, exact) is True
     assert studio_ultimate._research_source_relevant(topic, one_term_only) is False
     assert studio_ultimate._research_source_relevant(topic, matching_words_but_unrelated_title) is False
+    assert studio_ultimate._research_source_relevant(topic, broad_definition) is False
+    assert studio_ultimate._research_source_relevant(topic, unrelated_space_object) is False
 
