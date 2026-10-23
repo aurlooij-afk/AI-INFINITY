@@ -99,7 +99,9 @@ def test_live_render_heredocs_compile_and_import_sys_before_sys_exit():
         for node in ast.walk(second)
     ), "the regression guard must exercise the actual sys.exit call path"
 
-    assert "sudo apt-get install -y --no-install-recommends ffmpeg" in workflow
+    assert "uses: FedericoCarboni/setup-ffmpeg@37062fbf7149fc5578d6c57e08aed62458b375d6" in workflow
+    assert "ffmpeg-version: release" in workflow
+    assert "linking-type: static" in workflow
     assert "command -v ffmpeg" in workflow
     assert "command -v ffprobe" in workflow
     assert "timeout=180" in blocks[1]
