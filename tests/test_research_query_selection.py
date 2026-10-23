@@ -263,10 +263,15 @@ def test_short_specific_subject_requires_title_context_and_all_subject_terms():
         "title": "Artificial structures visible from space",
         "summary": "Artificial structures visible from space include buildings and walls; Earth has many human-made structures.",
     }
+    unrelated_weapons = {
+        "title": "Anti-satellite weapons tested in Earth orbit",
+        "summary": "Anti-satellite weapons tested in Earth orbit can destroy spacecraft, even from space.",
+    }
 
     assert studio_ultimate._research_source_relevant(topic, exact) is True
     assert studio_ultimate._research_source_relevant(topic, one_term_only) is False
     assert studio_ultimate._research_source_relevant(topic, matching_words_but_unrelated_title) is False
     assert studio_ultimate._research_source_relevant(topic, broad_definition) is False
     assert studio_ultimate._research_source_relevant(topic, unrelated_space_object) is False
+    assert studio_ultimate._research_source_relevant(topic, unrelated_weapons) is False
 
