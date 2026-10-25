@@ -9,19 +9,17 @@ BASE="http://127.0.0.1:18086"
 DATA=Path("/tmp/ai-infinity-one-idea-runtime")
 OUT=Path(os.environ.get("AI_INFINITY_EVIDENCE_DIR","/review-evidence"))
 FILES=OUT/"deliverables"
-TITLE="ONE IDEA. INFINITE WORLDS."
+TITLE="AI Infinity One Idea Infinite Worlds Launch Film"
 OUT.mkdir(parents=True,exist_ok=True); FILES.mkdir(parents=True,exist_ok=True)
-BRIEF="""Create an extraordinary 60-second cinematic brand film for AI Infinity titled ONE IDEA. INFINITE WORLDS. This must be a real video produced by the existing AI Infinity Creator Operating System, not a slideshow, mockup, synthetic screen, or hand-built substitute.
+BRIEF="""Create a professional 60-second AI Infinity launch film called One Idea Infinite Worlds in English, 16:9 landscape. Build one coherent emotional story: a creator has a single idea, researches it, shapes a script, sees it unfold into expansive worlds, refines it on a real editing timeline, and reveals a finished creative work. Begin with a powerful first-four-seconds hook, build visual scale and emotion, and end on a restrained premium AI Infinity brand reveal. The theme is creative possibility brought into real work.
 
-STORY: 0-4s: an arresting cinematic hook, creator facing a blank screen; narration: Every extraordinary world begins with something nobody else can see. 4-12s: one idea opens into expansive landscapes, an evocative futuristic city and human emotion, linked by a visual motif. 12-25s: show research, a clear narrative, writing and intentional story planning through relevant, distinct scenes. 25-40s: strongest sequence, deliberate composition, diverse shot sizes, controlled camera motion, atmospheric depth, motivated transitions, intentional lighting and emotional progression. 40-49s: show genuine editorial craft, timeline, narration, music, synchronized captions, render and quality checks. Do not fake UI or features AI Infinity cannot demonstrate. 49-56s: reveal idea becoming creative work; narration: Research it. Shape it. Bring it to life. Then make it better. 56-60s: restrained premium title reveal; final line: AI Infinity. One idea. Infinite worlds.
+Style: premium cinematic technology campaign, deep midnight blues, warm sunrise gold, subtle cyan and violet, filmic contrast, atmospheric landscapes, deliberate framing, motivated camera movement, meaningful transitions, strong visual variety, and coherent color/storytelling. Each scene must advance this story; do not make an unrelated stock slideshow.
 
-VISUAL DIRECTION: premium global technology-campaign quality; midnight blue, controlled cyan/violet and warm gold practical light, natural textures, rich blacks, atmospheric depth, elegant framing and visual continuity. Contrast intimate beats with expansive reveals. No generic unrelated montage, repeated imagery, random zooms, cluttered overlays, fake UI, malformed text or cheap transitions.
+Use at least 8 genuinely distinct scenes across the full 60 seconds. Use relevant visuals with explicit rights suitable for commercial promotion and record the exact source URL, creator, license and attribution, provenance, and integrity evidence. Do not use editorial-only imagery as an endorsement or brand advertisement. Prefer free images with clearly documented commercial-use rights. If suitable rights-cleared visuals are unavailable, keep the fallback and rights gates honest; do not disguise illustrative artwork as real footage.
 
-AUDIO: original intelligent English narration that fits the actual runtime; use a natural neural English voice if available and report the real provider. Coherent music arc from intimate opening to controlled climax and clean resolution. Narration intelligible, music balanced, captions synchronized.
+Audio: original English narration with a natural neural voice if available, and clearly record its actual provider; coherent music arc, balanced mix, and readable timed captions. Include script, SRT, thumbnail, programme mix, narration-only audio, sources, rights/provenance and production manifests, SEO/social copy, editable project/timeline, and package. Free-only, no paid providers, no publishing.
 
-PRODUCTION: create an actual 60-second 16:9 film through the existing AI Infinity workflow, targeting 1920x1080, with multiple distinct rendered scenes, relevant real-source visuals, voiceover, captions, thumbnail, audio master, complete package and editable project/timeline files where supported. Prefer verified public-domain or clearly licensed visuals. Preserve URLs, creator/rights-holder, licence/attribution, provenance and integrity evidence. Free-first only; no paid services. Never invent research, rights, footage, providers or capabilities. Unavailable footage, uncertain rights, fallback visuals or degraded research must remain visible and REVIEW_REQUIRED.
-
-VERIFY: inspect the actual MP4 with FFprobe and full FFmpeg decode; verify duration, resolution, streams, scene count, distinct visuals, voice, caption timing, audio integrity, source relevance, rights and manifest SHA-256. Make a contact sheet sampled across the entire film. Preserve script, captions, audio master, narration-only audio if available, sources, provenance, fact-check, rights/production manifests, thumbnail, package and review packet. Technical verification is not human approval. Do not publish. Never mark success solely because rendering finished."""
+Target 60 seconds, 1920x1080, 16:9 H.264/AAC. Verify actual duration/resolution, full media decode, unique scenes, captions, audio, source rights, zero fallback visuals, and final manifest SHA. If the renderer returns a shorter clip or rights are unresolved, mark REVIEW_REQUIRED; never claim completion. Generate the real film through AI Infinity's existing project creation and rendering engine. No mockup or hand-built replacement."""
 
 def sha(p):
  h=hashlib.sha256()
@@ -34,7 +32,7 @@ def probe(p):
  r=subprocess.run(["ffprobe","-v","error","-show_format","-show_streams","-of","json",str(p)],capture_output=True,text=True,timeout=180)
  if r.returncode: raise RuntimeError("ffprobe failed: "+r.stderr[-1200:])
  return json.loads(r.stdout)
-def contact(video,duration,target):
+def contact_sheet(video,duration,target):
  from PIL import Image,ImageDraw,ImageFont
  frames=[]
  for i,f in enumerate((.035,.14,.255,.37,.49,.61,.73,.85,.965),1):
