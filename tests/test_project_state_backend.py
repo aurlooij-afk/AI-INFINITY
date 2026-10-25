@@ -631,3 +631,91 @@ def test_render_blueprint_does_not_override_b2_endpoint_signing_region():
     blueprint = (root / "render.yaml").read_text(encoding="utf-8")
     assert '      - key: B2_REGION\n        value: ""' in blueprint
     assert '      - key: B2_REGION\n        value: "us-west-004"' not in blueprint
+
+def test_configure_fails_closed_when_remote_snapshot_restore_fails(monkeypatch, tmp_path: Path):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _b2_env(monkeypatch)
+    monkeypatch.setattr(
+        backend,
+        "_STATUS",
+        {
+            "configured": False,
+            "active": False,
+            "verified": False,
+            "snapshot_verified": False,
+            "backend": None,
+            "last_sync_at": None,
+            "last_sha256": None,
+            "last_error": None,
+            "last_restore": {},
+        },
+    )
+    monkeypatch.setattr(backend, "_DB_PATH", None)
+    monkeypatch.setattr(backend, "configured", lambda: True)
+    monkeypatch.setattr(backend, "contract_enabled", lambda: True)
+    monkeypatch.setattr(backend, "_verify_roundtrip", lambda: True)
+
+    def inaccessible_existing_snapshot():
+        backend._STATUS["last_error"] = "ClientError: code=AccessDenied http_status=403"
+        return {
+            "restored": False,
+            "reason": "restore_failed",
+            "error": "ClientError: code=AccessDenied http_status=403 operation=GetObject",
+            "truthful": True,
+        }
+
+    monkeypatch.setattr(backend, "restore_on_startup", inaccessible_existing_snapshot)
+    result = backend.configure(tmp_path / "state.db")
+
+    assert result["configured"] is True
+    assert result["active"] is False
+    assert result["verified"] is False
+    assert result["snapshot_verified"] is False
+    assert result["last_restore"]["reason"] == "restore_failed"
+    assert "AccessDenied" in result["last_error"]
+    assert backend.ready() is False
+    assert backend.snapshot_now()["status"] == "disabled"
+
+
+def test_restore_treats_only_explicit_missing_key_as_empty_store(monkeypatch, tmp_path: Path):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _b2_env(monkeypatch)
+
+    class FakeProviderError(Exception):
+        def __init__(self, code: str, status: int):
+            super().__init__("provider error")
+            self.response = {
+                "Error": {"Code": code, "Message": "provider error"},
+                "ResponseMetadata": {"HTTPStatusCode": status},
+            }
+
+    class MissingObjectClient:
+        def head_object(self, **kwargs):
+            raise FakeProviderError("NoSuchKey", 404)
+
+    monkeypatch.setattr(
+        backend,
+        "_STATUS",
+        {
+            "configured": True,
+            "active": True,
+            "verified": True,
+            "snapshot_verified": False,
+            "backend": "backblaze_b2",
+            "last_sync_at": None,
+            "last_sha256": None,
+            "last_error": None,
+        },
+    )
+    monkeypatch.setattr(backend, "_DB_PATH", tmp_path / "fresh.db")
+    monkeypatch.setattr(backend, "_client", lambda: MissingObjectClient())
+
+    result = backend.restore_on_startup()
+    assert result["restored"] is False
+    assert result["reason"] == "no_remote_snapshot"
+    assert backend.status()["active"] is True
+    assert (tmp_path / "fresh.db").exists() is False
+
+    assert backend._is_missing_object_error(FakeProviderError("NoSuchKey", 404))
+    assert not backend._is_missing_object_error(FakeProviderError("NoSuchBucket", 404))
+    assert not backend._is_missing_object_error(FakeProviderError("AccessDenied", 403))
