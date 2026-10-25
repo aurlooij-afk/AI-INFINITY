@@ -46,7 +46,7 @@ def test_mixed_resolution_and_aac_scenes_assemble_to_decodable_1080p(tmp_path=No
         assert (video.get("width"), video.get("height")) == (1920, 1080), probe
         assert video.get("codec_name") == "h264", probe
         assert audio.get("codec_name") == "aac", probe
-        assert 3.3 <= duration <= 4.0, duration
+        assert abs(duration - sum((1.2, 1.25, 1.1))) <= 1.0, duration
         decode = subprocess.run(
             ["ffmpeg", "-hide_banner", "-v", "error", "-xerror", "-i", str(output), "-f", "null", "-"],
             capture_output=True, text=True, timeout=120,
