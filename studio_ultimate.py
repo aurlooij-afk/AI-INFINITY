@@ -3131,11 +3131,37 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
     # A small token set is sufficient for composition selection; exact claims are
     # never invented and no numeric chart values are fabricated.
     s = subject.lower() + " " + focus.lower()
+    one_idea_campaign = (
+        re.search(r"\bone\s+idea\b", raw, re.I) is not None
+        and re.search(r"\binfinite\s+worlds\b", raw, re.I) is not None
+    )
+    is_night_creator = one_idea_campaign and any(w in s for w in ("blank monitor", "late at night", "quiet dark room", "screen reflection"))
+    is_handwritten_idea = one_idea_campaign and any(w in s for w in ("handwritten idea", "research notes", "storyboard panels"))
+    is_pencil_to_mountain = one_idea_campaign and any(w in s for w in ("pencil line drawing a mountain ridge", "match-cuts into a real expansive mountain landscape"))
+    is_mountain_landscape = one_idea_campaign and any(w in s for w in ("mountain landscape", "mountains catch first light", "mountain ridge"))
+    is_futuristic_city = one_idea_campaign and any(w in s for w in ("futuristic city", "city at blue hour", "gold windows"))
+    is_editor_timeline = one_idea_campaign and any(w in s for w in ("editing a multi-track video timeline", "editing timeline", "voice, music, captions"))
+    is_emotional_payoff = one_idea_campaign and any(w in s for w in ("same creator watches the finished film", "emotional payoff", "uncertainty shifts into quiet wonder"))
+    is_campaign_endcard = one_idea_campaign and any(w in s for w in ("minimal midnight-blue end frame", "infinity-like light trail", "signature ending"))
     is_energy = any(w in s for w in ("solar", "renewable", "wind turbine", "energy", "electric", "climate", "power grid"))
     is_tech = bool(re.search(r"\b(?:ai|artificial intelligence|machine learning)\b", s)) or any(w in s for w in ("software", "technology", "chip", "data", "digital"))
     is_creator = any(w in s for w in ("creator", "creative", "video", "film", "editing", "content", "design", "launch", "brand", "storyboard", "camera"))
     is_science = any(w in s for w in ("science", "research", "education", "learning", "experiment", "laboratory", "discovery", "knowledge"))
     is_business = any(w in s for w in ("business", "finance", "market", "startup", "growth", "strategy", "economy", "revenue"))
+    # Give each chapter a frame-specific headline instead of repeating the same
+    # truncated prompt prefix on every fallback asset.
+    campaign_headlines = [
+        ("A WORLD BEGINS UNSEEN", is_night_creator),
+        ("ONE IDEA, DRAWN INTO LIFE", is_handwritten_idea),
+        ("FROM PENCIL TO HORIZON", is_pencil_to_mountain),
+        ("FIRST LIGHT, NEW WORLDS", is_mountain_landscape),
+        ("A CITY BECOMES A POSSIBILITY", is_futuristic_city),
+        ("EVERY CUT HAS A PURPOSE", is_editor_timeline),
+        ("THE IDEA BECOMES REAL", is_emotional_payoff),
+        ("ONE IDEA. INFINITE WORLDS.", is_campaign_endcard),
+    ]
+    if one_idea_campaign:
+        subject = next((label for label, active in campaign_headlines if active), "ONE IDEA. INFINITE WORLDS.")
     # Keep title short, human-readable and separate from the provider prompt.
     title = subject[:1].upper() + subject[1:]
     if len(title) > 52:
@@ -3169,7 +3195,172 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
     center_x, center_y = (rx1+rx2)//2, (ry1+ry2)//2
     art_w, art_h = rx2-rx1, ry2-ry1
     draw.rounded_rectangle((rx1,ry1,rx2,ry2), radius=int(34*scale), fill=(11,23,40,170), outline=(180,215,245,65), width=max(1,int(2*scale)))
-    if is_energy:
+    if is_night_creator:
+        # Opening frame: the creator is visibly alone in a midnight room with a
+        # blank screen, one warm lamp and a distant unformed world beyond glass.
+        room_top=(10,16,32,255); room_bottom=(3,7,17,255)
+        for y in range(ry1,ry2):
+            t=(y-ry1)/max(1,ry2-ry1)
+            col=tuple(int(room_top[k]*(1-t)+room_bottom[k]*t) for k in range(3))+(255,)
+            draw.line((rx1,y,rx2,y),fill=col,width=1)
+        desk_y=ry1+int(art_h*.72)
+        draw.polygon([(rx1,desk_y),(rx2,desk_y-int(art_h*.06)),(rx2,ry2),(rx1,ry2)],fill=(26,24,32,255))
+        mon=(rx1+int(art_w*.15),ry1+int(art_h*.23),rx1+int(art_w*.67),ry1+int(art_h*.63))
+        draw.rounded_rectangle(mon,radius=int(15*scale),fill=(3,8,18,255),outline=(73,174,216,245),width=max(2,int(5*scale)))
+        draw.line((mon[0]+int(art_w*.035),mon[1]+int(art_h*.04),mon[2]-int(art_w*.035),mon[1]+int(art_h*.04)),fill=(111,196,229,80),width=max(1,int(2*scale)))
+        stand_x=(mon[0]+mon[2])//2
+        draw.rectangle((stand_x-int(10*scale),mon[3],stand_x+int(10*scale),desk_y-int(3*scale)),fill=(91,113,137,240))
+        draw.polygon([(stand_x-int(art_w*.1),desk_y-int(3*scale)),(stand_x+int(art_w*.1),desk_y-int(3*scale)),(stand_x+int(art_w*.13),desk_y+int(7*scale)),(stand_x-int(art_w*.13),desk_y+int(7*scale))],fill=(81,99,119,255))
+        # Warm practical lamp gives an intimate gold highlight against the cold screen.
+        lamp_x=rx1+int(art_w*.83); lamp_y=ry1+int(art_h*.22)
+        draw.ellipse((lamp_x-int(art_w*.07),lamp_y-int(art_h*.07),lamp_x+int(art_w*.07),lamp_y+int(art_h*.07)),fill=(255,191,99,105))
+        draw.line((lamp_x,lamp_y+int(art_h*.06),lamp_x,desk_y),fill=(211,179,125,220),width=max(2,int(5*scale)))
+        draw.line((lamp_x-int(art_w*.08),desk_y,lamp_x+int(art_w*.08),desk_y),fill=(211,179,125,220),width=max(2,int(5*scale)))
+        # Creator silhouette seen from behind.
+        body_x=rx1+int(art_w*.77); body_y=desk_y-int(art_h*.11)
+        head_r=int(art_h*.075)
+        draw.ellipse((body_x-head_r,body_y-int(art_h*.24)-head_r,body_x+head_r,body_y-int(art_h*.24)+head_r),fill=(8,13,24,255),outline=(66,116,157,150),width=max(1,int(2*scale)))
+        draw.rounded_rectangle((body_x-int(art_w*.09),body_y-int(art_h*.21),body_x+int(art_w*.09),desk_y+int(art_h*.10)),radius=int(25*scale),fill=(7,13,26,255),outline=(42,93,132,130),width=max(1,int(2*scale)))
+        # The blank monitor is the brightest visual point, as requested.
+        draw.ellipse((mon[0]+int(art_w*.12),mon[1]+int(art_h*.12),mon[0]+int(art_w*.24),mon[1]+int(art_h*.24)),fill=(65,188,230,18))
+    elif is_handwritten_idea:
+        # Overhead storyboarding table with distinct paper frames and a pencil.
+        draw.rounded_rectangle((rx1+int(art_w*.05),ry1+int(art_h*.04),rx2-int(art_w*.05),ry2-int(art_h*.04)),radius=int(26*scale),fill=(73,56,42,255),outline=(195,158,111,180),width=max(2,int(3*scale)))
+        card_w=int(art_w*.25); card_h=int(art_h*.43)
+        for i in range(3):
+            cx=rx1+int(art_w*.11)+i*int(art_w*.28); cy=ry1+int(art_h*(.18+(i%2)*.07))
+            paper=(245-i*5,231-i*8,205-i*7,255)
+            draw.rounded_rectangle((cx,cy,cx+card_w,cy+card_h),radius=int(7*scale),fill=paper,outline=(255,245,221,240),width=max(1,int(2*scale)))
+            # hand-drawn frames advance from a line, to a mountain, to a skyline
+            if i==0:
+                draw.line((cx+int(card_w*.12),cy+int(card_h*.72),cx+int(card_w*.88),cy+int(card_h*.72)),fill=(38,68,90,240),width=max(2,int(4*scale)))
+                draw.ellipse((cx+int(card_w*.65),cy+int(card_h*.2),cx+int(card_w*.8),cy+int(card_h*.35)),fill=(231,176,94,255))
+            elif i==1:
+                draw.polygon([(cx+int(card_w*.06),cy+int(card_h*.68)),(cx+int(card_w*.42),cy+int(card_h*.24)),(cx+int(card_w*.58),cy+int(card_h*.52)),(cx+int(card_w*.8),cy+int(card_h*.32)),(cx+int(card_w*.95),cy+int(card_h*.68))],fill=(48,93,118,245))
+            else:
+                for b in range(4):
+                    bx=cx+int(card_w*(.08+b*.22)); bh=int(card_h*(.22+(.13*(b%3)))
+                    draw.rectangle((bx,cy+int(card_h*.83)-bh,bx+int(card_w*.14),cy+int(card_h*.83)),fill=(29,75,98,240))
+            for line_idx in range(3):
+                yy=cy+card_h+int(12*scale)+line_idx*int(12*scale)
+                draw.line((cx,yy,cx+int(card_w*(.7 if line_idx else .9)),yy),fill=(25,43,57,130),width=max(1,int(2*scale)))
+        # Pencil angled across the table.
+        px1,py1=rx1+int(art_w*.28),ry1+int(art_h*.78); px2,py2=rx1+int(art_w*.86),ry1+int(art_h*.3)
+        draw.line((px1,py1,px2,py2),fill=(240,190,103,255),width=max(5,int(13*scale)))
+        draw.line((px1,py1,px2,py2),fill=(61,44,34,255),width=max(2,int(4*scale)))
+    elif is_pencil_to_mountain or is_mountain_landscape:
+        # Cinematic alpine dawn: deep indigo ridge layers, warm horizon and water.
+        horizon=ry1+int(art_h*.48)
+        sun_r=int(art_h*.09)
+        sx=rx1+int(art_w*(.65 if is_pencil_to_mountain else .72))
+        sy=ry1+int(art_h*.31)
+        for j, shade in enumerate(((31,49,79,255),(28,67,96,255),(21,91,111,255))):
+            base_y=horizon+int(art_h*(.07+j*.1))
+            pts=[(rx1,base_y)]
+            for k in range(7):
+                x=rx1+int(art_w*k/6)
+                peak=ry1+int(art_h*(.30+((k+j*2)%3)*.09))
+                pts.append((x,peak))
+            pts.extend([(rx2,ry2),(rx1,ry2)])
+            draw.polygon(pts,fill=shade)
+        draw.ellipse((sx-sun_r,sy-sun_r,sx+sun_r,sy+sun_r),fill=(255,192,110,255))
+        # A luminous path of water carries the composition from foreground to horizon.
+        water_top=ry1+int(art_h*.76)
+        draw.polygon([(rx1,water_top),(rx1+int(art_w*.28),water_top-int(art_h*.08)),(rx1+int(art_w*.54),water_top),(rx2,water_top-int(art_h*.04)),(rx2,ry2),(rx1,ry2)],fill=(14,46,64,255))
+        for i in range(9):
+            yy=water_top+int(art_h*.025)+i*int(art_h*.019)
+            line_w=int(art_w*(.06+.08*(i%3)))
+            xx=sx-line_w//2
+            draw.line((xx,yy,xx+line_w,yy),fill=(251,185,104,90+i*10),width=max(1,int((3+i//3)*scale)))
+        if is_pencil_to_mountain:
+            # Keep the pencil/sketch cue visually present so this reads as a transition.
+            draw.line((rx1+int(art_w*.12),ry1+int(art_h*.81),rx1+int(art_w*.32),ry1+int(art_h*.68)),fill=(238,206,153,240),width=max(3,int(7*scale)))
+    elif is_futuristic_city:
+        # Layered blue-hour skyline with individual golden windows and a human scale cue.
+        horizon=ry1+int(art_h*.82)
+        draw.rectangle((rx1,ry1,rx2,horizon),fill=(11,20,42,255))
+        sun=(rx1+int(art_w*.77),ry1+int(art_h*.2),rx1+int(art_w*.88),ry1+int(art_h*.35))
+        draw.ellipse(sun,fill=(255,171,102,220))
+        widths=[.13,.19,.11,.17,.14,.18]
+        heights=[.43,.62,.50,.76,.55,.68]
+        for i,(w,hf) in enumerate(zip(widths,heights)):
+            bx=rx1+int(art_w*(.03+sum(widths[:i])*.9)); bw=int(art_w*w)
+            bh=int(art_h*hf)
+            by=horizon-bh
+            tint=(19+i*3,43+i*5,74+i*7,255)
+            draw.rounded_rectangle((bx,by,bx+bw,horizon),radius=int(7*scale),fill=tint,outline=(59,139,177,160),width=max(1,int(2*scale)))
+            for wr in range(max(1,int(hf*9))):
+                for wc in range(2+(i%2)):
+                    wx=bx+int(bw*(.23+wc*.25)); wy=by+int(art_h*(.06+wr*.075))
+                    if wy<horizon-int(5*scale):
+                        draw.rectangle((wx,wy,wx+max(2,int(3*scale)),wy+max(2,int(4*scale))),fill=(255,191,104,180 if (wr+wc+i)%3 else 90))
+        # tiny human silhouette grounds the scale
+        px=rx1+int(art_w*.5); py=horizon-int(art_h*.08); rr=int(art_h*.025)
+        draw.ellipse((px-rr,py-int(art_h*.13),px+rr,py-int(art_h*.13)+rr*2),fill=(4,9,16,255))
+        draw.polygon([(px-int(art_w*.035),py-int(art_h*.1),(px+int(art_w*.035),py-int(art_h*.1),(px+int(art_w*.025),py),(px-int(art_w*.025),py)],fill=(5,10,18,255))
+    elif is_editor_timeline:
+        # Multi-track timeline, monitor glass, equalized music lanes and caption cues.
+        monitor=(rx1+int(art_w*.05),ry1+int(art_h*.05),rx2-int(art_w*.05),ry1+int(art_h*.67))
+        draw.rounded_rectangle(monitor,radius=int(14*scale),fill=(5,10,21,255),outline=(99,185,220,240),width=max(2,int(5*scale)))
+        for i in range(4):
+            fx=monitor[0]+int(art_w*(.04+i*.23))
+            fy=monitor[1]+int(art_h*(.12+(i%2)*.05))
+            fw=int(art_w*.19); fh=int(art_h*.28)
+            draw.rounded_rectangle((fx,fy,fx+fw,fy+fh),radius=int(5*scale),fill=((16+i*5,58+i*8,87+i*9,255)),outline=(76,155,188,180),width=max(1,int(2*scale)))
+            draw.polygon([(fx+int(fw*.05),fy+int(fh*.85)),(fx+int(fw*.45),fy+int(fh*.25)),(fx+int(fw*.95),fy+int(fh*.85)],fill=(48,132,158,255))
+        timeline_y=monitor[3]+int(art_h*.07)
+        for tr in range(3):
+            y=timeline_y+tr*int(art_h*.07)
+            draw.line((monitor[0]+int(art_w*.03),y,monitor[2]-int(art_w*.03),y),fill=(101,129,153,110),width=max(1,int(2*scale)))
+            for cl in range(6-tr):
+                x=monitor[0]+int(art_w*(.04+cl*.15+tr*.02))
+                draw.rounded_rectangle((x,y-int(8*scale),x+int(art_w*(.09+(.02*cl))),y+int(12*scale)),radius=int(4*scale),fill=((53,90+tr*20,180+cl*8,230)))
+        # Caption cue blocks and audio waveform below the timeline.
+        for i in range(8):
+            x=rx1+int(art_w*.08)+i*int(art_w*.105)
+            yy=ry1+int(art_h*.82)
+            draw.rounded_rectangle((x,yy,x+int(art_w*.07),yy+int(art_h*.055)),radius=int(4*scale),fill=(49,197,194,190))
+    elif is_emotional_payoff:
+        # Return to the original character from behind; world and studio cohere.
+        draw.rectangle((rx1,ry1,rx2,ry2),fill=(8,14,28,255))
+        win=(rx1+int(art_w*.08),ry1+int(art_h*.06),rx2-int(art_w*.08),ry1+int(art_h*.55))
+        draw.rectangle(win,fill=(15,42,68,255),outline=(63,139,174,240),width=max(2,int(3*scale)))
+        # mountains fade into the city line on the same screen
+        horizon=win[1]+int((win[3]-win[1])*.63)
+        draw.polygon([(win[0],horizon),(win[0]+int(art_w*.2),win[1]+int(art_h*.16),(win[0]+int(art_w*.35),horizon),(win[0]+int(art_w*.56),win[1]+int(art_h*.2),(win[2],horizon),(win[2],win[3]),(win[0],win[3])],fill=(31,82,100,255))
+        for b in range(8):
+            bx=win[0]+int((win[2]-win[0])*b/8); bh=int(art_h*(.06+.04*(b%3)))
+            draw.rectangle((bx,horizon-bh,bx+int(art_w*.055),horizon),fill=(239,177,104,180))
+        # creator shoulder silhouette in foreground
+        base_y=ry2-int(art_h*.05); head_x=center_x; head_y=ry1+int(art_h*.69); rr=int(art_h*.08)
+        draw.ellipse((head_x-rr,head_y-rr,head_x+rr,head_y+rr),fill=(4,8,16,255),outline=(65,115,150,160),width=max(1,int(2*scale)))
+        draw.rounded_rectangle((head_x-int(art_w*.16),head_y+rr//2,head_x+int(art_w*.16),base_y),radius=int(36*scale),fill=(4,8,16,255))
+        draw.line((rx1+int(art_w*.08),ry2-int(art_h*.04),rx2-int(art_w*.08),ry2-int(art_h*.04)),fill=(255,191,110,180),width=max(2,int(3*scale)))
+    elif is_campaign_endcard:
+        # Restrained infinity mark drawn as two luminous loops on negative space.
+        draw.rectangle((rx1,ry1,rx2,ry2),fill=(3,7,17,255))
+        cx,cy=center_x,ry1+int(art_h*.39)
+        loop_w=int(art_w*.25); loop_h=int(art_h*.29)
+        for thickness,alpha,color in [(int(20*scale),36,(42,192,242)),(int(12*scale),95,(95,118,255)),(int(5*scale),255,(192,113,249))]:
+            draw.arc((cx-loop_w,cy-loop_h,cx+int(art_w*.02),cy+loop_h),0,360,fill=color+(alpha,),width=max(1,thickness))
+            draw.arc((cx-int(art_w*.02),cy-loop_h,cx+loop_w,cy+loop_h),0,360,fill=color+(alpha,),width=max(1,thickness))
+        # Simple connected lemniscate path adds a signature shape.
+        pts=[]
+        import math
+        for n in range(361):
+            t=math.pi*2*n/360
+            denom=1+math.cos(t)**2
+            pts.append((cx+int(art_w*.30*math.sin(t)/denom),cy+int(art_h*.20*math.sin(t)*math.cos(t)/denom)))
+        draw.line(pts,fill=(61,209,240,235),width=max(2,int(5*scale)),joint="curve")
+        logo="AI INFINITY"
+        logo_font=font_at(42,True)
+        tw=draw.textbbox((0,0),logo,font=logo_font)[2]
+        draw.text((cx-tw//2,cy+int(art_h*.37)),logo,font=logo_font,fill=white)
+        tagline="ONE IDEA. INFINITE WORLDS."
+        tagline_font=font_at(21,True)
+        tw2=draw.textbbox((0,0),tagline,font=tagline_font)[2]
+        draw.text((cx-tw2//2,cy+int(art_h*.52)),tagline,font=tagline_font,fill=(190,211,232,245))
+    elif is_energy:
         sun_r = int(min(art_w,art_h)*.105)
         draw.ellipse((rx1+int(art_w*.61)-sun_r,ry1+int(art_h*.18)-sun_r,rx1+int(art_w*.61)+sun_r,ry1+int(art_h*.18)+sun_r), fill=gold)
         draw.polygon([(rx1,ry1+int(art_h*.58)),(rx1+int(art_w*.34),ry1+int(art_h*.30)),(rx1+int(art_w*.57),ry1+int(art_h*.60)),(rx2,ry1+int(art_h*.43)),(rx2,ry2),(rx1,ry2)], fill=(24,77,91,255))
