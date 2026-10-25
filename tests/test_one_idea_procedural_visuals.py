@@ -47,7 +47,7 @@ def test_procedural_art_extracts_visual_focus_and_renders_distinct_story_beats()
         assert len(set(hashes)) == len(prompts), hashes
         focus = [asset["visual_focus"].lower() for asset in assets]
         assert "blank monitor" in focus[0]
-        assert "storyboard" in focus[1]
+        assert "handwritten idea" in focus[1]
         assert "mountain ridge" in focus[2]
         assert "mountains catching first light" in focus[3]
         assert "futuristic city" in focus[4]
