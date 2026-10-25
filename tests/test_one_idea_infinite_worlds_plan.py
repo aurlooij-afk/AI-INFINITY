@@ -36,11 +36,11 @@ def test_campaign_plan_preserves_requested_story_and_distinct_visual_beats():
     assert narration[-1] == "AI Infinity. One idea. Infinite worlds."
     focuses = [str(x.get("visual_focus") or "") for x in chapters]
     assert len(set(focuses)) == 8, focuses
-    assert any("blank monitor" in x.lower() for x in focuses)
-    assert any("storyboard" in x.lower() for x in focuses)
+    assert any("laptop" in x.lower() and "night" in x.lower() for x in focuses)
+    assert any("notebook" in x.lower() and "writing" in x.lower() for x in focuses)
     assert any("mountain" in x.lower() for x in focuses)
     assert any("timeline" in x.lower() for x in focuses)
-    assert any("negative space" in x.lower() for x in focuses)
+    assert any("futuristic abstract neon geometric background" in x.lower() for x in focuses)
     assert plan.get("source_context", {}).get("source_claims_invented") is False
 
 
