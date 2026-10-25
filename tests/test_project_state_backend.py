@@ -624,3 +624,10 @@ def test_storage_error_diagnostics_expose_provider_code_without_secrets():
     assert "secret" not in scrubbed
     assert "do-not-log" not in scrubbed
     assert "BearerSecret" not in scrubbed
+
+def test_render_blueprint_does_not_override_b2_endpoint_signing_region():
+    """A hard-coded blueprint region must not conflict with the operator's B2 endpoint."""
+    root = Path(__file__).resolve().parents[1]
+    blueprint = (root / "render.yaml").read_text(encoding="utf-8")
+    assert '      - key: B2_REGION\\n        value: ""' in blueprint
+    assert '      - key: B2_REGION\\n        value: "us-west-004"' not in blueprint
