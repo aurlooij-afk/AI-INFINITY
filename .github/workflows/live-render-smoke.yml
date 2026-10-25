@@ -238,10 +238,10 @@ jobs:
                           def safe_storage_error(value):
                               import re
                               text = str(value or "")
-                              text = re.sub(r"(?i)https?://[^\\s\\\"']+", "[redacted-url]", text)
+                              text = re.sub(r"(?i)https?://[^\s\"']+", "[redacted-url]", text)
                               text = re.sub(
-                                  r"(?i)\\b(authorization|x-amz-security-token|access[_-]?key|secret[_-]?key|application[_-]?key|api[_-]?key|token)\\b\\s*[:=]\\s*[^\\s,;]+",
-                                  r"\\1=[redacted]",
+                                  r"(?i)\b(authorization|x-amz-security-token|access[_-]?key|secret[_-]?key|application[_-]?key|api[_-]?key|token)\b\s*[:=]\s*[^\s,;]+",
+                                  r"\1=[redacted]",
                                   text,
                               )
                               return " ".join(text.split())[:220]
