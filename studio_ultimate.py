@@ -3755,7 +3755,7 @@ _ONE_IDEA_PEXELS_MOTION_SOURCES: Dict[int, Dict[str, Any]] = {
     2: {
         "source_id": 9056443,
         "source_url": "https://www.pexels.com/video/a-person-typing-on-a-laptop-and-writing-in-a-notebook-9056443/",
-        "media_url": "https://videos.pexels.com/video-files/9056443/9056443-uhd_3840_2160_50fps.mp4",
+        "media_url": "https://videos.pexels.com/video-files/9056443/9056443-uhd_3840_2160_25fps.mp4",
         "creator": "SHVETS production",
         "title": "A Person Typing on a Laptop and Writing in a Notebook",
         "description": "A person working remotely from home, typing on a laptop and writing notes on a bed.",
@@ -3862,7 +3862,7 @@ def _curated_pexels_one_idea_video(
                 str(item["media_url"]), raw_path,
                 headers={"Accept": "video/mp4,video/*;q=0.9,*/*;q=0.5"},
                 timeout=(max(FAST_REMOTE_TIMEOUT, 25) if FAST_MODE else 45),
-                max_bytes=120_000_000,
+                max_bytes=180_000_000,
             )
             raw_probe = ffprobe_json(raw_path)
             streams = raw_probe.get("streams") or []
@@ -5282,9 +5282,128 @@ def _scene_mix(video: Path, voice: Path, music: Path, sfx: Path, duration: float
 
 
 def concat_segments(paths: List[Path], out: Path) -> None:
+    """Assemble scenes with stable video parameters and one continuous valid AAC encode.
+
+    Stream-copying independently encoded scene MP4s let mixed resolution / AAC
+    packet padding poison the master on the real 8-scene campaign. Normalize each
+    scene sequentially to the delivery profile plus PCM audio (bounded memory),
+    concatenate the same-profile intermediates, and encode the continuous programme
+    audio once. This keeps every visual scene editable while guaranteeing a decodable
+    master before captions, final mix, manifests, or quality gates run.
+    """
+    if not paths:
+        raise RuntimeError("cannot assemble an empty scene list")
+    first_probe = ffprobe_json(paths[0])
+    first_video = next((x for x in (first_probe.get("streams") or []) if x.get("codec_type") == "video"), {})
+    source_width = int(first_video.get("width") or 0)
+    source_height = int(first_video.get("height") or 0)
+    if not source_width or not source_height:
+        raise RuntimeError("first scene has no probeable video stream")
+    ratio = source_width / source_height
+    if ratio < 0.70:
+        target_width, target_height = ((720, 1280) if FAST_MODE else (1080, 1920))
+    elif ratio < 0.90:
+        target_width, target_height = ((720, 900) if FAST_MODE else (1080, 1350))
+    elif ratio <= 1.10:
+        target_width, target_height = ((720, 720) if FAST_MODE else (1080, 1080))
+    else:
+        target_width, target_height = ((1280, 720) if FAST_MODE else (1920, 1080))
+
+    normalized_dir = out.parent / (out.stem + "_normalized_segments")
+    normalized_dir.mkdir(parents=True, exist_ok=True)
+    normalized_paths: List[Path] = []
+    durations: List[float] = []
+    for index, source_path in enumerate(paths, 1):
+        source_probe = ffprobe_json(source_path)
+        source_streams = source_probe.get("streams") or []
+        source_video = next((x for x in source_streams if x.get("codec_type") == "video"), {})
+        source_audio = next((x for x in source_streams if x.get("codec_type") == "audio"), {})
+        duration = float(source_video.get("duration") or (source_probe.get("format") or {}).get("duration") or 0)
+        if not source_video or not source_audio or duration < 0.5:
+            raise RuntimeError(f"scene {index:02d} lacks valid video/audio or duration: {source_path}")
+        durations.append(duration)
+        normalized = normalized_dir / f"segment_{index:02d}.mkv"
+        normalized.unlink(missing_ok=True)
+        vf = (
+            f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,"
+            f"crop={target_width}:{target_height},fps=24,setsar=1,format=yuv420p"
+        )
+        af = (
+            "aresample=48000:async=1:first_pts=0,"
+            "aformat=sample_fmts=s16:channel_layouts=stereo,"
+            f"apad=whole_dur={duration:.6f},atrim=duration={duration:.6f},asetpts=PTS-STARTPTS"
+        )
+        ffmpeg(
+            "-i", source_path, "-map", "0:v:0", "-map", "0:a:0",
+            "-vf", vf, "-af", af, "-t", f"{duration:.6f}",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+            "-pix_fmt", "yuv420p", "-r", "24",
+            "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2",
+            "-f", "matroska", normalized,
+            timeout=max(120, int(duration * 10)),
+        )
+        normalized_probe = ffprobe_json(normalized)
+        normalized_streams = normalized_probe.get("streams") or []
+        normalized_video = next((x for x in normalized_streams if x.get("codec_type") == "video"), {})
+        normalized_audio = next((x for x in normalized_streams if x.get("codec_type") == "audio"), {})
+        normalized_duration = float((normalized_probe.get("format") or {}).get("duration") or 0)
+        if (
+            not normalized.is_file() or normalized.stat().st_size <= 10000
+            or int(normalized_video.get("width") or 0) != target_width
+            or int(normalized_video.get("height") or 0) != target_height
+            or normalized_video.get("codec_name") != "h264"
+            or normalized_audio.get("codec_name") != "pcm_s16le"
+            or abs(normalized_duration - duration) > 0.35
+        ):
+            raise RuntimeError(
+                f"scene {index:02d} normalization failed: "
+                f"resolution={normalized_video.get('width')}x{normalized_video.get('height')} "
+                f"audio={normalized_audio.get('codec_name')} "
+                f"duration={normalized_duration:.3f}/{duration:.3f}"
+            )
+        normalized_paths.append(normalized)
+
     manifest = out.with_suffix(".txt")
-    manifest.write_text("".join(f"file '{str(p).replace(chr(39), chr(39)+chr(92)+chr(39)+chr(39))}'\n" for p in paths), encoding="utf-8")
-    ffmpeg("-f", "concat", "-safe", "0", "-i", manifest, "-c", "copy", "-movflags", "+faststart", out, timeout=600)
+    manifest.write_text(
+        "".join(
+            f"file '{str(p).replace(chr(39), chr(39)+chr(92)+chr(39)+chr(39))}'\n"
+            for p in normalized_paths
+        ),
+        encoding="utf-8",
+    )
+    ffmpeg(
+        "-f", "concat", "-safe", "0", "-i", manifest,
+        "-map", "0:v:0", "-map", "0:a:0",
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+        "-movflags", "+faststart", out, timeout=600,
+    )
+    final_probe = ffprobe_json(out)
+    final_streams = final_probe.get("streams") or []
+    final_video = next((x for x in final_streams if x.get("codec_type") == "video"), {})
+    final_audio = next((x for x in final_streams if x.get("codec_type") == "audio"), {})
+    final_duration = float((final_probe.get("format") or {}).get("duration") or 0)
+    if (
+        not out.is_file() or out.stat().st_size <= 10000
+        or int(final_video.get("width") or 0) != target_width
+        or int(final_video.get("height") or 0) != target_height
+        or final_video.get("codec_name") != "h264"
+        or final_audio.get("codec_name") != "aac"
+        or abs(final_duration - sum(durations)) > 1.0
+    ):
+        raise RuntimeError(
+            f"assembled master failed verification: resolution={final_video.get('width')}x{final_video.get('height')} "
+            f"audio={final_audio.get('codec_name')} duration={final_duration:.3f}/{sum(durations):.3f}"
+        )
+    # A local complete-decode gate catches corrupt AAC or damaged video before the
+    # project can create metadata that claims a playable final deliverable.
+    decode = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-v", "error", "-xerror", "-i", str(out), "-f", "null", "-"],
+        capture_output=True, text=True, timeout=max(120, int(final_duration * 4)),
+    )
+    if decode.returncode != 0:
+        raise RuntimeError("assembled master full decode failed: " + (decode.stderr or "")[-3000:])
+    manifest.unlink(missing_ok=True)
+    shutil.rmtree(normalized_dir, ignore_errors=True)
 
 
 def make_variants(master: Path, outdir: Path, chapters: List[Dict[str, Any]], title: str) -> List[Dict[str, Any]]:
