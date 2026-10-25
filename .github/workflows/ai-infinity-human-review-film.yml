@@ -11,6 +11,7 @@ on:
       - tests/create_one_idea_infinite_worlds_review.py
       - tests/test_canonical_duration_precedence.py
       - tests/test_one_idea_infinite_worlds_plan.py
+      - tests/test_one_idea_procedural_visuals.py
   workflow_dispatch:
 
 permissions:
@@ -36,7 +37,8 @@ jobs:
           set -euo pipefail
           for test_file in \
             tests/test_canonical_duration_precedence.py \
-            tests/test_one_idea_infinite_worlds_plan.py; do
+            tests/test_one_idea_infinite_worlds_plan.py \
+            tests/test_one_idea_procedural_visuals.py; do
             docker run --rm \
               -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity-review-tests \
               -v "$GITHUB_WORKSPACE:/workspace:ro" \
