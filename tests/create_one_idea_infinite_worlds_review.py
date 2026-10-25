@@ -82,6 +82,12 @@ def sha(path: Path) -> str:
     return h.hexdigest()
 
 def main() -> int:
+    # Fail fast if story timecodes ever override the explicitly selected duration.
+    regression = subprocess.run([sys.executable, str(ROOT / "tests" / "test_canonical_duration_precedence.py")],
+                               capture_output=True, text=True, timeout=60)
+    print((regression.stdout or "") + (regression.stderr or ""), flush=True)
+    if regression.returncode != 0:
+        raise RuntimeError("Explicit-duration/story-timecode regression failed.")
     # Reuse the repository's real acceptance helpers for server boot and API calls.
     helpers = runpy.run_path(str(ROOT / "tests" / "final_acceptance_suite.py"))
     start, stop = helpers["start"], helpers["stop"]
