@@ -174,6 +174,41 @@ def main() -> int:
         except Exception as exc:
             result.setdefault("blockers", []).append("Could not list the creator artifact inventory: " + type(exc).__name__)
         project_dir = DATA / "creator_studio" / pid
+        # Preserve actual intermediates so a reviewer can inspect which sources,
+        # voice takes, music bed and rendered scenes produced this final export.
+        debug_dir = EVIDENCE / "debug-intermediates"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        captured_intermediates = []
+        if project_dir.is_dir():
+            allowed_patterns = (
+                "scene_*.mp4", "procedural_visual_*.png", "selected_visual_*.mp4",
+                "narration_*.mp3", "narration_only.mp3", "music.m4a",
+                "transition_*.wav", "master.mp4", "master.recovery.txt",
+                "canonical_contract.json", "visual_rights.json",
+            )
+            for pattern in allowed_patterns:
+                for candidate in sorted(project_dir.glob(pattern)):
+                    if not candidate.is_file() or candidate.stat().st_size <= 100:
+                        continue
+                    target_path = debug_dir / candidate.name
+                    shutil.copy2(candidate, target_path)
+                    row = {"name": candidate.name, "bytes": target_path.stat().st_size,
+                           "sha256": sha(target_path)}
+                    if candidate.suffix.lower() in {".mp4", ".m4a", ".mp3", ".wav"}:
+                        try:
+                            media = probe(target_path)
+                            row["duration_seconds"] = float((media.get("format") or {}).get("duration") or 0)
+                            row["streams"] = [
+                                {"type": stream.get("codec_type"), "codec": stream.get("codec_name"),
+                                 "duration_seconds": float(stream.get("duration") or 0),
+                                 "width": stream.get("width"), "height": stream.get("height")}
+                                for stream in (media.get("streams") or [])
+                            ]
+                        except Exception as exc:
+                            row["probe_error"] = type(exc).__name__ + ": " + str(exc)[:300]
+                    captured_intermediates.append(row)
+        (EVIDENCE / "intermediate-media-inventory.json").write_text(
+            json.dumps(captured_intermediates, ensure_ascii=False, indent=2) + "\\n", encoding="utf-8")
         artifact_dir = EVIDENCE / "artifacts"
         artifact_dir.mkdir(parents=True, exist_ok=True)
         wanted = [
