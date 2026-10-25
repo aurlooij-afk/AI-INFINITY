@@ -252,11 +252,15 @@ def main() -> int:
         decode = subprocess.run(["ffmpeg", "-hide_banner", "-v", "error", "-xerror",
                                  "-i", str(final), "-f", "null", "-"],
                                 capture_output=True, text=True, timeout=900)
+        subtitle = next((x for x in streams if x.get("codec_type") == "subtitle"), {})
         result["final_media"] = {
             "path": "artifacts/final.mp4", "size_bytes": final.stat().st_size,
             "sha256": sha(final), "duration_seconds": duration,
             "resolution": [width, height], "video_codec": video.get("codec_name"),
-            "audio_codec": audio.get("codec_name"), "ffprobe": media,
+            "audio_codec": audio.get("codec_name"),
+            "subtitle_codec": subtitle.get("codec_name"),
+            "subtitle_duration_seconds": float(subtitle.get("duration") or 0),
+            "ffprobe": media,
         }
         result["full_decode"] = {"passed": decode.returncode == 0,
                                  "exit_code": decode.returncode,
@@ -322,6 +326,8 @@ def main() -> int:
             "aspect_ratio_16x9": bool(width and height and abs((width / height) - (16/9)) <= 0.01),
             "h264_video": video.get("codec_name") == "h264",
             "audio_stream": bool(audio),
+            "embedded_subtitle_stream": bool(subtitle) and subtitle.get("codec_name") == "mov_text"
+                and float(subtitle.get("duration") or 0) >= 45,
             "full_ffmpeg_decode": decode.returncode == 0,
             "research_sources_present": src_count > 0,
             "source_visual_policy": checks.get("source_visual_policy_passed") is True,
