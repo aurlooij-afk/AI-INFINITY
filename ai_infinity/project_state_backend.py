@@ -569,7 +569,7 @@ def snapshot_now() -> Dict[str, Any]:
             with _LOCK:
                 _STATUS["snapshot_verified"] = False
                 _STATUS["last_error"] = _describe_storage_error(exc)
-            return {"status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:300]}", "truthful": True}
+            return {"status": "failed", "error": _describe_storage_error(exc), "truthful": True}
         finally:
             if tmp is not None:
                 tmp.unlink(missing_ok=True)
