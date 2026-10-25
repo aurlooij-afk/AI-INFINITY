@@ -1,0 +1,60 @@
+name: AI Infinity — One Idea Infinite Worlds Human Review Film
+
+on:
+  push:
+    branches:
+      - run/one-idea-infinite-worlds-review
+    paths:
+      - .github/workflows/ai-infinity-human-review-film.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-infinity-one-idea-human-review
+  cancel-in-progress: false
+
+jobs:
+  create-review-film:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - name: Check out the isolated review branch
+        uses: actions/checkout@v4
+
+      - name: Build the authoritative AI Infinity runtime
+        run: docker build --pull -t ai-infinity-human-review .
+
+      - name: Run the exact creative brief through the real Creator Studio
+        id: create
+        run: |
+          set -uo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/creative-review-evidence"
+          chmod 0777 "$GITHUB_WORKSPACE/creative-review-evidence"
+          set +e
+          docker run --rm --network host \
+            -e CI=true \
+            -e AI_INFINITY_REVIEW_DATA_DIR=/tmp/ai-infinity-one-idea-review \
+            -e AI_INFINITY_EVIDENCE_DIR=/evidence \
+            -v "$GITHUB_WORKSPACE:/workspace:ro" \
+            -v "$GITHUB_WORKSPACE/creative-review-evidence:/evidence" \
+            -w /workspace \
+            --entrypoint python \
+            ai-infinity-human-review \
+            tests/create_one_idea_infinite_worlds_review.py 2>&1 | tee "$GITHUB_WORKSPACE/creative-review-run.log"
+          run_status=$?
+          set -e
+          echo "creator_exit_code=$run_status" >> "$GITHUB_OUTPUT"
+          exit "$run_status"
+
+      - name: Upload real video and human-review evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-infinity-one-idea-infinite-worlds-human-review
+          path: |
+            creative-review-evidence/**
+            creative-review-run.log
+          if-no-files-found: warn
+          retention-days: 14
