@@ -66,5 +66,7 @@ services:
         sync: false
       - key: B2_APPLICATION_KEY
         sync: false
+      # Leave blank so the B2 signing region is inferred from B2_ENDPOINT.
+      # Set BACKBLAZE_B2_REGION explicitly only when intentionally overriding it.
       - key: B2_REGION
-        value: "us-west-004"
+        value: ""
