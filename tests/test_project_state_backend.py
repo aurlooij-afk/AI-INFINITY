@@ -596,3 +596,31 @@ def test_restore_refuses_mismatched_checksum_and_corrupt_sqlite(monkeypatch, tmp
         assert result["restored"] is False, (label, result)
         assert not target.exists(), f"{label}: unverified bytes replaced the target database"
         assert backend.status()["snapshot_verified"] is False
+
+def test_storage_error_diagnostics_expose_provider_code_without_secrets():
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+
+    class FakeProviderError(Exception):
+        operation_name = "HeadObject"
+        response = {
+            "Error": {
+                "Code": "AccessDenied",
+                "Message": "Access Denied",
+            },
+            "ResponseMetadata": {"HTTPStatusCode": 403, "RequestId": "request-123"},
+        }
+
+    detail = backend._describe_storage_error(FakeProviderError("sensitive=never-log"))
+    assert "code=AccessDenied" in detail
+    assert "http_status=403" in detail
+    assert "operation=HeadObject" in detail
+    assert "never-log" not in detail
+
+    scrubbed = backend._safe_error_text(
+        "ClientError: https://example.invalid/object?X-Amz-Signature=secret "
+        "application_key=do-not-log authorization=BearerSecret"
+    )
+    assert "https://example.invalid" not in scrubbed
+    assert "secret" not in scrubbed
+    assert "do-not-log" not in scrubbed
+    assert "BearerSecret" not in scrubbed
