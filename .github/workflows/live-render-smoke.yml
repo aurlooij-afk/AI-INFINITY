@@ -247,6 +247,9 @@ jobs:
                               "last_sync_present": bool(backend_state.get("last_sync_at")),
                               "sha256_present": bool(backend_state.get("last_sha256")),
                               "last_error_kind": str(backend_state.get("last_error") or "").split(":", 1)[0] or None,
+                              # Backend status now returns a redacted provider code/status/operation,
+                              # making genuine B2 failures diagnosable without exposing credentials.
+                              "last_error_detail": str(backend_state.get("last_error") or "")[:260] or None,
                           }
                           print("LIVE_PROJECT_STATE_DURABILITY_ATTEMPT", json.dumps(durable_evidence, sort_keys=True), flush=True)
                           if durable_evidence["persistent"] is True:
