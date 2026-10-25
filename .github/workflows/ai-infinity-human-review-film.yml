@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: ai-infinity-one-idea-human-review
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   create-review-film:
@@ -25,6 +25,9 @@ jobs:
 
       - name: Build the authoritative AI Infinity runtime
         run: docker build --pull -t ai-infinity-human-review .
+
+      - name: Verify explicit duration wins over storyboard timestamps
+        run: docker run --rm --entrypoint python ai-infinity-human-review tests/test_canonical_duration_precedence.py
 
       - name: Run the exact creative brief through the real Creator Studio
         id: create
