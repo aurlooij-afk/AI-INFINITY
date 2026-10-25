@@ -254,18 +254,18 @@ def _verify_roundtrip() -> bool:
 def _safe_error_text(value: Any, limit: int = 180) -> str:
     """Keep diagnostics actionable without exposing credentials or signed URLs."""
     text = str(value or "")
-    text = re.sub(r"(?i)https?://[^\\s\\\"']+", "[redacted-url]", text)
+    text = re.sub(r"(?i)https?://[^\s\"']+", "[redacted-url]", text)
     text = re.sub(
-        r"(?i)\\b(authorization|x-amz-security-token|access[_-]?key|secret[_-]?key|application[_-]?key|api[_-]?key|token)\\b\\s*[:=]\\s*[^\\s,;]+",
-        r"\\1=[redacted]",
+        r"(?i)\b(authorization|x-amz-security-token|access[_-]?key|secret[_-]?key|application[_-]?key|api[_-]?key|token)\b\s*[:=]\s*[^\s,;]+",
+        r"\1=[redacted]",
         text,
     )
-    text = re.sub(r"(?i)\\bAKIA[0-9A-Z]{16}\\b", "[redacted-access-key]", text)
+    text = re.sub(r"(?i)\bAKIA[0-9A-Z]{16}\b", "[redacted-access-key]", text)
     return " ".join(text.split())[:limit]
 
 
 def _describe_storage_error(exc: BaseException) -> str:
-    """Return the provider error code, HTTP status and operation, with secrets scrubbed."""
+    """Return provider error code, HTTP status and operation with secrets scrubbed."""
     response = getattr(exc, "response", None)
     if isinstance(response, dict):
         error = response.get("Error") if isinstance(response.get("Error"), dict) else {}
@@ -277,20 +277,17 @@ def _describe_storage_error(exc: BaseException) -> str:
         except (TypeError, ValueError):
             http_status = 0
         message = _safe_error_text(error.get("Message") or "")
-        parts = [type(exc).__name__]
+        details = []
         if code:
-            parts.append("code=" + code)
+            details.append("code=" + code)
         if http_status:
-            parts.append("http_status=" + str(http_status))
+            details.append("http_status=" + str(http_status))
         if operation:
-            parts.append("operation=" + operation)
+            details.append("operation=" + operation)
         if message:
-            parts.append("message=" + message)
-        # Request IDs are useful for provider support, but are not needed to diagnose
-        # permissions, region/signature, quota, or unsupported-operation errors.
-        return ": ".join([parts[0], " ".join(parts[1:])])[:260]
+            details.append("message=" + message)
+        return type(exc).__name__ + (": " + " ".join(details) if details else "")
     return type(exc).__name__ + ": " + _safe_error_text(exc, 220)
-
 
 
 def configure(db_path: Path | str) -> Dict[str, Any]:
@@ -571,7 +568,7 @@ def snapshot_now() -> Dict[str, Any]:
         except Exception as exc:
             with _LOCK:
                 _STATUS["snapshot_verified"] = False
-                _STATUS["last_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+                _STATUS["last_error"] = _describe_storage_error(exc)
             return {"status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:300]}", "truthful": True}
         finally:
             if tmp is not None:
