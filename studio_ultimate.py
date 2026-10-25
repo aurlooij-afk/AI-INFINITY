@@ -6782,32 +6782,139 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         article = None
         social = None
         if True:
-            # "audio_master" is the actual programme mix from the final video.
-            # Keep a separate narration-only stem so creators can still re-edit voice.
+            # Build a timeline-aligned narration stem from each real scene voice track.
+            # The former path concatenated voice clips and then ripped programme audio
+            # from a stream-copy-assembled MP4. AAC packet timestamps could leave the
+            # final soundtrack ~20s shorter than the picture. The scene-duration budget
+            # is authoritative here: pad/trim each narration inside its own scene slot,
+            # then mix the continuous full-length score and transition cues once.
             narration_only = outdir / "narration_only.mp3"
-            narration_inputs = [outdir / f"narration_{i:02d}.mp3" for i in range(1, len(chapters)+1)]
+            target_seconds = float(target)
+            scene_durations = [
+                max(0.2, float(ch.get("actual_duration") or ch.get("duration") or 0.0))
+                for ch in chapters
+            ]
+            if not scene_durations or abs(sum(scene_durations) - target_seconds) > 1.5:
+                raise RuntimeError(
+                    f"narration timeline scene budget {sum(scene_durations):.3f}s does not match programme {target_seconds:.3f}s"
+                )
+            timeline_segments = []
+            for i, duration_seconds in enumerate(scene_durations, 1):
+                original_voice = outdir / f"narration_{i:02d}.mp3"
+                fitted_voice = outdir / f"narration_{i:02d}_fitted.mp3"
+                voice_source = fitted_voice if fitted_voice.is_file() and fitted_voice.stat().st_size > 5000 else original_voice
+                if not voice_source.is_file() or voice_source.stat().st_size <= 2000:
+                    raise RuntimeError(f"narration scene {i:02d} is missing; cannot master missing voice tracks")
+                segment = outdir / f"narration_timeline_{i:02d}.wav"
+                segment.unlink(missing_ok=True)
+                ffmpeg(
+                    "-i", voice_source,
+                    "-af", f"apad=whole_dur={duration_seconds:.6f},atrim=duration={duration_seconds:.6f}",
+                    "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", segment,
+                    timeout=max(60, int(duration_seconds * 4)),
+                )
+                segment_seconds = float(probe_duration(segment))
+                if abs(segment_seconds - duration_seconds) > 0.12:
+                    raise RuntimeError(
+                        f"narration scene {i:02d} timeline slot is {segment_seconds:.3f}s, expected {duration_seconds:.3f}s"
+                    )
+                timeline_segments.append(segment)
             concat = outdir / "narration_concat.txt"
-            if len(narration_inputs) != len([p for p in narration_inputs if p.exists()]):
-                raise RuntimeError("narration set incomplete; cannot master missing voice tracks")
-            concat.write_text("\n".join(f"file '{p.as_posix()}'" for p in narration_inputs), encoding="utf-8")
-            ffmpeg("-f", "concat", "-safe", "0", "-i", concat, "-c:a", "libmp3lame", "-q:a", "2", "-ar", "48000", "-ac", "2", narration_only, timeout=240)
+            concat.write_text(
+                "\n".join("file '" + p.as_posix().replace("'", "'\\''") + "'" for p in timeline_segments),
+                encoding="utf-8",
+            )
+            narration_pcm = outdir / "narration_timeline.wav"
+            narration_pcm.unlink(missing_ok=True)
+            ffmpeg("-f", "concat", "-safe", "0", "-i", concat, "-ar", "48000", "-ac", "2",
+                   "-c:a", "pcm_s16le", narration_pcm, timeout=max(120, int(target_seconds * 5)))
+            narration_only.unlink(missing_ok=True)
+            ffmpeg("-i", narration_pcm, "-af", f"apad=whole_dur={target_seconds:.6f},atrim=duration={target_seconds:.6f}",
+                   "-c:a", "libmp3lame", "-q:a", "2", "-ar", "48000", "-ac", "2",
+                   narration_only, timeout=max(120, int(target_seconds * 5)))
             if not _valid_audio_file(narration_only, minimum_peak_db=-45.0):
-                raise RuntimeError("narration-only track is invalid or effectively silent")
+                raise RuntimeError("timeline-aligned narration-only track is invalid or effectively silent")
+            voice_seconds = float(probe_duration(narration_only))
+            if abs(voice_seconds - target_seconds) > 0.4:
+                raise RuntimeError(f"narration-only timeline is {voice_seconds:.3f}s, expected {target_seconds:.3f}s")
 
             audio_master = outdir / "audio_master.mp3"
+            audio_master.unlink(missing_ok=True)
+            mix_args: List[Any] = ["-i", narration_only]
+            music_path = outdir / "music.m4a"
+            if not music_path.is_file() or music_path.stat().st_size <= 10000:
+                raise RuntimeError("continuous programme score is unavailable; refusing to export a broken mix")
+            mix_args += ["-i", music_path]
+            mix_filters = [
+                f"[0:a]apad=whole_dur={target_seconds:.6f},atrim=duration={target_seconds:.6f},volume=1.0[voice]",
+                f"[1:a]apad=whole_dur={target_seconds:.6f},atrim=duration={target_seconds:.6f},volume=0.12[score]",
+            ]
+            mix_inputs = ["[voice]", "[score]"]
+            elapsed = 0.0
+            mix_input_index = 2
+            for i, duration_seconds in enumerate(scene_durations[:-1], 1):
+                elapsed += duration_seconds
+                sfx_path = outdir / f"transition_{i:02d}.wav"
+                if not sfx_path.is_file() or sfx_path.stat().st_size <= 1000:
+                    continue
+                delay_ms = max(0, int(round(elapsed * 1000)))
+                mix_args += ["-i", sfx_path]
+                label = f"fx{i}"
+                mix_filters.append(
+                    f"[{mix_input_index}:a]adelay={delay_ms}|{delay_ms},"
+                    f"apad=whole_dur={target_seconds:.6f},atrim=duration={target_seconds:.6f},volume=0.045[{label}]"
+                )
+                mix_inputs.append(f"[{label}]")
+                mix_input_index += 1
+            mix_filters.append(
+                "".join(mix_inputs) +
+                f"amix=inputs={len(mix_inputs)}:duration=longest:dropout_transition=2:normalize=0,"
+                f"loudnorm=I=-16:TP=-1.5:LRA=11,alimiter=limit=0.80:attack=5:release=50:level=false,"
+                f"apad=whole_dur={target_seconds:.6f},atrim=duration={target_seconds:.6f}[programme]"
+            )
             ffmpeg(
-                "-i", captioned, "-map", "0:a:0", "-vn",
+                *mix_args, "-filter_complex", ";".join(mix_filters), "-map", "[programme]",
                 "-c:a", "libmp3lame", "-q:a", "2", "-ar", "48000", "-ac", "2",
-                audio_master, timeout=max(120, int(probe_duration(captioned) * 4)),
+                audio_master, timeout=max(180, int(target_seconds * 7)),
             )
             if not _valid_audio_file(audio_master, minimum_peak_db=-45.0):
-                raise RuntimeError("programme audio master is invalid or effectively silent")
-            video_seconds = float(probe_duration(captioned))
+                raise RuntimeError("composed programme audio master is invalid or effectively silent")
             audio_seconds = float(probe_duration(audio_master))
-            if abs(audio_seconds - video_seconds) > 1.0:
+            if abs(audio_seconds - target_seconds) > 0.4:
                 raise RuntimeError(
-                    f"programme audio master duration mismatch: {audio_seconds:.3f}s vs video {video_seconds:.3f}s"
+                    f"composed programme audio master is {audio_seconds:.3f}s, expected {target_seconds:.3f}s"
                 )
+
+            # Replace the shortened concatenated audio stream with the properly
+            # timed source-track mix while stream-copying the existing rendered video.
+            # This is real in-engine finishing, not an external post-processing patch.
+            remuxed_final = outdir / "final_audio_aligned.mp4"
+            remuxed_final.unlink(missing_ok=True)
+            ffmpeg(
+                "-i", captioned, "-i", audio_master,
+                "-map", "0:v:0", "-map", "1:a:0", "-map", "0:s?",
+                "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+                "-c:s", "mov_text", "-metadata:s:s:0", "language=eng",
+                "-disposition:s:0", "default", "-t", f"{target_seconds:.3f}",
+                "-movflags", "+faststart", remuxed_final,
+                timeout=max(180, int(target_seconds * 5)),
+            )
+            fixed_probe = ffprobe_json(remuxed_final)
+            fixed_streams = fixed_probe.get("streams") or []
+            fixed_video = next((x for x in fixed_streams if x.get("codec_type") == "video"), {})
+            fixed_audio = next((x for x in fixed_streams if x.get("codec_type") == "audio"), {})
+            fixed_video_seconds = float(fixed_video.get("duration") or (fixed_probe.get("format") or {}).get("duration") or 0)
+            fixed_audio_seconds = float(fixed_audio.get("duration") or 0)
+            if (
+                not remuxed_final.is_file() or remuxed_final.stat().st_size <= 10000
+                or abs(fixed_video_seconds - target_seconds) > 0.75
+                or abs(fixed_audio_seconds - target_seconds) > 0.75
+                or not fixed_video or not fixed_audio
+            ):
+                raise RuntimeError(
+                    f"final video/audio streams remain misaligned: video={fixed_video_seconds:.3f}s audio={fixed_audio_seconds:.3f}s target={target_seconds:.3f}s"
+                )
+            os.replace(remuxed_final, captioned)
         if True:
             article = outdir / "article.md"
             article_lines = [f"# {plan.get('title') or topic}", "", str(plan.get('hook') or ""), ""]
