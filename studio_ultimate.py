@@ -3131,9 +3131,13 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
     # A small token set is sufficient for composition selection; exact claims are
     # never invented and no numeric chart values are fabricated.
     s = subject.lower() + " " + focus.lower()
-    one_idea_campaign = (
-        re.search(r"\bone\s+idea\b", raw, re.I) is not None
-        and re.search(r"\binfinite\s+worlds\b", raw, re.I) is not None
+    one_idea_campaign = any(
+        marker in raw.lower()
+        for marker in (
+            "blank monitor", "handwritten idea", "pencil line drawing a mountain ridge",
+            "futuristic city", "multi-track video timeline",
+            "same creator watches the finished film", "minimal midnight-blue end frame",
+        )
     )
     is_night_creator = one_idea_campaign and any(w in s for w in ("blank monitor", "late at night", "quiet dark room", "screen reflection"))
     is_handwritten_idea = one_idea_campaign and any(w in s for w in ("handwritten idea", "research notes", "storyboard panels"))
@@ -3239,7 +3243,7 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
                 draw.polygon([(cx+int(card_w*.06),cy+int(card_h*.68)),(cx+int(card_w*.42),cy+int(card_h*.24)),(cx+int(card_w*.58),cy+int(card_h*.52)),(cx+int(card_w*.8),cy+int(card_h*.32)),(cx+int(card_w*.95),cy+int(card_h*.68))],fill=(48,93,118,245))
             else:
                 for b in range(4):
-                    bx=cx+int(card_w*(.08+b*.22)); bh=int(card_h*(.22+(.13*(b%3)))
+                    bx=cx+int(card_w*(.08+b*.22)); bh=int(card_h*(0.22+0.13*(b%3)))
                     draw.rectangle((bx,cy+int(card_h*.83)-bh,bx+int(card_w*.14),cy+int(card_h*.83)),fill=(29,75,98,240))
             for line_idx in range(3):
                 yy=cy+card_h+int(12*scale)+line_idx*int(12*scale)
@@ -3297,7 +3301,12 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
         # tiny human silhouette grounds the scale
         px=rx1+int(art_w*.5); py=horizon-int(art_h*.08); rr=int(art_h*.025)
         draw.ellipse((px-rr,py-int(art_h*.13),px+rr,py-int(art_h*.13)+rr*2),fill=(4,9,16,255))
-        draw.polygon([(px-int(art_w*.035),py-int(art_h*.1),(px+int(art_w*.035),py-int(art_h*.1),(px+int(art_w*.025),py),(px-int(art_w*.025),py)],fill=(5,10,18,255))
+        draw.polygon([
+            (px-int(art_w*.035),py-int(art_h*.1)),
+            (px+int(art_w*.035),py-int(art_h*.1)),
+            (px+int(art_w*.025),py),
+            (px-int(art_w*.025),py),
+        ],fill=(5,10,18,255))
     elif is_editor_timeline:
         # Multi-track timeline, monitor glass, equalized music lanes and caption cues.
         monitor=(rx1+int(art_w*.05),ry1+int(art_h*.05),rx2-int(art_w*.05),ry1+int(art_h*.67))
@@ -3307,7 +3316,11 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
             fy=monitor[1]+int(art_h*(.12+(i%2)*.05))
             fw=int(art_w*.19); fh=int(art_h*.28)
             draw.rounded_rectangle((fx,fy,fx+fw,fy+fh),radius=int(5*scale),fill=((16+i*5,58+i*8,87+i*9,255)),outline=(76,155,188,180),width=max(1,int(2*scale)))
-            draw.polygon([(fx+int(fw*.05),fy+int(fh*.85)),(fx+int(fw*.45),fy+int(fh*.25)),(fx+int(fw*.95),fy+int(fh*.85)],fill=(48,132,158,255))
+            draw.polygon([
+                (fx+int(fw*.05),fy+int(fh*.85)),
+                (fx+int(fw*.45),fy+int(fh*.25)),
+                (fx+int(fw*.95),fy+int(fh*.85)),
+            ],fill=(48,132,158,255))
         timeline_y=monitor[3]+int(art_h*.07)
         for tr in range(3):
             y=timeline_y+tr*int(art_h*.07)
@@ -3327,7 +3340,15 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
         draw.rectangle(win,fill=(15,42,68,255),outline=(63,139,174,240),width=max(2,int(3*scale)))
         # mountains fade into the city line on the same screen
         horizon=win[1]+int((win[3]-win[1])*.63)
-        draw.polygon([(win[0],horizon),(win[0]+int(art_w*.2),win[1]+int(art_h*.16),(win[0]+int(art_w*.35),horizon),(win[0]+int(art_w*.56),win[1]+int(art_h*.2),(win[2],horizon),(win[2],win[3]),(win[0],win[3])],fill=(31,82,100,255))
+        draw.polygon([
+            (win[0],horizon),
+            (win[0]+int(art_w*.2),win[1]+int(art_h*.16)),
+            (win[0]+int(art_w*.35),horizon),
+            (win[0]+int(art_w*.56),win[1]+int(art_h*.2)),
+            (win[2],horizon),
+            (win[2],win[3]),
+            (win[0],win[3]),
+        ],fill=(31,82,100,255))
         for b in range(8):
             bx=win[0]+int((win[2]-win[0])*b/8); bh=int(art_h*(.06+.04*(b%3)))
             draw.rectangle((bx,horizon-bh,bx+int(art_w*.055),horizon),fill=(239,177,104,180))
