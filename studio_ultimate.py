@@ -1710,11 +1710,20 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         and re.search(r"\b(?:launch|product|platform|studio|creator|software)\b", brief_for_visuals, re.I)
     )
     ai_infinity_launch = _is_explicit_ai_infinity_launch_brief(brief_for_visuals)
+    # This named campaign has a deliberately authored story arc. Detect it from
+    # the actual brief/title so the deterministic fallback preserves its narrative
+    # instead of silently substituting the generic creator-workflow explainer.
+    one_idea_infinite_worlds = bool(
+        re.search(r"\bone\s+idea\b", brief_for_visuals, re.I)
+        and re.search(r"\binfinite\s+worlds\b", brief_for_visuals, re.I)
+    )
     uploaded_points = _uploaded_source_narration_points(research)
-    # Search public media for visible creator workflow rather than the brand name.
+    # Search for the specific visual subject; an umbrella "content creator" query
+    # previously pulled generic studio footage into every scene of this campaign.
     visual_search_subject = (
-        "content creator"
-        if ai_infinity_creator_workflow else topic_label
+        "cinematic story scene"
+        if one_idea_infinite_worlds else
+        ("content creator" if ai_infinity_creator_workflow else topic_label)
     )
     if fmt == "short":
         names = ["Hook", "Why it matters", "The key idea", "Practical example", "Takeaway"]
@@ -1752,6 +1761,12 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         else:
             names = ["Hook", "Context", "The core idea", "How it works", "Real-world examples", "What changes", "Practical takeaway", "Closing"]
             ratios = [0.09, 0.12, 0.12, 0.14, 0.13, 0.11, 0.12, 0.17]
+
+    if one_idea_infinite_worlds and fmt != "short":
+        # Six story beats are represented as eight real rendered scenes so the
+        # opening hook, world transition, editorial craft and final signature
+        # each get an intentional cut rather than a generic chapter montage.
+        ratios = [0.067, 0.133, 0.217, 0.108, 0.142, 0.150, 0.117, 0.066]
 
     ai_infinity_launch_narration = {
         "Hook": (
@@ -1796,6 +1811,18 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "Then publish only after the creator explicitly authorizes the destination and the required quality gates pass."
         ),
     }
+
+    if one_idea_infinite_worlds and str(language or "English").strip().lower() == "english":
+        ai_infinity_launch_narration.update({
+            "Hook": "Every extraordinary world begins with something nobody else can see.",
+            "Context": "Midnight. One idea reaches beyond a quiet room: a horizon, a city, a world not yet real.",
+            "The core idea": "Research gives it roots. Notes become a storyboard. A script gives each scene a purpose, so every shot moves the story forward.",
+            "How it works": "Then a pencil line becomes a horizon. Each transition leads somewhere; each shot carries the idea forward.",
+            "Real-world examples": "Mountains catch first light. A future city moves with purpose. In one human face, uncertainty gives way to wonder.",
+            "What changes": "The images become a cut. Voice, music, captions find their rhythm. Keep the timeline editable; verify the export.",
+            "Practical takeaway": "Research it. Shape it. Bring it to life. Then make it better.",
+            "Closing": "AI Infinity. One idea. Infinite worlds.",
+        })
 
     # Product-launch copy for Pashto must be long enough for a real 60-second
     # narration track and should explain the actual workflow, not generic slogans.
@@ -1955,6 +1982,17 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "Practical takeaway": "developer testing and refining a software project on a laptop",
                 "Closing": "software developer reviewing a completed application on a monitor",
             }
+        if one_idea_infinite_worlds and fmt != "short":
+            long_visual_focus = {
+                "Hook": "intimate cinematic close-up of a lone creator awake late at night, facing a blank monitor in a quiet dark room; soft cyan screen reflection on their face, one warm gold practical lamp, restrained framing and real human emotion",
+                "Context": "a handwritten idea on paper beneath a midnight desk lamp; the creator lifts the page and a vast distant horizon is reflected in the dark window; subtle match cut from the room to a world beyond it",
+                "The core idea": "hands arranging real research notes, source pages and pencil storyboard panels on a wooden desk; macro paper texture, purposeful overhead camera move, no fabricated citations or readable fake software interface",
+                "How it works": "a pencil line drawing a mountain ridge on a storyboard match-cuts into a real expansive mountain landscape at first light; the same diagonal composition bridges sketch and world, cinematic scale and natural atmosphere",
+                "Real-world examples": "a sweeping wide view of a futuristic city at blue hour, warm gold windows against midnight-blue architecture; a small human silhouette watches the skyline, with realistic scale, depth and motivated movement",
+                "What changes": "over-shoulder view of a real editor refining a multi-track video timeline with distinct footage clips, captions and audio tracks; restrained monitor glow, tactile editing detail, no fabricated AI Infinity product UI",
+                "Practical takeaway": "the same creator watches the finished film in the studio; mountain sunrise and city lights play on the monitor as uncertainty shifts into quiet wonder, a clear emotional payoff connected to the opening character",
+                "Closing": "minimal midnight-blue end frame with a restrained cyan-to-violet infinity-like light trail and generous negative space for the exact title 'AI Infinity. One idea. Infinite worlds.'; elegant, quiet, no extra badges or claims",
+            }
         focus = (visual_focus if fmt == "short" else long_visual_focus).get(name, f"a purposeful real-world visual about {topic_label}")
         localized = _localized_fallback_copy(language, name, clean_title, topic_label)
         localized_heading = localized["name"]
@@ -1995,6 +2033,17 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "Practical takeaway": "Export the complete package",
                 "Closing": "Proof before publishing",
             }
+            if one_idea_infinite_worlds:
+                launch_overlays = {
+                    "Hook": "Every world begins unseen",
+                    "Context": "One idea. Late at night.",
+                    "The core idea": "Research becomes a story",
+                    "How it works": "A pencil line becomes a world",
+                    "Real-world examples": "ONE IDEA. INFINITE WORLDS.",
+                    "What changes": "Voice. Music. Cut. Captions.",
+                    "Practical takeaway": "Research it. Shape it. Bring it to life.",
+                    "Closing": "AI Infinity · One idea. Infinite worlds.",
+                }
             localized_screen = launch_overlays.get(name, localized_screen)
         elif ai_infinity_launch and str(language or "").strip().lower() in {"pashto", "ps", "ps-af"}:
             localized_screen = {
