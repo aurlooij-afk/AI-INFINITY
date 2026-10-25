@@ -186,6 +186,20 @@ def _client():
     )
 
 
+
+def _is_missing_object_error(exc: BaseException) -> bool:
+    """Only treat an explicit missing-object response as a fresh-store condition."""
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return False
+    error = response.get("Error") if isinstance(response.get("Error"), dict) else {}
+    code = str(error.get("Code") or "").strip().lower()
+    # Do not interpret NoSuchBucket, AccessDenied, or an unclassified 404 as
+    # an empty store: doing so could initialize a fresh database over lost state.
+    return code in {"nosuchkey", "nosuchobject", "notfound", "404"}
+
+
+
 def _head(key: Optional[str] = None) -> Optional[Dict[str, Any]]:
     h = _client().head_object(Bucket=_cfg()["bucket"], Key=key or object_key())
     metadata = h.get("Metadata") or {}
@@ -366,6 +380,14 @@ def configure(db_path: Path | str) -> Dict[str, Any]:
             "completed_at": time.time(),
             "truthful": True,
         }
+        if not restored and str(restore_result.get("reason") or "") == "restore_failed":
+            # Never allow a failed read of an existing checkpoint to be followed
+            # by a write of a fresh/partial local database over the recovery point.
+            _STATUS["active"] = False
+            _STATUS["verified"] = False
+            _STATUS["snapshot_verified"] = False
+            detail = restore_result.get("error") or _STATUS.get("last_error") or "remote_snapshot_restore_failed"
+            _STATUS["last_error"] = _safe_error_text(detail, 260)
     return status()
 
 
@@ -385,7 +407,15 @@ def restore_on_startup() -> Dict[str, Any]:
     tmp_path: Optional[Path] = None
     body = None
     try:
-        head = _head()
+        try:
+            head = _head()
+        except Exception as exc:
+            if _is_missing_object_error(exc):
+                with _LOCK:
+                    _STATUS["snapshot_verified"] = False
+                    _STATUS["last_error"] = None
+                return {"restored": False, "reason": "no_remote_snapshot", "truthful": True}
+            raise
         if not head or int(head.get("size_bytes") or 0) <= 0:
             return {"restored": False, "reason": "no_remote_snapshot", "truthful": True}
         expected = str(head.get("sha256") or "")
