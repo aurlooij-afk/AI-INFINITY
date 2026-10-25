@@ -7114,13 +7114,17 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 )
 
             # Replace the shortened concatenated audio stream with the properly
-            # timed source-track mix while stream-copying the existing rendered video.
-            # This is real in-engine finishing, not an external post-processing patch.
+            # timed source-track mix, and embed the synchronized SRT as an editable
+            # MOV_TEXT subtitle stream. The review/export contract requires both a
+            # standalone .srt and subtitles selectable inside the actual MP4.
+            captions_srt = outdir / "captions.srt"
+            if not captions_srt.is_file() or captions_srt.stat().st_size <= 20:
+                raise RuntimeError("synchronized captions.srt is missing; final export cannot be marked complete")
             remuxed_final = outdir / "final_audio_aligned.mp4"
             remuxed_final.unlink(missing_ok=True)
             ffmpeg(
-                "-i", captioned, "-i", audio_master,
-                "-map", "0:v:0", "-map", "1:a:0", "-map", "0:s?",
+                "-i", captioned, "-i", audio_master, "-f", "srt", "-i", captions_srt,
+                "-map", "0:v:0", "-map", "1:a:0", "-map", "2:s:0",
                 "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
                 "-c:s", "mov_text", "-metadata:s:s:0", "language=eng",
                 "-disposition:s:0", "default", "-t", f"{target_seconds:.3f}",
@@ -7131,16 +7135,22 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             fixed_streams = fixed_probe.get("streams") or []
             fixed_video = next((x for x in fixed_streams if x.get("codec_type") == "video"), {})
             fixed_audio = next((x for x in fixed_streams if x.get("codec_type") == "audio"), {})
+            fixed_subtitle = next((x for x in fixed_streams if x.get("codec_type") == "subtitle"), {})
             fixed_video_seconds = float(fixed_video.get("duration") or (fixed_probe.get("format") or {}).get("duration") or 0)
             fixed_audio_seconds = float(fixed_audio.get("duration") or 0)
+            fixed_subtitle_seconds = float(fixed_subtitle.get("duration") or 0)
             if (
                 not remuxed_final.is_file() or remuxed_final.stat().st_size <= 10000
                 or abs(fixed_video_seconds - target_seconds) > 0.75
                 or abs(fixed_audio_seconds - target_seconds) > 0.75
-                or not fixed_video or not fixed_audio
+                or not fixed_video or not fixed_audio or not fixed_subtitle
+                or fixed_subtitle.get("codec_name") != "mov_text"
+                or fixed_subtitle_seconds <= 1.0
             ):
                 raise RuntimeError(
-                    f"final video/audio streams remain misaligned: video={fixed_video_seconds:.3f}s audio={fixed_audio_seconds:.3f}s target={target_seconds:.3f}s"
+                    "final stream alignment/subtitles invalid: "
+                    f"video={fixed_video_seconds:.3f}s audio={fixed_audio_seconds:.3f}s "
+                    f"subtitle={fixed_subtitle_seconds:.3f}s target={target_seconds:.3f}s"
                 )
             os.replace(remuxed_final, captioned)
         if True:
