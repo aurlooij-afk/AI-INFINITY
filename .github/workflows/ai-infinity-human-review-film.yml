@@ -13,6 +13,7 @@ on:
       - tests/test_one_idea_infinite_worlds_plan.py
       - tests/test_one_idea_procedural_visuals.py
       - tests/test_one_idea_source_catalog.py
+      - tests/test_concat_segments_normalization.py
   workflow_dispatch:
 
 permissions:
@@ -40,7 +41,8 @@ jobs:
             tests/test_canonical_duration_precedence.py \
             tests/test_one_idea_infinite_worlds_plan.py \
             tests/test_one_idea_procedural_visuals.py \
-            tests/test_one_idea_source_catalog.py; do
+            tests/test_one_idea_source_catalog.py \
+            tests/test_concat_segments_normalization.py; do
             docker run --rm \
               -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity-review-tests \
               -v "$GITHUB_WORKSPACE:/workspace:ro" \
