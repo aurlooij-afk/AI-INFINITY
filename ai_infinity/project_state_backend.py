@@ -250,6 +250,49 @@ def _verify_roundtrip() -> bool:
             pass
 
 
+
+def _safe_error_text(value: Any, limit: int = 180) -> str:
+    """Keep diagnostics actionable without exposing credentials or signed URLs."""
+    text = str(value or "")
+    text = re.sub(r"(?i)https?://[^\\s\\\"']+", "[redacted-url]", text)
+    text = re.sub(
+        r"(?i)\\b(authorization|x-amz-security-token|access[_-]?key|secret[_-]?key|application[_-]?key|api[_-]?key|token)\\b\\s*[:=]\\s*[^\\s,;]+",
+        r"\\1=[redacted]",
+        text,
+    )
+    text = re.sub(r"(?i)\\bAKIA[0-9A-Z]{16}\\b", "[redacted-access-key]", text)
+    return " ".join(text.split())[:limit]
+
+
+def _describe_storage_error(exc: BaseException) -> str:
+    """Return the provider error code, HTTP status and operation, with secrets scrubbed."""
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        error = response.get("Error") if isinstance(response.get("Error"), dict) else {}
+        metadata = response.get("ResponseMetadata") if isinstance(response.get("ResponseMetadata"), dict) else {}
+        code = re.sub(r"[^A-Za-z0-9_.-]", "", str(error.get("Code") or ""))[:80]
+        operation = re.sub(r"[^A-Za-z0-9_.-]", "", str(getattr(exc, "operation_name", "") or ""))[:80]
+        try:
+            http_status = int(metadata.get("HTTPStatusCode") or 0)
+        except (TypeError, ValueError):
+            http_status = 0
+        message = _safe_error_text(error.get("Message") or "")
+        parts = [type(exc).__name__]
+        if code:
+            parts.append("code=" + code)
+        if http_status:
+            parts.append("http_status=" + str(http_status))
+        if operation:
+            parts.append("operation=" + operation)
+        if message:
+            parts.append("message=" + message)
+        # Request IDs are useful for provider support, but are not needed to diagnose
+        # permissions, region/signature, quota, or unsupported-operation errors.
+        return ": ".join([parts[0], " ".join(parts[1:])])[:260]
+    return type(exc).__name__ + ": " + _safe_error_text(exc, 220)
+
+
+
 def configure(db_path: Path | str) -> Dict[str, Any]:
     """Attach the backend and restore remote state before local schema init."""
     global _DB_PATH, _SYNC_FAILURES
@@ -299,7 +342,7 @@ def configure(db_path: Path | str) -> Dict[str, Any]:
                 break
             last_error = "B2 canary verification failed"
         except Exception as exc:
-            last_error = f"{type(exc).__name__}: {str(exc)[:300]}"
+            last_error = _describe_storage_error(exc)
         if attempt + 1 < _MAX_CANARY_VERIFY_ATTEMPTS:
             time.sleep(float(min(2 ** attempt, 4)))
 
@@ -398,11 +441,11 @@ def restore_on_startup() -> Dict[str, Any]:
     except Exception as exc:
         with _LOCK:
             _STATUS["snapshot_verified"] = False
-            _STATUS["last_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+            _STATUS["last_error"] = _describe_storage_error(exc)
         return {
             "restored": False,
             "reason": "restore_failed",
-            "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+            "error": _describe_storage_error(exc),
             "truthful": True,
         }
     finally:
@@ -620,6 +663,9 @@ class DurableConnection(sqlite3.Connection):
 def status() -> Dict[str, Any]:
     with _LOCK:
         out = dict(_STATUS)
+    # Defend status consumers even if an older code path stored a raw exception.
+    if out.get("last_error"):
+        out["last_error"] = _safe_error_text(out["last_error"], 260)
     enabled = contract_enabled()
     out.update(
         {
