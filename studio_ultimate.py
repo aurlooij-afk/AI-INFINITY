@@ -1725,6 +1725,16 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         if one_idea_infinite_worlds else
         ("content creator" if ai_infinity_creator_workflow else topic_label)
     )
+    one_idea_search_subjects = {
+        "Hook": "man with headphones working on a laptop in a cozy home office at night",
+        "Context": "a person typing on a laptop and writing notes at home",
+        "The core idea": "person writing in a notebook with a ballpoint pen",
+        "How it works": "aerial view of a reflective mountain lake at sunrise with fog",
+        "Real-world examples": "futuristic city with lights and neon geometric skyline",
+        "What changes": "computer screen showing a video editing timeline interface",
+        "Practical takeaway": "solitary man walking on rocks by a serene mountain lake at sunrise",
+        "Closing": "futuristic abstract neon geometric background digital neon cubes",
+    }
     if fmt == "short":
         names = ["Hook", "Why it matters", "The key idea", "Practical example", "Takeaway"]
         visual_focus = {
@@ -1984,14 +1994,14 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             }
         if one_idea_infinite_worlds and fmt != "short":
             long_visual_focus = {
-                "Hook": "intimate cinematic close-up of a lone creator awake late at night, facing a blank monitor in a quiet dark room; soft cyan screen reflection on their face, one warm gold practical lamp, restrained framing and real human emotion",
-                "Context": "a handwritten idea on paper beneath a midnight desk lamp; the creator lifts the page and a vast distant horizon is reflected in the dark window; subtle match cut from the room to a world beyond it",
-                "The core idea": "hands arranging real research notes, source pages and pencil storyboard panels on a wooden desk; macro paper texture, purposeful overhead camera move, no fabricated citations or readable fake software interface",
-                "How it works": "a pencil line drawing a mountain ridge on a storyboard match-cuts into a real expansive mountain landscape at first light; the same diagonal composition bridges sketch and world, cinematic scale and natural atmosphere",
-                "Real-world examples": "a sweeping wide view of a futuristic city at blue hour, warm gold windows against midnight-blue architecture; a small human silhouette watches the skyline, with realistic scale, depth and motivated movement",
-                "What changes": "over-shoulder view of a real editor refining a multi-track video timeline with distinct footage clips, captions and audio tracks; restrained monitor glow, tactile editing detail, no fabricated AI Infinity product UI",
-                "Practical takeaway": "the same creator watches the finished film in the studio; mountain sunrise and city lights play on the monitor as uncertainty shifts into quiet wonder, a clear emotional payoff connected to the opening character",
-                "Closing": "minimal midnight-blue end frame with a restrained cyan-to-violet infinity-like light trail and generous negative space for the exact title 'AI Infinity. One idea. Infinite worlds.'; elegant, quiet, no extra badges or claims",
+                "Hook": "a focused freelancer with headphones working on a laptop in a cozy home office at night; warm practical lamp, cool monitor glow, quiet late-night human close-up before an idea forms",
+                "Context": "a person typing on a laptop and writing notes at home; an over-shoulder medium shot that turns the first thought into a concrete plan",
+                "The core idea": "close-up hands writing in a notebook with a ballpoint pen, paper grain and handwritten planning notes; intimate macro detail of the idea taking shape",
+                "How it works": "an aerial view of a reflective mountain lake at sunrise with foggy atmosphere; a sweeping landscape reveal that carries the drawn idea into a real world",
+                "Real-world examples": "a futuristic city with lights and neon, geometric towers and depth at blue hour; an ambitious new world revealed in a wide cinematic frame",
+                "What changes": "close-up of a computer screen showing a detailed video editing timeline interface, multiple tracks and an audio waveform; tangible professional editing craft",
+                "Practical takeaway": "a solitary man walking on rocks by a serene mountain lake at sunrise; a wide emotional payoff with a horizon and reflective water",
+                "Closing": "a futuristic abstract neon geometric background, digital neon cubes creating an immersive city skyline; midnight blue, restrained cyan and violet light with a clean lower third for the AI Infinity end card",
             }
         focus = (visual_focus if fmt == "short" else long_visual_focus).get(name, f"a purposeful real-world visual about {topic_label}")
         localized = _localized_fallback_copy(language, name, clean_title, topic_label)
@@ -2060,13 +2070,17 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "Practical takeaway": "بشپړه بسته صادره کړئ",
                 "Closing": "تر اجازې مخکې خپرول مه کوئ",
             }.get(name, localized_screen)
+        chapter_visual_subject = (
+            one_idea_search_subjects.get(name, visual_search_subject)
+            if one_idea_infinite_worlds else visual_search_subject
+        )
         chapters.append({
             "heading": f"{localized_heading} — {clean_title}" if name in {"Hook", "Closing"} else f"{localized_heading}: {clean_title}",
             "topic": topic_label,
             "visual_focus": focus,
-            "visual_search_subject": visual_search_subject,
+            "visual_search_subject": chapter_visual_subject,
             "narration": narration,
-            "visual_query": f"{visual_search_subject} {focus} documentary photography",
+            "visual_query": f"{chapter_visual_subject} {focus} documentary photography",
             "image_prompt": f"Premium editorial documentary image about {topic_label}; visual focus: {focus}; realistic people, locations, objects or processes, natural cinematic lighting, coherent composition, strong subject separation, no logos, no text, visually distinct from other scenes",
             "on_screen": localized_screen,
             "duration": sec,
@@ -3728,6 +3742,196 @@ def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: 
     }
 
 
+_ONE_IDEA_PEXELS_MOTION_SOURCES: Dict[int, Dict[str, Any]] = {
+    1: {
+        "source_id": 35331904,
+        "source_url": "https://www.pexels.com/video/focused-freelancer-working-in-cozy-home-office-35331904/",
+        "media_url": "https://videos.pexels.com/video-files/35331904/14970153_3840_2160_25fps.mp4",
+        "creator": "Tom Shutkin",
+        "title": "Focused Freelancer Working in Cozy Home Office",
+        "description": "A man with headphones working on a laptop in a cozy home office at night.",
+        "visual_match": "nighttime laptop creator opening hook",
+    },
+    2: {
+        "source_id": 9056443,
+        "source_url": "https://www.pexels.com/video/a-person-typing-on-a-laptop-and-writing-in-a-notebook-9056443/",
+        "media_url": "https://videos.pexels.com/video-files/9056443/9056443-uhd_3840_2160_50fps.mp4",
+        "creator": "SHVETS production",
+        "title": "A Person Typing on a Laptop and Writing in a Notebook",
+        "description": "A person working remotely from home, typing on a laptop and writing notes on a bed.",
+        "visual_match": "creator shapes initial idea in a home workspace",
+    },
+    3: {
+        "source_id": 7278330,
+        "source_url": "https://www.pexels.com/video/person-writing-on-a-notebook-7278330/",
+        "media_url": "https://videos.pexels.com/video-files/7278330/7278330-uhd_4096_2160_24fps.mp4",
+        "creator": "Anastasia Shuraeva",
+        "title": "Person Writing on a Notebook",
+        "description": "Person writing in a notebook with a ballpen, focusing on the hand.",
+        "visual_match": "macro handwritten planning notes",
+    },
+    4: {
+        "source_id": 8293620,
+        "source_url": "https://www.pexels.com/video/aerial-view-of-a-lake-8293620/",
+        "media_url": "https://videos.pexels.com/video-files/8293620/8293620-uhd_3840_2160_30fps.mp4",
+        "creator": "Polina",
+        "title": "Aerial View of a Lake",
+        "description": "Reflective mountain lake at sunrise with foggy ambiance.",
+        "visual_match": "pencil-to-world mountain lake sunrise transition",
+    },
+    5: {
+        "source_id": 18419650,
+        "source_url": "https://www.pexels.com/video/a-futuristic-city-with-lights-and-neon-18419650/",
+        "media_url": "https://videos.pexels.com/video-files/18419650/18419650-uhd_3840_2160_30fps.mp4",
+        "creator": "Pachon in Motion",
+        "title": "A Futuristic City with Lights and Neon",
+        "description": "Futuristic 3D animation featuring neon geometric shapes with techno vibes.",
+        "visual_match": "ambitious futuristic world reveal",
+    },
+    6: {
+        "source_id": 15517230,
+        "source_url": "https://www.pexels.com/video/a-computer-screen-showing-a-video-editing-screen-15517230/",
+        "media_url": "https://videos.pexels.com/video-files/15517230/15517230-uhd_3840_2160_60fps.mp4",
+        "creator": "Ludovic Delot",
+        "title": "A Computer Screen Showing a Video Editing Screen",
+        "description": "Close-up view of a detailed video editing timeline interface on a computer screen.",
+        "visual_match": "editing craft timeline and caption/audio tracks",
+    },
+    7: {
+        "source_id": 35686462,
+        "source_url": "https://www.pexels.com/video/man-walking-on-rocky-shoreline-at-sunrise-35686462/",
+        "media_url": "https://videos.pexels.com/video-files/35686462/15124539_3840_2160_60fps.mp4",
+        "creator": "Ahmed",
+        "title": "Man Walking on Rocky Shoreline at Sunrise",
+        "description": "A solitary man walks on rocks by a serene mountain lake at sunrise.",
+        "visual_match": "resolved human payoff at the same mountain lake",
+    },
+    8: {
+        "source_id": 37034912,
+        "source_url": "https://www.pexels.com/video/futuristic-abstract-neon-geometric-background-37034912/",
+        "media_url": "https://videos.pexels.com/video-files/37034912/15690037_1920_1080_30fps.mp4",
+        "creator": "Nicola Narracci",
+        "title": "Futuristic Abstract Neon Geometric Background",
+        "description": "Digital neon cubes create an immersive futuristic city skyline.",
+        "visual_match": "abstract neon background for restrained brand end card",
+    },
+}
+
+
+def _curated_pexels_one_idea_video(
+    scene: Dict[str, Any], outdir: Path, index: int
+) -> Optional[Dict[str, Any]]:
+    """Item-attributed, free Pexels footage selected for the actual campaign beats.
+
+    This is a finite, transparent source set with official landing pages and direct
+    media URLs. It does not pretend stock footage is generative AI. Every selected
+    clip is byte-checked, decoded, required to be at least 1080p and matched against
+    the current storyboard focus before it can enter the normal source/rights gate.
+    """
+    if not isinstance(scene, dict):
+        return None
+    profile_text = " ".join(
+        str(scene.get(key) or "")
+        for key in ("topic", "title", "heading", "visual_focus", "visual_query")
+    ).lower()
+    if "one idea" not in profile_text and "infinite worlds" not in profile_text:
+        return None
+    item = _ONE_IDEA_PEXELS_MOTION_SOURCES.get(int(index)) if str(index).isdigit() else None
+    if not item:
+        return None
+    focus = re.sub(r"\s+", " ", str(scene.get("visual_focus") or scene.get("heading") or "")).strip()
+    search_subject = str(scene.get("visual_search_subject") or scene.get("topic") or "")
+    candidate_metadata = {
+        "title": item["title"],
+        "description": item["description"],
+        # These are editorial search terms derived only from the displayed
+        # source title/description, not claims about hidden provider metadata.
+        "tags": " ".join(re.findall(r"[a-z0-9]+", item["title"].lower() + " " + item["description"].lower())),
+    }
+    if not _visual_candidate_relevant(candidate_metadata, search_subject, focus):
+        MEDIA_DEBUG_ERRORS["pexels-one-idea-video"] = (
+            f"scene_{index}: curated source metadata did not match storyboard focus"
+        )
+        return None
+    media_path = outdir / f"pexels_one_idea_{int(item['source_id'])}.mp4"
+    try:
+        if not media_path.is_file() or media_path.stat().st_size <= 20_000:
+            raw_path = outdir / f"pexels_one_idea_{int(item['source_id'])}_raw.mp4"
+            raw_path.unlink(missing_ok=True)
+            download(
+                str(item["media_url"]), raw_path,
+                headers={"Accept": "video/mp4,video/*;q=0.9,*/*;q=0.5"},
+                timeout=(max(FAST_REMOTE_TIMEOUT, 25) if FAST_MODE else 45),
+                max_bytes=120_000_000,
+            )
+            raw_probe = ffprobe_json(raw_path)
+            streams = raw_probe.get("streams") or []
+            video_stream = next((row for row in streams if row.get("codec_type") == "video"), None)
+            width = int((video_stream or {}).get("width") or 0)
+            height = int((video_stream or {}).get("height") or 0)
+            seconds = float(probe_duration(raw_path))
+            if (
+                not video_stream or min(width, height) < 1080
+                or seconds < 2.0 or raw_path.stat().st_size <= 20_000
+            ):
+                raw_path.unlink(missing_ok=True)
+                MEDIA_DEBUG_ERRORS["pexels-one-idea-video"] = f"scene_{index}: source failed full-HD media validation"
+                return None
+            shutil.move(str(raw_path), str(media_path))
+        probe = ffprobe_json(media_path)
+        streams = probe.get("streams") or []
+        video_stream = next((row for row in streams if row.get("codec_type") == "video"), None)
+        width = int((video_stream or {}).get("width") or 0)
+        height = int((video_stream or {}).get("height") or 0)
+        seconds = float(probe_duration(media_path))
+        if (
+            not video_stream or min(width, height) < 1080
+            or seconds < 2.0 or media_path.stat().st_size <= 20_000
+        ):
+            media_path.unlink(missing_ok=True)
+            MEDIA_DEBUG_ERRORS["pexels-one-idea-video"] = f"scene_{index}: cached source failed full-HD media validation"
+            return None
+        MEDIA_DEBUG_ERRORS.pop("pexels-one-idea-video", None)
+        return {
+            "kind": "video",
+            "path": str(media_path),
+            "source": "Pexels free licensed source video",
+            "provider": "Pexels",
+            "source_id": int(item["source_id"]),
+            "source_url": str(item["source_url"]),
+            "downloaded_media_url": str(item["media_url"]),
+            "creator": str(item["creator"]),
+            "attribution": f"Video by {item['creator']} / Pexels",
+            "license": "Pexels License",
+            "license_url": "https://www.pexels.com/license/",
+            "commercial_use_state": "commercial_use_allowed_under_provider_terms",
+            "rights_status": "license_metadata_present",
+            "provider_restrictions": (
+                "Pexels License; used as part of an edited audiovisual work, not redistributed "
+                "as a standalone source file. Review visible people, marks and context before release."
+            ),
+            "title": str(item["title"]),
+            "description": str(item["description"]),
+            "tags": candidate_metadata["tags"],
+            "resolution": [width, height],
+            "duration_seconds": round(seconds, 3),
+            "mime_type": "video/mp4",
+            "quality_tier": "curated_free_source_motion_video",
+            "provider_query": str(item["visual_match"]),
+            "retrieved_at": utc_iso(),
+            "validated_media": True,
+            "selection_reason": "official_source_title_and_description_match_scene_focus",
+            "selection_scene_index": int(index),
+        }
+    except Exception as exc:
+        MEDIA_DEBUG_ERRORS["pexels-one-idea-video"] = f"{type(exc).__name__}: {str(exc)[:240]}"
+        try:
+            (outdir / f"pexels_one_idea_{int(item['source_id'])}_raw.mp4").unlink(missing_ok=True)
+        except Exception:
+            pass
+        return None
+
+
 def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int) -> Optional[Dict[str, Any]]:
     """Keyless, item-attributed Pexels motion footage for the eight-shot AI Infinity launch profile.
 
@@ -4247,6 +4451,30 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         selected_candidate["source_file"]=str(path)
         selected_candidate["asset_sha256"]=digest
         return _apply_nasa_scene_usage_policy(selected_candidate, scene)
+
+    # The named ONE IDEA campaign has an authored eight-beat film treatment.
+    # Try its exact item-attributed motion shot before generic stock search; it
+    # still passes the shared metadata relevance, byte uniqueness and rights gates.
+    try:
+        campaign_motion = _curated_pexels_one_idea_video(scene, outdir, index)
+        if campaign_motion:
+            source_path = Path(str(campaign_motion.get("path") or ""))
+            if source_path.is_file():
+                MEDIA_SOURCE_METADATA_BY_PATH[str(source_path.resolve())] = dict(campaign_motion)
+            selected_campaign_motion = select_distinct_candidate(campaign_motion)
+            if selected_campaign_motion:
+                selected_campaign_motion["provider_query"] = campaign_motion.get("provider_query")
+                selected_campaign_motion["quality_tier"] = "curated_free_source_motion_video"
+                _media_success("pexels-one-idea-video", {
+                    "scene": index,
+                    "source_id": campaign_motion.get("source_id"),
+                    "duration_seconds": campaign_motion.get("duration_seconds"),
+                    "sha256": selected_campaign_motion.get("asset_sha256"),
+                })
+                return selected_campaign_motion
+            source_failures.append("_pexels-one-idea-video:duplicate-or-not-relevant")
+    except Exception as exc:
+        source_failures.append("_pexels-one-idea-video:" + type(exc).__name__ + ":" + str(exc)[:160])
 
     # For the known AI Infinity product-launch brief, try a shot-specific real
     # motion clip before generic image search. Previously a loosely matching
