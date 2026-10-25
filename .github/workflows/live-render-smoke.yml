@@ -235,6 +235,17 @@ jobs:
                           storage_state = storage_state if isinstance(storage_state, dict) else {}
                           backend_state = storage_state.get("project_state_backend_status")
                           backend_state = backend_state if isinstance(backend_state, dict) else {}
+                          def safe_storage_error(value):
+                              import re
+                              text = str(value or "")
+                              text = re.sub(r"(?i)https?://[^\s\"']+", "[redacted-url]", text)
+                              text = re.sub(
+                                  r"(?i)\b(authorization|x-amz-security-token|access[_-]?key|secret[_-]?key|application[_-]?key|api[_-]?key|token)\b\s*[:=]\s*[^\s,;]+",
+                                  r"\1=[redacted]",
+                                  text,
+                              )
+                              return " ".join(text.split())[:220]
+
                           durable_evidence = {
                               "persistent": storage_state.get("persistent") is True,
                               "mode": storage_state.get("mode"),
@@ -247,6 +258,9 @@ jobs:
                               "last_sync_present": bool(backend_state.get("last_sync_at")),
                               "sha256_present": bool(backend_state.get("last_sha256")),
                               "last_error_kind": str(backend_state.get("last_error") or "").split(":", 1)[0] or None,
+                              # Backend status now returns a redacted provider code/status/operation,
+                              # making genuine B2 failures diagnosable without exposing credentials.
+                              "last_error_detail": safe_storage_error(backend_state.get("last_error")) or None,
                           }
                           print("LIVE_PROJECT_STATE_DURABILITY_ATTEMPT", json.dumps(durable_evidence, sort_keys=True), flush=True)
                           if durable_evidence["persistent"] is True:

@@ -186,6 +186,20 @@ def _client():
     )
 
 
+
+def _is_missing_object_error(exc: BaseException) -> bool:
+    """Only treat an explicit missing-object response as a fresh-store condition."""
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return False
+    error = response.get("Error") if isinstance(response.get("Error"), dict) else {}
+    code = str(error.get("Code") or "").strip().lower()
+    # Do not interpret NoSuchBucket, AccessDenied, or an unclassified 404 as
+    # an empty store: doing so could initialize a fresh database over lost state.
+    return code in {"nosuchkey", "nosuchobject", "notfound", "404"}
+
+
+
 def _head(key: Optional[str] = None) -> Optional[Dict[str, Any]]:
     h = _client().head_object(Bucket=_cfg()["bucket"], Key=key or object_key())
     metadata = h.get("Metadata") or {}
@@ -250,6 +264,46 @@ def _verify_roundtrip() -> bool:
             pass
 
 
+
+def _safe_error_text(value: Any, limit: int = 180) -> str:
+    """Keep diagnostics actionable without exposing credentials or signed URLs."""
+    text = str(value or "")
+    text = re.sub(r"(?i)https?://[^\s\"']+", "[redacted-url]", text)
+    text = re.sub(
+        r"(?i)\b(authorization|x-amz-security-token|access[_-]?key|secret[_-]?key|application[_-]?key|api[_-]?key|token)\b\s*[:=]\s*[^\s,;]+",
+        r"\1=[redacted]",
+        text,
+    )
+    text = re.sub(r"(?i)\bAKIA[0-9A-Z]{16}\b", "[redacted-access-key]", text)
+    return " ".join(text.split())[:limit]
+
+
+def _describe_storage_error(exc: BaseException) -> str:
+    """Return provider error code, HTTP status and operation with secrets scrubbed."""
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        error = response.get("Error") if isinstance(response.get("Error"), dict) else {}
+        metadata = response.get("ResponseMetadata") if isinstance(response.get("ResponseMetadata"), dict) else {}
+        code = re.sub(r"[^A-Za-z0-9_.-]", "", str(error.get("Code") or ""))[:80]
+        operation = re.sub(r"[^A-Za-z0-9_.-]", "", str(getattr(exc, "operation_name", "") or ""))[:80]
+        try:
+            http_status = int(metadata.get("HTTPStatusCode") or 0)
+        except (TypeError, ValueError):
+            http_status = 0
+        message = _safe_error_text(error.get("Message") or "")
+        details = []
+        if code:
+            details.append("code=" + code)
+        if http_status:
+            details.append("http_status=" + str(http_status))
+        if operation:
+            details.append("operation=" + operation)
+        if message:
+            details.append("message=" + message)
+        return type(exc).__name__ + (": " + " ".join(details) if details else "")
+    return type(exc).__name__ + ": " + _safe_error_text(exc, 220)
+
+
 def configure(db_path: Path | str) -> Dict[str, Any]:
     """Attach the backend and restore remote state before local schema init."""
     global _DB_PATH, _SYNC_FAILURES
@@ -299,7 +353,7 @@ def configure(db_path: Path | str) -> Dict[str, Any]:
                 break
             last_error = "B2 canary verification failed"
         except Exception as exc:
-            last_error = f"{type(exc).__name__}: {str(exc)[:300]}"
+            last_error = _describe_storage_error(exc)
         if attempt + 1 < _MAX_CANARY_VERIFY_ATTEMPTS:
             time.sleep(float(min(2 ** attempt, 4)))
 
@@ -326,6 +380,14 @@ def configure(db_path: Path | str) -> Dict[str, Any]:
             "completed_at": time.time(),
             "truthful": True,
         }
+        if not restored and str(restore_result.get("reason") or "") == "restore_failed":
+            # Never allow a failed read of an existing checkpoint to be followed
+            # by a write of a fresh/partial local database over the recovery point.
+            _STATUS["active"] = False
+            _STATUS["verified"] = False
+            _STATUS["snapshot_verified"] = False
+            detail = restore_result.get("error") or _STATUS.get("last_error") or "remote_snapshot_restore_failed"
+            _STATUS["last_error"] = _safe_error_text(detail, 260)
     return status()
 
 
@@ -345,7 +407,15 @@ def restore_on_startup() -> Dict[str, Any]:
     tmp_path: Optional[Path] = None
     body = None
     try:
-        head = _head()
+        try:
+            head = _head()
+        except Exception as exc:
+            if _is_missing_object_error(exc):
+                with _LOCK:
+                    _STATUS["snapshot_verified"] = False
+                    _STATUS["last_error"] = None
+                return {"restored": False, "reason": "no_remote_snapshot", "truthful": True}
+            raise
         if not head or int(head.get("size_bytes") or 0) <= 0:
             return {"restored": False, "reason": "no_remote_snapshot", "truthful": True}
         expected = str(head.get("sha256") or "")
@@ -398,11 +468,11 @@ def restore_on_startup() -> Dict[str, Any]:
     except Exception as exc:
         with _LOCK:
             _STATUS["snapshot_verified"] = False
-            _STATUS["last_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+            _STATUS["last_error"] = _describe_storage_error(exc)
         return {
             "restored": False,
             "reason": "restore_failed",
-            "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+            "error": _describe_storage_error(exc),
             "truthful": True,
         }
     finally:
@@ -528,8 +598,8 @@ def snapshot_now() -> Dict[str, Any]:
         except Exception as exc:
             with _LOCK:
                 _STATUS["snapshot_verified"] = False
-                _STATUS["last_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
-            return {"status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:300]}", "truthful": True}
+                _STATUS["last_error"] = _describe_storage_error(exc)
+            return {"status": "failed", "error": _describe_storage_error(exc), "truthful": True}
         finally:
             if tmp is not None:
                 tmp.unlink(missing_ok=True)
@@ -620,6 +690,9 @@ class DurableConnection(sqlite3.Connection):
 def status() -> Dict[str, Any]:
     with _LOCK:
         out = dict(_STATUS)
+    # Defend status consumers even if an older code path stored a raw exception.
+    if out.get("last_error"):
+        out["last_error"] = _safe_error_text(out["last_error"], 260)
     enabled = contract_enabled()
     out.update(
         {
