@@ -1,0 +1,46 @@
+name: AI Infinity — Human Review Film
+
+on:
+  push:
+    branches:
+      - ops/human-review-one-idea-infinite-worlds
+    paths:
+      - .github/workflows/human-review-film.yml
+      - tests/human_review_film.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-infinity-human-review-one-idea
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout isolated review branch
+        uses: actions/checkout@v4
+      - name: Build the existing AI Infinity production runtime
+        run: docker build --pull -t ai-infinity-human-review .
+      - name: Generate requested film through AI Infinity and validate the real render
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/review-evidence"
+          chmod 0777 "${GITHUB_WORKSPACE}/review-evidence"
+          docker run --rm --network host --shm-size=1g \
+            -e AI_INFINITY_EVIDENCE_DIR=/review-evidence \
+            -v "${GITHUB_WORKSPACE}:/workspace:ro" \
+            -v "${GITHUB_WORKSPACE}/review-evidence:/review-evidence" \
+            -w /workspace \
+            --entrypoint python \
+            ai-infinity-human-review /workspace/tests/human_review_film.py
+      - name: Upload real video and human-review packet even when a gate fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-infinity-one-idea-infinite-worlds-review
+          path: review-evidence/**
+          if-no-files-found: warn
+          retention-days: 30
