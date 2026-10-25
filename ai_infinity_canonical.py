@@ -268,8 +268,12 @@ def compile_intent(command,raw):
     if not fmt:fmt="short" if ratio=="9:16" or re.search(r"\bshorts?|reel|tiktok\b",low) else "long"
     try:duration=int(raw.get("duration") or 0)
     except Exception:duration=0
-    m=re.search(r"\b(\d{1,4})\s*(seconds?|secs?|s|minutes?|mins?|m)\b",low)
-    if m:duration=int(m.group(1))*(60 if m.group(2).startswith("m") else 1)
+    # An explicit duration selected by the caller is authoritative. Natural-language
+    # parsing is only a fallback; otherwise a storyboard marker such as "0-4 seconds"
+    # can silently change a requested 60-second film into a 4-second project.
+    if duration<=0:
+        m=re.search(r"\b(\d{1,4})\s*(seconds?|secs?|s|minutes?|mins?|m)\b",low)
+        if m:duration=int(m.group(1))*(60 if m.group(2).startswith("m") else 1)
     if duration<=0:duration=60 if fmt=="short" else 300
     duration=max(20,min(3600,duration))
     if duration>=120 and fmt in {"short","shorts","reel","tiktok"} and ratio!="9:16":fmt="long"
