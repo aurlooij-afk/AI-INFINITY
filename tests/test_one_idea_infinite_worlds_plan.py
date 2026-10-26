@@ -13,6 +13,28 @@ Then make it better. At 56 seconds close with: AI Infinity. One idea. Infinite w
 Use real sources and preserve provenance and rights evidence."""
 
 
+def test_creative_plan_uses_the_exact_named_campaign_without_model_rewriting():
+    calls = []
+    def model_fn(_payload):
+        calls.append(True)
+        return {"provider": "generic-model", "text": '{"title":"Generic AI Ad","chapters":[]}'}
+    plan, provider = studio_ultimate.creative_plan({
+        "title": "ONE IDEA. INFINITE WORLDS.",
+        "objective": BRIEF,
+        "format": "long",
+        "duration": 60,
+        "aspect_ratio": "16:9",
+        "language": "English",
+        "content_type": "video",
+    }, {"sources": []}, model_fn)
+    assert calls == [], "the exact named campaign must not be silently rewritten by a model"
+    assert provider == "builtin-creative-engine:one-idea-infinite-worlds", provider
+    assert plan["title"] == "ONE IDEA. INFINITE WORLDS.", plan["title"]
+    assert plan["hook"] == "Every extraordinary world begins with something nobody else can see.", plan["hook"]
+    assert plan["cta"] == "Research it. Shape it. Bring it to life. Then make it better.", plan["cta"]
+    assert len(plan["chapters"]) == 8
+
+
 def test_campaign_plan_preserves_requested_story_and_distinct_visual_beats():
     plan = studio_ultimate._fallback_creative_plan(
         title="ONE IDEA. INFINITE WORLDS.",
@@ -58,5 +80,6 @@ def test_campaign_plan_preserves_requested_story_and_distinct_visual_beats():
 
 
 if __name__ == "__main__":
+    test_creative_plan_uses_the_exact_named_campaign_without_model_rewriting()
     test_campaign_plan_preserves_requested_story_and_distinct_visual_beats()
-    print("PASS: campaign fallback preserves eight distinct cinematic story beats.")
+    print("PASS: exact campaign plan, hook, 8 cinematic beats and scene metadata.")
