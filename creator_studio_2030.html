@@ -228,6 +228,18 @@ async function createCommand(){
       openModal(route==="project_status"?"Project status":"Available capabilities",'<pre class="mono">'+esc(JSON.stringify(d.result||d,null,2))+'</pre>');
       return;
     }
+    if(["script","strategy","marketing","seo","analytics","publisher","monetization"].indexOf(route)>=0){
+      const agentTitles={script:"Script / Storyboard",strategy:"Creative Strategy",marketing:"Marketing Plan",seo:"SEO Output",analytics:"Analytics",publisher:"Publishing Options",monetization:"Monetization Options"};
+      const planOnly=["script","strategy","marketing","seo"].indexOf(route)>=0;
+      $("commandNotice").className="notice "+(d.status==="completed"?"good":"warn");
+      $("commandNotice").textContent=planOnly
+        ?"Agent output returned. This result is a plan/draft; no media file was created."
+        :"Read-only capability result returned; no external action was performed.";
+      openModal(agentTitles[route]||"Agent result",
+        '<div class="notice '+(d.status==="completed"?"good":"warn")+'">'+esc(d.delivery_note||(planOnly?"Review the generated plan/draft before production.":"Read-only result; publishing and other external writes were not performed."))+'</div>'+
+        '<pre class="mono" style="margin-top:10px">'+esc(JSON.stringify(d,null,2))+'</pre>');
+      return;
+    }
     $("commandNotice").className="notice warn";
     $("commandNotice").textContent=String(d.reason||"This command did not match a supported safe execution route.");
     openModal("Command needs attention",'<div class="notice warn">'+esc(d.reason||d.status||"No execution was started.")+'</div><pre class="mono">'+esc(JSON.stringify(d,null,2))+'</pre>');
