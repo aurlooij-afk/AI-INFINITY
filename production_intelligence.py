@@ -10,6 +10,7 @@ No provider credential => truthful not_configured response.
 import base64, json, mimetypes, os, re, sqlite3, subprocess, time, uuid
 import api_anything_connector
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional
 import requests
 from fastapi import HTTPException, Request
