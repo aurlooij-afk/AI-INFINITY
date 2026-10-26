@@ -1824,14 +1824,38 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
 
     if one_idea_infinite_worlds and str(language or "English").strip().lower() == "english":
         ai_infinity_launch_narration.update({
-            "Hook": "Every extraordinary world begins with something nobody else can see.",
-            "Context": "Midnight. One idea reaches beyond a quiet room: a horizon, a city, a world not yet real.",
-            "The core idea": "Research gives it roots. Notes become a storyboard. A script gives each scene a purpose, so every shot moves the story forward.",
-            "How it works": "Then a pencil line becomes a horizon. Each transition leads somewhere; each shot carries the idea forward.",
-            "Real-world examples": "Mountains catch first light. A future city moves with purpose. In one human face, uncertainty gives way to wonder.",
-            "What changes": "The images become a cut. Voice, music, captions find their rhythm. Keep the timeline editable; verify the export.",
-            "Practical takeaway": "Research it. Shape it. Bring it to life. Then make it better.",
-            "Closing": "AI Infinity. One idea. Infinite worlds.",
+            "Hook": (
+                "Every extraordinary world begins with something nobody else can see. "
+                "One creator, one blank screen, one possibility waiting to take shape."
+            ),
+            "Context": (
+                "In the quiet of night, an idea becomes a note, a question, "
+                "and a story worth sharing."
+            ),
+            "The core idea": (
+                "Research gives the vision roots. Sources inform the story; "
+                "notes become a storyboard, and each scene earns its place."
+            ),
+            "How it works": (
+                "A pencil line becomes a horizon. The world opens, the camera moves, "
+                "and the idea grows beyond its room."
+            ),
+            "Real-world examples": (
+                "A city of tomorrow rises from that first thought. Each image has purpose: "
+                "reveal possibility, create emotion, move the story."
+            ),
+            "What changes": (
+                "The craft brings it together. Edit the timeline, shape the voice, "
+                "balance the music, align captions so every moment lands."
+            ),
+            "Practical takeaway": (
+                "Keep work editable, verify source rights, inspect the render, "
+                "and improve it without losing the creative thread."
+            ),
+            "Closing": (
+                "Research it. Shape it. Bring it to life. Then make it better. "
+                "AI Infinity. One idea. Infinite worlds."
+            ),
         })
 
     # Product-launch copy for Pashto must be long enough for a real 60-second
