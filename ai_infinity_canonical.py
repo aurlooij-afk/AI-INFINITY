@@ -650,6 +650,132 @@ def create_from_command(command,user_id,raw):
     event(pid,user_id,"project_created",{"version_id":vid,"intent_sha256":digest(intent),"preflight":pf})
     return {**result,"project_id":pid,"intent":intent,"preflight":pf,"version":{"version_id":vid,"label":"Version 1","state":"PENDING"},"canonical":VERSION,"truthful":True}
 
+
+def classify_command(command, raw=None):
+    """Classify only supported, bounded actions; unknown commands never default to video."""
+    payload = raw if isinstance(raw, dict) else {}
+    text = clean(command, 4000)
+    low = text.lower()
+    explicit = clean(payload.get("task_type") or payload.get("operation"), 40).lower().replace("-", "_")
+    aliases = {
+        "creation": "create", "production": "create", "media": "create",
+        "search": "research", "investigate": "research", "inspect": "capabilities",
+        "status": "capabilities", "project_status": "project_status",
+        "revision": "edit", "modification": "edit",
+    }
+    explicit = aliases.get(explicit, explicit)
+    supported = {"research", "create", "edit", "project_status", "capabilities"}
+    if explicit in supported:
+        route = explicit
+    elif re.match(r"^\s*(?:please\s+)?(?:publish|post|send|delete|destroy|purchase|buy|pay|transfer|schedule|upload)\b", low):
+        action = re.match(r"^\s*(?:please\s+)?([a-z]+)", low)
+        return {"route": "authorization_required", "action": action.group(1) if action else "external_action",
+                "reason": "Consequential external actions require action-specific authorization and a verified connector."}
+    elif payload.get("project_id") and re.search(r"\b(status|progress|verify|verification|health|where are we|what remains)\b", low) and not re.search(r"\b(create|make|generate|produce|research|investigate)\b", low):
+        route = "project_status"
+    elif re.search(r"\b(what can you do|available capabilities|available tools|system status|capability status|health check)\b", low):
+        route = "capabilities"
+    else:
+        creation = bool(re.search(r"\b(create|make|generate|produce|build|write|draft|develop|turn|convert|transform|repurpose)\b", low))
+        types = (
+            (r"\b(video|film|reel|documentary|explainer|launch film|shorts?)\b", "video"),
+            (r"\b(podcast|audio show)\b", "podcast"),
+            (r"\b(article|blog|essay|report|guide|newsletter|white paper|research brief)\b", "article"),
+            (r"\b(social post|social campaign|linkedin post|instagram post|tweet|x post)\b", "social"),
+        )
+        has_known_deliverable = clean(payload.get("content_type"), 30).lower() in {"video", "podcast", "article", "social"} or any(re.search(pattern, low) for pattern, _ in types)
+        research = bool(re.search(r"\b(research|investigate|find sources|compare examples|benchmark|collect sources|look up|search for evidence)\b", low))
+        editing = bool(re.search(r"\b(trim|cut|crop|resize|brighten|darken|speed up|slow down|increase volume|lower volume|change the captions|change subtitles|replace scene|reorder scenes|edit the video)\b", low))
+        if creation and has_known_deliverable:
+            route = "create"
+        elif research and not creation:
+            route = "research"
+        elif editing and payload.get("project_id"):
+            route = "edit"
+        elif editing:
+            return {"route": "project_id_required", "reason": "Editing requires an existing project ID so ownership and source artifacts can be verified."}
+        elif creation:
+            return {"route": "deliverable_required", "reason": "Specify a supported deliverable: video, podcast, article/report, or social package."}
+        else:
+            return {"route": "unsupported", "reason": "No safe executable route matched this command."}
+    if route == "edit" and not payload.get("project_id"):
+        return {"route": "project_id_required", "reason": "Editing requires an existing project ID."}
+    if route == "project_status" and not payload.get("project_id"):
+        return {"route": "project_id_required", "reason": "Project status requires an existing project ID."}
+    return {"route": route, "reason": "Matched an implemented AI Infinity capability."}
+
+
+def dispatch_command(command, user_id, raw=None):
+    """Execute through existing engines; this is a router, not a second creator engine."""
+    payload = raw if isinstance(raw, dict) else {}
+    cmd = clean(command, 4000)
+    if len(cmd) < 3:
+        raise HTTPException(422, "A command of at least three characters is required.")
+    decision = classify_command(cmd, payload)
+    route = decision["route"]
+    if route == "authorization_required":
+        return {
+            "status": "authorization_required", "route": route,
+            "action": decision["action"], "reason": decision["reason"],
+            "executed": False, "truthful": True,
+        }
+    if route in {"unsupported", "project_id_required", "deliverable_required"}:
+        return {
+            "status": "unsupported_or_incomplete", "route": route,
+            "reason": decision["reason"],
+            "supported_routes": ["research", "create", "edit_existing_project", "project_status", "capabilities"],
+            "executed": False, "truthful": True,
+        }
+    if route == "capabilities":
+        result = capabilities(user_id)
+        try:
+            import production_intelligence
+            result["production_intelligence"] = production_intelligence.provider_status()
+        except Exception as exc:
+            result["production_intelligence"] = {
+                "status": "unavailable", "error_type": type(exc).__name__, "truthful": True,
+            }
+        return {"status": "completed", "route": route, "result": result, "executed": True, "truthful": True}
+    if route == "project_status":
+        pid = clean(payload.get("project_id"), 180)
+        require_project(pid, user_id)
+        return {"status": "completed", "route": route, "result": reconcile(pid, user_id), "executed": True, "truthful": True}
+    if route == "edit":
+        pid = clean(payload.get("project_id"), 180)
+        require_project(pid, user_id)
+        if re.search(r"\b(delete|destroy)\s+(?:the\s+)?project\b", cmd, re.I):
+            raise HTTPException(409, "Destructive project deletion is not supported by this command router.")
+        result = apply_edit(pid, user_id, cmd)
+        return {"status": result.get("status", "completed"), "route": route, "result": result, "executed": True, "truthful": True}
+    if route == "research":
+        import production_intelligence
+        topic = clean(payload.get("topic") or payload.get("subject"), 500)
+        if not topic:
+            topic = re.sub(
+                r"^\s*(?:please\s+)?(?:research|investigate|benchmark|look\s+up|search\s+for|find\s+sources|collect\s+sources|compare\s+examples)\s+",
+                "", cmd, flags=re.I,
+            ).strip() or cmd
+        try:
+            limit = max(1, min(10, int(payload.get("limit") or 8)))
+        except (TypeError, ValueError, OverflowError):
+            limit = 8
+        result = production_intelligence.research(topic, limit=limit)
+        count = int(result.get("source_count") or 0)
+        return {
+            "status": "completed" if count else "degraded",
+            "route": route, "topic": topic, "result": result,
+            "source_count": count,
+            "quality_state": "REVIEW_REQUIRED" if count else "DEGRADED",
+            "claims_independently_verified": False,
+            "executed": True, "truthful": True,
+        }
+    if route == "create":
+        result = create_from_command(cmd, user_id, payload)
+        return {"status": result.get("status", "queued"), "route": route, "result": result, "executed": True, "truthful": True}
+    raise HTTPException(500, "Command router reached an unimplemented route.")
+
+
+
 def register(app):
     init_schema()
 
@@ -674,6 +800,13 @@ def register(app):
         with studio().DB_LOCK,db() as c:
             ps=[dict(r) for r in c.execute("SELECT project_id,state,current_version_id,created_at,updated_at FROM canonical_projects WHERE user_id=? ORDER BY updated_at DESC LIMIT 100",(uid_,)).fetchall()]
         return {"version":VERSION,"projects":ps,"profile":profile(uid_),"capabilities":capabilities(uid_),"truthful":True}
+
+    @app.post("/infinity/canonical/execute")
+    async def canonical_execute(request:Request,response:Response):
+        uid_=current_user(request,response)
+        payload=await request.json()
+        command=clean(payload.get("command") or payload.get("instruction"),4000)
+        return dispatch_command(command,uid_,payload)
 
     @app.post("/infinity/canonical/preflight")
     async def canonical_preflight(request:Request,response:Response):
