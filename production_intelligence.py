@@ -124,7 +124,7 @@ def research(topic,limit=10):
         source_name=str(item.get("source") or "")
         if source_name not in {
             "API Anything / YouTube", "API Anything / Hacker News", "API Anything / Goodreads",
-            "API Anything / Steam", "API Anything / Amazon",
+            "API Anything / Rotten Tomatoes", "API Anything / Amazon",
         }:
             continue
         sources.append({
@@ -141,8 +141,8 @@ def research(topic,limit=10):
                         "Author: "+str(item.get("author") or "unknown")[:160]+"; rating: "+str(item.get("rating") or "unknown")[:40]
                         if source_name=="API Anything / Goodreads"
                         else (
-                            "Price: "+str(item.get("price") or "not returned")[:80]+"; release: "+str(item.get("release_date") or "not returned")[:80]
-                            if source_name=="API Anything / Steam"
+                            "Release year: "+str(item.get("year") or "unknown")[:20]+"; critic score: "+str(item.get("tomatometer") or "not returned")[:40]
+                            if source_name=="API Anything / Rotten Tomatoes"
                             else "Product price: "+str(item.get("price") or "not returned")[:80]
                         )
                     )
@@ -175,7 +175,7 @@ def research(topic,limit=10):
             ("API Anything / YouTube", "api-anything-youtube"),
             ("API Anything / Hacker News", "api-anything-hacker-news"),
             ("API Anything / Goodreads", "api-anything-goodreads"),
-            ("API Anything / Steam", "api-anything-steam"),
+            ("API Anything / Rotten Tomatoes", "api-anything-rotten-tomatoes"),
             ("API Anything / Amazon", "api-anything-amazon"),
         ):
             if any(x.get("source") == source_name for x in clean):
@@ -424,15 +424,17 @@ def install_creator_research_connector():
                     "ratings_count": str(item.get("ratings_count") or "")[:60],
                     "retrieved_at": studio().utc_iso(),
                 }
-            elif source_name == "API Anything / Steam":
-                app_id = str(item.get("id") or "").strip()
-                if not re.fullmatch(r"\d{1,12}", app_id) or url != f"https://store.steampowered.com/app/{app_id}/":
+            elif source_name == "API Anything / Rotten Tomatoes":
+                slug = str(item.get("id") or "").strip()
+                if not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", slug) or url != f"https://www.rottentomatoes.com/m/{slug}":
                     continue
                 row = {
                     "title": title, "url": url, "source": source_name,
-                    "summary": "Steam product listing; price: " + str(item.get("price") or "not returned")[:80],
-                    "app_id": app_id, "price": str(item.get("price") or "")[:80],
-                    "release_date": str(item.get("release_date") or "")[:80],
+                    "summary": "Movie metadata; release year: " + str(item.get("year") or "unknown")[:20]
+                    + "; critic score: " + str(item.get("tomatometer") or "not returned")[:40],
+                    "movie_slug": slug, "year": str(item.get("year") or "")[:20],
+                    "tomatometer": str(item.get("tomatometer") or "")[:40],
+                    "cast": str(item.get("cast") or "")[:300],
                     "retrieved_at": studio().utc_iso(),
                 }
             elif source_name == "API Anything / Amazon":
@@ -464,7 +466,7 @@ def install_creator_research_connector():
                 ("youtube.search", "API Anything / YouTube"),
                 ("hacker-news.search", "API Anything / Hacker News"),
                 ("goodreads.searchBooks", "API Anything / Goodreads"),
-                ("steam.search", "API Anything / Steam"),
+                ("rottentomatoes.searchMovies", "API Anything / Rotten Tomatoes"),
                 ("amazon.search", "API Anything / Amazon"),
             ):
                 count = added_by_source.get(source_name, 0)
