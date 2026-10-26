@@ -690,6 +690,19 @@ def classify_command(command, raw=None):
             "route": "authorization_required", "action": action,
             "reason": "Consequential external actions require action-specific authorization and a verified connector.",
         }
+    unsupported_primary = bool(re.search(
+        r"\b(?:create|make|build|develop|generate|produce)\s+(?:(?:a|an|the|new|simple|basic|sample|small|full|mobile|web|desktop|ios|android)\s+){0,5}(?:website|web\s+site|web\s+app|web\s+application|mobile\s+app|mobile\s+application|spreadsheet|slide\s+deck|presentation|powerpoint|database|api\s+endpoint|codebase|code\s+project|computer\s+program|ios\s+app|android\s+app)\b",
+        low,
+    ))
+    explicit_media_output = bool(re.search(
+        r"\b(?:create|make|generate|produce|build)\s+(?:(?:a|an|the|new|short|long|cinematic|professional|vertical|horizontal|\d+[- ]second)\s+){0,5}(?:video|film|reel|documentary|explainer|podcast|article|blog|essay|report|guide|newsletter|social campaign|social post)\b",
+        low,
+    ))
+    if unsupported_primary and not explicit_media_output:
+        return {
+            "route": "unsupported_deliverable",
+            "reason": "This request names a deliverable that the current runtime does not implement. It will not be silently converted into a video. Supported creation outputs are video, podcast, article/report, and social package.",
+        }
     if explicit in supported:
         route = explicit
     elif re.search(r"\b(project|this project)\b", low) and re.search(
