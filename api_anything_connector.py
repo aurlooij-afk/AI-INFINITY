@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import ipaddress
 import selectors
 import re
 import shutil
@@ -260,6 +261,18 @@ def _bundled_search(
                         continue
                     host = parsed.hostname.rstrip(".").lower()
                     if host in {"localhost", "localhost.localdomain"} or host.endswith((".local", ".internal", ".localhost")):
+                        continue
+                    try:
+                        port = parsed.port
+                    except ValueError:
+                        continue
+                    if port not in {None, 443}:
+                        continue
+                    try:
+                        address = ipaddress.ip_address(host)
+                    except ValueError:
+                        address = None
+                    if address is not None and not address.is_global:
                         continue
                     normalized = {
                         "id": _clean_text(row.get("objectID"), 80),
