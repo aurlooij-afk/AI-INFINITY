@@ -29,7 +29,7 @@ def status() -> dict[str, Any]:
         "provider": "api-anything",
         "status": "installed" if executable else "not_installed",
         "available": bool(executable),
-        "enabled_operation": "youtube.search",
+        "enabled_operations": ["youtube.search", "hacker-news.search"],
         "mode": "bundled_read_only_plain_http",
         "browser_learning_enabled": False,
         "upstream_commit": UPSTREAM_COMMIT,
@@ -238,7 +238,7 @@ def _rate_limited_search(capability: str, query: str, limit: int = 10) -> dict[s
     if not shutil.which("api-anything"):
         return {"status": "not_configured", "items": [], "truthful": True}
     try:
-        max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))))
+        max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))))
         safe_limit = max(1, min(10, int(limit or 10)))
     except (TypeError, ValueError, OverflowError):
         return {"status": "invalid_configuration", "items": [], "truthful": True}
