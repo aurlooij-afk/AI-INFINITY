@@ -116,15 +116,22 @@ def research(topic,limit=10):
             sources.append({"source":"Brave Search","error":str(e)[:500]})
     # Supplemental competitor-video discovery through a pinned, bundled, read-only operation.
     # The connector uses a fresh private CLI home, validates the bundled spec, and forces tier 1.
-    api_anything_result=api_anything_connector.youtube_search(topic,limit=min(limit,10))
-    for item in (api_anything_result.get("items") or []):
+    api_anything_result=api_anything_connector.search_candidates(topic,limit=min(limit,10))
+    for item in (api_anything_result.get("sources") or []):
         if not isinstance(item,dict) or not item.get("url") or not item.get("title"):
             continue
+        source_name=str(item.get("source") or "")
+        if source_name not in {"API Anything / YouTube", "API Anything / Hacker News"}:
+            continue
         sources.append({
-            "source":"API Anything / YouTube",
+            "source":source_name,
             "title":str(item.get("title") or "")[:300],
-            "url":str(item.get("url") or "")[:500],
-            "summary":"Channel: "+str(item.get("channel") or "unknown")[:160]+"; views: "+str(item.get("views") or "unknown")[:80],
+            "url":str(item.get("url") or "")[:1000],
+            "summary":(
+                "Channel: "+str(item.get("channel") or "unknown")[:160]+"; views: "+str(item.get("views") or "unknown")[:80]
+                if source_name=="API Anything / YouTube"
+                else "Hacker News discussion; points: "+str(item.get("points") or "unknown")[:40]+"; comments: "+str(item.get("comments") or "unknown")[:40]
+            ),
             "retrieved_at":studio().utc_iso(),
         })
     clean=[]
@@ -151,7 +158,7 @@ def research(topic,limit=10):
         if any(x.get("source")=="API Anything / YouTube" for x in clean): used.append("api-anything-youtube")
         provider="+".join(used) or "unknown"
     providers_used=sorted({str(x.get("source") or "unknown") for x in clean})
-    return {"topic":topic,"provider":provider,"providers_used":providers_used,"api_anything":{"status":api_anything_result.get("status","unknown"),"items_added":sum(1 for x in clean if x.get("source")=="API Anything / YouTube"),"operation":"youtube.search","truthful":True},"source_count":len(clean),"sources":clean[:limit],"generated_at":studio().utc_iso(),"truthful":True}
+    return {"topic":topic,"provider":provider,"providers_used":providers_used,"api_anything":{"status":api_anything_result.get("status","unknown"),"items_added":sum(1 for x in clean if x.get("source") in {"API Anything / YouTube","API Anything / Hacker News"}),"operations":api_anything_result.get("operations",{}),"truthful":True},"source_count":len(clean),"sources":clean[:limit],"generated_at":studio().utc_iso(),"truthful":True}
 
 def frame_image(path:Path)->tuple[Path,Optional[Path]]:
     if path.suffix.lower() in {".png",".jpg",".jpeg",".webp"}:return path,None
@@ -318,7 +325,6 @@ def install_creator_research_connector():
         result = original(topic, limit=limit)
         if not isinstance(result, dict):
             return result
-        # Respect an explicit runtime policy that disables all external research.
         providers = result.get("providers")
         if isinstance(providers, dict) and providers and all(
             isinstance(item, dict) and item.get("status") == "disabled_by_policy"
@@ -327,8 +333,8 @@ def install_creator_research_connector():
             return result
 
         per = max(1, min(10, int(limit or 10)))
-        connector_result = api_anything_connector.youtube_search(topic, limit=per)
-        items = connector_result.get("items") if isinstance(connector_result, dict) else []
+        connector_result = api_anything_connector.search_candidates(topic, limit=per)
+        items = connector_result.get("sources") if isinstance(connector_result, dict) else []
         items = items if isinstance(items, list) else []
         sources = result.get("sources")
         if not isinstance(sources, list):
@@ -339,48 +345,77 @@ def install_creator_research_connector():
             for item in sources if isinstance(item, dict)
         }
         added = 0
+        added_by_source = {}
         relevant = getattr(target, "_research_source_relevant", None)
         for item in items:
             if not isinstance(item, dict):
                 continue
-            video_id = str(item.get("id") or "").strip()
             url = str(item.get("url") or "").strip()
             title = str(item.get("title") or "").strip()[:300]
-            if not re.fullmatch(r"[A-Za-z0-9_-]{6,20}", video_id):
+            source_name = str(item.get("source") or "")
+            if not title or not url.startswith("https://"):
                 continue
-            if url != f"https://www.youtube.com/watch?v={video_id}" or not title:
+            if source_name == "API Anything / YouTube":
+                video_id = str(item.get("id") or "").strip()
+                if not re.fullmatch(r"[A-Za-z0-9_-]{6,20}", video_id):
+                    continue
+                if url != f"https://www.youtube.com/watch?v={video_id}":
+                    continue
+                row = {
+                    "title": title, "url": url, "source": source_name,
+                    "summary": "Channel: " + str(item.get("channel") or "unknown")[:160]
+                    + "; views: " + str(item.get("views") or "unknown")[:80],
+                    "video_id": video_id,
+                    "channel": str(item.get("channel") or "")[:160],
+                    "views": str(item.get("views") or "")[:80],
+                    "retrieved_at": studio().utc_iso(),
+                }
+            elif source_name == "API Anything / Hacker News":
+                parsed = urlparse(url)
+                if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+                    continue
+                host = parsed.hostname.rstrip(".").lower()
+                if host in {"localhost", "localhost.localdomain"} or host.endswith((".local", ".internal", ".localhost")):
+                    continue
+                row = {
+                    "title": title, "url": url, "source": source_name,
+                    "summary": "Hacker News discussion; points: " + str(item.get("points") or "unknown")[:40]
+                    + "; comments: " + str(item.get("comments") or "unknown")[:40],
+                    "external_id": str(item.get("id") or "")[:80],
+                    "author": str(item.get("author") or "")[:120],
+                    "points": str(item.get("points") or "")[:40],
+                    "comments": str(item.get("comments") or "")[:40],
+                    "retrieved_at": studio().utc_iso(),
+                }
+            else:
                 continue
-            row = {
-                "title": title,
-                "url": url,
-                "source": "API Anything / YouTube",
-                "summary": "Channel: " + str(item.get("channel") or "unknown")[:160]
-                + "; views: " + str(item.get("views") or "unknown")[:80],
-                "video_id": video_id,
-                "channel": str(item.get("channel") or "")[:160],
-                "views": str(item.get("views") or "")[:80],
-                "retrieved_at": studio().utc_iso(),
-            }
             key = (url, title.casefold())
             if key in existing or (callable(relevant) and not relevant(str(topic or ""), row)):
                 continue
             existing.add(key)
             sources.append(row)
             added += 1
+            added_by_source[source_name] = added_by_source.get(source_name, 0) + 1
             if len(sources) >= per * 2:
                 break
 
         provider_map = result.setdefault("providers", {})
         if isinstance(provider_map, dict):
-            status_value = str(connector_result.get("status") or "unknown") if isinstance(connector_result, dict) else "failed"
-            provider_map["API Anything / YouTube"] = {
-                "status": "ready" if added else status_value,
-                "count": added,
-                "connector_status": status_value,
-                "operation": "youtube.search",
-                "transport_mode": "bundled_read_only_plain_http",
-                "truthful": True,
-            }
+            operation_statuses = connector_result.get("operations", {}) if isinstance(connector_result, dict) else {}
+            for capability, source_name in (
+                ("youtube.search", "API Anything / YouTube"),
+                ("hacker-news.search", "API Anything / Hacker News"),
+            ):
+                count = added_by_source.get(source_name, 0)
+                status_value = str(operation_statuses.get(capability) or "unknown")
+                provider_map[source_name] = {
+                    "status": "ready" if count else status_value,
+                    "count": count,
+                    "connector_status": status_value,
+                    "operation": capability,
+                    "transport_mode": "bundled_read_only_plain_http",
+                    "truthful": True,
+                }
         result["source_count"] = len(sources)
         result["provider_count"] = len({str(item.get("source") or "unknown") for item in sources if isinstance(item, dict)})
         result["degraded"] = not bool(sources)
@@ -388,14 +423,15 @@ def install_creator_research_connector():
         result["research_connector"] = {
             "api_anything_status": str(connector_result.get("status") or "unknown") if isinstance(connector_result, dict) else "failed",
             "items_added": added,
-            "operation": "youtube.search",
+            "operations": connector_result.get("operations", {}) if isinstance(connector_result, dict) else {},
             "truthful": True,
         }
         policy = result.get("relevance_policy")
         if isinstance(policy, dict):
+            retrieved_count = int(policy.get("retrieved_sources") or 0) + len(items)
             policy["accepted_sources"] = len(sources)
-            policy["retrieved_sources"] = int(policy.get("retrieved_sources") or 0) + len(items)
-            policy["rejected_irrelevant_sources"] = max(0, int(policy.get("retrieved_sources") or 0) - len(sources))
+            policy["retrieved_sources"] = retrieved_count
+            policy["rejected_irrelevant_sources"] = max(0, retrieved_count - len(sources))
         return result
 
     enriched_research_topic._api_anything_research_wrapped = True
