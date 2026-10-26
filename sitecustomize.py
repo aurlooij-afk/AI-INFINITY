@@ -30,7 +30,6 @@ def _apply() -> None:
 
     original_music = getattr(studio, "make_music", None)
     original_sfx = getattr(studio, "make_sfx", None)
-    original_concat = getattr(studio, "concat_segments", None)
 
     if callable(original_music) and not getattr(original_music, "_aiinfinity_recovery", False):
         def make_music_safe(outdir, seconds):
@@ -106,36 +105,6 @@ def _apply() -> None:
         make_sfx_safe._aiinfinity_recovery = True
         studio.make_sfx = make_sfx_safe
 
-    if callable(original_concat) and not getattr(original_concat, "_aiinfinity_recovery", False):
-        def concat_safe(paths, out):
-            try:
-                result = original_concat(paths, out)
-                if _valid(result, 10000):
-                    return result
-            except Exception:
-                pass
-            # Re-encode fallback handles small differences between scene
-            # streams that make concat-copy reject an otherwise valid project.
-            manifest = Path(out).with_suffix(".recovery.txt")
-            manifest.write_text(
-                "".join(
-                    "file '" + str(Path(p)).replace("'", "'\\''") + "'\n"
-                    for p in paths if Path(p).is_file()
-                ),
-                encoding="utf-8",
-            )
-            ffmpeg = getattr(studio, "ffmpeg")
-            ffmpeg(
-                "-f", "concat", "-safe", "0", "-i", manifest,
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "25",
-                "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", out,
-                timeout=900,
-            )
-            if not _valid(out, 10000):
-                raise RuntimeError("media assembly produced no valid master video")
-            return out
-        concat_safe._aiinfinity_recovery = True
-        studio.concat_segments = concat_safe
 
 
 _apply()
