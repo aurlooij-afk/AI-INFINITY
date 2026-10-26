@@ -156,15 +156,19 @@ def test_production_research_uses_api_anything_results_without_claiming_more_tha
     monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
     monkeypatch.setattr(
         production_intelligence.api_anything_connector,
-        "youtube_search",
+        "search_candidates",
         lambda query, limit=10: {
             "status": "ready",
-            "items": [{
+            "source_count": 1,
+            "sources": [{
+                "id": "abcdefghijk",
                 "title": "Research example",
                 "url": "https://www.youtube.com/watch?v=abcdefghijk",
                 "channel": "Example channel",
                 "views": "100 views",
+                "source": "API Anything / YouTube",
             }],
+            "operations": {"youtube.search": "ready", "hacker-news.search": "empty"},
             "truthful": True,
         },
     )
@@ -176,7 +180,7 @@ def test_production_research_uses_api_anything_results_without_claiming_more_tha
     assert result["api_anything"] == {
         "status": "ready",
         "items_added": 1,
-        "operation": "youtube.search",
+        "operations": {"youtube.search": "ready", "hacker-news.search": "empty"},
         "truthful": True,
     }
     assert result["sources"][0]["source"] == "API Anything / YouTube"
@@ -215,23 +219,27 @@ def test_installed_adapter_enriches_the_existing_creator_research_function(monke
     monkeypatch.setattr(production_intelligence, "studio", lambda: creator)
     monkeypatch.setattr(
         production_intelligence.api_anything_connector,
-        "youtube_search",
+        "search_candidates",
         lambda topic, limit=10: {
             "status": "ready",
-            "items": [
+            "sources": [
                 {
-                    "id": "abcdefghijk",
+                    "id": "abcdefghijk", "source": "API Anything / YouTube",
                     "title": "AI video editing tutorial",
                     "url": "https://www.youtube.com/watch?v=abcdefghijk",
-                    "channel": "Creator",
-                    "views": "1200 views",
+                    "channel": "Creator", "views": "1200 views",
                 },
                 {
-                    "id": "invalid id",
-                    "title": "Invalid row",
-                    "url": "https://www.youtube.com/watch?v=invalid%20id",
+                    "id": "invalid id", "source": "API Anything / YouTube",
+                    "title": "Invalid row", "url": "https://www.youtube.com/watch?v=invalid%20id",
+                },
+                {
+                    "id": "123", "source": "API Anything / Hacker News",
+                    "title": "AI video editing discussion", "url": "https://example.org/story",
+                    "author": "sample", "points": "4", "comments": "2",
                 },
             ],
+            "operations": {"youtube.search": "ready", "hacker-news.search": "ready"},
             "truthful": True,
         },
     )
@@ -240,11 +248,13 @@ def test_installed_adapter_enriches_the_existing_creator_research_function(monke
     result = creator.research_topic("AI video editing", limit=5)
 
     assert installed["status"] == "installed"
-    assert result["source_count"] == 2
-    assert result["provider_count"] == 2
+    assert result["source_count"] == 3
+    assert result["provider_count"] == 3
     assert [s["source"] for s in result["sources"]].count("API Anything / YouTube") == 1
-    assert result["research_connector"]["items_added"] == 1
+    assert [s["source"] for s in result["sources"]].count("API Anything / Hacker News") == 1
+    assert result["research_connector"]["items_added"] == 2
     assert result["providers"]["API Anything / YouTube"]["status"] == "ready"
+    assert result["providers"]["API Anything / Hacker News"]["status"] == "ready"
 
 
 def test_installed_adapter_respects_explicit_disable_external_research_policy(monkeypatch):
@@ -271,7 +281,7 @@ def test_installed_adapter_respects_explicit_disable_external_research_policy(mo
     def must_not_run(*args, **kwargs):
         raise AssertionError("API Anything must not run when external research is disabled")
 
-    monkeypatch.setattr(production_intelligence.api_anything_connector, "youtube_search", must_not_run)
+    monkeypatch.setattr(production_intelligence.api_anything_connector, "search_candidates", must_not_run)
     production_intelligence.install_creator_research_connector()
     assert creator.research_topic("AI video editing") is result_when_disabled
 
@@ -300,7 +310,7 @@ def test_production_research_route_respects_external_provider_disable_policy(mon
     def must_not_run(*args, **kwargs):
         raise AssertionError("Remote provider call must be blocked by policy")
 
-    monkeypatch.setattr(production_intelligence.api_anything_connector, "youtube_search", must_not_run)
+    monkeypatch.setattr(production_intelligence.api_anything_connector, "search_candidates", must_not_run)
     monkeypatch.setattr(production_intelligence.requests, "post", must_not_run)
     monkeypatch.setattr(production_intelligence.requests, "get", must_not_run)
 
@@ -339,3 +349,68 @@ def test_youtube_search_applies_shared_per_site_rate_limit(monkeypatch):
     assert second["status"] == "rate_limited"
     # The second request is rejected before any additional CLI/network operation.
     assert len(calls) == 3
+
+
+def test_hacker_news_search_uses_bundled_readonly_operation_and_validates_https_results(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    runner, calls = _stub_runner(site_name="hacker-news")
+    monkeypatch.setattr(connector.subprocess, "run", runner)
+
+    result = connector.hacker_news_search(" AI video editing ", limit=3)
+
+    assert result["status"] == "ready"
+    assert result["site"] == "hacker-news"
+    assert result["operation"] == "search"
+    assert result["transport_tier"] == 1
+    assert result["items"] == [{
+        "id": "123456",
+        "title": "A useful technology discussion",
+        "url": "https://example.org/story",
+        "author": "sample-user",
+        "points": "42",
+        "comments": "8",
+        "source": "API Anything / Hacker News",
+    }]
+    assert calls[0][1:] == ["sites"]
+    assert calls[1][1:] == ["ops", "hacker-news"]
+    assert calls[2][1:4] == ["call", "hacker-news", "search"]
+    assert json.loads(calls[2][calls[2].index("--json") + 1]) == {"query": "AI video editing"}
+    assert calls[2][calls[2].index("--max-tier") + 1] == "1"
+
+
+def test_hacker_news_search_rejects_non_https_result_urls(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    malicious = {
+        "ok": True, "class": "ok", "tier": 1,
+        "data": [
+            {"objectID": "1", "title": "Plain HTTP link", "url": "http://example.org/story"},
+            {"objectID": "2", "title": "Localhost link", "url": "https://localhost/private"},
+            {"objectID": "3", "title": "Safe HTTPS link", "url": "https://example.org/safe"},
+        ],
+    }
+    runner, calls = _stub_runner(site_name="hacker-news", result=malicious)
+    monkeypatch.setattr(connector.subprocess, "run", runner)
+
+    result = connector.hacker_news_search("security")
+
+    assert result["status"] == "ready"
+    assert [x["url"] for x in result["items"]] == ["https://example.org/safe"]
+
+
+def test_search_candidates_reports_each_allowlisted_operation_truthfully(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    seen = []
+
+    def fake(site_name, operation_name, query_parameter, query, limit, result_kind):
+        seen.append(site_name)
+        if site_name == "youtube":
+            return {"status": "ready", "items": [{"title": "video", "source": "API Anything / YouTube"}], "truthful": True}
+        return {"status": "empty", "items": [], "truthful": True}
+
+    monkeypatch.setattr(connector, "_bundled_search", fake)
+    result = connector.search_candidates("AI video editing", limit=3)
+
+    assert result["status"] == "ready"
+    assert result["source_count"] == 1
+    assert result["operations"] == {"youtube.search": "ready", "hacker-news.search": "empty"}
+    assert seen == ["youtube", "hacker-news"]
