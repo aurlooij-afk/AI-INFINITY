@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import selectors
 import re
 import shutil
 import subprocess
@@ -38,6 +39,9 @@ def status() -> dict[str, Any]:
     }
 
 
+_ORIGINAL_SUBPROCESS_RUN = subprocess.run
+
+
 def _run_json(
     runner: Callable[..., Any],
     executable: str,
@@ -47,27 +51,98 @@ def _run_json(
     env: dict[str, str],
     timeout: int,
 ) -> tuple[Any | None, str | None]:
-    try:
-        completed = runner(
-            [executable, *args],
-            cwd=cwd,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-            close_fds=True,
-        )
-    except subprocess.TimeoutExpired:
-        return None, "timeout"
-    except OSError:
-        return None, "execution_failed"
+    # Production uses incremental pipe reads so a remote response cannot be fully
+    # buffered in RAM before MAX_OUTPUT_CHARS is enforced. Tests can inject a runner.
+    if runner is _ORIGINAL_SUBPROCESS_RUN:
+        process = None
+        chunks = []
+        total = 0
+        deadline = time.monotonic() + timeout
+        try:
+            process = subprocess.Popen(
+                [executable, *args],
+                cwd=cwd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                start_new_session=True,
+            )
+            assert process.stdout is not None
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                while selector.get_map():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        process.kill()
+                        process.wait()
+                        return None, "timeout"
+                    events = selector.select(remaining)
+                    if not events:
+                        if process.poll() is None:
+                            process.kill()
+                            process.wait()
+                            return None, "timeout"
+                        continue
+                    for key, _ in events:
+                        chunk = os.read(key.fd, min(65536, MAX_OUTPUT_CHARS - total + 1))
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                            continue
+                        total += len(chunk)
+                        if total > MAX_OUTPUT_CHARS:
+                            process.kill()
+                            process.wait()
+                            return None, "output_too_large"
+                        chunks.append(chunk)
+            remaining = max(0.01, deadline - time.monotonic())
+            try:
+                code = process.wait(timeout=remaining)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+                return None, "timeout"
+            if code != 0:
+                return None, "command_failed"
+            stdout = b"".join(chunks).decode("utf-8", "replace")
+        except subprocess.TimeoutExpired:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+            return None, "timeout"
+        except OSError:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+            return None, "execution_failed"
+        except Exception:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+            return None, "execution_failed"
+    else:
+        # Injected test runner; preserve deterministic test control and the same caps.
+        try:
+            completed = runner(
+                [executable, *args],
+                cwd=cwd,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+                close_fds=True,
+            )
+        except subprocess.TimeoutExpired:
+            return None, "timeout"
+        except OSError:
+            return None, "execution_failed"
+        stdout = str(getattr(completed, "stdout", "") or "")
+        if len(stdout) > MAX_OUTPUT_CHARS:
+            return None, "output_too_large"
+        if getattr(completed, "returncode", 1) != 0:
+            return None, "command_failed"
 
-    stdout = str(getattr(completed, "stdout", "") or "")
-    if len(stdout) > MAX_OUTPUT_CHARS:
-        return None, "output_too_large"
-    if getattr(completed, "returncode", 1) != 0:
-        return None, "command_failed"
     try:
         return json.loads(stdout), None
     except (TypeError, ValueError):
