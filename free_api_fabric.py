@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse, urlencode
-from urllib.request import Request, urlopen, HTTPRedirectHandler, build_opener
+
 
 VERSION = "3622.1"
 MAX_DISCOVERED = max(1000, int(os.getenv("AI_INFINITY_FREE_API_MAX", "100000")))
@@ -94,14 +94,6 @@ def _init():
         """)
 
 _init()
-
-
-class _NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-OPENER = build_opener(_NoRedirect())
 
 
 def _public_addresses(host: str, port: int = 443) -> List[str]:
@@ -342,18 +334,30 @@ def verify_api(api_id: str) -> Dict[str,Any]:
         if not base: raise ValueError("OpenAPI server is not a safe public HTTPS host")
         ops=[]
         for path,item in (spec.get("paths") or {}).items():
-            if not isinstance(item,dict): continue
+            if not isinstance(item,dict) or "{" in str(path) or "}" in str(path):
+                continue
             for method,op in item.items():
-                if method.lower() not in {"get","head"} or not isinstance(op,dict): continue
+                if method.lower() not in {"get","head"} or not isinstance(op,dict):
+                    continue
+                # This executor supports only documented query parameters. Skip
+                # required headers/cookies and request bodies rather than guessing.
+                operation_params=(item.get("parameters") or []) + (op.get("parameters") or [])
+                if op.get("requestBody") or any(
+                    isinstance(p,dict) and p.get("in") not in {None,"query"}
+                    for p in operation_params
+                ):
+                    continue
                 free=_operation_free(spec,op)
-                if not free: continue
+                if not free:
+                    continue
                 url=urljoin(base.rstrip("/")+"/",str(path).lstrip("/"))
                 params=[]
-                for p in (item.get("parameters") or []) + (op.get("parameters") or []):
+                for p in operation_params:
                     if isinstance(p,dict):
                         params.append({"name":p.get("name"),"in":p.get("in"),"required":bool(p.get("required")),"schema":p.get("schema") or {}})
                 op_id="op-"+hashlib.sha256(f"{api_id}|{method}|{path}".encode()).hexdigest()[:24]
-                ops.append((op_id,method.upper(),str(path),url,op.get("operationId"),op.get("summary") or op.get("description"),params,op.get("requestBody") or {},op.get("security")))
+                ops.append((op_id,method.upper(),str(path),url,op.get("operationId"),op.get("summary") or op.get("description"),params,{},op.get("security")))
+
         with LOCK,_connect() as c:
             c.execute("DELETE FROM free_api_ops WHERE api_id=?",(api_id,))
             for x in ops:
@@ -429,37 +433,55 @@ def operations(api_id: str, limit: int=100) -> List[Dict[str,Any]]:
 
 
 def invoke(op_id: str, query: Optional[Dict[str,Any]]=None, body: Any=None) -> Dict[str,Any]:
-    with LOCK,_connect() as c: row=c.execute("SELECT * FROM free_api_ops WHERE op_id=? AND free=1",(op_id,)).fetchone()
-    if not row: raise ValueError("free executable operation not found")
-    r=dict(row); url=r["url"]
-    method=r["method"].upper()
-    # This catalog is public and has no action-specific user authorization contract.
-    # Authentication-free does not mean side-effect-free: enforce read-only methods
-    # even for stale rows saved by older versions before any outbound request is built.
+    with LOCK, _connect() as c:
+        row = c.execute("SELECT * FROM free_api_ops WHERE op_id=? AND free=1", (op_id,)).fetchone()
+    if not row:
+        raise ValueError("free executable operation not found")
+    r = dict(row)
+    method = str(r["method"] or "").upper()
+    # The public catalog has no action-specific authorization contract.
     if method not in {"GET", "HEAD"}:
         raise ValueError("write-capable operations are disabled; only GET/HEAD are allowed")
     if body is not None:
         raise ValueError("request bodies are disabled for the public read-only connector")
-    if not _host_safe(url): raise ValueError("unsafe operation host")
-    params=json.loads(r.get("parameters_json") or "[]")
-    q=dict(query or {})
-    required=[p["name"] for p in params if p.get("in")=="query" and p.get("required")]
-    missing=[x for x in required if x not in q]
-    if missing: raise ValueError("missing required query parameters: "+", ".join(missing))
-    if q: url += ("&" if "?" in url else "?")+urlencode({k:str(v) for k,v in q.items()})
-    headers={"User-Agent":"AI-Infinity-Free-API-Fabric/3622","Accept":"application/json,*/*"}
-    data=None
-    if body is not None and method in {"POST","PUT","PATCH"}:
-        data=json.dumps(body,ensure_ascii=False).encode(); headers["Content-Type"]="application/json"
-    req=Request(url,data=data,headers=headers,method=method)
-    started=time.time()
-    with OPENER.open(req,timeout=HTTP_TIMEOUT) as resp:
-        raw=resp.read(2_000_000)
-        ctype=resp.headers.get("Content-Type","")
-        text=raw.decode("utf-8","replace")
-        try: payload=json.loads(text)
-        except Exception: payload=text
-        return {"status_code":resp.status,"content_type":ctype,"latency_ms":round((time.time()-started)*1000,2),"data":payload,"api_id":r["api_id"],"operation_id":op_id,"truthful":True}
+
+    params = json.loads(r.get("parameters_json") or "[]")
+    query_params = [p for p in params if p.get("in") == "query" and p.get("name")]
+    allowed = {p["name"] for p in query_params}
+    q = dict(query or {})
+    unexpected = sorted(set(q) - allowed)
+    if unexpected:
+        raise ValueError("unsupported query parameters: " + ", ".join(str(x)[:100] for x in unexpected[:10]))
+    required = [p["name"] for p in query_params if p.get("required")]
+    missing = [x for x in required if x not in q]
+    if missing:
+        raise ValueError("missing required query parameters: " + ", ".join(missing))
+
+    url = str(r["url"] or "")
+    if q:
+        url += ("&" if "?" in url else "?") + urlencode({k: str(v) for k, v in q.items()})
+    started = time.time()
+    status_code, content_type, raw = _public_https_request(
+        url, timeout=HTTP_TIMEOUT, max_bytes=2_000_000, method=method
+    )
+    if not 200 <= status_code < 300:
+        # Do not follow redirects or echo untrusted remote response bodies in the API error.
+        raise ValueError(f"remote operation returned HTTP {status_code}")
+    text = raw.decode("utf-8", "replace")
+    try:
+        payload = json.loads(text)
+    except Exception:
+        payload = text
+    return {
+        "status_code": status_code,
+        "content_type": content_type,
+        "latency_ms": round((time.time() - started) * 1000, 2),
+        "data": payload,
+        "api_id": r["api_id"],
+        "operation_id": op_id,
+        "truthful": True,
+    }
+
 
 
 def register(app: Any):
