@@ -33,12 +33,39 @@ def _apply() -> None:
 
     if callable(original_music) and not getattr(original_music, "_aiinfinity_recovery", False):
         def make_music_safe(outdir, seconds):
-            # Deterministic one-source local music first. This avoids the
-            # multi-input filter graph that was the most fragile early-stage
-            # operation on memory-constrained free containers.
+            # Prefer the Creator Studio's original four-chord cinematic score.
+            # The old recovery wrapper always returned a single 110 Hz tone
+            # before the richer composer got a chance to run, which made every
+            # otherwise-complete film sound like an unfinished placeholder.
             out = Path(outdir) / "music.m4a"
             duration = max(1.0, min(900.0, float(seconds)))
             ffmpeg = getattr(studio, "ffmpeg")
+            try:
+                original_result = original_music(outdir, duration)
+                if _valid(original_result, 5000):
+                    try:
+                        probe = studio.ffprobe_json(Path(original_result))
+                        stream = next(
+                            (row for row in (probe.get("streams") or [])
+                             if row.get("codec_type") == "audio"),
+                            {},
+                        )
+                        actual_duration = float(
+                            (probe.get("format") or {}).get("duration") or 0
+                        )
+                        if (
+                            stream
+                            and stream.get("codec_name") in {"aac", "mp3", "opus", "vorbis"}
+                            and abs(actual_duration - duration) <= 1.0
+                            and int(stream.get("channels") or 0) in {1, 2}
+                        ):
+                            return Path(original_result)
+                    except Exception:
+                        pass
+            except Exception:
+                # A verified, bounded local music fallback below keeps free
+                # execution available if the original composition cannot render.
+                pass
             try:
                 ffmpeg(
                     "-f", "lavfi", "-i",
