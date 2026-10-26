@@ -721,6 +721,51 @@ def classify_command(command, raw=None):
     if edit_request and not payload.get("project_id"):
         return {"route": "project_id_required", "reason": "Editing requires an existing project ID so its owner and source artifact can be verified."}
 
+    # Bounded multilingual routing for the already supported output languages.
+    localized_research = bool(re.search(
+        r"(?:تحقیق\s+(?:کرو|کریں|کیجیے|کن|کنید|وکړئ)|ذرائع\s+تلاش\s+کریں|معلومات\s+تلاش\s+کریں|بررسی\s+(?:کن|کنید)|جستجو\s+(?:کن|کنید)|منابع\s+(?:را\s+)?(?:پیدا\s+کن|بیابید)|څېړنه\s+وکړئ|څیړنه\s+وکړئ|سرچینې\s+ومومئ|پرتله\s+کړئ|ابحث(?:\s+عن)?|اجمع\s+المصادر|قارن|تحقق\s+من\s+المصادر)",
+        low,
+    ))
+    localized_create = bool(re.search(
+        r"(?:بناؤ|بنائیں|بنائیے|تخلیق\s+کریں|تیار\s+کریں|لکھیں|لکھو|بسازید?|ایجاد\s+کنید?|تولید\s+کنید?|تهیه\s+کنید?|جوړ\s+کړئ|جوړ\s+کړه|تولید\s+کړئ|أنشئ|اصنع|اكتب|جهّز|جهز)",
+        low,
+    ))
+    localized_script = bool(re.search(
+        r"(?:اسکرپٹ|منظرنامہ|نریشن|وائس\s*اوور|سناریو|فیلمنامه|متن\s+گویندگی|سکرېپټ|تعليق\s+صوتي|سيناريو|لوحة\s+القصة)",
+        low,
+    ))
+    localized_strategy = bool(re.search(
+        r"(?:حکمت\s+عملی|راهبرد|ستراتیژي|ستراتیژۍ|استراتيجية|خطة\s+(?:عمل|تسويق)|بازاریابی|بازاریابي)",
+        low,
+    ))
+    localized_types = (
+        (r"(?:ویڈیو|ویدیو|ویدئوی|ویډیو|فيديو|مقطع|فلم|فیلم)", "video"),
+        (r"(?:پوڈکاسٹ|پادکست|پوډکاسټ|بودكاست)", "podcast"),
+        (r"(?:مضمون|مقالہ|مقاله|گزارش|مقال|تقرير)", "article"),
+        (r"(?:سوشل\s+(?:پوسٹ|مہم)|پست\s+اجتماعی|کمپین|ټولنیز\s+پوسټ|منشور|حملة)", "social"),
+    )
+    localized_content_type = next((kind for pattern, kind in localized_types if re.search(pattern, low)), "")
+    localized_unsupported = bool(re.search(
+        r"(?:ویب\s*سائٹ|وب.?سایت|ویبپاڼه|موقع\s+(?:إلكتروني|ويب)|تطبيق|جدول\s+بيانات|صفحه\s+گسترده|عرض\s+تقديمي|پاورپوائنٹ|قاعدة\s+بيانات)",
+        low,
+    ))
+    if localized_unsupported and not localized_content_type and localized_create:
+        return {
+            "route": "unsupported_deliverable",
+            "reason": "This website/app/spreadsheet/presentation/database request is not implemented by the current runtime; it will not be silently converted into video.",
+        }
+    if not explicit and localized_script and localized_create and not localized_content_type:
+        return {"route": "script", "reason": "Matched an existing script/creative-plan capability."}
+    if not explicit and localized_strategy and not localized_content_type:
+        return {"route": "strategy", "reason": "Matched an existing strategy/creative-plan capability."}
+    if not explicit and localized_research and not localized_create:
+        return {"route": "research", "reason": "Matched a supported multilingual research request."}
+    if not explicit and localized_create:
+        selected_type = localized_content_type or clean(payload.get("content_type"), 30).lower()
+        if selected_type not in {"video", "podcast", "article", "social"}:
+            return {"route": "deliverable_required", "reason": "Specify a supported output: video, podcast, article/report, or social package."}
+        return {"route": "create", "content_type": selected_type, "reason": "Matched a supported multilingual creation request."}
+
     if explicit in supported:
         route = explicit
     elif re.search(r"\b(project|this project)\b", low) and re.search(
@@ -953,7 +998,11 @@ def dispatch_command(command, user_id, raw=None):
             "executed": True, "truthful": True,
         }
     if route == "create":
-        result = create_from_command(cmd, user_id, payload)
+        effective_payload = dict(payload)
+        inferred_type = clean(decision.get("content_type"), 30).lower()
+        if inferred_type in {"video", "podcast", "article", "social"}:
+            effective_payload["content_type"] = inferred_type
+        result = create_from_command(cmd, user_id, effective_payload)
         return {"status": result.get("status", "queued"), "route": route, "result": result, "executed": True, "truthful": True}
     raise HTTPException(500, "Command router reached an unimplemented route.")
 
