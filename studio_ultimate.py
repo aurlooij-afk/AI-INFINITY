@@ -6809,6 +6809,26 @@ def _allocate_scene_durations(
     if floor_budget > target + 1e-6:
         raise ValueError("Selected scenes exceed the available duration budget.")
 
+    # A storyboard may already contain explicit, authored timecodes. When those
+    # scene durations are valid, each scene meets the floor, and the durations
+    # sum to the requested runtime, preserve them exactly. The previous allocator
+    # treated explicit seconds as weights and added the floor again, shifting a
+    # cinematic brief's 0–4/4–12/12–25 beats even though the plan total was 60s.
+    explicit_durations = []
+    for scene in selected:
+        try:
+            requested_scene_seconds = float(scene.get("duration") or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            requested_scene_seconds = 0.0
+        explicit_durations.append(requested_scene_seconds)
+    if (
+        all(0.0 < value < float("inf") and value + 1e-6 >= floor for value in explicit_durations)
+        and abs(sum(explicit_durations) - target) <= 0.05
+    ):
+        for scene, value in zip(selected, explicit_durations):
+            scene["duration"] = round(value, 3)
+        return selected
+
     weights = []
     for scene in selected:
         try:
