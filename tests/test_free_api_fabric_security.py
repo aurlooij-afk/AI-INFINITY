@@ -299,3 +299,51 @@ def test_public_verify_endpoint_caps_each_batch(isolated_fabric, monkeypatch):
     assert result["bounded_limit"] == 25
     assert result["requested_limit"] == 100000
 
+def test_catalog_sync_with_no_usable_entries_is_degraded(isolated_fabric, monkeypatch):
+    monkeypatch.setattr(
+        fabric, "_get_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ConnectionError("source unavailable")),
+    )
+
+    result = fabric.sync_catalogs()
+
+    assert result["status"] == "degraded"
+    assert all(value == 0 for value in result["source_counts"].values())
+    assert result["error"]
+    assert result["truthful"] is True
+
+
+def test_empty_bootstrap_does_not_mark_discovery_ready(isolated_fabric, monkeypatch):
+    import time
+
+    def no_entries():
+        fabric.SYNC_STATE.update({
+            "running": False, "last_run": time.time(), "last_error": "",
+            "source_counts": {"public-api-lists": 0, "public-apis": 0, "apis-guru": 0},
+        })
+        return {"status": "degraded", "source_counts": {"public-api-lists": 0, "public-apis": 0, "apis-guru": 0}}
+
+    class InlineThread:
+        def __init__(self, target, **kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(fabric, "sync_catalogs", no_entries)
+    monkeypatch.setattr(fabric.threading, "Thread", InlineThread)
+
+    assert fabric.start_background_sync() is True
+    assert fabric.SYNC_STATE["bootstrap_started"] is False
+    assert fabric.SYNC_STATE["bootstrap_complete"] is False
+    assert "no usable entries" in fabric.SYNC_STATE["last_error"]
+
+
+def test_lazy_discovery_respects_cooldown_after_failed_attempt(isolated_fabric):
+    import time
+
+    fabric.SYNC_STATE["last_run"] = time.time()
+    assert fabric.start_background_sync() is False
+    assert fabric.SYNC_STATE["bootstrap_started"] is False
+    assert fabric.SYNC_STATE["bootstrap_complete"] is False
+
