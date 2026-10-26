@@ -8,6 +8,7 @@ No provider credential => truthful not_configured response.
 """
 
 import base64, json, mimetypes, os, re, sqlite3, subprocess, time, uuid
+import api_anything_connector
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import requests
@@ -98,6 +99,19 @@ def research(topic,limit=10):
                 sources.append({"source":"Brave Search","title":x.get("title"),"url":x.get("url"),"summary":x.get("description") or x.get("snippet") or "","published_at":x.get("age")})
         except Exception as e:
             sources.append({"source":"Brave Search","error":str(e)[:500]})
+    # Supplemental competitor-video discovery through a pinned, bundled, read-only operation.
+    # The connector uses a fresh private CLI home, validates the bundled spec, and forces tier 1.
+    api_anything_result=api_anything_connector.youtube_search(topic,limit=min(limit,10))
+    for item in (api_anything_result.get("items") or []):
+        if not isinstance(item,dict) or not item.get("url") or not item.get("title"):
+            continue
+        sources.append({
+            "source":"API Anything / YouTube",
+            "title":str(item.get("title") or "")[:300],
+            "url":str(item.get("url") or "")[:500],
+            "summary":"Channel: "+str(item.get("channel") or "unknown")[:160]+"; views: "+str(item.get("views") or "unknown")[:80],
+            "retrieved_at":studio().utc_iso(),
+        })
     clean=[]
     seen=set()
     for x in sources:
@@ -111,13 +125,18 @@ def research(topic,limit=10):
         try:
             legacy=studio().research_topic(topic,limit=min(limit,10))
             clean=[x for x in legacy.get("sources") or [] if not x.get("error")]
-            provider="legacy"
+            provider="legacy" if clean else "none"
         except Exception:
             clean=[]
             provider="none"
     else:
-        provider="tavily+brave" if key else ("brave" if os.getenv("BRAVE_SEARCH_API_KEY","").strip() else "tavily")
-    return {"topic":topic,"provider":provider,"source_count":len(clean),"sources":clean[:limit],"generated_at":studio().utc_iso(),"truthful":True}
+        used=[]
+        if any(x.get("source")=="Tavily" for x in clean): used.append("tavily")
+        if any(x.get("source")=="Brave Search" for x in clean): used.append("brave")
+        if any(x.get("source")=="API Anything / YouTube" for x in clean): used.append("api-anything-youtube")
+        provider="+".join(used) or "unknown"
+    providers_used=sorted({str(x.get("source") or "unknown") for x in clean})
+    return {"topic":topic,"provider":provider,"providers_used":providers_used,"api_anything":{"status":api_anything_result.get("status","unknown"),"items_added":sum(1 for x in clean if x.get("source")=="API Anything / YouTube"),"operation":"youtube.search","truthful":True},"source_count":len(clean),"sources":clean[:limit],"generated_at":studio().utc_iso(),"truthful":True}
 
 def frame_image(path:Path)->tuple[Path,Optional[Path]]:
     if path.suffix.lower() in {".png",".jpg",".jpeg",".webp"}:return path,None
