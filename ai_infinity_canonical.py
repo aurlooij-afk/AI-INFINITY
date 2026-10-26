@@ -740,6 +740,15 @@ def classify_command(command, raw=None):
             route = "marketing"
         elif strategy_request and not media_creation and not re.search(r"\b(create|make|generate|produce|build)\s+.{0,40}\b(video|film|reel|podcast|article|report|social campaign|social post)\b", low):
             route = "strategy"
+        elif re.search(r"\b(website|web\s+site|web\s+app|web\s+application|mobile\s+app|mobile\s+application|spreadsheet|slide\s+deck|presentation|powerpoint|database|api\s+endpoint|codebase|code\s+project|computer\s+program|ios\s+app|android\s+app)\b", low) and not any(
+            re.search(pattern, low) for pattern in (
+                r"\b(video|film|reel|documentary|explainer|launch film|shorts?)\b",
+                r"\b(podcast|audio show)\b",
+                r"\b(article|blog|essay|report|guide|newsletter|white paper|research brief)\b",
+                r"\b(social post|social campaign|linkedin post|instagram post|tweet|x post)\b",
+            )
+        ):
+            return {"route": "unsupported_deliverable", "reason": "This request names a deliverable that the current runtime does not implement. It will not be silently converted into a video. Supported creation outputs are video, podcast, article/report, and social package."}
         elif media_creation:
             route = "create"
         elif research and not creation:
@@ -779,7 +788,7 @@ def dispatch_command(command, user_id, raw=None):
             "action": decision["action"], "reason": decision["reason"],
             "executed": False, "truthful": True,
         }
-    if route in {"unsupported", "project_id_required", "deliverable_required"}:
+    if route in {"unsupported", "project_id_required", "deliverable_required", "unsupported_deliverable"}:
         return {
             "status": "unsupported_or_incomplete", "route": route,
             "reason": decision["reason"],
