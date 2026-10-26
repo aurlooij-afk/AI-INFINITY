@@ -46,6 +46,7 @@ def provider_status():
       "research":{
         "tavily":bool(os.getenv("TAVILY_API_KEY","").strip()),
         "brave":bool(os.getenv("BRAVE_SEARCH_API_KEY","").strip()),
+        "api_anything":api_anything_connector.status(),
         "fallback":"Wikipedia + DuckDuckGo"
       },
       "vision":{"openai":bool(os.getenv("OPENAI_API_KEY","").strip()),"model":os.getenv("AI_INFINITY_VISION_MODEL","gpt-5.6-luna")},
@@ -73,6 +74,7 @@ def parse_json_text(text):
 
 def research(topic,limit=10):
     topic=re.sub(r"\s+"," ",str(topic or "").strip())[:500]
+    limit=max(1,min(20,int(limit or 10)))
     if not topic:raise HTTPException(422,"topic required")
     sources=[]
     key=os.getenv("TAVILY_API_KEY","").strip()
