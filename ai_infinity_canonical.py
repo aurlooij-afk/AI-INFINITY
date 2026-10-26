@@ -683,7 +683,7 @@ def classify_command(command, raw=None):
     localized_actions = (
         ("publish", r"(?:شائع\s+(?:کرو|کریں)|پوسٹ\s+(?:کرو|کریں)|نشر\s+(?:کن|کنید)|خپور\s+(?:کړه|کړئ)|انشروا?|انشري)"),
         ("send", r"(?:بھیج(?:یں|و)?|ارسال\s+(?:کن|کنید)|واست(?:وه|وئ)|أرسل(?:وا)?|ابعث)"),
-        ("delete", r"(?:حذف\s+(?:کرو|کریں|کن|کنید)|ړنګ\s+(?:کړه|کړئ)|احذف(?:وا)?)"),
+        ("delete", r"(?:حذف\s+(?:کرو|کریں|کن|کنید|المشروع|المحتوى|الملف)|ړنګ\s+(?:کړه|کړئ)|احذف(?:وا)?)"),
         ("purchase", r"(?:خرید(?:یں|و|کنید)?|بخر|اشتر(?:وا)?)"),
         ("pay", r"(?:ادائیگی\s+(?:کرو|کریں)|پرداخت\s+(?:کن|کنید)|تادیه\s+وکړه|ادفع(?:وا)?)"),
         ("transfer", r"(?:منتقل\s+(?:کرو|کریں|کن|کنید)|انتقال\s+بده|حوّل(?:وا)?)"),
@@ -729,7 +729,7 @@ def classify_command(command, raw=None):
         return {"route": "project_id_required", "reason": "Project status requires an existing project ID."}
 
     edit_request = bool(re.match(
-        r"^\s*(?:please\s+)?(?:trim|cut|crop|resize|brighten|darken|speed\s+up|slow\s+down|increase\s+volume|lower\s+volume|change\s+(?:the\s+)?captions|change\s+subtitles|replace\s+scene|reorder\s+scenes|edit\s+(?:the|this|my)\s+video|mute|burn\s+captions|embed\s+subtitles|make\s+(?:this|it)\s+video\s+(?:faster|slower)|make\s+(?:this|it)\s+(?:more\s+)?(?:cinematic|premium|polished)\b)",
+        r"^\s*(?:please\s+)?(?:trim|cut|crop|resize|brighten|darken|speed\s+up|slow\s+down|increase\s+volume|lower\s+volume|change\s+(?:the\s+)?captions|change\s+subtitles|set\s+captions|set\s+subtitles|switch\s+captions|switch\s+subtitles|replace\s+scene|reorder\s+scenes|edit\s+(?:the|this|my)\s+video|mute|burn\s+captions|embed\s+subtitles|make\s+(?:this|it)\s+video\s+(?:faster|slower)|make\s+(?:this|it)\s+(?:more\s+)?(?:cinematic|premium|polished)\b)",
         low,
     ))
     # A new deliverable takes precedence over ambient editing vocabulary (e.g.
