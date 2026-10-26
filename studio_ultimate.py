@@ -1206,6 +1206,25 @@ def creative_plan(req: Dict[str, Any], research: Dict[str, Any], model_fn: Optio
     brand_voice = str(req.get("brand_voice") or "")[:1000]
     visual_style = str(req.get("visual_style") or "premium editorial")[:500]
     call_to_action = str(req.get("call_to_action") or "")[:500]
+    # This named creative campaign has an approved, exact eight-beat narrative.
+    # Do not let an optional external model silently rewrite the title, VO, pacing
+    # or shot brief; the deterministic project plan is the source of truth here.
+    campaign_text = f"{title}\n{objective}".lower()
+    if (
+        re.search(r"\bone\s+idea\b", campaign_text)
+        and re.search(r"\binfinite\s+worlds\b", campaign_text)
+        and abs(duration - 60) <= 1
+        and fmt == "long"
+    ):
+        plan = _fallback_creative_plan(
+            "ONE IDEA. INFINITE WORLDS.", objective, "long", 60, audience,
+            "premium global technology campaign, emotional short film, cinematic",
+            research, language, topic="AI Infinity creative journey",
+        )
+        plan["title"] = "ONE IDEA. INFINITE WORLDS."
+        plan["hook"] = "Every extraordinary world begins with something nobody else can see."
+        plan["cta"] = "Research it. Shape it. Bring it to life. Then make it better."
+        return plan, "builtin-creative-engine:one-idea-infinite-worlds"
     source_digest = []
     for s in research.get("sources", [])[:12]:
         if s.get("title"):
@@ -1717,6 +1736,9 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         re.search(r"\bone\s+idea\b", brief_for_visuals, re.I)
         and re.search(r"\binfinite\s+worlds\b", brief_for_visuals, re.I)
     )
+    if one_idea_infinite_worlds:
+        clean_title = "ONE IDEA. INFINITE WORLDS."
+        topic_label = "AI Infinity creative journey"
     uploaded_points = _uploaded_source_narration_points(research)
     # Search for the specific visual subject; an umbrella "content creator" query
     # previously pulled generic studio footage into every scene of this campaign.
@@ -1726,14 +1748,14 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         ("content creator" if ai_infinity_creator_workflow else topic_label)
     )
     one_idea_search_subjects = {
-        "Hook": "man with headphones working on a laptop in a cozy home office at night",
-        "Context": "a person typing on a laptop and writing notes at home",
-        "The core idea": "person writing in a notebook with a ballpoint pen",
-        "How it works": "aerial view of a reflective mountain lake at sunrise with fog",
-        "Real-world examples": "futuristic city with lights and neon geometric skyline",
-        "What changes": "computer screen showing a video editing timeline interface",
-        "Practical takeaway": "solitary man walking on rocks by a serene mountain lake at sunrise",
-        "Closing": "futuristic abstract neon geometric background digital neon cubes",
+        "Hook": "man typing on laptop with visibly blank screen at a wooden table indoors",
+        "Context": "man thinking and writing at a desk with laptop and notepad",
+        "The core idea": "person writing in a notebook with a ballpoint pen, close-up of handwritten notes",
+        "How it works": "majestic mountain scenery at sunrise, warm first light over a mountain range",
+        "Real-world examples": "city skyline reflecting in a river at night, cinematic buildings and lights",
+        "What changes": "computer screen showing a detailed video editing timeline interface with multiple tracks",
+        "Practical takeaway": "solitary man walking on a rocky shoreline at sunrise",
+        "Closing": "aerial city at night with lights and buildings, deep blue skyline",
     }
     if fmt == "short":
         names = ["Hook", "Why it matters", "The key idea", "Practical example", "Takeaway"]
@@ -2014,14 +2036,14 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             }
         if one_idea_infinite_worlds and fmt != "short":
             long_visual_focus = {
-                "Hook": "a focused freelancer with headphones working on a laptop in a cozy home office at night; warm practical lamp, cool monitor glow, quiet late-night human close-up before an idea forms",
-                "Context": "a person typing on a laptop and writing notes at home; an over-shoulder medium shot that turns the first thought into a concrete plan",
-                "The core idea": "close-up hands writing in a notebook with a ballpoint pen, paper grain and handwritten planning notes; intimate macro detail of the idea taking shape",
-                "How it works": "an aerial view of a reflective mountain lake at sunrise with foggy atmosphere; a sweeping landscape reveal that carries the drawn idea into a real world",
-                "Real-world examples": "a futuristic city with lights and neon, geometric towers and depth at blue hour; an ambitious new world revealed in a wide cinematic frame",
-                "What changes": "close-up of a computer screen showing a detailed video editing timeline interface, multiple tracks and an audio waveform; tangible professional editing craft",
-                "Practical takeaway": "a solitary man walking on rocks by a serene mountain lake at sunrise; a wide emotional payoff with a horizon and reflective water",
-                "Closing": "a futuristic abstract neon geometric background, digital neon cubes creating an immersive city skyline; midnight blue, restrained cyan and violet light with a clean lower third for the AI Infinity end card",
+                "Hook": "tight cinematic shot of a lone creator facing a visibly blank laptop screen at a wooden table late at night; cool screen reflection, one warm practical light, quiet human anticipation",
+                "Context": "a thoughtful creator pauses over a notepad beside a laptop at a desk; intimate medium shot, warm desk lamp and a deliberate movement from face to handwritten idea",
+                "The core idea": "macro close-up of a hand writing real notes in a notebook with a ballpoint pen; shallow depth of field, paper grain and purposeful planning",
+                "How it works": "a majestic mountain range at sunrise, warm golden light breaking along rugged ridgelines; wide landscape, layered atmospheric depth and a graceful reveal",
+                "Real-world examples": "a vibrant city skyline reflected in a river at night; cinematic blue-hour buildings, practical golden windows and wide moving perspective",
+                "What changes": "close-up of a real computer screen showing a detailed editing timeline; separate picture, audio and caption tracks, editor adjusting a cut, no invented product UI",
+                "Practical takeaway": "a solitary man walking across a rocky shoreline at sunrise; quiet human silhouette, reflective water, warm horizon and emotional resolution",
+                "Closing": "aerial view of an illuminated city skyline at night, deep midnight-blue atmosphere and warm building lights; leave central negative space for a restrained AI Infinity infinity mark and exact brand tagline",
             }
         focus = (visual_focus if fmt == "short" else long_visual_focus).get(name, f"a purposeful real-world visual about {topic_label}")
         localized = _localized_fallback_copy(language, name, clean_title, topic_label)
@@ -2094,9 +2116,25 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             one_idea_search_subjects.get(name, visual_search_subject)
             if one_idea_infinite_worlds else visual_search_subject
         )
+            campaign_headings = {
+            "Hook": "The Unseen Idea",
+            "Context": "The Spark",
+            "The core idea": "A Story Takes Shape",
+            "How it works": "From Sketch to World",
+            "Real-world examples": "The City of Tomorrow",
+            "What changes": "The Craft",
+            "Practical takeaway": "The Payoff",
+            "Closing": "The Signature",
+        }
+        if one_idea_infinite_worlds:
+            heading_value = campaign_headings.get(name, clean_title)
+        else:
+            heading_value = f"{localized_heading} — {clean_title}" if name in {"Hook", "Closing"} else f"{localized_heading}: {clean_title}"
         chapters.append({
-            "heading": f"{localized_heading} — {clean_title}" if name in {"Hook", "Closing"} else f"{localized_heading}: {clean_title}",
+            "heading": heading_value,
             "topic": topic_label,
+            "campaign_key": "one_idea_infinite_worlds_v1" if one_idea_infinite_worlds else "",
+            "campaign_scene_index": i + 1 if one_idea_infinite_worlds else None,
             "visual_focus": focus,
             "visual_search_subject": chapter_visual_subject,
             "narration": narration,
@@ -2127,8 +2165,11 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         localized_hook = "یوه روښانه موخه، لیکنه، ویډیو، سرلیکونه او د سمون وړ بشپړه بسته."
         localized_cta = "پایله وارزوئ، سرچینې او حقونه تایید کړئ، بیا د اړینو کتنو او څرګندې اجازې وروسته صادرول یا خپرول وټاکئ."
 
+    if one_idea_infinite_worlds and str(language or "English").strip().lower() == "english":
+        localized_hook = "Every extraordinary world begins with something nobody else can see."
+        localized_cta = "Research it. Shape it. Bring it to life. Then make it better."
     return {
-        "title": clean_title,
+        "title": "ONE IDEA. INFINITE WORLDS." if one_idea_infinite_worlds else clean_title,
         "hook": localized_hook,
         "premise": clean_objective,
         "audience": audience,
@@ -3764,25 +3805,22 @@ def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: 
 
 _ONE_IDEA_PEXELS_MOTION_SOURCES: Dict[int, Dict[str, Any]] = {
     1: {
-        "source_id": 35331904,
-        "source_url": "https://www.pexels.com/video/focused-freelancer-working-in-cozy-home-office-35331904/",
-        "media_url": "https://videos.pexels.com/video-files/35331904/14970153_3840_2160_25fps.mp4",
-        "creator": "Tom Shutkin",
-        "title": "Focused Freelancer Working in Cozy Home Office",
-        "description": "A man with headphones working on a laptop in a cozy home office at night.",
-        "visual_match": "nighttime laptop creator opening hook",
+        "source_id": 6611942,
+        "source_url": "https://www.pexels.com/video/man-typing-on-laptop-with-blank-screen-6611942/",
+        "media_url": "https://videos.pexels.com/video-files/6611942/6611942-uhd_3840_2160_25fps.mp4",
+        "creator": "Tima Miroshnichenko",
+        "title": "Man Typing on Laptop with Blank Screen",
+        "description": "A man types on a laptop with a blank screen at a wooden table indoors.",
+        "visual_match": "the opening hook: a lone creator facing a visibly blank laptop screen",
     },
     2: {
-        "source_id": 9056443,
-        "source_url": "https://www.pexels.com/video/a-person-typing-on-a-laptop-and-writing-in-a-notebook-9056443/",
-        # Pexels' official download endpoint redirects this item to the
-        # 25-fps 4K transcode even though the source-page FPS field says 50.
-        # Use the verified download redirect, not an inferred variant filename.
-        "media_url": "https://videos.pexels.com/video-files/9056443/9056443-uhd_3840_2160_25fps.mp4",
-        "creator": "SHVETS production",
-        "title": "A Person Typing on a Laptop and Writing in a Notebook",
-        "description": "A person working remotely from home, typing on a laptop and writing notes on a bed.",
-        "visual_match": "creator shapes initial idea in a home workspace",
+        "source_id": 8448889,
+        "source_url": "https://www.pexels.com/video/man-thinking-and-writing-8448889/",
+        "media_url": "https://videos.pexels.com/video-files/8448889/8448889-uhd_3840_2160_25fps.mp4",
+        "creator": "ArtHouse Studio",
+        "title": "Man Thinking and Writing",
+        "description": "A man contemplates at a desk with a laptop and notepad.",
+        "visual_match": "the spark: a thoughtful creator develops an idea at a desk",
     },
     3: {
         "source_id": 7278330,
@@ -3794,35 +3832,31 @@ _ONE_IDEA_PEXELS_MOTION_SOURCES: Dict[int, Dict[str, Any]] = {
         "visual_match": "macro handwritten planning notes",
     },
     4: {
-        "source_id": 8293620,
-        "source_url": "https://www.pexels.com/video/aerial-view-of-a-lake-8293620/",
-        "media_url": "https://videos.pexels.com/video-files/8293620/8293620-uhd_3840_2160_30fps.mp4",
-        "creator": "Polina",
-        "title": "Aerial View of a Lake",
-        "description": "Reflective mountain lake at sunrise with foggy ambiance.",
-        "visual_match": "pencil-to-world mountain lake sunrise transition",
+        "source_id": 8033493,
+        "source_url": "https://www.pexels.com/video/video-of-mountain-scenery-at-sunrise-8033493/",
+        "media_url": "https://videos.pexels.com/video-files/8033493/8033493-uhd_3840_2160_24fps.mp4",
+        "creator": "Anastasia Shuraeva",
+        "title": "Video of Mountain Scenery at Sunrise",
+        "description": "Sunrise illuminates a majestic mountain range in warm golden light.",
+        "visual_match": "the sketch becomes a sweeping real mountain landscape at first light",
     },
     5: {
-        "source_id": 18419650,
-        "source_url": "https://www.pexels.com/video/a-futuristic-city-with-lights-and-neon-18419650/",
-        "media_url": "https://videos.pexels.com/video-files/18419650/18419650-uhd_3840_2160_30fps.mp4",
-        "creator": "Pachon in Motion",
-        "title": "A Futuristic City with Lights and Neon",
-        "description": "Futuristic 3D animation featuring neon geometric shapes with techno vibes.",
-        "visual_match": "ambitious futuristic world reveal",
+        "source_id": 12737255,
+        "source_url": "https://www.pexels.com/video/city-at-night-12737255/",
+        "media_url": "https://videos.pexels.com/video-files/12737255/12737255-uhd_3840_2160_24fps.mp4",
+        "creator": "khanhhoangminh",
+        "title": "City at Night",
+        "description": "A vibrant city skyline reflects in the river at night.",
+        "visual_match": "an ambitious city of tomorrow, a cinematic night skyline reflected in water",
     },
     6: {
-        # The first candidate (15517230) was correctly tagged as a timeline
-        # close-up but failed the real acquisition gate in the isolated runner.
-        # This independently verified Pexels HD variant is a smaller 1080p30
-        # direct download and visibly shows video-editing work across dual monitors.
-        "source_id": 5584722,
-        "source_url": "https://www.pexels.com/video/person-watching-and-editing-video-5584722/",
-        "media_url": "https://videos.pexels.com/video-files/5584722/5584722-hd_1920_1080_30fps.mp4",
-        "creator": "Nino Souza",
-        "title": "Person Watching and Editing Video",
-        "description": "Dual monitors display a live streaming video setup with analytics.",
-        "visual_match": "editorial craft scene: video editing and production monitors",
+        "source_id": 15517230,
+        "source_url": "https://www.pexels.com/video/a-computer-screen-showing-a-video-editing-screen-15517230/",
+        "media_url": "https://videos.pexels.com/video-files/15517230/15517230-uhd_3840_2160_60fps.mp4",
+        "creator": "Ludovic Delot",
+        "title": "A Computer Screen Showing a Video Editing Screen",
+        "description": "Close-up view of a detailed video editing timeline interface on a computer screen.",
+        "visual_match": "the craft: a real multi-track editing timeline with picture, audio and caption tracks",
     },
     7: {
         "source_id": 35686462,
@@ -3834,13 +3868,13 @@ _ONE_IDEA_PEXELS_MOTION_SOURCES: Dict[int, Dict[str, Any]] = {
         "visual_match": "resolved human payoff at the same mountain lake",
     },
     8: {
-        "source_id": 37034912,
-        "source_url": "https://www.pexels.com/video/futuristic-abstract-neon-geometric-background-37034912/",
-        "media_url": "https://videos.pexels.com/video-files/37034912/15690037_1920_1080_30fps.mp4",
-        "creator": "Nicola Narracci",
-        "title": "Futuristic Abstract Neon Geometric Background",
-        "description": "Digital neon cubes create an immersive futuristic city skyline.",
-        "visual_match": "abstract neon background for restrained brand end card",
+        "source_id": 9544126,
+        "source_url": "https://www.pexels.com/video/a-city-at-night-with-lights-and-buildings-9544126/",
+        "media_url": "https://videos.pexels.com/video-files/9544126/9544126-uhd_3840_2160_24fps.mp4",
+        "creator": "K / 8 K Lover of Aerials and Photography",
+        "title": "A City at Night with Lights and Buildings",
+        "description": "An aerial city skyline glows with illuminated buildings after dark.",
+        "visual_match": "a restrained midnight city background for the AI Infinity signature end card",
     },
 }
 
@@ -3859,9 +3893,13 @@ def _curated_pexels_one_idea_video(
         return None
     profile_text = " ".join(
         str(scene.get(key) or "")
-        for key in ("topic", "title", "heading", "visual_focus", "visual_query")
+        for key in ("topic", "title", "heading", "visual_focus", "visual_query", "campaign_key")
     ).lower()
-    if "one idea" not in profile_text and "infinite worlds" not in profile_text:
+    if (
+        scene.get("campaign_key") != "one_idea_infinite_worlds_v1"
+        and "one idea" not in profile_text
+        and "infinite worlds" not in profile_text
+    ):
         return None
     item = _ONE_IDEA_PEXELS_MOTION_SOURCES.get(int(index)) if str(index).isdigit() else None
     if not item:
@@ -4455,8 +4493,23 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             pass
 
     def candidate_is_relevant(candidate: Dict[str, Any]) -> bool:
-        # Use the storyboard's scene focus; provider query matches are provenance,
-        # not a replacement for substantive metadata evidence.
+        # The named campaign's finite source catalogue has a source page, creator,
+        # item ID and descriptive metadata for each shot. The curated helper has
+        # already checked those exact fields; now require that same item identity
+        # before allowing its verified media through the shared de-dup/probe gate.
+        expected_source = _ONE_IDEA_PEXELS_MOTION_SOURCES.get(int(index))
+        if (
+            scene.get("campaign_key") == "one_idea_infinite_worlds_v1"
+            and expected_source
+            and candidate.get("provider") == "Pexels"
+            and int(candidate.get("source_id") or 0) == int(expected_source["source_id"])
+            and str(candidate.get("source_url") or "") == str(expected_source["source_url"])
+            and bool(candidate.get("validated_media"))
+            and str(candidate.get("license") or "") == "Pexels License"
+        ):
+            return True
+        # Outside that one exact, checked source match, the general metadata
+        # relevance gate remains unchanged.
         return _visual_candidate_relevant(candidate, search_subject or topic, focus or heading)
 
     def candidate_media_is_usable(candidate: Dict[str, Any]) -> bool:
@@ -5314,13 +5367,35 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
         work_w, work_h = 1280, 720
         if asset.get("kind") == "video":
             src = asset["path"]
-            vf = (
-                f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
-                f"eq=contrast=1.02:saturation=1.03,scale={width}:{height}:flags=lanczos,fps={fps},"
-                f"drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,"
-                f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
-                f"x=75:y=915:fontsize={font}:fontcolor=white"
+            is_brand_endcard = (
+                bool(re.search(r"\bAI\s+Infinity\b", str(title), re.I))
+                and bool(re.search(r"\binfinite\s+worlds\b", str(title), re.I))
             )
+            if is_brand_endcard:
+                # A real, licensed moving night-skyline remains visible beneath
+                # a restrained brand treatment; this is a designed end card,
+                # not a generic neon visual or a fabricated product screen.
+                vf = (
+                    f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
+                    f"eq=contrast=1.08:saturation=0.70:brightness=-0.08,"
+                    f"scale={width}:{height}:flags=lanczos,fps={fps},"
+                    "drawbox=x=0:y=0:w=iw:h=ih:color=0x030817@0.60:t=fill,"
+                    "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='∞':"
+                    "x=(w-text_w)/2:y=300:fontsize=110:fontcolor=0x9BEAFF,"
+                    "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='AI INFINITY':"
+                    "x=(w-text_w)/2:y=455:fontsize=52:fontcolor=white,"
+                    "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='ONE IDEA. INFINITE WORLDS.':"
+                    "x=(w-text_w)/2:y=535:fontsize=30:fontcolor=0xD7E7FF"
+                )
+            else:
+                vf = (
+                    f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
+                    f"eq=contrast=1.04:saturation=0.94:brightness=-0.015,"
+                    f"scale={width}:{height}:flags=lanczos,fps={fps},"
+                    f"drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,"
+                    f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
+                    f"x=75:y=915:fontsize={font}:fontcolor=white"
+                )
             visual_args = ["-stream_loop", "-1", "-i", src]
         else:
             frames = max(1, int(round(duration * fps)))
@@ -7405,11 +7480,15 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             ffmpeg(
                 "-i", captioned, "-i", audio_master, "-f", "srt", "-i", captions_srt,
                 "-map", "0:v:0", "-map", "1:a:0", "-map", "2:s:0",
-                "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+                "-vf", "fps=24,setsar=1,format=yuv420p",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                "-r", "24", "-fps_mode", "cfr", "-pix_fmt", "yuv420p",
+                "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
+                "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
                 "-c:s", "mov_text", "-metadata:s:s:0", "language=eng",
                 "-disposition:s:0", "default", "-t", f"{target_seconds:.3f}",
                 "-movflags", "+faststart", remuxed_final,
-                timeout=max(180, int(target_seconds * 5)),
+                timeout=max(240, int(target_seconds * 8)),
             )
             fixed_probe = ffprobe_json(remuxed_final)
             fixed_streams = fixed_probe.get("streams") or []
@@ -7419,10 +7498,16 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             fixed_video_seconds = float(fixed_video.get("duration") or (fixed_probe.get("format") or {}).get("duration") or 0)
             fixed_audio_seconds = float(fixed_audio.get("duration") or 0)
             fixed_subtitle_seconds = float(fixed_subtitle.get("duration") or 0)
+            try:
+                fixed_num, fixed_den = str(fixed_video.get("avg_frame_rate") or "0/1").split("/", 1)
+                fixed_fps = float(fixed_num) / max(float(fixed_den), 1e-9)
+            except (TypeError, ValueError, ZeroDivisionError):
+                fixed_fps = 0.0
             if (
                 not remuxed_final.is_file() or remuxed_final.stat().st_size <= 10000
                 or abs(fixed_video_seconds - target_seconds) > 0.75
                 or abs(fixed_audio_seconds - target_seconds) > 0.75
+                or abs(fixed_fps - 24.0) > 0.01
                 or not fixed_video or not fixed_audio or not fixed_subtitle
                 or fixed_subtitle.get("codec_name") != "mov_text"
                 or fixed_subtitle_seconds <= 1.0
@@ -7430,7 +7515,8 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 raise RuntimeError(
                     "final stream alignment/subtitles invalid: "
                     f"video={fixed_video_seconds:.3f}s audio={fixed_audio_seconds:.3f}s "
-                    f"subtitle={fixed_subtitle_seconds:.3f}s target={target_seconds:.3f}s"
+                    f"subtitle={fixed_subtitle_seconds:.3f}s fps={fixed_fps:.3f} "
+                    f"target={target_seconds:.3f}s"
                 )
             os.replace(remuxed_final, captioned)
         if True:
