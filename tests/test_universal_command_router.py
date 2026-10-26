@@ -252,6 +252,7 @@ def test_multilingual_creation_routes_use_the_intended_supported_content_type():
     cases = [
         ("AI Infinity کے لیے ایک ویڈیو بنائیں", "video"),
         ("AI Infinity کے لیے پوڈکاسٹ بنائیں", "podcast"),
+        ("AI Infinity لپاره ویډیو جوړه کړئ", "video"),
         ("یک ویدیو درباره طراحی بسازید", "video"),
         ("أنشئ فيديو عن تصميم المحتوى", "video"),
     ]
