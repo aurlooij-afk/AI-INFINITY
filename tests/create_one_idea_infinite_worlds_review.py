@@ -174,41 +174,57 @@ def main() -> int:
         except Exception as exc:
             result.setdefault("blockers", []).append("Could not list the creator artifact inventory: " + type(exc).__name__)
         project_dir = DATA / "creator_studio" / pid
-        # Preserve actual intermediates so a reviewer can inspect which sources,
-        # voice takes, music bed and rendered scenes produced this final export.
+        # Preserve per-file integrity evidence without duplicating hundreds of
+        # megabytes of source footage inside the human-review artifact.
         debug_dir = EVIDENCE / "debug-intermediates"
         debug_dir.mkdir(parents=True, exist_ok=True)
         captured_intermediates = []
         if project_dir.is_dir():
             allowed_patterns = (
                 "scene_*.mp4", "procedural_visual_*.png", "selected_visual_*.mp4",
-                "narration_*.mp3", "narration_only.mp3", "music.m4a",
-                "transition_*.wav", "master.mp4", "master.recovery.txt",
-                "canonical_contract.json", "visual_rights.json",
+                "pexels_one_idea_*.mp4", "narration_*.mp3", "narration_only.mp3",
+                "music.m4a", "transition_*.wav", "master.mp4",
+                "master_video_only.mkv", "canonical_contract.json", "visual_rights.json",
             )
             for pattern in allowed_patterns:
                 for candidate in sorted(project_dir.glob(pattern)):
                     if not candidate.is_file() or candidate.stat().st_size <= 100:
                         continue
-                    target_path = debug_dir / candidate.name
-                    shutil.copy2(candidate, target_path)
-                    row = {"name": candidate.name, "bytes": target_path.stat().st_size,
-                           "sha256": sha(target_path)}
-                    if candidate.suffix.lower() in {".mp4", ".m4a", ".mp3", ".wav"}:
+                    row = {
+                        "name": candidate.name,
+                        "bytes": candidate.stat().st_size,
+                        "sha256": sha(candidate),
+                    }
+                    if candidate.suffix.lower() in {".mp4", ".m4a", ".mp3", ".wav", ".mkv"}:
                         try:
-                            media = probe(target_path)
+                            media = probe(candidate)
                             row["duration_seconds"] = float((media.get("format") or {}).get("duration") or 0)
                             row["streams"] = [
                                 {"type": stream.get("codec_type"), "codec": stream.get("codec_name"),
                                  "duration_seconds": float(stream.get("duration") or 0),
-                                 "width": stream.get("width"), "height": stream.get("height")}
+                                 "width": stream.get("width"), "height": stream.get("height"),
+                                 "channels": stream.get("channels"), "sample_rate": stream.get("sample_rate")}
                                 for stream in (media.get("streams") or [])
                             ]
                         except Exception as exc:
                             row["probe_error"] = type(exc).__name__ + ": " + str(exc)[:300]
                     captured_intermediates.append(row)
         (EVIDENCE / "intermediate-media-inventory.json").write_text(
-            json.dumps(captured_intermediates, ensure_ascii=False, indent=2) + "\\n", encoding="utf-8")
+            json.dumps(captured_intermediates, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        # Keep the app's complete editable project package intact, but make it
+        # a separate artifact so the human-review packet stays below the 512 MiB
+        # download ceiling. The package's hash is recorded in the summary.
+        project_package = project_dir / "package.zip"
+        if project_package.is_file() and project_package.stat().st_size > 1000:
+            shutil.copy2(project_package, EVIDENCE / "editable-project-package.zip")
+            result["editable_project_package"] = {
+                "available": True,
+                "bytes": project_package.stat().st_size,
+                "sha256": sha(project_package),
+                "storage": "separate GitHub Actions artifact",
+            }
+        else:
+            result["editable_project_package"] = {"available": False}
         artifact_dir = EVIDENCE / "artifacts"
         artifact_dir.mkdir(parents=True, exist_ok=True)
         wanted = [
@@ -216,7 +232,7 @@ def main() -> int:
             "captions.srt", "script.md", "sources.json", "manifest.json",
             "production_manifest.json", "rights_manifest.json", "provenance.json",
             "fact_check.json", "visual_rights.json", "seo.json", "social_campaign.json",
-            "accessibility.json", "timeline.json", "package.zip", "storyboard.json",
+            "accessibility.json", "timeline.json", "storyboard.json",
         ]
         retrieval = {}
         for name in wanted:
@@ -391,16 +407,45 @@ def main() -> int:
         bundle = EVIDENCE / "AI-Infinity-One-Idea-Infinite-Worlds-Review-Package.zip"
         with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=3) as z:
             for path in sorted(EVIDENCE.rglob("*")):
-                if path.is_file() and path != bundle:
-                    z.write(path, path.relative_to(EVIDENCE).as_posix(),
-                            compress_type=zipfile.ZIP_STORED if path.suffix.lower() in {".mp4", ".mp3", ".zip"} else zipfile.ZIP_DEFLATED)
+                if not path.is_file() or path == bundle:
+                    continue
+                relative = path.relative_to(EVIDENCE)
+                if relative.name == "editable-project-package.zip":
+                    continue
+                if relative.parts and relative.parts[0] == "debug-intermediates":
+                    continue
+                z.write(path, relative.as_posix(),
+                        compress_type=zipfile.ZIP_STORED if path.suffix.lower() in {".mp4", ".mp3", ".zip"} else zipfile.ZIP_DEFLATED)
+        visual_audit = []
+        for asset in assets:
+            visual_audit.append({
+                key: asset.get(key) for key in (
+                    "scene", "scene_index", "asset_id", "title", "source", "provider",
+                    "source_url", "downloaded_media_url", "creator", "license", "license_url",
+                    "quality_tier", "asset_kind", "commercial_use_state", "rights_status",
+                    "rights_evidence_method", "fallback", "fallback_reason", "selection_reason",
+                    "resolution", "duration_seconds", "sha256", "asset_sha256",
+                ) if key in asset
+            })
+        result["visual_asset_audit"] = visual_audit
+        (EVIDENCE / "production-summary.json").write_text(
+            json.dumps(result, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
         print("AI_INFINITY_CREATIVE_REVIEW_RESULT=" + json.dumps({
             "project_id": pid, "overall_result": result["overall_result"],
             "all_technical_gates_passed": result["all_technical_gates_passed"],
+            "failed_gates": [name for name, passed in technical_gates.items() if not passed],
             "duration_seconds": duration, "resolution": [width, height],
             "source_count": src_count, "rights_asset_count": len(assets),
             "fallback_visual_count": checks.get("fallback_visual_count"),
+            "fallback_assets": [
+                {"scene": row.get("scene") or row.get("scene_index"),
+                 "source": row.get("source"), "title": row.get("title"),
+                 "fallback": row.get("fallback"), "fallback_reason": row.get("fallback_reason")}
+                for row in visual_audit if row.get("fallback")
+            ],
+            "embedded_subtitles": bool(subtitle) and subtitle.get("codec_name") == "mov_text",
             "review_package_bytes": bundle.stat().st_size,
+            "editable_project_package_bytes": result.get("editable_project_package", {}).get("bytes"),
         }, ensure_ascii=False), flush=True)
         # The actual render is useful for human review even if strict creative truth failed;
         # fail the job only when the artifact is not a technically decodable 60-second video.
