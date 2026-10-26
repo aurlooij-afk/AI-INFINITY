@@ -214,6 +214,26 @@ async function createCommand(){
       openModal("Research results",body);
       return;
     }
+    if(route==="public_api"){
+      const result=d.result||{};
+      const candidates=Array.isArray(d.candidates)?d.candidates:[];
+      const operations=Array.isArray(d.operations)?d.operations:[];
+      let body="";
+      if(d.executed){
+        body='<div class="notice good">A verified read-only API request returned successfully. This is external data, not independently verified evidence.</div><pre class="mono" style="margin-top:10px">'+esc(JSON.stringify(result,null,2))+'</pre>';
+      }else if(candidates.length){
+        body='<div class="notice warn">Verified public API candidates are available. No request has been executed yet. Choose an API ID, inspect its verified operations, then invoke an operation with explicit query parameters.</div><ol style="padding-left:22px">'+candidates.map(function(x){return '<li style="margin:8px 0"><b>'+esc(x.name||x.api_id)+'</b><div class="itemSub">API ID: <code>'+esc(x.api_id)+'</code> · '+esc(x.source||"public catalog")+' · '+esc(x.operation_count||0)+' operation(s)</div><div class="itemSub">'+esc(x.description||"No description supplied by the public catalog.")+'</div></li>'}).join("")+'</ol>';
+      }else if(operations.length){
+        body='<div class="notice warn">Verified read-only operations for API ID '+esc(d.api_id||"")+'. No request has been executed yet.</div><ol style="padding-left:22px">'+operations.map(function(x){return '<li style="margin:8px 0"><b>'+esc(x.summary||x.operation_id||x.op_id||"Unnamed operation")+'</b><div class="itemSub">Operation ID: <code>'+esc(x.op_id||"")+'</code> · '+esc(x.method||"")+' · '+esc(x.path||"")+'</div><div class="itemSub">Query parameters: '+esc(x.parameters_json||"[]")+'</div></li>'}).join("")+'</ol>';
+      }else{
+        body='<div class="empty">'+esc(d.status==="discovery_started"||d.discovery_status==="warming"?"Public API discovery has started in the background. No source or result is claimed yet.":d.reason||"No verified matching public API was available.")+'</div>';
+      }
+      body+='<div class="itemSub" style="margin-top:12px">Next command example: <code>Use a public API api_id=…</code> to inspect operations, then <code>Use a public API operation_id=… q="your query"</code> to invoke a verified read-only operation. Parameter names are checked against the stored OpenAPI definition.</div>';
+      $(\"commandNotice\").className="notice "+(d.executed?"good":"warn");
+      $(\"commandNotice\").textContent=d.executed?"Verified public API read completed.":candidates.length||operations.length?"Public API catalogue results returned; no external query executed.":d.status==="discovery_started"?"Public API discovery started; no results claimed yet.":"Public API request needs a verified API/operation.";
+      openModal("Public API fabric",body);
+      return;
+    }
     if(route==="edit"){
       const result=d.result||{};
       $("commandNotice").className="notice "+(d.status==="completed"?"good":"warn");
