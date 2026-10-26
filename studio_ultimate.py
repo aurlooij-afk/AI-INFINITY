@@ -1841,8 +1841,8 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "and the idea grows beyond its room."
             ),
             "Real-world examples": (
-                "A city of tomorrow rises from that first thought. Each image has purpose: "
-                "reveal possibility, create emotion, move the story."
+                "Mountains catch first light; a city of tomorrow rises from that first thought. "
+                "Each image has purpose: reveal possibility, create emotion, move the story."
             ),
             "What changes": (
                 "The craft brings it together. Edit the timeline, shape the voice, "
