@@ -7589,14 +7589,31 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         },), encoding="utf-8")
 
         rights_items = []
-        for asset in assets_meta:
+        for scene_index, asset in enumerate(assets_meta, 1):
+            quality_tier = str(asset.get("quality_tier") or "")
+            source_asset_kind = str(asset.get("asset_kind") or asset.get("kind") or "")
+            is_fallback_visual = bool(asset.get("fallback")) or (
+                "fallback" in quality_tier.lower()
+                or source_asset_kind == "illustrative_graphic_not_photograph"
+            )
             rights_items.append({
+                "scene_index": asset.get("selection_scene_index") or asset.get("scene_index") or scene_index,
                 "asset": asset.get("path") or asset.get("kind"),
                 "kind": asset.get("kind"),
+                "asset_kind": source_asset_kind,
+                "quality_tier": quality_tier or None,
+                "fallback": is_fallback_visual,
+                "fallback_reason": asset.get("fallback_reason") or (
+                    "procedural illustration used instead of a source video/image"
+                    if is_fallback_visual else None
+                ),
+                "selection_reason": asset.get("selection_reason"),
                 "source": asset.get("source"),
                 "source_id": asset.get("source_id") or asset.get("id"),
                 "source_url": asset.get("source_url"),
+                "downloaded_media_url": asset.get("downloaded_media_url"),
                 "title": asset.get("title"),
+                "description": asset.get("description"),
                 "creator": asset.get("creator"),
                 "attribution": asset.get("attribution"),
                 "license": asset.get("license"),
@@ -7610,6 +7627,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 "provider_query": asset.get("provider_query"),
                 "rights_status_reason": asset.get("rights_status_reason"),
                 "resolution": asset.get("resolution"),
+                "duration_seconds": asset.get("duration_seconds"),
                 "mime_type": asset.get("mime_type"),
                 "usable_bytes": asset.get("asset_size_bytes"),
             })
