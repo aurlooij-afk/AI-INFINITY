@@ -348,6 +348,31 @@ def main() -> int:
         }
         result["sources"] = {"source_count": src_count, "status": src.get("status"),
                              "providers": src.get("providers"), "truthful": src.get("truthful")}
+        source_motion_assets = [
+            asset for asset in assets
+            if str(asset.get("kind") or "").lower() == "video"
+            and str(asset.get("quality_tier") or "") == "curated_free_source_motion_video"
+            and str(asset.get("source") or "") == "Pexels free licensed source video"
+            and str(asset.get("license") or "") == "Pexels License"
+            and str(asset.get("license_url") or "") == "https://www.pexels.com/license/"
+            and asset.get("source_id") is not None
+            and str(asset.get("source_url") or "").startswith("https://www.pexels.com/video/")
+            and str(asset.get("commercial_use_state") or "") == "commercial_use_allowed_under_provider_terms"
+            and bool(asset.get("asset_sha256"))
+        ]
+        motion_ids = [str(asset.get("source_id")) for asset in source_motion_assets]
+        motion_urls = [str(asset.get("source_url")) for asset in source_motion_assets]
+        motion_scene_indexes = sorted(int(asset.get("scene_index") or 0) for asset in source_motion_assets)
+        result["source_motion_audit"] = {
+            "expected_motion_scenes": 8,
+            "attributed_licensed_motion_scene_count": len(source_motion_assets),
+            "unique_source_ids": len(set(motion_ids)),
+            "unique_source_pages": len(set(motion_urls)),
+            "scene_indexes": motion_scene_indexes,
+            "source_ids": motion_ids,
+            "all_asset_hashes_present": all(bool(asset.get("asset_sha256")) for asset in source_motion_assets),
+            "truthful": True,
+        }
         result["rights_manifest"] = {"asset_count": len(assets),
                                      "unresolved_asset_count": len(unresolved),
                                      "unresolved_assets": unresolved,
@@ -377,6 +402,13 @@ def main() -> int:
             "source_visual_policy": checks.get("source_visual_policy_passed") is True,
             "zero_visual_fallbacks": int(checks.get("fallback_visual_count") or 0) == 0,
             "rights_manifest_present": bool(assets),
+            "eight_distinct_licensed_motion_scenes": (
+                len(source_motion_assets) == 8
+                and len(set(motion_ids)) == 8
+                and len(set(motion_urls)) == 8
+                and motion_scene_indexes == list(range(1, 9))
+                and result["source_motion_audit"]["all_asset_hashes_present"]
+            ),
             "zero_unresolved_rights": len(unresolved) == 0 and checks.get("visual_rights_evidence_present") is True,
             "captions_present_and_timed": captions_path.exists() and cue_count >= 13 and checks.get("caption_sync_passed") is True,
             "manifest_sha_matches": bool(expected_sha) and expected_sha == sha(final),
