@@ -5282,14 +5282,13 @@ def _scene_mix(video: Path, voice: Path, music: Path, sfx: Path, duration: float
 
 
 def concat_segments(paths: List[Path], out: Path) -> None:
-    """Assemble scenes with stable video parameters and one continuous valid AAC encode.
+    """Assemble a clean video master without decoding scene-level AAC.
 
-    Stream-copying independently encoded scene MP4s let mixed resolution / AAC
-    packet padding poison the master on the real 8-scene campaign. Normalize each
-    scene sequentially to the delivery profile plus PCM audio (bounded memory),
-    concatenate the same-profile intermediates, and encode the continuous programme
-    audio once. This keeps every visual scene editable while guaranteeing a decodable
-    master before captions, final mix, manifests, or quality gates run.
+    Source scene MP4s may contain inconsistent/corrupt AAC preview packets even
+    when each render process exited successfully. To keep assembly deterministic,
+    this stage normalizes and concatenates VIDEO ONLY, then attaches one newly
+    encoded silent stereo track for downstream duration/caption processing. The
+    authoritative narration/music stems are mixed later in the mastering stage.
     """
     if not paths:
         raise RuntimeError("cannot assemble an empty scene list")
@@ -5327,39 +5326,33 @@ def concat_segments(paths: List[Path], out: Path) -> None:
             f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,"
             f"crop={target_width}:{target_height},fps=24,setsar=1,format=yuv420p"
         )
-        # Scene MP4s have independently mixed AAC preview audio. A corrupted
-        # channel-layout packet can make FFmpeg infer dozens of channels and poison
-        # assembly. The canonical narration/music stems are mixed later; use known
-        # stereo silence only to carry timing through this video-normalization stage.
-        silence_filter = f"anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration={duration:.6f},asetpts=PTS-STARTPTS"
+        # Explicitly map only video; never select, normalize, or concatenate the
+        # original scene's AAC preview stream.
         ffmpeg(
-            "-i", source_path, "-f", "lavfi", "-t", f"{duration:.6f}", "-i", silence_filter,
-            "-map", "0:v:0", "-map", "1:a:0",
-            "-vf", vf, "-af", "aformat=sample_fmts=s16:channel_layouts=stereo",
-            "-t", f"{duration:.6f}",
+            "-i", source_path, "-map", "0:v:0", "-an", "-sn",
+            "-vf", vf, "-t", f"{duration:.6f}",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
             "-pix_fmt", "yuv420p", "-r", "24",
-            "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2",
             "-f", "matroska", normalized,
             timeout=max(120, int(duration * 10)),
         )
         normalized_probe = ffprobe_json(normalized)
         normalized_streams = normalized_probe.get("streams") or []
         normalized_video = next((x for x in normalized_streams if x.get("codec_type") == "video"), {})
+        normalized_duration = float(normalized_video.get("duration") or (normalized_probe.get("format") or {}).get("duration") or 0)
         normalized_audio = next((x for x in normalized_streams if x.get("codec_type") == "audio"), {})
-        normalized_duration = float((normalized_probe.get("format") or {}).get("duration") or 0)
         if (
             not normalized.is_file() or normalized.stat().st_size <= 10000
             or int(normalized_video.get("width") or 0) != target_width
             or int(normalized_video.get("height") or 0) != target_height
             or normalized_video.get("codec_name") != "h264"
-            or normalized_audio.get("codec_name") != "pcm_s16le"
+            or bool(normalized_audio)
             or abs(normalized_duration - duration) > 0.35
         ):
             raise RuntimeError(
-                f"scene {index:02d} normalization failed: "
+                f"scene {index:02d} video normalization failed: "
                 f"resolution={normalized_video.get('width')}x{normalized_video.get('height')} "
-                f"audio={normalized_audio.get('codec_name')} "
+                f"unexpected_audio={bool(normalized_audio)} "
                 f"duration={normalized_duration:.3f}/{duration:.3f}"
             )
         normalized_paths.append(normalized)
@@ -5372,11 +5365,46 @@ def concat_segments(paths: List[Path], out: Path) -> None:
         ),
         encoding="utf-8",
     )
+    video_only = out.parent / (out.stem + "_video_only.mp4")
+    video_only.unlink(missing_ok=True)
     ffmpeg(
         "-f", "concat", "-safe", "0", "-i", manifest,
-        "-map", "0:v:0", "-map", "0:a:0",
-        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
-        "-movflags", "+faststart", out, timeout=600,
+        "-map", "0:v:0", "-an",
+        "-c:v", "copy", "-movflags", "+faststart", video_only,
+        timeout=600,
+    )
+    total_duration = float(sum(durations))
+    video_probe = ffprobe_json(video_only)
+    video_streams = video_probe.get("streams") or []
+    assembled_video = next((x for x in video_streams if x.get("codec_type") == "video"), {})
+    assembled_duration = float(assembled_video.get("duration") or (video_probe.get("format") or {}).get("duration") or 0)
+    if (
+        not video_only.is_file() or video_only.stat().st_size <= 10000
+        or int(assembled_video.get("width") or 0) != target_width
+        or int(assembled_video.get("height") or 0) != target_height
+        or assembled_video.get("codec_name") != "h264"
+        or abs(assembled_duration - total_duration) > 1.0
+    ):
+        raise RuntimeError(
+            f"video-only assembly failed: resolution={assembled_video.get('width')}x{assembled_video.get('height')} "
+            f"duration={assembled_duration:.3f}/{total_duration:.3f}"
+        )
+
+    # Attach one known-good AAC silence track only after all visual assembly has
+    # completed. The real narration/music mix replaces this later in the pipeline.
+    silence_filter = (
+        "anullsrc=channel_layout=stereo:sample_rate=48000,"
+        f"atrim=duration={total_duration:.6f},asetpts=PTS-STARTPTS"
+    )
+    out.unlink(missing_ok=True)
+    ffmpeg(
+        "-i", video_only,
+        "-f", "lavfi", "-t", f"{total_duration:.6f}", "-i", silence_filter,
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+        "-ar", "48000", "-ac", "2", "-t", f"{total_duration:.6f}",
+        "-movflags", "+faststart", out,
+        timeout=max(120, int(total_duration * 5)),
     )
     final_probe = ffprobe_json(out)
     final_streams = final_probe.get("streams") or []
@@ -5389,14 +5417,12 @@ def concat_segments(paths: List[Path], out: Path) -> None:
         or int(final_video.get("height") or 0) != target_height
         or final_video.get("codec_name") != "h264"
         or final_audio.get("codec_name") != "aac"
-        or abs(final_duration - sum(durations)) > 1.0
+        or abs(final_duration - total_duration) > 1.0
     ):
         raise RuntimeError(
             f"assembled master failed verification: resolution={final_video.get('width')}x{final_video.get('height')} "
-            f"audio={final_audio.get('codec_name')} duration={final_duration:.3f}/{sum(durations):.3f}"
+            f"audio={final_audio.get('codec_name')} duration={final_duration:.3f}/{total_duration:.3f}"
         )
-    # A local complete-decode gate catches corrupt AAC or damaged video before the
-    # project can create metadata that claims a playable final deliverable.
     decode = subprocess.run(
         ["ffmpeg", "-hide_banner", "-v", "error", "-xerror", "-i", str(out), "-f", "null", "-"],
         capture_output=True, text=True, timeout=max(120, int(final_duration * 4)),
@@ -5404,6 +5430,7 @@ def concat_segments(paths: List[Path], out: Path) -> None:
     if decode.returncode != 0:
         raise RuntimeError("assembled master full decode failed: " + (decode.stderr or "")[-3000:])
     manifest.unlink(missing_ok=True)
+    video_only.unlink(missing_ok=True)
     shutil.rmtree(normalized_dir, ignore_errors=True)
 
 
