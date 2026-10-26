@@ -65,13 +65,27 @@ jobs:
           echo "creator_exit_code=$run_status" >> "$GITHUB_OUTPUT"
           exit "$run_status"
 
-      - name: Upload real video and human-review evidence
+      - name: Upload compact human-review video and evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ai-infinity-one-idea-infinite-worlds-human-review
           path: |
-            creative-review-evidence/**
+            creative-review-evidence/AI-Infinity-One-Idea-Infinite-Worlds-60s.mp4
+            creative-review-evidence/AI-Infinity-One-Idea-Infinite-Worlds-Review-Package.zip
+            creative-review-evidence/production-summary.json
+            creative-review-evidence/human-review-scorecard.json
+            creative-review-evidence/intermediate-media-inventory.json
+            creative-review-evidence/exact-creative-brief.md
             creative-review-run.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload original editable AI Infinity project package separately
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-infinity-one-idea-infinite-worlds-editable-project
+          path: creative-review-evidence/editable-project-package.zip
           if-no-files-found: warn
           retention-days: 14
