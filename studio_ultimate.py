@@ -1849,7 +1849,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "work editable, verify each source, and inspect the final cut."
             ),
             "Practical takeaway": (
-                "The idea is real now. Research it. Shape it. Bring it to life. Then make it better."
+                "Now it's real. Research it. Shape it. Bring it to life. Then make it better."
             ),
             "Closing": "AI Infinity. One idea. Infinite worlds.",
         })
