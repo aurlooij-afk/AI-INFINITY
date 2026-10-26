@@ -200,6 +200,7 @@ def test_openapi_verification_skips_required_unsupported_params_and_path_templat
                 "security": [],
                 "parameters": [{"name": "X-Account", "in": "header", "required": True}],
             }},
+            "https://attacker.example/evil": {"get": {"operationId": "escapedHost", "security": []}},
             "/list": {"get": {"operationId": "listItems", "security": [], "parameters": []}},
         },
     }
