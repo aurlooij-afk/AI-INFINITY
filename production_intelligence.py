@@ -157,6 +157,7 @@ def research(topic,limit=10):
         if any(x.get("source")=="Tavily" for x in clean): used.append("tavily")
         if any(x.get("source")=="Brave Search" for x in clean): used.append("brave")
         if any(x.get("source")=="API Anything / YouTube" for x in clean): used.append("api-anything-youtube")
+        if any(x.get("source")=="API Anything / Hacker News" for x in clean): used.append("api-anything-hacker-news")
         provider="+".join(used) or "unknown"
     providers_used=sorted({str(x.get("source") or "unknown") for x in clean})
     return {"topic":topic,"provider":provider,"providers_used":providers_used,"api_anything":{"status":api_anything_result.get("status","unknown"),"items_added":sum(1 for x in clean if x.get("source") in {"API Anything / YouTube","API Anything / Hacker News"}),"operations":api_anything_result.get("operations",{}),"truthful":True},"source_count":len(clean),"sources":clean[:limit],"generated_at":studio().utc_iso(),"truthful":True}
