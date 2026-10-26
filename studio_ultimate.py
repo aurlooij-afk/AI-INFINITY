@@ -1752,7 +1752,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         "Context": "man thinking and writing at a desk with laptop and notepad",
         "The core idea": "person writing in a notebook with a ballpoint pen, close-up of handwritten notes",
         "How it works": "majestic mountain scenery at sunrise, warm first light over a mountain range",
-        "Real-world examples": "city skyline reflecting in a river at night, cinematic buildings and lights",
+        "Real-world examples": "panoramic futuristic city skyline with hovering spacecraft, luminous skyscrapers and ocean at night",
         "What changes": "computer screen showing a detailed video editing timeline interface with multiple tracks",
         "Practical takeaway": "solitary man walking on a rocky shoreline at sunrise",
         "Closing": "aerial city at night with lights and buildings, deep blue skyline",
@@ -1846,10 +1846,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
 
     if one_idea_infinite_worlds and str(language or "English").strip().lower() == "english":
         ai_infinity_launch_narration.update({
-            "Hook": (
-                "Every extraordinary world begins with something nobody else can see. "
-                "One creator, one blank screen, one possibility waiting to take shape."
-            ),
+            "Hook": "Every extraordinary world begins with something nobody else can see.",
             "Context": (
                 "In the quiet of night, imagination opens a field of possibilities: "
                 "a note, a question, and the first frame of a story worth sharing."
@@ -1870,9 +1867,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "Edit the timeline, shape the voice, balance music and captions. "
                 "Keep it editable; verify source rights before export."
             ),
-            "Practical takeaway": (
-                "Now it's real. Research it. Shape it. Bring it to life. Then make it better."
-            ),
+            "Practical takeaway": "Research it. Shape it. Bring it to life. Then make it better.",
             "Closing": "AI Infinity. One idea. Infinite worlds.",
         })
 
@@ -2040,7 +2035,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "Context": "a thoughtful creator pauses over a notepad beside a laptop at a desk; intimate medium shot, warm desk lamp and a deliberate movement from face to handwritten idea",
                 "The core idea": "macro close-up of a hand writing real notes in a notebook with a ballpoint pen; shallow depth of field, paper grain and purposeful planning",
                 "How it works": "a majestic mountain range at sunrise, warm golden light breaking along rugged ridgelines; wide landscape, layered atmospheric depth and a graceful reveal",
-                "Real-world examples": "a vibrant city skyline reflected in a river at night; cinematic blue-hour buildings, practical golden windows and wide moving perspective",
+                "Real-world examples": "a panoramic futuristic city skyline at night with luminous skyscrapers, hovering spacecraft and ocean horizon; cinematic scale, controlled cyan-violet light and convincing depth",
                 "What changes": "close-up of a real computer screen showing a detailed editing timeline; separate picture, audio and caption tracks, editor adjusting a cut, no invented product UI",
                 "Practical takeaway": "a solitary man walking across a rocky shoreline at sunrise; quiet human silhouette, reflective water, warm horizon and emotional resolution",
                 "Closing": "aerial view of an illuminated city skyline at night, deep midnight-blue atmosphere and warm building lights; leave central negative space for a restrained AI Infinity infinity mark and exact brand tagline",
@@ -3841,13 +3836,13 @@ _ONE_IDEA_PEXELS_MOTION_SOURCES: Dict[int, Dict[str, Any]] = {
         "visual_match": "the sketch becomes a sweeping real mountain landscape at first light",
     },
     5: {
-        "source_id": 12737255,
-        "source_url": "https://www.pexels.com/video/city-at-night-12737255/",
-        "media_url": "https://videos.pexels.com/video-files/12737255/12737255-uhd_3840_2160_24fps.mp4",
-        "creator": "khanhhoangminh",
-        "title": "City at Night",
-        "description": "A vibrant city skyline reflects in the river at night.",
-        "visual_match": "an ambitious city of tomorrow, a cinematic night skyline reflected in water",
+        "source_id": 31013711,
+        "source_url": "https://www.pexels.com/video/futuristic-oceanfront-cityscape-at-night-31013711/",
+        "media_url": "https://videos.pexels.com/video-files/31013711/13255086_3840_2160_24fps.mp4",
+        "creator": "Adis Resic",
+        "title": "Futuristic Oceanfront Cityscape at Night",
+        "description": "A panoramic futuristic city skyline with hovering spacecraft and glowing skyscrapers over an ocean.",
+        "visual_match": "the imagined future becomes a panoramic oceanfront city with luminous towers",
     },
     6: {
         "source_id": 15517230,
