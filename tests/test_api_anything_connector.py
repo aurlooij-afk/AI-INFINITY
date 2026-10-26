@@ -120,3 +120,37 @@ def test_youtube_search_handles_timeout_without_retrying_side_effects(monkeypatc
     assert result["status"] == "timeout"
     assert result["items"] == []
     assert calls == 1
+
+
+def test_production_research_uses_api_anything_results_without_claiming_more_than_returned(monkeypatch):
+    import production_intelligence
+
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
+    monkeypatch.setattr(
+        production_intelligence.api_anything_connector,
+        "youtube_search",
+        lambda query, limit=10: {
+            "status": "ready",
+            "items": [{
+                "title": "Research example",
+                "url": "https://www.youtube.com/watch?v=abcdefghijk",
+                "channel": "Example channel",
+                "views": "100 views",
+            }],
+            "truthful": True,
+        },
+    )
+
+    result = production_intelligence.research("AI video editing", limit=5)
+
+    assert result["provider"] == "api-anything-youtube"
+    assert result["source_count"] == 1
+    assert result["api_anything"] == {
+        "status": "ready",
+        "items_added": 1,
+        "operation": "youtube.search",
+        "truthful": True,
+    }
+    assert result["sources"][0]["source"] == "API Anything / YouTube"
+    assert result["sources"][0]["url"] == "https://www.youtube.com/watch?v=abcdefghijk"
