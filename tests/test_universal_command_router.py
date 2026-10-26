@@ -267,3 +267,18 @@ def test_multilingual_script_request_and_unsupported_website_request_are_not_vid
 
     assert script["route"] == "script"
     assert website["route"] == "unsupported_deliverable"
+
+
+def test_multilingual_consequential_actions_require_authorization():
+    cases = [
+        "یہ ویڈیو شائع کریں",
+        "دا ویډیو خپور کړئ",
+        "این ویدیو را نشر کنید",
+        "انشر الفيديو على يوتيوب",
+        "أرسل رسالة إلى الجميع",
+        "حذف المشروع",
+    ]
+    for command in cases:
+        result = canonical.classify_command(command)
+        assert result["route"] == "authorization_required", (command, result)
+        assert result.get("action")
