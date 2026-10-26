@@ -283,3 +283,18 @@ def test_production_research_route_respects_external_provider_disable_policy(mon
     assert result["api_anything"]["status"] == "disabled_by_policy"
     assert result["source_count"] == 0
     assert result["sources"] == []
+
+
+def test_invalid_timeout_configuration_fails_closed_without_running_cli(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    monkeypatch.setenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", "not-an-integer")
+
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("invalid configuration must be rejected before execution")
+
+    monkeypatch.setattr(connector.subprocess, "run", must_not_run)
+    result = connector.youtube_search("AI Infinity")
+
+    assert result["status"] == "invalid_configuration"
+    assert result["items"] == []
+    assert result["truthful"] is True
