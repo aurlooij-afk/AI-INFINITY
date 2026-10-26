@@ -74,7 +74,7 @@ COPY --from=api-anything-builder /src/api-anything/sites/ /opt/api-anything/site
 COPY --from=api-anything-builder /src/api-anything/node_modules/ /opt/api-anything/node_modules/
 COPY --from=api-anything-builder /src/api-anything/package.json /opt/api-anything/package.json
 COPY --from=api-anything-builder /src/api-anything/LICENSE /opt/api-anything/LICENSE
-RUN printf '#!/bin/sh\\nexec /usr/local/bin/node /opt/api-anything/dist/cli.js "$@"\\n' > /usr/local/bin/api-anything \
+RUN printf '#!/bin/sh\nexec /usr/local/bin/node /opt/api-anything/dist/cli.js "$@"\n' > /usr/local/bin/api-anything \
     && chmod 755 /usr/local/bin/api-anything \
     && mkdir -p /usr/share/licenses/api-anything \
     && cp /opt/api-anything/LICENSE /usr/share/licenses/api-anything/LICENSE \
