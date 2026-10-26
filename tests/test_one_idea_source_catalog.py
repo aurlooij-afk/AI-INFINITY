@@ -25,7 +25,7 @@ def test_eight_story_scenes_have_distinct_attributed_free_source_clips():
         2: (8448889, "ArtHouse Studio", "thinking-and-writing"),
         3: (7278330, "Anastasia Shuraeva", "notebook"),
         4: (8033493, "Anastasia Shuraeva", "mountain-scenery-at-sunrise"),
-        5: (12737255, "khanhhoangminh", "city-at-night"),
+        5: (31013711, "Adis Resic", "futuristic-oceanfront-cityscape-at-night"),
         6: (15517230, "Ludovic Delot", "video-editing-screen"),
         7: (35686462, "Ahmed", "rocky-shoreline-at-sunrise"),
         8: (9544126, "K / 8 K Lover of Aerials and Photography", "city-at-night-with-lights-and-buildings"),
