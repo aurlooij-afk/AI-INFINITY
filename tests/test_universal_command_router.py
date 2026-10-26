@@ -210,3 +210,27 @@ def test_supported_video_about_an_unsupported_topic_still_routes_to_video_creati
         {"content_type": "video"},
     )
     assert result["route"] == "create"
+
+
+def test_cinematic_video_creation_is_not_misclassified_as_an_edit_of_selected_project():
+    result = canonical.classify_command(
+        "Create a professional cinematic video about accessible design",
+        {"content_type": "video", "project_id": "studio_existing_project"},
+    )
+    assert result["route"] == "create"
+
+
+def test_explicit_but_unrecognized_project_edit_fails_closed_without_render(monkeypatch):
+    monkeypatch.setattr(canonical, "require_project", lambda project_id, user_id: {"project_id": project_id})
+
+    def must_not_render(*args, **kwargs):
+        raise AssertionError("unsupported edit must not trigger a render")
+
+    monkeypatch.setattr(canonical, "apply_edit", must_not_render)
+    result = canonical.dispatch_command(
+        "Change the title to something shorter",
+        "user-1",
+        {"task_type": "edit", "project_id": "studio_project_1"},
+    )
+    assert result["status"] == "unsupported_or_incomplete"
+    assert result["executed"] is False
