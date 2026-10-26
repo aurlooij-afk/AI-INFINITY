@@ -229,8 +229,8 @@ async function createCommand(){
         body='<div class="empty">'+esc(d.status==="discovery_started"||d.discovery_status==="warming"?"Public API discovery has started in the background. No source or result is claimed yet.":d.reason||"No verified matching public API was available.")+'</div>';
       }
       body+='<div class="itemSub" style="margin-top:12px">Next command example: <code>Use a public API api_id=…</code> to inspect operations, then <code>Use a public API operation_id=… q="your query"</code> to invoke a verified read-only operation. Parameter names are checked against the stored OpenAPI definition.</div>';
-      $(\"commandNotice\").className="notice "+(d.executed?"good":"warn");
-      $(\"commandNotice\").textContent=d.executed?"Verified public API read completed.":candidates.length||operations.length?"Public API catalogue results returned; no external query executed.":d.status==="discovery_started"?"Public API discovery started; no results claimed yet.":"Public API request needs a verified API/operation.";
+      $("commandNotice").className="notice "+(d.executed?"good":"warn");
+      $("commandNotice").textContent=d.executed?"Verified public API read completed.":candidates.length||operations.length?"Public API catalogue results returned; no external query executed.":d.status==="discovery_started"?"Public API discovery started; no results claimed yet.":"Public API request needs a verified API/operation.";
       openModal("Public API fabric",body);
       return;
     }
