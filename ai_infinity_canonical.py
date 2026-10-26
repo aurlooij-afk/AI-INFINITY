@@ -903,11 +903,29 @@ def dispatch_command(command, user_id, raw=None):
 
         api_id = clean(payload.get("api_id"), 120)
         op_id = clean(payload.get("op_id") or payload.get("operation_id"), 120)
+        if not api_id:
+            match = re.search(r"\bapi[_ -]?id\s*[:=]\s*([A-Za-z0-9_-]{6,120})", cmd, re.I)
+            api_id = match.group(1) if match else ""
+        if not op_id:
+            match = re.search(r"\b(?:operation|op)[_ -]?id\s*[:=]\s*([A-Za-z0-9_-]{6,120})", cmd, re.I)
+            op_id = match.group(1) if match else ""
         api_params = payload.get("api_params")
         if not isinstance(api_params, dict):
             api_params = payload.get("query_params")
         if not isinstance(api_params, dict):
             api_params = {}
+        if not api_params:
+            # Natural-language command box can pass explicit read arguments as
+            # key=value; the API fabric later rejects names absent from the verified spec.
+            pairs = re.findall(
+                r"(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_.-]{0,63})\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s,;]+))",
+                cmd,
+            )
+            api_params = {
+                key: (double_quoted if double_quoted != "" else single_quoted if single_quoted != "" else bare)
+                for key, double_quoted, single_quoted, bare in pairs
+                if key.lower() not in {"api_id", "api-id", "operation_id", "operation-id", "op_id", "op-id"}
+            }
 
         # A concrete operation ID is the only execution path. The fabric rechecks
         # that it is catalogued as a verified no-auth GET/HEAD operation at call time.
