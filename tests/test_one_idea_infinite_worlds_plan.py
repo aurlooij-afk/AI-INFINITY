@@ -35,6 +35,15 @@ def test_creative_plan_uses_the_exact_named_campaign_without_model_rewriting():
     assert len(plan["chapters"]) == 8
 
 
+def test_allocator_preserves_explicit_scene_timecodes_that_sum_to_target():
+    authored = [4, 8, 13, 6.5, 8.5, 9, 7, 4]
+    chapters = [{"heading": f"Scene {i}", "duration": seconds} for i, seconds in enumerate(authored, 1)]
+    allocated = studio_ultimate._allocate_scene_durations(chapters, 60.0)
+    actual = [float(chapter["duration"]) for chapter in allocated]
+    assert actual == authored, (authored, actual)
+    assert abs(sum(actual) - 60.0) <= 0.001
+
+
 def test_campaign_plan_preserves_requested_story_and_distinct_visual_beats():
     plan = studio_ultimate._fallback_creative_plan(
         title="ONE IDEA. INFINITE WORLDS.",
@@ -81,5 +90,6 @@ def test_campaign_plan_preserves_requested_story_and_distinct_visual_beats():
 
 if __name__ == "__main__":
     test_creative_plan_uses_the_exact_named_campaign_without_model_rewriting()
+    test_allocator_preserves_explicit_scene_timecodes_that_sum_to_target()
     test_campaign_plan_preserves_requested_story_and_distinct_visual_beats()
     print("PASS: exact campaign plan, hook, 8 cinematic beats and scene metadata.")
