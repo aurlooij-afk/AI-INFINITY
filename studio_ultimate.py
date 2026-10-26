@@ -3771,7 +3771,7 @@ _ONE_IDEA_PEXELS_MOTION_SOURCES: Dict[int, Dict[str, Any]] = {
         "source_id": 35331904,
         "source_url": "https://www.pexels.com/video/focused-freelancer-working-in-cozy-home-office-35331904/",
         "media_url": "https://videos.pexels.com/video-files/35331904/14970153_3840_2160_25fps.mp4",
-        "creator": "Artem Shutkin",
+        "creator": "Tom Shutkin",
         "title": "Focused Freelancer Working in Cozy Home Office",
         "description": "A man with headphones working on a laptop in a cozy home office at night.",
         "visual_match": "nighttime laptop creator opening hook",
