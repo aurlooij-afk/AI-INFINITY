@@ -133,3 +133,64 @@ def test_primary_director_mode_command_box_uses_canonical_router_and_renders_res
     assert 'if(route==="create")' in handler
     assert "authorization_required" in handler or "supported safe execution route" in handler
     assert 'onclick="createCommand()">Run command</button>' in html
+
+
+def test_script_strategy_seo_analytics_publisher_and_monetization_are_distinct_routes():
+    assert canonical.classify_command("Draft a script for an AI Infinity launch video")["route"] == "script"
+    assert canonical.classify_command("Plan a launch strategy for AI Infinity")["route"] == "strategy"
+    assert canonical.classify_command("Generate SEO metadata for my video")["route"] == "seo"
+    assert canonical.classify_command("Analyze performance metrics")["route"] == "analytics"
+    assert canonical.classify_command("Show my publishing options")["route"] == "publisher"
+    assert canonical.classify_command("List monetization options")["route"] == "monetization"
+
+
+def test_script_agent_delegates_to_existing_research_and_creative_plan_without_claiming_media_artifact(monkeypatch):
+    fake_engine = SimpleNamespace(
+        research_topic=lambda topic, limit=8: {
+            "topic": topic, "source_count": 1,
+            "sources": [{"title": "Source", "url": "https://example.org/source"}],
+            "truthful": True,
+        },
+        creative_plan=lambda request, research, model_fn: ({
+            "title": request["title"], "script": "A reviewed draft goes here.",
+        }, "deterministic_fallback"),
+    )
+    monkeypatch.setattr(canonical, "studio", lambda: fake_engine)
+    monkeypatch.setitem(sys.modules, "main", SimpleNamespace(_2700_model=None))
+
+    result = canonical.dispatch_command("Draft a script for an AI Infinity launch video", "user-1", {})
+
+    assert result["route"] == "script"
+    assert result["status"] == "completed"
+    assert result["provider"] == "deterministic_fallback"
+    assert result["result"]["script"] == "A reviewed draft goes here."
+    assert result["artifact_created"] is False
+    assert result["review_required"] is True
+
+
+def test_read_only_analytics_and_publisher_routes_do_not_publish(monkeypatch):
+    fake_engine = SimpleNamespace(
+        _analytics_3621=lambda user_id: {"project_count": 2, "truthful": True},
+        _connections=lambda user_id: [{"provider": "youtube", "connected": False}],
+    )
+    monkeypatch.setattr(canonical, "studio", lambda: fake_engine)
+
+    analytics = canonical.dispatch_command("Analyze performance metrics", "user-1", {})
+    publisher = canonical.dispatch_command("Show my publishing options", "user-1", {})
+
+    assert analytics["route"] == "analytics"
+    assert analytics["result"]["project_count"] == 2
+    assert publisher["route"] == "publisher"
+    assert publisher["result"]["publish_executed"] is False
+    assert publisher["result"]["authorization_required_for_publish"] is True
+
+
+def test_primary_director_mode_displays_agent_outputs_without_faking_media_creation():
+    html = Path("creator_studio_2030.html").read_text(encoding="utf-8")
+    start = html.index("async function createCommand(){")
+    end = html.index("\nasync function planCommand(){", start)
+    handler = html[start:end]
+
+    assert 'if(["script","strategy","marketing","seo","analytics","publisher","monetization"].indexOf(route)>=0)' in handler
+    assert "no media file was created" in handler
+    assert "no external action was performed" in handler
