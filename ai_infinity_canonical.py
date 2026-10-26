@@ -660,6 +660,7 @@ def classify_command(command, raw=None):
     aliases = {
         "creation": "create", "production": "create", "media": "create",
         "search": "research", "investigate": "research", "inspect": "capabilities",
+        "free_api": "public_api", "api_search": "public_api", "api_call": "public_api",
         "status": "capabilities", "project_status": "project_status",
         "revision": "edit", "modification": "edit", "plan": "strategy",
         "write_script": "script", "scriptwriting": "script",
@@ -668,7 +669,7 @@ def classify_command(command, raw=None):
     explicit = aliases.get(explicit, explicit)
     supported = {
         "research", "create", "edit", "project_status", "capabilities",
-        "script", "strategy", "marketing", "seo", "analytics", "publisher", "monetization",
+        "script", "strategy", "marketing", "seo", "analytics", "publisher", "monetization", "public_api",
     }
     action_words = {"publish", "post", "send", "delete", "destroy", "purchase", "buy", "pay", "transfer", "schedule", "upload"}
     explicit_action = explicit in action_words
@@ -736,6 +737,16 @@ def classify_command(command, raw=None):
     # "create a cinematic video" while another project happens to be selected).
     if edit_request and not payload.get("project_id"):
         return {"route": "project_id_required", "reason": "Editing requires an existing project ID so its owner and source artifact can be verified."}
+
+    public_api_intent = bool(
+        re.search(r"\b(?:public|free|open)\s+(?:web\s+)?apis?\b|\bapi anything\b", low)
+        and re.search(r"\b(use|search|find|look up|query|fetch|retrieve|call|discover|catalog|run)\b", low)
+    )
+    if explicit == "public_api" or public_api_intent:
+        return {
+            "route": "public_api",
+            "reason": "Matched the curated public API fabric; only verified, unauthenticated GET/HEAD operations can execute.",
+        }
 
     # Bounded multilingual routing for the already supported output languages.
     localized_research = bool(re.search(
@@ -886,6 +897,65 @@ def dispatch_command(command, user_id, raw=None):
                 "script", "strategy", "marketing", "seo", "analytics", "publisher", "monetization",
             ],
             "executed": False, "truthful": True,
+        }
+    if route == "public_api":
+        import free_api_fabric as fabric
+
+        api_id = clean(payload.get("api_id"), 120)
+        op_id = clean(payload.get("op_id") or payload.get("operation_id"), 120)
+        api_params = payload.get("api_params")
+        if not isinstance(api_params, dict):
+            api_params = payload.get("query_params")
+        if not isinstance(api_params, dict):
+            api_params = {}
+
+        # A concrete operation ID is the only execution path. The fabric rechecks
+        # that it is catalogued as a verified no-auth GET/HEAD operation at call time.
+        if op_id:
+            result = fabric.invoke(op_id, query=api_params, body=payload.get("body"))
+            return {
+                "status": "completed", "route": route, "operation_id": op_id,
+                "result": result, "executed": True, "read_only": True,
+                "truthful": True,
+            }
+
+        if api_id:
+            current = fabric.operations(api_id, limit=50)
+            verification = None
+            if not current:
+                verification = fabric.verify_api(api_id)
+                current = fabric.operations(api_id, limit=50)
+            return {
+                "status": "completed" if current else "degraded",
+                "route": route, "api_id": api_id, "operations": current[:50],
+                "verification": verification, "executed": False,
+                "next_action": "Provide a verified operation_id and api_params to execute one read-only query.",
+                "truthful": True,
+            }
+
+        search_text = clean(
+            payload.get("api_search") or payload.get("api_name") or payload.get("topic") or payload.get("subject"),
+            200,
+        )
+        if not search_text:
+            search_text = re.sub(
+                r"^\s*(?:please\s+)?(?:use|search|find|look up|query|fetch|retrieve|discover|catalog|run)\s+",
+                "", cmd, flags=re.I,
+            ).strip()[:200]
+        candidates = fabric.catalog(query=search_text, limit=10, executable_only=True)
+        bootstrapped = False
+        if not candidates and not fabric.SYNC_STATE.get("bootstrap_started"):
+            bootstrapped = bool(fabric.start_background_sync())
+        state = fabric.status()
+        return {
+            "status": "completed" if candidates else "discovery_started" if bootstrapped or state.get("bootstrap_started") else "degraded",
+            "route": route, "query": search_text, "candidates": candidates,
+            "discovery_status": "warming" if bootstrapped or (
+                state.get("bootstrap_started") and not state.get("bootstrap_complete")
+            ) else "ready",
+            "executed": False,
+            "next_action": "Choose a verified API candidate, then pass its api_id to inspect operations or a verified operation_id to execute.",
+            "truthful": True,
         }
     if route == "capabilities":
         result = capabilities(user_id)
