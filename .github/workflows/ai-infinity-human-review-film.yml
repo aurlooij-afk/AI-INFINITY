@@ -47,6 +47,7 @@ jobs:
             tests/test_concat_segments_normalization.py; do
             docker run --rm \
               -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity-review-tests \
+              -e AI_INFINITY_FAST_MODE=0 \
               -v "$GITHUB_WORKSPACE:/workspace:ro" \
               -w /workspace \
               --entrypoint python \
