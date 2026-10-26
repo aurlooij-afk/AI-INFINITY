@@ -3779,7 +3779,10 @@ _ONE_IDEA_PEXELS_MOTION_SOURCES: Dict[int, Dict[str, Any]] = {
     2: {
         "source_id": 9056443,
         "source_url": "https://www.pexels.com/video/a-person-typing-on-a-laptop-and-writing-in-a-notebook-9056443/",
-        "media_url": "https://videos.pexels.com/video-files/9056443/9056443-uhd_3840_2160_50fps.mp4",
+        # Pexels' official download endpoint redirects this item to the
+        # 25-fps 4K transcode even though the source-page FPS field says 50.
+        # Use the verified download redirect, not an inferred variant filename.
+        "media_url": "https://videos.pexels.com/video-files/9056443/9056443-uhd_3840_2160_25fps.mp4",
         "creator": "SHVETS production",
         "title": "A Person Typing on a Laptop and Writing in a Notebook",
         "description": "A person working remotely from home, typing on a laptop and writing notes on a bed.",
