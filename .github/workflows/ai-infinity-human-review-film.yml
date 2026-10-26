@@ -52,6 +52,8 @@ jobs:
           set +e
           docker run --rm --network host \
             -e CI=true \
+            -e AI_INFINITY_FAST_MODE=0 \
+            -e AI_INFINITY_VIDEO_PRESET=veryfast \
             -e AI_INFINITY_REVIEW_DATA_DIR=/tmp/ai-infinity-one-idea-review \
             -e AI_INFINITY_EVIDENCE_DIR=/evidence \
             -v "$GITHUB_WORKSPACE:/workspace:ro" \
