@@ -11,6 +11,12 @@ import free_api_fabric as fabric
 @pytest.fixture
 def isolated_fabric(monkeypatch, tmp_path):
     monkeypatch.setattr(fabric, "DB_PATH", tmp_path / "free_api_fabric.db")
+    for key, value in {
+        "running": False, "last_run": 0.0, "last_error": "", "source_counts": {},
+        "verified": 0, "bootstrap_started": False, "bootstrap_complete": False,
+    }.items():
+        monkeypatch.setitem(fabric.SYNC_STATE, key, value)
+    fabric.INVOKE_LAST.clear()
     fabric._init()
     yield
 
