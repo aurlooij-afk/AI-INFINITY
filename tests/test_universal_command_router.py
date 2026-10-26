@@ -375,3 +375,33 @@ def test_failed_public_api_operation_is_truthfully_degraded_and_redacted(monkeyp
     assert "secret=" not in str(result)
     assert "private topic" not in str(result)
 
+def test_public_api_command_can_resolve_api_id_from_natural_language(monkeypatch):
+    inspected = []
+    fake_fabric = SimpleNamespace(
+        operations=lambda api_id, limit=50: inspected.append((api_id, limit)) or [{
+            "op_id": "op-abc123", "method": "GET", "path": "/search", "parameters_json": '[{"name":"q","in":"query"}]'
+        }],
+        verify_api=lambda api_id: (_ for _ in ()).throw(AssertionError("verified existing operation should not be re-verified")),
+    )
+    monkeypatch.setitem(sys.modules, "free_api_fabric", fake_fabric)
+
+    result = canonical.dispatch_command(
+        "Use a public API api_id=free-a1b2c3d4 to inspect operations", "user-public-api", {}
+    )
+
+    assert result["route"] == "public_api"
+    assert result["api_id"] == "free-a1b2c3d4"
+    assert result["operations"][0]["op_id"] == "op-abc123"
+    assert inspected == [("free-a1b2c3d4", 50)]
+
+
+def test_public_api_intent_has_ui_result_handler():
+    html = Path("creator_studio_2030.html").read_text(encoding="utf-8")
+    start = html.index("async function createCommand(){")
+    end = html.index("\nasync function planCommand(){", start)
+    handler = html[start:end]
+
+    assert 'if(route==="public_api")' in handler
+    assert "No request has been executed yet" in handler
+    assert "operation_id=…" in handler
+
