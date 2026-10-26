@@ -1,5 +1,5 @@
-# API Anything is pinned to an audited upstream commit. Only two explicitly reviewed
-# bundled read-only search operations are enabled; no browser or account session is enabled.
+# API Anything is pinned to an audited upstream commit. Only curated bundled read-only operations are enabled;
+# no browser fallback, arbitrary user specs, or account sessions are enabled.
 FROM node:22.13.1-bookworm-slim AS api-anything-builder
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
@@ -82,9 +82,10 @@ RUN printf '#!/bin/sh\nexec /usr/local/bin/node /opt/api-anything/dist/cli.js "$
     && api-anything --version
 
 RUN api-anything sites | grep -q '"name":"youtube"' && api-anything ops youtube | grep -q '"name":"search"' && api-anything ops youtube | grep -q '"readOnly":true'  \
-    && api-anything sites | grep -q '"name":"hacker-news"'  \
-    && api-anything ops hacker-news | grep -q '"name":"search"'  \
-    && api-anything ops hacker-news | grep -q '"readOnly":true'
+    && api-anything sites | grep -q '"name":"hacker-news"' && api-anything ops hacker-news | grep -q '"name":"search"' && api-anything ops hacker-news | grep -q '"readOnly":true'  \
+    && api-anything sites | grep -q '"name":"goodreads"' && api-anything ops goodreads | grep -q '"name":"searchBooks"' && api-anything ops goodreads | grep -q '"readOnly":true'  \
+    && api-anything sites | grep -q '"name":"steam"' && api-anything ops steam | grep -q '"name":"search"' && api-anything ops steam | grep -q '"readOnly":true'  \
+    && api-anything sites | grep -q '"name":"amazon"' && api-anything ops amazon | grep -q '"name":"search"' && api-anything ops amazon | grep -q '"readOnly":true'
 
 COPY requirements.txt bridge-requirements.txt ./
 RUN python -m pip install --upgrade pip \
