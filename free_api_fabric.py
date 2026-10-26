@@ -256,7 +256,7 @@ def verify_api(api_id: str) -> Dict[str,Any]:
         for path,item in (spec.get("paths") or {}).items():
             if not isinstance(item,dict): continue
             for method,op in item.items():
-                if method.lower() not in {"get","post","put","patch","delete","head"} or not isinstance(op,dict): continue
+                if method.lower() not in {"get","head"} or not isinstance(op,dict): continue
                 free=_operation_free(spec,op)
                 if not free: continue
                 url=urljoin(base.rstrip("/")+"/",str(path).lstrip("/"))
@@ -344,6 +344,14 @@ def invoke(op_id: str, query: Optional[Dict[str,Any]]=None, body: Any=None) -> D
     with LOCK,_connect() as c: row=c.execute("SELECT * FROM free_api_ops WHERE op_id=? AND free=1",(op_id,)).fetchone()
     if not row: raise ValueError("free executable operation not found")
     r=dict(row); url=r["url"]
+    method=r["method"].upper()
+    # This catalog is public and has no action-specific user authorization contract.
+    # Authentication-free does not mean side-effect-free: enforce read-only methods
+    # even for stale rows saved by older versions before any outbound request is built.
+    if method not in {"GET", "HEAD"}:
+        raise ValueError("write-capable operations are disabled; only GET/HEAD are allowed")
+    if body is not None:
+        raise ValueError("request bodies are disabled for the public read-only connector")
     if not _host_safe(url): raise ValueError("unsafe operation host")
     params=json.loads(r.get("parameters_json") or "[]")
     q=dict(query or {})
@@ -351,7 +359,6 @@ def invoke(op_id: str, query: Optional[Dict[str,Any]]=None, body: Any=None) -> D
     missing=[x for x in required if x not in q]
     if missing: raise ValueError("missing required query parameters: "+", ".join(missing))
     if q: url += ("&" if "?" in url else "?")+urlencode({k:str(v) for k,v in q.items()})
-    method=r["method"].upper()
     headers={"User-Agent":"AI-Infinity-Free-API-Fabric/3622","Accept":"application/json,*/*"}
     data=None
     if body is not None and method in {"POST","PUT","PATCH"}:
