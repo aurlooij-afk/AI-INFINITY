@@ -703,6 +703,14 @@ def classify_command(command, raw=None):
             "route": "unsupported_deliverable",
             "reason": "This request names a deliverable that the current runtime does not implement. It will not be silently converted into a video. Supported creation outputs are video, podcast, article/report, and social package.",
         }
+    # Normalize common status phrasings before broad capability inference. This
+    # avoids misrouting short commands like "Check project status" as unknown.
+    status_request = bool(re.search(
+        r"\b(?:check|show|get|read|verify|explain|summarize|tell\s+me)\b.{0,40}\bproject\b.{0,30}\b(?:status|progress|health|verification|what\s+remains)\b",
+        low,
+    ) or re.search(r"\b(?:project\s+status|status\s+of\s+the\s+project|progress\s+on\s+the\s+project)\b", low))
+    if status_request and not payload.get("project_id"):
+        return {"route": "project_id_required", "reason": "Project status requires an existing project ID."}
     if explicit in supported:
         route = explicit
     elif re.search(r"\b(project|this project)\b", low) and re.search(
