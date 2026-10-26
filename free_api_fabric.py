@@ -22,6 +22,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from pydantic import BaseModel
 from urllib.parse import urljoin, urlparse, urlencode
 
 
@@ -102,6 +103,11 @@ def _init():
         """)
 
 _init()
+
+
+class InvokeRequest(BaseModel):
+    query: Dict[str, Any] = {}
+    body: Any = None
 
 
 def _public_addresses(host: str, port: int = 443) -> List[str]:
@@ -423,6 +429,8 @@ def start_background_sync():
             SYNC_STATE["bootstrap_complete"] = True
         except Exception as exc:
             SYNC_STATE["last_error"] = str(exc)[:1000]
+            with BACKGROUND_START_LOCK:
+                SYNC_STATE["bootstrap_started"] = False
     threading.Thread(target=worker, name="ai-infinity-free-api-sync", daemon=True).start()
     return True
 
@@ -515,12 +523,7 @@ def invoke(op_id: str, query: Optional[Dict[str,Any]]=None, body: Any=None) -> D
 
 
 def register(app: Any):
-    from fastapi import HTTPException, Request
-    from pydantic import BaseModel
-
-    class InvokeRequest(BaseModel):
-        query: Dict[str,Any] = {}
-        body: Any = None
+    from fastapi import HTTPException
 
     @app.get("/infinity/studio/free-apis/status")
     def free_api_status():
