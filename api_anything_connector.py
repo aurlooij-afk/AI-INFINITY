@@ -1,8 +1,8 @@
 """Isolated, read-only bridge from AI Infinity research to API Anything.
 
-This initial integration exposes two pinned bundled read-only research operations
-(YouTube search and Hacker News search), uses plain HTTP only, refuses user/registry overrides, and gives each
-invocation a fresh private API Anything home so external sessions cannot cross users.
+This integration exposes five pinned bundled read-only operations across public research,
+books, games, and product search. It uses tier-one HTTP only, refuses user/registry overrides,
+and gives each invocation a fresh private API Anything home so sessions cannot cross users.
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ def status() -> dict[str, Any]:
         "provider": "api-anything",
         "status": "installed" if executable else "not_installed",
         "available": bool(executable),
-        "enabled_operations": ["youtube.search", "hacker-news.search"],
+        "enabled_operations": ["youtube.search", "hacker-news.search", "goodreads.searchBooks", "steam.search", "amazon.search"],
         "mode": "bundled_read_only_plain_http",
         "browser_learning_enabled": False,
         "upstream_commit": UPSTREAM_COMMIT,
@@ -284,6 +284,42 @@ def _bundled_search(
                         "comments": _clean_text(row.get("num_comments") or row.get("comments"), 40),
                         "source": "API Anything / Hacker News",
                     }
+                elif result_kind == "goodreads":
+                    book_id = _clean_text(row.get("bookId") or row.get("id"), 24)
+                    if not re.fullmatch(r"\d{1,20}", book_id):
+                        continue
+                    normalized = {
+                        "id": book_id,
+                        "title": title,
+                        "author": _clean_text(row.get("author"), 160),
+                        "rating": _clean_text(row.get("avgRating"), 40),
+                        "ratings_count": _clean_text(row.get("ratingsCount"), 60),
+                        "url": f"https://www.goodreads.com/book/show/{book_id}",
+                        "source": "API Anything / Goodreads",
+                    }
+                elif result_kind == "steam":
+                    app_id = _clean_text(row.get("itemKey") or row.get("appid") or row.get("id"), 20)
+                    if not re.fullmatch(r"\d{1,12}", app_id):
+                        continue
+                    normalized = {
+                        "id": app_id,
+                        "title": title,
+                        "price": _clean_text(row.get("price"), 80),
+                        "release_date": _clean_text(row.get("releaseDate"), 80),
+                        "url": f"https://store.steampowered.com/app/{app_id}/",
+                        "source": "API Anything / Steam",
+                    }
+                elif result_kind == "amazon":
+                    asin = _clean_text(row.get("asin") or row.get("itemKey") or row.get("id"), 10).upper()
+                    if not re.fullmatch(r"[A-Z0-9]{10}", asin):
+                        continue
+                    normalized = {
+                        "id": asin,
+                        "title": title,
+                        "price": _clean_text(row.get("price"), 80),
+                        "url": f"https://www.amazon.com/dp/{asin}",
+                        "source": "API Anything / Amazon",
+                    }
                 else:
                     return {"status": "operation_not_allowlisted", "items": [], "truthful": True}
                 items.append(normalized)
@@ -315,6 +351,9 @@ MIN_SITE_INTERVAL_SECONDS = 1.0
 _ALLOWED_SEARCHES = {
     "youtube.search": ("youtube", "search", "q", "youtube"),
     "hacker-news.search": ("hacker-news", "search", "query", "hacker-news"),
+    "goodreads.searchBooks": ("goodreads", "searchBooks", "q", "goodreads"),
+    "steam.search": ("steam", "search", "term", "steam"),
+    "amazon.search": ("amazon", "search", "k", "amazon"),
 }
 
 
@@ -357,11 +396,20 @@ def hacker_news_search(query: str, limit: int = 10) -> dict[str, Any]:
 
 
 def search_candidates(query: str, limit: int = 10) -> dict[str, Any]:
-    """Collect candidates from the explicitly allowed bundled sources, with per-source outcomes."""
+    """Search broad sources plus context-matched bundled public research operations."""
     safe_limit = max(1, min(10, int(limit or 10)))
+    topic = _clean_text(query, MAX_QUERY_CHARS).lower()
+    capabilities = ["youtube.search", "hacker-news.search"]
+    # Avoid slow and irrelevant calls: use specialist sites only when the brief supports them.
+    if re.search(r"\b(book|books|author|novel|literature|reading|fiction|nonfiction|biography|memoir)\b", topic):
+        capabilities.append("goodreads.searchBooks")
+    if re.search(r"\b(game|games|gaming|steam|video game|pc game)\b", topic):
+        capabilities.append("steam.search")
+    if re.search(r"\b(product|products|price comparison|shopping|laptop|camera|microphone|headphones|smartphone|tablet|gear|equipment)\b", topic):
+        capabilities.append("amazon.search")
     sources = []
     statuses = {}
-    for capability in ("youtube.search", "hacker-news.search"):
+    for capability in capabilities:
         result = _rate_limited_search(capability, query, safe_limit)
         statuses[capability] = result.get("status", "unknown")
         sources.extend(result.get("items") or [])
