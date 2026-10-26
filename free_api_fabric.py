@@ -411,24 +411,39 @@ def verify_batch(limit: int=100) -> Dict[str,Any]:
 def start_background_sync():
     """Start one lazy catalog bootstrap; bulk verification is deliberately bounded."""
     with BACKGROUND_START_LOCK:
-        if SYNC_STATE.get("bootstrap_started"):
+        if SYNC_STATE.get("bootstrap_started") or SYNC_STATE.get("bootstrap_complete"):
+            return False
+        cooldown = max(60, min(86400, int(os.getenv("AI_INFINITY_FREE_API_SYNC_COOLDOWN_SECONDS", "900"))))
+        last_run = float(SYNC_STATE.get("last_run") or 0)
+        if last_run and time.time() - last_run < cooldown:
             return False
         SYNC_STATE["bootstrap_started"] = True
 
     def worker():
         try:
-            sync_catalogs()
+            sync_result = sync_catalogs()
+            source_counts = sync_result.get("source_counts") if isinstance(sync_result, dict) else {}
+            with LOCK, _connect() as c:
+                total = int(c.execute("SELECT COUNT(*) FROM free_api_registry").fetchone()[0] or 0)
+                n = int(c.execute(
+                    "SELECT COUNT(*) FROM free_api_registry WHERE source='apis-guru' AND status='discovered'"
+                ).fetchone()[0] or 0)
+            # A finished network attempt is not proof of discovery. Require real
+            # catalogue records; keep state degraded and retry only after cooldown otherwise.
+            if total <= 0 and not any(int(v or 0) > 0 for v in (source_counts or {}).values()):
+                SYNC_STATE["last_error"] = SYNC_STATE.get("last_error") or "public API catalogs returned no usable entries"
+                SYNC_STATE["bootstrap_complete"] = False
+                with BACKGROUND_START_LOCK:
+                    SYNC_STATE["bootstrap_started"] = False
+                return
             # Do not scan the entire registry during a small/free-instance boot.
             # Verify a small first batch; a selected API is verified on demand below.
-            with LOCK, _connect() as c:
-                n = c.execute(
-                    "SELECT COUNT(*) FROM free_api_registry WHERE source='apis-guru' AND status='discovered'"
-                ).fetchone()[0]
             if n:
                 verify_batch(min(BOOTSTRAP_VERIFY_LIMIT, n))
             SYNC_STATE["bootstrap_complete"] = True
         except Exception as exc:
             SYNC_STATE["last_error"] = str(exc)[:1000]
+            SYNC_STATE["bootstrap_complete"] = False
             with BACKGROUND_START_LOCK:
                 SYNC_STATE["bootstrap_started"] = False
     threading.Thread(target=worker, name="ai-infinity-free-api-sync", daemon=True).start()
@@ -556,7 +571,7 @@ def register(app: Any):
     def free_api_catalog(query: str="", limit: int=100, executable_only: bool=False):
         items = catalog(query, limit, executable_only)
         started = False
-        if not items and not SYNC_STATE.get("bootstrap_started"):
+        if not items and not SYNC_STATE.get("bootstrap_started") and not SYNC_STATE.get("bootstrap_complete"):
             started = bool(start_background_sync())
         return {
             "items": items,
