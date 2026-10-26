@@ -343,7 +343,7 @@ def verify_api(api_id: str) -> Dict[str,Any]:
                 # required headers/cookies and request bodies rather than guessing.
                 operation_params=(item.get("parameters") or []) + (op.get("parameters") or [])
                 if op.get("requestBody") or any(
-                    isinstance(p,dict) and p.get("in") not in {None,"query"}
+                    not isinstance(p,dict) or p.get("in") != "query"
                     for p in operation_params
                 ):
                     continue
