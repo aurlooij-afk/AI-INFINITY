@@ -665,12 +665,13 @@ def classify_command(command, raw=None):
     }
     explicit = aliases.get(explicit, explicit)
     supported = {"research", "create", "edit", "project_status", "capabilities"}
-    if explicit in supported:
-        route = explicit
-    elif re.match(r"^\s*(?:please\s+)?(?:publish|post|send|delete|destroy|purchase|buy|pay|transfer|schedule|upload)\b", low):
+    # A routing hint must never override a detected consequential external action.
+    if re.match(r"^\s*(?:please\s+)?(?:publish|post|send|delete|destroy|purchase|buy|pay|transfer|schedule|upload)\b", low):
         action = re.match(r"^\s*(?:please\s+)?([a-z]+)", low)
         return {"route": "authorization_required", "action": action.group(1) if action else "external_action",
                 "reason": "Consequential external actions require action-specific authorization and a verified connector."}
+    if explicit in supported:
+        route = explicit
     elif payload.get("project_id") and re.search(r"\b(status|progress|verify|verification|health|where are we|what remains)\b", low) and not re.search(r"\b(create|make|generate|produce|research|investigate)\b", low):
         route = "project_status"
     elif re.search(r"\b(what can you do|available capabilities|available tools|system status|capability status|health check)\b", low):
