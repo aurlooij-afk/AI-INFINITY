@@ -1,7 +1,7 @@
 """Isolated, read-only bridge from AI Infinity research to API Anything.
 
-This first integration deliberately exposes only the pinned bundled YouTube search
-operation, uses the plain-HTTP tier, refuses user/registry overrides, and gives each
+This initial integration exposes two pinned bundled read-only research operations
+(YouTube search and Hacker News search), uses plain HTTP only, refuses user/registry overrides, and gives each
 invocation a fresh private API Anything home so external sessions cannot cross users.
 """
 from __future__ import annotations
@@ -16,6 +16,7 @@ import time
 import threading
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 UPSTREAM_COMMIT = "69bef64f5b3628f448d3d9c2435c455bcb6ea38d"
 MAX_QUERY_CHARS = 250
