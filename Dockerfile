@@ -1,16 +1,16 @@
 # API Anything is pinned to an audited upstream commit. The runtime uses only its bundled
 # read-only HTTP operation on the initial integration; no browser or account session is enabled.
 FROM node:22.13.1-bookworm-slim AS api-anything-builder
-RUN apt-get update \\
-    && apt-get install -y --no-install-recommends git ca-certificates \\
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-RUN git init /src/api-anything \\
-    && git -C /src/api-anything remote add origin https://github.com/goodnight000/api-anything.git \\
-    && git -C /src/api-anything fetch --depth 1 origin 69bef64f5b3628f448d3d9c2435c455bcb6ea38d \\
-    && git -C /src/api-anything checkout --detach FETCH_HEAD \\
-    && cd /src/api-anything \\
-    && npm ci --no-audit --no-fund \\
-    && npm run build \\
+RUN git init /src/api-anything \
+    && git -C /src/api-anything remote add origin https://github.com/goodnight000/api-anything.git \
+    && git -C /src/api-anything fetch --depth 1 origin 69bef64f5b3628f448d3d9c2435c455bcb6ea38d \
+    && git -C /src/api-anything checkout --detach FETCH_HEAD \
+    && cd /src/api-anything \
+    && npm ci --no-audit --no-fund \
+    && npm run build \
     && npm prune --omit=dev
 
 FROM debian:trixie-slim AS espeak-builder
@@ -74,11 +74,11 @@ COPY --from=api-anything-builder /src/api-anything/sites/ /opt/api-anything/site
 COPY --from=api-anything-builder /src/api-anything/node_modules/ /opt/api-anything/node_modules/
 COPY --from=api-anything-builder /src/api-anything/package.json /opt/api-anything/package.json
 COPY --from=api-anything-builder /src/api-anything/LICENSE /opt/api-anything/LICENSE
-RUN printf '#!/bin/sh\\nexec /usr/local/bin/node /opt/api-anything/dist/cli.js "$@"\\n' > /usr/local/bin/api-anything \\
-    && chmod 755 /usr/local/bin/api-anything \\
-    && mkdir -p /usr/share/licenses/api-anything \\
-    && cp /opt/api-anything/LICENSE /usr/share/licenses/api-anything/LICENSE \\
-    && node --version \\
+RUN printf '#!/bin/sh\\nexec /usr/local/bin/node /opt/api-anything/dist/cli.js "$@"\\n' > /usr/local/bin/api-anything \
+    && chmod 755 /usr/local/bin/api-anything \
+    && mkdir -p /usr/share/licenses/api-anything \
+    && cp /opt/api-anything/LICENSE /usr/share/licenses/api-anything/LICENSE \
+    && node --version \
     && api-anything --version
 
 COPY requirements.txt bridge-requirements.txt ./
