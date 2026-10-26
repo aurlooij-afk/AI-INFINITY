@@ -8,6 +8,8 @@ on:
       - .github/workflows/ai-infinity-human-review-film.yml
       - ai_infinity_canonical.py
       - studio_ultimate.py
+      - sitecustomize.py
+      - reality_first_3901.py
       - tests/create_one_idea_infinite_worlds_review.py
       - tests/test_canonical_duration_precedence.py
       - tests/test_one_idea_infinite_worlds_plan.py
