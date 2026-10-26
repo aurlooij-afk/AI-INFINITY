@@ -1829,12 +1829,12 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "One creator, one blank screen, one possibility waiting to take shape."
             ),
             "Context": (
-                "In the quiet of night, an idea becomes a note, a question, "
-                "and a story worth sharing."
+                "In the quiet of night, imagination opens a field of possibilities: "
+                "a note, a question, and the first frame of a story worth sharing."
             ),
             "The core idea": (
-                "Research gives the vision roots. Sources inform the story; "
-                "notes become a storyboard, and each scene earns its place."
+                "Research gives it roots. Sources inform the story; notes become a "
+                "storyboard, and each scene earns its place."
             ),
             "How it works": (
                 "A pencil line becomes a horizon. The world opens, the camera moves, "
@@ -1849,8 +1849,8 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "balance the music, align captions so every moment lands."
             ),
             "Practical takeaway": (
-                "Keep work editable, verify source rights, inspect the render, "
-                "and improve it without losing the creative thread."
+                "Keep the work editable, verify each source and its rights, inspect the "
+                "final render, and improve it without losing the creative thread."
             ),
             "Closing": (
                 "Research it. Shape it. Bring it to life. Then make it better. "
