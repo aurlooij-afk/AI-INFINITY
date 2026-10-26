@@ -711,6 +711,16 @@ def classify_command(command, raw=None):
     ) or re.search(r"\b(?:project\s+status|status\s+of\s+the\s+project|progress\s+on\s+the\s+project)\b", low))
     if status_request and not payload.get("project_id"):
         return {"route": "project_id_required", "reason": "Project status requires an existing project ID."}
+
+    edit_request = bool(re.match(
+        r"^\s*(?:please\s+)?(?:trim|cut|crop|resize|brighten|darken|speed\s+up|slow\s+down|increase\s+volume|lower\s+volume|change\s+(?:the\s+)?captions|change\s+subtitles|replace\s+scene|reorder\s+scenes|edit\s+(?:the|this|my)\s+video|mute|burn\s+captions|embed\s+subtitles|make\s+(?:this|it)\s+video\s+(?:faster|slower)|make\s+(?:this|it)\s+(?:more\s+)?(?:cinematic|premium|polished)\b)",
+        low,
+    ))
+    # A new deliverable takes precedence over ambient editing vocabulary (e.g.
+    # "create a cinematic video" while another project happens to be selected).
+    if edit_request and not payload.get("project_id"):
+        return {"route": "project_id_required", "reason": "Editing requires an existing project ID so its owner and source artifact can be verified."}
+
     if explicit in supported:
         route = explicit
     elif re.search(r"\b(project|this project)\b", low) and re.search(
@@ -720,10 +730,7 @@ def classify_command(command, raw=None):
             route = "project_status"
         else:
             return {"route": "project_id_required", "reason": "Project status requires an existing project ID."}
-    elif payload.get("project_id") and re.search(
-        r"\b(trim|cut|crop|resize|faster|speed\s*up|slower|slow\s*down|brighter|brightness|cinematic|premium|polished|more\s+contrast|contrasty|more\s+vivid|saturated|mute|without\s+audio|vertical|portrait|square|landscape|burn.*captions|embed.*subtitles)\b",
-        low,
-    ):
+    elif payload.get("project_id") and edit_request:
         route = "edit"
     elif re.search(r"\b(what can you do|available capabilities|available tools|system status|capability status|health check)\b", low):
         route = "capabilities"
@@ -838,6 +845,19 @@ def dispatch_command(command, user_id, raw=None):
         require_project(pid, user_id)
         if re.search(r"\b(delete|destroy)\s+(?:the\s+)?project\b", cmd, re.I):
             raise HTTPException(409, "Destructive project deletion is not supported by this command router.")
+        operation = interpret_edit(cmd)
+        changes = operation.get("changes") if isinstance(operation, dict) else []
+        default_only = (
+            isinstance(changes, list) and len(changes) == 1
+            and changes[0].get("type") == "grade"
+            and changes[0].get("interpretation") == "bounded visual polish"
+        )
+        if default_only:
+            return {
+                "status": "unsupported_or_incomplete", "route": route,
+                "reason": "The edit instruction did not match a supported edit. Supported edits include trim, speed, aspect ratio, brightness/contrast/saturation, mute, and caption burn-in.",
+                "executed": False, "truthful": True,
+            }
         result = apply_edit(pid, user_id, cmd)
         return {"status": result.get("status", "completed"), "route": route, "result": result, "executed": True, "truthful": True}
     if route in {"analytics", "publisher", "monetization"}:
