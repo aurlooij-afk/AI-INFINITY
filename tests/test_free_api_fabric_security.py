@@ -211,3 +211,85 @@ def test_openapi_verification_skips_required_unsupported_params_and_path_templat
 
     assert result["operations"] == 1
     assert [op["operation_id"] for op in fabric.operations(api_id)] == ["listItems"]
+
+def test_registered_fabric_is_reachable_without_scanning_on_app_start(isolated_fabric, monkeypatch):
+    from fastapi import FastAPI
+
+    starts = []
+    monkeypatch.setattr(fabric, "start_background_sync", lambda: starts.append(True) or True)
+    app = FastAPI()
+    fabric.register(app)
+
+    paths = {route.path for route in app.router.routes}
+    assert "/infinity/studio/free-apis/status" in paths
+    assert "/infinity/studio/free-apis/catalog" in paths
+    assert "/infinity/studio/free-apis/{api_id}/operations" in paths
+    assert "/infinity/studio/free-apis/verify/{api_id}" in paths
+    assert "/infinity/studio/free-apis/invoke/{op_id}" in paths
+    assert starts == []
+    assert app.state.free_api_fabric["discovery_mode"] == "lazy_catalog_request"
+    assert app.state.free_api_fabric["automatic_free_failover"] is False
+
+
+def test_empty_catalog_starts_only_one_lazy_bootstrap(isolated_fabric, monkeypatch):
+    from fastapi import FastAPI
+
+    starts = []
+    def start_once():
+        fabric.SYNC_STATE["bootstrap_started"] = True
+        starts.append(True)
+        return True
+
+    monkeypatch.setattr(fabric, "catalog", lambda *args, **kwargs: [])
+    monkeypatch.setattr(fabric, "start_background_sync", start_once)
+    app = FastAPI()
+    fabric.register(app)
+    route = next(r for r in app.router.routes if r.path == "/infinity/studio/free-apis/catalog")
+
+    first = route.endpoint("", 20, False)
+    second = route.endpoint("", 20, False)
+
+    assert starts == [True]
+    assert first["discovery_status"] == "warming"
+    assert second["discovery_status"] == "warming"
+
+
+def test_selected_catalog_entry_is_verified_on_demand(isolated_fabric, monkeypatch):
+    from fastapi import FastAPI
+
+    api_id = "on-demand-public-api"
+    fabric._upsert({
+        "api_id": api_id, "source": "test", "name": "On demand public API",
+        "spec_url": "https://api.example.test/openapi.json",
+        "homepage": "https://api.example.test", "auth": "unknown", "status": "discovered",
+    })
+    verified = []
+    operation_rows = [[], [{"op_id": "safe-op", "method": "GET"}]]
+    monkeypatch.setattr(fabric, "operations", lambda requested, limit=100: operation_rows.pop(0))
+    monkeypatch.setattr(fabric, "verify_api", lambda requested: verified.append(requested) or {"status": "executable"})
+
+    app = FastAPI()
+    fabric.register(app)
+    route = next(r for r in app.router.routes if r.path == "/infinity/studio/free-apis/{api_id}/operations")
+    result = route.endpoint(api_id, 100)
+
+    assert verified == [api_id]
+    assert result["verification"] == {"status": "executable"}
+    assert result["operations"] == [{"op_id": "safe-op", "method": "GET"}]
+
+
+def test_public_verify_endpoint_caps_each_batch(isolated_fabric, monkeypatch):
+    from fastapi import FastAPI
+
+    calls = []
+    monkeypatch.setattr(fabric, "verify_batch", lambda limit: calls.append(limit) or {"checked": limit})
+    app = FastAPI()
+    fabric.register(app)
+    route = next(r for r in app.router.routes if r.path == "/infinity/studio/free-apis/verify")
+
+    result = route.endpoint(100000)
+
+    assert calls == [25]
+    assert result["bounded_limit"] == 25
+    assert result["requested_limit"] == 100000
+
