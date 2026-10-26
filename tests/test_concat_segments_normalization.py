@@ -25,7 +25,7 @@ def test_runtime_recovery_does_not_reintroduce_scene_aac():
 def make_scene(path: Path, width: int, height: int, fps: int, sample_rate: int, channels: int, hz: int, seconds: float):
     command = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        "-f", "lavfi", "-i", f"color=c={['red','blue','green'][hz % 3]}:size={width}x{height}:rate={fps}",
+        "-f", "lavfi", "-i", f"testsrc2=size={width}x{height}:rate={fps}",
         "-f", "lavfi", "-i", f"sine=frequency={hz}:sample_rate={sample_rate}",
         "-t", str(seconds), "-map", "0:v:0", "-map", "1:a:0",
         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
