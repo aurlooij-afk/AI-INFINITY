@@ -2111,7 +2111,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             one_idea_search_subjects.get(name, visual_search_subject)
             if one_idea_infinite_worlds else visual_search_subject
         )
-            campaign_headings = {
+        campaign_headings = {
             "Hook": "The Unseen Idea",
             "Context": "The Spark",
             "The core idea": "A Story Takes Shape",
