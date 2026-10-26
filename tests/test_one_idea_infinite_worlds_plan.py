@@ -84,7 +84,7 @@ def test_campaign_plan_preserves_requested_story_and_distinct_visual_beats():
     assert any("notebook" in x.lower() and "writing" in x.lower() for x in focuses)
     assert any("mountain" in x.lower() for x in focuses)
     assert any("timeline" in x.lower() for x in focuses)
-    assert any("city skyline" in x.lower() and "river" in x.lower() for x in focuses)
+    assert any("futuristic city skyline" in x.lower() and "spacecraft" in x.lower() for x in focuses)
     assert plan.get("source_context", {}).get("source_claims_invented") is False
 
 
