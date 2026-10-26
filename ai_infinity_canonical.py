@@ -972,7 +972,11 @@ def dispatch_command(command, user_id, raw=None):
             ).strip()[:200]
         candidates = fabric.catalog(query=search_text, limit=10, executable_only=True)
         bootstrapped = False
-        if not candidates and not fabric.SYNC_STATE.get("bootstrap_started"):
+        if (
+            not candidates
+            and not fabric.SYNC_STATE.get("bootstrap_started")
+            and not fabric.SYNC_STATE.get("bootstrap_complete")
+        ):
             bootstrapped = bool(fabric.start_background_sync())
         state = fabric.status()
         return {
