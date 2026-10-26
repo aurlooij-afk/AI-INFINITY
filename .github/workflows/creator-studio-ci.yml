@@ -16,6 +16,7 @@ on:
       - "tests/test_storage_route_registration.py"
       - "tests/test_production_fallback.py"
       - "tests/test_production_closure.py"
+      - "tests/test_api_anything_connector.py"
       - "tests/test_storage_artifact_readback.py"
       - "tests/test_project_state_backend.py"
       - "tests/production_creator_smoke.py"
@@ -42,6 +43,7 @@ on:
       - "tests/test_storage_route_registration.py"
       - "tests/test_production_fallback.py"
       - "tests/test_production_closure.py"
+      - "tests/test_api_anything_connector.py"
       - "tests/test_storage_artifact_readback.py"
       - "tests/test_project_state_backend.py"
       - "tests/production_creator_smoke.py"
@@ -117,10 +119,12 @@ jobs:
       - name: Compile all runtime Python modules
         run: |
           set -euo pipefail
-          python -m py_compile main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py creator_final_3800.py professional_creator_v2.py professional_creator_v2_timeline_patch.py professional_creator_fabric.py production_closure_3624.py editorial_review_3625.py ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py overlay_final_3700.py runtime_main_3700.py
+          python -m py_compile main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py api_anything_connector.py production_intelligence.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py creator_final_3800.py professional_creator_v2.py professional_creator_v2_timeline_patch.py professional_creator_fabric.py production_closure_3624.py editorial_review_3625.py ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py overlay_final_3700.py runtime_main_3700.py
           echo "Python syntax checks passed."
       - name: Verify canonical 607 capability fabric
         run: python -m pytest -q tests/test_professional_creator_fabric.py
+      - name: Verify API Anything research connector isolation and integration
+        run: python -m pytest -q tests/test_api_anything_connector.py
       - name: Verify durable project-state contract
         run: python -m pytest -q tests/test_project_state_backend.py
       - name: Verify persistent-volume truth is backed by mount evidence
