@@ -1241,23 +1241,23 @@ def install() -> None:
                                  {"operation": "assembly", "segment_count": len(list(paths))})
                 return return_value
             except Exception as first_exc:
-                _event(pid, "assembly", "REPAIR_REQUIRED", 1, str(first_exc)[:1600],
-                       {"strategy": "copy_reencode"})
-                manifest = Path(out).with_suffix(".reality.txt")
-                manifest.write_text(
-                    "".join("file '" + str(Path(x)).replace("'", "'\\''") + "'\n"
-                            for x in paths if Path(x).is_file()),
-                    encoding="utf-8",
+                _event(
+                    pid, "assembly", "REPAIR_REQUIRED", 1,
+                    str(first_exc)[:1600],
+                    {
+                        "strategy": "fail_closed_no_scene_aac_retry",
+                        "reason": (
+                            "The canonical assembler owns video-only normalization and full-decode "
+                            "verification. Re-encoding raw scene MP4s here could re-introduce corrupt "
+                            "per-scene AAC, so no legacy audio concat fallback is permitted."
+                        ),
+                        "truthful": True,
+                    },
                 )
-                s.ffmpeg(
-                    "-f", "concat", "-safe", "0", "-i", manifest,
-                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
-                    "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", out,
-                    timeout=900,
-                )
-                if not _valid_file(Path(out), 10000) or not _media_probe(Path(out)).get("ok"):
-                    raise RuntimeError("assembly recovery produced invalid media")
-                return out
+                raise RuntimeError(
+                    "canonical video-only assembly failed; legacy scene-AAC fallback is disabled: "
+                    + str(first_exc)[:2200]
+                ) from first_exc
         concat_wrapped._reality_first_wrapped = True
         s.concat_segments = concat_wrapped
 
