@@ -234,3 +234,36 @@ def test_explicit_but_unrecognized_project_edit_fails_closed_without_render(monk
     )
     assert result["status"] == "unsupported_or_incomplete"
     assert result["executed"] is False
+
+
+def test_multilingual_research_commands_do_not_fall_back_to_selected_video_type():
+    cases = [
+        "AI ویڈیو ایڈیٹنگ پر تحقیق کریں",
+        "د AI ویډیو ایډیټنګ په اړه څېړنه وکړئ",
+        "AI ویدیو تدوین را بررسی کنید",
+        "ابحث عن مصادر حول تحرير الفيديو",
+    ]
+    for command in cases:
+        result = canonical.classify_command(command, {"content_type": "video", "language": "Urdu"})
+        assert result["route"] == "research", (command, result)
+
+
+def test_multilingual_creation_routes_use_the_intended_supported_content_type():
+    cases = [
+        ("AI Infinity کے لیے ایک ویڈیو بنائیں", "video"),
+        ("AI Infinity کے لیے پوڈکاسٹ بنائیں", "podcast"),
+        ("یک ویدیو درباره طراحی بسازید", "video"),
+        ("أنشئ فيديو عن تصميم المحتوى", "video"),
+    ]
+    for command, expected_type in cases:
+        result = canonical.classify_command(command, {"content_type": "article", "language": "Arabic"})
+        assert result["route"] == "create", (command, result)
+        assert result["content_type"] == expected_type, (command, result)
+
+
+def test_multilingual_script_request_and_unsupported_website_request_are_not_video_jobs():
+    script = canonical.classify_command("AI Infinity کا اسکرپٹ لکھیں", {"content_type": "video"})
+    website = canonical.classify_command("أنشئ موقع ويب", {"content_type": "video"})
+
+    assert script["route"] == "script"
+    assert website["route"] == "unsupported_deliverable"
