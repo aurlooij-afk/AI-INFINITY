@@ -10,6 +10,18 @@ from tempfile import TemporaryDirectory
 from studio_ultimate import concat_segments, ffprobe_json, probe_duration
 
 
+def test_runtime_recovery_does_not_reintroduce_scene_aac():
+    root = Path(__file__).resolve().parents[1]
+    startup = (root / "sitecustomize.py").read_text(encoding="utf-8")
+    reality = (root / "reality_first_3901.py").read_text(encoding="utf-8")
+    assert "concat_safe" not in startup
+    assert 'strategy": "fail_closed_no_scene_aac_retry' in reality
+    repair = reality.index('strategy": "fail_closed_no_scene_aac_retry')
+    repair_end = reality.index("concat_wrapped._reality_first_wrapped = True", repair)
+    repair_block = reality[repair:repair_end]
+    assert '"-c:a"' not in repair_block
+    assert 'legacy scene-AAC fallback is disabled' in repair_block
+
 def make_scene(path: Path, width: int, height: int, fps: int, sample_rate: int, channels: int, hz: int, seconds: float):
     command = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
@@ -55,5 +67,6 @@ def test_mixed_resolution_and_aac_scenes_assemble_to_decodable_1080p(tmp_path=No
 
 
 if __name__ == "__main__":
+    test_runtime_recovery_does_not_reintroduce_scene_aac()
     test_mixed_resolution_and_aac_scenes_assemble_to_decodable_1080p()
-    print("PASS: mixed 720p/1080p and AAC scenes assemble into a full-decode 1080p master.")
+    print("PASS: AAC-safe runtime recovery and mixed-scene 1080p full decode.")
