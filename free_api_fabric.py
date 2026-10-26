@@ -557,7 +557,7 @@ def register(app: Any):
             started = bool(start_background_sync())
         return {
             "items": items,
-            "discovery_status": "warming" if started or SYNC_STATE.get("running") else "ready",
+            "discovery_status": "warming" if started or SYNC_STATE.get("running") or (SYNC_STATE.get("bootstrap_started") and not SYNC_STATE.get("bootstrap_complete")) else "ready",
             "status": status(),
             "truthful": True,
         }
