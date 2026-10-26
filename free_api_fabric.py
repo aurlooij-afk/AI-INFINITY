@@ -298,8 +298,22 @@ def sync_catalogs() -> Dict[str, Any]:
             except Exception as exc:
                 counts[source]=0
                 SYNC_STATE["last_error"]=(SYNC_STATE.get("last_error")+"; "+source+": "+str(exc))[:1000]
-        SYNC_STATE["source_counts"]=counts
-        return {"status":"completed","source_counts":counts,**status()}
+        SYNC_STATE["source_counts"] = counts
+        useful_entries = sum(int(value or 0) for value in counts.values())
+        if useful_entries <= 0:
+            if not SYNC_STATE.get("last_error"):
+                SYNC_STATE["last_error"] = "all public API catalogs returned zero usable entries"
+            sync_status = "degraded"
+        elif SYNC_STATE.get("last_error"):
+            sync_status = "degraded"
+        else:
+            sync_status = "completed"
+        return {
+            "status": sync_status,
+            "source_counts": counts,
+            "error": str(SYNC_STATE.get("last_error") or "")[:260] or None,
+            **status(),
+        }
     finally:
         SYNC_STATE["running"]=False
         SYNC_LOCK.release()
