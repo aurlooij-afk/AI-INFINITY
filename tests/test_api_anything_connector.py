@@ -154,3 +154,96 @@ def test_production_research_uses_api_anything_results_without_claiming_more_tha
     }
     assert result["sources"][0]["source"] == "API Anything / YouTube"
     assert result["sources"][0]["url"] == "https://www.youtube.com/watch?v=abcdefghijk"
+
+
+def test_installed_adapter_enriches_the_existing_creator_research_function(monkeypatch):
+    from types import SimpleNamespace
+    import production_intelligence
+
+    base_result = {
+        "topic": "AI video editing",
+        "sources": [{
+            "title": "AI video editing basics",
+            "url": "https://example.com/ai-video",
+            "source": "Example",
+            "summary": "AI video editing techniques",
+        }],
+        "source_count": 1,
+        "provider_count": 1,
+        "providers": {"Example": {"status": "ready", "count": 1, "truthful": True}},
+        "degraded": False,
+        "status": "READY",
+        "truthful": True,
+        "relevance_policy": {
+            "retrieved_sources": 1,
+            "accepted_sources": 1,
+            "rejected_irrelevant_sources": 0,
+        },
+    }
+    creator = SimpleNamespace(
+        research_topic=lambda topic, limit=10: dict(base_result, sources=list(base_result["sources"]), providers=dict(base_result["providers"])),
+        _research_source_relevant=lambda topic, row: True,
+        utc_iso=lambda: "2026-10-27T00:00:00Z",
+    )
+    monkeypatch.setattr(production_intelligence, "studio", lambda: creator)
+    monkeypatch.setattr(
+        production_intelligence.api_anything_connector,
+        "youtube_search",
+        lambda topic, limit=10: {
+            "status": "ready",
+            "items": [
+                {
+                    "id": "abcdefghijk",
+                    "title": "AI video editing tutorial",
+                    "url": "https://www.youtube.com/watch?v=abcdefghijk",
+                    "channel": "Creator",
+                    "views": "1200 views",
+                },
+                {
+                    "id": "invalid id",
+                    "title": "Invalid row",
+                    "url": "https://www.youtube.com/watch?v=invalid%20id",
+                },
+            ],
+            "truthful": True,
+        },
+    )
+
+    installed = production_intelligence.install_creator_research_connector()
+    result = creator.research_topic("AI video editing", limit=5)
+
+    assert installed["status"] == "installed"
+    assert result["source_count"] == 2
+    assert result["provider_count"] == 2
+    assert [s["source"] for s in result["sources"]].count("API Anything / YouTube") == 1
+    assert result["research_connector"]["items_added"] == 1
+    assert result["providers"]["API Anything / YouTube"]["status"] == "ready"
+
+
+def test_installed_adapter_respects_explicit_disable_external_research_policy(monkeypatch):
+    from types import SimpleNamespace
+    import production_intelligence
+
+    result_when_disabled = {
+        "topic": "AI video editing",
+        "sources": [],
+        "source_count": 0,
+        "provider_count": 0,
+        "providers": {
+            "Wikipedia": {"status": "disabled_by_policy"},
+            "DuckDuckGo": {"status": "disabled_by_policy"},
+        },
+        "degraded": True,
+        "status": "DEGRADED",
+        "degraded_reason": "External research access is disabled by runtime policy.",
+        "truthful": True,
+    }
+    creator = SimpleNamespace(research_topic=lambda topic, limit=10: result_when_disabled)
+    monkeypatch.setattr(production_intelligence, "studio", lambda: creator)
+
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("API Anything must not run when external research is disabled")
+
+    monkeypatch.setattr(production_intelligence.api_anything_connector, "youtube_search", must_not_run)
+    production_intelligence.install_creator_research_connector()
+    assert creator.research_topic("AI video editing") is result_when_disabled
