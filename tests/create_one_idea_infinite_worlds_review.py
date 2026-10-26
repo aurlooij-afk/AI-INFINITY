@@ -399,6 +399,18 @@ def main() -> int:
                 result["reviewer_packet"] = packet_info
         except Exception as exc:
             result["review_packet_error"] = type(exc).__name__ + ": " + str(exc)[:1000]
+        visual_audit = []
+        for asset in assets:
+            visual_audit.append({
+                key: asset.get(key) for key in (
+                    "scene", "scene_index", "asset_id", "title", "source", "provider",
+                    "source_url", "downloaded_media_url", "creator", "license", "license_url",
+                    "quality_tier", "asset_kind", "commercial_use_state", "rights_status",
+                    "rights_evidence_method", "fallback", "fallback_reason", "selection_reason",
+                    "resolution", "duration_seconds", "sha256", "asset_sha256",
+                ) if key in asset
+            })
+        result["visual_asset_audit"] = visual_audit
         (EVIDENCE / "production-summary.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
         # A convenience top-level copy with the promised review filename.
@@ -416,20 +428,6 @@ def main() -> int:
                     continue
                 z.write(path, relative.as_posix(),
                         compress_type=zipfile.ZIP_STORED if path.suffix.lower() in {".mp4", ".mp3", ".zip"} else zipfile.ZIP_DEFLATED)
-        visual_audit = []
-        for asset in assets:
-            visual_audit.append({
-                key: asset.get(key) for key in (
-                    "scene", "scene_index", "asset_id", "title", "source", "provider",
-                    "source_url", "downloaded_media_url", "creator", "license", "license_url",
-                    "quality_tier", "asset_kind", "commercial_use_state", "rights_status",
-                    "rights_evidence_method", "fallback", "fallback_reason", "selection_reason",
-                    "resolution", "duration_seconds", "sha256", "asset_sha256",
-                ) if key in asset
-            })
-        result["visual_asset_audit"] = visual_audit
-        (EVIDENCE / "production-summary.json").write_text(
-            json.dumps(result, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
         print("AI_INFINITY_CREATIVE_REVIEW_RESULT=" + json.dumps({
             "project_id": pid, "overall_result": result["overall_result"],
             "all_technical_gates_passed": result["all_technical_gates_passed"],
