@@ -5088,13 +5088,35 @@ def make_music(outdir: Path, seconds: float) -> Path:
         ffmpeg(*sources, "-filter_complex", ";".join(filters),
                "-map", "[m]", "-c:a", "aac", "-b:a", "160k", out, timeout=max(120, int(30 + s * 3)))
     except Exception as exc:
-        # Keep the core production path alive with a simple original tone bed.
+        # Keep a genuinely musical fallback if the evolving chord progression
+        # fails on a constrained FFmpeg build. A layered consonant pad is still
+        # original locally generated audio; do not silently fall back to a lone
+        # oscillator that sounds like a preview tone under a premium brand film.
         audit_event("", "music_fallback", {"error": str(exc)[:600], "duration_seconds": s})
         out.unlink(missing_ok=True)
+        fallback_sources = [
+            "-f", "lavfi", "-i", f"sine=frequency=110:sample_rate=48000:duration={s}",
+            "-f", "lavfi", "-i", f"sine=frequency=164.81:sample_rate=48000:duration={s}",
+            "-f", "lavfi", "-i", f"sine=frequency=220:sample_rate=48000:duration={s}",
+            "-f", "lavfi", "-i", f"sine=frequency=261.63:sample_rate=48000:duration={s}",
+        ]
+        fallback_filters = (
+            "[0:a]volume=0.022,lowpass=f=260,afade=t=in:st=0:d=1.5,afade=t=out:st="
+            + str(max(0.5, s - 2.0)) + ":d=2[a0];"
+            "[1:a]volume=0.014,lowpass=f=550,afade=t=in:st=0:d=2,afade=t=out:st="
+            + str(max(0.5, s - 2.0)) + ":d=2[a1];"
+            "[2:a]volume=0.010,lowpass=f=1200,afade=t=in:st=0:d=2.5,afade=t=out:st="
+            + str(max(0.5, s - 2.0)) + ":d=2[a2];"
+            "[3:a]volume=0.005,lowpass=f=2000,afade=t=in:st=0:d=3,afade=t=out:st="
+            + str(max(0.5, s - 2.0)) + ":d=2[a3];"
+            "[a0][a1][a2][a3]amix=inputs=4:duration=longest:normalize=0,"
+            "aecho=0.7:0.32:45|90:0.08|0.04,"
+            "highpass=f=55,lowpass=f=2400,loudnorm=I=-26:TP=-6:LRA=8[m]"
+        )
         ffmpeg(
-            "-f", "lavfi", "-i", f"sine=frequency=196:sample_rate=48000:duration={s}",
-            "-af", "volume=0.025,lowpass=f=1800,afade=t=in:st=0:d=0.5,afade=t=out:st=" + str(max(0.5, s - 0.5)) + ":d=0.5",
-            "-c:a", "aac", "-b:a", "128k", out, timeout=max(60, int(12 + s * 2))
+            *fallback_sources, "-filter_complex", fallback_filters, "-map", "[m]",
+            "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+            out, timeout=max(120, int(20 + s * 3))
         )
     return out
 
