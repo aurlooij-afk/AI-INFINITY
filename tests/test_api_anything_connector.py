@@ -59,7 +59,7 @@ def test_youtube_search_uses_bundled_readonly_operation_and_tier_one(monkeypatch
     assert calls[1][1:] == ["ops", "youtube"]
     assert calls[2][1:4] == ["call", "youtube", "search"]
     assert "--max-tier" in calls[2] and calls[2][calls[2].index("--max-tier") + 1] == "1"
-    assert "query" in calls[2][calls[2].index("--json") + 1]
+    assert json.loads(calls[2][calls[2].index("--json") + 1]) == {"q": "climate change adaptation"}
 
 
 def test_youtube_search_does_not_call_unbundled_or_user_overridden_specs(monkeypatch):
