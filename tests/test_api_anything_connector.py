@@ -247,3 +247,39 @@ def test_installed_adapter_respects_explicit_disable_external_research_policy(mo
     monkeypatch.setattr(production_intelligence.api_anything_connector, "youtube_search", must_not_run)
     production_intelligence.install_creator_research_connector()
     assert creator.research_topic("AI video editing") is result_when_disabled
+
+
+def test_production_research_route_respects_external_provider_disable_policy(monkeypatch):
+    from types import SimpleNamespace
+    import production_intelligence
+
+    monkeypatch.setenv("TAVILY_API_KEY", "must-not-be-used")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "must-not-be-used")
+    creator = SimpleNamespace(
+        _external_providers_disabled=lambda: True,
+        research_topic=lambda topic, limit=10: {
+            "topic": topic,
+            "sources": [],
+            "source_count": 0,
+            "providers": {"Wikipedia": {"status": "disabled_by_policy", "count": 0}},
+            "degraded": True,
+            "status": "DEGRADED",
+            "degraded_reason": "External research access is disabled by runtime policy.",
+            "truthful": True,
+        },
+    )
+    monkeypatch.setattr(production_intelligence, "studio", lambda: creator)
+
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("Remote provider call must be blocked by policy")
+
+    monkeypatch.setattr(production_intelligence.api_anything_connector, "youtube_search", must_not_run)
+    monkeypatch.setattr(production_intelligence.requests, "post", must_not_run)
+    monkeypatch.setattr(production_intelligence.requests, "get", must_not_run)
+
+    result = production_intelligence.research("AI video editing", limit=5)
+
+    assert result["provider"] == "disabled_by_policy"
+    assert result["api_anything"]["status"] == "disabled_by_policy"
+    assert result["source_count"] == 0
+    assert result["sources"] == []
