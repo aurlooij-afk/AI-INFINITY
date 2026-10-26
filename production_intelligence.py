@@ -294,7 +294,105 @@ def eleven_sfx(pid,prompt,duration=3):
     root=Path(os.getenv("AI_INFINITY_DATA_DIR","/tmp/ai-infinity"))/"production-intelligence"/pid;root.mkdir(parents=True,exist_ok=True);p=root/("sfx_"+uuid.uuid4().hex[:12]+".mp3");p.write_bytes(r.content)
     return {"status":"completed","provider":"elevenlabs","path":str(p),"duration_seconds":duration,"truthful":True}
 
+def install_creator_research_connector():
+    """Augment the existing Creator Studio research function without replacing its providers."""
+    target = studio()
+    original = getattr(target, "research_topic", None)
+    if not callable(original) or getattr(original, "_api_anything_research_wrapped", False):
+        return {"status": "already_installed" if callable(original) else "unavailable", "truthful": True}
+
+    def enriched_research_topic(topic, limit=10):
+        result = original(topic, limit=limit)
+        if not isinstance(result, dict):
+            return result
+        # Respect an explicit runtime policy that disables all external research.
+        providers = result.get("providers")
+        if isinstance(providers, dict) and providers and all(
+            isinstance(item, dict) and item.get("status") == "disabled_by_policy"
+            for item in providers.values()
+        ):
+            return result
+
+        per = max(1, min(10, int(limit or 10)))
+        connector_result = api_anything_connector.youtube_search(topic, limit=per)
+        items = connector_result.get("items") if isinstance(connector_result, dict) else []
+        items = items if isinstance(items, list) else []
+        sources = result.get("sources")
+        if not isinstance(sources, list):
+            sources = []
+            result["sources"] = sources
+        existing = {
+            (str(item.get("url") or "").strip(), str(item.get("title") or "").strip().casefold())
+            for item in sources if isinstance(item, dict)
+        }
+        added = 0
+        relevant = getattr(target, "_research_source_relevant", None)
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            video_id = str(item.get("id") or "").strip()
+            url = str(item.get("url") or "").strip()
+            title = str(item.get("title") or "").strip()[:300]
+            if not re.fullmatch(r"[A-Za-z0-9_-]{6,20}", video_id):
+                continue
+            if url != f"https://www.youtube.com/watch?v={video_id}" or not title:
+                continue
+            row = {
+                "title": title,
+                "url": url,
+                "source": "API Anything / YouTube",
+                "summary": "Channel: " + str(item.get("channel") or "unknown")[:160]
+                + "; views: " + str(item.get("views") or "unknown")[:80],
+                "video_id": video_id,
+                "channel": str(item.get("channel") or "")[:160],
+                "views": str(item.get("views") or "")[:80],
+                "retrieved_at": studio().utc_iso(),
+            }
+            key = (url, title.casefold())
+            if key in existing or (callable(relevant) and not relevant(str(topic or ""), row)):
+                continue
+            existing.add(key)
+            sources.append(row)
+            added += 1
+            if len(sources) >= per * 2:
+                break
+
+        provider_map = result.setdefault("providers", {})
+        if isinstance(provider_map, dict):
+            status_value = str(connector_result.get("status") or "unknown") if isinstance(connector_result, dict) else "failed"
+            provider_map["API Anything / YouTube"] = {
+                "status": "ready" if added else status_value,
+                "count": added,
+                "connector_status": status_value,
+                "operation": "youtube.search",
+                "transport_mode": "bundled_read_only_plain_http",
+                "truthful": True,
+            }
+        result["source_count"] = len(sources)
+        result["provider_count"] = len({str(item.get("source") or "unknown") for item in sources if isinstance(item, dict)})
+        result["degraded"] = not bool(sources)
+        result["status"] = "READY" if sources else "DEGRADED"
+        result["research_connector"] = {
+            "api_anything_status": str(connector_result.get("status") or "unknown") if isinstance(connector_result, dict) else "failed",
+            "items_added": added,
+            "operation": "youtube.search",
+            "truthful": True,
+        }
+        policy = result.get("relevance_policy")
+        if isinstance(policy, dict):
+            policy["accepted_sources"] = len(sources)
+            policy["retrieved_sources"] = int(policy.get("retrieved_sources") or 0) + len(items)
+            policy["rejected_irrelevant_sources"] = max(0, int(policy.get("retrieved_sources") or 0) - len(sources))
+        return result
+
+    enriched_research_topic._api_anything_research_wrapped = True
+    enriched_research_topic._api_anything_original = original
+    target.research_topic = enriched_research_topic
+    return {"status": "installed", "truthful": True}
+
+
 def register(app):
+    install_creator_research_connector()
     @app.get("/infinity/production/intelligence")
     def intelligence_status():return provider_status()
     @app.post("/infinity/production/research")
