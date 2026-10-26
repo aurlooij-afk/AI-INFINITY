@@ -246,9 +246,9 @@ def test_installed_adapter_enriches_the_existing_creator_research_function(monke
                     "author": "Susanna Clarke", "rating": "4.3", "ratings_count": "100000",
                 },
                 {
-                    "id": "504230", "source": "API Anything / Steam",
-                    "title": "Celeste", "url": "https://store.steampowered.com/app/504230/",
-                    "price": "$19.99", "release_date": "2018",
+                    "id": "interstellar", "source": "API Anything / Rotten Tomatoes",
+                    "title": "Interstellar", "url": "https://www.rottentomatoes.com/m/interstellar",
+                    "year": "2014", "tomatometer": "91%", "cast": "Matthew McConaughey",
                 },
                 {
                     "id": "B012345678", "source": "API Anything / Amazon",
@@ -258,7 +258,7 @@ def test_installed_adapter_enriches_the_existing_creator_research_function(monke
             ],
             "operations": {
                 "youtube.search": "ready", "hacker-news.search": "ready",
-                "goodreads.searchBooks": "ready", "steam.search": "ready", "amazon.search": "ready",
+                "goodreads.searchBooks": "ready", "rottentomatoes.searchMovies": "ready", "amazon.search": "ready",
             },
             "truthful": True,
         },
