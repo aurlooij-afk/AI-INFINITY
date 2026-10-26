@@ -783,7 +783,10 @@ def dispatch_command(command, user_id, raw=None):
         return {
             "status": "unsupported_or_incomplete", "route": route,
             "reason": decision["reason"],
-            "supported_routes": ["research", "create", "edit_existing_project", "project_status", "capabilities"],
+            "supported_routes": [
+                "research", "create", "edit_existing_project", "project_status", "capabilities",
+                "script", "strategy", "marketing", "seo", "analytics", "publisher", "monetization",
+            ],
             "executed": False, "truthful": True,
         }
     if route == "capabilities":
@@ -807,6 +810,76 @@ def dispatch_command(command, user_id, raw=None):
             raise HTTPException(409, "Destructive project deletion is not supported by this command router.")
         result = apply_edit(pid, user_id, cmd)
         return {"status": result.get("status", "completed"), "route": route, "result": result, "executed": True, "truthful": True}
+    if route in {"analytics", "publisher", "monetization"}:
+        engine = studio()
+        if route == "analytics":
+            result = engine._analytics_3621(user_id)
+            return {"status": "completed", "route": route, "result": result, "read_only": True, "truthful": True}
+        if route == "publisher":
+            connections = engine._connections(user_id)
+            return {
+                "status": "completed", "route": route,
+                "result": {
+                    "connections": connections,
+                    "supported_publishers": ["youtube", "webhook"],
+                    "publish_executed": False,
+                    "authorization_required_for_publish": True,
+                    "truthful": True,
+                },
+                "read_only": True, "truthful": True,
+            }
+        lanes = getattr(engine, "MONETIZATION_LANES_3621", [])
+        metrics = {}
+        try:
+            main_module = __import__("main")
+            metrics_fn = getattr(main_module, "_3601_metrics", None)
+            if callable(metrics_fn):
+                metrics = metrics_fn()
+        except Exception:
+            metrics = {}
+        return {
+            "status": "completed", "route": route,
+            "result": {"lanes": lanes, "metrics": metrics, "read_only": True, "truthful": True},
+            "read_only": True, "truthful": True,
+        }
+    if route in {"script", "strategy", "marketing", "seo"}:
+        engine = studio()
+        topic = clean(payload.get("topic") or payload.get("subject"), 500) or cmd
+        try:
+            duration = max(20, min(3600, int(payload.get("duration") or 300)))
+        except (TypeError, ValueError, OverflowError):
+            duration = 300
+        platforms = payload.get("platforms") if isinstance(payload.get("platforms"), list) else []
+        request_data = {
+            "title": clean(payload.get("title"), 180) or topic[:180],
+            "topic": topic,
+            "objective": clean(payload.get("objective"), 4000) or cmd,
+            "format": clean(payload.get("format"), 30) or "long",
+            "duration": duration,
+            "audience": clean(payload.get("audience"), 600) or "general audience",
+            "tone": clean(payload.get("tone"), 700) or "cinematic, intelligent, useful",
+            "language": clean(payload.get("language"), 60) or "English",
+            "platforms": [clean(x, 40) for x in platforms[:12]],
+            "brand_voice": clean(payload.get("brand_voice"), 1600),
+            "visual_style": clean(payload.get("visual_style"), 900) or "premium editorial",
+            "call_to_action": clean(payload.get("call_to_action"), 600),
+        }
+        research_result = engine.research_topic(topic, limit=8)
+        model_fn = None
+        try:
+            main_module = __import__("main")
+            model_fn = getattr(main_module, "_2700_model", None)
+        except Exception:
+            pass
+        plan_result, provider = engine.creative_plan(request_data, research_result, model_fn)
+        return {
+            "status": "completed" if plan_result else "degraded",
+            "route": route, "agent": route, "provider": provider,
+            "research": research_result, "result": plan_result,
+            "artifact_created": False,
+            "delivery_note": "This is a plan/script/metadata result; no media file or project artifact was created by this agent request.",
+            "review_required": True, "truthful": True,
+        }
     if route == "research":
         import production_intelligence
         topic = clean(payload.get("topic") or payload.get("subject"), 500)
