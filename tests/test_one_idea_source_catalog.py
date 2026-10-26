@@ -17,6 +17,14 @@ def test_eight_story_scenes_have_distinct_attributed_free_source_clips():
     assert all(name.strip() for name in creators), creators
     assert all(str(row["source_id"]) in row["media_url"] for row in rows.values())
     assert all(row["title"] and row["description"] and row["visual_match"] for row in rows.values())
+    # Scene 6 uses a confirmed 1080p30 Pexels download endpoint as the
+    # smaller, source-attributed backup for the inaccessible UHD edit-timeline clip.
+    scene6 = rows[6]
+    assert scene6["source_id"] == 5584722, scene6
+    assert scene6["source_url"] == "https://www.pexels.com/video/person-watching-and-editing-video-5584722/"
+    assert scene6["media_url"] == "https://videos.pexels.com/video-files/5584722/5584722-hd_1920_1080_30fps.mp4"
+    assert scene6["creator"] == "Nino Souza"
+    assert "editing" in scene6["title"].lower() and "video" in scene6["title"].lower()
 
 
 if __name__ == "__main__":
