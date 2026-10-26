@@ -25,8 +25,16 @@ def test_campaign_plan_preserves_requested_story_and_distinct_visual_beats():
         language="English",
         topic="ONE IDEA. INFINITE WORLDS.",
     )
+    assert plan["title"] == "ONE IDEA. INFINITE WORLDS.", plan["title"]
+    assert plan["hook"] == "Every extraordinary world begins with something nobody else can see.", plan["hook"]
     chapters = plan["chapters"]
     assert len(chapters) == 8, [x.get("heading") for x in chapters]
+    assert [x.get("heading") for x in chapters] == [
+        "The Unseen Idea", "The Spark", "A Story Takes Shape", "From Sketch to World",
+        "The City of Tomorrow", "The Craft", "The Payoff", "The Signature",
+    ]
+    assert all(x.get("campaign_key") == "one_idea_infinite_worlds_v1" for x in chapters)
+    assert [x.get("campaign_scene_index") for x in chapters] == list(range(1, 9))
     narration = [x["narration"] for x in chapters]
     combined = " ".join(narration).lower()
     assert narration[0].startswith("Every extraordinary world begins with something nobody else can see.")
@@ -45,7 +53,7 @@ def test_campaign_plan_preserves_requested_story_and_distinct_visual_beats():
     assert any("notebook" in x.lower() and "writing" in x.lower() for x in focuses)
     assert any("mountain" in x.lower() for x in focuses)
     assert any("timeline" in x.lower() for x in focuses)
-    assert any("futuristic abstract neon geometric background" in x.lower() for x in focuses)
+    assert any("city skyline" in x.lower() and "river" in x.lower() for x in focuses)
     assert plan.get("source_context", {}).get("source_claims_invented") is False
 
 
