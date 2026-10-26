@@ -64,6 +64,7 @@ def _run_json(
                 [executable, *args],
                 cwd=cwd,
                 env=env,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 close_fds=True,
