@@ -283,3 +283,95 @@ def test_multilingual_consequential_actions_require_authorization():
         result = canonical.classify_command(command)
         assert result["route"] == "authorization_required", (command, result)
         assert result.get("action")
+
+def test_public_api_intent_routes_to_the_existing_read_only_fabric():
+    result = canonical.classify_command("Use a public API to search for climate adaptation evidence")
+    assert result["route"] == "public_api"
+    assert "verified" in result["reason"]
+
+
+def test_public_api_command_invokes_only_a_selected_operation_id(monkeypatch):
+    calls = []
+    fake_fabric = SimpleNamespace(
+        invoke=lambda operation_id, query=None, body=None: (
+            calls.append((operation_id, query, body)) or {
+                "api_id": "public-api-1", "operation_id": operation_id,
+                "status_code": 200, "data": [{"title": "Climate data"}], "truthful": True,
+            }
+        )
+    )
+    monkeypatch.setitem(sys.modules, "free_api_fabric", fake_fabric)
+
+    result = canonical.dispatch_command(
+        "Use a public API to search climate data", "user-public-api",
+        {"task_type": "public_api", "op_id": "verified-get-op", "api_params": {"q": "climate data"}},
+    )
+
+    assert result["route"] == "public_api"
+    assert result["status"] == "completed"
+    assert result["executed"] is True
+    assert result["read_only"] is True
+    assert calls == [("verified-get-op", {"q": "climate data"}, None)]
+
+
+def test_public_api_command_discovers_candidates_without_claiming_execution(monkeypatch):
+    fake_fabric = SimpleNamespace(
+        catalog=lambda query, limit, executable_only: [{
+            "api_id": "public-api-1", "name": "Public Climate Data", "executable": 1,
+        }],
+        SYNC_STATE={"bootstrap_started": False, "bootstrap_complete": False},
+        start_background_sync=lambda: False,
+        status=lambda: {"bootstrap_started": False, "bootstrap_complete": False, "truthful": True},
+    )
+    monkeypatch.setitem(sys.modules, "free_api_fabric", fake_fabric)
+
+    result = canonical.dispatch_command(
+        "Use a public API to find climate data", "user-public-api",
+        {"task_type": "public_api", "api_search": "climate"},
+    )
+
+    assert result["route"] == "public_api"
+    assert result["status"] == "completed"
+    assert result["executed"] is False
+    assert result["candidates"][0]["api_id"] == "public-api-1"
+    assert "Choose a verified API candidate" in result["next_action"]
+
+
+def test_public_api_discovery_reports_warming_state_without_fake_success(monkeypatch):
+    starts = []
+    fake_fabric = SimpleNamespace(
+        catalog=lambda query, limit, executable_only: [],
+        SYNC_STATE={"bootstrap_started": False, "bootstrap_complete": False},
+        start_background_sync=lambda: starts.append(True) or True,
+        status=lambda: {"bootstrap_started": True, "bootstrap_complete": False, "truthful": True},
+    )
+    monkeypatch.setitem(sys.modules, "free_api_fabric", fake_fabric)
+
+    result = canonical.dispatch_command(
+        "Use a free public API to search for air quality", "user-public-api",
+        {"task_type": "public_api", "api_search": "air quality"},
+    )
+
+    assert starts == [True]
+    assert result["status"] == "discovery_started"
+    assert result["discovery_status"] == "warming"
+    assert result["executed"] is False
+
+
+def test_failed_public_api_operation_is_truthfully_degraded_and_redacted(monkeypatch):
+    fake_fabric = SimpleNamespace(
+        invoke=lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("secret=caller-supplied-value"))
+    )
+    monkeypatch.setitem(sys.modules, "free_api_fabric", fake_fabric)
+
+    result = canonical.dispatch_command(
+        "Use a public API to search", "user-public-api",
+        {"task_type": "public_api", "op_id": "verified-get-op", "api_params": {"q": "private topic"}},
+    )
+
+    assert result["status"] == "degraded"
+    assert result["executed"] is False
+    assert result["error_type"] == "ValueError"
+    assert "secret=" not in str(result)
+    assert "private topic" not in str(result)
+
