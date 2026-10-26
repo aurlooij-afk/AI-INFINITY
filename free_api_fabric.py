@@ -334,6 +334,7 @@ def verify_api(api_id: str) -> Dict[str,Any]:
         base=next((x for x in servers if _host_safe(x)),None)
         if not base: raise ValueError("OpenAPI server is not a safe public HTTPS host")
         ops=[]
+        base_host = (urlparse(base).hostname or "").rstrip(".").lower()
         for path,item in (spec.get("paths") or {}).items():
             if not isinstance(item,dict) or "{" in str(path) or "}" in str(path):
                 continue
@@ -351,7 +352,14 @@ def verify_api(api_id: str) -> Dict[str,Any]:
                 free=_operation_free(spec,op)
                 if not free:
                     continue
+                # A malicious OpenAPI document must not smuggle an absolute URL
+                # into a path and turn the registry into an arbitrary public-URL proxy.
                 url=urljoin(base.rstrip("/")+"/",str(path).lstrip("/"))
+                parsed_operation=urlparse(url)
+                if parsed_operation.scheme != "https" or (parsed_operation.hostname or "").rstrip(".").lower() != base_host:
+                    continue
+                if parsed_operation.port not in (None, 443) or parsed_operation.username or parsed_operation.password:
+                    continue
                 params=[]
                 for p in operation_params:
                     if isinstance(p,dict):
