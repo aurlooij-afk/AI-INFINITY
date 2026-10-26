@@ -677,15 +677,31 @@ def classify_command(command, raw=None):
         low,
     ))
     delegated_action = bool(re.search(
-        r"\b(?:i\s+want\s+to|i\s+need\s+to|can\s+you|help\s+me\s+to|please\s+help\s+me)\s+(?:publish|post|send|delete|destroy|purchase|buy|pay|transfer|schedule|upload)\b",
+        r"\b(?:i\s+want\s+to|i\s+want\s+you\s+to|i\s+need\s+to|i\s+need\s+you\s+to|can\s+you|could\s+you|would\s+you|help\s+me(?:\s+to)?|please\s+help\s+me)\s+(?:publish|post|send|delete|destroy|purchase|buy|pay|transfer|schedule|upload)\b",
         low,
     ))
-    if explicit_action or imperative_action or delegated_action:
-        action = explicit if explicit_action else (re.match(
-            r"^\s*(?:please\s+)?([a-z]+)", low
-        ).group(1) if imperative_action else re.search(
-            r"\b(?:publish|post|send|delete|destroy|purchase|buy|pay|transfer|schedule|upload)\b", low
-        ).group(0))
+    localized_actions = (
+        ("publish", r"(?:شائع\s+(?:کرو|کریں)|پوسٹ\s+(?:کرو|کریں)|نشر\s+(?:کن|کنید)|خپور\s+(?:کړه|کړئ)|انشروا?|انشري)"),
+        ("send", r"(?:بھیج(?:یں|و)?|ارسال\s+(?:کن|کنید)|واست(?:وه|وئ)|أرسل(?:وا)?|ابعث)"),
+        ("delete", r"(?:حذف\s+(?:کرو|کریں|کن|کنید)|ړنګ\s+(?:کړه|کړئ)|احذف(?:وا)?)"),
+        ("purchase", r"(?:خرید(?:یں|و|کنید)?|بخر|اشتر(?:وا)?)"),
+        ("pay", r"(?:ادائیگی\s+(?:کرو|کریں)|پرداخت\s+(?:کن|کنید)|تادیه\s+وکړه|ادفع(?:وا)?)"),
+        ("transfer", r"(?:منتقل\s+(?:کرو|کریں|کن|کنید)|انتقال\s+بده|حوّل(?:وا)?)"),
+        ("schedule", r"(?:شیڈول\s+(?:کرو|کریں)|زمان.?بندی\s+(?:کن|کنید)|مهالویش\s+(?:کړه|کړئ)|جدول(?:وا)?)"),
+        ("upload", r"(?:اپ\s*لوڈ\s+(?:کرو|کریں)|بارگذاری\s+(?:کن|کنید)|پورته\s+(?:کړه|کړئ)|ارفع(?:وا)?)"),
+    )
+    localized_action = next(
+        (action for action, pattern in localized_actions if re.search(pattern, low)),
+        "",
+    )
+    if explicit_action or imperative_action or delegated_action or localized_action:
+        action = explicit if explicit_action else (
+            re.match(r"^\s*(?:please\s+)?([a-z]+)", low).group(1)
+            if imperative_action else (
+                re.search(r"\b(?:publish|post|send|delete|destroy|purchase|buy|pay|transfer|schedule|upload)\b", low).group(0)
+                if delegated_action else localized_action
+            )
+        )
         return {
             "route": "authorization_required", "action": action,
             "reason": "Consequential external actions require action-specific authorization and a verified connector.",
