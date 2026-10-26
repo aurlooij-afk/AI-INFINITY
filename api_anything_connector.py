@@ -32,7 +32,7 @@ def status() -> dict[str, Any]:
         "provider": "api-anything",
         "status": "installed" if executable else "not_installed",
         "available": bool(executable),
-        "enabled_operations": ["youtube.search", "hacker-news.search", "goodreads.searchBooks", "steam.search", "amazon.search"],
+        "enabled_operations": ["youtube.search", "hacker-news.search", "goodreads.searchBooks", "rottentomatoes.searchMovies", "amazon.search"],
         "mode": "bundled_read_only_plain_http",
         "browser_learning_enabled": False,
         "upstream_commit": UPSTREAM_COMMIT,
@@ -297,17 +297,29 @@ def _bundled_search(
                         "url": f"https://www.goodreads.com/book/show/{book_id}",
                         "source": "API Anything / Goodreads",
                     }
-                elif result_kind == "steam":
-                    app_id = _clean_text(row.get("itemKey") or row.get("appid") or row.get("id"), 20)
-                    if not re.fullmatch(r"\d{1,12}", app_id):
+                elif result_kind == "rottentomatoes":
+                    raw_url = _clean_text(row.get("url"), 500)
+                    parsed = urlparse(raw_url)
+                    host = (parsed.hostname or "").rstrip(".").lower()
+                    path = parsed.path.strip("/")
+                    parts = path.split("/")
+                    if (
+                        parsed.scheme not in {"https", ""}
+                        or (host and host != "www.rottentomatoes.com")
+                        or len(parts) != 2 or parts[0] != "m"
+                        or not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", parts[1])
+                        or parsed.username or parsed.password
+                    ):
                         continue
+                    slug = parts[1]
                     normalized = {
-                        "id": app_id,
+                        "id": slug,
                         "title": title,
-                        "price": _clean_text(row.get("price"), 80),
-                        "release_date": _clean_text(row.get("releaseDate"), 80),
-                        "url": f"https://store.steampowered.com/app/{app_id}/",
-                        "source": "API Anything / Steam",
+                        "year": _clean_text(row.get("year"), 20),
+                        "tomatometer": _clean_text(row.get("tomatometer"), 40),
+                        "cast": _clean_text(row.get("cast"), 300),
+                        "url": f"https://www.rottentomatoes.com/m/{slug}",
+                        "source": "API Anything / Rotten Tomatoes",
                     }
                 elif result_kind == "amazon":
                     asin = _clean_text(row.get("asin") or row.get("itemKey") or row.get("id"), 10).upper()
@@ -352,7 +364,7 @@ _ALLOWED_SEARCHES = {
     "youtube.search": ("youtube", "search", "q", "youtube"),
     "hacker-news.search": ("hacker-news", "search", "query", "hacker-news"),
     "goodreads.searchBooks": ("goodreads", "searchBooks", "q", "goodreads"),
-    "steam.search": ("steam", "search", "term", "steam"),
+    "rottentomatoes.searchMovies": ("rottentomatoes", "searchMovies", "q", "rottentomatoes"),
     "amazon.search": ("amazon", "search", "k", "amazon"),
 }
 
@@ -403,8 +415,8 @@ def search_candidates(query: str, limit: int = 10) -> dict[str, Any]:
     # Avoid slow and irrelevant calls: use specialist sites only when the brief supports them.
     if re.search(r"\b(book|books|author|novel|literature|reading|fiction|nonfiction|biography|memoir)\b", topic):
         capabilities.append("goodreads.searchBooks")
-    if re.search(r"\b(game|games|gaming|steam|video game|pc game)\b", topic):
-        capabilities.append("steam.search")
+    if re.search(r"\b(movie|movies|film|films|cinema|cinematic references|actors|directors|tomatometer|critic score)\b", topic):
+        capabilities.append("rottentomatoes.searchMovies")
     if re.search(r"\b(product|products|price comparison|shopping|laptop|camera|microphone|headphones|smartphone|tablet|gear|equipment)\b", topic):
         capabilities.append("amazon.search")
     sources = []
