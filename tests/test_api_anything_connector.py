@@ -420,6 +420,95 @@ def test_search_candidates_reports_each_allowlisted_operation_truthfully(monkeyp
     assert seen == ["youtube", "hacker-news"]
 
 
+@pytest.mark.parametrize(
+    ("site", "operation", "query_parameter", "result_kind", "payload", "expected_source", "expected_url"),
+    [
+        (
+            "goodreads", "searchBooks", "q", "goodreads",
+            {"bookId": "35959740", "title": "Piranesi", "author": "Susanna Clarke", "avgRating": "4.3", "ratingsCount": "100000"},
+            "API Anything / Goodreads", "https://www.goodreads.com/book/show/35959740",
+        ),
+        (
+            "steam", "search", "term", "steam",
+            {"itemKey": "504230", "title": "Celeste", "price": "$19.99", "releaseDate": "2018"},
+            "API Anything / Steam", "https://store.steampowered.com/app/504230/",
+        ),
+        (
+            "amazon", "search", "k", "amazon",
+            {"asin": "B012345678", "title": "USB microphone", "price": "$29.99"},
+            "API Anything / Amazon", "https://www.amazon.com/dp/B012345678",
+        ),
+    ],
+)
+def test_additional_public_sources_normalize_to_canonical_provenance_urls(
+    monkeypatch, site, operation, query_parameter, result_kind, payload, expected_source, expected_url
+):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    runner, calls = _stub_runner(
+        site_name=site, operation_name=operation,
+        result={"ok": True, "class": "ok", "tier": 1, "data": [payload]},
+    )
+    monkeypatch.setattr(connector.subprocess, "run", runner)
+
+    result = connector._rate_limited_search(
+        f"{site}.{operation}", "Piranesi microphone Celeste", 5
+    )
+
+    assert result["status"] == "ready"
+    assert result["items"][0]["source"] == expected_source
+    assert result["items"][0]["url"] == expected_url
+    assert result["items"][0]["title"] == payload["title"]
+    assert result["transport_tier"] == 1
+    call = calls[-1]
+    assert call[:3] == ["call", site, operation]
+    assert json.loads(call[call.index("--json") + 1]) == {query_parameter: "Piranesi microphone Celeste"}
+    assert call[call.index("--max-tier") + 1] == "1"
+
+
+def test_contextual_search_routes_only_relevant_specialist_sites(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    seen = []
+
+    def fake_bundled(site_name, operation_name, query_parameter, query, limit, result_kind):
+        seen.append((site_name, operation_name))
+        return {"status": "empty", "items": [], "truthful": True}
+
+    monkeypatch.setattr(connector, "_bundled_search", fake_bundled)
+
+    books = connector.search_candidates("Research books and novels about artificial intelligence")
+    assert books["operations"].keys() == {"youtube.search", "hacker-news.search", "goodreads.searchBooks"}
+    assert [site for site, _ in seen] == ["youtube", "hacker-news", "goodreads"]
+
+    seen.clear()
+    games = connector.search_candidates("Compare PC games about space exploration")
+    assert games["operations"].keys() == {"youtube.search", "hacker-news.search", "steam.search"}
+    assert [site for site, _ in seen] == ["youtube", "hacker-news", "steam"]
+
+    seen.clear()
+    products = connector.search_candidates("Research laptop products and price comparison")
+    assert products["operations"].keys() == {"youtube.search", "hacker-news.search", "amazon.search"}
+    assert [site for site, _ in seen] == ["youtube", "hacker-news", "amazon"]
+
+
+def test_additional_sources_reject_invalid_ids_before_constructing_links(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    cases = [
+        ("goodreads", "searchBooks", "goodreads", {"bookId": "../private", "title": "Bad book"}),
+        ("steam", "search", "steam", {"itemKey": "../../private", "title": "Bad game"}),
+        ("amazon", "search", "amazon", {"asin": "https://evil.example", "title": "Bad product"}),
+    ]
+    for site, operation, result_kind, row in cases:
+        runner, _ = _stub_runner(
+            site_name=site, operation_name=operation,
+            result={"ok": True, "class": "ok", "tier": 1, "data": [row]},
+        )
+        monkeypatch.setattr(connector.subprocess, "run", runner)
+        query_parameter = {"goodreads": "q", "steam": "term", "amazon": "k"}[site]
+        result = connector._rate_limited_search(f"{site}.{operation}", "test query", 5)
+        assert result["status"] == "empty"
+        assert result["items"] == []
+
+
 def test_connector_enforces_output_limit_while_streaming_subprocess_stdout(monkeypatch, tmp_path):
     monkeypatch.setattr(connector, "MAX_OUTPUT_CHARS", 64)
     payload, error = connector._run_json(
