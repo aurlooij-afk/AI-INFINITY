@@ -1833,29 +1833,25 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "a note, a question, and the first frame of a story worth sharing."
             ),
             "The core idea": (
-                "Research gives it roots. Sources inform the story; notes become a "
-                "storyboard, and each scene earns its place."
+                "Research gives it roots. Sources inform the story; notes become a storyboard, "
+                "track each asset's origin and rights, and make every scene earn its place."
             ),
             "How it works": (
-                "A pencil line becomes a horizon. The world opens, the camera moves, "
-                "and the idea grows beyond its room."
+                "A pencil line becomes a horizon; the world opens beyond the room, "
+                "and the idea grows into a moving story."
             ),
             "Real-world examples": (
-                "Mountains catch first light; a city of tomorrow rises from that first thought. "
-                "Each image has purpose: reveal possibility, create emotion, move the story."
+                "Mountains catch first light; a city of tomorrow rises. Every image reveals "
+                "possibility, creates emotion, and moves the story forward."
             ),
             "What changes": (
-                "The craft brings it together. Edit the timeline, shape the voice, "
-                "balance the music, align captions so every moment lands."
+                "Edit the timeline, shape the voice, balance music and captions. Keep the "
+                "work editable, verify each source, and inspect the final cut."
             ),
             "Practical takeaway": (
-                "Keep the work editable, verify each source and its rights, inspect the "
-                "final render, and improve it without losing the creative thread."
+                "The idea is real now. Research it. Shape it. Bring it to life. Then make it better."
             ),
-            "Closing": (
-                "Research it. Shape it. Bring it to life. Then make it better. "
-                "AI Infinity. One idea. Infinite worlds."
-            ),
+            "Closing": "AI Infinity. One idea. Infinite worlds.",
         })
 
     # Product-launch copy for Pashto must be long enough for a real 60-second
