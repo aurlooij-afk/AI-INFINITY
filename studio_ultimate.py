@@ -7497,10 +7497,18 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 raise RuntimeError("synchronized captions.srt is missing; final export cannot be marked complete")
             remuxed_final = outdir / "final_audio_aligned.mp4"
             remuxed_final.unlink(missing_ok=True)
+            subtitle_filter_path = (
+                str(captions_srt).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+            )
+            final_video_filter = (
+                "fps=24,setsar=1,format=yuv420p,"
+                f"subtitles='{subtitle_filter_path}':"
+                "force_style='FontName=DejaVu Sans,FontSize=30,Outline=2,Shadow=1,MarginV=220,Alignment=2'"
+            )
             ffmpeg(
                 "-i", captioned, "-i", audio_master, "-f", "srt", "-i", captions_srt,
                 "-map", "0:v:0", "-map", "1:a:0", "-map", "2:s:0",
-                "-vf", "fps=24,setsar=1,format=yuv420p",
+                "-vf", final_video_filter,
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
                 "-r", "24", "-fps_mode", "cfr", "-pix_fmt", "yuv420p",
                 "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
