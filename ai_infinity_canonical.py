@@ -912,7 +912,17 @@ def dispatch_command(command, user_id, raw=None):
         # A concrete operation ID is the only execution path. The fabric rechecks
         # that it is catalogued as a verified no-auth GET/HEAD operation at call time.
         if op_id:
-            result = fabric.invoke(op_id, query=api_params, body=payload.get("body"))
+            try:
+                result = fabric.invoke(op_id, query=api_params, body=payload.get("body"))
+            except Exception as exc:
+                # Keep external-response details and any caller-provided values out
+                # of command errors; the fabric itself never executes non-GET/HEAD.
+                return {
+                    "status": "degraded", "route": route, "operation_id": op_id,
+                    "reason": "The selected verified read-only operation failed; no successful result is claimed.",
+                    "error_type": type(exc).__name__, "executed": False,
+                    "truthful": True,
+                }
             return {
                 "status": "completed", "route": route, "operation_id": op_id,
                 "result": result, "executed": True, "read_only": True,
