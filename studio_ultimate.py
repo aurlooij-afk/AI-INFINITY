@@ -1845,8 +1845,8 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "possibility, creates emotion, and moves the story forward."
             ),
             "What changes": (
-                "Edit the timeline, shape the voice, balance music and captions. Keep the "
-                "work editable, verify each source, and inspect the final cut."
+                "Edit the timeline, shape the voice, balance music and captions. "
+                "Keep it editable; verify source rights before export."
             ),
             "Practical takeaway": (
                 "Now it's real. Research it. Shape it. Bring it to life. Then make it better."
