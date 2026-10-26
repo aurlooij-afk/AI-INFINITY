@@ -63,7 +63,7 @@
 <button class="chip" onclick="fillCmd('Turn this public article into a fact-checked video with sources, captions and a thumbnail: https://')">Website → video</button>
 <button class="chip" onclick="fillCmd('Turn an uploaded document into a polished video + podcast package with chapter markers and show notes.')">Document → show</button>
 <button class="chip" onclick="fillCmd('Repurpose my latest completed master into platform-native vertical variants and campaign copy.')">Repurpose</button>
-</div><div class="actionRow" style="margin:0"><button class="btn" onclick="planCommand()">Plan</button><button class="btn primary" onclick="createCommand()">Create production</button></div></div></div>
+</div><div class="actionRow" style="margin:0"><button class="btn" onclick="planCommand()">Plan</button><button class="btn primary" onclick="createCommand()">Run command</button></div></div></div>
 <div class="presetGrid">
 <button class="preset" onclick="preset('short')"><b>Shorts Factory</b><span>Hooks · captions · vertical · variants</span></button>
 <button class="preset" onclick="preset('long')"><b>Long-form</b><span>Research · story · video · package</span></button>
@@ -153,7 +153,90 @@ function setHealth(h){state.health=h||{};const ok=h.status==="healthy";$("livePi
 async function boot(){await session();try{const [b,h,t]=await Promise.all([api("/infinity/studio/bootstrap"),api("/infinity/studio/health"),api("/infinity/studio/tools")]);state.boot=b;state.health=h;setHealth(h);renderTools(t.tools||[]);state.projects=b.projects||[];renderProjects();renderBrand(b.profile||{});renderSignals();await Promise.all([loadCurrentFromList(),loadAnalytics(),runGapAudit(),scanTrends(true),loadAssets(),loadAgents(),loadConnections(),loadOperations()]);renderBenchmarks();renderCapability();populatePublishProjects()}catch(e){$("commandNotice").className="notice bad";$("commandNotice").textContent="Workspace could not initialize: "+e.message;toast(e.message)}}
 function renderTools(tools){const order=["video","image","voice","music","text","web-to-video","document-to-show","repurpose","dubbing","avatar","interactive"];const xs=order.map(id=>(tools||[]).find(x=>x.id===id)).filter(Boolean);$("toolGrid").innerHTML=xs.map(x=>'<button class="card cardPad" style="text-align:left;cursor:pointer" onclick="runTool(\''+esc(x.id)+'\')"><div class="row"><b>'+esc(x.name)+'</b><span class="badge '+(x.status==="ready"?"good":"warn")+'">'+esc(x.status)+'</span></div><div class="itemSub">'+esc(x.description||"")+'</div></button>').join("")}
 function renderSignals(){const names=[["Research","Current web sources + provenance"],["Story","Hook → narrative → CTA"],["Media","Voice + visuals + music"],["Delivery","SEO + social + platform variants"],["Trust","QC + claims + artifact integrity"],["Learning","Feedback + creator memory"]];$("miniSignals").innerHTML=names.map(x=>'<div class="item"><div class="row"><div class="itemTitle">'+x[0]+'</div><span class="badge good">wired</span></div><div class="itemSub">'+x[1]+'</div></div>').join("")}
-async function createCommand(){const objective=$("cmd").value.trim();if(!objective){toast("Describe what you want AI Infinity to make.");return}const payload={objective,title:objective.slice(0,110),topic:objective,content_type:$("contentType").value,format:$("format").value,duration:Number($("duration").value),aspect_ratio:$("ratio").value,language:$("language").value,quality_preset:"balanced",source_file_names:state.sourceNames.slice(0,12)};try{$("commandNotice").className="notice";$("commandNotice").textContent="Creating the production graph…";const d=await api("/infinity/studio/project",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)});setCurrent(d.project_id||d.result?.project_id);toast("Production started.")}catch(e){$("commandNotice").className="notice bad";$("commandNotice").textContent=e.message;toast(e.message)}}
+async function createCommand(){
+  const objective=$("cmd").value.trim();
+  if(!objective){toast("Describe the outcome you want AI Infinity to execute.");return}
+  const payload={
+    command:objective,
+    objective,
+    title:objective.slice(0,110),
+    topic:objective,
+    project_id:state.current&&state.current.project_id||"",
+    content_type:$("contentType").value,
+    format:$("format").value,
+    duration:Number($("duration").value),
+    aspect_ratio:$("ratio").value,
+    language:$("language").value,
+    quality_preset:"balanced",
+    source_file_names:state.sourceNames.slice(0,12)
+  };
+  try{
+    $("commandNotice").className="notice";
+    $("commandNotice").textContent="Routing your command to the correct existing workflow…";
+    const d=await api("/infinity/canonical/execute",{
+      method:"POST",
+      headers:{"content-type":"application/json"},
+      body:JSON.stringify(payload)
+    });
+    const route=String(d.route||"");
+    if(route==="create"){
+      const result=d.result||{};
+      const pid=result.project_id||d.project_id;
+      if(!pid){
+        $("commandNotice").className="notice bad";
+        $("commandNotice").textContent="The creator engine returned no project ID. No project is being presented as started.";
+        openModal("Command result",'<pre class="mono">'+esc(JSON.stringify(d,null,2))+'</pre>');
+        return;
+      }
+      $("commandNotice").className="notice good";
+      $("commandNotice").textContent="Production was queued. The project will be monitored through the existing Creator Studio workflow.";
+      await setCurrent(pid);
+      toast("Production queued.");
+      return;
+    }
+    if(route==="research"){
+      const result=d.result||{};
+      const sources=Array.isArray(result.sources)?result.sources:[];
+      const rows=sources.slice(0,12).map(function(s){
+        const title=esc(s.title||"Untitled source");
+        const url=String(s.url||"");
+        const link=url.toLowerCase().startsWith("https://")
+          ? '<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">'+title+'</a>'
+          : title;
+        return '<li style="margin:8px 0"><b>'+link+'</b><div class="itemSub">'+esc(s.source||"Unknown source")+' · '+esc(s.published_at||s.retrieved_at||"Publication date not verified")+'</div><div class="itemSub">'+esc(s.summary||s.snippet||"")+'</div></li>';
+      }).join("");
+      const body='<div class="notice '+(d.status==="completed"?"good":"warn")+'">Research status: '+esc(d.status||"unknown")+'. Sources returned: '+esc(d.source_count||0)+'. Claims are not independently verified and require review before production or publication.</div>'+
+        '<div class="itemSub" style="margin:10px 0">Providers: '+esc((result.providers_used||[]).join(", ")||result.provider||"none confirmed")+'</div>'+
+        (rows?'<ol style="padding-left:22px">'+rows+'</ol>':'<div class="empty">No usable sources were returned. The research task is degraded, not complete.</div>')+
+        '<pre class="mono" style="margin-top:10px">'+esc(JSON.stringify({research_connector:result.api_anything||d.research_connector||null,quality_state:d.quality_state||"REVIEW_REQUIRED"},null,2))+'</pre>';
+      $("commandNotice").className="notice "+(d.status==="completed"?"good":"warn");
+      $("commandNotice").textContent="Research "+(d.status==="completed"?"returned "+String(d.source_count||0)+" source(s).":"is degraded; no usable sources were confirmed.");
+      openModal("Research results",body);
+      return;
+    }
+    if(route==="edit"){
+      const result=d.result||{};
+      $("commandNotice").className="notice "+(d.status==="completed"?"good":"warn");
+      $("commandNotice").textContent="Existing project edit status: "+String(d.status||"unknown")+".";
+      openModal("Project edit result",'<pre class="mono">'+esc(JSON.stringify(result,null,2))+'</pre>');
+      if(result.project_id)await setCurrent(result.project_id);
+      return;
+    }
+    if(route==="project_status"||route==="capabilities"){
+      $("commandNotice").className="notice good";
+      $("commandNotice").textContent=route==="project_status"?"Project status was read from the existing project record.":"Capability status was read from the existing runtime.";
+      openModal(route==="project_status"?"Project status":"Available capabilities",'<pre class="mono">'+esc(JSON.stringify(d.result||d,null,2))+'</pre>');
+      return;
+    }
+    $("commandNotice").className="notice warn";
+    $("commandNotice").textContent=String(d.reason||"This command did not match a supported safe execution route.");
+    openModal("Command needs attention",'<div class="notice warn">'+esc(d.reason||d.status||"No execution was started.")+'</div><pre class="mono">'+esc(JSON.stringify(d,null,2))+'</pre>');
+  }catch(e){
+    $("commandNotice").className="notice bad";
+    $("commandNotice").textContent=e.message;
+    toast(e.message);
+  }
+}
 async function planCommand(){const objective=$("cmd").value.trim();if(!objective){toast("Add an objective first.");return}try{const d=await api("/infinity/studio/agents/run",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({agent_id:"strategy",objective,payload:{format:$("format").value,duration:Number($("duration").value),language:$("language").value}})});openModal("Strategy plan",'<div class="notice good">Plan generated by the live strategy agent.</div><pre class="mono" style="margin-top:10px">'+esc(JSON.stringify(d.result||d,null,2))+'</pre>')}catch(e){toast(e.message)}}
 async function runTool(id){const objective=$("cmd").value.trim();if(!objective&&id!=="repurpose"){toast("Add a command for this tool.");return}try{const d=await api("/infinity/studio/tools/run",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({tool_id:id,objective,title:objective,format:$("format").value,duration:Number($("duration").value),content_type:$("contentType").value,language:$("language").value,source_file_names:state.sourceNames.slice(0,12)})});if(d.status==="provider_required"||d.status==="extension_required"){openModal("Capability readiness",'<div class="notice warn">'+esc(d.message)+'</div>');return}const pid=d.result?.project_id||d.project_id;if(pid){setCurrent(pid);toast("Tool workflow started.")}else openModal("Tool result",'<pre class="mono">'+esc(JSON.stringify(d,null,2))+'</pre>')}catch(e){toast(e.message)}}
 async function setCurrent(pid){if(!pid)return;clearInterval(state.poll);await loadProject(pid);state.poll=setInterval(()=>loadProject(pid,true),2600);$("production").scrollIntoView({behavior:"smooth",block:"start"})}
