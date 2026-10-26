@@ -34,7 +34,15 @@ DB_PATH = Path(os.getenv("AI_INFINITY_FREE_API_DB", str(DATA_DIR / "free_api_fab
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 LOCK = threading.RLock()
 SYNC_LOCK = threading.Lock()
-SYNC_STATE = {"running": False, "last_run": 0.0, "last_error": "", "source_counts": {}, "verified": 0}
+BACKGROUND_START_LOCK = threading.Lock()
+INVOKE_LOCK = threading.Lock()
+INVOKE_GATE = threading.BoundedSemaphore(8)
+INVOKE_LAST: Dict[str, float] = {}
+BOOTSTRAP_VERIFY_LIMIT = max(1, min(50, int(os.getenv("AI_INFINITY_FREE_API_BOOTSTRAP_VERIFY_LIMIT", "20"))))
+SYNC_STATE = {
+    "running": False, "last_run": 0.0, "last_error": "", "source_counts": {},
+    "verified": 0, "bootstrap_started": False, "bootstrap_complete": False,
+}
 
 SOURCES = {
     "public-api-lists": "https://public-api-lists.github.io/public-api-lists/api/all.json",
@@ -395,23 +403,28 @@ def verify_batch(limit: int=100) -> Dict[str,Any]:
 
 
 def start_background_sync():
+    """Start one lazy catalog bootstrap; bulk verification is deliberately bounded."""
+    with BACKGROUND_START_LOCK:
+        if SYNC_STATE.get("bootstrap_started"):
+            return False
+        SYNC_STATE["bootstrap_started"] = True
+
     def worker():
         try:
             sync_catalogs()
-            # Gradually verify OpenAPI definitions. This is deliberately incremental
-            # so a free web instance never blocks startup on thousands of remote APIs.
-            max_batches=max(1,(MAX_DISCOVERED+99)//100)
-            for _ in range(max_batches):
-                with LOCK,_connect() as c:
-                    n=c.execute("SELECT COUNT(*) FROM free_api_registry WHERE source='apis-guru' AND status='discovered'").fetchone()[0]
-                if not n: break
-                verify_batch(min(100,n))
-                # Respect small/free web-instance CPU and remote-provider rate limits.
-                time.sleep(0.15)
+            # Do not scan the entire registry during a small/free-instance boot.
+            # Verify a small first batch; a selected API is verified on demand below.
+            with LOCK, _connect() as c:
+                n = c.execute(
+                    "SELECT COUNT(*) FROM free_api_registry WHERE source='apis-guru' AND status='discovered'"
+                ).fetchone()[0]
+            if n:
+                verify_batch(min(BOOTSTRAP_VERIFY_LIMIT, n))
+            SYNC_STATE["bootstrap_complete"] = True
         except Exception as exc:
-            SYNC_STATE["last_error"]=str(exc)[:1000]
-    t=threading.Thread(target=worker,name="ai-infinity-free-api-sync",daemon=True)
-    t.start()
+            SYNC_STATE["last_error"] = str(exc)[:1000]
+    threading.Thread(target=worker, name="ai-infinity-free-api-sync", daemon=True).start()
+    return True
 
 
 def status() -> Dict[str,Any]:
@@ -421,7 +434,15 @@ def status() -> Dict[str,Any]:
         verified=c.execute("SELECT COUNT(*) FROM free_api_registry WHERE no_auth_verified=1").fetchone()[0]
         ops=c.execute("SELECT COUNT(*) FROM free_api_ops WHERE free=1").fetchone()[0]
         sources={r[0]:r[1] for r in c.execute("SELECT source,COUNT(*) FROM free_api_registry GROUP BY source")}
-    return {"version":VERSION,"discovered":total,"no_auth_verified":verified,"executable_apis":executable,"executable_free_operations":ops,"sources":sources,"max_capacity":MAX_DISCOVERED,"automatic_discovery":True,"automatic_free_failover":True,"truthful":True}
+    return {
+        "version": VERSION, "discovered": total, "no_auth_verified": verified,
+        "executable_apis": executable, "executable_free_operations": ops, "sources": sources,
+        "max_capacity": MAX_DISCOVERED, "automatic_discovery": True,
+        "discovery_mode": "lazy_catalog_request", "bootstrap_started": bool(SYNC_STATE.get("bootstrap_started")),
+        "bootstrap_complete": bool(SYNC_STATE.get("bootstrap_complete")),
+        "bootstrap_verify_limit": BOOTSTRAP_VERIFY_LIMIT, "automatic_free_failover": False,
+        "truthful": True,
+    }
 
 
 def catalog(query: str="", limit: int=100, executable_only: bool=False) -> List[Dict[str,Any]]:
@@ -507,24 +528,72 @@ def register(app: Any):
 
     @app.post("/infinity/studio/free-apis/sync")
     def free_api_sync():
+        if SYNC_STATE.get("running"):
+            return {"status": "already_running", **status()}
+        cooldown = max(60, min(86400, int(os.getenv("AI_INFINITY_FREE_API_SYNC_COOLDOWN_SECONDS", "900"))))
+        last_run = float(SYNC_STATE.get("last_run") or 0)
+        remaining = cooldown - (time.time() - last_run)
+        if last_run and remaining > 0:
+            return {"status": "cooldown", "retry_after_seconds": int(remaining) + 1, **status()}
         return sync_catalogs()
 
     @app.post("/infinity/studio/free-apis/verify")
-    def free_api_verify(limit: int=100):
-        return verify_batch(limit)
+    def free_api_verify(limit: int=25):
+        requested = max(1, int(limit))
+        result = verify_batch(min(25, requested))
+        result["requested_limit"] = requested
+        result["bounded_limit"] = min(25, requested)
+        return result
+
+    @app.post("/infinity/studio/free-apis/verify/{api_id}")
+    def free_api_verify_one(api_id: str):
+        return verify_api(api_id)
 
     @app.get("/infinity/studio/free-apis/catalog")
     def free_api_catalog(query: str="", limit: int=100, executable_only: bool=False):
-        return {"items":catalog(query,limit,executable_only),"truthful":True}
+        items = catalog(query, limit, executable_only)
+        started = False
+        if not items and not SYNC_STATE.get("bootstrap_started"):
+            started = bool(start_background_sync())
+        return {
+            "items": items,
+            "discovery_status": "warming" if started or SYNC_STATE.get("running") else "ready",
+            "status": status(),
+            "truthful": True,
+        }
 
     @app.get("/infinity/studio/free-apis/{api_id}/operations")
     def free_api_operations(api_id: str, limit: int=100):
-        return {"api_id":api_id,"operations":operations(api_id,limit),"truthful":True}
+        current = operations(api_id, limit)
+        verification = None
+        if not current:
+            with LOCK, _connect() as c:
+                record = c.execute("SELECT status FROM free_api_registry WHERE api_id=?", (api_id,)).fetchone()
+            if record and record["status"] == "discovered":
+                verification = verify_api(api_id)
+                current = operations(api_id, limit)
+        return {"api_id": api_id, "operations": current, "verification": verification, "truthful": True}
 
     @app.post("/infinity/studio/free-apis/invoke/{op_id}")
     def free_api_invoke(op_id: str, req: InvokeRequest):
-        try: return invoke(op_id,req.query,req.body)
-        except Exception as exc: raise HTTPException(502,str(exc)[:500])
+        if not INVOKE_GATE.acquire(blocking=False):
+            raise HTTPException(429, "public API invocation concurrency limit reached")
+        try:
+            with INVOKE_LOCK:
+                instant = time.time()
+                prior = INVOKE_LAST.get(op_id, 0.0)
+                cooldown = max(0.0, min(2.0, float(os.getenv("AI_INFINITY_FREE_API_OPERATION_COOLDOWN_SECONDS", "0.2"))))
+                if instant - prior < cooldown:
+                    raise HTTPException(429, "public API operation cooldown active")
+                INVOKE_LAST[op_id] = instant
+            try:
+                return invoke(op_id, req.query, req.body)
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(502, str(exc)[:500])
+        finally:
+            INVOKE_GATE.release()
 
-    start_background_sync()
+    # Do not launch a catalog scan during module import/application startup.
     app.state.free_api_fabric = status()
