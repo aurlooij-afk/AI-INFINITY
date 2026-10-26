@@ -16,29 +16,46 @@ def clear_connector_call_limits():
     connector._LAST_CALL_AT.clear()
 
 
-def _stub_runner(*, site_source="bundled", read_only=True, result=None, error=False):
+def _stub_runner(*, site_name="youtube", operation_name="search", site_source="bundled", read_only=True, result=None, error=False):
     calls = []
 
     def runner(command, **kwargs):
         calls.append(command)
         args = command[1:]
         if args == ["sites"]:
-            payload = [{"name": "youtube", "source": site_source}]
-        elif args == ["ops", "youtube"]:
-            payload = {"operations": [{"name": "search", "readOnly": read_only}]}
-        elif args[:3] == ["call", "youtube", "search"]:
+            payload = [{"name": site_name, "source": site_source}]
+        elif args == ["ops", site_name]:
+            payload = {"operations": [{"name": operation_name, "readOnly": read_only}]}
+        elif args[:3] == ["call", site_name, operation_name]:
             if error:
                 return subprocess.CompletedProcess(command, 2, stdout="", stderr="secret=do-not-return")
-            payload = result if result is not None else {
-                "ok": True,
-                "class": "ok",
-                "tier": 1,
-                "data": [
-                    {"id": "abcdefghijk", "title": "A useful video", "channel": "Channel", "views": "1200 views"},
-                    {"id": "bad id", "title": "Invalid identifier must be discarded"},
-                    {"id": "lmnopqrstuv", "title": "Second useful video"},
-                ],
-            }
+            if result is not None:
+                payload = result
+            elif site_name == "hacker-news":
+                payload = {
+                    "ok": True,
+                    "class": "ok",
+                    "tier": 1,
+                    "data": [{
+                        "objectID": "123456",
+                        "title": "A useful technology discussion",
+                        "url": "https://example.org/story",
+                        "author": "sample-user",
+                        "points": 42,
+                        "num_comments": 8,
+                    }],
+                }
+            else:
+                payload = {
+                    "ok": True,
+                    "class": "ok",
+                    "tier": 1,
+                    "data": [
+                        {"id": "abcdefghijk", "title": "A useful video", "channel": "Channel", "views": "1200 views"},
+                        {"id": "bad id", "title": "Invalid identifier must be discarded"},
+                        {"id": "lmnopqrstuv", "title": "Second useful video"},
+                    ],
+                }
         else:
             raise AssertionError(f"unexpected command: {command}")
         return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
