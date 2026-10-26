@@ -5317,10 +5317,9 @@ def concat_segments(paths: List[Path], out: Path) -> None:
         source_probe = ffprobe_json(source_path)
         source_streams = source_probe.get("streams") or []
         source_video = next((x for x in source_streams if x.get("codec_type") == "video"), {})
-        source_audio = next((x for x in source_streams if x.get("codec_type") == "audio"), {})
         duration = float(source_video.get("duration") or (source_probe.get("format") or {}).get("duration") or 0)
-        if not source_video or not source_audio or duration < 0.5:
-            raise RuntimeError(f"scene {index:02d} lacks valid video/audio or duration: {source_path}")
+        if not source_video or duration < 0.5:
+            raise RuntimeError(f"scene {index:02d} lacks valid video or duration: {source_path}")
         durations.append(duration)
         normalized = normalized_dir / f"segment_{index:02d}.mkv"
         normalized.unlink(missing_ok=True)
@@ -5328,14 +5327,16 @@ def concat_segments(paths: List[Path], out: Path) -> None:
             f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,"
             f"crop={target_width}:{target_height},fps=24,setsar=1,format=yuv420p"
         )
-        af = (
-            "aresample=48000:async=1:first_pts=0,"
-            "aformat=sample_fmts=s16:channel_layouts=stereo,"
-            f"apad=whole_dur={duration:.6f},atrim=duration={duration:.6f},asetpts=PTS-STARTPTS"
-        )
+        # Scene MP4s have independently mixed AAC preview audio. A corrupted
+        # channel-layout packet can make FFmpeg infer dozens of channels and poison
+        # assembly. The canonical narration/music stems are mixed later; use known
+        # stereo silence only to carry timing through this video-normalization stage.
+        silence_filter = f"anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration={duration:.6f},asetpts=PTS-STARTPTS"
         ffmpeg(
-            "-i", source_path, "-map", "0:v:0", "-map", "0:a:0",
-            "-vf", vf, "-af", af, "-t", f"{duration:.6f}",
+            "-i", source_path, "-f", "lavfi", "-t", f"{duration:.6f}", "-i", silence_filter,
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-vf", vf, "-af", "aformat=sample_fmts=s16:channel_layouts=stereo",
+            "-t", f"{duration:.6f}",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
             "-pix_fmt", "yuv420p", "-r", "24",
             "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2",
