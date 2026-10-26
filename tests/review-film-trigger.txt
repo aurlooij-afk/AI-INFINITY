@@ -1,2 +1,2 @@
-Run latest AI Infinity One Idea Infinite Worlds end-to-end review build.
-Require duration/assembly/story/audio/rights regressions before creating the actual Creator Studio project.
+Run the latest AI Infinity ONE IDEA. INFINITE WORLDS. project through Creator Studio after the scene-6 source correction.
+Require all five regressions, zero fallback visuals, full 60s 1080p output, synchronized voice/music/captions, per-scene rights/provenance, full decode, and separate editable project artifact.
