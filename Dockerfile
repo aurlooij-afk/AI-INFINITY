@@ -81,9 +81,9 @@ RUN printf '#!/bin/sh\nexec /usr/local/bin/node /opt/api-anything/dist/cli.js "$
     && node --version \
     && api-anything --version
 
-RUN api-anything sites | grep -q '"name":"youtube"' && api-anything ops youtube | grep -q '"name":"search"' && api-anything ops youtube | grep -q '"readOnly":true' \\
-    && api-anything sites | grep -q '"name":"hacker-news"' \\
-    && api-anything ops hacker-news | grep -q '"name":"search"' \\
+RUN api-anything sites | grep -q '"name":"youtube"' && api-anything ops youtube | grep -q '"name":"search"' && api-anything ops youtube | grep -q '"readOnly":true'  \
+    && api-anything sites | grep -q '"name":"hacker-news"'  \
+    && api-anything ops hacker-news | grep -q '"name":"search"'  \
     && api-anything ops hacker-news | grep -q '"readOnly":true'
 
 COPY requirements.txt bridge-requirements.txt ./
