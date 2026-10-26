@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import ai_infinity_canonical as canonical
@@ -119,3 +120,16 @@ def test_unsupported_and_consequential_tasks_do_not_start_work(monkeypatch):
     assert unsupported["executed"] is False
     assert protected["status"] == "authorization_required"
     assert protected["executed"] is False
+
+
+def test_primary_director_mode_command_box_uses_canonical_router_and_renders_research():
+    html = Path("creator_studio_2030.html").read_text(encoding="utf-8")
+    start = html.index("async function createCommand(){")
+    end = html.index("\nasync function planCommand(){", start)
+    handler = html[start:end]
+
+    assert 'api("/infinity/canonical/execute"' in handler
+    assert 'if(route==="research")' in handler
+    assert 'if(route==="create")' in handler
+    assert "authorization_required" in handler or "supported safe execution route" in handler
+    assert 'onclick="createCommand()">Run command</button>' in html
