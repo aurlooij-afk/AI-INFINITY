@@ -272,7 +272,7 @@ def test_installed_adapter_enriches_the_existing_creator_research_function(monke
     assert result["provider_count"] == 6
     for source_name in (
         "API Anything / YouTube", "API Anything / Hacker News", "API Anything / Goodreads",
-        "API Anything / Steam", "API Anything / Amazon",
+        "API Anything / Rotten Tomatoes", "API Anything / Amazon",
     ):
         assert [s["source"] for s in result["sources"]].count(source_name) == 1
         assert result["providers"][source_name]["status"] == "ready"
@@ -480,7 +480,7 @@ def test_additional_public_sources_normalize_to_canonical_provenance_urls(
     assert result["items"][0]["title"] == payload["title"]
     assert result["transport_tier"] == 1
     call = calls[-1]
-    assert call[:3] == ["call", site, operation]
+    assert call[1:4] == ["call", site, operation]
     assert json.loads(call[call.index("--json") + 1]) == {query_parameter: "Piranesi microphone Celeste"}
     assert call[call.index("--max-tier") + 1] == "1"
 
@@ -500,11 +500,13 @@ def test_contextual_search_routes_only_relevant_specialist_sites(monkeypatch):
     assert [site for site, _ in seen] == ["youtube", "hacker-news", "goodreads"]
 
     seen.clear()
+    connector._LAST_CALL_AT.clear()  # Keep this routing test independent of the deliberate cross-request cooldown.
     movies = connector.search_candidates("Compare movie critic scores and cinematic references")
     assert movies["operations"].keys() == {"youtube.search", "hacker-news.search", "rottentomatoes.searchMovies"}
     assert [site for site, _ in seen] == ["youtube", "hacker-news", "rottentomatoes"]
 
     seen.clear()
+    connector._LAST_CALL_AT.clear()
     products = connector.search_candidates("Research laptop products and price comparison")
     assert products["operations"].keys() == {"youtube.search", "hacker-news.search", "amazon.search"}
     assert [site for site, _ in seen] == ["youtube", "hacker-news", "amazon"]
