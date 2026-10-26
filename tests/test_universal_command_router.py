@@ -194,3 +194,19 @@ def test_primary_director_mode_displays_agent_outputs_without_faking_media_creat
     assert 'if(["script","strategy","marketing","seo","analytics","publisher","monetization"].indexOf(route)>=0)' in handler
     assert "no media file was created" in handler
     assert "no external action was performed" in handler
+
+
+def test_unsupported_primary_deliverable_does_not_fall_back_to_ui_default_video():
+    result = canonical.classify_command(
+        "Create a website for AI Infinity",
+        {"content_type": "video"},
+    )
+    assert result["route"] == "unsupported_deliverable"
+
+
+def test_supported_video_about_an_unsupported_topic_still_routes_to_video_creation():
+    result = canonical.classify_command(
+        "Create a video about website design",
+        {"content_type": "video"},
+    )
+    assert result["route"] == "create"
