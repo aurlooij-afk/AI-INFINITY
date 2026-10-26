@@ -4,3 +4,5 @@ Required output: exactly 60 seconds; authored scene boundaries 0–4, 4–12, 12
 
 Recent system fixes under test: explicit scene-timecode preservation, video-only normalized assembly to prevent corrupt per-scene AAC, continuous stereo programme mix, strict 24fps final encode, exact title/hook/payoff, source-specific visual matching and a restrained city-night signature end card. Do not mark ready for human review unless every technical acceptance gate passes; otherwise preserve the real failure evidence and report blockers.
 Assembly regression + Python compile fix validation after real 26-channel AAC failure.
+
+Fix source catalog title assertion; rerun exact cinematic film.
