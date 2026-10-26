@@ -1,3 +1,18 @@
+# API Anything is pinned to an audited upstream commit. The runtime uses only its bundled
+# read-only HTTP operation on the initial integration; no browser or account session is enabled.
+FROM node:22.13.1-bookworm-slim AS api-anything-builder
+RUN apt-get update \\
+    && apt-get install -y --no-install-recommends git ca-certificates \\
+    && rm -rf /var/lib/apt/lists/*
+RUN git init /src/api-anything \\
+    && git -C /src/api-anything remote add origin https://github.com/goodnight000/api-anything.git \\
+    && git -C /src/api-anything fetch --depth 1 origin 69bef64f5b3628f448d3d9c2435c455bcb6ea38d \\
+    && git -C /src/api-anything checkout --detach FETCH_HEAD \\
+    && cd /src/api-anything \\
+    && npm ci --no-audit --no-fund \\
+    && npm run build \\
+    && npm prune --omit=dev
+
 FROM debian:trixie-slim AS espeak-builder
 
 ARG ESPEAK_NG_COMMIT=ba90c8e9f440ad544f674a790bb5f53878b6ffc5
@@ -53,12 +68,25 @@ RUN apt-get update \
 COPY --from=espeak-builder /opt/espeak-ng/ /usr/local/
 RUN useradd --system --create-home --uid 10001 --shell /usr/sbin/nologin aiinfinity
 WORKDIR /app
+COPY --from=api-anything-builder /usr/local/bin/node /usr/local/bin/node
+COPY --from=api-anything-builder /src/api-anything/dist/ /opt/api-anything/dist/
+COPY --from=api-anything-builder /src/api-anything/sites/ /opt/api-anything/sites/
+COPY --from=api-anything-builder /src/api-anything/node_modules/ /opt/api-anything/node_modules/
+COPY --from=api-anything-builder /src/api-anything/package.json /opt/api-anything/package.json
+COPY --from=api-anything-builder /src/api-anything/LICENSE /opt/api-anything/LICENSE
+RUN printf '#!/bin/sh\\nexec /usr/local/bin/node /opt/api-anything/dist/cli.js "$@"\\n' > /usr/local/bin/api-anything \\
+    && chmod 755 /usr/local/bin/api-anything \\
+    && mkdir -p /usr/share/licenses/api-anything \\
+    && cp /opt/api-anything/LICENSE /usr/share/licenses/api-anything/LICENSE \\
+    && node --version \\
+    && api-anything --version
+
 COPY requirements.txt bridge-requirements.txt ./
 RUN python -m pip install --upgrade pip \
     && python -m pip install -r requirements.txt \
     && if [ -s bridge-requirements.txt ]; then python -m pip install -r bridge-requirements.txt; fi
 
-COPY entrypoint.sh sitecustomize.py main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_studio_2030.html creator_entrypoint.py creator_pro_os.py overlay_final_3700.py runtime_main_3700.py production_graph.py production_intelligence.py production_openai_video.py production_closure_3624.py professional_creator_v2.py professional_creator_v2_timeline_patch.py editorial_review_3625.py ./
+COPY entrypoint.sh sitecustomize.py main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_studio_2030.html creator_entrypoint.py creator_pro_os.py overlay_final_3700.py runtime_main_3700.py production_graph.py production_intelligence.py api_anything_connector.py production_openai_video.py production_closure_3624.py professional_creator_v2.py professional_creator_v2_timeline_patch.py editorial_review_3625.py ./
 COPY production_hardening.py creator_final_3800.py ui_3800.html divine_closure_3900.py reality_first_3901.py ai_infinity_canonical.py ai_infinity_app.py professional_creator_fabric.py capability_registry.json ./
 COPY ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py ./
 COPY ai_infinity/ ./ai_infinity/
@@ -66,7 +94,7 @@ COPY ai_infinity/ ./ai_infinity/
 RUN python -m py_compile \
     sitecustomize.py main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py \
     infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py \
-    overlay_final_3700.py runtime_main_3700.py production_graph.py production_intelligence.py \
+    overlay_final_3700.py runtime_main_3700.py production_graph.py production_intelligence.py api_anything_connector.py \
     production_hardening.py creator_final_3800.py production_closure_3624.py professional_creator_v2.py professional_creator_v2_timeline_patch.py professional_creator_fabric.py editorial_review_3625.py \
     divine_closure_3900.py reality_first_3901.py ai_infinity_canonical.py ai_infinity_app.py \
     ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py
