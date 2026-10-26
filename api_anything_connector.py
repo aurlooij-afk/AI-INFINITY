@@ -77,16 +77,21 @@ def _clean_text(value: Any, limit: int = 500) -> str:
     return re.sub(r"\s+", " ", str(value or "").replace("\x00", " ")).strip()[:limit]
 
 
-def youtube_search(query: str, limit: int = 10) -> dict[str, Any]:
-    """Search public YouTube results through the bundled, read-only API Anything spec."""
+def _bundled_search(
+    site_name: str,
+    operation_name: str,
+    query_parameter: str,
+    query: str,
+    limit: int,
+    result_kind: str,
+) -> dict[str, Any]:
+    """Execute a fixed, allowlisted bundled read-only research operation in isolation."""
     q = _clean_text(query, MAX_QUERY_CHARS)
     if not q:
         return {"status": "invalid_input", "items": [], "truthful": True}
-
     executable = shutil.which("api-anything")
     if not executable:
         return {"status": "not_configured", "items": [], "truthful": True}
-
     try:
         timeout = max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))))
         safe_limit = max(1, min(10, int(limit or 10)))
@@ -95,7 +100,7 @@ def youtube_search(query: str, limit: int = 10) -> dict[str, Any]:
     started = time.monotonic()
 
     try:
-        # Do not inherit application API keys or a user's browser/session state into this tool.
+        # Never inherit application provider keys, browser cookies or other session state.
         with tempfile.TemporaryDirectory(prefix="ai-infinity-api-anything-") as temporary:
             root = Path(temporary).resolve()
             home = root / "home"
@@ -109,35 +114,34 @@ def youtube_search(query: str, limit: int = 10) -> dict[str, Any]:
                 "TMPDIR": str(root),
                 "NODE_ENV": "production",
             }
-
             sites, error = _run_json(
                 subprocess.run, executable, ["sites"], cwd=str(root), env=env, timeout=timeout
             )
             if error:
                 return {"status": error, "items": [], "truthful": True}
             site = next(
-                (item for item in sites if isinstance(item, dict) and item.get("name") == "youtube"),
+                (item for item in sites if isinstance(item, dict) and item.get("name") == site_name),
                 None,
             ) if isinstance(sites, list) else None
             if not site or site.get("source") != "bundled":
                 return {"status": "untrusted_site_spec", "items": [], "truthful": True}
 
             operations, error = _run_json(
-                subprocess.run, executable, ["ops", "youtube"], cwd=str(root), env=env, timeout=timeout
+                subprocess.run, executable, ["ops", site_name], cwd=str(root), env=env, timeout=timeout
             )
             if error:
                 return {"status": error, "items": [], "truthful": True}
             ops = operations.get("operations") if isinstance(operations, dict) else None
             operation = next(
-                (item for item in ops if isinstance(item, dict) and item.get("name") == "search"),
+                (item for item in ops if isinstance(item, dict) and item.get("name") == operation_name),
                 None,
             ) if isinstance(ops, list) else None
             if not operation or operation.get("readOnly") is not True:
                 return {"status": "operation_not_verified_read_only", "items": [], "truthful": True}
 
             args = [
-                "call", "youtube", "search",
-                "--json", json.dumps({"q": q}, ensure_ascii=False, separators=(",", ":")),
+                "call", site_name, operation_name,
+                "--json", json.dumps({query_parameter: q}, ensure_ascii=False, separators=(",", ":")),
                 "--max-tier", "1",
             ]
             result, error = _run_json(
@@ -147,7 +151,8 @@ def youtube_search(query: str, limit: int = 10) -> dict[str, Any]:
                 return {"status": error, "items": [], "truthful": True}
             if not isinstance(result, dict) or result.get("ok") is not True:
                 return {"status": "operation_failed", "items": [], "truthful": True}
-
+            if result.get("tier") != 1:
+                return {"status": "unexpected_transport_tier", "items": [], "truthful": True}
             raw_items = result.get("data")
             if not isinstance(raw_items, list):
                 return {"status": "invalid_result_shape", "items": [], "truthful": True}
@@ -156,19 +161,42 @@ def youtube_search(query: str, limit: int = 10) -> dict[str, Any]:
             for row in raw_items:
                 if not isinstance(row, dict):
                     continue
-                video_id = _clean_text(row.get("id"), 32)
-                title = _clean_text(row.get("title"), 300)
-                if not re.fullmatch(r"[A-Za-z0-9_-]{6,20}", video_id) or not title:
+                title = _clean_text(row.get("title") or row.get("name"), 300)
+                if not title:
                     continue
-                items.append({
-                    "id": video_id,
-                    "title": title,
-                    "channel": _clean_text(row.get("channel"), 160),
-                    "views": _clean_text(row.get("views"), 80),
-                    # Construct links only from a validated identifier on a fixed HTTPS host.
-                    "url": f"https://www.youtube.com/watch?v={video_id}",
-                    "source": "API Anything / YouTube",
-                })
+                if result_kind == "youtube":
+                    item_id = _clean_text(row.get("id"), 32)
+                    if not re.fullmatch(r"[A-Za-z0-9_-]{6,20}", item_id):
+                        continue
+                    url = f"https://www.youtube.com/watch?v={item_id}"
+                    normalized = {
+                        "id": item_id,
+                        "title": title,
+                        "channel": _clean_text(row.get("channel"), 160),
+                        "views": _clean_text(row.get("views"), 80),
+                        "url": url,
+                        "source": "API Anything / YouTube",
+                    }
+                elif result_kind == "hacker-news":
+                    url = _clean_text(row.get("url"), 1000)
+                    parsed = urlparse(url)
+                    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+                        continue
+                    host = parsed.hostname.rstrip(".").lower()
+                    if host in {"localhost", "localhost.localdomain"} or host.endswith((".local", ".internal", ".localhost")):
+                        continue
+                    normalized = {
+                        "id": _clean_text(row.get("objectID"), 80),
+                        "title": title,
+                        "url": url,
+                        "author": _clean_text(row.get("author"), 120),
+                        "points": _clean_text(row.get("points"), 40),
+                        "comments": _clean_text(row.get("num_comments") or row.get("comments"), 40),
+                        "source": "API Anything / Hacker News",
+                    }
+                else:
+                    return {"status": "operation_not_allowlisted", "items": [], "truthful": True}
+                items.append(normalized)
                 if len(items) >= safe_limit:
                     break
 
@@ -176,49 +204,81 @@ def youtube_search(query: str, limit: int = 10) -> dict[str, Any]:
                 "status": "ready" if items else "empty",
                 "items": items,
                 "query": q,
-                "site": "youtube",
-                "operation": "search",
+                "site": site_name,
+                "operation": operation_name,
                 "transport_tier": result.get("tier"),
                 "latency_ms": round((time.monotonic() - started) * 1000, 2),
                 "truthful": True,
             }
     except Exception as exc:
-        # Do not return arbitrary stderr, URLs or process environment details to the user.
         return {"status": "internal_error", "error_type": type(exc).__name__, "items": [], "truthful": True}
 
 
-# The API Anything CLI is process-local. Since each call gets a fresh isolated home,
-# enforce pacing and single-flight at the AI Infinity process boundary as well.
-_RAW_YOUTUBE_SEARCH = youtube_search
+# The API Anything CLI pacing is process-local. Keep a shared process-level gate/cooldown
+# because every invocation intentionally uses a fresh isolated home.
 _EXECUTION_GATE = threading.BoundedSemaphore(1)
 _RATE_LOCK = threading.Lock()
 _LAST_CALL_AT: dict[str, float] = {}
 MIN_SITE_INTERVAL_SECONDS = 1.0
 
+# This explicit allowlist is the capability boundary. We never execute arbitrary site/op names.
+_ALLOWED_SEARCHES = {
+    "youtube.search": ("youtube", "search", "q", "youtube"),
+    "hacker-news.search": ("hacker-news", "search", "query", "hacker-news"),
+}
 
-def youtube_search(query: str, limit: int = 10) -> dict[str, Any]:
-    """Rate-limited wrapper; one isolated CLI call at a time, at most one per site/second."""
+
+def _rate_limited_search(capability: str, query: str, limit: int = 10) -> dict[str, Any]:
+    config = _ALLOWED_SEARCHES.get(capability)
+    if not config:
+        return {"status": "operation_not_allowlisted", "items": [], "truthful": True}
     q = _clean_text(query, MAX_QUERY_CHARS)
     if not q:
         return {"status": "invalid_input", "items": [], "truthful": True}
     if not shutil.which("api-anything"):
         return {"status": "not_configured", "items": [], "truthful": True}
     try:
-        # Validate local configuration before acquiring a slot or consuming the rate window.
-        max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))))
+        max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))))
         safe_limit = max(1, min(10, int(limit or 10)))
     except (TypeError, ValueError, OverflowError):
         return {"status": "invalid_configuration", "items": [], "truthful": True}
-
+    site_name, operation_name, query_parameter, result_kind = config
     if not _EXECUTION_GATE.acquire(timeout=0.5):
         return {"status": "busy", "items": [], "truthful": True}
     try:
         now = time.monotonic()
         with _RATE_LOCK:
-            last = _LAST_CALL_AT.get("youtube")
+            last = _LAST_CALL_AT.get(site_name)
             if last is not None and now - last < MIN_SITE_INTERVAL_SECONDS:
                 return {"status": "rate_limited", "items": [], "truthful": True}
-            _LAST_CALL_AT["youtube"] = now
-        return _RAW_YOUTUBE_SEARCH(q, safe_limit)
+            _LAST_CALL_AT[site_name] = now
+        return _bundled_search(site_name, operation_name, query_parameter, q, safe_limit, result_kind)
     finally:
         _EXECUTION_GATE.release()
+
+
+def youtube_search(query: str, limit: int = 10) -> dict[str, Any]:
+    return _rate_limited_search("youtube.search", query, limit)
+
+
+def hacker_news_search(query: str, limit: int = 10) -> dict[str, Any]:
+    """Search Hacker News through its bundled, read-only, tier-one operation."""
+    return _rate_limited_search("hacker-news.search", query, limit)
+
+
+def search_candidates(query: str, limit: int = 10) -> dict[str, Any]:
+    """Collect candidates from the explicitly allowed bundled sources, with per-source outcomes."""
+    safe_limit = max(1, min(10, int(limit or 10)))
+    sources = []
+    statuses = {}
+    for capability in ("youtube.search", "hacker-news.search"):
+        result = _rate_limited_search(capability, query, safe_limit)
+        statuses[capability] = result.get("status", "unknown")
+        sources.extend(result.get("items") or [])
+    return {
+        "status": "ready" if sources else "degraded",
+        "source_count": len(sources),
+        "sources": sources[: safe_limit * 2],
+        "operations": statuses,
+        "truthful": True,
+    }
