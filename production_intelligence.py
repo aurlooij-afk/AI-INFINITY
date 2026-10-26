@@ -122,7 +122,10 @@ def research(topic,limit=10):
         if not isinstance(item,dict) or not item.get("url") or not item.get("title"):
             continue
         source_name=str(item.get("source") or "")
-        if source_name not in {"API Anything / YouTube", "API Anything / Hacker News"}:
+        if source_name not in {
+            "API Anything / YouTube", "API Anything / Hacker News", "API Anything / Goodreads",
+            "API Anything / Steam", "API Anything / Amazon",
+        }:
             continue
         sources.append({
             "source":source_name,
@@ -131,7 +134,19 @@ def research(topic,limit=10):
             "summary":(
                 "Channel: "+str(item.get("channel") or "unknown")[:160]+"; views: "+str(item.get("views") or "unknown")[:80]
                 if source_name=="API Anything / YouTube"
-                else "Hacker News discussion; points: "+str(item.get("points") or "unknown")[:40]+"; comments: "+str(item.get("comments") or "unknown")[:40]
+                else (
+                    "Hacker News discussion; points: "+str(item.get("points") or "unknown")[:40]+"; comments: "+str(item.get("comments") or "unknown")[:40]
+                    if source_name=="API Anything / Hacker News"
+                    else (
+                        "Author: "+str(item.get("author") or "unknown")[:160]+"; rating: "+str(item.get("rating") or "unknown")[:40]
+                        if source_name=="API Anything / Goodreads"
+                        else (
+                            "Price: "+str(item.get("price") or "not returned")[:80]+"; release: "+str(item.get("release_date") or "not returned")[:80]
+                            if source_name=="API Anything / Steam"
+                            else "Product price: "+str(item.get("price") or "not returned")[:80]
+                        )
+                    )
+                )
             ),
             "retrieved_at":studio().utc_iso(),
         })
@@ -156,11 +171,18 @@ def research(topic,limit=10):
         used=[]
         if any(x.get("source")=="Tavily" for x in clean): used.append("tavily")
         if any(x.get("source")=="Brave Search" for x in clean): used.append("brave")
-        if any(x.get("source")=="API Anything / YouTube" for x in clean): used.append("api-anything-youtube")
-        if any(x.get("source")=="API Anything / Hacker News" for x in clean): used.append("api-anything-hacker-news")
+        for source_name, provider_name in (
+            ("API Anything / YouTube", "api-anything-youtube"),
+            ("API Anything / Hacker News", "api-anything-hacker-news"),
+            ("API Anything / Goodreads", "api-anything-goodreads"),
+            ("API Anything / Steam", "api-anything-steam"),
+            ("API Anything / Amazon", "api-anything-amazon"),
+        ):
+            if any(x.get("source") == source_name for x in clean):
+                used.append(provider_name)
         provider="+".join(used) or "unknown"
     providers_used=sorted({str(x.get("source") or "unknown") for x in clean})
-    return {"topic":topic,"provider":provider,"providers_used":providers_used,"api_anything":{"status":api_anything_result.get("status","unknown"),"items_added":sum(1 for x in clean if x.get("source") in {"API Anything / YouTube","API Anything / Hacker News"}),"operations":api_anything_result.get("operations",{}),"truthful":True},"source_count":len(clean),"sources":clean[:limit],"generated_at":studio().utc_iso(),"truthful":True}
+    return {"topic":topic,"provider":provider,"providers_used":providers_used,"api_anything":{"status":api_anything_result.get("status","unknown"),"items_added":sum(1 for x in clean if str(x.get("source") or "").startswith("API Anything / ")),"operations":api_anything_result.get("operations",{}),"truthful":True},"source_count":len(clean),"sources":clean[:limit],"generated_at":studio().utc_iso(),"truthful":True}
 
 def frame_image(path:Path)->tuple[Path,Optional[Path]]:
     if path.suffix.lower() in {".png",".jpg",".jpeg",".webp"}:return path,None
@@ -389,6 +411,40 @@ def install_creator_research_connector():
                     "comments": str(item.get("comments") or "")[:40],
                     "retrieved_at": studio().utc_iso(),
                 }
+            elif source_name == "API Anything / Goodreads":
+                book_id = str(item.get("id") or "").strip()
+                if not re.fullmatch(r"\d{1,20}", book_id) or url != f"https://www.goodreads.com/book/show/{book_id}":
+                    continue
+                row = {
+                    "title": title, "url": url, "source": source_name,
+                    "summary": "Author: " + str(item.get("author") or "unknown")[:160]
+                    + "; rating: " + str(item.get("rating") or "unknown")[:40],
+                    "book_id": book_id, "author": str(item.get("author") or "")[:160],
+                    "rating": str(item.get("rating") or "")[:40],
+                    "ratings_count": str(item.get("ratings_count") or "")[:60],
+                    "retrieved_at": studio().utc_iso(),
+                }
+            elif source_name == "API Anything / Steam":
+                app_id = str(item.get("id") or "").strip()
+                if not re.fullmatch(r"\d{1,12}", app_id) or url != f"https://store.steampowered.com/app/{app_id}/":
+                    continue
+                row = {
+                    "title": title, "url": url, "source": source_name,
+                    "summary": "Steam product listing; price: " + str(item.get("price") or "not returned")[:80],
+                    "app_id": app_id, "price": str(item.get("price") or "")[:80],
+                    "release_date": str(item.get("release_date") or "")[:80],
+                    "retrieved_at": studio().utc_iso(),
+                }
+            elif source_name == "API Anything / Amazon":
+                asin = str(item.get("id") or "").strip().upper()
+                if not re.fullmatch(r"[A-Z0-9]{10}", asin) or url != f"https://www.amazon.com/dp/{asin}":
+                    continue
+                row = {
+                    "title": title, "url": url, "source": source_name,
+                    "summary": "Amazon product listing; price: " + str(item.get("price") or "not returned")[:80],
+                    "asin": asin, "price": str(item.get("price") or "")[:80],
+                    "retrieved_at": studio().utc_iso(),
+                }
             else:
                 continue
             key = (url, title.casefold())
@@ -407,6 +463,9 @@ def install_creator_research_connector():
             for capability, source_name in (
                 ("youtube.search", "API Anything / YouTube"),
                 ("hacker-news.search", "API Anything / Hacker News"),
+                ("goodreads.searchBooks", "API Anything / Goodreads"),
+                ("steam.search", "API Anything / Steam"),
+                ("amazon.search", "API Anything / Amazon"),
             ):
                 count = added_by_source.get(source_name, 0)
                 status_value = str(operation_statuses.get(capability) or "unknown")
