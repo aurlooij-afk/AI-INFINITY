@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import socket
 
 import pytest
@@ -112,12 +113,16 @@ def test_outbound_https_pins_validated_public_ip_and_does_not_follow_redirects(m
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
 
     class Response:
-        status = 200
+        status = 302
 
         class Headers:
             @staticmethod
             def get(name, default=""):
-                return "application/json" if name == "Content-Type" else default
+                if name == "Content-Type":
+                    return "application/json"
+                if name == "Location":
+                    return "https://attacker.example/redirect-target"
+                return default
 
         headers = Headers()
 
@@ -150,9 +155,10 @@ def test_outbound_https_pins_validated_public_ip_and_does_not_follow_redirects(m
         "https://example.org/search?q=hello", timeout=5, max_bytes=1024, method="GET"
     )
 
-    assert status == 200
+    assert status == 302
     assert content_type == "application/json"
     assert json.loads(raw) == {"ok": True}
+    # The Location target is not fetched; only the original host is resolved/connected.
     assert captured["dns_host"] == "example.org"
     assert captured["addresses"] == ["93.184.216.34"]
     assert captured["method"] == "GET"
