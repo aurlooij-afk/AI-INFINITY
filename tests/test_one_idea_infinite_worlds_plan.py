@@ -33,7 +33,12 @@ def test_campaign_plan_preserves_requested_story_and_distinct_visual_beats():
     assert "research gives it roots" in combined
     assert "mountains catch first light" in combined
     assert "research it. shape it. bring it to life. then make it better." in combined
-    assert narration[-1].endswith("AI Infinity. One idea. Infinite worlds.")
+    assert narration[6].lower().endswith(
+        "research it. shape it. bring it to life. then make it better."
+    ), narration[6]
+    assert narration[-1] == "AI Infinity. One idea. Infinite worlds."
+    durations = [float(chapter.get("duration") or 0) for chapter in chapters]
+    assert abs(sum(durations) - 60) <= 1.0, durations
     focuses = [str(x.get("visual_focus") or "") for x in chapters]
     assert len(set(focuses)) == 8, focuses
     assert any("laptop" in x.lower() and "night" in x.lower() for x in focuses)
