@@ -81,6 +81,8 @@ RUN printf '#!/bin/sh\nexec /usr/local/bin/node /opt/api-anything/dist/cli.js "$
     && node --version \
     && api-anything --version
 
+RUN api-anything sites | grep -q '"name":"youtube"' && api-anything ops youtube | grep -q '"name":"search"' && api-anything ops youtube | grep -q '"readOnly":true'
+
 COPY requirements.txt bridge-requirements.txt ./
 RUN python -m pip install --upgrade pip \
     && python -m pip install -r requirements.txt \
