@@ -179,9 +179,10 @@ def _public_https_request(url: str, timeout: int, max_bytes: int, method: str = 
     if u.query:
         path += "?" + u.query
     connection = _PinnedHTTPSConnection(host, 443, addresses, timeout)
+    host_header = "[" + host + "]" if ":" in host else host
     try:
         connection.request(method.upper(), path, headers={
-            "Host": host,
+            "Host": host_header,
             "User-Agent": "AI-Infinity-Free-API-Fabric/3622",
             "Accept": "application/json,*/*",
             "Connection": "close",
