@@ -3,7 +3,17 @@ from __future__ import annotations
 import json
 import subprocess
 
+import pytest
+
 import api_anything_connector as connector
+
+
+
+@pytest.fixture(autouse=True)
+def clear_connector_call_limits():
+    connector._LAST_CALL_AT.clear()
+    yield
+    connector._LAST_CALL_AT.clear()
 
 
 def _stub_runner(*, site_source="bundled", read_only=True, result=None, error=False):
@@ -298,3 +308,17 @@ def test_invalid_timeout_configuration_fails_closed_without_running_cli(monkeypa
     assert result["status"] == "invalid_configuration"
     assert result["items"] == []
     assert result["truthful"] is True
+
+
+def test_youtube_search_applies_shared_per_site_rate_limit(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    runner, calls = _stub_runner()
+    monkeypatch.setattr(connector.subprocess, "run", runner)
+
+    first = connector.youtube_search("AI video editing")
+    second = connector.youtube_search("space exploration")
+
+    assert first["status"] == "ready"
+    assert second["status"] == "rate_limited"
+    # The second request is rejected before any additional CLI/network operation.
+    assert len(calls) == 3
