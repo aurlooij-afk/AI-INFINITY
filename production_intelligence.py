@@ -76,6 +76,19 @@ def research(topic,limit=10):
     topic=re.sub(r"\s+"," ",str(topic or "").strip())[:500]
     limit=max(1,min(20,int(limit or 10)))
     if not topic:raise HTTPException(422,"topic required")
+    # Honor the canonical runtime policy before calling any remote research provider.
+    policy_check=getattr(studio(),"_external_providers_disabled",None)
+    if callable(policy_check) and policy_check():
+        blocked=studio().research_topic(topic,limit=min(limit,10))
+        if not isinstance(blocked,dict):blocked={}
+        blocked.update({
+            "topic":topic,
+            "provider":"disabled_by_policy",
+            "providers_used":[],
+            "api_anything":{"status":"disabled_by_policy","items_added":0,"operation":"youtube.search","truthful":True},
+            "truthful":True,
+        })
+        return blocked
     sources=[]
     key=os.getenv("TAVILY_API_KEY","").strip()
     if key:
