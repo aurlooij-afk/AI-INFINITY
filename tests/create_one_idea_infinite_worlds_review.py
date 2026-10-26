@@ -269,11 +269,16 @@ def main() -> int:
                                  "-i", str(final), "-f", "null", "-"],
                                 capture_output=True, text=True, timeout=900)
         subtitle = next((x for x in streams if x.get("codec_type") == "subtitle"), {})
+        try:
+            fps_num, fps_den = str(video.get("avg_frame_rate") or "0/1").split("/", 1)
+            frame_rate_fps = float(fps_num) / max(float(fps_den), 1e-9)
+        except (TypeError, ValueError, ZeroDivisionError):
+            frame_rate_fps = 0.0
         result["final_media"] = {
             "path": "artifacts/final.mp4", "size_bytes": final.stat().st_size,
             "sha256": sha(final), "duration_seconds": duration,
-            "resolution": [width, height], "video_codec": video.get("codec_name"),
-            "audio_codec": audio.get("codec_name"),
+            "resolution": [width, height], "frame_rate_fps": frame_rate_fps,
+            "video_codec": video.get("codec_name"), "audio_codec": audio.get("codec_name"),
             "subtitle_codec": subtitle.get("codec_name"),
             "subtitle_duration_seconds": float(subtitle.get("duration") or 0),
             "ffprobe": media,
@@ -339,6 +344,8 @@ def main() -> int:
             "engine_truth_verified": truth.get("verified") is True and str(truth.get("state") or "").upper() == "VERIFIED",
             "duration_60s": abs(duration - 60) <= 1,
             "resolution_1920x1080": (width, height) == (1920, 1080),
+            "frame_rate_24fps_cfr": abs(frame_rate_fps - 24.0) <= 0.01
+                and video.get("avg_frame_rate") == "24/1",
             "aspect_ratio_16x9": bool(width and height and abs((width / height) - (16/9)) <= 0.01),
             "h264_video": video.get("codec_name") == "h264",
             "audio_stream": bool(audio),
@@ -352,6 +359,12 @@ def main() -> int:
             "zero_unresolved_rights": len(unresolved) == 0 and checks.get("visual_rights_evidence_present") is True,
             "captions_present_and_timed": captions_path.exists() and cue_count >= 13 and checks.get("caption_sync_passed") is True,
             "manifest_sha_matches": bool(expected_sha) and expected_sha == sha(final),
+            "exact_campaign_title_and_hook": bool(
+                re.search(r"(?mi)^#\\s+ONE IDEA\\. INFINITE WORLDS\\.$", script_text)
+                and "Every extraordinary world begins with something nobody else can see." in script_text
+                and "Research it. Shape it. Bring it to life. Then make it better." in script_text
+                and "AI Infinity. One idea. Infinite worlds." in script_text
+            ),
             "professional_scene_coverage": checks.get("professional_scene_coverage_passed") is True,
             "professional_visual_diversity": checks.get("professional_visual_diversity_passed") is True,
             "professional_motion_coverage": checks.get("professional_motion_coverage_passed") is True,
