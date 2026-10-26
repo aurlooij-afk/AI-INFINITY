@@ -1,2 +1,2 @@
-Latest branch build after narration alignment, per-scene rights/fallback audit, video-only assembly, and split review/editable artifacts.
-Created 2026-10-26T12:21:00.055Z.
+Run latest AI Infinity One Idea Infinite Worlds end-to-end review build.
+Require duration/assembly/story/audio/rights regressions before creating the actual Creator Studio project.
