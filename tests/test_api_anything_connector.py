@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 
 import pytest
 
@@ -385,7 +387,9 @@ def test_hacker_news_search_rejects_non_https_result_urls(monkeypatch):
         "data": [
             {"objectID": "1", "title": "Plain HTTP link", "url": "http://example.org/story"},
             {"objectID": "2", "title": "Localhost link", "url": "https://localhost/private"},
-            {"objectID": "3", "title": "Safe HTTPS link", "url": "https://example.org/safe"},
+            {"objectID": "3", "title": "Private IP link", "url": "https://127.0.0.1/private"},
+            {"objectID": "4", "title": "Nonstandard port link", "url": "https://example.org:8443/private"},
+            {"objectID": "5", "title": "Safe HTTPS link", "url": "https://example.org/safe"},
         ],
     }
     runner, calls = _stub_runner(site_name="hacker-news", result=malicious)
@@ -414,3 +418,18 @@ def test_search_candidates_reports_each_allowlisted_operation_truthfully(monkeyp
     assert result["source_count"] == 1
     assert result["operations"] == {"youtube.search": "ready", "hacker-news.search": "empty"}
     assert seen == ["youtube", "hacker-news"]
+
+
+def test_connector_enforces_output_limit_while_streaming_subprocess_stdout(monkeypatch, tmp_path):
+    monkeypatch.setattr(connector, "MAX_OUTPUT_CHARS", 64)
+    payload, error = connector._run_json(
+        connector._ORIGINAL_SUBPROCESS_RUN,
+        sys.executable,
+        ["-c", "import sys; sys.stdout.write('x' * 1000000)"],
+        cwd=str(tmp_path),
+        env={"PATH": os.environ.get("PATH", "")},
+        timeout=5,
+    )
+
+    assert payload is None
+    assert error == "output_too_large"
