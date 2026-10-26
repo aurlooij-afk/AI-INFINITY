@@ -652,7 +652,7 @@ def create_from_command(command,user_id,raw):
 
 
 def classify_command(command, raw=None):
-    """Classify only supported, bounded actions; unknown commands never default to video."""
+    """Select an implemented capability without silently falling back to video creation."""
     payload = raw if isinstance(raw, dict) else {}
     text = clean(command, 4000)
     low = text.lower()
@@ -661,18 +661,40 @@ def classify_command(command, raw=None):
         "creation": "create", "production": "create", "media": "create",
         "search": "research", "investigate": "research", "inspect": "capabilities",
         "status": "capabilities", "project_status": "project_status",
-        "revision": "edit", "modification": "edit",
+        "revision": "edit", "modification": "edit", "plan": "strategy",
+        "write_script": "script", "scriptwriting": "script",
+        "performance": "analytics", "seo_metadata": "seo", "publish_options": "publisher",
     }
     explicit = aliases.get(explicit, explicit)
-    supported = {"research", "create", "edit", "project_status", "capabilities"}
-    # A routing hint must never override a detected consequential external action.
-    if re.match(r"^\s*(?:please\s+)?(?:publish|post|send|delete|destroy|purchase|buy|pay|transfer|schedule|upload)\b", low):
-        action = re.match(r"^\s*(?:please\s+)?([a-z]+)", low)
-        return {"route": "authorization_required", "action": action.group(1) if action else "external_action",
-                "reason": "Consequential external actions require action-specific authorization and a verified connector."}
+    supported = {
+        "research", "create", "edit", "project_status", "capabilities",
+        "script", "strategy", "marketing", "seo", "analytics", "publisher", "monetization",
+    }
+    action_words = {"publish", "post", "send", "delete", "destroy", "purchase", "buy", "pay", "transfer", "schedule", "upload"}
+    explicit_action = explicit in action_words
+    imperative_action = bool(re.match(
+        r"^\s*(?:please\s+)?(?:publish|post|send|delete|destroy|purchase|buy|pay|transfer|schedule|upload)\b",
+        low,
+    ))
+    delegated_action = bool(re.search(
+        r"\b(?:i\s+want\s+to|i\s+need\s+to|can\s+you|help\s+me\s+to|please\s+help\s+me)\s+(?:publish|post|send|delete|destroy|purchase|buy|pay|transfer|schedule|upload)\b",
+        low,
+    ))
+    if explicit_action or imperative_action or delegated_action:
+        action = explicit if explicit_action else (re.match(
+            r"^\s*(?:please\s+)?([a-z]+)", low
+        ).group(1) if imperative_action else re.search(
+            r"\b(?:publish|post|send|delete|destroy|purchase|buy|pay|transfer|schedule|upload)\b", low
+        ).group(0))
+        return {
+            "route": "authorization_required", "action": action,
+            "reason": "Consequential external actions require action-specific authorization and a verified connector.",
+        }
     if explicit in supported:
         route = explicit
-    elif re.search(r"\b(project|this project)\b", low) and re.search(r"\b(status|progress|verify|verification|health|where are we|what remains)\b", low) and not re.search(r"\b(create|make|generate|produce|research|investigate)\b", low):
+    elif re.search(r"\b(project|this project)\b", low) and re.search(
+        r"\b(status|progress|verify|verification|health|where are we|what remains)\b", low
+    ) and not re.search(r"\b(create|make|generate|produce|research|investigate)\b", low):
         if payload.get("project_id"):
             route = "project_status"
         else:
@@ -686,31 +708,60 @@ def classify_command(command, raw=None):
         route = "capabilities"
     else:
         creation = bool(re.search(r"\b(create|make|generate|produce|build|write|draft|develop|turn|convert|transform|repurpose)\b", low))
-        types = (
-            (r"\b(video|film|reel|documentary|explainer|launch film|shorts?)\b", "video"),
-            (r"\b(podcast|audio show)\b", "podcast"),
-            (r"\b(article|blog|essay|report|guide|newsletter|white paper|research brief)\b", "article"),
-            (r"\b(social post|social campaign|linkedin post|instagram post|tweet|x post)\b", "social"),
+        media_creation = bool(re.search(
+            r"\b(?:create|make|generate|produce|build)\s+(?:(?:a|an|the|new|short|long|cinematic|professional|vertical|horizontal|\d+[- ]second)\s+){0,5}(?:video|film|reel|documentary|explainer|podcast|article|blog|essay|report|guide|newsletter|social campaign|social post)\b",
+            low,
+        ))
+        script_request = bool(
+            re.search(r"\b(write|draft|outline|make|create|generate|prepare|develop|review|improve|revise)\b", low)
+            and re.search(r"\b(script|storyboard|narration|voiceover script|spoken copy)\b", low)
+            and not media_creation
         )
-        has_known_deliverable = clean(payload.get("content_type"), 30).lower() in {"video", "podcast", "article", "social"} or any(re.search(pattern, low) for pattern, _ in types)
+        analytics_request = bool(re.search(r"\b(analytics|performance metrics|engagement metrics|performance report|project metrics)\b", low))
+        publisher_request = bool(re.search(r"\b(publishing options|publisher connections|connected channels|how can i publish|publishing status)\b", low))
+        monetization_request = bool(re.search(r"\b(monetization|monetisation|revenue streams|earning options|monetization options)\b", low))
+        seo_request = bool(re.search(r"\b(seo metadata|meta description|search engine optimization|search engine optimisation|keyword research|seo keywords)\b", low))
+        marketing_request = bool(re.search(r"\b(marketing plan|campaign strategy|go[- ]to[- ]market|launch marketing|growth plan)\b", low))
+        strategy_request = bool(re.search(r"\b(strategy|strategize|strategise|creative brief|brainstorm|plan a|plan the|outline a plan)\b", low))
         research = bool(re.search(r"\b(research|investigate|find sources|compare examples|benchmark|collect sources|look up|search for evidence)\b", low))
-        editing = bool(re.search(r"\b(trim|cut|crop|resize|brighten|darken|speed up|slow down|increase volume|lower volume|change the captions|change subtitles|replace scene|reorder scenes|edit the video)\b", low))
-        if creation and has_known_deliverable:
+
+        # Agent tasks produce plans/research/analysis, not a fake media file.
+        if script_request:
+            route = "script"
+        elif analytics_request:
+            route = "analytics"
+        elif publisher_request:
+            route = "publisher"
+        elif monetization_request:
+            route = "monetization"
+        elif seo_request and not media_creation:
+            route = "seo"
+        elif marketing_request and not media_creation:
+            route = "marketing"
+        elif strategy_request and not media_creation and not re.search(r"\b(create|make|generate|produce|build)\s+.{0,40}\b(video|film|reel|podcast|article|report|social campaign|social post)\b", low):
+            route = "strategy"
+        elif media_creation:
             route = "create"
         elif research and not creation:
             route = "research"
-        elif editing and payload.get("project_id"):
-            route = "edit"
-        elif editing:
-            return {"route": "project_id_required", "reason": "Editing requires an existing project ID so ownership and source artifacts can be verified."}
-        elif creation:
-            return {"route": "deliverable_required", "reason": "Specify a supported deliverable: video, podcast, article/report, or social package."}
         else:
-            return {"route": "unsupported", "reason": "No safe executable route matched this command."}
-    if route == "edit" and not payload.get("project_id"):
-        return {"route": "project_id_required", "reason": "Editing requires an existing project ID."}
-    if route == "project_status" and not payload.get("project_id"):
-        return {"route": "project_id_required", "reason": "Project status requires an existing project ID."}
+            types = (
+                r"\b(video|film|reel|documentary|explainer|launch film|shorts?)\b",
+                r"\b(podcast|audio show)\b",
+                r"\b(article|blog|essay|report|guide|newsletter|white paper|research brief)\b",
+                r"\b(social post|social campaign|linkedin post|instagram post|tweet|x post)\b",
+            )
+            has_known_deliverable = clean(payload.get("content_type"), 30).lower() in {"video", "podcast", "article", "social"} or any(re.search(pattern, low) for pattern in types)
+            if creation and has_known_deliverable:
+                route = "create"
+            elif research:
+                route = "research"
+            elif creation:
+                return {"route": "deliverable_required", "reason": "Specify a supported deliverable: video, podcast, article/report, or social package."}
+            else:
+                return {"route": "unsupported", "reason": "No safe executable route matched this command."}
+    if route in {"edit", "project_status"} and not payload.get("project_id"):
+        return {"route": "project_id_required", "reason": "This action requires an existing project ID."}
     return {"route": route, "reason": "Matched an implemented AI Infinity capability."}
 
 
