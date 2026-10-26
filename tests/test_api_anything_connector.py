@@ -449,9 +449,9 @@ def test_search_candidates_reports_each_allowlisted_operation_truthfully(monkeyp
             "API Anything / Goodreads", "https://www.goodreads.com/book/show/35959740",
         ),
         (
-            "steam", "search", "term", "steam",
-            {"itemKey": "504230", "title": "Celeste", "price": "$19.99", "releaseDate": "2018"},
-            "API Anything / Steam", "https://store.steampowered.com/app/504230/",
+            "rottentomatoes", "searchMovies", "q", "rottentomatoes",
+            {"url": "/m/interstellar", "title": "Interstellar", "year": "2014", "tomatometer": "91%", "cast": "Matthew McConaughey"},
+            "API Anything / Rotten Tomatoes", "https://www.rottentomatoes.com/m/interstellar",
         ),
         (
             "amazon", "search", "k", "amazon",
@@ -500,9 +500,9 @@ def test_contextual_search_routes_only_relevant_specialist_sites(monkeypatch):
     assert [site for site, _ in seen] == ["youtube", "hacker-news", "goodreads"]
 
     seen.clear()
-    games = connector.search_candidates("Compare PC games about space exploration")
-    assert games["operations"].keys() == {"youtube.search", "hacker-news.search", "steam.search"}
-    assert [site for site, _ in seen] == ["youtube", "hacker-news", "steam"]
+    movies = connector.search_candidates("Compare movie critic scores and cinematic references")
+    assert movies["operations"].keys() == {"youtube.search", "hacker-news.search", "rottentomatoes.searchMovies"}
+    assert [site for site, _ in seen] == ["youtube", "hacker-news", "rottentomatoes"]
 
     seen.clear()
     products = connector.search_candidates("Research laptop products and price comparison")
@@ -514,7 +514,7 @@ def test_additional_sources_reject_invalid_ids_before_constructing_links(monkeyp
     monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
     cases = [
         ("goodreads", "searchBooks", "goodreads", {"bookId": "../private", "title": "Bad book"}),
-        ("steam", "search", "steam", {"itemKey": "../../private", "title": "Bad game"}),
+        ("rottentomatoes", "searchMovies", "rottentomatoes", {"url": "/m/../../private", "title": "Bad movie"}),
         ("amazon", "search", "amazon", {"asin": "https://evil.example", "title": "Bad product"}),
     ]
     for site, operation, result_kind, row in cases:
@@ -523,7 +523,7 @@ def test_additional_sources_reject_invalid_ids_before_constructing_links(monkeyp
             result={"ok": True, "class": "ok", "tier": 1, "data": [row]},
         )
         monkeypatch.setattr(connector.subprocess, "run", runner)
-        query_parameter = {"goodreads": "q", "steam": "term", "amazon": "k"}[site]
+        query_parameter = {"goodreads": "q", "rottentomatoes": "q", "amazon": "k"}[site]
         result = connector._rate_limited_search(f"{site}.{operation}", "test query", 5)
         assert result["status"] == "empty"
         assert result["items"] == []
