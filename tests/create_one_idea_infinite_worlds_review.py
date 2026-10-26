@@ -360,7 +360,7 @@ def main() -> int:
             "captions_present_and_timed": captions_path.exists() and cue_count >= 13 and checks.get("caption_sync_passed") is True,
             "manifest_sha_matches": bool(expected_sha) and expected_sha == sha(final),
             "exact_campaign_title_and_hook": bool(
-                re.search(r"(?mi)^#\\s+ONE IDEA\\. INFINITE WORLDS\\.$", script_text)
+                re.search(r"(?mi)^#\s+ONE IDEA\. INFINITE WORLDS\.$", script_text)
                 and "Every extraordinary world begins with something nobody else can see." in script_text
                 and "Research it. Shape it. Bring it to life. Then make it better." in script_text
                 and "AI Infinity. One idea. Infinite worlds." in script_text
