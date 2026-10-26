@@ -86,8 +86,11 @@ def youtube_search(query: str, limit: int = 10) -> dict[str, Any]:
     if not executable:
         return {"status": "not_configured", "items": [], "truthful": True}
 
-    timeout = max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))))
-    safe_limit = max(1, min(10, int(limit or 10)))
+    try:
+        timeout = max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))))
+        safe_limit = max(1, min(10, int(limit or 10)))
+    except (TypeError, ValueError, OverflowError):
+        return {"status": "invalid_configuration", "items": [], "truthful": True}
     started = time.monotonic()
 
     try:
