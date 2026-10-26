@@ -244,7 +244,7 @@ def compile_intent(command,raw):
         intent_patterns=(
             (r"\b(?:video|film|reel|documentary|explainer)\b","video"),
             (r"\b(?:podcast|audio show)\b","podcast"),
-            (r"\b(?:article|blog|essay)\b","article"),
+            (r"\b(?:article|blog|essay|report|guide|newsletter|white paper|research brief)\b","article"),
             (r"\b(?:social(?:\s+media)?\s+(?:post|campaign)|linkedin post|instagram post|tweet|x post)\b","social"),
         )
         intent_matches=[]
@@ -674,6 +674,11 @@ def classify_command(command, raw=None):
         route = explicit
     elif payload.get("project_id") and re.search(r"\b(status|progress|verify|verification|health|where are we|what remains)\b", low) and not re.search(r"\b(create|make|generate|produce|research|investigate)\b", low):
         route = "project_status"
+    elif payload.get("project_id") and re.search(
+        r"\b(trim|cut|crop|resize|faster|speed\s*up|slower|slow\s*down|brighter|brightness|cinematic|premium|polished|more\s+contrast|contrasty|more\s+vivid|saturated|mute|without\s+audio|vertical|portrait|square|landscape|burn.*captions|embed.*subtitles)\b",
+        low,
+    ):
+        route = "edit"
     elif re.search(r"\b(what can you do|available capabilities|available tools|system status|capability status|health check)\b", low):
         route = "capabilities"
     else:
