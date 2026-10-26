@@ -6,3 +6,5 @@ Recent system fixes under test: explicit scene-timecode preservation, video-only
 Assembly regression + Python compile fix validation after real 26-channel AAC failure.
 
 Fix source catalog title assertion; rerun exact cinematic film.
+
+Fix post-render review harness regex import and rerun to collect actual film artifacts.
