@@ -8,12 +8,14 @@ It never invents credentials or calls APIs that require authentication.
 """
 
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
 import re
 import socket
 import sqlite3
+import ssl
 import threading
 import time
 import uuid
@@ -102,31 +104,117 @@ class _NoRedirect(HTTPRedirectHandler):
 OPENER = build_opener(_NoRedirect())
 
 
+def _public_addresses(host: str, port: int = 443) -> List[str]:
+    """Resolve once per request and reject any non-public target address."""
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except Exception as exc:
+        raise ValueError("remote host could not be resolved safely") from exc
+    addresses = []
+    seen = set()
+    for info in infos:
+        try:
+            address = ipaddress.ip_address(info[4][0])
+        except (IndexError, ValueError):
+            raise ValueError("remote DNS returned an invalid address")
+        if not address.is_global:
+            raise ValueError("remote DNS resolved to a non-public address")
+        value = str(address)
+        if value not in seen:
+            seen.add(value)
+            addresses.append(value)
+    if not addresses:
+        raise ValueError("remote host has no validated public address")
+    return addresses
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection to a vetted IP while retaining the original host for TLS SNI/cert checks."""
+    def __init__(self, host: str, port: int, addresses: List[str], timeout: int):
+        super().__init__(host=host, port=port, timeout=timeout, context=ssl.create_default_context())
+        self._pinned_addresses = list(addresses)
+
+    def connect(self):
+        last_error = None
+        for address in self._pinned_addresses:
+            sock = None
+            try:
+                sock = socket.create_connection((address, self.port), self.timeout)
+                self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+                return
+            except (OSError, ssl.SSLError) as exc:
+                last_error = exc
+                if sock is not None:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+        raise OSError("could not connect to a validated public address") from last_error
+
+
+def _parse_public_https_url(url: str):
+    u = urlparse(str(url or "").strip())
+    if u.scheme != "https" or not u.hostname or u.username or u.password:
+        raise ValueError("only public HTTPS URLs without embedded credentials are allowed")
+    try:
+        port = u.port
+    except ValueError as exc:
+        raise ValueError("invalid destination port") from exc
+    if port not in (None, 443):
+        raise ValueError("only HTTPS port 443 is allowed")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in u.path + u.query):
+        raise ValueError("control characters are not allowed in destination URLs")
+    host = u.hostname.rstrip(".").lower()
+    if host in {"localhost", "localhost.localdomain"} or host.endswith((".local", ".internal", ".localhost")):
+        raise ValueError("local destination host is blocked")
+    return u, host
+
+
 def _host_safe(url: str) -> bool:
     try:
-        u = urlparse(str(url).strip())
-        if u.scheme != "https" or not u.hostname:
-            return False
-        host = u.hostname.rstrip(".").lower()
-        if host in {"localhost", "localhost.localdomain"} or host.endswith((".local", ".internal")):
-            return False
-        try:
-            ip = ipaddress.ip_address(host)
-            return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
-        except ValueError:
-            pass
-        infos = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
-        return bool(infos) and all(not (ipaddress.ip_address(x[4][0]).is_private or ipaddress.ip_address(x[4][0]).is_loopback or ipaddress.ip_address(x[4][0]).is_link_local or ipaddress.ip_address(x[4][0]).is_reserved or ipaddress.ip_address(x[4][0]).is_multicast or ipaddress.ip_address(x[4][0]).is_unspecified) for x in infos)
+        u, host = _parse_public_https_url(url)
+        _public_addresses(host, 443)
+        return bool(u.hostname)
     except Exception:
         return False
 
 
+def _public_https_request(url: str, timeout: int, max_bytes: int, method: str = "GET"):
+    """Perform one HTTPS request to validated public DNS addresses; never follow redirects."""
+    u, host = _parse_public_https_url(url)
+    addresses = _public_addresses(host, 443)
+    path = u.path or "/"
+    if u.query:
+        path += "?" + u.query
+    connection = _PinnedHTTPSConnection(host, 443, addresses, timeout)
+    try:
+        connection.request(method.upper(), path, headers={
+            "Host": host,
+            "User-Agent": "AI-Infinity-Free-API-Fabric/3622",
+            "Accept": "application/json,*/*",
+            "Connection": "close",
+        })
+        response = connection.getresponse()
+        payload = bytearray()
+        while True:
+            chunk = response.read(min(65536, max_bytes - len(payload) + 1))
+            if not chunk:
+                break
+            payload.extend(chunk)
+            if len(payload) > max_bytes:
+                raise ValueError("remote response exceeded the configured size limit")
+        # 3xx is returned as a status; the client never follows the Location header.
+        return response.status, response.headers.get("Content-Type", ""), bytes(payload)
+    finally:
+        connection.close()
+
+
 def _get_json(url: str, timeout: int = HTTP_TIMEOUT) -> Any:
-    if not _host_safe(url):
-        raise ValueError("unsafe or non-HTTPS remote URL")
-    req = Request(url, headers={"User-Agent": "AI-Infinity-Free-API-Fabric/3622", "Accept": "application/json"}, method="GET")
-    with OPENER.open(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8", "replace"))
+    status_code, _, raw = _public_https_request(url, timeout=timeout, max_bytes=2_000_000, method="GET")
+    if not 200 <= status_code < 300:
+        raise ValueError(f"remote JSON returned HTTP {status_code}")
+    return json.loads(raw.decode("utf-8", "replace"))
+
 
 
 def _norm_auth(v: Any) -> str:
