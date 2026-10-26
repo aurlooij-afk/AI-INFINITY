@@ -303,8 +303,8 @@ def test_public_api_command_invokes_only_a_selected_operation_id(monkeypatch):
     monkeypatch.setitem(sys.modules, "free_api_fabric", fake_fabric)
 
     result = canonical.dispatch_command(
-        "Use a public API to search climate data", "user-public-api",
-        {"task_type": "public_api", "op_id": "verified-get-op", "api_params": {"q": "climate data"}},
+        'Use a public API to search climate data operation_id=verified-get-op q="climate data"', "user-public-api",
+        {"task_type": "public_api"},
     )
 
     assert result["route"] == "public_api"
