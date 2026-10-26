@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -184,3 +185,40 @@ def youtube_search(query: str, limit: int = 10) -> dict[str, Any]:
     except Exception as exc:
         # Do not return arbitrary stderr, URLs or process environment details to the user.
         return {"status": "internal_error", "error_type": type(exc).__name__, "items": [], "truthful": True}
+
+
+# The API Anything CLI is process-local. Since each call gets a fresh isolated home,
+# enforce pacing and single-flight at the AI Infinity process boundary as well.
+_RAW_YOUTUBE_SEARCH = youtube_search
+_EXECUTION_GATE = threading.BoundedSemaphore(1)
+_RATE_LOCK = threading.Lock()
+_LAST_CALL_AT: dict[str, float] = {}
+MIN_SITE_INTERVAL_SECONDS = 1.0
+
+
+def youtube_search(query: str, limit: int = 10) -> dict[str, Any]:
+    """Rate-limited wrapper; one isolated CLI call at a time, at most one per site/second."""
+    q = _clean_text(query, MAX_QUERY_CHARS)
+    if not q:
+        return {"status": "invalid_input", "items": [], "truthful": True}
+    if not shutil.which("api-anything"):
+        return {"status": "not_configured", "items": [], "truthful": True}
+    try:
+        # Validate local configuration before acquiring a slot or consuming the rate window.
+        max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))))
+        safe_limit = max(1, min(10, int(limit or 10)))
+    except (TypeError, ValueError, OverflowError):
+        return {"status": "invalid_configuration", "items": [], "truthful": True}
+
+    if not _EXECUTION_GATE.acquire(timeout=0.5):
+        return {"status": "busy", "items": [], "truthful": True}
+    try:
+        now = time.monotonic()
+        with _RATE_LOCK:
+            last = _LAST_CALL_AT.get("youtube")
+            if last is not None and now - last < MIN_SITE_INTERVAL_SECONDS:
+                return {"status": "rate_limited", "items": [], "truthful": True}
+            _LAST_CALL_AT["youtube"] = now
+        return _RAW_YOUTUBE_SEARCH(q, safe_limit)
+    finally:
+        _EXECUTION_GATE.release()
