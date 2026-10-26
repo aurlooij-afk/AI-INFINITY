@@ -1,5 +1,5 @@
-# API Anything is pinned to an audited upstream commit. The runtime uses only its bundled
-# read-only HTTP operation on the initial integration; no browser or account session is enabled.
+# API Anything is pinned to an audited upstream commit. Only two explicitly reviewed
+# bundled read-only search operations are enabled; no browser or account session is enabled.
 FROM node:22.13.1-bookworm-slim AS api-anything-builder
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
