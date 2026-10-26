@@ -3747,7 +3747,7 @@ _ONE_IDEA_PEXELS_MOTION_SOURCES: Dict[int, Dict[str, Any]] = {
         "source_id": 35331904,
         "source_url": "https://www.pexels.com/video/focused-freelancer-working-in-cozy-home-office-35331904/",
         "media_url": "https://videos.pexels.com/video-files/35331904/14970153_3840_2160_25fps.mp4",
-        "creator": "Tom Shutkin",
+        "creator": "Artem Shutkin",
         "title": "Focused Freelancer Working in Cozy Home Office",
         "description": "A man with headphones working on a laptop in a cozy home office at night.",
         "visual_match": "nighttime laptop creator opening hook",
@@ -3755,7 +3755,7 @@ _ONE_IDEA_PEXELS_MOTION_SOURCES: Dict[int, Dict[str, Any]] = {
     2: {
         "source_id": 9056443,
         "source_url": "https://www.pexels.com/video/a-person-typing-on-a-laptop-and-writing-in-a-notebook-9056443/",
-        "media_url": "https://videos.pexels.com/video-files/9056443/9056443-uhd_3840_2160_25fps.mp4",
+        "media_url": "https://videos.pexels.com/video-files/9056443/9056443-uhd_3840_2160_50fps.mp4",
         "creator": "SHVETS production",
         "title": "A Person Typing on a Laptop and Writing in a Notebook",
         "description": "A person working remotely from home, typing on a laptop and writing notes on a bed.",
