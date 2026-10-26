@@ -209,6 +209,27 @@ def main() -> int:
                         except Exception as exc:
                             row["probe_error"] = type(exc).__name__ + ": " + str(exc)[:300]
                     captured_intermediates.append(row)
+        expected_story_seconds = [4.0, 8.0, 13.0, 6.5, 8.5, 9.0, 7.0, 4.0]
+        scene_media = sorted(
+            [row for row in captured_intermediates
+             if re.fullmatch(r"scene_\d{2}\.mp4", str(row.get("name") or ""))],
+            key=lambda row: str(row["name"]),
+        )
+        actual_story_seconds = [float(row.get("duration_seconds") or 0.0) for row in scene_media]
+        story_timing_passed = (
+            len(actual_story_seconds) == len(expected_story_seconds)
+            and all(abs(actual - expected) <= 0.25
+                    for actual, expected in zip(actual_story_seconds, expected_story_seconds))
+        )
+        result["story_timing"] = {
+            "passed": story_timing_passed,
+            "expected_scene_seconds": expected_story_seconds,
+            "actual_scene_seconds": actual_story_seconds,
+            "scene_files": [row.get("name") for row in scene_media],
+            "expected_boundaries_seconds": [0, 4, 12, 25, 31.5, 40, 49, 56, 60],
+            "actual_total_seconds": round(sum(actual_story_seconds), 3),
+            "tolerance_seconds_per_scene": 0.25,
+        }
         (EVIDENCE / "intermediate-media-inventory.json").write_text(
             json.dumps(captured_intermediates, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         # Keep the app's complete editable project package intact, but make it
@@ -365,6 +386,7 @@ def main() -> int:
                 and "Research it. Shape it. Bring it to life. Then make it better." in script_text
                 and "AI Infinity. One idea. Infinite worlds." in script_text
             ),
+            "authored_story_timing": result.get("story_timing", {}).get("passed") is True,
             "professional_scene_coverage": checks.get("professional_scene_coverage_passed") is True,
             "professional_visual_diversity": checks.get("professional_visual_diversity_passed") is True,
             "professional_motion_coverage": checks.get("professional_motion_coverage_passed") is True,
