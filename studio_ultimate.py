@@ -5282,18 +5282,23 @@ def _scene_mix(video: Path, voice: Path, music: Path, sfx: Path, duration: float
 
 
 def concat_segments(paths: List[Path], out: Path) -> None:
-    """Assemble a clean video master without decoding scene-level AAC.
+    """Build one stable 1080p video master without concatenating scene AAC streams.
 
-    Source scene MP4s may contain inconsistent/corrupt AAC preview packets even
-    when each render process exited successfully. To keep assembly deterministic,
-    this stage normalizes and concatenates VIDEO ONLY, then attaches one newly
-    encoded silent stereo track for downstream duration/caption processing. The
-    authoritative narration/music stems are mixed later in the mastering stage.
+    The real Creator Studio composes narration and music from their source stems
+    after scene assembly. Scene-level AAC must therefore never be concatenated:
+    independently encoded AAC segments may advertise incompatible channel layouts
+    and produce an invalid 26-channel rematrix at a scene boundary. Normalize the
+    picture only, assemble the video-only stream, and attach a full-duration silent
+    stereo carrier. The normal programme master is replaced by the separately mixed
+    narration/music/subtitle finalizer before delivery and must pass its own QC.
     """
     if not paths:
         raise RuntimeError("cannot assemble an empty scene list")
     first_probe = ffprobe_json(paths[0])
-    first_video = next((x for x in (first_probe.get("streams") or []) if x.get("codec_type") == "video"), {})
+    first_video = next(
+        (row for row in (first_probe.get("streams") or []) if row.get("codec_type") == "video"),
+        {},
+    )
     source_width = int(first_video.get("width") or 0)
     source_height = int(first_video.get("height") or 0)
     if not source_width or not source_height:
@@ -5315,113 +5320,168 @@ def concat_segments(paths: List[Path], out: Path) -> None:
     for index, source_path in enumerate(paths, 1):
         source_probe = ffprobe_json(source_path)
         source_streams = source_probe.get("streams") or []
-        source_video = next((x for x in source_streams if x.get("codec_type") == "video"), {})
-        duration = float(source_video.get("duration") or (source_probe.get("format") or {}).get("duration") or 0)
+        source_video = next(
+            (row for row in source_streams if row.get("codec_type") == "video"),
+            {},
+        )
+        duration = float(
+            source_video.get("duration")
+            or (source_probe.get("format") or {}).get("duration")
+            or 0
+        )
         if not source_video or duration < 0.5:
             raise RuntimeError(f"scene {index:02d} lacks valid video or duration: {source_path}")
         durations.append(duration)
         normalized = normalized_dir / f"segment_{index:02d}.mkv"
         normalized.unlink(missing_ok=True)
-        vf = (
-            f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,"
-            f"crop={target_width}:{target_height},fps=24,setsar=1,format=yuv420p"
+        width = int(source_video.get("width") or 0)
+        height = int(source_video.get("height") or 0)
+        codec = str(source_video.get("codec_name") or "")
+        pix_fmt = str(source_video.get("pix_fmt") or "")
+        frame_rate_raw = str(source_video.get("avg_frame_rate") or source_video.get("r_frame_rate") or "0/1")
+        try:
+            num, den = frame_rate_raw.split("/", 1)
+            frame_rate = float(num) / max(float(den), 1e-9)
+        except (TypeError, ValueError, ZeroDivisionError):
+            frame_rate = 0.0
+        video_already_delivery_ready = (
+            codec == "h264"
+            and (width, height) == (target_width, target_height)
+            and pix_fmt == "yuv420p"
+            and abs(frame_rate - 24.0) < 0.05
         )
-        # Explicitly map only video; never select, normalize, or concatenate the
-        # original scene's AAC preview stream.
-        ffmpeg(
-            "-i", source_path, "-map", "0:v:0", "-an", "-sn",
-            "-vf", vf, "-t", f"{duration:.6f}",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-            "-pix_fmt", "yuv420p", "-r", "24",
-            "-f", "matroska", normalized,
-            timeout=max(120, int(duration * 10)),
-        )
+        if video_already_delivery_ready:
+            # Preserve high-quality source frames where they already match the
+            # locked delivery profile; do not re-encode seven 1080p scenes merely
+            # because one lower-resolution source needs normalization.
+            ffmpeg(
+                "-fflags", "+genpts", "-i", source_path,
+                "-map", "0:v:0", "-an", "-c:v", "copy",
+                "-avoid_negative_ts", "make_zero", "-f", "matroska", normalized,
+                timeout=max(60, int(duration * 4)),
+            )
+        else:
+            vf = (
+                f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,"
+                f"crop={target_width}:{target_height},fps=24,setsar=1,format=yuv420p"
+            )
+            ffmpeg(
+                "-i", source_path, "-map", "0:v:0", "-an",
+                "-vf", vf, "-t", f"{duration:.6f}",
+                "-c:v", "libx264", "-preset", "ultrafast" if FAST_MODE else "veryfast",
+                "-crf", "18", "-pix_fmt", "yuv420p", "-r", "24",
+                "-an", "-f", "matroska", normalized,
+                timeout=max(90, int(duration * 8)),
+            )
         normalized_probe = ffprobe_json(normalized)
         normalized_streams = normalized_probe.get("streams") or []
-        normalized_video = next((x for x in normalized_streams if x.get("codec_type") == "video"), {})
-        normalized_duration = float(normalized_video.get("duration") or (normalized_probe.get("format") or {}).get("duration") or 0)
-        normalized_audio = next((x for x in normalized_streams if x.get("codec_type") == "audio"), {})
+        normalized_video = next(
+            (row for row in normalized_streams if row.get("codec_type") == "video"),
+            {},
+        )
+        normalized_duration = float(
+            (normalized_probe.get("format") or {}).get("duration") or 0
+        )
         if (
             not normalized.is_file() or normalized.stat().st_size <= 10000
             or int(normalized_video.get("width") or 0) != target_width
             or int(normalized_video.get("height") or 0) != target_height
             or normalized_video.get("codec_name") != "h264"
-            or bool(normalized_audio)
+            or normalized_video.get("pix_fmt") != "yuv420p"
             or abs(normalized_duration - duration) > 0.35
         ):
             raise RuntimeError(
                 f"scene {index:02d} video normalization failed: "
                 f"resolution={normalized_video.get('width')}x{normalized_video.get('height')} "
-                f"unexpected_audio={bool(normalized_audio)} "
                 f"duration={normalized_duration:.3f}/{duration:.3f}"
             )
         normalized_paths.append(normalized)
 
-    manifest = out.with_suffix(".txt")
+    manifest = out.with_suffix(".video-only.txt")
+    video_master = out.parent / (out.stem + "_video_only.mkv")
     manifest.write_text(
         "".join(
-            f"file '{str(p).replace(chr(39), chr(39)+chr(92)+chr(39)+chr(39))}'\n"
-            for p in normalized_paths
+            f"file '{str(path).replace(chr(39), chr(39)+chr(92)+chr(39)+chr(39))}'\n"
+            for path in normalized_paths
         ),
         encoding="utf-8",
     )
-    video_only = out.parent / (out.stem + "_video_only.mp4")
-    video_only.unlink(missing_ok=True)
+    video_master.unlink(missing_ok=True)
     ffmpeg(
         "-f", "concat", "-safe", "0", "-i", manifest,
-        "-map", "0:v:0", "-an",
-        "-c:v", "copy", "-movflags", "+faststart", video_only,
-        timeout=600,
+        "-map", "0:v:0", "-an", "-c:v", "copy",
+        "-avoid_negative_ts", "make_zero", video_master,
+        timeout=max(120, int(sum(durations) * 3)),
     )
-    total_duration = float(sum(durations))
-    video_probe = ffprobe_json(video_only)
+    video_probe = ffprobe_json(video_master)
     video_streams = video_probe.get("streams") or []
-    assembled_video = next((x for x in video_streams if x.get("codec_type") == "video"), {})
-    assembled_duration = float(assembled_video.get("duration") or (video_probe.get("format") or {}).get("duration") or 0)
+    final_video = next(
+        (row for row in video_streams if row.get("codec_type") == "video"),
+        {},
+    )
+    video_duration = float(
+        final_video.get("duration")
+        or (video_probe.get("format") or {}).get("duration")
+        or 0
+    )
     if (
-        not video_only.is_file() or video_only.stat().st_size <= 10000
-        or int(assembled_video.get("width") or 0) != target_width
-        or int(assembled_video.get("height") or 0) != target_height
-        or assembled_video.get("codec_name") != "h264"
-        or abs(assembled_duration - total_duration) > 1.0
+        not video_master.is_file() or video_master.stat().st_size <= 10000
+        or int(final_video.get("width") or 0) != target_width
+        or int(final_video.get("height") or 0) != target_height
+        or final_video.get("codec_name") != "h264"
+        or abs(video_duration - sum(durations)) > 1.0
     ):
         raise RuntimeError(
-            f"video-only assembly failed: resolution={assembled_video.get('width')}x{assembled_video.get('height')} "
-            f"duration={assembled_duration:.3f}/{total_duration:.3f}"
+            f"video-only assembly failed: resolution={final_video.get('width')}x{final_video.get('height')} "
+            f"duration={video_duration:.3f}/{sum(durations):.3f}"
         )
-
-    # Attach one known-good AAC silence track only after all visual assembly has
-    # completed. The real narration/music mix replaces this later in the pipeline.
-    silence_filter = (
-        "anullsrc=channel_layout=stereo:sample_rate=48000,"
-        f"atrim=duration={total_duration:.6f},asetpts=PTS-STARTPTS"
+    video_decode = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-v", "error", "-xerror", "-i", str(video_master),
+         "-map", "0:v:0", "-an", "-f", "null", "-"],
+        capture_output=True, text=True, timeout=max(120, int(video_duration * 3)),
     )
+    if video_decode.returncode != 0:
+        raise RuntimeError("video-only master full decode failed: " + (video_decode.stderr or "")[-3000:])
+
+    # A silent stereo carrier keeps the intermediate master structurally valid.
+    # It is not a deliverable soundtrack; it is replaced by the full-length,
+    # independently normalized voice+music programme mix before final.mp4 is saved.
+    carrier_duration = max(0.5, sum(durations))
     out.unlink(missing_ok=True)
     ffmpeg(
-        "-i", video_only,
-        "-f", "lavfi", "-t", f"{total_duration:.6f}", "-i", silence_filter,
+        "-i", video_master,
+        "-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate=48000:d={carrier_duration:.6f}",
         "-map", "0:v:0", "-map", "1:a:0",
-        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-        "-ar", "48000", "-ac", "2", "-t", f"{total_duration:.6f}",
-        "-movflags", "+faststart", out,
-        timeout=max(120, int(total_duration * 5)),
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+        "-t", f"{carrier_duration:.6f}", "-movflags", "+faststart", out,
+        timeout=max(90, int(carrier_duration * 4)),
     )
     final_probe = ffprobe_json(out)
     final_streams = final_probe.get("streams") or []
-    final_video = next((x for x in final_streams if x.get("codec_type") == "video"), {})
-    final_audio = next((x for x in final_streams if x.get("codec_type") == "audio"), {})
+    final_video = next(
+        (row for row in final_streams if row.get("codec_type") == "video"),
+        {},
+    )
+    final_audio = next(
+        (row for row in final_streams if row.get("codec_type") == "audio"),
+        {},
+    )
     final_duration = float((final_probe.get("format") or {}).get("duration") or 0)
+    channels = int(final_audio.get("channels") or 0)
     if (
         not out.is_file() or out.stat().st_size <= 10000
         or int(final_video.get("width") or 0) != target_width
         or int(final_video.get("height") or 0) != target_height
         or final_video.get("codec_name") != "h264"
         or final_audio.get("codec_name") != "aac"
-        or abs(final_duration - total_duration) > 1.0
+        or channels != 2
+        or abs(final_duration - sum(durations)) > 1.0
     ):
         raise RuntimeError(
-            f"assembled master failed verification: resolution={final_video.get('width')}x{final_video.get('height')} "
-            f"audio={final_audio.get('codec_name')} duration={final_duration:.3f}/{total_duration:.3f}"
+            f"assembled master failed verification: "
+            f"resolution={final_video.get('width')}x{final_video.get('height')} "
+            f"audio={final_audio.get('codec_name')}/{channels} "
+            f"duration={final_duration:.3f}/{sum(durations):.3f}"
         )
     decode = subprocess.run(
         ["ffmpeg", "-hide_banner", "-v", "error", "-xerror", "-i", str(out), "-f", "null", "-"],
@@ -5430,9 +5490,8 @@ def concat_segments(paths: List[Path], out: Path) -> None:
     if decode.returncode != 0:
         raise RuntimeError("assembled master full decode failed: " + (decode.stderr or "")[-3000:])
     manifest.unlink(missing_ok=True)
-    video_only.unlink(missing_ok=True)
+    video_master.unlink(missing_ok=True)
     shutil.rmtree(normalized_dir, ignore_errors=True)
-
 
 def make_variants(master: Path, outdir: Path, chapters: List[Dict[str, Any]], title: str) -> List[Dict[str, Any]]:
     if FAST_MODE:
