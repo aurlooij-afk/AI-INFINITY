@@ -240,8 +240,26 @@ def test_installed_adapter_enriches_the_existing_creator_research_function(monke
                     "title": "AI video editing discussion", "url": "https://example.org/story",
                     "author": "sample", "points": "4", "comments": "2",
                 },
+                {
+                    "id": "35959740", "source": "API Anything / Goodreads",
+                    "title": "Piranesi", "url": "https://www.goodreads.com/book/show/35959740",
+                    "author": "Susanna Clarke", "rating": "4.3", "ratings_count": "100000",
+                },
+                {
+                    "id": "504230", "source": "API Anything / Steam",
+                    "title": "Celeste", "url": "https://store.steampowered.com/app/504230/",
+                    "price": "$19.99", "release_date": "2018",
+                },
+                {
+                    "id": "B012345678", "source": "API Anything / Amazon",
+                    "title": "USB microphone", "url": "https://www.amazon.com/dp/B012345678",
+                    "price": "$29.99",
+                },
             ],
-            "operations": {"youtube.search": "ready", "hacker-news.search": "ready"},
+            "operations": {
+                "youtube.search": "ready", "hacker-news.search": "ready",
+                "goodreads.searchBooks": "ready", "steam.search": "ready", "amazon.search": "ready",
+            },
             "truthful": True,
         },
     )
@@ -250,13 +268,15 @@ def test_installed_adapter_enriches_the_existing_creator_research_function(monke
     result = creator.research_topic("AI video editing", limit=5)
 
     assert installed["status"] == "installed"
-    assert result["source_count"] == 3
-    assert result["provider_count"] == 3
-    assert [s["source"] for s in result["sources"]].count("API Anything / YouTube") == 1
-    assert [s["source"] for s in result["sources"]].count("API Anything / Hacker News") == 1
-    assert result["research_connector"]["items_added"] == 2
-    assert result["providers"]["API Anything / YouTube"]["status"] == "ready"
-    assert result["providers"]["API Anything / Hacker News"]["status"] == "ready"
+    assert result["source_count"] == 6
+    assert result["provider_count"] == 6
+    for source_name in (
+        "API Anything / YouTube", "API Anything / Hacker News", "API Anything / Goodreads",
+        "API Anything / Steam", "API Anything / Amazon",
+    ):
+        assert [s["source"] for s in result["sources"]].count(source_name) == 1
+        assert result["providers"][source_name]["status"] == "ready"
+    assert result["research_connector"]["items_added"] == 5
 
 
 def test_installed_adapter_respects_explicit_disable_external_research_policy(monkeypatch):
