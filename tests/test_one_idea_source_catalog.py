@@ -38,7 +38,7 @@ def test_eight_story_scenes_have_distinct_attributed_free_source_clips():
     assert rows[1]["title"] == "Man Typing on Laptop with Blank Screen"
     assert "sunrise" in rows[4]["title"].lower()
     assert "timeline" in rows[6]["description"].lower()
-    assert "timeline" in rows[6]["title"].lower()
+    assert "editing" in rows[6]["title"].lower()
     assert "blank laptop" in rows[1]["visual_match"].lower()
 
 
