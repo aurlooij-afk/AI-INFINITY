@@ -6059,6 +6059,115 @@ def _normalize_delivery_duration(source: Path, target_seconds: float, out: Path)
     if abs(fitted - target) > 0.75:
         raise RuntimeError(f"duration normalization ({reason}) produced {fitted:.2f}s instead of {target:.2f}s")
     return out
+def _normalize_delivery_profile(
+    source: Path,
+    out: Path,
+    aspect_ratio: str,
+    require_full_hd: bool,
+) -> Path:
+    """Enforce the requested delivery canvas after all scene/concat operations."""
+    if not source.is_file() or source.stat().st_size <= 10_000:
+        raise RuntimeError("delivery profile normalization requires a real completed video")
+    if not require_full_hd:
+        return source
+    targets = {
+        "16:9": (1920, 1080),
+        "9:16": (1080, 1920),
+        "1:1": (1080, 1080),
+        "4:5": (1080, 1350),
+    }
+    width, height = targets.get(str(aspect_ratio or "16:9").strip(), targets["16:9"])
+    probe = ffprobe_json(source)
+    streams = probe.get("streams") or []
+    video = next((row for row in streams if row.get("codec_type") == "video"), {})
+    current = (int(video.get("width") or 0), int(video.get("height") or 0))
+    if current == (width, height):
+        return source
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.unlink(missing_ok=True)
+    # Quality presets are a delivery contract, not a hint. If an upstream
+    # renderer returned its low-memory canvas, finish at the requested size and
+    # report the profile normalization rather than silently shipping 720p.
+    vf = (
+        f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
+        f"crop={width}:{height},setsar=1"
+    )
+    ffmpeg(
+        "-i", source,
+        "-map", "0:v:0",
+        "-map", "0:a:0",
+        "-vf", vf,
+        "-c:v", "libx264",
+        "-preset", os.getenv("AI_INFINITY_PROFILE_PRESET", "veryfast"),
+        "-crf", "18",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-ar", "48000",
+        "-ac", "2",
+        "-movflags", "+faststart",
+        out,
+        timeout=max(180, int(probe_duration(source) * 8)),
+    )
+    if not out.is_file() or out.stat().st_size <= 10_000:
+        raise RuntimeError("delivery profile normalization produced an invalid file")
+    result = ffprobe_json(out)
+    result_video = next(
+        (row for row in (result.get("streams") or []) if row.get("codec_type") == "video"),
+        {},
+    )
+    actual = (int(result_video.get("width") or 0), int(result_video.get("height") or 0))
+    duration_in = float((probe.get("format") or {}).get("duration") or 0)
+    duration_out = float((result.get("format") or {}).get("duration") or 0)
+    if actual != (width, height):
+        raise RuntimeError(
+            f"delivery profile normalization expected {width}x{height}, got {actual[0]}x{actual[1]}"
+        )
+    if duration_in <= 0 or abs(duration_out - duration_in) > 1.0:
+        raise RuntimeError(
+            f"delivery profile normalization changed duration from {duration_in:.3f}s to {duration_out:.3f}s"
+        )
+    return out
+
+
+def _ensure_delivery_subtitle_track(source: Path, captions: Path, out: Path) -> Path:
+    """Mux the authoritative SRT into the final MP4, replacing stale/missing subtitle tracks."""
+    if not source.is_file() or source.stat().st_size <= 10_000:
+        raise RuntimeError("subtitle mux requires a real completed video")
+    if not captions.is_file() or captions.stat().st_size <= 20:
+        raise RuntimeError("subtitle mux requires the production captions.srt")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.unlink(missing_ok=True)
+    ffmpeg(
+        "-i", source,
+        "-i", captions,
+        "-map", "0:v:0",
+        "-map", "0:a:0",
+        "-map", "1:0",
+        "-c:v", "copy",
+        "-c:a", "copy",
+        "-c:s", "mov_text",
+        "-metadata:s:s:0", "language=eng",
+        "-disposition:s:0", "default",
+        "-movflags", "+faststart",
+        out,
+        timeout=max(90, int(probe_duration(source) * 3)),
+    )
+    if not out.is_file() or out.stat().st_size <= 10_000:
+        raise RuntimeError("subtitle mux produced an invalid MP4")
+    result = ffprobe_json(out)
+    streams = result.get("streams") or []
+    if not any(row.get("codec_type") == "subtitle" for row in streams):
+        raise RuntimeError("final MP4 is missing the required embedded subtitle stream")
+    src_duration = float(probe_duration(source))
+    out_duration = float(probe_duration(out))
+    if src_duration <= 0 or abs(out_duration - src_duration) > 0.75:
+        raise RuntimeError(
+            f"subtitle mux changed duration from {src_duration:.3f}s to {out_duration:.3f}s"
+        )
+    return out
+
+
 def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = False) -> Dict[str, Any]:
     """Master the actual delivered programme to a measurable dialogue-safe target.
 
@@ -6735,6 +6844,43 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 else "trimmed_real_media" if float(before_duration) > float(target)
                 else "none"
             ),
+        })
+
+        # Enforce full-HD delivery for high/professional briefs, even if an upstream
+        # scene renderer fell back to its lower-memory canvas. Then always restore the
+        # authoritative SRT as an MP4 subtitle stream; duration fitting/profile transcodes
+        # must never silently remove caption delivery.
+        quality_preset = str(req.get("quality_preset") or "balanced").strip().lower()
+        requires_full_hd_delivery = (
+            not FAST_MODE
+            or quality_preset in {"high", "professional", "cinematic", "ultra"}
+            or bool(req.get("require_full_hd"))
+        )
+        profile_output = outdir / "final_delivery_profile.mp4"
+        profile_source = _normalize_delivery_profile(
+            captioned, profile_output, requested_ratio, requires_full_hd_delivery
+        )
+        if profile_source != captioned and profile_source.exists():
+            os.replace(profile_source, captioned)
+        subtitle_output = outdir / "final_subtitles_muxed.mp4"
+        subtitle_source = _ensure_delivery_subtitle_track(captioned, captions, subtitle_output)
+        if subtitle_source != captioned and subtitle_source.exists():
+            os.replace(subtitle_source, captioned)
+        delivery_profile_probe = ffprobe_json(captioned)
+        delivery_video = next(
+            (row for row in (delivery_profile_probe.get("streams") or []) if row.get("codec_type") == "video"),
+            {},
+        )
+        delivery_subtitle_count = sum(
+            row.get("codec_type") == "subtitle" for row in (delivery_profile_probe.get("streams") or [])
+        )
+        checkpoint(project_id, "delivery_profile_and_subtitles_verified", {
+            "requested_aspect_ratio": requested_ratio,
+            "requires_full_hd": requires_full_hd_delivery,
+            "width": int(delivery_video.get("width") or 0),
+            "height": int(delivery_video.get("height") or 0),
+            "subtitle_stream_count": delivery_subtitle_count,
+            "truthful": True,
         })
 
         # Run one final programme-level audio master after assembly, subtitle muxing,
