@@ -1612,6 +1612,17 @@ def _explicit_timed_storyboard_plan(
     user storyboard with generic Creator OS marketing copy.
     """
     raw_objective = re.sub(r"\s+", " ", str(objective or "")).strip()
+    style_match = re.search(
+        r"(?:\bVISUAL DIRECTION\b|\bVISUALS?\s*:?)\s*(.*?)"
+        r"(?=\bVOICE[\s,]+MUSIC\b|\bPRODUCTION REQUIREMENTS\b|"
+        r"\bQUALITY CONTROL\b|\bSUCCESS STANDARD\b|$)",
+        raw_objective,
+        re.I,
+    )
+    visual_style = re.sub(r"[*_]+", "", style_match.group(1)).strip()[:900] if style_match else ""
+    story_objective = re.split(
+        r"\b(?:VISUAL DIRECTION|VISUALS?)\b\s*:?", raw_objective, maxsplit=1, flags=re.I
+    )[0]
     pattern = re.compile(
         r"(?P<start>\d{1,4})\s*[–—-]\s*(?P<end>\d{1,4})\s*"
         r"(?:s|secs?|seconds?)\b\s*(?:[—: ]\s*)?"
@@ -1619,7 +1630,7 @@ def _explicit_timed_storyboard_plan(
         r"(?=(?:\s+\d{1,4}\s*[–—-]\s*\d{1,4}\s*(?:s|secs?|seconds?)\b)|$)",
         re.I,
     )
-    matches = list(pattern.finditer(raw_objective))
+    matches = list(pattern.finditer(story_objective))
     if len(matches) < 6:
         return None
     intervals = []
@@ -1741,6 +1752,7 @@ def _explicit_timed_storyboard_plan(
             "visual_query": f"{search_subject}; {visual_detail}"[:700],
             "image_prompt": (
                 f"Premium cinematic live-action film still: {visual_focus}. "
+                f"Overall visual direction: {visual_style}. "
                 "Deep midnight blues, controlled cyan/violet highlights, warm gold practical light, "
                 "filmic contrast, realistic textures, coherent composition, no fabricated UI, no logos, no gibberish text."
             )[:1000],
