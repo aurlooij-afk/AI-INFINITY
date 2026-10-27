@@ -983,3 +983,45 @@ def test_api_anything_write_learning_uses_aborted_write_capture_flag(monkeypatch
     assert result["status"] == "learned"
     assert result["learning_aborts_write_requests"] is True
     assert "--write" in calls[-1]
+
+
+def test_general_executor_accepts_declared_credentials_and_nested_json_without_echoing_secrets(monkeypatch, tmp_path):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
+    connector._GENERIC_COOLDOWNS.clear()
+    calls = []
+
+    def fake_run(runner, executable, args, *, cwd, env, timeout):
+        calls.append((list(args), dict(env)))
+        if args == ["sites"]:
+            return [{"name": "data.example.com", "source": "user"}], None
+        if args == ["ops", "data.example.com"]:
+            return {"operations": [{
+                "name": "queryRecords", "readOnly": True, "minTier": 1,
+                "parameters": [{"name": "api_key"}, {"name": "filters"}],
+            }]}, None
+        if args[0:3] == ["call", "data.example.com", "queryRecords"]:
+            return {"ok": True, "tier": 1, "data": {
+                "records": [{"id": "record-1"}], "api_key": "echoed-secret",
+            }}, None
+        raise AssertionError(f"unexpected CLI request: {args}")
+
+    monkeypatch.setattr(connector, "_run_json", fake_run)
+    params = {
+        "api_key": "caller-secret-value",
+        "filters": {"regions": ["AF", "PK"], "active": True},
+    }
+    result = connector.execute_api_anything_operation(
+        "data.example.com", "queryRecords", params,
+        user_id="research-user", allow_writes=False, max_tier=1,
+    )
+
+    assert result["status"] == "completed"
+    assert result["executed"] is True
+    call_args = calls[-1][0]
+    sent = json.loads(call_args[call_args.index("--json") + 1])
+    assert sent == params
+    serialized_result = json.dumps(result, ensure_ascii=False)
+    assert "caller-secret-value" not in serialized_result
+    assert "echoed-secret" not in serialized_result
+    assert result["result"]["api_key"] == "[redacted]"
