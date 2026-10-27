@@ -548,7 +548,7 @@ def test_connector_enforces_output_limit_while_streaming_subprocess_stdout(monke
     assert error == "output_too_large"
 
 
-def _generic_runner(*, read_only=True, parameters=None, result=None, site_source="bundled"):
+def _generic_runner(*, read_only=True, parameters=None, result=None, site_source="bundled", min_tier=1):
     calls = []
 
     def runner(command, **kwargs):
@@ -557,11 +557,14 @@ def _generic_runner(*, read_only=True, parameters=None, result=None, site_source
         if args == ["sites"]:
             payload = [{"name": "demo-site", "source": site_source}]
         elif args == ["ops", "demo-site"]:
-            payload = {"operations": [{
+            operation = {
                 "name": "search", "readOnly": read_only,
-                "parameters": parameters if parameters is not None else ["q:string"],
+                "params": parameters if parameters is not None else ["q:string"],
                 "summary": "Search public records",
-            }]}
+            }
+            if min_tier > 1:
+                operation["minTier"] = min_tier
+            payload = {"operations": [operation]}
         elif args[:3] == ["call", "demo-site", "search"]:
             payload = result if result is not None else {
                 "ok": True, "tier": 1,
@@ -635,6 +638,25 @@ def test_generic_readonly_executor_rejects_unknown_params_and_write_operations_b
     assert refused["status"] == "operation_not_verified_read_only"
     assert refused["executed"] is False
     assert len(write_calls) == 2
+
+
+def test_generic_catalog_and_executor_refuse_operations_requiring_higher_transport_tiers(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    runner, catalog_calls = _generic_runner(min_tier=2)
+    monkeypatch.setattr(connector.subprocess, "run", runner)
+
+    catalog = connector.list_bundled_read_only_operations()
+    assert catalog["status"] == "empty"
+    assert catalog["operations"] == []
+    assert len(catalog_calls) == 2
+
+    connector._GENERIC_COOLDOWNS.clear()
+    runner, execution_calls = _generic_runner(min_tier=2)
+    monkeypatch.setattr(connector.subprocess, "run", runner)
+    refused = connector.execute_bundled_read_only("demo-site", "search", {"q": "anything"})
+    assert refused["status"] == "tier_one_transport_required"
+    assert refused["executed"] is False
+    assert len(execution_calls) == 2
 
 
 def test_generic_readonly_executor_rejects_unbundled_specs_and_sensitive_inputs(monkeypatch):
