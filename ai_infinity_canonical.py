@@ -1090,6 +1090,98 @@ def dispatch_command(command, user_id, raw=None):
                 ),
                 "truthful": True,
             }
+
+        import free_api_fabric as fabric
+
+        api_id = clean(payload.get("api_id"), 120)
+        op_id = clean(payload.get("op_id") or payload.get("operation_id"), 120)
+        if not api_id:
+            match = re.search(r"\bapi[_ -]?id\s*[:=]\s*([A-Za-z0-9_-]{6,120})", cmd, re.I)
+            api_id = match.group(1) if match else ""
+        if not op_id:
+            match = re.search(r"\b(?:operation|op)[_ -]?id\s*[:=]\s*([A-Za-z0-9_-]{6,120})", cmd, re.I)
+            op_id = match.group(1) if match else ""
+        api_params = payload.get("api_params")
+        if not isinstance(api_params, dict):
+            api_params = payload.get("query_params")
+        if not isinstance(api_params, dict):
+            api_params = {}
+        if not api_params:
+            # Natural-language command box can pass explicit read arguments as
+            # key=value; the API fabric later rejects names absent from the verified spec.
+            pairs = re.findall(
+                r"(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_.-]{0,63})\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s,;]+))",
+                cmd,
+            )
+            api_params = {
+                key: (double_quoted if double_quoted != "" else single_quoted if single_quoted != "" else bare)
+                for key, double_quoted, single_quoted, bare in pairs
+                if key.lower() not in {"api_id", "api-id", "operation_id", "operation-id", "op_id", "op-id"}
+            }
+
+        # A concrete operation ID is the only execution path. The fabric rechecks
+        # that it is catalogued as a verified no-auth GET/HEAD operation at call time.
+        if op_id:
+            try:
+                result = fabric.invoke(op_id, query=api_params, body=payload.get("body"))
+            except Exception as exc:
+                # Keep external-response details and any caller-provided values out
+                # of command errors; the fabric itself never executes non-GET/HEAD.
+                return {
+                    "status": "degraded", "route": route, "operation_id": op_id,
+                    "reason": "The selected verified read-only operation failed; no successful result is claimed.",
+                    "error_type": type(exc).__name__, "executed": False,
+                    "truthful": True,
+                }
+            return {
+                "status": "completed", "route": route, "operation_id": op_id,
+                "result": result, "executed": True, "read_only": True,
+                "truthful": True,
+            }
+
+        if api_id:
+            current = fabric.operations(api_id, limit=50)
+            verification = None
+            if not current:
+                verification = fabric.verify_api(api_id)
+                current = fabric.operations(api_id, limit=50)
+            return {
+                "status": "completed" if current else "degraded",
+                "route": route, "api_id": api_id, "operations": current[:50],
+                "verification": verification, "executed": False,
+                "next_action": "Provide a verified operation_id and api_params to execute one read-only query.",
+                "truthful": True,
+            }
+
+        search_text = clean(
+            payload.get("api_search") or payload.get("api_name") or payload.get("topic") or payload.get("subject"),
+            200,
+        )
+        if not search_text:
+            search_text = re.sub(
+                r"^\s*(?:please\s+)?(?:use|search|find|look up|query|fetch|retrieve|discover|catalog|run)\s+",
+                "", cmd, flags=re.I,
+            ).strip()[:200]
+        candidates = fabric.catalog(query=search_text, limit=10, executable_only=True)
+        bootstrapped = False
+        if (
+            not candidates
+            and not fabric.SYNC_STATE.get("bootstrap_started")
+            and not fabric.SYNC_STATE.get("bootstrap_complete")
+        ):
+            bootstrapped = bool(fabric.start_background_sync())
+        state = fabric.status()
+        return {
+            "status": "completed" if candidates else "discovery_started" if bootstrapped or state.get("bootstrap_started") else "degraded",
+            "route": route, "query": search_text, "candidates": candidates,
+            "discovery_status": "warming" if bootstrapped or (
+                state.get("bootstrap_started") and not state.get("bootstrap_complete")
+            ) else "ready",
+            "executed": False,
+            "next_action": "Choose a verified API candidate, then pass its api_id to inspect operations or a verified operation_id to execute.",
+            "truthful": True,
+        }
+
     if route == "capabilities":
         result = capabilities(user_id)
         try:
