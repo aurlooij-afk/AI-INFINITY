@@ -881,6 +881,14 @@ def list_api_anything_operations(
         return {"status": "internal_error", "error_type": type(exc).__name__, "sites": [], "operations": [], "truthful": True}
 
 
+def _write_preview_key(site_name: str, operation_name: str, parameters: dict[str, Any], max_tier: int) -> str:
+    payload = json.dumps(
+        {"site": site_name, "operation": operation_name, "parameters": parameters, "max_tier": max_tier},
+        sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def execute_api_anything_operation(
     site_name: str, operation_name: str, parameters: dict[str, Any] | None = None, *,
     user_id: str = "anonymous", allow_writes: bool = False, max_tier: int = 3,
@@ -982,6 +990,15 @@ def execute_api_anything_operation(
                 }
             if not declared and safe_params:
                 return {"status": "parameter_schema_unavailable", "executed": False, "truthful": True}
+            preview_dir = Path(env["API_ANYTHING_HOME"]) / ".ai-infinity-write-previews"
+            preview_path = preview_dir / (_write_preview_key(site_name, operation_name, safe_params, max_tier) + ".json")
+            if is_write and allow_writes and not dry_run and not preview_path.is_file():
+                return {
+                    "status": "dry_run_required", "executed": False,
+                    "site": site_name, "operation": operation_name, "write_capable": True,
+                    "next_action": "Run this exact operation with api_anything_dry_run=true, review the redacted request, then repeat with api_anything_allow_writes=true.",
+                    "truthful": True,
+                }
             args = [
                 "call", site_name, operation_name, "--json",
                 json.dumps(safe_params, ensure_ascii=False, separators=(",", ":")),
@@ -1005,11 +1022,26 @@ def execute_api_anything_operation(
                 return {"status": "invalid_result_shape", "executed": False, "truthful": True}
             safe_result = _safe_public_data(result)
             if dry_run:
+                preview_ready = result.get("ok") is True and result.get("dry") is True
+                if preview_ready and is_write:
+                    try:
+                        preview_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+                        preview_path.write_text(json.dumps({
+                            "site": site_name, "operation": operation_name,
+                            "parameters_sha256": hashlib.sha256(
+                                json.dumps(safe_params, sort_keys=True, ensure_ascii=False).encode("utf-8")
+                            ).hexdigest(),
+                            "max_tier": max_tier, "created_at": int(time.time()),
+                        }), encoding="utf-8")
+                        preview_path.chmod(0o600)
+                    except OSError:
+                        return {"status": "preview_receipt_persist_failed", "executed": False, "truthful": True}
                 return {
-                    "status": "dry_run_ready" if result.get("ok") is True else "dry_run_failed",
+                    "status": "dry_run_ready" if preview_ready else "dry_run_failed",
                     "provider": "api-anything", "site": site_name, "operation": operation_name,
                     "read_only": not is_write, "write_capable": is_write, "dry_run": True,
                     "request_preview": _safe_public_data(result.get("request") or result.get("preview") or result.get("data")),
+                    "preview_receipt_saved": bool(preview_ready and is_write),
                     "executed": False, "truthful": True,
                 }
             if result.get("ok") is not True:
