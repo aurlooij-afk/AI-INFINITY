@@ -931,7 +931,8 @@ def test_general_api_anything_executor_executes_scoped_user_read_with_selected_t
     assert result["executed"] is True
     assert result["transport_tier"] == 2
     assert calls[-1][0][calls[-1][0].index("--max-tier") + 1] == "2"
-    assert calls[-1][1]["API_ANYTHING_HOME"] != calls[0][1]["API_ANYTHING_HOME"]
+    # Repeated calls by the same caller reuse their durable profile so learned specs survive.
+    assert calls[-1][1]["API_ANYTHING_HOME"] == calls[0][1]["API_ANYTHING_HOME"]
 
 
 def test_api_anything_learning_accepts_two_examples_and_refuses_local_targets(monkeypatch, tmp_path):
