@@ -968,7 +968,7 @@ def dispatch_command(command, user_id, raw=None):
                 key, item = value.split(separator, 1)
                 return {key.strip(): item.strip()}
 
-            trigger_url = payload.get("api_anything_trigger_url") or parsed_pairs.pop("trigger", "")
+            trigger_url = payload.get("api_anything_trigger_url") or parsed_pairs.pop("trigger_url", parsed_pairs.pop("trigger", ""))
             example_1 = parse_example(payload.get("api_anything_example") or parsed_pairs.pop("example", ""))
             example_2 = parse_example(payload.get("api_anything_example2") or parsed_pairs.pop("example2", ""))
             match_spec = payload.get("api_anything_match")
@@ -990,6 +990,7 @@ def dispatch_command(command, user_id, raw=None):
             learn_request = (
                 bool(re.search(r"\b(?:learn|teach|map)\b", cmd.lower()))
                 or payload.get("api_anything_learn") is True
+                or payload.get("api_anything_action") == "learn"
             )
             if learn_request:
                 if not hasattr(connector, "learn_api_anything_operation"):
@@ -1003,7 +1004,7 @@ def dispatch_command(command, user_id, raw=None):
                 )
                 learned = result.get("status") == "learned"
                 return {
-                    "status": "completed" if learned else "degraded",
+                    "status": "learned" if learned else "degraded",
                     "route": route, "provider": "api-anything", "result": result,
                     "executed": False, "learned": learned, "truthful": True,
                 }
@@ -1016,7 +1017,7 @@ def dispatch_command(command, user_id, raw=None):
                 re.search(r"(?:^|\s)--dry(?:\s|$)", cmd, re.I)
             )
             tier_value = payload.get("api_anything_max_tier") or payload.get("max_tier")
-            tier_match = re.search(r"(?:^|\s)--max-tier\s+([123])(?:\s|$)", cmd, re.I)
+            tier_match = re.search(r"(?:^|\s)(?:--max-tier\s+|max_tier\s*=\s*)([123])(?:\s|$)", cmd, re.I)
             if tier_value is None and tier_match:
                 tier_value = int(tier_match.group(1))
             try:
