@@ -703,6 +703,29 @@ def execute_bundled_operation(
                 args.append("--allow-writes")
             if dry_run:
                 args.append("--dry")
+            if preview_missing and auto_preflight:
+                preflight_args = [*args, "--dry"]
+                preview_result, preview_error = run(preflight_args)
+                if preview_error or not isinstance(preview_result, dict) or preview_result.get("ok") is not True or preview_result.get("dry") is not True:
+                    return {
+                        "status": "dry_run_failed", "executed": False,
+                        "site": site_name, "operation": operation_name,
+                        "error_type": preview_error or "invalid_preview_response",
+                        "truthful": True,
+                    }
+                try:
+                    preview_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    preview_path.write_text(json.dumps({
+                        "site": site_name, "operation": operation_name,
+                        "parameters_sha256": hashlib.sha256(
+                            json.dumps(safe_params, sort_keys=True, ensure_ascii=False).encode("utf-8")
+                        ).hexdigest(),
+                        "max_tier": max_tier, "created_at": int(time.time()),
+                    }), encoding="utf-8")
+                    preview_path.chmod(0o600)
+                except OSError:
+                    return {"status": "preview_receipt_persist_failed", "executed": False, "truthful": True}
+
             result, error = run(args)
             if error:
                 return {"status": error, "executed": False, "truthful": True}
@@ -925,6 +948,7 @@ def execute_api_anything_operation(
     site_name: str, operation_name: str, parameters: dict[str, Any] | None = None, *,
     user_id: str = "anonymous", allow_writes: bool = False, max_tier: int = 3,
     dry_run: bool = False, idempotency_key: str = "", again: bool = False,
+    auto_preflight: bool = False,
 ) -> dict[str, Any]:
     """Run a bundled or learned API Anything operation with tier selection and write reporting."""
     site_name = _clean_text(site_name, 64).lower()
@@ -1024,11 +1048,12 @@ def execute_api_anything_operation(
                 return {"status": "parameter_schema_unavailable", "executed": False, "truthful": True}
             preview_dir = Path(env["API_ANYTHING_HOME"]) / ".ai-infinity-write-previews"
             preview_path = preview_dir / (_write_preview_key(site_name, operation_name, safe_params, max_tier) + ".json")
-            if is_write and allow_writes and not dry_run and not preview_path.is_file():
+            preview_missing = is_write and allow_writes and not dry_run and not preview_path.is_file()
+            if preview_missing and not auto_preflight:
                 return {
                     "status": "dry_run_required", "executed": False,
                     "site": site_name, "operation": operation_name, "write_capable": True,
-                    "next_action": "Run this exact operation with api_anything_dry_run=true, review the redacted request, then repeat with api_anything_allow_writes=true.",
+                    "next_action": "Run this exact operation with api_anything_dry_run=true, inspect the request preview, then repeat the exact operation.",
                     "truthful": True,
                 }
             args = [
