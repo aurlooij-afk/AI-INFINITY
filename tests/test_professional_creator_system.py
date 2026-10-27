@@ -27,3 +27,44 @@ def test_professional_creator_ui_is_real_route():
     assert r.status_code == 200, r.text
     assert "Professional Creator System" in r.text
     assert "Start production" in r.text
+
+def test_explicit_timecoded_brand_film_brief_is_preserved_by_offline_planner():
+    import studio_ultimate
+
+    objective = (
+        "Create a 60-second cinematic brand film for AI Infinity. Story: "
+        "0–4s an arresting night-room hook, lone creator facing a blank screen; "
+        "narration “Every extraordinary world begins with something nobody else can see.” "
+        "4–12s the idea opens into dramatic landscapes, a futuristic city and human emotion. "
+        "12–25s real research becomes a clear narrative, script and storyboard; never invent research or UI. "
+        "25–40s cinematic landscapes, meaningful transitions, atmospheric lighting and emotional progression. "
+        "40–49s editable timeline, synchronized captions, balanced soundtrack and verification. "
+        "49–56s the creator reveals the completed work; narration “Research it. Shape it. Bring it to life. Then make it better.” "
+        "56–60s restrained AI Infinity signature; final line “AI Infinity. One idea. Infinite worlds.” "
+        "Visuals: midnight blue, restrained cyan/violet, warm gold."
+    )
+    plan = studio_ultimate._fallback_creative_plan(
+        title="ONE IDEA. INFINITE WORLDS.",
+        objective=objective,
+        fmt="long",
+        duration=60,
+        audience="global technology audience",
+        tone="premium cinematic and emotionally intelligent",
+        research={"sources": []},
+        language="English",
+        topic="AI Infinity — One Idea. Infinite Worlds.",
+    )
+
+    chapters = plan["chapters"]
+    assert plan["title"] == "ONE IDEA. INFINITE WORLDS."
+    assert plan["storyboard_origin"] == "explicit_timecoded_user_brief"
+    assert plan["brief_fidelity"]["timecoded_scenes"] == 7
+    assert [chapter["duration"] for chapter in chapters] == [4.0, 8.0, 13.0, 15.0, 9.0, 7.0, 4.0]
+    assert sum(chapter["duration"] for chapter in chapters) == 60.0
+    assert chapters[0]["narration"] == "Every extraordinary world begins with something nobody else can see."
+    assert chapters[5]["narration"] == "Research it. Shape it. Bring it to life. Then make it better."
+    assert chapters[6]["narration"] == "AI Infinity. One idea. Infinite worlds."
+    assert len({chapter["visual_focus"] for chapter in chapters}) == 7
+    assert "futuristic city" in chapters[1]["visual_focus"].lower()
+    assert "generic Creator OS marketing copy" not in " ".join(chapter["narration"] for chapter in chapters)
+
