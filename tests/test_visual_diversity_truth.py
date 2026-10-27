@@ -1924,3 +1924,80 @@ def test_final_delivery_loudness_master_rejects_invalid_targets(monkeypatch, tmp
     else:
         raise AssertionError("unsafe loudness target should have been rejected")
 
+def test_final_delivery_profile_enforces_full_hd_for_high_quality_briefs(monkeypatch, tmp_path):
+    target_studio = closure._studio()
+    source = tmp_path / "source_720p.mp4"
+    output = tmp_path / "source_1080p.mp4"
+    source.write_bytes(b"real-source-fixture" * 1200)
+    captured = {}
+
+    def fake_ffmpeg(*args, **kwargs):
+        captured["args"] = [str(value) for value in args]
+        captured["timeout"] = kwargs.get("timeout")
+        Path(args[-1]).write_bytes(b"normalized-full-hd-fixture" * 1200)
+
+    def fake_probe(path):
+        resolution = (1920, 1080) if Path(path) == output else (1280, 720)
+        return {
+            "format": {"duration": "60.0"},
+            "streams": [
+                {"codec_type": "video", "codec_name": "h264", "width": resolution[0], "height": resolution[1]},
+                {"codec_type": "audio", "codec_name": "aac", "duration": "60.0"},
+            ],
+        }
+
+    monkeypatch.setattr(target_studio, "ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(target_studio, "ffprobe_json", fake_probe)
+    monkeypatch.setattr(target_studio, "probe_duration", lambda path: 60.0)
+
+    result = target_studio._normalize_delivery_profile(source, output, "16:9", require_full_hd=True)
+
+    args = captured["args"]
+    assert result == output
+    assert "-vf" in args
+    assert "scale=1920:1080:force_original_aspect_ratio=increase:flags=lanczos,crop=1920:1080,setsar=1" in args
+    assert args[args.index("-map") + 1] == "0:v:0"
+    assert "0:a:0" in args
+    assert "-crf" in args and args[args.index("-crf") + 1] == "18"
+    assert output.is_file() and output.stat().st_size > 10_000
+
+
+def test_final_delivery_subtitle_mux_uses_authoritative_srt(monkeypatch, tmp_path):
+    target_studio = closure._studio()
+    source = tmp_path / "final_video.mp4"
+    captions = tmp_path / "captions.srt"
+    output = tmp_path / "final_with_subtitles.mp4"
+    source.write_bytes(b"real-video-fixture" * 1200)
+    captions.write_text(
+        "1\\n00:00:00,000 --> 00:00:03,000\\nEvery world begins with an idea.\\n",
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def fake_ffmpeg(*args, **kwargs):
+        captured["args"] = [str(value) for value in args]
+        Path(args[-1]).write_bytes(b"video-with-subtitle-fixture" * 1200)
+
+    def fake_probe(path):
+        streams = [
+            {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080},
+            {"codec_type": "audio", "codec_name": "aac", "duration": "60.0"},
+        ]
+        if Path(path) == output:
+            streams.append({"codec_type": "subtitle", "codec_name": "mov_text", "duration": "60.0"})
+        return {"format": {"duration": "60.0"}, "streams": streams}
+
+    monkeypatch.setattr(target_studio, "ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(target_studio, "ffprobe_json", fake_probe)
+    monkeypatch.setattr(target_studio, "probe_duration", lambda path: 60.0)
+
+    result = target_studio._ensure_delivery_subtitle_track(source, captions, output)
+
+    args = captured["args"]
+    assert result == output
+    assert str(captions) in args
+    assert "-map" in args and "1:0" in args
+    assert "-c:s" in args and args[args.index("-c:s") + 1] == "mov_text"
+    assert "-metadata:s:s:0" in args and "language=eng" in args
+    assert "-disposition:s:0" in args and "default" in args
+    assert output.is_file() and output.stat().st_size > 10_000
