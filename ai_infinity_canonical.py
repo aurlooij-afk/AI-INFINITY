@@ -968,7 +968,7 @@ def dispatch_command(command, user_id, raw=None):
                 key, item = value.split(separator, 1)
                 return {key.strip(): item.strip()}
 
-            trigger_url = payload.get("api_anything_trigger_url") or parsed_pairs.pop("trigger_url", parsed_pairs.pop("trigger", ""))
+            trigger_url = payload.get("api_anything_trigger_url") or parsed_pairs.pop("trigger_url", parsed_pairs.pop("trigger_url", parsed_pairs.pop("trigger", "")))
             example_1 = parse_example(payload.get("api_anything_example") or parsed_pairs.pop("example", ""))
             example_2 = parse_example(payload.get("api_anything_example2") or parsed_pairs.pop("example2", ""))
             match_spec = payload.get("api_anything_match")
@@ -990,6 +990,7 @@ def dispatch_command(command, user_id, raw=None):
             learn_request = (
                 bool(re.search(r"\b(?:learn|teach|map)\b", cmd.lower()))
                 or payload.get("api_anything_learn") is True
+                or payload.get("api_anything_action") == "learn"
                 or payload.get("api_anything_action") == "learn"
             )
             if learn_request:
