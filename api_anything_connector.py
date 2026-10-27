@@ -1126,39 +1126,50 @@ def learn_api_anything_operation(
     example: dict[str, Any], example2: dict[str, Any], *,
     user_id: str = "anonymous", write: bool = False,
     match: dict[str, str] | None = None,
+    steps: list[dict[str, Any]] | None = None,
+    soft_from: str = "",
+    description: str = "",
 ) -> dict[str, Any]:
-    """Learn a site operation from two distinct examples; write learning intercepts/aborts writes."""
+    """Learn a site operation from two different examples, with optional browser interaction steps."""
     site_name = _clean_text(site_name, 64).lower()
     operation_name = _clean_text(operation_name, 64)
-    if not _SAFE_SITE_NAME.fullmatch(site_name) or not _SAFE_OPERATION_NAME.fullmatch(operation_name):
+    if not _SAFE_SITE_NAME.fullmatch(site_name) or not _SAFE_OPERATION_NAME.fullmatch(operation_name) or ".." in site_name:
         return {"status": "invalid_operation", "executed": False, "truthful": True}
+
+    def public_https(value: str) -> bool:
+        parsed_value = urlparse(value)
+        host_value = (parsed_value.hostname or "").rstrip(".").lower()
+        try:
+            port_value = parsed_value.port
+        except ValueError:
+            return False
+        if (
+            parsed_value.scheme != "https" or not host_value or parsed_value.username or parsed_value.password
+            or port_value not in (None, 443)
+            or host_value in {"localhost", "localhost.localdomain"}
+            or host_value.endswith((".local", ".internal", ".localhost", ".test", ".invalid"))
+        ):
+            return False
+        try:
+            address_value = ipaddress.ip_address(host_value)
+            if not address_value.is_global:
+                return False
+        except ValueError:
+            pass
+        return True
+
     trigger_url = _clean_text(trigger_url, 1200)
-    parsed = urlparse(trigger_url)
-    host = (parsed.hostname or "").rstrip(".").lower()
-    try:
-        port = parsed.port
-    except ValueError:
+    soft_from = _clean_text(soft_from, 1200)
+    description = _clean_text(description, 300)
+    if not public_https(trigger_url) or (soft_from and not public_https(soft_from)):
         return {"status": "public_https_url_required", "executed": False, "truthful": True}
-    if (
-        parsed.scheme != "https" or not host or parsed.username or parsed.password
-        or port not in (None, 443)
-        or host in {"localhost", "localhost.localdomain"}
-        or host.endswith((".local", ".internal", ".localhost", ".test", ".invalid"))
-        or ".." in site_name
-    ):
-        return {"status": "public_https_url_required", "executed": False, "truthful": True}
-    try:
-        address = ipaddress.ip_address(host)
-        if not address.is_global:
-            return {"status": "public_https_url_required", "executed": False, "truthful": True}
-    except ValueError:
-        pass
     if not isinstance(example, dict) or not isinstance(example2, dict) or not example or not example2:
         return {"status": "two_examples_required", "executed": False, "truthful": True}
     if set(example) != set(example2):
         return {"status": "example_parameters_must_match", "executed": False, "truthful": True}
     if example == example2:
         return {"status": "examples_must_differ", "executed": False, "truthful": True}
+
     def validate_example(row: dict[str, Any]) -> dict[str, str] | None:
         safe: dict[str, str] = {}
         for key, value in row.items():
@@ -1166,17 +1177,54 @@ def learn_api_anything_operation(
                 return None
             if not isinstance(value, (str, int, float, bool)) or isinstance(value, str) and (len(value) > MAX_QUERY_CHARS or chr(0) in value):
                 return None
+            if isinstance(value, float) and not math.isfinite(value):
+                return None
             safe[key] = str(value)
         return safe
+
     first = validate_example(example)
     second = validate_example(example2)
     if first is None or second is None:
         return {"status": "invalid_example", "executed": False, "truthful": True}
-    if not all("{" + key + "}" in trigger_url for key in first):
-        return {"status": "trigger_must_include_each_parameter_placeholder", "executed": False, "truthful": True}
+
+    safe_steps: list[dict[str, Any]] = []
+    if steps is not None:
+        if not isinstance(steps, list) or len(steps) > 20:
+            return {"status": "invalid_steps", "executed": False, "truthful": True}
+        for step in steps:
+            if not isinstance(step, dict) or set(step) - {"action", "selector", "value", "ms"}:
+                return {"status": "invalid_steps", "executed": False, "truthful": True}
+            action = step.get("action")
+            if action not in {"click", "fill", "press", "wait", "goto"}:
+                return {"status": "invalid_steps", "executed": False, "truthful": True}
+            safe_step: dict[str, Any] = {"action": action}
+            for field in ("selector", "value"):
+                val = step.get(field)
+                if val is not None:
+                    if not isinstance(val, str) or len(val) > 800 or chr(0) in val:
+                        return {"status": "invalid_steps", "executed": False, "truthful": True}
+                    if field == "value" and action == "goto" and val and not public_https(val):
+                        return {"status": "public_https_url_required", "executed": False, "truthful": True}
+                    safe_step[field] = val
+            if action in {"click", "fill", "press"} and not safe_step.get("selector"):
+                return {"status": "invalid_steps", "executed": False, "truthful": True}
+            if action == "wait":
+                ms = step.get("ms", 250)
+                if type(ms) not in (int, float) or not math.isfinite(ms) or ms < 0 or ms > 10000:
+                    return {"status": "invalid_steps", "executed": False, "truthful": True}
+                safe_step["ms"] = ms
+            safe_steps.append(safe_step)
+
+    all_template_fields = trigger_url + "\n" + json.dumps(safe_steps, ensure_ascii=False)
+    if not all("{" + key + "}" in all_template_fields for key in first):
+        return {"status": "trigger_or_steps_must_include_each_parameter_placeholder", "executed": False, "truthful": True}
+
     safe_match = match if isinstance(match, dict) else {}
     if any(key not in {"method", "host", "path", "operationName"} for key in safe_match):
         return {"status": "invalid_match_fields", "executed": False, "truthful": True}
+    if any(not isinstance(value, str) or len(value) > 180 or chr(0) in value for value in safe_match.values()):
+        return {"status": "invalid_match_value", "executed": False, "truthful": True}
+
     if not _EXECUTION_GATE.acquire(timeout=0.5):
         return {"status": "busy", "executed": False, "truthful": True}
     try:
@@ -1195,9 +1243,13 @@ def learn_api_anything_operation(
                 args.extend(["--example", f"{key}={value}"])
             for key, value in second.items():
                 args.extend(["--example2", f"{key}={value}"])
+            if safe_steps:
+                args.extend(["--steps", json.dumps(safe_steps, ensure_ascii=False, separators=(",", ":"))])
+            if soft_from:
+                args.extend(["--soft-from", soft_from])
+            if description:
+                args.extend(["--description", description])
             for key, value in safe_match.items():
-                if not isinstance(value, str) or len(value) > 180 or chr(0) in value:
-                    return {"status": "invalid_match_value", "executed": False, "truthful": True}
                 args.extend(["--match", f"{key}={value}"])
             if write:
                 args.append("--write")
@@ -1210,8 +1262,8 @@ def learn_api_anything_operation(
             return {
                 "status": "learned" if ok else "learning_failed",
                 "site": site_name, "operation": operation_name,
-                "write_operation": bool(write),
-                "learning_aborts_write_requests": bool(write),
+                "write_operation": bool(write), "learning_aborts_write_requests": bool(write),
+                "has_browser_steps": bool(safe_steps), "has_soft_navigation": bool(soft_from),
                 "result": _safe_public_data(result),
                 "executed": False,
                 "next_action": "Inspect the saved operation, verify both examples, and dry-run a write before its first execution." if write else "Inspect and verify the learned operation before relying on it.",
@@ -1221,3 +1273,4 @@ def learn_api_anything_operation(
         return {"status": "internal_error", "error_type": type(exc).__name__, "executed": False, "truthful": True}
     finally:
         _EXECUTION_GATE.release()
+
