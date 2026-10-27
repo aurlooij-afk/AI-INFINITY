@@ -32,8 +32,9 @@ def status() -> dict[str, Any]:
         "provider": "api-anything",
         "status": "installed" if executable else "not_installed",
         "available": bool(executable),
-        "enabled_operations": ["youtube.search", "hacker-news.search", "goodreads.searchBooks", "rottentomatoes.searchMovies", "amazon.search"],
-        "mode": "bundled_read_only_plain_http",
+        "convenience_search_operations": ["youtube.search", "hacker-news.search", "goodreads.searchBooks", "rottentomatoes.searchMovies", "amazon.search"],
+        "generic_bundled_read_only_operations": True,
+        "mode": "dynamic_bundled_read_only_plain_http",
         "browser_learning_enabled": False,
         "upstream_commit": UPSTREAM_COMMIT,
         "truthful": True,
@@ -491,7 +492,7 @@ def _safe_public_data(value: Any, depth: int = 0) -> Any:
     if depth >= 6:
         return "[depth limit]"
     if isinstance(value, str):
-        return value.replace("\\x00", "")[:2000]
+        return value.replace(chr(0), "")[:2000]
     if isinstance(value, (int, float, bool)) or value is None:
         return value
     if isinstance(value, list):
