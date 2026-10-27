@@ -176,7 +176,7 @@ def _bundled_search(
     if not executable:
         return {"status": "not_configured", "items": [], "truthful": True}
     try:
-        timeout = max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))))))
+        timeout = max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))))
         safe_limit = max(1, min(10, int(limit or 10)))
     except (TypeError, ValueError, OverflowError):
         return {"status": "invalid_configuration", "items": [], "truthful": True}
@@ -645,7 +645,7 @@ def execute_bundled_operation(
                 return {"status": "rate_limited", "executed": False, "truthful": True}
             _GENERIC_COOLDOWNS[site_name] = now
         try:
-            timeout = max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))))
+            timeout = max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))))
         except (TypeError, ValueError, OverflowError):
             return {"status": "invalid_configuration", "executed": False, "truthful": True}
         with tempfile.TemporaryDirectory(prefix="ai-infinity-api-anything-call-") as temporary:
