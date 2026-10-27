@@ -559,7 +559,7 @@ def _generic_runner(*, read_only=True, parameters=None, result=None, site_source
         elif args == ["ops", "demo-site"]:
             payload = {"operations": [{
                 "name": "search", "readOnly": read_only,
-                "parameters": parameters if parameters is not None else [{"name": "q", "type": "string"}],
+                "parameters": parameters if parameters is not None else ["q:string"],
                 "summary": "Search public records",
             }]}
         elif args[:3] == ["call", "demo-site", "search"]:
