@@ -117,7 +117,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          result="$(docker run --rm --platform linux/amd64 --entrypoint python ai-infinity:ci -c 'import json; from api_anything_connector import execute_bundled_read_only; print(json.dumps(execute_bundled_read_only(\"hacker-news\", \"search\", {\"query\": \"sqlite\"})))')"
+          result="$(docker run --rm --platform linux/amd64 --entrypoint python ai-infinity:ci -c 'import json; from api_anything_connector import execute_bundled_read_only; print(json.dumps(execute_bundled_read_only("hacker-news", "search", {"query": "sqlite"})))')"
           printf '%s' "$result" | python -c '
           import json, sys
           result = json.load(sys.stdin)
