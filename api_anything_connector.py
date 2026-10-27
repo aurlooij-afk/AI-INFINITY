@@ -175,7 +175,7 @@ def _bundled_search(
     if not executable:
         return {"status": "not_configured", "items": [], "truthful": True}
     try:
-        timeout = max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))))))
+        timeout = max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))))
         safe_limit = max(1, min(10, int(limit or 10)))
     except (TypeError, ValueError, OverflowError):
         return {"status": "invalid_configuration", "items": [], "truthful": True}
@@ -674,7 +674,7 @@ def execute_bundled_operation(
             if not operation or operation.get("readOnly") not in (True, False):
                 return {"status": "operation_not_explicitly_classified", "executed": False, "truthful": True}
             is_read = operation.get("readOnly") is True
-            if not is_read and not allow_writes:
+            if not is_read and not allow_writes and not dry_run:
                 return {
                     "status": "write_confirmation_required", "executed": False,
                     "site": site_name, "operation": operation_name, "write": True,
