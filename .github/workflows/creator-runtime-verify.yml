@@ -170,7 +170,7 @@ jobs:
           # a persisted malformed Start Command must not replace main:app.
           docker stop ai-infinity-ci >/dev/null
           docker rm ai-infinity-ci >/dev/null 2>&1 || true
-          docker run -d --rm --name ai-infinity-ci --platform linux/amd64 -e AI_INFINITY_3601_BACKGROUND=false -e AI_INFINITY_FAST_MODE=1 -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity -p 10000:10000 ai-infinity:ci "[sh,-c,exec uvicorn ai_infinity_app:app --host 0.0.0.0 --port 10000]"
+          docker run -d --rm --name ai-infinity-ci --platform linux/amd64 -e AI_INFINITY_3601_BACKGROUND=false -e AI_INFINITY_FAST_MODE=0 -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity -p 10000:10000 ai-infinity:ci "[sh,-c,exec uvicorn ai_infinity_app:app --host 0.0.0.0 --port 10000]"
           ready=0
           for i in $(seq 1 20); do
             if curl -fsS http://127.0.0.1:10000/infinity/studio/system/readiness > /tmp/closure-readiness.json; then
@@ -245,17 +245,17 @@ jobs:
           python - <<'PY'
           import json
           p = {
-            "title": "AI Infinity Earth-from-Space Production Smoke Test",
-            "objective": "Create a 20-second cinematic documentary about Earth from space using relevant NASA or public-domain imagery, with topic-matched visuals, narration and captions.",
-            "topic": "Earth from space",
-            "format": "short",
-            "duration": 20,
+            "title": "ONE IDEA. INFINITE WORLDS. — AI Infinity Brand Film",
+            "objective": "Create an extraordinary 60-second cinematic brand film for AI Infinity titled ONE IDEA. INFINITE WORLDS. It must feel like a premium global technology brand campaign and emotional short film, not a generic ad, slideshow or tutorial. Story: 0–4s an arresting night-room hook, lone creator facing a blank screen; narration “Every extraordinary world begins with something nobody else can see.” 4–12s the idea opens into dramatic landscapes, a futuristic city and human emotion tied together with continuous story motifs. 12–25s real research becomes a clear narrative, script and storyboard; never invent research, URLs or UI. 25–40s the emotional cinematic peak: materially distinct compositions, deliberate movement, atmospheric light, believable depth and motivated transitions. 40–49s show actual editable timeline, synchronized captions, balanced audio, verification and recoverable package only when those capabilities really exist. 49–56s return to the creator and reveal the complete work; narration “Research it. Shape it. Bring it to life. Then make it better.” 56–60s restrained AI Infinity signature and line “AI Infinity. One idea. Infinite worlds.” Visuals: midnight blue, restrained cyan/violet, warm gold, natural textures, premium typography, no noisy neon or random effects. Target 1920x1080, 16:9, 60 seconds exactly. Use free-first production only. Use a natural English neural voice only if a genuinely available free provider is verified; otherwise report the actual local voice. Prefer verified public-domain/licensed sources and preserve source URL, creator, licence, attribution, provenance and integrity; uncertain rights, fallback assets or unsupported provider must stay REVIEW_REQUIRED. Deliver MP4, thumbnail, master audio, narration-only audio if supported, captions.srt, final script, sources.json, provenance/rights manifests, production manifest, editable timeline if supported, ZIP and an honest human-review packet. Never fabricate source research, licence evidence, provider usage or success.",
+            "topic": "AI Infinity — One Idea. Infinite Worlds.",
+            "format": "video",
+            "duration": 60,
             "content_type": "video",
             "audience": "general audience",
             "tone": "cinematic, clear, encouraging",
             "language": "English",
             "aspect_ratio": "16:9",
-            "quality_preset": "fast",
+            "quality_preset": "high",
             "features": []
           }
           open("/tmp/create.json","w").write(json.dumps(p))
@@ -357,6 +357,14 @@ jobs:
             "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/asset/final.mp4" -o /tmp/final.mp4
           curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
             "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/asset/thumbnail.jpg" -o /tmp/thumbnail.jpg
+          mkdir -p /tmp/ai-infinity-brand-film-review
+          cp /tmp/final.mp4 /tmp/ai-infinity-brand-film-review/final.mp4
+          cp /tmp/thumbnail.jpg /tmp/ai-infinity-brand-film-review/thumbnail.jpg
+          for name in audio_master.mp3 narration_only.mp3 captions.srt script.md sources.json manifest.json production_manifest.json rights_manifest.json visual_rights.json provenance.json package.zip timeline.otio; do
+            curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
+              "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/asset/$name" \
+              -o "/tmp/ai-infinity-brand-film-review/$name" || rm -f "/tmp/ai-infinity-brand-film-review/$name"
+          done
           test -s /tmp/final.mp4
           test -s /tmp/thumbnail.jpg
           ffprobe -v error -show_entries format=duration,size:stream=codec_type,codec_name,width,height -of json /tmp/final.mp4 > /tmp/final-probe.json
@@ -367,13 +375,15 @@ jobs:
           duration=float((x.get("format") or {}).get("duration") or 0)
           streams=x.get("streams") or []
           video=next((s for s in streams if s.get("codec_type")=="video"), {})
-          assert 19 <= duration <= 21, {"duration_seconds":duration,"expected_target_seconds":20}
+          assert abs(duration - 60.0) <= 0.15, {"duration_seconds":duration,"expected_target_seconds":60}
           assert video, streams
           assert any(s.get("codec_type")=="audio" for s in streams), streams
-          assert int(video.get("width") or 0) == 1280 and int(video.get("height") or 0) == 720, {
-              "width": video.get("width"), "height": video.get("height"), "expected": "1280x720"
+          assert int(video.get("width") or 0) == 1920 and int(video.get("height") or 0) == 1080, {
+              "width": video.get("width"), "height": video.get("height"), "expected": "1920x1080"
           }
           print("FINAL_MEDIA_DURATION_STREAMS_ASPECT_PASS", duration, video.get("width"), video.get("height"))
+          subprocess.run(["ffmpeg","-v","error","-i","/tmp/final.mp4","-f","null","-"],check=True,timeout=240)
+          print("FULL_MEDIA_DECODE_PASS")
           PY
           echo "END_TO_END_CREATOR_ARTIFACT_TEST_PASSED"
 
@@ -390,6 +400,9 @@ jobs:
             /tmp/verify.json
             /tmp/reality-proof.json
             /tmp/final-probe.json
+            /tmp/final.mp4
+            /tmp/thumbnail.jpg
+            /tmp/ai-infinity-brand-film-review/**
             /tmp/ai-infinity-real-smoke/**/*.json
             /tmp/ai-infinity-real-smoke/**/*.md
           if-no-files-found: warn
