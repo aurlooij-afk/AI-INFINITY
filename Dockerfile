@@ -1,5 +1,5 @@
-# API Anything is pinned to an audited upstream commit. Only curated bundled read-only operations are enabled;
-# no browser fallback, arbitrary user specs, or account sessions are enabled.
+# API Anything is pinned upstream; tier-1 HTTP and browser-backed tier-2/3 learning and calls are enabled.
+# User-learned operation specs and sessions use a per-user API_ANYTHING_HOME.
 FROM node:22.13.1-bookworm-slim AS api-anything-builder
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
@@ -57,11 +57,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     AI_INFINITY_DIVINE_CLOSURE=true \
     AI_INFINITY_PRODUCTION_GRAPH_WORKER=true \
     PORT=10000 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    API_ANYTHING_BROWSER=/usr/bin/chromium
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       ca-certificates curl ffmpeg espeak-ng libsndfile1 libglib2.0-0 \
+       ca-certificates curl ffmpeg espeak-ng chromium libsndfile1 libglib2.0-0 \
        libsm6 libxext6 libxrender1 poppler-utils tini \
     && rm -rf /var/lib/apt/lists/*
 
