@@ -920,7 +920,7 @@ def dispatch_command(command, user_id, raw=None):
             # Support a transparent natural-language command form:
             # "Use API Anything site=goodreads operation=getBook bookId=50202953".
             pairs = re.findall(
-                r"(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_.-]{0,63})\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s,;]+))",
+                r"(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_.-]{0,63})\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s,;]+))",
                 cmd,
             )
             parsed_pairs = {
