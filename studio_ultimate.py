@@ -1613,7 +1613,7 @@ def _explicit_timed_storyboard_plan(
     """
     raw_objective = re.sub(r"\s+", " ", str(objective or "")).strip()
     style_match = re.search(
-        r"(?:\bVISUAL DIRECTION\b|\bVISUALS?\s*:?)\s*\*{0,2}\s*(.*?)"
+        r"(?:\bVISUAL DIRECTION\b|\bVISUALS\s*:)\s*\*{0,2}\s*(.*?)"
         r"(?=\bVOICE[\s,]+MUSIC\b|\bPRODUCTION REQUIREMENTS\b|"
         r"\bQUALITY CONTROL\b|\bSUCCESS STANDARD\b|$)",
         raw_objective,
@@ -1621,7 +1621,7 @@ def _explicit_timed_storyboard_plan(
     )
     visual_style = re.sub(r"[*_]+", "", style_match.group(1)).strip()[:900] if style_match else ""
     story_objective = re.split(
-        r"\b(?:VISUAL DIRECTION|VISUALS?)\b\s*:?\s*\*{0,2}", raw_objective, maxsplit=1, flags=re.I
+        r"\b(?:VISUAL DIRECTION|VISUALS)\b\s*:?\s*\*{0,2}", raw_objective, maxsplit=1, flags=re.I
     )[0]
     pattern = re.compile(
         r"(?P<start>\d{1,4})\s*[–—-]\s*(?P<end>\d{1,4})\s*"
