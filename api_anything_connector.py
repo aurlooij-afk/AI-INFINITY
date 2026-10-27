@@ -481,9 +481,9 @@ def _declared_parameter_names(operation: dict[str, Any]) -> set[str]:
             if isinstance(row, str):
                 # The pinned API Anything CLI summarizes params as
                 # "name:type", optionally followed by ?, hints, and examples.
-                match = re.match(r"^([A-Za-z][A-Za-z0-9_.-]{0,63})(?::[A-Za-z]+(?:\\?)?)?(?:\\s|$)", row)
-                if match:
-                    names.add(match.group(1))
+                candidate = row.split(":", 1)[0].strip()
+                if re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", candidate):
+                    names.add(candidate)
             elif isinstance(row, dict):
                 name = row.get("name") or row.get("key") or row.get("parameter")
                 if isinstance(name, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", name):
