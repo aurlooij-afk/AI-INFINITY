@@ -738,7 +738,14 @@ def classify_command(command, raw=None):
     if edit_request and not payload.get("project_id"):
         return {"route": "project_id_required", "reason": "Editing requires an existing project ID so its owner and source artifact can be verified."}
 
-    public_api_intent = bool(
+    # Route explicit API Anything operation syntax directly even when the user
+    # does not name the provider. This makes the command interface capability-first
+    # while execution remains limited to the verified bundled read-only adapter.
+    explicit_api_operation = bool(
+        re.search(r"(?<![A-Za-z0-9_])site\s*=", low)
+        and re.search(r"(?<![A-Za-z0-9_])(?:operation|op)\s*=", low)
+    )
+    public_api_intent = explicit_api_operation or bool(
         re.search(r"\b(?:public|free|open)\s+(?:web\s+)?apis?\b|\bapi anything\b", low)
         and re.search(r"\b(use|search|find|look up|query|fetch|retrieve|call|discover|catalog|run|show|list|inspect|enumerate)\b", low)
     )
