@@ -765,7 +765,7 @@ def classify_command(command, raw=None):
     if explicit == "public_api" or public_api_intent:
         return {
             "route": "public_api",
-            "reason": "Matched the curated public API fabric; only verified, unauthenticated GET/HEAD operations can execute.",
+            "reason": "Matched public API or API Anything capability routing; execution and write outcomes are reported per operation.",
         }
 
     # Bounded multilingual routing for the already supported output languages.
@@ -919,8 +919,8 @@ def dispatch_command(command, user_id, raw=None):
             "executed": False, "truthful": True,
         }
     if route == "public_api":
-        # API Anything uses the profile belonging to this caller. Bundled and
-        # user-learned operations are discovered from the same persisted home.
+        import api_anything_connector as connector
+
         use_api_anything = (
             "api anything" in cmd.lower()
             or bool(payload.get("api_anything_site"))
@@ -930,8 +930,6 @@ def dispatch_command(command, user_id, raw=None):
             )
         )
         if use_api_anything:
-            import api_anything_connector as connector
-
             site_name = clean(payload.get("api_anything_site") or "", 64).lower()
             operation_name = clean(payload.get("api_anything_operation") or "", 64)
             params = payload.get("api_anything_params")
@@ -949,95 +947,90 @@ def dispatch_command(command, user_id, raw=None):
                 for key, double_quoted, single_quoted, bare in pairs
             }
             if not site_name:
-                site_name = clean(parsed_pairs.get("site", ""), 64).lower()
+                site_name = clean(parsed_pairs.pop("site", ""), 64).lower()
             if not operation_name:
-                operation_name = clean(parsed_pairs.get("operation") or parsed_pairs.get("op") or "", 64)
+                operation_name = clean(parsed_pairs.pop("operation", parsed_pairs.pop("op", "")), 64)
 
-            action = clean(payload.get("api_anything_action") or parsed_pairs.get("action") or "", 32).lower()
-            if not action and re.search(r"\b(learn|teach|capture|add)\b", cmd.lower()):
-                action = "learn"
-            if not action:
-                action = "execute" if operation_name else "list"
+            def parse_example(value):
+                if isinstance(value, dict):
+                    return value
+                if not isinstance(value, str) or not value.strip():
+                    return {}
+                try:
+                    decoded = json.loads(value)
+                    if isinstance(decoded, dict):
+                        return decoded
+                except (TypeError, ValueError):
+                    pass
+                separator = ":" if ":" in value else "=" if "=" in value else ""
+                if not separator:
+                    return {}
+                key, item = value.split(separator, 1)
+                return {key.strip(): item.strip()}
 
-            if action in {"learn", "teach", "capture", "add"}:
-                example = payload.get("api_anything_example")
-                example2 = payload.get("api_anything_example2")
-                if not isinstance(example, dict):
-                    example = {}
-                    for key, value in parsed_pairs.items():
-                        if key.startswith("example."):
-                            example[key.split(".", 1)[1]] = value
-                if not isinstance(example2, dict):
-                    example2 = {}
-                    for key, value in parsed_pairs.items():
-                        if key.startswith("example2."):
-                            example2[key.split(".", 1)[1]] = value
-                trigger = clean(
-                    payload.get("api_anything_trigger_url")
-                    or parsed_pairs.get("trigger_url")
-                    or parsed_pairs.get("trigger")
-                    or "", 1200,
-                )
-                match = payload.get("api_anything_match")
-                if not isinstance(match, dict):
-                    match = {}
-                    for key, value in parsed_pairs.items():
-                        if key.startswith("match."):
-                            match[key.split(".", 1)[1]] = value
-                write_learning = payload.get("api_anything_write") is True or (
-                    str(parsed_pairs.get("write", "")).lower() in {"true", "yes", "1"}
-                    or bool(re.search(r"(?:^|\s)--write(?:\s|$)", cmd, re.I))
-                )
-                if not site_name or not operation_name or not trigger:
+            trigger_url = payload.get("api_anything_trigger_url") or parsed_pairs.pop("trigger", "")
+            example_1 = parse_example(payload.get("api_anything_example") or parsed_pairs.pop("example", ""))
+            example_2 = parse_example(payload.get("api_anything_example2") or parsed_pairs.pop("example2", ""))
+            match_spec = payload.get("api_anything_match")
+            if not isinstance(match_spec, dict):
+                match_spec = {}
+            write_learning = (
+                payload.get("api_anything_write_learning") is True
+                or bool(re.search(r"(?:^|\s)--write(?:\s|$)", cmd, re.I))
+            )
+            for key in (
+                "site", "operation", "op", "provider", "api", "api_id", "operation_id", "op_id",
+                "trigger", "example", "example2", "match", "max_tier", "max-tier",
+                "allow_writes", "dry", "write", "again", "idempotency_key", "idempotency-key",
+            ):
+                parsed_pairs.pop(key, None)
+            if not params:
+                params = parsed_pairs
+
+            learn_request = (
+                bool(re.search(r"\b(?:learn|teach|map)\b", cmd.lower()))
+                or payload.get("api_anything_learn") is True
+            )
+            if learn_request:
+                if not hasattr(connector, "learn_api_anything_operation"):
                     return {
-                        "status": "learning_inputs_required", "route": route,
-                        "provider": "api-anything", "executed": False,
-                        "next_action": "Supply site, operation, trigger_url, api_anything_example and api_anything_example2. The browser-backed learner needs two different examples.",
-                        "truthful": True,
+                        "status": "capability_not_installed", "route": route, "provider": "api-anything",
+                        "executed": False, "truthful": True,
                     }
-                learned = connector.learn_api_anything_operation(
-                    site_name, operation_name, trigger, example, example2,
-                    user_id=user_id, write=write_learning, match=match,
+                result = connector.learn_api_anything_operation(
+                    site_name, operation_name, trigger_url, example_1, example_2,
+                    user_id=user_id, write=write_learning, match=match_spec,
                 )
+                learned = result.get("status") == "learned"
                 return {
-                    "status": learned.get("status", "learning_failed"),
-                    "route": route, "provider": "api-anything", "result": learned,
-                    "executed": False, "truthful": True,
+                    "status": "completed" if learned else "degraded",
+                    "route": route, "provider": "api-anything", "result": result,
+                    "executed": False, "learned": learned, "truthful": True,
                 }
 
-            meta_keys = {
-                "site", "operation", "op", "provider", "api", "api_id", "operation_id", "op_id",
-                "action", "trigger", "trigger_url", "write", "allow_writes", "allow-writes",
-                "dry_run", "dry-run", "max_tier", "max-tier", "idempotency_key", "idempotency-key",
-                "again",
-            }
-            parsed_params = {
-                key: value for key, value in parsed_pairs.items()
-                if key.lower() not in meta_keys
-                and not key.startswith("example.")
-                and not key.startswith("example2.")
-                and not key.startswith("match.")
-            }
-            if not params:
-                params = parsed_params
             write_allowance = (
                 payload.get("api_anything_allow_writes") is True
                 or bool(re.search(r"(?:^|\s)--allow-writes(?:\s|$)", cmd, re.I))
-                or str(parsed_pairs.get("allow_writes", parsed_pairs.get("allow-writes", ""))).lower() in {"true", "yes", "1"}
             )
             dry_run = payload.get("api_anything_dry_run") is True or bool(
                 re.search(r"(?:^|\s)--dry(?:\s|$)", cmd, re.I)
-            ) or str(parsed_pairs.get("dry_run", parsed_pairs.get("dry-run", ""))).lower() in {"true", "yes", "1"}
-            max_tier_raw = payload.get("api_anything_max_tier", parsed_pairs.get("max_tier", parsed_pairs.get("max-tier", 3)))
+            )
+            tier_value = payload.get("api_anything_max_tier") or payload.get("max_tier")
+            tier_match = re.search(r"(?:^|\s)--max-tier\s+([123])(?:\s|$)", cmd, re.I)
+            if tier_value is None and tier_match:
+                tier_value = int(tier_match.group(1))
             try:
-                max_tier = int(max_tier_raw)
-            except (TypeError, ValueError):
+                max_tier = max(1, min(3, int(tier_value or 3)))
+            except (TypeError, ValueError, OverflowError):
                 max_tier = 3
+            key_match = re.search(r"(?:^|\s)--idempotency-key\s+([A-Za-z0-9_.:-]{8,128})(?:\s|$)", cmd, re.I)
             idempotency_key = clean(
-                payload.get("api_anything_idempotency_key") or parsed_pairs.get("idempotency_key") or parsed_pairs.get("idempotency-key") or "",
+                payload.get("api_anything_idempotency_key") or (key_match.group(1) if key_match else ""),
                 128,
             )
-            again = payload.get("api_anything_again") is True or str(parsed_pairs.get("again", "")).lower() in {"true", "yes", "1"}
+            again = payload.get("api_anything_again") is True or bool(
+                re.search(r"(?:^|\s)--again(?:\s|$)", cmd, re.I)
+            )
 
             if operation_name:
                 if hasattr(connector, "execute_api_anything_operation"):
@@ -1056,12 +1049,12 @@ def dispatch_command(command, user_id, raw=None):
                 executed = result.get("executed") is True
                 if result_status == "write_confirmation_required":
                     status = "write_confirmation_required"
-                elif result_status in {"dry_run_ready", "dry_run"}:
-                    status = result_status
+                elif result_status == "dry_run_ready":
+                    status = "dry_run_ready"
                 elif result_status == "completed" and executed:
                     status = "completed"
                 elif result_status == "write_accepted_not_independently_verified":
-                    status = result_status
+                    status = "write_accepted_not_independently_verified"
                 elif result_status == "write_outcome_ambiguous_check_target_do_not_retry":
                     status = "write_outcome_ambiguous"
                 else:
@@ -1070,119 +1063,33 @@ def dispatch_command(command, user_id, raw=None):
                     "status": status, "route": route, "provider": "api-anything",
                     "result": result, "executed": executed,
                     "read_only": result.get("read_only", result_status == "completed"),
-                    "write": result.get("write_capable", result.get("write", False)),
+                    "write": result.get("write", result.get("write_capable", False)),
                     "truthful": True,
                 }
 
+            include_writes = payload.get("api_anything_include_writes") is True or bool(
+                re.search(r"\b(?:write|writable|writes|read\s*(?:and|&)\s*write|all\s+operations)\b", cmd.lower())
+            )
             if hasattr(connector, "list_api_anything_operations"):
                 result = connector.list_api_anything_operations(
-                    site_name=site_name, limit=200, user_id=user_id, include_writes=True,
+                    site_name=site_name, limit=200, user_id=user_id, include_writes=include_writes,
                 )
-                next_action = "Choose a listed site and operation. For a write, dry-run the exact parameters, then authorize that specific operation with api_anything_allow_writes=true."
-            elif hasattr(connector, "list_bundled_operations"):
+            elif include_writes and hasattr(connector, "list_bundled_operations"):
                 result = connector.list_bundled_operations(site_name=site_name, limit=100, include_writes=True)
-                next_action = "Choose an operation and its declared parameters. Write operations require a dry run and explicit --allow-writes."
             else:
                 result = connector.list_bundled_read_only_operations(site_name=site_name, limit=100)
-                next_action = "Choose a listed read operation and supply its declared parameters."
             return {
                 "status": "completed" if result.get("status") == "ready" else "degraded",
                 "route": route, "provider": "api-anything",
                 "result": result, "sites": result.get("sites", []),
-                "operations": result.get("operations", []),
-                "executed": False, "next_action": next_action, "truthful": True,
-            }
-
-        import free_api_fabric as fabric
-
-        api_id = clean(payload.get("api_id"), 120)
-        op_id = clean(payload.get("op_id") or payload.get("operation_id"), 120)
-        if not api_id:
-            match = re.search(r"\bapi[_ -]?id\s*[:=]\s*([A-Za-z0-9_-]{6,120})", cmd, re.I)
-            api_id = match.group(1) if match else ""
-        if not op_id:
-            match = re.search(r"\b(?:operation|op)[_ -]?id\s*[:=]\s*([A-Za-z0-9_-]{6,120})", cmd, re.I)
-            op_id = match.group(1) if match else ""
-        api_params = payload.get("api_params")
-        if not isinstance(api_params, dict):
-            api_params = payload.get("query_params")
-        if not isinstance(api_params, dict):
-            api_params = {}
-        if not api_params:
-            # Natural-language command box can pass explicit read arguments as
-            # key=value; the API fabric later rejects names absent from the verified spec.
-            pairs = re.findall(
-                r"(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_.-]{0,63})\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s,;]+))",
-                cmd,
-            )
-            api_params = {
-                key: (double_quoted if double_quoted != "" else single_quoted if single_quoted != "" else bare)
-                for key, double_quoted, single_quoted, bare in pairs
-                if key.lower() not in {"api_id", "api-id", "operation_id", "operation-id", "op_id", "op-id"}
-            }
-
-        # A concrete operation ID is the only execution path. The fabric rechecks
-        # that it is catalogued as a verified no-auth GET/HEAD operation at call time.
-        if op_id:
-            try:
-                result = fabric.invoke(op_id, query=api_params, body=payload.get("body"))
-            except Exception as exc:
-                # Keep external-response details and any caller-provided values out
-                # of command errors; the fabric itself never executes non-GET/HEAD.
-                return {
-                    "status": "degraded", "route": route, "operation_id": op_id,
-                    "reason": "The selected verified read-only operation failed; no successful result is claimed.",
-                    "error_type": type(exc).__name__, "executed": False,
-                    "truthful": True,
-                }
-            return {
-                "status": "completed", "route": route, "operation_id": op_id,
-                "result": result, "executed": True, "read_only": True,
+                "operations": result.get("operations", []), "executed": False,
+                "next_action": (
+                    "Choose a listed operation and provide its declared parameters. For writes, dry-run the exact target and content, then explicitly authorize with --allow-writes."
+                    if include_writes else
+                    "Choose a listed read operation and provide its declared parameters. Use --max-tier 3 for operations requiring the browser tier."
+                ),
                 "truthful": True,
             }
-
-        if api_id:
-            current = fabric.operations(api_id, limit=50)
-            verification = None
-            if not current:
-                verification = fabric.verify_api(api_id)
-                current = fabric.operations(api_id, limit=50)
-            return {
-                "status": "completed" if current else "degraded",
-                "route": route, "api_id": api_id, "operations": current[:50],
-                "verification": verification, "executed": False,
-                "next_action": "Provide a verified operation_id and api_params to execute one read-only query.",
-                "truthful": True,
-            }
-
-        search_text = clean(
-            payload.get("api_search") or payload.get("api_name") or payload.get("topic") or payload.get("subject"),
-            200,
-        )
-        if not search_text:
-            search_text = re.sub(
-                r"^\s*(?:please\s+)?(?:use|search|find|look up|query|fetch|retrieve|discover|catalog|run)\s+",
-                "", cmd, flags=re.I,
-            ).strip()[:200]
-        candidates = fabric.catalog(query=search_text, limit=10, executable_only=True)
-        bootstrapped = False
-        if (
-            not candidates
-            and not fabric.SYNC_STATE.get("bootstrap_started")
-            and not fabric.SYNC_STATE.get("bootstrap_complete")
-        ):
-            bootstrapped = bool(fabric.start_background_sync())
-        state = fabric.status()
-        return {
-            "status": "completed" if candidates else "discovery_started" if bootstrapped or state.get("bootstrap_started") else "degraded",
-            "route": route, "query": search_text, "candidates": candidates,
-            "discovery_status": "warming" if bootstrapped or (
-                state.get("bootstrap_started") and not state.get("bootstrap_complete")
-            ) else "ready",
-            "executed": False,
-            "next_action": "Choose a verified API candidate, then pass its api_id to inspect operations or a verified operation_id to execute.",
-            "truthful": True,
-        }
     if route == "capabilities":
         result = capabilities(user_id)
         try:
