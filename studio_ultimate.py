@@ -6081,6 +6081,17 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
         raise ValueError("AI_INFINITY_DELIVERY_TRUE_PEAK_DBTP must remain between -3 and -1 dBTP")
     if not (5.0 <= target_lra <= 20.0):
         raise ValueError("AI_INFINITY_DELIVERY_LRA must remain between 5 and 20 LU")
+    # MP4 container duration can be 60 seconds even when a scene audio stream
+    # ends early. Normalize the audio stream to the actual programme duration,
+    # not just the container duration, before applying loudness mastering.
+    source_duration = float(probe_duration(source))
+    if source_duration <= 0:
+        raise RuntimeError("final loudness mastering cannot determine the programme duration")
+    audio_filter = (
+        f"atrim=duration={source_duration:.3f},"
+        f"apad=whole_dur={source_duration:.3f},"
+        f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}"
+    )
     rate = "96k" if fast_mode else "192k"
     ffmpeg(
         "-i", source,
@@ -6088,7 +6099,7 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
         "-map", "0:a:0",
         "-map", "0:s?",
         "-c:v", "copy",
-        "-af", f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}",
+        "-af", audio_filter,
         "-c:a", "aac",
         "-b:a", rate,
         "-ar", "48000",
@@ -6121,6 +6132,21 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
         raise RuntimeError(
             f"final loudness mastering changed duration from {source_duration:.3f}s to {output_duration:.3f}s"
         )
+    output_audio_duration = float(output_audio.get("duration") or 0)
+    if not output_audio_duration:
+        try:
+            numerator, denominator = str(output_audio.get("time_base") or "").split("/", 1)
+            output_audio_duration = (
+                float(output_audio.get("duration_ts") or 0) * float(numerator) / float(denominator)
+            )
+        except (ValueError, ZeroDivisionError):
+            output_audio_duration = 0.0
+    output_video_duration = float(output_video.get("duration") or output_duration)
+    if not output_audio_duration or abs(output_audio_duration - output_video_duration) > 0.75:
+        raise RuntimeError(
+            "final loudness mastering did not align audio to video: "
+            f"{output_audio_duration:.3f}s audio vs {output_video_duration:.3f}s video"
+        )
     return {
         "status": "completed",
         "target_integrated_lufs": target_i,
@@ -6128,6 +6154,8 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
         "target_loudness_range_lu": target_lra,
         "source_duration_seconds": round(source_duration, 3),
         "output_duration_seconds": round(output_duration, 3),
+        "audio_duration_seconds": round(output_audio_duration, 3),
+        "audio_video_duration_match": True,
         "video_stream_copied": True,
         "audio_codec": str(output_audio.get("codec_name") or ""),
         "subtitle_stream_count": sum(row.get("codec_type") == "subtitle" for row in output_streams),
