@@ -2,7 +2,7 @@ name: AI Infinity Standalone Runtime Verification
 
 on:
   push:
-    branches: [main, ai-infinity-canonical-divine]
+    branches: [main, ai-infinity-canonical-divine, feat/api-anything-research-connector]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ai-infinity-standalone-runtime-main
+  group: ai-infinity-standalone-runtime-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
