@@ -1103,7 +1103,7 @@ def dispatch_command(command, user_id, raw=None):
                 "result": result, "sites": result.get("sites", []),
                 "operations": result.get("operations", []), "executed": False,
                 "next_action": (
-                    "Choose a listed operation and provide its declared parameters. For writes, dry-run the exact target and content, then explicitly authorize with --allow-writes."
+                    "Choose a listed site and operation with its declared parameters. The system preflights writes automatically; a failed preview prevents the write, and uncertain outcomes require read-back before retry."
                     if include_writes else
                     "Choose a listed read operation and provide its declared parameters. Use --max-tier 3 for operations requiring the browser tier."
                 ),
