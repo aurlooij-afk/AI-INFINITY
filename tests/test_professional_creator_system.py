@@ -32,16 +32,21 @@ def test_explicit_timecoded_brand_film_brief_is_preserved_by_offline_planner():
     import studio_ultimate
 
     objective = (
-        "Create a 60-second cinematic brand film for AI Infinity. Story: "
-        "0–4s an arresting night-room hook, lone creator facing a blank screen; "
-        "narration “Every extraordinary world begins with something nobody else can see.” "
-        "4–12s the idea opens into dramatic landscapes, a futuristic city and human emotion. "
-        "12–25s real research becomes a clear narrative, script and storyboard; never invent research or UI. "
-        "25–40s cinematic landscapes, meaningful transitions, atmospheric lighting and emotional progression. "
-        "40–49s editable timeline, synchronized captions, balanced soundtrack and verification. "
-        "49–56s the creator reveals the completed work; narration “Research it. Shape it. Bring it to life. Then make it better.” "
-        "56–60s restrained AI Infinity signature; final line “AI Infinity. One idea. Infinite worlds.” "
-        "Visuals: midnight blue, restrained cyan/violet, warm gold."
+        "Create a 60-second premium cinematic brand film for AI Infinity. "
+        "**STORY AND PACING** "
+        "**0–4 seconds — The hook.** Open immediately on a breathtaking night-room image. "
+        "A lone creator looks at a blank screen. Voiceover: “Every extraordinary world begins with something nobody else can see.” "
+        "**4–12 seconds — The spark.** A single idea appears; the creator enters dramatic landscapes, a futuristic city and human emotion. "
+        "**12–25 seconds — The transformation.** Research becomes a clear story, script and storyboard; transitions must be motivated. "
+        "**25–40 seconds — The cinematic experience.** Distinct compositions, deliberate camera movement, atmospheric lighting, depth and meaningful progression. "
+        "**40–49 seconds — The craft.** Show a real editable timeline, synchronized captions, balanced soundtrack and verification only where genuinely supported. "
+        "**49–56 seconds — The payoff.** The idea becomes a complete work. Voiceover: “Research it. Shape it. Bring it to life. Then make it better.” "
+        "**56–60 seconds — The signature ending.** A restrained AI Infinity end card. Final line: “AI Infinity. One idea. Infinite worlds.” "
+        "**VISUAL DIRECTION** Use a sophisticated filmic look: deep midnight blues, controlled cyan and violet highlights, warm gold practical lights, natural textures, atmospheric depth and premium typography. Avoid excessive neon, random zooms, repeated imagery and clutter. "
+        "**VOICE, MUSIC AND SOUND** Use natural expressive English neural voice when a genuinely available free provider is verified; otherwise disclose the actual local voice. Music must grow from intimate to a controlled climax and resolve cleanly. "
+        "**PRODUCTION REQUIREMENTS** Target 1920x1080, 16:9 and exactly 60 seconds. Preserve real source URLs, creators, licences, attribution, provenance and per-asset hashes. "
+        "No invented sources, permissions, provider use or product capabilities. "
+        "**QUALITY CONTROL** Probe and fully decode the MP4, verify duration, resolution, stream presence, distinct scenes, captions, audio levels, sources, rights and manifest hashes. Unknown rights remain REVIEW_REQUIRED."
     )
     plan = studio_ultimate._fallback_creative_plan(
         title="ONE IDEA. INFINITE WORLDS.",
