@@ -672,3 +672,35 @@ def test_generic_readonly_executor_rejects_unbundled_specs_and_sensitive_inputs(
     connector._GENERIC_COOLDOWNS.clear()
     assert connector.execute_bundled_read_only("demo-site", "search", {"api_key": "value"})["status"] == "sensitive_parameter_not_allowed"
     assert connector.execute_bundled_read_only("bad site", "search", {})["status"] == "invalid_operation"
+
+
+
+def test_generic_readonly_executor_accepts_callresult_without_optional_identity_fields(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    runner, calls = _generic_runner(result={
+        "ok": True, "class": "ok", "tier": 1,
+        "data": [{"title": "Public result"}],
+    })
+    monkeypatch.setattr(connector.subprocess, "run", runner)
+
+    result = connector.execute_bundled_read_only("demo-site", "search", {"q": "climate data"})
+
+    assert result["status"] == "completed"
+    assert result["executed"] is True
+    assert result["result"] == [{"title": "Public result"}]
+    assert len(calls) == 3
+
+
+def test_generic_readonly_executor_rejects_contradictory_result_identity(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    runner, calls = _generic_runner(result={
+        "ok": True, "class": "ok", "site": "other-site", "op": "search",
+        "tier": 1, "data": [{"title": "Should not be accepted"}],
+    })
+    monkeypatch.setattr(connector.subprocess, "run", runner)
+
+    result = connector.execute_bundled_read_only("demo-site", "search", {"q": "climate data"})
+
+    assert result["status"] == "result_identity_mismatch"
+    assert result["executed"] is False
+    assert len(calls) == 3
