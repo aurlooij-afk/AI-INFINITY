@@ -652,3 +652,24 @@ def test_api_anything_write_uses_explicit_natural_language_intent_without_flag(m
         },
     )]
 
+
+
+def test_api_anything_catalog_includes_read_and_write_ops_by_default(monkeypatch):
+    calls = []
+    connector_fake = SimpleNamespace(
+        list_api_anything_operations=lambda **kwargs: (
+            calls.append(kwargs) or {
+                "status": "ready", "sites": ["example.com"],
+                "operations": [
+                    {"site": "example.com", "operation": "search", "read_only": True},
+                    {"site": "example.com", "operation": "updateRecord", "read_only": False, "write_capable": True},
+                ],
+                "executed": False, "truthful": True,
+            }
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "api_anything_connector", connector_fake)
+    result = canonical.dispatch_command("List API Anything operations", "user-catalog-5", {})
+    assert result["status"] == "completed"
+    assert [op["operation"] for op in result["operations"]] == ["search", "updateRecord"]
+    assert calls == [{"site_name": "", "limit": 200, "user_id": "user-catalog-5", "include_writes": True}]
