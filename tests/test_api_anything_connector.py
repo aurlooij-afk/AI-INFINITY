@@ -1091,3 +1091,40 @@ def test_learning_rejects_private_browser_goto_step(monkeypatch, tmp_path):
     )
     assert result["status"] == "public_https_url_required"
     assert calls == []
+
+
+def test_general_executor_auto_preflights_an_explicitly_authorized_write(monkeypatch, tmp_path):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
+    connector._GENERIC_COOLDOWNS.clear()
+    calls = []
+
+    def fake_run(runner, executable, args, *, cwd, env, timeout):
+        calls.append(list(args))
+        if args == ["sites"]:
+            return [{"name": "messages.example.com", "source": "user"}], None
+        if args == ["ops", "messages.example.com"]:
+            return {"operations": [{
+                "name": "sendMessage", "readOnly": False, "minTier": 2,
+                "parameters": [{"name": "recipient"}, {"name": "body"}],
+            }]}, None
+        if args[:3] == ["call", "messages.example.com", "sendMessage"] and "--dry" in args:
+            return {"ok": True, "dry": True, "request": {"url": "https://messages.example.com/send"}}, None
+        if args[:3] == ["call", "messages.example.com", "sendMessage"]:
+            return {"ok": True, "tier": 2, "write": "accepted", "data": {"accepted": True}}, None
+        raise AssertionError(f"unexpected CLI request: {args}")
+
+    monkeypatch.setattr(connector, "_run_json", fake_run)
+    result = connector.execute_api_anything_operation(
+        "messages.example.com", "sendMessage",
+        {"recipient": "reviewer", "body": "Hello"},
+        user_id="natural-write-user", allow_writes=True, max_tier=2, auto_preflight=True,
+    )
+
+    assert result["status"] == "write_accepted_not_independently_verified"
+    assert result["executed"] is True
+    assert len(calls) == 4
+    assert "--dry" in calls[2]
+    assert "--allow-writes" in calls[2]
+    assert "--dry" not in calls[3]
+    assert "--allow-writes" in calls[3]
