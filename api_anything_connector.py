@@ -703,36 +703,6 @@ def execute_bundled_operation(
                 args.append("--allow-writes")
             if dry_run:
                 args.append("--dry")
-            if preview_missing and auto_preflight:
-                preflight_args = [*args, "--dry"]
-                preview_result, preview_error = run(preflight_args)
-                if preview_error or not isinstance(preview_result, dict) or preview_result.get("ok") is not True or preview_result.get("dry") is not True:
-                    return {
-                        "status": "dry_run_failed", "executed": False,
-                        "site": site_name, "operation": operation_name,
-                        "error_type": preview_error or "invalid_preview_response",
-                        "truthful": True,
-                    }
-                try:
-                    preview_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-                    preview_path.write_text(json.dumps({
-                        "site": site_name, "operation": operation_name,
-                        "parameters_sha256": hashlib.sha256(
-                            json.dumps(safe_params, sort_keys=True, ensure_ascii=False).encode("utf-8")
-                        ).hexdigest(),
-                        "max_tier": max_tier, "created_at": int(time.time()),
-                    }), encoding="utf-8")
-                    preview_path.chmod(0o600)
-                except OSError:
-                    return {"status": "preview_receipt_persist_failed", "executed": False, "truthful": True}
-
-            if is_write and allow_writes and not dry_run:
-                try:
-                    preview_path.unlink()
-                except FileNotFoundError:
-                    return {"status": "dry_run_required", "executed": False, "truthful": True}
-                except OSError:
-                    return {"status": "preview_receipt_consume_failed", "executed": False, "truthful": True}
             result, error = run(args)
             if error:
                 return {"status": error, "executed": False, "truthful": True}
@@ -971,19 +941,11 @@ def execute_api_anything_operation(
     for key, value in params.items():
         if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", key):
             return {"status": "invalid_parameter_name", "executed": False, "truthful": True}
-        if _SENSITIVE_OUTPUT_KEY.search(key):
-            return {"status": "sensitive_parameter_not_allowed", "executed": False, "truthful": True}
-        if isinstance(value, str):
-            if len(value) > MAX_QUERY_CHARS or chr(0) in value:
-                return {"status": "invalid_parameter_value", "executed": False, "truthful": True}
-            safe_params[key] = value
-        elif type(value) in (int, bool):
-            safe_params[key] = value
-        elif type(value) is float and math.isfinite(value):
-            safe_params[key] = value
-        else:
-            return {"status": "scalar_parameters_required", "executed": False, "truthful": True}
-    if len(json.dumps(safe_params, ensure_ascii=False)) > 4000:
+        try:
+            safe_params[key] = _validate_api_argument(value)
+        except ValueError:
+            return {"status": "invalid_parameter_value", "executed": False, "truthful": True}
+    if len(json.dumps(safe_params, ensure_ascii=False, allow_nan=False)) > 12000:
         return {"status": "parameters_too_large", "executed": False, "truthful": True}
     executable = shutil.which("api-anything")
     if not executable:
@@ -1079,6 +1041,41 @@ def execute_api_anything_operation(
                 if not re.fullmatch(r"[A-Za-z0-9_.:-]{8,128}", key):
                     return {"status": "invalid_idempotency_key", "executed": False, "truthful": True}
                 args.extend(["--idempotency-key", key])
+            if preview_missing and auto_preflight:
+                preflight_args = [*args, "--dry"]
+                preview_result, preview_error = run(preflight_args)
+                if (
+                    preview_error
+                    or not isinstance(preview_result, dict)
+                    or preview_result.get("ok") is not True
+                    or preview_result.get("dry") is not True
+                ):
+                    return {
+                        "status": "dry_run_failed", "executed": False,
+                        "site": site_name, "operation": operation_name,
+                        "error_type": preview_error or "invalid_preview_response",
+                        "truthful": True,
+                    }
+                try:
+                    preview_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    preview_path.write_text(json.dumps({
+                        "site": site_name, "operation": operation_name,
+                        "parameters_sha256": hashlib.sha256(
+                            json.dumps(safe_params, sort_keys=True, ensure_ascii=False).encode("utf-8")
+                        ).hexdigest(),
+                        "max_tier": max_tier, "created_at": int(time.time()),
+                    }), encoding="utf-8")
+                    preview_path.chmod(0o600)
+                except OSError:
+                    return {"status": "preview_receipt_persist_failed", "executed": False, "truthful": True}
+
+            if is_write and allow_writes and not dry_run:
+                try:
+                    preview_path.unlink()
+                except FileNotFoundError:
+                    return {"status": "dry_run_required", "executed": False, "truthful": True}
+                except OSError:
+                    return {"status": "preview_receipt_consume_failed", "executed": False, "truthful": True}
             result, error = run(args)
             if error:
                 return {"status": error, "executed": False, "truthful": True}
