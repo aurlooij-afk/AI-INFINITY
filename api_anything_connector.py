@@ -679,7 +679,13 @@ def execute_bundled_read_only(
                 return {"status": error, "executed": False, "truthful": True}
             if not isinstance(result, dict) or result.get("ok") is not True:
                 return {"status": "operation_failed", "executed": False, "truthful": True}
-            if result.get("site") != site_name or result.get("op") != operation_name:
+            # API Anything's successful CallResult type does not promise site/op
+            # fields; when it does return either, reject only a contradictory identity.
+            returned_site = result.get("site")
+            returned_op = result.get("op")
+            if returned_site and returned_site != site_name:
+                return {"status": "result_identity_mismatch", "executed": False, "truthful": True}
+            if returned_op and returned_op != operation_name:
                 return {"status": "result_identity_mismatch", "executed": False, "truthful": True}
             if result.get("tier") != 1:
                 return {"status": "unexpected_transport_tier", "executed": False, "truthful": True}
