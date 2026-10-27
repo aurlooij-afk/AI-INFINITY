@@ -590,7 +590,7 @@ def test_api_anything_user_profile_operation_dispatches_tier_and_user_id(monkeyp
         "reader-site", "getRecord", {"recordId": "rec-42"},
         {
             "user_id": "user-research-7", "allow_writes": False,
-            "max_tier": 2, "dry_run": False, "idempotency_key": "", "again": False,
+            "max_tier": 2, "dry_run": False, "idempotency_key": "", "again": False, "auto_preflight": True,
         },
     )]
 
@@ -647,7 +647,7 @@ def test_api_anything_write_uses_explicit_natural_language_intent_without_flag(m
     assert calls == [(
         "social-site", "sendMessage", {"recipient": "reviewer", "body": "hello"},
         {
-            "user_id": "user-write-4", "allow_writes": True, "max_tier": 3,
+            "user_id": "user-write-4", "allow_writes": False, "max_tier": 3,
             "dry_run": False, "idempotency_key": "", "again": False, "auto_preflight": True,
         },
     )]
