@@ -1011,7 +1011,7 @@ def execute_api_anything_operation(
                 is_write = False
             elif read_only is False:
                 is_write = True
-                if not allow_writes and not dry_run:
+                if not allow_writes and not dry_run and not auto_preflight:
                     return {
                         "status": "write_confirmation_required", "executed": False,
                         "site": site_name, "operation": operation_name, "write_capable": True,
@@ -1036,7 +1036,7 @@ def execute_api_anything_operation(
                 return {"status": "parameter_schema_unavailable", "executed": False, "truthful": True}
             preview_dir = Path(env["API_ANYTHING_HOME"]) / ".ai-infinity-write-previews"
             preview_path = preview_dir / (_write_preview_key(site_name, operation_name, safe_params, max_tier) + ".json")
-            preview_missing = is_write and allow_writes and not dry_run and not preview_path.is_file()
+            preview_missing = is_write and (allow_writes or auto_preflight) and not dry_run and not preview_path.is_file()
             if preview_missing and not auto_preflight:
                 return {
                     "status": "dry_run_required", "executed": False,
@@ -1088,7 +1088,7 @@ def execute_api_anything_operation(
                 except OSError:
                     return {"status": "preview_receipt_persist_failed", "executed": False, "truthful": True}
 
-            if is_write and allow_writes and not dry_run:
+            if is_write and (allow_writes or auto_preflight) and not dry_run:
                 try:
                     preview_path.unlink()
                 except FileNotFoundError:
