@@ -1053,7 +1053,7 @@ def dispatch_command(command, user_id, raw=None):
                 if hasattr(connector, "execute_api_anything_operation"):
                     result = connector.execute_api_anything_operation(
                         site_name, operation_name, params, user_id=user_id,
-                        allow_writes=write_allowance and False, max_tier=max_tier, dry_run=dry_run,
+                        allow_writes=False, max_tier=max_tier, dry_run=dry_run,
                         idempotency_key=idempotency_key, again=again, auto_preflight=True,
                     )
                 elif hasattr(connector, "execute_bundled_operation"):
