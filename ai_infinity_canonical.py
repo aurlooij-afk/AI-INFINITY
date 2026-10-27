@@ -899,6 +899,68 @@ def dispatch_command(command, user_id, raw=None):
             "executed": False, "truthful": True,
         }
     if route == "public_api":
+        # API Anything is capability-open across the pinned bundled registry, but
+        # only audited bundled readOnly operations and declared scalar parameters
+        # can execute. This branch never enables registry pulls, browser fallback,
+        # sessions, arbitrary URLs, or writes.
+        use_api_anything = (
+            "api anything" in cmd.lower()
+            or bool(payload.get("api_anything_site"))
+        )
+        if use_api_anything:
+            import api_anything_connector as connector
+
+            site_name = clean(payload.get("api_anything_site") or "", 64).lower()
+            operation_name = clean(payload.get("api_anything_operation") or "", 64)
+            params = payload.get("api_anything_params")
+            if not isinstance(params, dict):
+                params = payload.get("parameters")
+            if not isinstance(params, dict):
+                params = {}
+            # Support a transparent natural-language command form:
+            # "Use API Anything site=goodreads operation=getBook bookId=50202953".
+            pairs = re.findall(
+                r"(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_.-]{0,63})\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s,;]+))",
+                cmd,
+            )
+            parsed_pairs = {
+                key: (double_quoted if double_quoted != "" else single_quoted if single_quoted != "" else bare)
+                for key, double_quoted, single_quoted, bare in pairs
+            }
+            if not site_name:
+                site_name = clean(parsed_pairs.pop("site", ""), 64).lower()
+            if not operation_name:
+                operation_name = clean(parsed_pairs.pop("operation", parsed_pairs.pop("op", "")), 64)
+            for key in ("site", "operation", "op", "provider", "api", "api_id", "operation_id", "op_id"):
+                parsed_pairs.pop(key, None)
+            if not params:
+                params = parsed_pairs
+            if operation_name and not site_name:
+                return {
+                    "status": "needs_site", "route": route, "provider": "api-anything",
+                    "next_action": "Specify the bundled site and operation, for example site=goodreads operation=searchBooks q=Piranesi.",
+                    "executed": False, "truthful": True,
+                }
+            if operation_name:
+                result = connector.execute_bundled_read_only(site_name, operation_name, params)
+                completed = result.get("status") == "completed" and result.get("executed") is True
+                return {
+                    "status": "completed" if completed else "degraded",
+                    "route": route, "provider": "api-anything",
+                    "result": result, "executed": completed,
+                    "read_only": True, "truthful": True,
+                }
+            result = connector.list_bundled_read_only_operations(site_name=site_name, limit=100)
+            return {
+                "status": "completed" if result.get("status") == "ready" else "degraded",
+                "route": route, "provider": "api-anything",
+                "result": result, "sites": result.get("sites", []),
+                "operations": result.get("operations", []),
+                "executed": False,
+                "next_action": "Choose a listed bundled read-only site/operation and provide its declared parameters to execute it.",
+                "truthful": True,
+            }
+
         import free_api_fabric as fabric
 
         api_id = clean(payload.get("api_id"), 120)
