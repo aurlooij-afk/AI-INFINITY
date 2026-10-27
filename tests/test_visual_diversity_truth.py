@@ -1884,8 +1884,8 @@ def test_final_delivery_loudness_master_preserves_video_and_validates_streams(mo
         return {
             "format": {"duration": "20.0"},
             "streams": [
-                {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080},
-                {"codec_type": "audio", "codec_name": "aac"},
+                {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080, "duration": "20.0"},
+                {"codec_type": "audio", "codec_name": "aac", "duration": "20.0"},
                 {"codec_type": "subtitle", "codec_name": "mov_text"},
             ],
         }
@@ -1899,7 +1899,11 @@ def test_final_delivery_loudness_master_preserves_video_and_validates_streams(mo
 
     args = captured["args"]
     assert "-c:v" in args and args[args.index("-c:v") + 1] == "copy"
-    assert "-af" in args and args[args.index("-af") + 1] == "loudnorm=I=-16.0:TP=-1.5:LRA=11.0"
+    assert "-af" in args
+    audio_filter = args[args.index("-af") + 1]
+    assert "atrim=duration=20.000" in audio_filter
+    assert "apad=whole_dur=20.000" in audio_filter
+    assert "loudnorm=I=-16.0:TP=-1.5:LRA=11.0" in audio_filter
     assert "0:s?" in args
     assert result["status"] == "completed" and result["truthful"] is True
     assert result["target_integrated_lufs"] == -16.0
