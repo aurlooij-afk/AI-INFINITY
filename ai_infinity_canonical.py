@@ -762,7 +762,7 @@ def classify_command(command, raw=None):
     if explicit == "public_api" or public_api_intent:
         return {
             "route": "public_api",
-            "reason": "Matched public API or API Anything capability routing; execution and write outcomes are reported per operation.",
+            "reason": "Matched verified public API or API Anything capability routing; execution and write outcomes are reported per operation.",
         }
 
     # Bounded multilingual routing for the already supported output languages.
@@ -1006,6 +1006,8 @@ def dispatch_command(command, user_id, raw=None):
                         raw_steps = json.loads(raw_steps)
                     except (TypeError, ValueError):
                         return {"status": "invalid_steps", "route": route, "executed": False, "truthful": True}
+                if raw_steps == "":
+                    raw_steps = None
                 if raw_steps is not None and not isinstance(raw_steps, list):
                     return {"status": "invalid_steps", "route": route, "executed": False, "truthful": True}
                 soft_from = clean(payload.get("api_anything_soft_from") or parsed_pairs.pop("soft_from", ""), 1200)
@@ -1051,7 +1053,7 @@ def dispatch_command(command, user_id, raw=None):
                 if hasattr(connector, "execute_api_anything_operation"):
                     result = connector.execute_api_anything_operation(
                         site_name, operation_name, params, user_id=user_id,
-                        allow_writes=write_allowance, max_tier=max_tier, dry_run=dry_run,
+                        allow_writes=write_allowance and False, max_tier=max_tier, dry_run=dry_run,
                         idempotency_key=idempotency_key, again=again, auto_preflight=True,
                     )
                 elif hasattr(connector, "execute_bundled_operation"):
