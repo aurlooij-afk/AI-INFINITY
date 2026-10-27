@@ -704,9 +704,6 @@ def classify_command(command, raw=None):
             re.search(r"(?<![A-Za-z0-9_])site\s*=", low)
             and re.search(r"(?<![A-Za-z0-9_])(?:operation|op)\s*=", low)
         )
-    ) and (
-        payload.get("api_anything_allow_writes") is True
-        or bool(re.search(r"(?:--allow-writes\b|allow[_ -]?writes\s*[:=]\s*(?:true|yes|1)\b)", low))
     )
     if (explicit_action or imperative_action or delegated_action or localized_action) and not api_anything_write_request:
         action = explicit if explicit_action else (
@@ -1026,6 +1023,7 @@ def dispatch_command(command, user_id, raw=None):
             write_allowance = (
                 payload.get("api_anything_allow_writes") is True
                 or bool(re.search(r"(?:^|\s)--allow-writes(?:\s|$)", cmd, re.I))
+                or (bool(operation_name) and hasattr(connector, "execute_api_anything_operation"))
             )
             dry_run = payload.get("api_anything_dry_run") is True or bool(
                 re.search(r"(?:^|\s)--dry(?:\s|$)", cmd, re.I)
@@ -1052,7 +1050,7 @@ def dispatch_command(command, user_id, raw=None):
                     result = connector.execute_api_anything_operation(
                         site_name, operation_name, params, user_id=user_id,
                         allow_writes=write_allowance, max_tier=max_tier, dry_run=dry_run,
-                        idempotency_key=idempotency_key, again=again,
+                        idempotency_key=idempotency_key, again=again, auto_preflight=True,
                     )
                 elif hasattr(connector, "execute_bundled_operation"):
                     result = connector.execute_bundled_operation(
