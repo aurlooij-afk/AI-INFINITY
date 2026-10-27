@@ -67,4 +67,22 @@ def test_explicit_timecoded_brand_film_brief_is_preserved_by_offline_planner():
     assert len({chapter["visual_focus"] for chapter in chapters}) == 7
     assert "futuristic city" in chapters[1]["visual_focus"].lower()
     assert "generic Creator OS marketing copy" not in " ".join(chapter["narration"] for chapter in chapters)
+    model_calls = []
+    model_plan, provider = studio_ultimate.creative_plan(
+        {
+            "title": "ONE IDEA. INFINITE WORLDS.",
+            "objective": objective,
+            "format": "long",
+            "duration": 60,
+            "audience": "global technology audience",
+            "tone": "premium cinematic and emotionally intelligent",
+            "language": "English",
+            "topic": "AI Infinity — One Idea. Infinite Worlds.",
+        },
+        {"sources": []},
+        lambda payload: model_calls.append(payload) or {},
+    )
+    assert provider == "explicit-timecoded-user-brief"
+    assert model_calls == []
+    assert [chapter["duration"] for chapter in model_plan["chapters"]] == [4.0, 8.0, 13.0, 15.0, 9.0, 7.0, 4.0]
 
