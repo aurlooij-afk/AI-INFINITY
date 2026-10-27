@@ -1084,8 +1084,26 @@ def execute_api_anything_operation(
                     return {"status": "preview_receipt_consume_failed", "executed": False, "truthful": True}
             result, error = run(args)
             if error:
+                if is_write and not dry_run:
+                    return {
+                        "status": "write_outcome_ambiguous_check_target_do_not_retry",
+                        "provider": "api-anything", "site": site_name, "operation": operation_name,
+                        "write_capable": True, "write_outcome": "unknown",
+                        "execution_attempted": True, "executed": False,
+                        "next_action": "Read the target through a separate read operation before retrying.",
+                        "error_type": error, "truthful": True,
+                    }
                 return {"status": error, "executed": False, "truthful": True}
             if not isinstance(result, dict):
+                if is_write and not dry_run:
+                    return {
+                        "status": "write_outcome_ambiguous_check_target_do_not_retry",
+                        "provider": "api-anything", "site": site_name, "operation": operation_name,
+                        "write_capable": True, "write_outcome": "unknown",
+                        "execution_attempted": True, "executed": False,
+                        "next_action": "Read the target through a separate read operation before retrying.",
+                        "truthful": True,
+                    }
                 return {"status": "invalid_result_shape", "executed": False, "truthful": True}
             safe_result = _safe_public_data(result)
             if dry_run:
@@ -1113,19 +1131,49 @@ def execute_api_anything_operation(
                 }
             if result.get("ok") is not True:
                 write_outcome = _clean_text(result.get("write"), 40) if is_write else None
+                if is_write and write_outcome in {"accepted", "may_have_applied", "applied"}:
+                    return {
+                        "status": "write_outcome_ambiguous_check_target_do_not_retry",
+                        "provider": "api-anything", "site": site_name, "operation": operation_name,
+                        "write_capable": True, "write_outcome": write_outcome,
+                        "execution_attempted": True, "executed": False,
+                        "error_class": _clean_text(result.get("class"), 60),
+                        "reason": _clean_text(result.get("reason"), 300),
+                        "retry": "no", "result": safe_result,
+                        "next_action": "Read the target through a separate read operation before retrying.",
+                        "truthful": True,
+                    }
                 return {
-                    "status": "operation_failed", "provider": "api-anything",
+                    "status": "write_not_applied" if is_write and write_outcome == "not_applied" else "operation_failed",
+                    "provider": "api-anything",
                     "site": site_name, "operation": operation_name,
                     "read_only": not is_write, "write_capable": is_write,
                     "error_class": _clean_text(result.get("class"), 60),
                     "reason": _clean_text(result.get("reason"), 300),
                     "write_outcome": write_outcome,
                     "retry": _clean_text(result.get("retry"), 40),
-                    "executed": is_write and write_outcome in {"accepted", "may_have_applied", "applied"},
-                    "result": safe_result, "truthful": True,
+                    "executed": False, "result": safe_result, "truthful": True,
                 }
+            returned_site = result.get("site")
+            returned_operation = result.get("op") or result.get("operation")
+            if (returned_site and returned_site != site_name) or (returned_operation and returned_operation != operation_name):
+                if is_write:
+                    return {
+                        "status": "write_outcome_ambiguous_check_target_do_not_retry",
+                        "provider": "api-anything", "site": site_name, "operation": operation_name,
+                        "write_capable": True, "write_outcome": "unknown",
+                        "execution_attempted": True, "executed": False, "truthful": True,
+                    }
+                return {"status": "result_identity_mismatch", "executed": False, "truthful": True}
             returned_tier = result.get("tier")
             if type(returned_tier) is not int or returned_tier < min_tier or returned_tier > max_tier:
+                if is_write:
+                    return {
+                        "status": "write_outcome_ambiguous_check_target_do_not_retry",
+                        "provider": "api-anything", "site": site_name, "operation": operation_name,
+                        "write_capable": True, "write_outcome": "unknown",
+                        "execution_attempted": True, "executed": False, "truthful": True,
+                    }
                 return {"status": "unexpected_transport_tier", "executed": False, "truthful": True}
             data = _safe_public_data(result.get("data"))
             encoded = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
