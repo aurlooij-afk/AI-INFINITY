@@ -704,3 +704,97 @@ def test_generic_readonly_executor_rejects_contradictory_result_identity(monkeyp
     assert result["status"] == "result_identity_mismatch"
     assert result["executed"] is False
     assert len(calls) == 3
+
+
+def _write_stub_runner(*, write_outcome="accepted", dry_preview=False):
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        args = command[1:]
+        if args == ["sites"]:
+            payload = [{"name": "demo-site", "source": "bundled"}]
+        elif args == ["ops", "demo-site"]:
+            payload = {"operations": [{
+                "name": "sendMessage",
+                "readOnly": False,
+                "parameters": ["recipient:string", "message:string"],
+                "minTier": 1,
+            }]}
+        elif args[:3] == ["call", "demo-site", "sendMessage"]:
+            if "--dry" in args:
+                payload = {"ok": True, "class": "ok", "tier": 1, "request": {
+                    "method": "POST", "url": "https://example.org/messages",
+                    "body": {"recipient": "test-user", "message": "hello"},
+                }}
+            else:
+                payload = {"ok": True, "class": "ok", "tier": 1,
+                           "write": write_outcome, "data": {"receipt": "fixture-123"}}
+        else:
+            raise AssertionError(f"unexpected command: {command}")
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
+
+    return runner, calls
+
+
+def test_generic_write_is_visible_but_not_sent_without_explicit_allowance(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    runner, calls = _write_stub_runner()
+    monkeypatch.setattr(connector.subprocess, "run", runner)
+
+    result = connector.execute_bundled_operation(
+        "demo-site", "sendMessage", {"recipient": "test-user", "message": "hello"},
+    )
+
+    assert result["status"] == "write_confirmation_required"
+    assert result["executed"] is False
+    assert result["write"] is True
+    assert not any(call[1:4] == ["call", "demo-site", "sendMessage"] for call in calls)
+
+
+def test_generic_write_dry_run_never_claims_execution(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    runner, calls = _write_stub_runner()
+    monkeypatch.setattr(connector.subprocess, "run", runner)
+
+    result = connector.execute_bundled_operation(
+        "demo-site", "sendMessage", {"recipient": "test-user", "message": "hello"},
+        dry_run=True,
+    )
+
+    call = next(call for call in calls if call[1:4] == ["call", "demo-site", "sendMessage"])
+    assert "--allow-writes" in call and "--dry" in call
+    assert result["status"] == "dry_run_ready"
+    assert result["executed"] is False
+    assert result["request_preview"]["method"] == "POST"
+
+
+def test_generic_write_acknowledgement_is_not_mislabeled_as_verified_delivery(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    runner, calls = _write_stub_runner(write_outcome="accepted")
+    monkeypatch.setattr(connector.subprocess, "run", runner)
+
+    result = connector.execute_bundled_operation(
+        "demo-site", "sendMessage", {"recipient": "test-user", "message": "hello"},
+        allow_writes=True,
+    )
+
+    assert result["status"] == "write_accepted_not_independently_verified"
+    assert result["executed"] is True
+    assert result["write_outcome"] == "accepted"
+    call = next(call for call in calls if call[1:4] == ["call", "demo-site", "sendMessage"])
+    assert "--allow-writes" in call and "--dry" not in call
+
+
+def test_generic_write_ambiguous_result_warns_not_to_retry(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    runner, _ = _write_stub_runner(write_outcome="may_have_applied")
+    monkeypatch.setattr(connector.subprocess, "run", runner)
+
+    result = connector.execute_bundled_operation(
+        "demo-site", "sendMessage", {"recipient": "test-user", "message": "hello"},
+        allow_writes=True,
+    )
+
+    assert result["status"] == "write_outcome_ambiguous_check_target_do_not_retry"
+    assert result["executed"] is True
