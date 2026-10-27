@@ -1766,15 +1766,29 @@ def _explicit_timed_storyboard_plan(
     if abs(total - target) > 0.01:
         chapters[-1]["duration"] = round(float(chapters[-1]["duration"]) + target - total, 3)
     exact_title = re.sub(r"\s+", " ", str(title or "")).strip()[:180]
+    audience_value = str(audience or "general audience")
+    tone_value = str(tone or "premium cinematic, emotionally intelligent")
+    cta_value = chapters[-2]["narration"] if len(chapters) > 1 else chapters[-1]["narration"]
     return {
         "title": exact_title,
         "hook": chapters[0]["narration"],
+        "opening_hook": chapters[0]["narration"],
         "premise": raw_objective[:12000],
-        "audience": str(audience or "general audience"),
-        "tone": str(tone or "premium cinematic, emotionally intelligent"),
-        "cta": chapters[-2]["narration"] if len(chapters) > 1 else chapters[-1]["narration"],
+        "brief": raw_objective[:12000],
+        "audience": audience_value,
+        "tone": tone_value,
+        "cta": cta_value,
+        "call_to_action": cta_value,
         "language": str(language or "English"),
+        "format": str(fmt or "video"),
+        "duration_seconds": target,
+        "topic": str(topic or exact_title),
+        "concept": exact_title,
+        "visual_style": visual_style or tone_value,
+        "platforms": [],
         "platform_adaptations": [],
+        "research_narration_sources": [],
+        "source_digest": [],
         "chapters": chapters,
         "storyboard_origin": "explicit_timecoded_user_brief",
         "brief_fidelity": {
