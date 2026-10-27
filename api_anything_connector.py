@@ -623,13 +623,19 @@ def execute_bundled_operation(
     for key, value in params.items():
         if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", key):
             return {"status": "invalid_parameter_name", "executed": False, "truthful": True}
-        try:
-            # Declared API inputs may legitimately include an API key/token or nested JSON.
-            # Values are sent only to the selected verified operation and never echoed here.
-            safe_params[key] = _validate_api_argument(value)
-        except ValueError:
-            return {"status": "invalid_parameter_value", "executed": False, "truthful": True}
-    if len(json.dumps(safe_params, ensure_ascii=False, allow_nan=False)) > 12000:
+        if _SENSITIVE_OUTPUT_KEY.search(key):
+            return {"status": "sensitive_parameter_not_allowed", "executed": False, "truthful": True}
+        if isinstance(value, str):
+            if len(value) > MAX_QUERY_CHARS or chr(0) in value:
+                return {"status": "invalid_parameter_value", "executed": False, "truthful": True}
+            safe_params[key] = value
+        elif type(value) in (int, bool):
+            safe_params[key] = value
+        elif type(value) is float and math.isfinite(value):
+            safe_params[key] = value
+        else:
+            return {"status": "scalar_parameters_required", "executed": False, "truthful": True}
+    if len(json.dumps(safe_params, ensure_ascii=False)) > 4000:
         return {"status": "parameters_too_large", "executed": False, "truthful": True}
     executable = shutil.which("api-anything")
     if not executable:
