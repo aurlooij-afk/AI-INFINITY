@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import ipaddress
+import math
 import selectors
 import re
 import shutil
@@ -592,10 +593,12 @@ def execute_bundled_read_only(
         if _SENSITIVE_OUTPUT_KEY.search(key):
             return {"status": "sensitive_parameter_not_allowed", "executed": False, "truthful": True}
         if isinstance(value, str):
-            if len(value) > MAX_QUERY_CHARS or "\\x00" in value:
+            if len(value) > MAX_QUERY_CHARS or chr(0) in value:
                 return {"status": "invalid_parameter_value", "executed": False, "truthful": True}
             safe_params[key] = value
-        elif isinstance(value, (int, float, bool)) and not isinstance(value, complex):
+        elif type(value) in (int, bool):
+            safe_params[key] = value
+        elif type(value) is float and math.isfinite(value):
             safe_params[key] = value
         else:
             return {"status": "scalar_parameters_required", "executed": False, "truthful": True}
