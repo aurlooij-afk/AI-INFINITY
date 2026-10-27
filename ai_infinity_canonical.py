@@ -999,9 +999,22 @@ def dispatch_command(command, user_id, raw=None):
                         "status": "capability_not_installed", "route": route, "provider": "api-anything",
                         "executed": False, "truthful": True,
                     }
+                raw_steps = payload.get("api_anything_steps")
+                if raw_steps is None:
+                    raw_steps = payload.get("api_anything_steps_json") or parsed_pairs.pop("steps", "")
+                if isinstance(raw_steps, str) and raw_steps.strip():
+                    try:
+                        raw_steps = json.loads(raw_steps)
+                    except (TypeError, ValueError):
+                        return {"status": "invalid_steps", "route": route, "executed": False, "truthful": True}
+                if raw_steps is not None and not isinstance(raw_steps, list):
+                    return {"status": "invalid_steps", "route": route, "executed": False, "truthful": True}
+                soft_from = clean(payload.get("api_anything_soft_from") or parsed_pairs.pop("soft_from", ""), 1200)
+                description = clean(payload.get("api_anything_description") or parsed_pairs.pop("description", ""), 300)
                 result = connector.learn_api_anything_operation(
                     site_name, operation_name, trigger_url, example_1, example_2,
                     user_id=user_id, write=write_learning, match=match_spec,
+                    steps=raw_steps, soft_from=soft_from, description=description,
                 )
                 learned = result.get("status") == "learned"
                 return {
