@@ -621,7 +621,7 @@ def test_api_anything_learn_command_passes_two_examples_to_profiled_learner(monk
     assert calls == [(
         "reader-site", "search", "https://example.com/search?q={q}",
         {"q": "cats"}, {"q": "dogs"},
-        {"user_id": "user-learn-3", "write": False, "match": {}},
+        {"user_id": "user-learn-3", "write": False, "match": {}, "steps": None, "soft_from": "", "description": ""},
     )]
 
 
