@@ -1025,3 +1025,17 @@ def test_general_executor_accepts_declared_credentials_and_nested_json_without_e
     assert "caller-secret-value" not in serialized_result
     assert "echoed-secret" not in serialized_result
     assert result["result"]["api_key"] == "[redacted]"
+
+
+def test_status_distinguishes_empty_bundled_writes_from_supported_user_write_execution(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    state = connector.status()
+    assert state["available"] is True
+    assert state["generic_bundled_write_operations"] is False
+    assert state["user_learned_write_operations"] is True
+    assert state["registry_operations"] is True
+    assert state["supported_transport_tiers"] == [1, 2, 3]
+    assert state["write_execution_requires_matching_dry_run"] is True
+    assert state["browser_learning_supported"] is True
+    assert state["browser_learning_runtime_verified"] is False
+    assert state["durable_profile_storage_verified"] is False
