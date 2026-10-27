@@ -113,22 +113,22 @@ jobs:
 
       - name: Build portable image
         run: docker build --platform linux/amd64 --tag ai-infinity:ci .
-      - name: Verify live read-only API Anything research operation
+      - name: Verify live read-only API Anything operation through AI Infinity adapter
         shell: bash
         run: |
           set -euo pipefail
-          result="$(docker run --rm --platform linux/amd64 --entrypoint api-anything ai-infinity:ci call hacker-news search query=sqlite --max-tier 1)"
+          result="$(docker run --rm --platform linux/amd64 --entrypoint python ai-infinity:ci -c 'import json; from api_anything_connector import execute_bundled_read_only; print(json.dumps(execute_bundled_read_only(\"hacker-news\", \"search\", {\"query\": \"sqlite\"})))')"
           printf '%s' "$result" | python -c '
           import json, sys
           result = json.load(sys.stdin)
-          assert result.get("ok") is True, {"class": result.get("class"), "next": result.get("next")}
-          assert result.get("tier") == 1, {"tier": result.get("tier")}
-          data = result.get("data")
-          assert isinstance(data, list) and data, "live Hacker News search returned no results"
-          assert all(isinstance(item, dict) and item.get("title") for item in data), "search results lack titles"
-          print(json.dumps({"status": "verified", "operation": "hacker-news.search", "tier": result["tier"], "result_count": len(data), "first_title": data[0]["title"], "truthful": True}))
+          assert result.get("status") == "completed", {"status": result.get("status"), "error_type": result.get("error_type")}
+          assert result.get("executed") is True and result.get("read_only") is True, result
+          assert result.get("transport_tier") == 1, {"tier": result.get("transport_tier")}
+          data = result.get("result")
+          assert isinstance(data, list) and data, "dynamic AI Infinity adapter returned no records"
+          assert all(isinstance(item, dict) and item.get("title") for item in data), "results lack titles"
+          print(json.dumps({"status": "verified", "provider": result["provider"], "operation": result["site"] + "." + result["operation"], "tier": result["transport_tier"], "result_count": len(data), "first_title": data[0]["title"], "truthful": True}))
           '
-
       - name: Start image and verify HTTP
         run: |
           set -euo pipefail
