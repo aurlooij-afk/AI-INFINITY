@@ -405,3 +405,74 @@ def test_public_api_intent_has_ui_result_handler():
     assert "No request has been executed yet" in handler
     assert "operation_id=…" in handler
 
+
+
+def test_api_anything_command_discovers_bundled_readonly_operations(monkeypatch):
+    connector = SimpleNamespace(
+        list_bundled_read_only_operations=lambda site_name="", limit=100: {
+            "status": "ready", "sites": ["youtube", "goodreads"],
+            "operations": [{"site": "goodreads", "operation": "searchBooks", "read_only": True, "parameters": ["q"]}],
+            "executed": False, "truthful": True,
+        }
+    )
+    monkeypatch.setitem(sys.modules, "api_anything_connector", connector)
+    monkeypatch.setitem(sys.modules, "free_api_fabric", SimpleNamespace(
+        catalog=lambda **kwargs: (_ for _ in ()).throw(AssertionError("API Anything must use its dynamic bundled catalog"))
+    ))
+
+    result = canonical.dispatch_command("Show API Anything read-only operations", "user-1", {})
+
+    assert result["route"] == "public_api"
+    assert result["provider"] == "api-anything"
+    assert result["executed"] is False
+    assert result["operations"][0]["operation"] == "searchBooks"
+
+
+def test_api_anything_command_executes_selected_readonly_operation_without_public_api_fallback(monkeypatch):
+    calls = []
+    connector = SimpleNamespace(
+        execute_bundled_read_only=lambda site, operation, params: (
+            calls.append((site, operation, params)) or {
+                "status": "completed", "executed": True, "read_only": True,
+                "site": site, "operation": operation, "result": [{"title": "Piranesi"}],
+                "transport_tier": 1, "truthful": True,
+            }
+        )
+    )
+    monkeypatch.setitem(sys.modules, "api_anything_connector", connector)
+    monkeypatch.setitem(sys.modules, "free_api_fabric", SimpleNamespace(
+        invoke=lambda *a, **kw: (_ for _ in ()).throw(AssertionError("must not fall through to free API fabric"))
+    ))
+
+    result = canonical.dispatch_command(
+        "Use API Anything site=goodreads operation=searchBooks q=Piranesi", "user-1", {}
+    )
+
+    assert result["status"] == "completed"
+    assert result["provider"] == "api-anything"
+    assert result["executed"] is True
+    assert result["result"]["transport_tier"] == 1
+    assert calls == [("goodreads", "searchBooks", {"q": "Piranesi"})]
+
+
+def test_api_anything_explicit_payload_supports_parameters_and_does_not_authorize_writes(monkeypatch):
+    calls = []
+    connector = SimpleNamespace(
+        execute_bundled_read_only=lambda site, operation, params: (
+            calls.append((site, operation, params)) or {
+                "status": "operation_not_verified_read_only", "executed": False, "truthful": True,
+            }
+        )
+    )
+    monkeypatch.setitem(sys.modules, "api_anything_connector", connector)
+
+    result = canonical.dispatch_command(
+        "Call API Anything operation", "user-1",
+        {"api_anything_site": "linkedin", "api_anything_operation": "sendMessage",
+         "api_anything_params": {"recipient": "someone", "message": "hello"}},
+    )
+
+    assert result["status"] == "degraded"
+    assert result["executed"] is False
+    assert calls == [("linkedin", "sendMessage", {"recipient": "someone", "message": "hello"})]
+    assert canonical.classify_command("Send a message through API Anything")["route"] == "authorization_required"
