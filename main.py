@@ -8,6 +8,7 @@ import reality_first_3901
 import studio_ultimate
 import production_graph
 import production_intelligence
+import free_api_fabric
 import production_openai_video
 import production_closure_3624
 import professional_creator_v2_timeline_patch
@@ -75,6 +76,7 @@ studio_ultimate.register(app)
 reality_first_3901.register(app)
 production_graph.register(app)
 production_intelligence.register(app)
+free_api_fabric.register(app)
 production_openai_video.register(app)
 production_closure_3624.register(app)
 editorial_review_3625.register(app)

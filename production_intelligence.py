@@ -8,7 +8,9 @@ No provider credential => truthful not_configured response.
 """
 
 import base64, json, mimetypes, os, re, sqlite3, subprocess, time, uuid
+import api_anything_connector
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional
 import requests
 from fastapi import HTTPException, Request
@@ -45,6 +47,7 @@ def provider_status():
       "research":{
         "tavily":bool(os.getenv("TAVILY_API_KEY","").strip()),
         "brave":bool(os.getenv("BRAVE_SEARCH_API_KEY","").strip()),
+        "api_anything":api_anything_connector.status(),
         "fallback":"Wikipedia + DuckDuckGo"
       },
       "vision":{"openai":bool(os.getenv("OPENAI_API_KEY","").strip()),"model":os.getenv("AI_INFINITY_VISION_MODEL","gpt-5.6-luna")},
@@ -72,7 +75,21 @@ def parse_json_text(text):
 
 def research(topic,limit=10):
     topic=re.sub(r"\s+"," ",str(topic or "").strip())[:500]
+    limit=max(1,min(20,int(limit or 10)))
     if not topic:raise HTTPException(422,"topic required")
+    # Honor the canonical runtime policy before calling any remote research provider.
+    policy_check=getattr(studio(),"_external_providers_disabled",None)
+    if callable(policy_check) and policy_check():
+        blocked=studio().research_topic(topic,limit=min(limit,10))
+        if not isinstance(blocked,dict):blocked={}
+        blocked.update({
+            "topic":topic,
+            "provider":"disabled_by_policy",
+            "providers_used":[],
+            "api_anything":{"status":"disabled_by_policy","items_added":0,"operation":"youtube.search","truthful":True},
+            "truthful":True,
+        })
+        return blocked
     sources=[]
     key=os.getenv("TAVILY_API_KEY","").strip()
     if key:
@@ -98,6 +115,41 @@ def research(topic,limit=10):
                 sources.append({"source":"Brave Search","title":x.get("title"),"url":x.get("url"),"summary":x.get("description") or x.get("snippet") or "","published_at":x.get("age")})
         except Exception as e:
             sources.append({"source":"Brave Search","error":str(e)[:500]})
+    # Supplemental competitor-video discovery through a pinned, bundled, read-only operation.
+    # The connector uses a fresh private CLI home, validates the bundled spec, and forces tier 1.
+    api_anything_result=api_anything_connector.search_candidates(topic,limit=min(limit,10))
+    for item in (api_anything_result.get("sources") or []):
+        if not isinstance(item,dict) or not item.get("url") or not item.get("title"):
+            continue
+        source_name=str(item.get("source") or "")
+        if source_name not in {
+            "API Anything / YouTube", "API Anything / Hacker News", "API Anything / Goodreads",
+            "API Anything / Rotten Tomatoes", "API Anything / Amazon",
+        }:
+            continue
+        sources.append({
+            "source":source_name,
+            "title":str(item.get("title") or "")[:300],
+            "url":str(item.get("url") or "")[:1000],
+            "summary":(
+                "Channel: "+str(item.get("channel") or "unknown")[:160]+"; views: "+str(item.get("views") or "unknown")[:80]
+                if source_name=="API Anything / YouTube"
+                else (
+                    "Hacker News discussion; points: "+str(item.get("points") or "unknown")[:40]+"; comments: "+str(item.get("comments") or "unknown")[:40]
+                    if source_name=="API Anything / Hacker News"
+                    else (
+                        "Author: "+str(item.get("author") or "unknown")[:160]+"; rating: "+str(item.get("rating") or "unknown")[:40]
+                        if source_name=="API Anything / Goodreads"
+                        else (
+                            "Release year: "+str(item.get("year") or "unknown")[:20]+"; critic score: "+str(item.get("tomatometer") or "not returned")[:40]
+                            if source_name=="API Anything / Rotten Tomatoes"
+                            else "Product price: "+str(item.get("price") or "not returned")[:80]
+                        )
+                    )
+                )
+            ),
+            "retrieved_at":studio().utc_iso(),
+        })
     clean=[]
     seen=set()
     for x in sources:
@@ -111,13 +163,26 @@ def research(topic,limit=10):
         try:
             legacy=studio().research_topic(topic,limit=min(limit,10))
             clean=[x for x in legacy.get("sources") or [] if not x.get("error")]
-            provider="legacy"
+            provider="legacy" if clean else "none"
         except Exception:
             clean=[]
             provider="none"
     else:
-        provider="tavily+brave" if key else ("brave" if os.getenv("BRAVE_SEARCH_API_KEY","").strip() else "tavily")
-    return {"topic":topic,"provider":provider,"source_count":len(clean),"sources":clean[:limit],"generated_at":studio().utc_iso(),"truthful":True}
+        used=[]
+        if any(x.get("source")=="Tavily" for x in clean): used.append("tavily")
+        if any(x.get("source")=="Brave Search" for x in clean): used.append("brave")
+        for source_name, provider_name in (
+            ("API Anything / YouTube", "api-anything-youtube"),
+            ("API Anything / Hacker News", "api-anything-hacker-news"),
+            ("API Anything / Goodreads", "api-anything-goodreads"),
+            ("API Anything / Rotten Tomatoes", "api-anything-rotten-tomatoes"),
+            ("API Anything / Amazon", "api-anything-amazon"),
+        ):
+            if any(x.get("source") == source_name for x in clean):
+                used.append(provider_name)
+        provider="+".join(used) or "unknown"
+    providers_used=sorted({str(x.get("source") or "unknown") for x in clean})
+    return {"topic":topic,"provider":provider,"providers_used":providers_used,"api_anything":{"status":api_anything_result.get("status","unknown"),"items_added":sum(1 for x in clean if str(x.get("source") or "").startswith("API Anything / ")),"operations":api_anything_result.get("operations",{}),"truthful":True},"source_count":len(clean),"sources":clean[:limit],"generated_at":studio().utc_iso(),"truthful":True}
 
 def frame_image(path:Path)->tuple[Path,Optional[Path]]:
     if path.suffix.lower() in {".png",".jpg",".jpeg",".webp"}:return path,None
@@ -273,7 +338,173 @@ def eleven_sfx(pid,prompt,duration=3):
     root=Path(os.getenv("AI_INFINITY_DATA_DIR","/tmp/ai-infinity"))/"production-intelligence"/pid;root.mkdir(parents=True,exist_ok=True);p=root/("sfx_"+uuid.uuid4().hex[:12]+".mp3");p.write_bytes(r.content)
     return {"status":"completed","provider":"elevenlabs","path":str(p),"duration_seconds":duration,"truthful":True}
 
+def install_creator_research_connector():
+    """Augment the existing Creator Studio research function without replacing its providers."""
+    target = studio()
+    original = getattr(target, "research_topic", None)
+    if not callable(original) or getattr(original, "_api_anything_research_wrapped", False):
+        return {"status": "already_installed" if callable(original) else "unavailable", "truthful": True}
+
+    def enriched_research_topic(topic, limit=10):
+        result = original(topic, limit=limit)
+        if not isinstance(result, dict):
+            return result
+        providers = result.get("providers")
+        if isinstance(providers, dict) and providers and all(
+            isinstance(item, dict) and item.get("status") == "disabled_by_policy"
+            for item in providers.values()
+        ):
+            return result
+
+        per = max(1, min(10, int(limit or 10)))
+        connector_result = api_anything_connector.search_candidates(topic, limit=per)
+        items = connector_result.get("sources") if isinstance(connector_result, dict) else []
+        items = items if isinstance(items, list) else []
+        sources = result.get("sources")
+        if not isinstance(sources, list):
+            sources = []
+            result["sources"] = sources
+        existing = {
+            (str(item.get("url") or "").strip(), str(item.get("title") or "").strip().casefold())
+            for item in sources if isinstance(item, dict)
+        }
+        added = 0
+        added_by_source = {}
+        relevant = getattr(target, "_research_source_relevant", None)
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").strip()
+            title = str(item.get("title") or "").strip()[:300]
+            source_name = str(item.get("source") or "")
+            if not title or not url.startswith("https://"):
+                continue
+            if source_name == "API Anything / YouTube":
+                video_id = str(item.get("id") or "").strip()
+                if not re.fullmatch(r"[A-Za-z0-9_-]{6,20}", video_id):
+                    continue
+                if url != f"https://www.youtube.com/watch?v={video_id}":
+                    continue
+                row = {
+                    "title": title, "url": url, "source": source_name,
+                    "summary": "Channel: " + str(item.get("channel") or "unknown")[:160]
+                    + "; views: " + str(item.get("views") or "unknown")[:80],
+                    "video_id": video_id,
+                    "channel": str(item.get("channel") or "")[:160],
+                    "views": str(item.get("views") or "")[:80],
+                    "retrieved_at": studio().utc_iso(),
+                }
+            elif source_name == "API Anything / Hacker News":
+                parsed = urlparse(url)
+                if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+                    continue
+                host = parsed.hostname.rstrip(".").lower()
+                if host in {"localhost", "localhost.localdomain"} or host.endswith((".local", ".internal", ".localhost")):
+                    continue
+                row = {
+                    "title": title, "url": url, "source": source_name,
+                    "summary": "Hacker News discussion; points: " + str(item.get("points") or "unknown")[:40]
+                    + "; comments: " + str(item.get("comments") or "unknown")[:40],
+                    "external_id": str(item.get("id") or "")[:80],
+                    "author": str(item.get("author") or "")[:120],
+                    "points": str(item.get("points") or "")[:40],
+                    "comments": str(item.get("comments") or "")[:40],
+                    "retrieved_at": studio().utc_iso(),
+                }
+            elif source_name == "API Anything / Goodreads":
+                book_id = str(item.get("id") or "").strip()
+                if not re.fullmatch(r"\d{1,20}", book_id) or url != f"https://www.goodreads.com/book/show/{book_id}":
+                    continue
+                row = {
+                    "title": title, "url": url, "source": source_name,
+                    "summary": "Author: " + str(item.get("author") or "unknown")[:160]
+                    + "; rating: " + str(item.get("rating") or "unknown")[:40],
+                    "book_id": book_id, "author": str(item.get("author") or "")[:160],
+                    "rating": str(item.get("rating") or "")[:40],
+                    "ratings_count": str(item.get("ratings_count") or "")[:60],
+                    "retrieved_at": studio().utc_iso(),
+                }
+            elif source_name == "API Anything / Rotten Tomatoes":
+                slug = str(item.get("id") or "").strip()
+                if not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", slug) or url != f"https://www.rottentomatoes.com/m/{slug}":
+                    continue
+                row = {
+                    "title": title, "url": url, "source": source_name,
+                    "summary": "Movie metadata; release year: " + str(item.get("year") or "unknown")[:20]
+                    + "; critic score: " + str(item.get("tomatometer") or "not returned")[:40],
+                    "movie_slug": slug, "year": str(item.get("year") or "")[:20],
+                    "tomatometer": str(item.get("tomatometer") or "")[:40],
+                    "cast": str(item.get("cast") or "")[:300],
+                    "retrieved_at": studio().utc_iso(),
+                }
+            elif source_name == "API Anything / Amazon":
+                asin = str(item.get("id") or "").strip().upper()
+                if not re.fullmatch(r"[A-Z0-9]{10}", asin) or url != f"https://www.amazon.com/dp/{asin}":
+                    continue
+                row = {
+                    "title": title, "url": url, "source": source_name,
+                    "summary": "Amazon product listing; price: " + str(item.get("price") or "not returned")[:80],
+                    "asin": asin, "price": str(item.get("price") or "")[:80],
+                    "retrieved_at": studio().utc_iso(),
+                }
+            else:
+                continue
+            key = (url, title.casefold())
+            if key in existing or (callable(relevant) and not relevant(str(topic or ""), row)):
+                continue
+            existing.add(key)
+            sources.append(row)
+            added += 1
+            added_by_source[source_name] = added_by_source.get(source_name, 0) + 1
+            if len(sources) >= per * 2:
+                break
+
+        provider_map = result.setdefault("providers", {})
+        if isinstance(provider_map, dict):
+            operation_statuses = connector_result.get("operations", {}) if isinstance(connector_result, dict) else {}
+            for capability, source_name in (
+                ("youtube.search", "API Anything / YouTube"),
+                ("hacker-news.search", "API Anything / Hacker News"),
+                ("goodreads.searchBooks", "API Anything / Goodreads"),
+                ("rottentomatoes.searchMovies", "API Anything / Rotten Tomatoes"),
+                ("amazon.search", "API Anything / Amazon"),
+            ):
+                count = added_by_source.get(source_name, 0)
+                status_value = str(operation_statuses.get(capability) or "unknown")
+                provider_map[source_name] = {
+                    "status": "ready" if count else status_value,
+                    "count": count,
+                    "connector_status": status_value,
+                    "operation": capability,
+                    "transport_mode": "bundled_read_only_plain_http",
+                    "truthful": True,
+                }
+        result["source_count"] = len(sources)
+        result["provider_count"] = len({str(item.get("source") or "unknown") for item in sources if isinstance(item, dict)})
+        result["degraded"] = not bool(sources)
+        result["status"] = "READY" if sources else "DEGRADED"
+        result["research_connector"] = {
+            "api_anything_status": str(connector_result.get("status") or "unknown") if isinstance(connector_result, dict) else "failed",
+            "items_added": added,
+            "operations": connector_result.get("operations", {}) if isinstance(connector_result, dict) else {},
+            "truthful": True,
+        }
+        policy = result.get("relevance_policy")
+        if isinstance(policy, dict):
+            retrieved_count = int(policy.get("retrieved_sources") or 0) + len(items)
+            policy["accepted_sources"] = len(sources)
+            policy["retrieved_sources"] = retrieved_count
+            policy["rejected_irrelevant_sources"] = max(0, retrieved_count - len(sources))
+        return result
+
+    enriched_research_topic._api_anything_research_wrapped = True
+    enriched_research_topic._api_anything_original = original
+    target.research_topic = enriched_research_topic
+    return {"status": "installed", "truthful": True}
+
+
 def register(app):
+    install_creator_research_connector()
     @app.get("/infinity/production/intelligence")
     def intelligence_status():return provider_status()
     @app.post("/infinity/production/research")

@@ -244,7 +244,7 @@ def compile_intent(command,raw):
         intent_patterns=(
             (r"\b(?:video|film|reel|documentary|explainer)\b","video"),
             (r"\b(?:podcast|audio show)\b","podcast"),
-            (r"\b(?:article|blog|essay)\b","article"),
+            (r"\b(?:article|blog|essay|report|guide|newsletter|white paper|research brief)\b","article"),
             (r"\b(?:social(?:\s+media)?\s+(?:post|campaign)|linkedin post|instagram post|tweet|x post)\b","social"),
         )
         intent_matches=[]
@@ -650,6 +650,696 @@ def create_from_command(command,user_id,raw):
     event(pid,user_id,"project_created",{"version_id":vid,"intent_sha256":digest(intent),"preflight":pf})
     return {**result,"project_id":pid,"intent":intent,"preflight":pf,"version":{"version_id":vid,"label":"Version 1","state":"PENDING"},"canonical":VERSION,"truthful":True}
 
+
+def classify_command(command, raw=None):
+    """Select an implemented capability without silently falling back to video creation."""
+    payload = raw if isinstance(raw, dict) else {}
+    text = clean(command, 4000)
+    low = text.lower()
+    explicit = clean(payload.get("task_type") or payload.get("operation"), 40).lower().replace("-", "_")
+    aliases = {
+        "creation": "create", "production": "create", "media": "create",
+        "search": "research", "investigate": "research", "inspect": "capabilities",
+        "free_api": "public_api", "api_search": "public_api", "api_call": "public_api",
+        "status": "capabilities", "project_status": "project_status",
+        "revision": "edit", "modification": "edit", "plan": "strategy",
+        "write_script": "script", "scriptwriting": "script",
+        "performance": "analytics", "seo_metadata": "seo", "publish_options": "publisher",
+    }
+    explicit = aliases.get(explicit, explicit)
+    supported = {
+        "research", "create", "edit", "project_status", "capabilities",
+        "script", "strategy", "marketing", "seo", "analytics", "publisher", "monetization", "public_api",
+    }
+    action_words = {"publish", "post", "send", "delete", "destroy", "purchase", "buy", "pay", "transfer", "schedule", "upload"}
+    explicit_action = explicit in action_words
+    imperative_action = bool(re.match(
+        r"^\s*(?:please\s+)?(?:publish|post|send|delete|destroy|purchase|buy|pay|transfer|schedule|upload)\b",
+        low,
+    ))
+    delegated_action = bool(re.search(
+        r"\b(?:i\s+want\s+to|i\s+want\s+you\s+to|i\s+need\s+to|i\s+need\s+you\s+to|can\s+you|could\s+you|would\s+you|help\s+me(?:\s+to)?|please\s+help\s+me)\s+(?:publish|post|send|delete|destroy|purchase|buy|pay|transfer|schedule|upload)\b",
+        low,
+    ))
+    localized_actions = (
+        ("publish", r"(?:شائع\s+(?:کرو|کریں)|پوسٹ\s+(?:کرو|کریں)|نشر\s+(?:کن|کنید)|خپور\s+(?:کړه|کړئ)|انشر(?:وا)?|انشري)"),
+        ("send", r"(?:بھیج(?:یں|و)?|ارسال\s+(?:کن|کنید)|واست(?:وه|وئ)|أرسل(?:وا)?|ابعث)"),
+        ("delete", r"(?:حذف\s+(?:کرو|کریں|کن|کنید|المشروع|المحتوى|الملف)|ړنګ\s+(?:کړه|کړئ)|احذف(?:وا)?)"),
+        ("purchase", r"(?:خرید(?:یں|و|کنید)?|بخر|اشتر(?:وا)?)"),
+        ("pay", r"(?:ادائیگی\s+(?:کرو|کریں)|پرداخت\s+(?:کن|کنید)|تادیه\s+وکړه|ادفع(?:وا)?)"),
+        ("transfer", r"(?:منتقل\s+(?:کرو|کریں|کن|کنید)|انتقال\s+بده|حوّل(?:وا)?)"),
+        ("schedule", r"(?:شیڈول\s+(?:کرو|کریں)|زمان.?بندی\s+(?:کن|کنید)|مهالویش\s+(?:کړه|کړئ)|جدول(?:وا)?)"),
+        ("upload", r"(?:اپ\s*لوڈ\s+(?:کرو|کریں)|بارگذاری\s+(?:کن|کنید)|پورته\s+(?:کړه|کړئ)|ارفع(?:وا)?)"),
+    )
+    localized_action = next(
+        (action for action, pattern in localized_actions if re.search(pattern, low)),
+        "",
+    )
+    api_anything_write_request = bool(
+        (
+            payload.get("api_anything_site")
+            and (payload.get("api_anything_operation") or payload.get("operation"))
+        )
+        or (
+            re.search(r"(?<![A-Za-z0-9_])site\s*=", low)
+            and re.search(r"(?<![A-Za-z0-9_])(?:operation|op)\s*=", low)
+        )
+    )
+    if (explicit_action or imperative_action or delegated_action or localized_action) and not api_anything_write_request:
+        action = explicit if explicit_action else (
+            re.match(r"^\s*(?:please\s+)?([a-z]+)", low).group(1)
+            if imperative_action else (
+                re.search(r"\b(?:publish|post|send|delete|destroy|purchase|buy|pay|transfer|schedule|upload)\b", low).group(0)
+                if delegated_action else localized_action
+            )
+        )
+        return {
+            "route": "authorization_required", "action": action,
+            "reason": "Consequential external actions require action-specific authorization and a verified connector.",
+        }
+    unsupported_primary = bool(re.search(
+        r"\b(?:create|make|build|develop|generate|produce)\s+(?:(?:a|an|the|new|simple|basic|sample|small|full|mobile|web|desktop|ios|android)\s+){0,5}(?:website|web\s+site|web\s+app|web\s+application|mobile\s+app|mobile\s+application|spreadsheet|slide\s+deck|presentation|powerpoint|database|api\s+endpoint|codebase|code\s+project|computer\s+program|ios\s+app|android\s+app)\b",
+        low,
+    ))
+    explicit_media_output = bool(re.search(
+        r"\b(?:create|make|generate|produce|build)\s+(?:(?:a|an|the|new|short|long|cinematic|professional|vertical|horizontal|\d+[- ]second)\s+){0,5}(?:video|film|reel|documentary|explainer|podcast|article|blog|essay|report|guide|newsletter|social campaign|social post)\b",
+        low,
+    ))
+    if unsupported_primary and not explicit_media_output:
+        return {
+            "route": "unsupported_deliverable",
+            "reason": "This request names a deliverable that the current runtime does not implement. It will not be silently converted into a video. Supported creation outputs are video, podcast, article/report, and social package.",
+        }
+    # Normalize common status phrasings before broad capability inference. This
+    # avoids misrouting short commands like "Check project status" as unknown.
+    status_request = bool(re.search(
+        r"\b(?:check|show|get|read|verify|explain|summarize|tell\s+me)\b.{0,40}\bproject\b.{0,30}\b(?:status|progress|health|verification|what\s+remains)\b",
+        low,
+    ) or re.search(r"\b(?:project\s+status|status\s+of\s+the\s+project|progress\s+on\s+the\s+project)\b", low))
+    if status_request and not payload.get("project_id"):
+        return {"route": "project_id_required", "reason": "Project status requires an existing project ID."}
+
+    edit_request = bool(re.match(
+        r"^\s*(?:please\s+)?(?:trim|cut|crop|resize|brighten|darken|speed\s+up|slow\s+down|increase\s+volume|lower\s+volume|change\s+(?:the\s+)?captions|change\s+subtitles|set\s+captions|set\s+subtitles|switch\s+captions|switch\s+subtitles|replace\s+scene|reorder\s+scenes|edit\s+(?:the|this|my)\s+video|mute|burn\s+captions|embed\s+subtitles|make\s+(?:this|it)\s+video\s+(?:faster|slower)|make\s+(?:this|it)\s+(?:more\s+)?(?:cinematic|premium|polished)\b)",
+        low,
+    ))
+    # A new deliverable takes precedence over ambient editing vocabulary (e.g.
+    # "create a cinematic video" while another project happens to be selected).
+    if edit_request and not payload.get("project_id"):
+        return {"route": "project_id_required", "reason": "Editing requires an existing project ID so its owner and source artifact can be verified."}
+
+    # Route explicit API Anything operation syntax directly even when the user
+    # does not name the provider. This makes the command interface capability-first
+    # while execution remains limited to the verified bundled read-only adapter.
+    explicit_api_operation = bool(
+        re.search(r"(?<![A-Za-z0-9_])site\s*=", low)
+        and re.search(r"(?<![A-Za-z0-9_])(?:operation|op)\s*=", low)
+    )
+    public_api_intent = explicit_api_operation or bool(
+        re.search(r"\b(?:public|free|open)\s+(?:web\s+)?apis?\b|\bapi anything\b", low)
+        and re.search(r"\b(use|search|find|look up|query|fetch|retrieve|call|discover|catalog|run|show|list|inspect|enumerate|learn|teach|capture|add)\b", low)
+    )
+    if explicit == "public_api" or public_api_intent:
+        return {
+            "route": "public_api",
+            "reason": "Matched verified public API or API Anything capability routing; execution and write outcomes are reported per operation.",
+        }
+
+    # Bounded multilingual routing for the already supported output languages.
+    localized_research = bool(re.search(
+        r"(?:تحقیق\s+(?:کرو|کریں|کیجیے|کن|کنید|وکړئ)|ذرائع\s+تلاش\s+کریں|معلومات\s+تلاش\s+کریں|بررسی\s+(?:کن|کنید)|جستجو\s+(?:کن|کنید)|منابع\s+(?:را\s+)?(?:پیدا\s+کن|بیابید)|څېړنه\s+وکړئ|څیړنه\s+وکړئ|سرچینې\s+ومومئ|پرتله\s+کړئ|ابحث(?:\s+عن)?|اجمع\s+المصادر|قارن|تحقق\s+من\s+المصادر)",
+        low,
+    ))
+    localized_create = bool(re.search(
+        r"(?:بناؤ|بنائیں|بنائیے|تخلیق\s+کریں|تیار\s+کریں|لکھیں|لکھو|بسازید?|ایجاد\s+کنید?|تولید\s+کنید?|تهیه\s+کنید?|جوړ\s+کړئ|جوړ\s+کړه|جوړه\s+کړئ|جوړه\s+کړه|تولید\s+کړئ|أنشئ|اصنع|اكتب|جهّز|جهز)",
+        low,
+    ))
+    localized_script = bool(re.search(
+        r"(?:اسکرپٹ|منظرنامہ|نریشن|وائس\s*اوور|سناریو|فیلمنامه|متن\s+گویندگی|سکرېپټ|تعليق\s+صوتي|سيناريو|لوحة\s+القصة)",
+        low,
+    ))
+    localized_strategy = bool(re.search(
+        r"(?:حکمت\s+عملی|راهبرد|ستراتیژي|ستراتیژۍ|استراتيجية|خطة\s+(?:عمل|تسويق)|بازاریابی|بازاریابي)",
+        low,
+    ))
+    localized_types = (
+        (r"(?:ویڈیو|ویدیو|ویدئوی|ویډیو|فيديو|مقطع|فلم|فیلم)", "video"),
+        (r"(?:پوڈکاسٹ|پادکست|پوډکاسټ|بودكاست)", "podcast"),
+        (r"(?:مضمون|مقالہ|مقاله|گزارش|مقال|تقرير)", "article"),
+        (r"(?:سوشل\s+(?:پوسٹ|مہم)|پست\s+اجتماعی|کمپین|ټولنیز\s+پوسټ|منشور|حملة)", "social"),
+    )
+    localized_content_type = next((kind for pattern, kind in localized_types if re.search(pattern, low)), "")
+    localized_unsupported = bool(re.search(
+        r"(?:ویب\s*سائٹ|وب.?سایت|ویبپاڼه|موقع\s+(?:إلكتروني|ويب)|تطبيق|جدول\s+بيانات|صفحه\s+گسترده|عرض\s+تقديمي|پاورپوائنٹ|قاعدة\s+بيانات)",
+        low,
+    ))
+    if localized_unsupported and not localized_content_type and localized_create:
+        return {
+            "route": "unsupported_deliverable",
+            "reason": "This website/app/spreadsheet/presentation/database request is not implemented by the current runtime; it will not be silently converted into video.",
+        }
+    if not explicit and localized_script and localized_create and not localized_content_type:
+        return {"route": "script", "reason": "Matched an existing script/creative-plan capability."}
+    if not explicit and localized_strategy and not localized_content_type:
+        return {"route": "strategy", "reason": "Matched an existing strategy/creative-plan capability."}
+    if not explicit and localized_research and not localized_create:
+        return {"route": "research", "reason": "Matched a supported multilingual research request."}
+    if not explicit and localized_create:
+        selected_type = localized_content_type or clean(payload.get("content_type"), 30).lower()
+        if selected_type not in {"video", "podcast", "article", "social"}:
+            return {"route": "deliverable_required", "reason": "Specify a supported output: video, podcast, article/report, or social package."}
+        return {"route": "create", "content_type": selected_type, "reason": "Matched a supported multilingual creation request."}
+
+    if explicit in supported:
+        route = explicit
+    elif re.search(r"\b(project|this project)\b", low) and re.search(
+        r"\b(status|progress|verify|verification|health|where are we|what remains)\b", low
+    ) and not re.search(r"\b(create|make|generate|produce|research|investigate)\b", low):
+        if payload.get("project_id"):
+            route = "project_status"
+        else:
+            return {"route": "project_id_required", "reason": "Project status requires an existing project ID."}
+    elif payload.get("project_id") and edit_request:
+        route = "edit"
+    elif re.search(r"\b(what can you do|available capabilities|available tools|system status|capability status|health check)\b", low):
+        route = "capabilities"
+    else:
+        creation = bool(re.search(r"\b(create|make|generate|produce|build|write|draft|develop|turn|convert|transform|repurpose)\b", low))
+        media_creation = bool(re.search(
+            r"\b(?:create|make|generate|produce|build)\s+(?:(?:a|an|the|new|short|long|cinematic|professional|vertical|horizontal|\d+[- ]second)\s+){0,5}(?:video|film|reel|documentary|explainer|podcast|article|blog|essay|report|guide|newsletter|social campaign|social post)\b",
+            low,
+        ))
+        script_request = bool(
+            re.search(r"\b(write|draft|outline|make|create|generate|prepare|develop|review|improve|revise)\b", low)
+            and re.search(r"\b(script|storyboard|narration|voiceover script|spoken copy)\b", low)
+            and not media_creation
+        )
+        analytics_request = bool(re.search(r"\b(analytics|performance metrics|engagement metrics|performance report|project metrics)\b", low))
+        publisher_request = bool(re.search(r"\b(publishing options|publisher connections|connected channels|how can i publish|publishing status)\b", low))
+        monetization_request = bool(re.search(r"\b(monetization|monetisation|revenue streams|earning options|monetization options)\b", low))
+        seo_request = bool(re.search(r"\b(seo metadata|meta description|search engine optimization|search engine optimisation|keyword research|seo keywords)\b", low))
+        marketing_request = bool(re.search(r"\b(marketing plan|campaign strategy|go[- ]to[- ]market|launch marketing|growth plan)\b", low))
+        strategy_request = bool(re.search(r"\b(strategy|strategize|strategise|creative brief|brainstorm|plan a|plan the|outline a plan)\b", low))
+        research = bool(re.search(r"\b(research|investigate|find sources|compare examples|benchmark|collect sources|look up|search for evidence)\b", low))
+
+        # Agent tasks produce plans/research/analysis, not a fake media file.
+        if script_request:
+            route = "script"
+        elif analytics_request:
+            route = "analytics"
+        elif publisher_request:
+            route = "publisher"
+        elif monetization_request:
+            route = "monetization"
+        elif seo_request and not media_creation:
+            route = "seo"
+        elif marketing_request and not media_creation:
+            route = "marketing"
+        elif strategy_request and not media_creation and not re.search(r"\b(create|make|generate|produce|build)\s+.{0,40}\b(video|film|reel|podcast|article|report|social campaign|social post)\b", low):
+            route = "strategy"
+        elif re.search(r"\b(website|web\s+site|web\s+app|web\s+application|mobile\s+app|mobile\s+application|spreadsheet|slide\s+deck|presentation|powerpoint|database|api\s+endpoint|codebase|code\s+project|computer\s+program|ios\s+app|android\s+app)\b", low) and not any(
+            re.search(pattern, low) for pattern in (
+                r"\b(video|film|reel|documentary|explainer|launch film|shorts?)\b",
+                r"\b(podcast|audio show)\b",
+                r"\b(article|blog|essay|report|guide|newsletter|white paper|research brief)\b",
+                r"\b(social post|social campaign|linkedin post|instagram post|tweet|x post)\b",
+            )
+        ):
+            return {"route": "unsupported_deliverable", "reason": "This request names a deliverable that the current runtime does not implement. It will not be silently converted into a video. Supported creation outputs are video, podcast, article/report, and social package."}
+        elif media_creation:
+            route = "create"
+        elif research and not creation:
+            route = "research"
+        else:
+            types = (
+                r"\b(video|film|reel|documentary|explainer|launch film|shorts?)\b",
+                r"\b(podcast|audio show)\b",
+                r"\b(article|blog|essay|report|guide|newsletter|white paper|research brief)\b",
+                r"\b(social post|social campaign|linkedin post|instagram post|tweet|x post)\b",
+            )
+            has_known_deliverable = clean(payload.get("content_type"), 30).lower() in {"video", "podcast", "article", "social"} or any(re.search(pattern, low) for pattern in types)
+            if creation and has_known_deliverable:
+                route = "create"
+            elif research:
+                route = "research"
+            elif creation:
+                return {"route": "deliverable_required", "reason": "Specify a supported deliverable: video, podcast, article/report, or social package."}
+            else:
+                return {"route": "unsupported", "reason": "No safe executable route matched this command."}
+    if route in {"edit", "project_status"} and not payload.get("project_id"):
+        return {"route": "project_id_required", "reason": "This action requires an existing project ID."}
+    return {"route": route, "reason": "Matched an implemented AI Infinity capability."}
+
+
+def dispatch_command(command, user_id, raw=None):
+    """Execute through existing engines; this is a router, not a second creator engine."""
+    payload = raw if isinstance(raw, dict) else {}
+    cmd = clean(command, 4000)
+    if len(cmd) < 3:
+        raise HTTPException(422, "A command of at least three characters is required.")
+    decision = classify_command(cmd, payload)
+    route = decision["route"]
+    if route == "authorization_required":
+        return {
+            "status": "authorization_required", "route": route,
+            "action": decision["action"], "reason": decision["reason"],
+            "executed": False, "truthful": True,
+        }
+    if route in {"unsupported", "project_id_required", "deliverable_required", "unsupported_deliverable"}:
+        return {
+            "status": "unsupported_or_incomplete", "route": route,
+            "reason": decision["reason"],
+            "supported_routes": [
+                "research", "create", "edit_existing_project", "project_status", "capabilities",
+                "script", "strategy", "marketing", "seo", "analytics", "publisher", "monetization",
+            ],
+            "executed": False, "truthful": True,
+        }
+    if route == "public_api":
+        import api_anything_connector as connector
+
+        use_api_anything = (
+            "api anything" in cmd.lower()
+            or bool(payload.get("api_anything_site"))
+            or (
+                bool(re.search(r"(?<![A-Za-z0-9_])site\s*=", cmd, re.I))
+                and bool(re.search(r"(?<![A-Za-z0-9_])(?:operation|op)\s*=", cmd, re.I))
+            )
+        )
+        if use_api_anything:
+            site_name = clean(payload.get("api_anything_site") or "", 64).lower()
+            operation_name = clean(payload.get("api_anything_operation") or "", 64)
+            params = payload.get("api_anything_params")
+            if not isinstance(params, dict):
+                params = payload.get("parameters")
+            if not isinstance(params, dict):
+                params = {}
+
+            pairs = re.findall(
+                r"(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_.-]{0,63})\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s,;]+))",
+                cmd,
+            )
+            parsed_pairs = {
+                key: (double_quoted if double_quoted != "" else single_quoted if single_quoted != "" else bare)
+                for key, double_quoted, single_quoted, bare in pairs
+            }
+            if not site_name:
+                site_name = clean(parsed_pairs.pop("site", ""), 64).lower()
+            if not operation_name:
+                operation_name = clean(parsed_pairs.pop("operation", parsed_pairs.pop("op", "")), 64)
+
+            def parse_example(value):
+                if isinstance(value, dict):
+                    return value
+                if not isinstance(value, str) or not value.strip():
+                    return {}
+                try:
+                    decoded = json.loads(value)
+                    if isinstance(decoded, dict):
+                        return decoded
+                except (TypeError, ValueError):
+                    pass
+                separator = ":" if ":" in value else "=" if "=" in value else ""
+                if not separator:
+                    return {}
+                key, item = value.split(separator, 1)
+                return {key.strip(): item.strip()}
+
+            trigger_url = payload.get("api_anything_trigger_url") or parsed_pairs.pop("trigger_url", parsed_pairs.pop("trigger_url", parsed_pairs.pop("trigger", "")))
+            example_1 = parse_example(payload.get("api_anything_example") or parsed_pairs.pop("example", ""))
+            example_2 = parse_example(payload.get("api_anything_example2") or parsed_pairs.pop("example2", ""))
+            match_spec = payload.get("api_anything_match")
+            if not isinstance(match_spec, dict):
+                match_spec = {}
+            write_learning = (
+                payload.get("api_anything_write_learning") is True
+                or payload.get("api_anything_write") is True
+                or str(parsed_pairs.get("write", "")).lower() in {"true", "yes", "1"}
+                or bool(re.search(r"(?:^|\s)--write(?:\s|$)", cmd, re.I))
+            )
+            for key in (
+                "site", "operation", "op", "provider", "api", "api_id", "operation_id", "op_id",
+                "trigger", "example", "example2", "match", "max_tier", "max-tier",
+                "allow_writes", "dry", "write", "again", "idempotency_key", "idempotency-key",
+            ):
+                parsed_pairs.pop(key, None)
+            if not params:
+                params = parsed_pairs
+
+            learn_request = (
+                bool(re.search(r"\b(?:learn|teach|map)\b", cmd.lower()))
+                or payload.get("api_anything_learn") is True
+                or payload.get("api_anything_action") == "learn"
+                or payload.get("api_anything_action") == "learn"
+            )
+            if learn_request:
+                if not hasattr(connector, "learn_api_anything_operation"):
+                    return {
+                        "status": "capability_not_installed", "route": route, "provider": "api-anything",
+                        "executed": False, "truthful": True,
+                    }
+                raw_steps = payload.get("api_anything_steps")
+                if raw_steps is None:
+                    raw_steps = payload.get("api_anything_steps_json") or parsed_pairs.pop("steps", "")
+                if isinstance(raw_steps, str) and raw_steps.strip():
+                    try:
+                        raw_steps = json.loads(raw_steps)
+                    except (TypeError, ValueError):
+                        return {"status": "invalid_steps", "route": route, "executed": False, "truthful": True}
+                if raw_steps == "":
+                    raw_steps = None
+                if raw_steps is not None and not isinstance(raw_steps, list):
+                    return {"status": "invalid_steps", "route": route, "executed": False, "truthful": True}
+                soft_from = clean(payload.get("api_anything_soft_from") or parsed_pairs.pop("soft_from", ""), 1200)
+                description = clean(payload.get("api_anything_description") or parsed_pairs.pop("description", ""), 300)
+                result = connector.learn_api_anything_operation(
+                    site_name, operation_name, trigger_url, example_1, example_2,
+                    user_id=user_id, write=write_learning, match=match_spec,
+                    steps=raw_steps, soft_from=soft_from, description=description,
+                )
+                learned = result.get("status") == "learned"
+                return {
+                    "status": "learned" if learned else "degraded",
+                    "route": route, "provider": "api-anything", "result": result,
+                    "executed": False, "learned": learned, "truthful": True,
+                }
+
+            write_allowance = (
+                payload.get("api_anything_allow_writes") is True
+                or bool(re.search(r"(?:^|\s)--allow-writes(?:\s|$)", cmd, re.I))
+                or (bool(operation_name) and hasattr(connector, "execute_api_anything_operation"))
+            )
+            dry_run = payload.get("api_anything_dry_run") is True or bool(
+                re.search(r"(?:^|\s)--dry(?:\s|$)", cmd, re.I)
+            )
+            tier_value = payload.get("api_anything_max_tier") or payload.get("max_tier")
+            tier_match = re.search(r"(?:^|\s)(?:--max-tier\s+|max_tier\s*=\s*)([123])(?:\s|$)", cmd, re.I)
+            if tier_value is None and tier_match:
+                tier_value = int(tier_match.group(1))
+            try:
+                max_tier = max(1, min(3, int(tier_value or 3)))
+            except (TypeError, ValueError, OverflowError):
+                max_tier = 3
+            key_match = re.search(r"(?:^|\s)--idempotency-key\s+([A-Za-z0-9_.:-]{8,128})(?:\s|$)", cmd, re.I)
+            idempotency_key = clean(
+                payload.get("api_anything_idempotency_key") or (key_match.group(1) if key_match else ""),
+                128,
+            )
+            again = payload.get("api_anything_again") is True or bool(
+                re.search(r"(?:^|\s)--again(?:\s|$)", cmd, re.I)
+            )
+
+            if operation_name:
+                if hasattr(connector, "execute_api_anything_operation"):
+                    result = connector.execute_api_anything_operation(
+                        site_name, operation_name, params, user_id=user_id,
+                        allow_writes=False, max_tier=max_tier, dry_run=dry_run,
+                        idempotency_key=idempotency_key, again=again, auto_preflight=True,
+                    )
+                elif hasattr(connector, "execute_bundled_operation"):
+                    result = connector.execute_bundled_operation(
+                        site_name, operation_name, params, allow_writes=write_allowance, dry_run=dry_run,
+                    )
+                else:
+                    result = connector.execute_bundled_read_only(site_name, operation_name, params)
+                result_status = result.get("status")
+                executed = result.get("executed") is True
+                if result_status in {"write_confirmation_required", "dry_run_required", "preview_receipt_persist_failed"}:
+                    status = result_status
+                elif result_status == "dry_run_ready":
+                    status = "dry_run_ready"
+                elif result_status == "completed" and executed:
+                    status = "completed"
+                elif result_status == "write_accepted_not_independently_verified":
+                    status = "write_accepted_not_independently_verified"
+                elif result_status == "write_outcome_ambiguous_check_target_do_not_retry":
+                    status = "write_outcome_ambiguous"
+                else:
+                    status = "degraded"
+                return {
+                    "status": status, "route": route, "provider": "api-anything",
+                    "result": result, "executed": executed,
+                    "read_only": result.get("read_only", result_status == "completed"),
+                    "write": result.get("write", result.get("write_capable", False)),
+                    "truthful": True,
+                }
+
+            # Listing is side-effect-free; include learned write operations by default so the
+            # command catalog reflects available capabilities instead of hiding them.
+            include_writes = (
+                payload.get("api_anything_read_only") is not True
+                and payload.get("api_anything_include_writes") is not False
+                and not bool(re.search(r"\bread[- ]only\b", cmd.lower()))
+            )
+            if hasattr(connector, "list_api_anything_operations"):
+                result = connector.list_api_anything_operations(
+                    site_name=site_name, limit=200, user_id=user_id, include_writes=include_writes,
+                )
+            elif include_writes and hasattr(connector, "list_bundled_operations"):
+                result = connector.list_bundled_operations(site_name=site_name, limit=100, include_writes=True)
+            else:
+                result = connector.list_bundled_read_only_operations(site_name=site_name, limit=100)
+            return {
+                "status": "completed" if result.get("status") == "ready" else "degraded",
+                "route": route, "provider": "api-anything",
+                "result": result, "sites": result.get("sites", []),
+                "operations": result.get("operations", []), "executed": False,
+                "next_action": (
+                    "Choose a listed site and operation with its declared parameters. The system preflights writes automatically; a failed preview prevents the write, and uncertain outcomes require read-back before retry."
+                    if include_writes else
+                    "Choose a listed read operation and provide its declared parameters. Use --max-tier 3 for operations requiring the browser tier."
+                ),
+                "truthful": True,
+            }
+
+        import free_api_fabric as fabric
+
+        api_id = clean(payload.get("api_id"), 120)
+        op_id = clean(payload.get("op_id") or payload.get("operation_id"), 120)
+        if not api_id:
+            match = re.search(r"\bapi[_ -]?id\s*[:=]\s*([A-Za-z0-9_-]{6,120})", cmd, re.I)
+            api_id = match.group(1) if match else ""
+        if not op_id:
+            match = re.search(r"\b(?:operation|op)[_ -]?id\s*[:=]\s*([A-Za-z0-9_-]{6,120})", cmd, re.I)
+            op_id = match.group(1) if match else ""
+        api_params = payload.get("api_params")
+        if not isinstance(api_params, dict):
+            api_params = payload.get("query_params")
+        if not isinstance(api_params, dict):
+            api_params = {}
+        if not api_params:
+            # Natural-language command box can pass explicit read arguments as
+            # key=value; the API fabric later rejects names absent from the verified spec.
+            pairs = re.findall(
+                r"(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_.-]{0,63})\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s,;]+))",
+                cmd,
+            )
+            api_params = {
+                key: (double_quoted if double_quoted != "" else single_quoted if single_quoted != "" else bare)
+                for key, double_quoted, single_quoted, bare in pairs
+                if key.lower() not in {"api_id", "api-id", "operation_id", "operation-id", "op_id", "op-id"}
+            }
+
+        # A concrete operation ID is the only execution path. The fabric rechecks
+        # that it is catalogued as a verified no-auth GET/HEAD operation at call time.
+        if op_id:
+            try:
+                result = fabric.invoke(op_id, query=api_params, body=payload.get("body"))
+            except Exception as exc:
+                # Keep external-response details and any caller-provided values out
+                # of command errors; the fabric itself never executes non-GET/HEAD.
+                return {
+                    "status": "degraded", "route": route, "operation_id": op_id,
+                    "reason": "The selected verified read-only operation failed; no successful result is claimed.",
+                    "error_type": type(exc).__name__, "executed": False,
+                    "truthful": True,
+                }
+            return {
+                "status": "completed", "route": route, "operation_id": op_id,
+                "result": result, "executed": True, "read_only": True,
+                "truthful": True,
+            }
+
+        if api_id:
+            current = fabric.operations(api_id, limit=50)
+            verification = None
+            if not current:
+                verification = fabric.verify_api(api_id)
+                current = fabric.operations(api_id, limit=50)
+            return {
+                "status": "completed" if current else "degraded",
+                "route": route, "api_id": api_id, "operations": current[:50],
+                "verification": verification, "executed": False,
+                "next_action": "Provide a verified operation_id and api_params to execute one read-only query.",
+                "truthful": True,
+            }
+
+        search_text = clean(
+            payload.get("api_search") or payload.get("api_name") or payload.get("topic") or payload.get("subject"),
+            200,
+        )
+        if not search_text:
+            search_text = re.sub(
+                r"^\s*(?:please\s+)?(?:use|search|find|look up|query|fetch|retrieve|discover|catalog|run)\s+",
+                "", cmd, flags=re.I,
+            ).strip()[:200]
+        candidates = fabric.catalog(query=search_text, limit=10, executable_only=True)
+        bootstrapped = False
+        if (
+            not candidates
+            and not fabric.SYNC_STATE.get("bootstrap_started")
+            and not fabric.SYNC_STATE.get("bootstrap_complete")
+        ):
+            bootstrapped = bool(fabric.start_background_sync())
+        state = fabric.status()
+        return {
+            "status": "completed" if candidates else "discovery_started" if bootstrapped or state.get("bootstrap_started") else "degraded",
+            "route": route, "query": search_text, "candidates": candidates,
+            "discovery_status": "warming" if bootstrapped or (
+                state.get("bootstrap_started") and not state.get("bootstrap_complete")
+            ) else "ready",
+            "executed": False,
+            "next_action": "Choose a verified API candidate, then pass its api_id to inspect operations or a verified operation_id to execute.",
+            "truthful": True,
+        }
+
+    if route == "capabilities":
+        result = capabilities(user_id)
+        try:
+            import production_intelligence
+            result["production_intelligence"] = production_intelligence.provider_status()
+        except Exception as exc:
+            result["production_intelligence"] = {
+                "status": "unavailable", "error_type": type(exc).__name__, "truthful": True,
+            }
+        return {"status": "completed", "route": route, "result": result, "executed": True, "truthful": True}
+    if route == "project_status":
+        pid = clean(payload.get("project_id"), 180)
+        require_project(pid, user_id)
+        return {"status": "completed", "route": route, "result": reconcile(pid, user_id), "executed": True, "truthful": True}
+    if route == "edit":
+        pid = clean(payload.get("project_id"), 180)
+        require_project(pid, user_id)
+        if re.search(r"\b(delete|destroy)\s+(?:the\s+)?project\b", cmd, re.I):
+            raise HTTPException(409, "Destructive project deletion is not supported by this command router.")
+        operation = interpret_edit(cmd)
+        changes = operation.get("changes") if isinstance(operation, dict) else []
+        default_only = (
+            isinstance(changes, list) and len(changes) == 1
+            and changes[0].get("type") == "grade"
+            and changes[0].get("interpretation") == "bounded visual polish"
+        )
+        if default_only:
+            return {
+                "status": "unsupported_or_incomplete", "route": route,
+                "reason": "The edit instruction did not match a supported edit. Supported edits include trim, speed, aspect ratio, brightness/contrast/saturation, mute, and caption burn-in.",
+                "executed": False, "truthful": True,
+            }
+        result = apply_edit(pid, user_id, cmd)
+        return {"status": result.get("status", "completed"), "route": route, "result": result, "executed": True, "truthful": True}
+    if route in {"analytics", "publisher", "monetization"}:
+        engine = studio()
+        if route == "analytics":
+            result = engine._analytics_3621(user_id)
+            return {"status": "completed", "route": route, "result": result, "read_only": True, "truthful": True}
+        if route == "publisher":
+            connections = engine._connections(user_id)
+            return {
+                "status": "completed", "route": route,
+                "result": {
+                    "connections": connections,
+                    "supported_publishers": ["youtube", "webhook"],
+                    "publish_executed": False,
+                    "authorization_required_for_publish": True,
+                    "truthful": True,
+                },
+                "read_only": True, "truthful": True,
+            }
+        lanes = getattr(engine, "MONETIZATION_LANES_3621", [])
+        metrics = {}
+        try:
+            main_module = __import__("main")
+            metrics_fn = getattr(main_module, "_3601_metrics", None)
+            if callable(metrics_fn):
+                metrics = metrics_fn()
+        except Exception:
+            metrics = {}
+        return {
+            "status": "completed", "route": route,
+            "result": {"lanes": lanes, "metrics": metrics, "read_only": True, "truthful": True},
+            "read_only": True, "truthful": True,
+        }
+    if route in {"script", "strategy", "marketing", "seo"}:
+        engine = studio()
+        topic = clean(payload.get("topic") or payload.get("subject"), 500) or cmd
+        try:
+            duration = max(20, min(3600, int(payload.get("duration") or 300)))
+        except (TypeError, ValueError, OverflowError):
+            duration = 300
+        platforms = payload.get("platforms") if isinstance(payload.get("platforms"), list) else []
+        request_data = {
+            "title": clean(payload.get("title"), 180) or topic[:180],
+            "topic": topic,
+            "objective": clean(payload.get("objective"), 4000) or cmd,
+            "format": clean(payload.get("format"), 30) or "long",
+            "duration": duration,
+            "audience": clean(payload.get("audience"), 600) or "general audience",
+            "tone": clean(payload.get("tone"), 700) or "cinematic, intelligent, useful",
+            "language": clean(payload.get("language"), 60) or "English",
+            "platforms": [clean(x, 40) for x in platforms[:12]],
+            "brand_voice": clean(payload.get("brand_voice"), 1600),
+            "visual_style": clean(payload.get("visual_style"), 900) or "premium editorial",
+            "call_to_action": clean(payload.get("call_to_action"), 600),
+        }
+        research_result = engine.research_topic(topic, limit=8)
+        model_fn = None
+        try:
+            main_module = __import__("main")
+            model_fn = getattr(main_module, "_2700_model", None)
+        except Exception:
+            pass
+        plan_result, provider = engine.creative_plan(request_data, research_result, model_fn)
+        return {
+            "status": "completed" if plan_result else "degraded",
+            "route": route, "agent": route, "provider": provider,
+            "research": research_result, "result": plan_result,
+            "artifact_created": False,
+            "delivery_note": "This is a plan/script/metadata result; no media file or project artifact was created by this agent request.",
+            "review_required": True, "truthful": True,
+        }
+    if route == "research":
+        import production_intelligence
+        topic = clean(payload.get("topic") or payload.get("subject"), 500)
+        if not topic:
+            topic = re.sub(
+                r"^\s*(?:please\s+)?(?:research|investigate|benchmark|look\s+up|search\s+for|find\s+sources|collect\s+sources|compare\s+examples)\s+",
+                "", cmd, flags=re.I,
+            ).strip() or cmd
+        try:
+            limit = max(1, min(10, int(payload.get("limit") or 8)))
+        except (TypeError, ValueError, OverflowError):
+            limit = 8
+        result = production_intelligence.research(topic, limit=limit)
+        count = int(result.get("source_count") or 0)
+        return {
+            "status": "completed" if count else "degraded",
+            "route": route, "topic": topic, "result": result,
+            "source_count": count,
+            "quality_state": "REVIEW_REQUIRED" if count else "DEGRADED",
+            "claims_independently_verified": False,
+            "executed": True, "truthful": True,
+        }
+    if route == "create":
+        effective_payload = dict(payload)
+        inferred_type = clean(decision.get("content_type"), 30).lower()
+        if inferred_type in {"video", "podcast", "article", "social"}:
+            effective_payload["content_type"] = inferred_type
+        result = create_from_command(cmd, user_id, effective_payload)
+        return {"status": result.get("status", "queued"), "route": route, "result": result, "executed": True, "truthful": True}
+    raise HTTPException(500, "Command router reached an unimplemented route.")
+
+
+
 def register(app):
     init_schema()
 
@@ -674,6 +1364,13 @@ def register(app):
         with studio().DB_LOCK,db() as c:
             ps=[dict(r) for r in c.execute("SELECT project_id,state,current_version_id,created_at,updated_at FROM canonical_projects WHERE user_id=? ORDER BY updated_at DESC LIMIT 100",(uid_,)).fetchall()]
         return {"version":VERSION,"projects":ps,"profile":profile(uid_),"capabilities":capabilities(uid_),"truthful":True}
+
+    @app.post("/infinity/canonical/execute")
+    async def canonical_execute(request:Request,response:Response):
+        uid_=current_user(request,response)
+        payload=await request.json()
+        command=clean(payload.get("command") or payload.get("instruction"),4000)
+        return dispatch_command(command,uid_,payload)
 
     @app.post("/infinity/canonical/preflight")
     async def canonical_preflight(request:Request,response:Response):

@@ -8,20 +8,23 @@ It never invents credentials or calls APIs that require authentication.
 """
 
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
 import re
 import socket
 import sqlite3
+import ssl
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from pydantic import BaseModel
 from urllib.parse import urljoin, urlparse, urlencode
-from urllib.request import Request, urlopen, HTTPRedirectHandler, build_opener
+
 
 VERSION = "3622.1"
 MAX_DISCOVERED = max(1000, int(os.getenv("AI_INFINITY_FREE_API_MAX", "100000")))
@@ -32,7 +35,15 @@ DB_PATH = Path(os.getenv("AI_INFINITY_FREE_API_DB", str(DATA_DIR / "free_api_fab
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 LOCK = threading.RLock()
 SYNC_LOCK = threading.Lock()
-SYNC_STATE = {"running": False, "last_run": 0.0, "last_error": "", "source_counts": {}, "verified": 0}
+BACKGROUND_START_LOCK = threading.Lock()
+INVOKE_LOCK = threading.Lock()
+INVOKE_GATE = threading.BoundedSemaphore(8)
+INVOKE_LAST: Dict[str, float] = {}
+BOOTSTRAP_VERIFY_LIMIT = max(1, min(50, int(os.getenv("AI_INFINITY_FREE_API_BOOTSTRAP_VERIFY_LIMIT", "20"))))
+SYNC_STATE = {
+    "running": False, "last_run": 0.0, "last_error": "", "source_counts": {},
+    "verified": 0, "bootstrap_started": False, "bootstrap_complete": False,
+}
 
 SOURCES = {
     "public-api-lists": "https://public-api-lists.github.io/public-api-lists/api/all.json",
@@ -94,39 +105,123 @@ def _init():
 _init()
 
 
-class _NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
+class InvokeRequest(BaseModel):
+    query: Dict[str, Any] = {}
+    body: Any = None
 
 
-OPENER = build_opener(_NoRedirect())
+def _public_addresses(host: str, port: int = 443) -> List[str]:
+    """Resolve once per request and reject any non-public target address."""
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except Exception as exc:
+        raise ValueError("remote host could not be resolved safely") from exc
+    addresses = []
+    seen = set()
+    for info in infos:
+        try:
+            address = ipaddress.ip_address(info[4][0])
+        except (IndexError, ValueError):
+            raise ValueError("remote DNS returned an invalid address")
+        if not address.is_global:
+            raise ValueError("remote DNS resolved to a non-public address")
+        value = str(address)
+        if value not in seen:
+            seen.add(value)
+            addresses.append(value)
+    if not addresses:
+        raise ValueError("remote host has no validated public address")
+    return addresses
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection to a vetted IP while retaining the original host for TLS SNI/cert checks."""
+    def __init__(self, host: str, port: int, addresses: List[str], timeout: int):
+        super().__init__(host=host, port=port, timeout=timeout, context=ssl.create_default_context())
+        self._pinned_addresses = list(addresses)
+
+    def connect(self):
+        last_error = None
+        for address in self._pinned_addresses:
+            sock = None
+            try:
+                sock = socket.create_connection((address, self.port), self.timeout)
+                self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+                return
+            except (OSError, ssl.SSLError) as exc:
+                last_error = exc
+                if sock is not None:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+        raise OSError("could not connect to a validated public address") from last_error
+
+
+def _parse_public_https_url(url: str):
+    u = urlparse(str(url or "").strip())
+    if u.scheme != "https" or not u.hostname or u.username or u.password:
+        raise ValueError("only public HTTPS URLs without embedded credentials are allowed")
+    try:
+        port = u.port
+    except ValueError as exc:
+        raise ValueError("invalid destination port") from exc
+    if port not in (None, 443):
+        raise ValueError("only HTTPS port 443 is allowed")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in u.path + u.query):
+        raise ValueError("control characters are not allowed in destination URLs")
+    host = u.hostname.rstrip(".").lower()
+    if host in {"localhost", "localhost.localdomain"} or host.endswith((".local", ".internal", ".localhost")):
+        raise ValueError("local destination host is blocked")
+    return u, host
 
 
 def _host_safe(url: str) -> bool:
     try:
-        u = urlparse(str(url).strip())
-        if u.scheme != "https" or not u.hostname:
-            return False
-        host = u.hostname.rstrip(".").lower()
-        if host in {"localhost", "localhost.localdomain"} or host.endswith((".local", ".internal")):
-            return False
-        try:
-            ip = ipaddress.ip_address(host)
-            return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
-        except ValueError:
-            pass
-        infos = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
-        return bool(infos) and all(not (ipaddress.ip_address(x[4][0]).is_private or ipaddress.ip_address(x[4][0]).is_loopback or ipaddress.ip_address(x[4][0]).is_link_local or ipaddress.ip_address(x[4][0]).is_reserved or ipaddress.ip_address(x[4][0]).is_multicast or ipaddress.ip_address(x[4][0]).is_unspecified) for x in infos)
+        u, host = _parse_public_https_url(url)
+        _public_addresses(host, 443)
+        return bool(u.hostname)
     except Exception:
         return False
 
 
+def _public_https_request(url: str, timeout: int, max_bytes: int, method: str = "GET"):
+    """Perform one HTTPS request to validated public DNS addresses; never follow redirects."""
+    u, host = _parse_public_https_url(url)
+    addresses = _public_addresses(host, 443)
+    path = u.path or "/"
+    if u.query:
+        path += "?" + u.query
+    connection = _PinnedHTTPSConnection(host, 443, addresses, timeout)
+    host_header = "[" + host + "]" if ":" in host else host
+    try:
+        connection.request(method.upper(), path, headers={
+            "Host": host_header,
+            "User-Agent": "AI-Infinity-Free-API-Fabric/3622",
+            "Accept": "application/json,*/*",
+            "Connection": "close",
+        })
+        response = connection.getresponse()
+        payload = bytearray()
+        while True:
+            chunk = response.read(min(65536, max_bytes - len(payload) + 1))
+            if not chunk:
+                break
+            payload.extend(chunk)
+            if len(payload) > max_bytes:
+                raise ValueError("remote response exceeded the configured size limit")
+        # 3xx is returned as a status; the client never follows the Location header.
+        return response.status, response.headers.get("Content-Type", ""), bytes(payload)
+    finally:
+        connection.close()
+
+
 def _get_json(url: str, timeout: int = HTTP_TIMEOUT) -> Any:
-    if not _host_safe(url):
-        raise ValueError("unsafe or non-HTTPS remote URL")
-    req = Request(url, headers={"User-Agent": "AI-Infinity-Free-API-Fabric/3622", "Accept": "application/json"}, method="GET")
-    with OPENER.open(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8", "replace"))
+    status_code, _, raw = _public_https_request(url, timeout=timeout, max_bytes=2_000_000, method="GET")
+    if not 200 <= status_code < 300:
+        raise ValueError(f"remote JSON returned HTTP {status_code}")
+    return json.loads(raw.decode("utf-8", "replace"))
+
 
 
 def _norm_auth(v: Any) -> str:
@@ -203,8 +298,22 @@ def sync_catalogs() -> Dict[str, Any]:
             except Exception as exc:
                 counts[source]=0
                 SYNC_STATE["last_error"]=(SYNC_STATE.get("last_error")+"; "+source+": "+str(exc))[:1000]
-        SYNC_STATE["source_counts"]=counts
-        return {"status":"completed","source_counts":counts,**status()}
+        SYNC_STATE["source_counts"] = counts
+        useful_entries = sum(int(value or 0) for value in counts.values())
+        if useful_entries <= 0:
+            if not SYNC_STATE.get("last_error"):
+                SYNC_STATE["last_error"] = "all public API catalogs returned zero usable entries"
+            sync_status = "degraded"
+        elif SYNC_STATE.get("last_error"):
+            sync_status = "degraded"
+        else:
+            sync_status = "completed"
+        return {
+            "status": sync_status,
+            "source_counts": counts,
+            "error": str(SYNC_STATE.get("last_error") or "")[:260] or None,
+            **status(),
+        }
     finally:
         SYNC_STATE["running"]=False
         SYNC_LOCK.release()
@@ -253,19 +362,39 @@ def verify_api(api_id: str) -> Dict[str,Any]:
         base=next((x for x in servers if _host_safe(x)),None)
         if not base: raise ValueError("OpenAPI server is not a safe public HTTPS host")
         ops=[]
+        base_host = (urlparse(base).hostname or "").rstrip(".").lower()
         for path,item in (spec.get("paths") or {}).items():
-            if not isinstance(item,dict): continue
+            if not isinstance(item,dict) or "{" in str(path) or "}" in str(path):
+                continue
             for method,op in item.items():
-                if method.lower() not in {"get","post","put","patch","delete","head"} or not isinstance(op,dict): continue
+                if method.lower() not in {"get","head"} or not isinstance(op,dict):
+                    continue
+                # This executor supports only documented query parameters. Skip
+                # required headers/cookies and request bodies rather than guessing.
+                operation_params=(item.get("parameters") or []) + (op.get("parameters") or [])
+                if op.get("requestBody") or any(
+                    not isinstance(p,dict) or p.get("in") != "query"
+                    for p in operation_params
+                ):
+                    continue
                 free=_operation_free(spec,op)
-                if not free: continue
+                if not free:
+                    continue
+                # A malicious OpenAPI document must not smuggle an absolute URL
+                # into a path and turn the registry into an arbitrary public-URL proxy.
                 url=urljoin(base.rstrip("/")+"/",str(path).lstrip("/"))
+                parsed_operation=urlparse(url)
+                if parsed_operation.scheme != "https" or (parsed_operation.hostname or "").rstrip(".").lower() != base_host:
+                    continue
+                if parsed_operation.port not in (None, 443) or parsed_operation.username or parsed_operation.password:
+                    continue
                 params=[]
-                for p in (item.get("parameters") or []) + (op.get("parameters") or []):
+                for p in operation_params:
                     if isinstance(p,dict):
                         params.append({"name":p.get("name"),"in":p.get("in"),"required":bool(p.get("required")),"schema":p.get("schema") or {}})
                 op_id="op-"+hashlib.sha256(f"{api_id}|{method}|{path}".encode()).hexdigest()[:24]
-                ops.append((op_id,method.upper(),str(path),url,op.get("operationId"),op.get("summary") or op.get("description"),params,op.get("requestBody") or {},op.get("security")))
+                ops.append((op_id,method.upper(),str(path),url,op.get("operationId"),op.get("summary") or op.get("description"),params,{},op.get("security")))
+
         with LOCK,_connect() as c:
             c.execute("DELETE FROM free_api_ops WHERE api_id=?",(api_id,))
             for x in ops:
@@ -294,23 +423,45 @@ def verify_batch(limit: int=100) -> Dict[str,Any]:
 
 
 def start_background_sync():
+    """Start one lazy catalog bootstrap; bulk verification is deliberately bounded."""
+    with BACKGROUND_START_LOCK:
+        if SYNC_STATE.get("bootstrap_started") or SYNC_STATE.get("bootstrap_complete"):
+            return False
+        cooldown = max(60, min(86400, int(os.getenv("AI_INFINITY_FREE_API_SYNC_COOLDOWN_SECONDS", "900"))))
+        last_run = float(SYNC_STATE.get("last_run") or 0)
+        if last_run and time.time() - last_run < cooldown:
+            return False
+        SYNC_STATE["bootstrap_started"] = True
+
     def worker():
         try:
-            sync_catalogs()
-            # Gradually verify OpenAPI definitions. This is deliberately incremental
-            # so a free web instance never blocks startup on thousands of remote APIs.
-            max_batches=max(1,(MAX_DISCOVERED+99)//100)
-            for _ in range(max_batches):
-                with LOCK,_connect() as c:
-                    n=c.execute("SELECT COUNT(*) FROM free_api_registry WHERE source='apis-guru' AND status='discovered'").fetchone()[0]
-                if not n: break
-                verify_batch(min(100,n))
-                # Respect small/free web-instance CPU and remote-provider rate limits.
-                time.sleep(0.15)
+            sync_result = sync_catalogs()
+            source_counts = sync_result.get("source_counts") if isinstance(sync_result, dict) else {}
+            with LOCK, _connect() as c:
+                total = int(c.execute("SELECT COUNT(*) FROM free_api_registry").fetchone()[0] or 0)
+                n = int(c.execute(
+                    "SELECT COUNT(*) FROM free_api_registry WHERE source='apis-guru' AND status='discovered'"
+                ).fetchone()[0] or 0)
+            # A finished network attempt is not proof of discovery. Require real
+            # catalogue records; keep state degraded and retry only after cooldown otherwise.
+            if total <= 0 and not any(int(v or 0) > 0 for v in (source_counts or {}).values()):
+                SYNC_STATE["last_error"] = SYNC_STATE.get("last_error") or "public API catalogs returned no usable entries"
+                SYNC_STATE["bootstrap_complete"] = False
+                with BACKGROUND_START_LOCK:
+                    SYNC_STATE["bootstrap_started"] = False
+                return
+            # Do not scan the entire registry during a small/free-instance boot.
+            # Verify a small first batch; a selected API is verified on demand below.
+            if n:
+                verify_batch(min(BOOTSTRAP_VERIFY_LIMIT, n))
+            SYNC_STATE["bootstrap_complete"] = True
         except Exception as exc:
-            SYNC_STATE["last_error"]=str(exc)[:1000]
-    t=threading.Thread(target=worker,name="ai-infinity-free-api-sync",daemon=True)
-    t.start()
+            SYNC_STATE["last_error"] = str(exc)[:1000]
+            SYNC_STATE["bootstrap_complete"] = False
+            with BACKGROUND_START_LOCK:
+                SYNC_STATE["bootstrap_started"] = False
+    threading.Thread(target=worker, name="ai-infinity-free-api-sync", daemon=True).start()
+    return True
 
 
 def status() -> Dict[str,Any]:
@@ -320,7 +471,15 @@ def status() -> Dict[str,Any]:
         verified=c.execute("SELECT COUNT(*) FROM free_api_registry WHERE no_auth_verified=1").fetchone()[0]
         ops=c.execute("SELECT COUNT(*) FROM free_api_ops WHERE free=1").fetchone()[0]
         sources={r[0]:r[1] for r in c.execute("SELECT source,COUNT(*) FROM free_api_registry GROUP BY source")}
-    return {"version":VERSION,"discovered":total,"no_auth_verified":verified,"executable_apis":executable,"executable_free_operations":ops,"sources":sources,"max_capacity":MAX_DISCOVERED,"automatic_discovery":True,"automatic_free_failover":True,"truthful":True}
+    return {
+        "version": VERSION, "discovered": total, "no_auth_verified": verified,
+        "executable_apis": executable, "executable_free_operations": ops, "sources": sources,
+        "max_capacity": MAX_DISCOVERED, "automatic_discovery": True,
+        "discovery_mode": "lazy_catalog_request", "bootstrap_started": bool(SYNC_STATE.get("bootstrap_started")),
+        "bootstrap_complete": bool(SYNC_STATE.get("bootstrap_complete")),
+        "bootstrap_verify_limit": BOOTSTRAP_VERIFY_LIMIT, "automatic_free_failover": False,
+        "truthful": True,
+    }
 
 
 def catalog(query: str="", limit: int=100, executable_only: bool=False) -> List[Dict[str,Any]]:
@@ -341,39 +500,59 @@ def operations(api_id: str, limit: int=100) -> List[Dict[str,Any]]:
 
 
 def invoke(op_id: str, query: Optional[Dict[str,Any]]=None, body: Any=None) -> Dict[str,Any]:
-    with LOCK,_connect() as c: row=c.execute("SELECT * FROM free_api_ops WHERE op_id=? AND free=1",(op_id,)).fetchone()
-    if not row: raise ValueError("free executable operation not found")
-    r=dict(row); url=r["url"]
-    if not _host_safe(url): raise ValueError("unsafe operation host")
-    params=json.loads(r.get("parameters_json") or "[]")
-    q=dict(query or {})
-    required=[p["name"] for p in params if p.get("in")=="query" and p.get("required")]
-    missing=[x for x in required if x not in q]
-    if missing: raise ValueError("missing required query parameters: "+", ".join(missing))
-    if q: url += ("&" if "?" in url else "?")+urlencode({k:str(v) for k,v in q.items()})
-    method=r["method"].upper()
-    headers={"User-Agent":"AI-Infinity-Free-API-Fabric/3622","Accept":"application/json,*/*"}
-    data=None
-    if body is not None and method in {"POST","PUT","PATCH"}:
-        data=json.dumps(body,ensure_ascii=False).encode(); headers["Content-Type"]="application/json"
-    req=Request(url,data=data,headers=headers,method=method)
-    started=time.time()
-    with OPENER.open(req,timeout=HTTP_TIMEOUT) as resp:
-        raw=resp.read(2_000_000)
-        ctype=resp.headers.get("Content-Type","")
-        text=raw.decode("utf-8","replace")
-        try: payload=json.loads(text)
-        except Exception: payload=text
-        return {"status_code":resp.status,"content_type":ctype,"latency_ms":round((time.time()-started)*1000,2),"data":payload,"api_id":r["api_id"],"operation_id":op_id,"truthful":True}
+    with LOCK, _connect() as c:
+        row = c.execute("SELECT * FROM free_api_ops WHERE op_id=? AND free=1", (op_id,)).fetchone()
+    if not row:
+        raise ValueError("free executable operation not found")
+    r = dict(row)
+    method = str(r["method"] or "").upper()
+    # The public catalog has no action-specific authorization contract.
+    if method not in {"GET", "HEAD"}:
+        raise ValueError("write-capable operations are disabled; only GET/HEAD are allowed")
+    if body is not None:
+        raise ValueError("request bodies are disabled for the public read-only connector")
+
+    params = json.loads(r.get("parameters_json") or "[]")
+    query_params = [p for p in params if p.get("in") == "query" and p.get("name")]
+    allowed = {p["name"] for p in query_params}
+    q = dict(query or {})
+    unexpected = sorted(set(q) - allowed)
+    if unexpected:
+        raise ValueError("unsupported query parameters: " + ", ".join(str(x)[:100] for x in unexpected[:10]))
+    required = [p["name"] for p in query_params if p.get("required")]
+    missing = [x for x in required if x not in q]
+    if missing:
+        raise ValueError("missing required query parameters: " + ", ".join(missing))
+
+    url = str(r["url"] or "")
+    if q:
+        url += ("&" if "?" in url else "?") + urlencode({k: str(v) for k, v in q.items()})
+    started = time.time()
+    status_code, content_type, raw = _public_https_request(
+        url, timeout=HTTP_TIMEOUT, max_bytes=2_000_000, method=method
+    )
+    if not 200 <= status_code < 300:
+        # Do not follow redirects or echo untrusted remote response bodies in the API error.
+        raise ValueError(f"remote operation returned HTTP {status_code}")
+    text = raw.decode("utf-8", "replace")
+    try:
+        payload = json.loads(text)
+    except Exception:
+        payload = text
+    return {
+        "status_code": status_code,
+        "content_type": content_type,
+        "latency_ms": round((time.time() - started) * 1000, 2),
+        "data": payload,
+        "api_id": r["api_id"],
+        "operation_id": op_id,
+        "truthful": True,
+    }
+
 
 
 def register(app: Any):
-    from fastapi import HTTPException, Request
-    from pydantic import BaseModel
-
-    class InvokeRequest(BaseModel):
-        query: Dict[str,Any] = {}
-        body: Any = None
+    from fastapi import HTTPException
 
     @app.get("/infinity/studio/free-apis/status")
     def free_api_status():
@@ -381,24 +560,72 @@ def register(app: Any):
 
     @app.post("/infinity/studio/free-apis/sync")
     def free_api_sync():
+        if SYNC_STATE.get("running"):
+            return {"status": "already_running", **status()}
+        cooldown = max(60, min(86400, int(os.getenv("AI_INFINITY_FREE_API_SYNC_COOLDOWN_SECONDS", "900"))))
+        last_run = float(SYNC_STATE.get("last_run") or 0)
+        remaining = cooldown - (time.time() - last_run)
+        if last_run and remaining > 0:
+            return {"status": "cooldown", "retry_after_seconds": int(remaining) + 1, **status()}
         return sync_catalogs()
 
     @app.post("/infinity/studio/free-apis/verify")
-    def free_api_verify(limit: int=100):
-        return verify_batch(limit)
+    def free_api_verify(limit: int=25):
+        requested = max(1, int(limit))
+        result = verify_batch(min(25, requested))
+        result["requested_limit"] = requested
+        result["bounded_limit"] = min(25, requested)
+        return result
+
+    @app.post("/infinity/studio/free-apis/verify/{api_id}")
+    def free_api_verify_one(api_id: str):
+        return verify_api(api_id)
 
     @app.get("/infinity/studio/free-apis/catalog")
     def free_api_catalog(query: str="", limit: int=100, executable_only: bool=False):
-        return {"items":catalog(query,limit,executable_only),"truthful":True}
+        items = catalog(query, limit, executable_only)
+        started = False
+        if not items and not SYNC_STATE.get("bootstrap_started") and not SYNC_STATE.get("bootstrap_complete"):
+            started = bool(start_background_sync())
+        return {
+            "items": items,
+            "discovery_status": "warming" if started or SYNC_STATE.get("running") or (SYNC_STATE.get("bootstrap_started") and not SYNC_STATE.get("bootstrap_complete")) else "ready",
+            "status": status(),
+            "truthful": True,
+        }
 
     @app.get("/infinity/studio/free-apis/{api_id}/operations")
     def free_api_operations(api_id: str, limit: int=100):
-        return {"api_id":api_id,"operations":operations(api_id,limit),"truthful":True}
+        current = operations(api_id, limit)
+        verification = None
+        if not current:
+            with LOCK, _connect() as c:
+                record = c.execute("SELECT status FROM free_api_registry WHERE api_id=?", (api_id,)).fetchone()
+            if record and record["status"] == "discovered":
+                verification = verify_api(api_id)
+                current = operations(api_id, limit)
+        return {"api_id": api_id, "operations": current, "verification": verification, "truthful": True}
 
     @app.post("/infinity/studio/free-apis/invoke/{op_id}")
     def free_api_invoke(op_id: str, req: InvokeRequest):
-        try: return invoke(op_id,req.query,req.body)
-        except Exception as exc: raise HTTPException(502,str(exc)[:500])
+        if not INVOKE_GATE.acquire(blocking=False):
+            raise HTTPException(429, "public API invocation concurrency limit reached")
+        try:
+            with INVOKE_LOCK:
+                instant = time.time()
+                prior = INVOKE_LAST.get(op_id, 0.0)
+                cooldown = max(0.0, min(2.0, float(os.getenv("AI_INFINITY_FREE_API_OPERATION_COOLDOWN_SECONDS", "0.2"))))
+                if instant - prior < cooldown:
+                    raise HTTPException(429, "public API operation cooldown active")
+                INVOKE_LAST[op_id] = instant
+            try:
+                return invoke(op_id, req.query, req.body)
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(502, str(exc)[:500])
+        finally:
+            INVOKE_GATE.release()
 
-    start_background_sync()
+    # Do not launch a catalog scan during module import/application startup.
     app.state.free_api_fabric = status()

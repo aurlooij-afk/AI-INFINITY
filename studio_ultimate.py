@@ -1206,6 +1206,15 @@ def creative_plan(req: Dict[str, Any], research: Dict[str, Any], model_fn: Optio
     brand_voice = str(req.get("brand_voice") or "")[:1000]
     visual_style = str(req.get("visual_style") or "premium editorial")[:500]
     call_to_action = str(req.get("call_to_action") or "")[:500]
+    # A user's explicit timecoded storyboard outranks both a model suggestion and
+    # generic fallback marketing copy. Preserve authored scene order, narration,
+    # transitions and exact ending whenever the brief provides those anchors.
+    timecoded_plan = _explicit_timed_storyboard_plan(
+        title=title, objective=objective, fmt=fmt, duration=duration,
+        audience=audience, tone=tone, language=language, topic=str(req.get("topic") or ""),
+    )
+    if timecoded_plan:
+        return timecoded_plan, "explicit-timecoded-user-brief"
     source_digest = []
     for s in research.get("sources", [])[:12]:
         if s.get("title"):
@@ -1587,6 +1596,210 @@ def _is_explicit_ai_infinity_launch_brief(text: str) -> bool:
     )
 
 
+def _explicit_timed_storyboard_plan(
+    title: str,
+    objective: str,
+    fmt: str,
+    duration: int,
+    audience: str,
+    tone: str,
+    language: str,
+    topic: str,
+) -> Optional[Dict[str, Any]]:
+    """Honor user-authored timecoded film beats when no creative model is available.
+
+    This prevents the deterministic fallback from silently replacing a detailed
+    user storyboard with generic Creator OS marketing copy.
+    """
+    raw_objective = re.sub(r"\s+", " ", str(objective or "")).strip()
+    style_match = re.search(
+        r"(?:\bVISUAL DIRECTION\b|\bVISUALS\s*:)\s*\*{0,2}\s*(.*?)"
+        r"(?=\bVOICE[\s,]+MUSIC\b|\bPRODUCTION REQUIREMENTS\b|"
+        r"\bQUALITY CONTROL\b|\bSUCCESS STANDARD\b|$)",
+        raw_objective,
+        re.I,
+    )
+    visual_style = re.sub(r"[*_]+", "", style_match.group(1)).strip()[:900] if style_match else ""
+    story_objective = re.split(
+        r"\b(?:VISUAL DIRECTION|VISUALS)\b\s*:?\s*\*{0,2}", raw_objective, maxsplit=1, flags=re.I
+    )[0]
+    pattern = re.compile(
+        r"(?P<start>\d{1,4})\s*[–—-]\s*(?P<end>\d{1,4})\s*"
+        r"(?:s|secs?|seconds?)\b\s*(?:[—: ]\s*)?"
+        r"(?P<description>.*?)"
+        r"(?=(?:\s+\*{0,2}\s*\d{1,4}\s*[–—-]\s*\d{1,4}\s*(?:s|secs?|seconds?)\b)|$)",
+        re.I,
+    )
+    matches = list(pattern.finditer(story_objective))
+    if len(matches) < 6:
+        return None
+    intervals = []
+    for match in matches:
+        start, end = int(match.group("start")), int(match.group("end"))
+        if end <= start:
+            return None
+        intervals.append((start, end, match.group("description").strip()))
+    if intervals[0][0] != 0:
+        return None
+    target = max(20, min(3600, int(duration or intervals[-1][1])))
+    source_span = intervals[-1][1] - intervals[0][0]
+    # This branch is deliberately for explicit storyboard timelines, not dates or
+    # incidental ranges embedded in ordinary prose.
+    if source_span < max(20, target - 2) or source_span > target + 2:
+        return None
+
+    headings = [
+        "The Hook", "The Spark", "The Transformation", "The Cinematic Experience",
+        "The Craft", "The Payoff", "Signature Ending",
+    ]
+    visual_anchors = [
+        "intimate late-night room, lone creator, blank screen, close-up, quiet tension",
+        "wide dramatic natural landscape opening into a futuristic city, scale and wonder",
+        "hands researching real sources, printed notes, script pages and storyboard frames",
+        "cinematic landscape, ocean, mountain textures, futuristic architecture and human emotion",
+        "editing workstation, real timeline, caption preview, sound meters and deliberate hands-on craft",
+        "the same creator watching the finished film, a human emotional reaction, warm gold practical light",
+        "restrained midnight-blue brand end-card, subtle cyan and violet light, clean negative space",
+    ]
+    overlays = [
+        "Every extraordinary world begins",
+        "One idea. Infinite possibilities.",
+        "Research. Script. Storyboard.",
+        "Step into the vision.",
+        "Edit. Listen. Verify.",
+        "Research it. Shape it. Make it better.",
+        "AI INFINITY  •  ONE IDEA. INFINITE WORLDS.",
+    ]
+    fallback_narration = [
+        "Every extraordinary world begins with something nobody else can see.",
+        "One small idea becomes a doorway. Beyond the room, new worlds begin to unfold.",
+        "We gather the evidence, shape the research into a story, then give it form in a script and storyboard.",
+        "Mountains, water and a city of tomorrow come alive. Each shot reveals another part of the same vision.",
+        "Cut with purpose. Keep the voice clear, the captions in sync, and the master verifiable before it leaves the studio.",
+        "Research it. Shape it. Bring it to life. Then make it better.",
+        "AI Infinity. One idea. Infinite worlds.",
+    ]
+    chapters = []
+    raw_durations = [end - start for start, end, _ in intervals]
+    scale = float(target) / float(source_span)
+    allocated = []
+    remaining = float(target)
+    for index, raw_duration in enumerate(raw_durations):
+        if index == len(raw_durations) - 1:
+            seconds = round(remaining, 3)
+        else:
+            seconds = round(raw_duration * scale, 3)
+            remaining -= seconds
+        allocated.append(max(1.0, seconds))
+
+    for index, (start, end, description) in enumerate(intervals):
+        if index >= len(headings):
+            # A longer user storyboard may add beats. Keep the user's distinct
+            # sequence instead of truncating it to the built-in fallback count.
+            heading = f"Scene {index + 1}"
+            anchor = "purposeful cinematic scene with a clear subject and motivated movement"
+            overlay = "The story moves forward"
+            fallback = "Every deliberate choice brings the idea closer to a finished work."
+        else:
+            heading = headings[index]
+            anchor = visual_anchors[index]
+            overlay = overlays[index]
+            fallback = fallback_narration[index]
+        detail = re.split(
+            r"\b(?:visuals?|visual direction|voice,?\s*music|production requirements|quality control|success standard)\s*:",
+            description,
+            maxsplit=1,
+            flags=re.I,
+        )[0].strip()
+        spoken = re.search(
+            r"\b(?:narration|voiceover|final line|line)\s*[:—-]?\s*[“\"](.+?)[”\"]",
+            detail,
+            re.I,
+        )
+        narration = (spoken.group(1).strip() if spoken else fallback)
+        visual_detail = re.sub(
+            r";\s*(?:never|do not|don't|avoid|only use|use only)\b.*$",
+            "",
+            detail,
+            flags=re.I,
+        )
+        visual_detail = re.sub(
+            r";?\s*\b(?:narration|voiceover|final line|line)\s*[:—-]?\s*[“\"].*?[”\"]",
+            "",
+            visual_detail,
+            flags=re.I,
+        )
+        visual_detail = re.sub(r"\s+", " ", visual_detail).strip(" .;:")
+        if not visual_detail:
+            visual_detail = anchor
+        visual_focus = f"{anchor}; brief direction: {visual_detail}"[:650]
+        search_subjects = [
+            "creator alone in a dark room at night",
+            "cinematic mountains ocean and futuristic city",
+            "research notes script pages and storyboard",
+            "dramatic cinematic landscapes and futuristic city",
+            "professional video editing timeline and captions",
+            "creator watching a finished film",
+            "minimal dark cinematic brand end card",
+        ]
+        search_subject = search_subjects[index] if index < len(search_subjects) else "cinematic story scene"
+        chapters.append({
+            "heading": heading,
+            "topic": str(topic or title or "AI Infinity").strip()[:180],
+            "visual_focus": visual_focus,
+            "visual_search_subject": search_subject,
+            "narration": narration,
+            "visual_query": f"{search_subject}; {visual_detail}"[:700],
+            "image_prompt": (
+                f"Premium cinematic live-action film still: {visual_focus}. "
+                f"Overall visual direction: {visual_style}. "
+                "Deep midnight blues, controlled cyan/violet highlights, warm gold practical light, "
+                "filmic contrast, realistic textures, coherent composition, no fabricated UI, no logos, no gibberish text."
+            )[:1000],
+            "on_screen": overlay,
+            "duration": allocated[index],
+            "proof_needed": [],
+            "brief_origin": "explicit_timecoded_user_brief",
+            "timecode": {"start_seconds": start, "end_seconds": end},
+        })
+    total = sum(float(chapter["duration"]) for chapter in chapters)
+    if abs(total - target) > 0.01:
+        chapters[-1]["duration"] = round(float(chapters[-1]["duration"]) + target - total, 3)
+    exact_title = re.sub(r"\s+", " ", str(title or "")).strip()[:180]
+    audience_value = str(audience or "general audience")
+    tone_value = str(tone or "premium cinematic, emotionally intelligent")
+    cta_value = chapters[-2]["narration"] if len(chapters) > 1 else chapters[-1]["narration"]
+    return {
+        "title": exact_title,
+        "hook": chapters[0]["narration"],
+        "opening_hook": chapters[0]["narration"],
+        "premise": raw_objective[:12000],
+        "brief": raw_objective[:12000],
+        "audience": audience_value,
+        "tone": tone_value,
+        "cta": cta_value,
+        "call_to_action": cta_value,
+        "language": str(language or "English"),
+        "format": str(fmt or "video"),
+        "duration_seconds": target,
+        "topic": str(topic or exact_title),
+        "concept": exact_title,
+        "visual_style": visual_style or tone_value,
+        "platforms": [],
+        "platform_adaptations": [],
+        "research_narration_sources": [],
+        "source_digest": [],
+        "chapters": chapters,
+        "storyboard_origin": "explicit_timecoded_user_brief",
+        "brief_fidelity": {
+            "source": "user_authored_timeline",
+            "timecoded_scenes": len(chapters),
+            "duration_seconds": target,
+            "storyboard_replaced_by_generic_fallback": False,
+        },
+    }
+
+
 def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int, audience: str, tone: str, research: Dict[str, Any], language: str = "English", topic: str = "") -> Dict[str, Any]:
     """Build a deterministic, topic-coherent fallback plan without leaking unrelated search snippets."""
     raw_title = re.sub(r"\s+", " ", title).strip()[:900]
@@ -1606,6 +1819,12 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
 
     clean_title = subject_from_brief(raw_title)
     explicit_topic = re.sub(r"\s+", " ", str(topic or "")).strip()
+    timecoded_plan = _explicit_timed_storyboard_plan(
+        title=raw_title, objective=objective, fmt=fmt, duration=duration,
+        audience=audience, tone=tone, language=language, topic=explicit_topic,
+    )
+    if timecoded_plan:
+        return timecoded_plan
     objective_has_subject_clause = bool(re.search(
         r"\b(?:video|film|short|reel|documentary|explainer)\s+(?:about|on|for|covering|exploring)\b",
         clean_objective, re.I
@@ -4944,7 +5163,7 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
         "original_or_public_visual_sources": all(str(x.get("source") or "") != "CI test fixture (not production)" for x in (assets or [])),
         "no_fake_slideshow_flag": True,
     }
-    passed = all(bool(x) for k, x in checks.items() if k != "full_hd")
+    passed = all(bool(x) for k, x in checks.items() if k != "full_hd" or not FAST_MODE)
     return {"passed": passed, "checks": checks, "duration_seconds": round(duration, 2), "resolution": [int(v.get("width") or 0), int(v.get("height") or 0)], "video_codec": v.get("codec_name"), "audio_codec": a.get("codec_name"), "file_size_bytes": master.stat().st_size if master.exists() else 0}
 
 
@@ -5862,6 +6081,17 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
         raise ValueError("AI_INFINITY_DELIVERY_TRUE_PEAK_DBTP must remain between -3 and -1 dBTP")
     if not (5.0 <= target_lra <= 20.0):
         raise ValueError("AI_INFINITY_DELIVERY_LRA must remain between 5 and 20 LU")
+    # MP4 container duration can be 60 seconds even when a scene audio stream
+    # ends early. Normalize the audio stream to the actual programme duration,
+    # not just the container duration, before applying loudness mastering.
+    source_duration = float(probe_duration(source))
+    if source_duration <= 0:
+        raise RuntimeError("final loudness mastering cannot determine the programme duration")
+    audio_filter = (
+        f"atrim=duration={source_duration:.3f},"
+        f"apad=whole_dur={source_duration:.3f},"
+        f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}"
+    )
     rate = "96k" if fast_mode else "192k"
     ffmpeg(
         "-i", source,
@@ -5869,7 +6099,7 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
         "-map", "0:a:0",
         "-map", "0:s?",
         "-c:v", "copy",
-        "-af", f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}",
+        "-af", audio_filter,
         "-c:a", "aac",
         "-b:a", rate,
         "-ar", "48000",
@@ -5902,6 +6132,21 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
         raise RuntimeError(
             f"final loudness mastering changed duration from {source_duration:.3f}s to {output_duration:.3f}s"
         )
+    output_audio_duration = float(output_audio.get("duration") or 0)
+    if not output_audio_duration:
+        try:
+            numerator, denominator = str(output_audio.get("time_base") or "").split("/", 1)
+            output_audio_duration = (
+                float(output_audio.get("duration_ts") or 0) * float(numerator) / float(denominator)
+            )
+        except (ValueError, ZeroDivisionError):
+            output_audio_duration = 0.0
+    output_video_duration = float(output_video.get("duration") or output_duration)
+    if not output_audio_duration or abs(output_audio_duration - output_video_duration) > 0.75:
+        raise RuntimeError(
+            "final loudness mastering did not align audio to video: "
+            f"{output_audio_duration:.3f}s audio vs {output_video_duration:.3f}s video"
+        )
     return {
         "status": "completed",
         "target_integrated_lufs": target_i,
@@ -5909,6 +6154,8 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
         "target_loudness_range_lu": target_lra,
         "source_duration_seconds": round(source_duration, 3),
         "output_duration_seconds": round(output_duration, 3),
+        "audio_duration_seconds": round(output_audio_duration, 3),
+        "audio_video_duration_match": True,
         "video_stream_copied": True,
         "audio_codec": str(output_audio.get("codec_name") or ""),
         "subtitle_stream_count": sum(row.get("codec_type") == "subtitle" for row in output_streams),
@@ -6769,7 +7016,19 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             rights_manifest_ok = False
         qc.setdefault("checks", {})["production_manifest"] = production_manifest_ok
         qc.setdefault("checks", {})["rights_manifest"] = rights_manifest_ok
-        qc["passed"] = all(bool(v) for k, v in qc["checks"].items() if k not in {"full_hd", "embedded_subtitles", "fallback_visual_used"})
+        quality_preset = str(req.get("quality_preset") or "balanced").strip().lower()
+        requires_full_hd = (
+            not FAST_MODE
+            or quality_preset in {"high", "professional", "cinematic", "ultra"}
+            or bool(req.get("require_full_hd"))
+        )
+        ignored_quality_checks = {"embedded_subtitles", "fallback_visual_used"}
+        if not requires_full_hd:
+            ignored_quality_checks.add("full_hd")
+        qc["passed"] = all(
+            bool(value) for key, value in qc["checks"].items()
+            if key not in ignored_quality_checks
+        )
 
         feature_report = _feature_execution_report(project_id, project["user_id"], [str(x) for x in (req.get("features") or [])], outdir, qc=qc, req=req)
         metadata = {

@@ -63,7 +63,7 @@
 <button class="chip" onclick="fillCmd('Turn this public article into a fact-checked video with sources, captions and a thumbnail: https://')">Website → video</button>
 <button class="chip" onclick="fillCmd('Turn an uploaded document into a polished video + podcast package with chapter markers and show notes.')">Document → show</button>
 <button class="chip" onclick="fillCmd('Repurpose my latest completed master into platform-native vertical variants and campaign copy.')">Repurpose</button>
-</div><div class="actionRow" style="margin:0"><button class="btn" onclick="planCommand()">Plan</button><button class="btn primary" onclick="createCommand()">Create production</button></div></div></div>
+</div><div class="actionRow" style="margin:0"><button class="btn" onclick="planCommand()">Plan</button><button class="btn primary" onclick="createCommand()">Run command</button></div></div></div>
 <div class="presetGrid">
 <button class="preset" onclick="preset('short')"><b>Shorts Factory</b><span>Hooks · captions · vertical · variants</span></button>
 <button class="preset" onclick="preset('long')"><b>Long-form</b><span>Research · story · video · package</span></button>
@@ -153,7 +153,126 @@ function setHealth(h){state.health=h||{};const ok=h.status==="healthy";$("livePi
 async function boot(){await session();try{const [b,h,t]=await Promise.all([api("/infinity/studio/bootstrap"),api("/infinity/studio/health"),api("/infinity/studio/tools")]);state.boot=b;state.health=h;setHealth(h);renderTools(t.tools||[]);state.projects=b.projects||[];renderProjects();renderBrand(b.profile||{});renderSignals();await Promise.all([loadCurrentFromList(),loadAnalytics(),runGapAudit(),scanTrends(true),loadAssets(),loadAgents(),loadConnections(),loadOperations()]);renderBenchmarks();renderCapability();populatePublishProjects()}catch(e){$("commandNotice").className="notice bad";$("commandNotice").textContent="Workspace could not initialize: "+e.message;toast(e.message)}}
 function renderTools(tools){const order=["video","image","voice","music","text","web-to-video","document-to-show","repurpose","dubbing","avatar","interactive"];const xs=order.map(id=>(tools||[]).find(x=>x.id===id)).filter(Boolean);$("toolGrid").innerHTML=xs.map(x=>'<button class="card cardPad" style="text-align:left;cursor:pointer" onclick="runTool(\''+esc(x.id)+'\')"><div class="row"><b>'+esc(x.name)+'</b><span class="badge '+(x.status==="ready"?"good":"warn")+'">'+esc(x.status)+'</span></div><div class="itemSub">'+esc(x.description||"")+'</div></button>').join("")}
 function renderSignals(){const names=[["Research","Current web sources + provenance"],["Story","Hook → narrative → CTA"],["Media","Voice + visuals + music"],["Delivery","SEO + social + platform variants"],["Trust","QC + claims + artifact integrity"],["Learning","Feedback + creator memory"]];$("miniSignals").innerHTML=names.map(x=>'<div class="item"><div class="row"><div class="itemTitle">'+x[0]+'</div><span class="badge good">wired</span></div><div class="itemSub">'+x[1]+'</div></div>').join("")}
-async function createCommand(){const objective=$("cmd").value.trim();if(!objective){toast("Describe what you want AI Infinity to make.");return}const payload={objective,title:objective.slice(0,110),topic:objective,content_type:$("contentType").value,format:$("format").value,duration:Number($("duration").value),aspect_ratio:$("ratio").value,language:$("language").value,quality_preset:"balanced",source_file_names:state.sourceNames.slice(0,12)};try{$("commandNotice").className="notice";$("commandNotice").textContent="Creating the production graph…";const d=await api("/infinity/studio/project",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)});setCurrent(d.project_id||d.result?.project_id);toast("Production started.")}catch(e){$("commandNotice").className="notice bad";$("commandNotice").textContent=e.message;toast(e.message)}}
+async function createCommand(){
+  const objective=$("cmd").value.trim();
+  if(!objective){toast("Describe the outcome you want AI Infinity to execute.");return}
+  const payload={
+    command:objective,
+    objective,
+    title:objective.slice(0,110),
+    topic:objective,
+    project_id:state.current&&state.current.project_id||"",
+    content_type:$("contentType").value,
+    format:$("format").value,
+    duration:Number($("duration").value),
+    aspect_ratio:$("ratio").value,
+    language:$("language").value,
+    quality_preset:"balanced",
+    source_file_names:state.sourceNames.slice(0,12)
+  };
+  try{
+    $("commandNotice").className="notice";
+    $("commandNotice").textContent="Routing your command to the correct existing workflow…";
+    const d=await api("/infinity/canonical/execute",{
+      method:"POST",
+      headers:{"content-type":"application/json"},
+      body:JSON.stringify(payload)
+    });
+    const route=String(d.route||"");
+    if(route==="create"){
+      const result=d.result||{};
+      const pid=result.project_id||d.project_id;
+      if(!pid){
+        $("commandNotice").className="notice bad";
+        $("commandNotice").textContent="The creator engine returned no project ID. No project is being presented as started.";
+        openModal("Command result",'<pre class="mono">'+esc(JSON.stringify(d,null,2))+'</pre>');
+        return;
+      }
+      $("commandNotice").className="notice good";
+      $("commandNotice").textContent="Production was queued. The project will be monitored through the existing Creator Studio workflow.";
+      await setCurrent(pid);
+      toast("Production queued.");
+      return;
+    }
+    if(route==="research"){
+      const result=d.result||{};
+      const sources=Array.isArray(result.sources)?result.sources:[];
+      const rows=sources.slice(0,12).map(function(s){
+        const title=esc(s.title||"Untitled source");
+        const url=String(s.url||"");
+        const link=url.toLowerCase().startsWith("https://")
+          ? '<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">'+title+'</a>'
+          : title;
+        return '<li style="margin:8px 0"><b>'+link+'</b><div class="itemSub">'+esc(s.source||"Unknown source")+' · '+esc(s.published_at||s.retrieved_at||"Publication date not verified")+'</div><div class="itemSub">'+esc(s.summary||s.snippet||"")+'</div></li>';
+      }).join("");
+      const body='<div class="notice '+(d.status==="completed"?"good":"warn")+'">Research status: '+esc(d.status||"unknown")+'. Sources returned: '+esc(d.source_count||0)+'. Claims are not independently verified and require review before production or publication.</div>'+
+        '<div class="itemSub" style="margin:10px 0">Providers: '+esc((result.providers_used||[]).join(", ")||result.provider||"none confirmed")+'</div>'+
+        (rows?'<ol style="padding-left:22px">'+rows+'</ol>':'<div class="empty">No usable sources were returned. The research task is degraded, not complete.</div>')+
+        '<pre class="mono" style="margin-top:10px">'+esc(JSON.stringify({research_connector:result.api_anything||d.research_connector||null,quality_state:d.quality_state||"REVIEW_REQUIRED"},null,2))+'</pre>';
+      $("commandNotice").className="notice "+(d.status==="completed"?"good":"warn");
+      $("commandNotice").textContent="Research "+(d.status==="completed"?"returned "+String(d.source_count||0)+" source(s).":"is degraded; no usable sources were confirmed.");
+      openModal("Research results",body);
+      return;
+    }
+    if(route==="public_api"){
+      const result=d.result||{};
+      const candidates=Array.isArray(d.candidates)?d.candidates:[];
+      const operations=Array.isArray(d.operations)?d.operations:[];
+      let body="";
+      if(d.executed){
+        body='<div class="notice good">A verified read-only API request returned successfully. This is external data, not independently verified evidence.</div><pre class="mono" style="margin-top:10px">'+esc(JSON.stringify(result,null,2))+'</pre>';
+      }else if(candidates.length){
+        body='<div class="notice warn">Verified public API candidates are available. No request has been executed yet. Choose an API ID, inspect its verified operations, then invoke an operation with explicit query parameters.</div><ol style="padding-left:22px">'+candidates.map(function(x){return '<li style="margin:8px 0"><b>'+esc(x.name||x.api_id)+'</b><div class="itemSub">API ID: <code>'+esc(x.api_id)+'</code> · '+esc(x.source||"public catalog")+' · '+esc(x.operation_count||0)+' operation(s)</div><div class="itemSub">'+esc(x.description||"No description supplied by the public catalog.")+'</div></li>'}).join("")+'</ol>';
+      }else if(operations.length){
+        if(d.provider==="api-anything"){
+          body='<div class="notice warn">Pinned bundled read-only operations discovered. No request has been executed yet. Choose a listed operation and provide only its declared parameters.</div><ol style="padding-left:22px">'+operations.map(function(x){return '<li style="margin:8px 0"><b>'+esc((x.site||"")+'.'+(x.operation||""))+'</b><div class="itemSub">'+esc(x.description||"No description supplied.")+'</div><div class="itemSub">Declared parameters: <code>'+esc(JSON.stringify(x.parameters||[]))+'</code> · '+esc(x.transport||"read-only operation")+'</div></li>'}).join("")+'</ol>';
+        }else{
+          body='<div class="notice warn">Verified read-only operations for API ID '+esc(d.api_id||"")+'. No request has been executed yet.</div><ol style="padding-left:22px">'+operations.map(function(x){return '<li style="margin:8px 0"><b>'+esc(x.summary||x.operation_id||x.op_id||"Unnamed operation")+'</b><div class="itemSub">Operation ID: <code>'+esc(x.op_id||"")+'</code> · '+esc(x.method||"")+' · '+esc(x.path||"")+'</div><div class="itemSub">Query parameters: '+esc(x.parameters_json||"[]")+'</div></li>'}).join("")+'</ol>';
+        }
+      }else{
+        body='<div class="empty">'+esc(d.status==="discovery_started"||d.discovery_status==="warming"?"Public API discovery has started in the background. No source or result is claimed yet.":d.reason||"No verified matching public API was available.")+'</div>';
+      }
+      body+='<div class="itemSub" style="margin-top:12px">Next command example: <code>Use a public API api_id=…</code> to inspect operations, then <code>Use a public API operation_id=… q="your query"</code> to invoke a verified read-only operation. Parameter names are checked against the stored OpenAPI definition.</div>';
+      $("commandNotice").className="notice "+(d.executed?"good":"warn");
+      $("commandNotice").textContent=d.executed?"Verified public API read completed.":candidates.length||operations.length?"Public API catalogue results returned; no external query executed.":d.status==="discovery_started"?"Public API discovery started; no results claimed yet.":"Public API request needs a verified API/operation.";
+      openModal("Public API fabric",body);
+      return;
+    }
+    if(route==="edit"){
+      const result=d.result||{};
+      $("commandNotice").className="notice "+(d.status==="completed"?"good":"warn");
+      $("commandNotice").textContent="Existing project edit status: "+String(d.status||"unknown")+".";
+      openModal("Project edit result",'<pre class="mono">'+esc(JSON.stringify(result,null,2))+'</pre>');
+      if(result.project_id)await setCurrent(result.project_id);
+      return;
+    }
+    if(route==="project_status"||route==="capabilities"){
+      $("commandNotice").className="notice good";
+      $("commandNotice").textContent=route==="project_status"?"Project status was read from the existing project record.":"Capability status was read from the existing runtime.";
+      openModal(route==="project_status"?"Project status":"Available capabilities",'<pre class="mono">'+esc(JSON.stringify(d.result||d,null,2))+'</pre>');
+      return;
+    }
+    if(["script","strategy","marketing","seo","analytics","publisher","monetization"].indexOf(route)>=0){
+      const agentTitles={script:"Script / Storyboard",strategy:"Creative Strategy",marketing:"Marketing Plan",seo:"SEO Output",analytics:"Analytics",publisher:"Publishing Options",monetization:"Monetization Options"};
+      const planOnly=["script","strategy","marketing","seo"].indexOf(route)>=0;
+      $("commandNotice").className="notice "+(d.status==="completed"?"good":"warn");
+      $("commandNotice").textContent=planOnly
+        ?"Agent output returned. This result is a plan/draft; no media file was created."
+        :"Read-only capability result returned; no external action was performed.";
+      openModal(agentTitles[route]||"Agent result",
+        '<div class="notice '+(d.status==="completed"?"good":"warn")+'">'+esc(d.delivery_note||(planOnly?"Review the generated plan/draft before production.":"Read-only result; publishing and other external writes were not performed."))+'</div>'+
+        '<pre class="mono" style="margin-top:10px">'+esc(JSON.stringify(d,null,2))+'</pre>');
+      return;
+    }
+    $("commandNotice").className="notice warn";
+    $("commandNotice").textContent=String(d.reason||"This command did not match a supported safe execution route.");
+    openModal("Command needs attention",'<div class="notice warn">'+esc(d.reason||d.status||"No execution was started.")+'</div><pre class="mono">'+esc(JSON.stringify(d,null,2))+'</pre>');
+  }catch(e){
+    $("commandNotice").className="notice bad";
+    $("commandNotice").textContent=e.message;
+    toast(e.message);
+  }
+}
 async function planCommand(){const objective=$("cmd").value.trim();if(!objective){toast("Add an objective first.");return}try{const d=await api("/infinity/studio/agents/run",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({agent_id:"strategy",objective,payload:{format:$("format").value,duration:Number($("duration").value),language:$("language").value}})});openModal("Strategy plan",'<div class="notice good">Plan generated by the live strategy agent.</div><pre class="mono" style="margin-top:10px">'+esc(JSON.stringify(d.result||d,null,2))+'</pre>')}catch(e){toast(e.message)}}
 async function runTool(id){const objective=$("cmd").value.trim();if(!objective&&id!=="repurpose"){toast("Add a command for this tool.");return}try{const d=await api("/infinity/studio/tools/run",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({tool_id:id,objective,title:objective,format:$("format").value,duration:Number($("duration").value),content_type:$("contentType").value,language:$("language").value,source_file_names:state.sourceNames.slice(0,12)})});if(d.status==="provider_required"||d.status==="extension_required"){openModal("Capability readiness",'<div class="notice warn">'+esc(d.message)+'</div>');return}const pid=d.result?.project_id||d.project_id;if(pid){setCurrent(pid);toast("Tool workflow started.")}else openModal("Tool result",'<pre class="mono">'+esc(JSON.stringify(d,null,2))+'</pre>')}catch(e){toast(e.message)}}
 async function setCurrent(pid){if(!pid)return;clearInterval(state.poll);await loadProject(pid);state.poll=setInterval(()=>loadProject(pid,true),2600);$("production").scrollIntoView({behavior:"smooth",block:"start"})}

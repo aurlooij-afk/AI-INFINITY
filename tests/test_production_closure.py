@@ -100,3 +100,48 @@ def test_strict_visual_gate_keeps_qualified_illustrative_fallback_review_require
     assert result.get("fallback_record", {}).get("execution_state") == "DEGRADED"
     assert result.get("fallback_record", {}).get("truthful") is True
     assert closure._is_qualified_illustrative_fallback(result) is True
+
+def test_final_audio_master_pads_early_ended_audio_stream_to_video_duration(tmp_path):
+    """A 4s video with 2s audio must be mastered with aligned audio, not delivered short."""
+    import shutil
+    import subprocess
+
+    ffmpeg_bin = shutil.which("ffmpeg")
+    assert ffmpeg_bin, "FFmpeg is required for the real-stream regression"
+    source = tmp_path / "short_audio_source.mp4"
+    mastered = tmp_path / "duration_aligned.mp4"
+    subprocess.run(
+        [
+            ffmpeg_bin, "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "color=c=navy:s=320x180:r=24:d=4",
+            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=2",
+            "-map", "0:v:0", "-map", "1:a:0", "-t", "4",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "96k", str(source),
+        ],
+        check=True,
+        timeout=60,
+    )
+
+    source_probe = studio.ffprobe_json(source)
+    source_duration = float((source_probe.get("format") or {}).get("duration") or 0)
+    source_audio = next(row for row in source_probe["streams"] if row.get("codec_type") == "audio")
+    source_audio_duration = float(source_audio.get("duration") or 0)
+    assert 3.8 <= source_duration <= 4.2, source_probe
+    assert 0 < source_audio_duration < 3.0, source_probe
+
+    result = studio._normalize_delivery_loudness(source, mastered, fast_mode=True)
+
+    output_probe = studio.ffprobe_json(mastered)
+    output_duration = float((output_probe.get("format") or {}).get("duration") or 0)
+    output_audio = next(row for row in output_probe["streams"] if row.get("codec_type") == "audio")
+    audio_duration = float(result["audio_duration_seconds"])
+    assert 3.8 <= output_duration <= 4.2, output_probe
+    assert abs(audio_duration - output_duration) <= 0.75, (audio_duration, output_duration, output_probe)
+    assert result["audio_video_duration_match"] is True
+    subprocess.run(
+        [ffmpeg_bin, "-hide_banner", "-loglevel", "error", "-i", str(mastered), "-f", "null", "-"],
+        check=True,
+        timeout=60,
+    )
+
