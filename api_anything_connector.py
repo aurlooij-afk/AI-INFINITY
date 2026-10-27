@@ -511,16 +511,16 @@ def _safe_public_data(value: Any, depth: int = 0) -> Any:
     return _clean_text(value, 500)
 
 
-def list_bundled_read_only_operations(site_name: str = "", limit: int = 100) -> dict[str, Any]:
-    """Discover current pinned, bundled read-only operations without executing them."""
+def list_bundled_operations(site_name: str = "", limit: int = 100, include_writes: bool = True) -> dict[str, Any]:
+    """Discover pinned bundled operations, separating reads from explicitly declared writes."""
     executable = shutil.which("api-anything")
     if not executable:
         return {"status": "not_configured", "sites": [], "operations": [], "truthful": True}
     requested_site = _clean_text(site_name, 64).lower()
     if requested_site and not _SAFE_SITE_NAME.fullmatch(requested_site):
         return {"status": "invalid_site", "sites": [], "operations": [], "truthful": True}
-    safe_limit = max(1, min(100, int(limit or 100)))
     try:
+        safe_limit = max(1, min(100, int(limit or 100)))
         timeout = max(3, min(10, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))))
         with tempfile.TemporaryDirectory(prefix="ai-infinity-api-catalog-") as temporary:
             root = Path(temporary).resolve()
@@ -545,10 +545,11 @@ def list_bundled_read_only_operations(site_name: str = "", limit: int = 100) -> 
                 if op_error or not isinstance(rows, list):
                     continue
                 for operation in rows:
-                    if not isinstance(operation, dict) or operation.get("readOnly") is not True:
+                    if not isinstance(operation, dict) or operation.get("readOnly") not in (True, False):
                         continue
-                    # Do not offer operations requiring browser/session fallback in the
-                    # production command path; tier-one is the supported transport.
+                    is_read = operation.get("readOnly") is True
+                    if not is_read and not include_writes:
+                        continue
                     min_tier = operation.get("minTier", 1)
                     if type(min_tier) is not int or min_tier != 1:
                         continue
@@ -558,11 +559,13 @@ def list_bundled_read_only_operations(site_name: str = "", limit: int = 100) -> 
                     operations.append({
                         "site": site["name"],
                         "operation": name,
-                        "read_only": True,
+                        "read_only": is_read,
+                        "write": not is_read,
                         "parameters": sorted(_declared_parameter_names(operation)),
                         "description": _clean_text(operation.get("summary") or operation.get("description") or "", 300),
                         "notes": _clean_text(operation.get("notes") or "", 500),
                         "transport": "tier_1_plain_http_only",
+                        "execution_mode": "read" if is_read else "write_requires_explicit_allowance",
                     })
                     if len(operations) >= safe_limit:
                         break
@@ -572,6 +575,8 @@ def list_bundled_read_only_operations(site_name: str = "", limit: int = 100) -> 
                 "status": "ready" if operations else "empty",
                 "site_count": len(sites),
                 "operation_count": len(operations),
+                "read_operation_count": sum(1 for op in operations if op["read_only"]),
+                "write_operation_count": sum(1 for op in operations if op["write"]),
                 "sites": [row["name"] for row in sites],
                 "operations": operations,
                 "executed": False,
@@ -582,12 +587,22 @@ def list_bundled_read_only_operations(site_name: str = "", limit: int = 100) -> 
         return {"status": "internal_error", "error_type": type(exc).__name__, "sites": [], "operations": [], "truthful": True}
 
 
-def execute_bundled_read_only(
+def list_bundled_read_only_operations(site_name: str = "", limit: int = 100) -> dict[str, Any]:
+    """Backwards-compatible read-only catalog for research tools."""
+    result = list_bundled_operations(site_name=site_name, limit=limit, include_writes=False)
+    result["generic_bundled_read_only_operations"] = True
+    return result
+
+
+def execute_bundled_operation(
     site_name: str,
     operation_name: str,
     parameters: dict[str, Any] | None = None,
+    *,
+    allow_writes: bool = False,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Execute a selected bundled operation when its current spec explicitly says readOnly."""
+    """Execute a pinned bundled read or explicitly authorized write on tier-one HTTP."""
     site_name = _clean_text(site_name, 64).lower()
     operation_name = _clean_text(operation_name, 64)
     if not _SAFE_SITE_NAME.fullmatch(site_name) or not _SAFE_OPERATION_NAME.fullmatch(operation_name):
@@ -627,7 +642,7 @@ def execute_bundled_read_only(
                 return {"status": "rate_limited", "executed": False, "truthful": True}
             _GENERIC_COOLDOWNS[site_name] = now
         try:
-            timeout = max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))))
+            timeout = max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))))
         except (TypeError, ValueError, OverflowError):
             return {"status": "invalid_configuration", "executed": False, "truthful": True}
         with tempfile.TemporaryDirectory(prefix="ai-infinity-api-anything-call-") as temporary:
@@ -654,8 +669,16 @@ def execute_bundled_read_only(
                 (row for row in operations if isinstance(row, dict) and row.get("name") == operation_name),
                 None,
             )
-            if not operation or operation.get("readOnly") is not True:
-                return {"status": "operation_not_verified_read_only", "executed": False, "truthful": True}
+            if not operation or operation.get("readOnly") not in (True, False):
+                return {"status": "operation_not_explicitly_classified", "executed": False, "truthful": True}
+            is_read = operation.get("readOnly") is True
+            if not is_read and not allow_writes:
+                return {
+                    "status": "write_confirmation_required", "executed": False,
+                    "site": site_name, "operation": operation_name, "write": True,
+                    "required_confirmation": "Re-run this exact operation with --allow-writes after checking the target and content.",
+                    "truthful": True,
+                }
             min_tier = operation.get("minTier", 1)
             if type(min_tier) is not int or min_tier != 1:
                 return {"status": "tier_one_transport_required", "executed": False, "truthful": True}
@@ -668,19 +691,41 @@ def execute_bundled_read_only(
                 }
             if not declared and safe_params:
                 return {"status": "parameter_schema_unavailable", "executed": False, "truthful": True}
-            # CLI receives a JSON argument, never shell-expanded user content. Tier 1
-            # forbids browser/session fallback. The bundled spec must also stay read-only.
-            result, error = run([
+            args = [
                 "call", site_name, operation_name,
                 "--json", json.dumps(safe_params, ensure_ascii=False, separators=(",", ":")),
                 "--max-tier", "1",
-            ])
+            ]
+            if not is_read:
+                args.append("--allow-writes")
+            if dry_run:
+                args.append("--dry")
+            result, error = run(args)
             if error:
                 return {"status": error, "executed": False, "truthful": True}
-            if not isinstance(result, dict) or result.get("ok") is not True:
-                return {"status": "operation_failed", "executed": False, "truthful": True}
-            # API Anything's successful CallResult type does not promise site/op
-            # fields; when it does return either, reject only a contradictory identity.
+            if not isinstance(result, dict):
+                return {"status": "invalid_result_shape", "executed": False, "truthful": True}
+            if dry_run:
+                return {
+                    "status": "dry_run_ready" if result.get("ok") is True else "dry_run_failed",
+                    "provider": "api-anything", "site": site_name, "operation": operation_name,
+                    "read_only": is_read, "write": not is_read, "dry_run": True,
+                    "transport_tier": result.get("tier"),
+                    "request_preview": _safe_public_data(result.get("request") or result.get("preview") or result.get("data")),
+                    "executed": False, "truthful": True,
+                }
+            if result.get("ok") is not True:
+                safe_failure = {
+                    "status": "operation_failed", "provider": "api-anything",
+                    "site": site_name, "operation": operation_name,
+                    "read_only": is_read, "write": not is_read,
+                    "error_class": _clean_text(result.get("class"), 60),
+                    "reason": _clean_text(result.get("reason"), 300),
+                    "write_outcome": _clean_text(result.get("write"), 40) if not is_read else None,
+                    "executed": not is_read and result.get("write") in {"accepted", "may_have_applied", "applied"},
+                    "truthful": True,
+                }
+                return safe_failure
             returned_site = result.get("site")
             returned_op = result.get("op")
             if returned_site and returned_site != site_name:
@@ -693,10 +738,24 @@ def execute_bundled_read_only(
             encoded = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
             if len(encoded) > 50000:
                 data = encoded[:50000] + "…[truncated]"
+            write_outcome = _clean_text(result.get("write"), 40) if not is_read else None
+            if is_read:
+                status_name = "completed"
+            elif write_outcome == "applied":
+                status_name = "completed"
+            elif write_outcome == "accepted":
+                status_name = "write_accepted_not_independently_verified"
+            elif write_outcome == "may_have_applied":
+                status_name = "write_outcome_ambiguous_check_target_do_not_retry"
+            elif write_outcome == "not_applied":
+                status_name = "write_not_applied"
+            else:
+                status_name = "write_acknowledgement_unverified"
             return {
-                "status": "completed", "provider": "api-anything",
+                "status": status_name, "provider": "api-anything",
                 "site": site_name, "operation": operation_name,
-                "read_only": True, "transport_tier": 1,
+                "read_only": is_read, "write": not is_read, "write_outcome": write_outcome,
+                "transport_tier": result.get("tier"),
                 "parameters_sha256": __import__("hashlib").sha256(
                     json.dumps(safe_params, sort_keys=True, ensure_ascii=False).encode("utf-8")
                 ).hexdigest(),
@@ -709,3 +768,12 @@ def execute_bundled_read_only(
         return {"status": "internal_error", "error_type": type(exc).__name__, "executed": False, "truthful": True}
     finally:
         _EXECUTION_GATE.release()
+
+
+def execute_bundled_read_only(
+    site_name: str,
+    operation_name: str,
+    parameters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Backwards-compatible entry point for read-only research operations."""
+    return execute_bundled_operation(site_name, operation_name, parameters, allow_writes=False, dry_run=False)
