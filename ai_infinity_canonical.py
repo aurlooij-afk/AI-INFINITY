@@ -973,6 +973,8 @@ def dispatch_command(command, user_id, raw=None):
                 match_spec = {}
             write_learning = (
                 payload.get("api_anything_write_learning") is True
+                or payload.get("api_anything_write") is True
+                or str(parsed_pairs.get("write", "")).lower() in {"true", "yes", "1"}
                 or bool(re.search(r"(?:^|\s)--write(?:\s|$)", cmd, re.I))
             )
             for key in (
@@ -1080,9 +1082,9 @@ def dispatch_command(command, user_id, raw=None):
                     "truthful": True,
                 }
 
-            include_writes = payload.get("api_anything_include_writes") is True or bool(
-                re.search(r"\b(?:write|writable|writes|read\s*(?:and|&)\s*write|all\s+operations)\b", cmd.lower())
-            )
+            # Listing is side-effect-free; include learned write operations by default so the
+            # command catalog reflects available capabilities instead of hiding them.
+            include_writes = payload.get("api_anything_read_only") is not True and payload.get("api_anything_include_writes") is not False
             if hasattr(connector, "list_api_anything_operations"):
                 result = connector.list_api_anything_operations(
                     site_name=site_name, limit=200, user_id=user_id, include_writes=include_writes,
