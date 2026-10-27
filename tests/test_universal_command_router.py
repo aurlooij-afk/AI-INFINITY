@@ -476,3 +476,11 @@ def test_api_anything_explicit_payload_supports_parameters_and_does_not_authoriz
     assert result["executed"] is False
     assert calls == [("linkedin", "sendMessage", {"recipient": "someone", "message": "hello"})]
     assert canonical.classify_command("Send a message through API Anything")["route"] == "authorization_required"
+
+def test_explicit_site_operation_syntax_routes_to_verified_public_api_without_provider_name():
+    result = canonical.classify_command(
+        "Run site=hacker-news operation=search query=sqlite"
+    )
+
+    assert result["route"] == "public_api"
+    assert "verified" in result["reason"].lower()
