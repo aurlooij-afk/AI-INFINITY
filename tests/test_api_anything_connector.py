@@ -567,7 +567,7 @@ def _generic_runner(*, read_only=True, parameters=None, result=None, site_source
             payload = {"operations": [operation]}
         elif args[:3] == ["call", "demo-site", "search"]:
             payload = result if result is not None else {
-                "ok": True, "tier": 1,
+                "ok": True, "site": "demo-site", "op": "search", "tier": 1,
                 "data": [{"title": "Public record", "url": "https://example.org/item", "api_key": "must-not-leak"}],
             }
         else:
