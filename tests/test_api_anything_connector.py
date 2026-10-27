@@ -544,3 +544,107 @@ def test_connector_enforces_output_limit_while_streaming_subprocess_stdout(monke
 
     assert payload is None
     assert error == "output_too_large"
+
+
+def _generic_runner(*, read_only=True, parameters=None, result=None, site_source="bundled"):
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append((command, kwargs))
+        args = command[1:]
+        if args == ["sites"]:
+            payload = [{"name": "demo-site", "source": site_source}]
+        elif args == ["ops", "demo-site"]:
+            payload = {"operations": [{
+                "name": "search", "readOnly": read_only,
+                "parameters": parameters if parameters is not None else [{"name": "q", "type": "string"}],
+                "summary": "Search public records",
+            }]}
+        elif args[:3] == ["call", "demo-site", "search"]:
+            payload = result if result is not None else {
+                "ok": True, "tier": 1,
+                "data": [{"title": "Public record", "url": "https://example.org/item", "api_key": "must-not-leak"}],
+            }
+        else:
+            raise AssertionError(f"unexpected command: {command}")
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
+
+    return runner, calls
+
+
+def test_generic_catalog_lists_all_bundled_readonly_operations_without_executing(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    runner, calls = _generic_runner()
+    monkeypatch.setattr(connector.subprocess, "run", runner)
+
+    result = connector.list_bundled_read_only_operations()
+
+    assert result["status"] == "ready"
+    assert result["sites"] == ["demo-site"]
+    assert result["operations"] == [{
+        "site": "demo-site",
+        "operation": "search",
+        "read_only": True,
+        "parameters": ["q"],
+        "description": "Search public records",
+        "notes": "",
+        "transport": "tier_1_plain_http_only",
+    }]
+    assert result["executed"] is False
+    assert len(calls) == 2
+    assert all(kwargs["env"].get("OPENAI_API_KEY") is None for _, kwargs in calls)
+
+
+def test_generic_readonly_executor_calls_selected_declared_parameter_and_redacts_secrets(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    runner, calls = _generic_runner()
+    monkeypatch.setattr(connector.subprocess, "run", runner)
+
+    result = connector.execute_bundled_read_only("demo-site", "search", {"q": "climate data"})
+
+    assert result["status"] == "completed"
+    assert result["executed"] is True
+    assert result["read_only"] is True
+    assert result["transport_tier"] == 1
+    assert result["result"][0]["title"] == "Public record"
+    assert result["result"][0]["api_key"] == "[redacted]"
+    call_args = calls[-1][0][1:]
+    assert call_args[:3] == ["call", "demo-site", "search"]
+    assert json.loads(call_args[call_args.index("--json") + 1]) == {"q": "climate data"}
+    assert call_args[call_args.index("--max-tier") + 1] == "1"
+    # Application credentials are never inherited by the isolated API Anything child.
+    assert all("OPENAI_API_KEY" not in kwargs["env"] for _, kwargs in calls)
+
+
+def test_generic_readonly_executor_rejects_unknown_params_and_write_operations_before_network(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    runner, calls = _generic_runner()
+    monkeypatch.setattr(connector.subprocess, "run", runner)
+
+    unknown = connector.execute_bundled_read_only("demo-site", "search", {"account_id": "x"})
+    assert unknown["status"] == "undeclared_parameters"
+    assert unknown["executed"] is False
+    assert len(calls) == 2
+
+    connector._GENERIC_COOLDOWNS.clear()
+    write_runner, write_calls = _generic_runner(read_only=False)
+    monkeypatch.setattr(connector.subprocess, "run", write_runner)
+    refused = connector.execute_bundled_read_only("demo-site", "search", {"q": "nothing"})
+    assert refused["status"] == "operation_not_verified_read_only"
+    assert refused["executed"] is False
+    assert len(write_calls) == 2
+
+
+def test_generic_readonly_executor_rejects_unbundled_specs_and_sensitive_inputs(monkeypatch):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    runner, calls = _generic_runner(site_source="user")
+    monkeypatch.setattr(connector.subprocess, "run", runner)
+
+    untrusted = connector.execute_bundled_read_only("demo-site", "search", {"q": "test"})
+    assert untrusted["status"] == "untrusted_site_spec"
+    assert untrusted["executed"] is False
+    assert len(calls) == 1
+
+    connector._GENERIC_COOLDOWNS.clear()
+    assert connector.execute_bundled_read_only("demo-site", "search", {"api_key": "value"})["status"] == "sensitive_parameter_not_allowed"
+    assert connector.execute_bundled_read_only("bad site", "search", {})["status"] == "invalid_operation"
