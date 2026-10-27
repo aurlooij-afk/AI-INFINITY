@@ -388,6 +388,111 @@ jobs:
           echo "END_TO_END_CREATOR_ARTIFACT_TEST_PASSED"
 
 
+      - name: Assemble film assets, independent decode, frame sheet, integrity manifest, and human-review ZIP
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          REVIEW=/tmp/ai-infinity-brand-film-review
+          mkdir -p "$REVIEW"
+          if [ -s /tmp/create-response.json ] && [ -s /tmp/cookies.txt ] && curl -fsS http://127.0.0.1:10000/health >/dev/null 2>&1; then
+            PROJECT_ID=$(python -c 'import json; print(json.load(open("/tmp/create-response.json")).get("project_id",""))')
+            if [ -n "$PROJECT_ID" ]; then
+              for name in final.mp4 thumbnail.jpg audio_master.mp3 narration_only.mp3 captions.srt script.md sources.json manifest.json production_manifest.json rights_manifest.json visual_rights.json provenance.json package.zip timeline.otio; do
+                curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/asset/$name" -o "$REVIEW/$name" 2>/dev/null
+                if [ $? -ne 0 ]; then rm -f "$REVIEW/$name"; fi
+              done
+              printf '%s\n' "$PROJECT_ID" > "$REVIEW/project_id.txt"
+            fi
+          fi
+          if [ -s "$REVIEW/final.mp4" ]; then
+            ffprobe -v error -show_format -show_streams -of json "$REVIEW/final.mp4" > "$REVIEW/ffprobe.json" 2>"$REVIEW/ffprobe_error.txt"
+            ffmpeg -hide_banner -loglevel error -i "$REVIEW/final.mp4" -f null - >"$REVIEW/full_decode.log" 2>&1
+            if [ $? -eq 0 ]; then echo "PASS" > "$REVIEW/full_decode_status.txt"; else echo "FAIL" > "$REVIEW/full_decode_status.txt"; fi
+            ffmpeg -hide_banner -loglevel error -i "$REVIEW/final.mp4" -vf "fps=1/5,scale=480:270,tile=4x3" -frames:v 1 "$REVIEW/contact_sheet.jpg" 2>"$REVIEW/contact_sheet_error.txt"
+            ffmpeg -hide_banner -i "$REVIEW/final.mp4" -af ebur128=peak=true -f null - 2>"$REVIEW/audio_loudness.txt"
+          fi
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          root=Path("/tmp/ai-infinity-brand-film-review")
+          media=root/"final.mp4"
+          probe={}
+          if (root/"ffprobe.json").exists():
+              try: probe=json.loads((root/"ffprobe.json").read_text(encoding="utf-8"))
+              except Exception: probe={}
+          streams=probe.get("streams",[])
+          v=next((s for s in streams if s.get("codec_type")=="video"),{})
+          a=next((s for s in streams if s.get("codec_type")=="audio"),{})
+          fmt=probe.get("format",{})
+          files=[]
+          for p in sorted(root.rglob("*")):
+              if p.is_file() and p.name not in {"integrity_manifest.json"}:
+                  h=hashlib.sha256()
+                  with p.open("rb") as f:
+                      for chunk in iter(lambda:f.read(1024*1024),b""): h.update(chunk)
+                  files.append({"path":str(p.relative_to(root)),"size_bytes":p.stat().st_size,"sha256":h.hexdigest()})
+          integrity={
+            "truthful":True,"generator":"AI Infinity real container workflow (GitHub Actions)",
+            "project_id":(root/"project_id.txt").read_text().strip() if (root/"project_id.txt").exists() else None,
+            "media_available":media.is_file(),
+            "duration_seconds":float(fmt.get("duration") or 0) if fmt else None,
+            "width":v.get("width"),"height":v.get("height"),
+            "video_codec":v.get("codec_name"),"audio_codec":a.get("codec_name"),
+            "video_stream_present":bool(v),"audio_stream_present":bool(a),
+            "full_decode":"PASS" if (root/"full_decode_status.txt").exists() and (root/"full_decode_status.txt").read_text().strip()=="PASS" else "NOT_VERIFIED_OR_FAILED",
+            "contact_sheet_available":(root/"contact_sheet.jpg").is_file(),
+            "captions_available":(root/"captions.srt").is_file(),
+            "sources_evidence_available":(root/"sources.json").is_file(),
+            "rights_or_visual_rights_evidence_available":any((root/n).is_file() for n in ("rights_manifest.json","visual_rights.json")),
+            "editable_timeline_available":(root/"timeline.otio").is_file(),
+            "human_creative_review":"PENDING",
+            "files":files
+          }
+          (root/"integrity_manifest.json").write_text(json.dumps(integrity,indent=2,sort_keys=True)+"\n",encoding="utf-8")
+          missing=[]
+          for label,names in [("final MP4",["final.mp4"]),("thumbnail",["thumbnail.jpg"]),("captions",["captions.srt"]),("sources",["sources.json"]),("rights evidence",["rights_manifest.json","visual_rights.json"])]:
+              if not any((root/n).exists() for n in names): missing.append(label)
+          duration=integrity["duration_seconds"]
+          spec="PASS" if integrity["media_available"] and duration is not None and abs(duration-60.0)<=0.15 and v.get("width")==1920 and v.get("height")==1080 and integrity["full_decode"]=="PASS" else "REVIEW_REQUIRED"
+          notes=[
+            "# AI Infinity — ONE IDEA. INFINITE WORLDS. | Human Review Packet",
+            "",
+            "## Evidence source",
+            "Generated by the real AI Infinity application inside the current GitHub Actions Docker runtime via /infinity/divine/create; this is CI-hosted production, not a live Render deployment.",
+            "",
+            "## Technical target check",
+            f"- 60-second / 1920×1080 target: **{spec}**",
+            f"- Actual duration: {duration} seconds",
+            f"- Actual resolution: {v.get('width')}×{v.get('height')}",
+            f"- Video codec: {v.get('codec_name')}; audio codec: {a.get('codec_name')}",
+            f"- Full decode: {integrity['full_decode']}",
+            f"- Contact sheet: {'available' if integrity['contact_sheet_available'] else 'not available'}",
+            "",
+            "## Creative and rights review",
+            "- Human creative review: **PENDING — not yet reviewed or approved**",
+            "- Inspect the first 4 seconds, scene variation, story continuity, typography, pacing and emotional payoff.",
+            "- Verify voice provider from genuine production evidence; do not infer neural voice from a voice name.",
+            "- Check narration clarity, music balance, caption synchronization, loudness and ending.",
+            "- Verify sources, creator, source URL, licence, attribution and provenance for each external asset.",
+            "- If rights, provider, provenance, recovery or quality evidence is missing or uncertain, retain REVIEW_REQUIRED.",
+            "",
+            "## Missing items (automatically detected)",
+            *(["- None of the required media is missing from the basic review packet."] if not missing else [f"- Missing: {', '.join(missing)}"]),
+            "",
+            "## Files and integrity",
+            "integrity_manifest.json lists only files actually collected, with SHA-256 hashes, sizes and stream metadata.",
+            "",
+            "## Remaining release gates",
+            "- Live Render deployment remains blocked while the configured service is suspended.",
+            "- Durable object storage PUT→HEAD→GET→SHA and restart/fresh-instance recovery must be verified separately.",
+            "- Human/native-language creative review and rights acceptance remain open until an authorized reviewer completes them."
+          ]
+          (root/"human_review_packet.md").write_text("\n".join(notes)+"\n",encoding="utf-8")
+          print(json.dumps({"review_packet":str(root/"human_review_packet.md"),"integrity_manifest":str(root/"integrity_manifest.json"),"spec_gate":spec,"duration_seconds":duration,"resolution":[v.get("width"),v.get("height")],"missing":missing},indent=2))
+          PY
+          cd "$REVIEW" && zip -qr /tmp/AI_Infinity_ONE_IDEA_INFINITE_WORLDS_human_review.zip .
+          echo "Brand-film evidence collection completed; review gates are recorded in the packet."
       - name: Upload standalone production closure evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -402,6 +507,7 @@ jobs:
             /tmp/final-probe.json
             /tmp/final.mp4
             /tmp/thumbnail.jpg
+            /tmp/AI_Infinity_ONE_IDEA_INFINITE_WORLDS_human_review.zip
             /tmp/ai-infinity-brand-film-review/**
             /tmp/ai-infinity-real-smoke/**/*.json
             /tmp/ai-infinity-real-smoke/**/*.md
