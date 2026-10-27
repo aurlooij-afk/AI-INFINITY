@@ -726,6 +726,13 @@ def execute_bundled_operation(
                 except OSError:
                     return {"status": "preview_receipt_persist_failed", "executed": False, "truthful": True}
 
+            if is_write and allow_writes and not dry_run:
+                try:
+                    preview_path.unlink()
+                except FileNotFoundError:
+                    return {"status": "dry_run_required", "executed": False, "truthful": True}
+                except OSError:
+                    return {"status": "preview_receipt_consume_failed", "executed": False, "truthful": True}
             result, error = run(args)
             if error:
                 return {"status": error, "executed": False, "truthful": True}
