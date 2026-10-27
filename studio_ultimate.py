@@ -1206,6 +1206,15 @@ def creative_plan(req: Dict[str, Any], research: Dict[str, Any], model_fn: Optio
     brand_voice = str(req.get("brand_voice") or "")[:1000]
     visual_style = str(req.get("visual_style") or "premium editorial")[:500]
     call_to_action = str(req.get("call_to_action") or "")[:500]
+    # A user's explicit timecoded storyboard outranks both a model suggestion and
+    # generic fallback marketing copy. Preserve authored scene order, narration,
+    # transitions and exact ending whenever the brief provides those anchors.
+    timecoded_plan = _explicit_timed_storyboard_plan(
+        title=title, objective=objective, fmt=fmt, duration=duration,
+        audience=audience, tone=tone, language=language, topic=str(req.get("topic") or ""),
+    )
+    if timecoded_plan:
+        return timecoded_plan, "explicit-timecoded-user-brief"
     source_digest = []
     for s in research.get("sources", [])[:12]:
         if s.get("title"):
