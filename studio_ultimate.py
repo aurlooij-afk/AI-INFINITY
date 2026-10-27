@@ -1627,7 +1627,7 @@ def _explicit_timed_storyboard_plan(
         r"(?P<start>\d{1,4})\s*[–—-]\s*(?P<end>\d{1,4})\s*"
         r"(?:s|secs?|seconds?)\b\s*(?:[—: ]\s*)?"
         r"(?P<description>.*?)"
-        r"(?=(?:\s+\d{1,4}\s*[–—-]\s*\d{1,4}\s*(?:s|secs?|seconds?)\b)|$)",
+        r"(?=(?:\s+\*{0,2}\s*\d{1,4}\s*[–—-]\s*\d{1,4}\s*(?:s|secs?|seconds?)\b)|$)",
         re.I,
     )
     matches = list(pattern.finditer(story_objective))
