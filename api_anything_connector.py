@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 import ipaddress
 import math
 import selectors
@@ -779,3 +780,375 @@ def execute_bundled_read_only(
 ) -> dict[str, Any]:
     """Backwards-compatible entry point for read-only research operations."""
     return execute_bundled_operation(site_name, operation_name, parameters, allow_writes=False, dry_run=False)
+
+
+def _user_profile_env(root: Path, user_id: str) -> dict[str, str]:
+    """Persist learned specs and logins in a private, deterministic per-user API Anything home."""
+    identity = _clean_text(user_id, 256) or "anonymous"
+    key = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+    configured = os.getenv("AI_INFINITY_API_ANYTHING_DATA_DIR")
+    base = Path(configured).expanduser() if configured else (
+        Path(os.getenv("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity")).expanduser() / "api-anything"
+    )
+    base.mkdir(parents=True, mode=0o700, exist_ok=True)
+    profile = base.resolve() / key
+    profile.mkdir(mode=0o700, exist_ok=True)
+    try:
+        profile.chmod(0o700)
+    except OSError:
+        pass
+    home = profile / "home"
+    home.mkdir(mode=0o700, exist_ok=True)
+    return {
+        "PATH": os.getenv("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "HOME": str(home),
+        "API_ANYTHING_HOME": str(profile),
+        "TMPDIR": str(root),
+        "NODE_ENV": "production",
+    }
+
+
+def list_api_anything_operations(
+    site_name: str = "", limit: int = 100, *, user_id: str = "anonymous", include_writes: bool = True
+) -> dict[str, Any]:
+    """Discover bundled plus this user's saved operations, including read/write and tier metadata."""
+    executable = shutil.which("api-anything")
+    if not executable:
+        return {"status": "not_configured", "sites": [], "operations": [], "truthful": True}
+    requested_site = _clean_text(site_name, 64).lower()
+    if requested_site and not _SAFE_SITE_NAME.fullmatch(requested_site):
+        return {"status": "invalid_site", "sites": [], "operations": [], "truthful": True}
+    try:
+        safe_limit = max(1, min(200, int(limit or 100)))
+        timeout = max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))))
+        with tempfile.TemporaryDirectory(prefix="ai-infinity-api-catalog-") as temporary:
+            root = Path(temporary).resolve()
+            env = _user_profile_env(root, user_id)
+
+            def run(args: list[str]) -> tuple[Any | None, str | None]:
+                return _run_json(subprocess.run, executable, args, cwd=str(root), env=env, timeout=timeout)
+
+            site_rows, error = run(["sites"])
+            if error or not isinstance(site_rows, list):
+                return {"status": error or "invalid_catalog", "sites": [], "operations": [], "truthful": True}
+            sites = [
+                row for row in site_rows
+                if isinstance(row, dict) and row.get("source") in {"bundled", "user"}
+                and isinstance(row.get("name"), str) and _SAFE_SITE_NAME.fullmatch(row["name"])
+                and (not requested_site or row["name"] == requested_site)
+            ][:50]
+            operations: list[dict[str, Any]] = []
+            for site in sites:
+                payload, op_error = run(["ops", site["name"]])
+                rows = payload.get("operations") if isinstance(payload, dict) else None
+                if op_error or not isinstance(rows, list):
+                    continue
+                for operation in rows:
+                    if not isinstance(operation, dict) or operation.get("readOnly") not in (True, False):
+                        continue
+                    read_only = operation.get("readOnly") is True
+                    if not read_only and not include_writes:
+                        continue
+                    min_tier = operation.get("minTier", 1)
+                    name = operation.get("name")
+                    if type(min_tier) is not int or min_tier not in (1, 2, 3):
+                        continue
+                    if not isinstance(name, str) or not _SAFE_OPERATION_NAME.fullmatch(name):
+                        continue
+                    operations.append({
+                        "site": site["name"], "source": site["source"], "operation": name,
+                        "read_only": read_only, "write_capable": not read_only,
+                        "min_tier": min_tier,
+                        "parameters": sorted(_declared_parameter_names(operation)),
+                        "description": _clean_text(operation.get("summary") or operation.get("description") or "", 300),
+                        "notes": _clean_text(operation.get("notes") or "", 500),
+                        "transport": f"tier_{min_tier}_or_higher",
+                    })
+                    if len(operations) >= safe_limit:
+                        break
+                if len(operations) >= safe_limit:
+                    break
+            return {
+                "status": "ready" if operations else "empty",
+                "site_count": len(sites), "operation_count": len(operations),
+                "read_operation_count": sum(1 for op in operations if op["read_only"]),
+                "write_operation_count": sum(1 for op in operations if op["write_capable"]),
+                "sites": [row["name"] for row in sites], "operations": operations,
+                "executed": False, "upstream_commit": UPSTREAM_COMMIT,
+                "profile_scope": "user", "truthful": True,
+            }
+    except Exception as exc:
+        return {"status": "internal_error", "error_type": type(exc).__name__, "sites": [], "operations": [], "truthful": True}
+
+
+def execute_api_anything_operation(
+    site_name: str, operation_name: str, parameters: dict[str, Any] | None = None, *,
+    user_id: str = "anonymous", allow_writes: bool = False, max_tier: int = 3,
+    dry_run: bool = False, idempotency_key: str = "", again: bool = False,
+) -> dict[str, Any]:
+    """Run a bundled or learned API Anything operation with tier selection and write reporting."""
+    site_name = _clean_text(site_name, 64).lower()
+    operation_name = _clean_text(operation_name, 64)
+    if not _SAFE_SITE_NAME.fullmatch(site_name) or not _SAFE_OPERATION_NAME.fullmatch(operation_name):
+        return {"status": "invalid_operation", "executed": False, "truthful": True}
+    if type(max_tier) is not int or max_tier not in (1, 2, 3):
+        return {"status": "invalid_transport_tier", "executed": False, "truthful": True}
+    params = parameters if isinstance(parameters, dict) else {}
+    if len(params) > _MAX_GENERIC_PARAMS:
+        return {"status": "too_many_parameters", "executed": False, "truthful": True}
+    safe_params: dict[str, Any] = {}
+    for key, value in params.items():
+        if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", key):
+            return {"status": "invalid_parameter_name", "executed": False, "truthful": True}
+        if _SENSITIVE_OUTPUT_KEY.search(key):
+            return {"status": "sensitive_parameter_not_allowed", "executed": False, "truthful": True}
+        if isinstance(value, str):
+            if len(value) > MAX_QUERY_CHARS or chr(0) in value:
+                return {"status": "invalid_parameter_value", "executed": False, "truthful": True}
+            safe_params[key] = value
+        elif type(value) in (int, bool):
+            safe_params[key] = value
+        elif type(value) is float and math.isfinite(value):
+            safe_params[key] = value
+        else:
+            return {"status": "scalar_parameters_required", "executed": False, "truthful": True}
+    if len(json.dumps(safe_params, ensure_ascii=False)) > 4000:
+        return {"status": "parameters_too_large", "executed": False, "truthful": True}
+    executable = shutil.which("api-anything")
+    if not executable:
+        return {"status": "not_configured", "executed": False, "truthful": True}
+    if not _EXECUTION_GATE.acquire(timeout=0.5):
+        return {"status": "busy", "executed": False, "truthful": True}
+    started = time.monotonic()
+    try:
+        now = time.monotonic()
+        with _RATE_LOCK:
+            last = _GENERIC_COOLDOWNS.get(site_name)
+            if last is not None and now - last < MIN_SITE_INTERVAL_SECONDS:
+                return {"status": "rate_limited", "executed": False, "truthful": True}
+            _GENERIC_COOLDOWNS[site_name] = now
+        try:
+            timeout = max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))))
+        except (TypeError, ValueError, OverflowError):
+            return {"status": "invalid_configuration", "executed": False, "truthful": True}
+        with tempfile.TemporaryDirectory(prefix="ai-infinity-api-call-") as temporary:
+            root = Path(temporary).resolve()
+            env = _user_profile_env(root, user_id)
+
+            def run(args: list[str]) -> tuple[Any | None, str | None]:
+                return _run_json(subprocess.run, executable, args, cwd=str(root), env=env, timeout=timeout)
+
+            sites, error = run(["sites"])
+            if error:
+                return {"status": error, "executed": False, "truthful": True}
+            site = next(
+                (row for row in sites if isinstance(row, dict) and row.get("name") == site_name and row.get("source") in {"bundled", "user"}),
+                None,
+            ) if isinstance(sites, list) else None
+            if not site:
+                return {"status": "unknown_site_for_profile", "executed": False, "truthful": True}
+            catalog, error = run(["ops", site_name])
+            operations = catalog.get("operations") if isinstance(catalog, dict) else None
+            if error or not isinstance(operations, list):
+                return {"status": error or "invalid_operation_catalog", "executed": False, "truthful": True}
+            operation = next((row for row in operations if isinstance(row, dict) and row.get("name") == operation_name), None)
+            if not operation:
+                return {"status": "unknown_operation", "executed": False, "truthful": True}
+            read_only = operation.get("readOnly")
+            if read_only is True:
+                is_write = False
+            elif read_only is False:
+                is_write = True
+                if not allow_writes and not dry_run:
+                    return {
+                        "status": "write_confirmation_required", "executed": False,
+                        "site": site_name, "operation": operation_name, "write_capable": True,
+                        "required_confirmation": "Repeat this operation with api_anything_allow_writes=true after verifying the exact target and content.",
+                        "truthful": True,
+                    }
+            else:
+                return {"status": "operation_read_only_status_unknown", "executed": False, "truthful": True}
+            min_tier = operation.get("minTier", 1)
+            if type(min_tier) is not int or min_tier not in (1, 2, 3):
+                return {"status": "invalid_operation_transport_tier", "executed": False, "truthful": True}
+            if max_tier < min_tier:
+                return {"status": "transport_tier_too_low", "executed": False, "min_tier": min_tier, "max_tier": max_tier, "truthful": True}
+            declared = _declared_parameter_names(operation)
+            unknown = sorted(set(safe_params) - declared)
+            if unknown:
+                return {
+                    "status": "undeclared_parameters", "executed": False,
+                    "allowed_parameters": sorted(declared), "rejected_parameters": unknown[:12], "truthful": True,
+                }
+            if not declared and safe_params:
+                return {"status": "parameter_schema_unavailable", "executed": False, "truthful": True}
+            args = [
+                "call", site_name, operation_name, "--json",
+                json.dumps(safe_params, ensure_ascii=False, separators=(",", ":")),
+                "--max-tier", str(max_tier),
+            ]
+            if is_write:
+                args.append("--allow-writes")
+            if dry_run:
+                args.append("--dry")
+            if again:
+                args.append("--again")
+            if idempotency_key:
+                key = _clean_text(idempotency_key, 128)
+                if not re.fullmatch(r"[A-Za-z0-9_.:-]{8,128}", key):
+                    return {"status": "invalid_idempotency_key", "executed": False, "truthful": True}
+                args.extend(["--idempotency-key", key])
+            result, error = run(args)
+            if error:
+                return {"status": error, "executed": False, "truthful": True}
+            if not isinstance(result, dict):
+                return {"status": "invalid_result_shape", "executed": False, "truthful": True}
+            safe_result = _safe_public_data(result)
+            if dry_run:
+                return {
+                    "status": "dry_run_ready" if result.get("ok") is True else "dry_run_failed",
+                    "provider": "api-anything", "site": site_name, "operation": operation_name,
+                    "read_only": not is_write, "write_capable": is_write, "dry_run": True,
+                    "request_preview": _safe_public_data(result.get("request") or result.get("preview") or result.get("data")),
+                    "executed": False, "truthful": True,
+                }
+            if result.get("ok") is not True:
+                write_outcome = _clean_text(result.get("write"), 40) if is_write else None
+                return {
+                    "status": "operation_failed", "provider": "api-anything",
+                    "site": site_name, "operation": operation_name,
+                    "read_only": not is_write, "write_capable": is_write,
+                    "error_class": _clean_text(result.get("class"), 60),
+                    "reason": _clean_text(result.get("reason"), 300),
+                    "write_outcome": write_outcome,
+                    "retry": _clean_text(result.get("retry"), 40),
+                    "executed": is_write and write_outcome in {"accepted", "may_have_applied", "applied"},
+                    "result": safe_result, "truthful": True,
+                }
+            returned_tier = result.get("tier")
+            if type(returned_tier) is not int or returned_tier < min_tier or returned_tier > max_tier:
+                return {"status": "unexpected_transport_tier", "executed": False, "truthful": True}
+            data = _safe_public_data(result.get("data"))
+            encoded = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+            if len(encoded) > 50000:
+                data = encoded[:50000] + "…[truncated]"
+            write_outcome = _clean_text(result.get("write"), 40) if is_write else None
+            status_name = (
+                "completed" if not is_write or write_outcome == "applied"
+                else "write_accepted_not_independently_verified" if write_outcome == "accepted"
+                else "write_outcome_ambiguous_check_target_do_not_retry" if write_outcome == "may_have_applied"
+                else "write_not_applied" if write_outcome == "not_applied"
+                else "write_acknowledgement_unverified"
+            )
+            return {
+                "status": status_name, "provider": "api-anything",
+                "site": site_name, "operation": operation_name, "source": site.get("source"),
+                "read_only": not is_write, "write_capable": is_write, "write_outcome": write_outcome,
+                "transport_tier": returned_tier, "result": data,
+                "parameters_sha256": hashlib.sha256(
+                    json.dumps(safe_params, sort_keys=True, ensure_ascii=False).encode("utf-8")
+                ).hexdigest(),
+                "latency_ms": round((time.monotonic() - started) * 1000, 2),
+                "upstream_commit": UPSTREAM_COMMIT, "executed": True, "truthful": True,
+            }
+    except Exception as exc:
+        return {"status": "internal_error", "error_type": type(exc).__name__, "executed": False, "truthful": True}
+    finally:
+        _EXECUTION_GATE.release()
+
+
+def learn_api_anything_operation(
+    site_name: str, operation_name: str, trigger_url: str,
+    example: dict[str, Any], example2: dict[str, Any], *,
+    user_id: str = "anonymous", write: bool = False,
+    match: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Learn a site operation from two distinct examples; write learning intercepts/aborts writes."""
+    site_name = _clean_text(site_name, 64).lower()
+    operation_name = _clean_text(operation_name, 64)
+    if not _SAFE_SITE_NAME.fullmatch(site_name) or not _SAFE_OPERATION_NAME.fullmatch(operation_name):
+        return {"status": "invalid_operation", "executed": False, "truthful": True}
+    trigger_url = _clean_text(trigger_url, 1200)
+    parsed = urlparse(trigger_url)
+    host = (parsed.hostname or "").rstrip(".").lower()
+    if (
+        parsed.scheme != "https" or not host or parsed.username or parsed.password
+        or (parsed.port not in (None, 443))
+        or host in {"localhost", "localhost.localdomain"}
+        or host.endswith((".local", ".internal", ".localhost", ".test", ".invalid"))
+    ):
+        return {"status": "public_https_url_required", "executed": False, "truthful": True}
+    try:
+        address = ipaddress.ip_address(host)
+        if not address.is_global:
+            return {"status": "public_https_url_required", "executed": False, "truthful": True}
+    except ValueError:
+        pass
+    if not isinstance(example, dict) or not isinstance(example2, dict) or not example or not example2:
+        return {"status": "two_examples_required", "executed": False, "truthful": True}
+    if set(example) != set(example2):
+        return {"status": "example_parameters_must_match", "executed": False, "truthful": True}
+    if set(example.items()) == set(example2.items()):
+        return {"status": "examples_must_differ", "executed": False, "truthful": True}
+    def validate_example(row: dict[str, Any]) -> dict[str, str] | None:
+        safe: dict[str, str] = {}
+        for key, value in row.items():
+            if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", key):
+                return None
+            if not isinstance(value, (str, int, float, bool)) or isinstance(value, str) and (len(value) > MAX_QUERY_CHARS or chr(0) in value):
+                return None
+            safe[key] = str(value)
+        return safe
+    first = validate_example(example)
+    second = validate_example(example2)
+    if first is None or second is None:
+        return {"status": "invalid_example", "executed": False, "truthful": True}
+    if not all("{" + key + "}" in trigger_url for key in first):
+        return {"status": "trigger_must_include_each_parameter_placeholder", "executed": False, "truthful": True}
+    safe_match = match if isinstance(match, dict) else {}
+    if any(key not in {"method", "host", "path", "operationName"} for key in safe_match):
+        return {"status": "invalid_match_fields", "executed": False, "truthful": True}
+    if not _EXECUTION_GATE.acquire(timeout=0.5):
+        return {"status": "busy", "executed": False, "truthful": True}
+    try:
+        executable = shutil.which("api-anything")
+        if not executable:
+            return {"status": "not_configured", "executed": False, "truthful": True}
+        try:
+            timeout = max(3, min(60, int(os.getenv("AI_INFINITY_API_ANYTHING_LEARN_TIMEOUT_SECONDS", "45"))))
+        except (TypeError, ValueError, OverflowError):
+            return {"status": "invalid_configuration", "executed": False, "truthful": True}
+        with tempfile.TemporaryDirectory(prefix="ai-infinity-api-learn-") as temporary:
+            root = Path(temporary).resolve()
+            env = _user_profile_env(root, user_id)
+            args = ["add", site_name, operation_name, "--trigger", trigger_url]
+            for key, value in first.items():
+                args.extend(["--example", f"{key}={value}"])
+            for key, value in second.items():
+                args.extend(["--example2", f"{key}={value}"])
+            for key, value in safe_match.items():
+                if not isinstance(value, str) or len(value) > 180 or chr(0) in value:
+                    return {"status": "invalid_match_value", "executed": False, "truthful": True}
+                args.extend(["--match", f"{key}={value}"])
+            if write:
+                args.append("--write")
+            result, error = _run_json(subprocess.run, executable, args, cwd=str(root), env=env, timeout=timeout)
+            if error:
+                return {"status": error, "executed": False, "truthful": True}
+            if not isinstance(result, dict):
+                return {"status": "invalid_learning_result", "executed": False, "truthful": True}
+            ok = result.get("ok") is True or result.get("status") in {"ready", "learned", "completed"}
+            return {
+                "status": "learned" if ok else "learning_failed",
+                "site": site_name, "operation": operation_name,
+                "write_operation": bool(write),
+                "learning_aborts_write_requests": bool(write),
+                "result": _safe_public_data(result),
+                "executed": False,
+                "next_action": "Inspect the saved operation, verify both examples, and dry-run a write before its first execution." if write else "Inspect and verify the learned operation before relying on it.",
+                "truthful": True,
+            }
+    except Exception as exc:
+        return {"status": "internal_error", "error_type": type(exc).__name__, "executed": False, "truthful": True}
+    finally:
+        _EXECUTION_GATE.release()
