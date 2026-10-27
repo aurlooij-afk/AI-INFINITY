@@ -854,12 +854,15 @@ def test_general_api_anything_executor_rejects_write_without_allowance_and_suppo
                 "parameters": [{"name": "recipient"}, {"name": "message"}],
             }]}, None
         if args[0:3] == ["call", "linkedin-workspace", "sendMessage"]:
-            return {"ok": True, "tier": 3, "data": {"preview": "redacted target"}, "write": "not_sent"}, None
+            if "--dry" in args:
+                return {"ok": True, "dry": True, "request": {"url": "https://example.com/message"}}, None
+            return {"ok": True, "tier": 3, "data": {"queued": True}, "write": "accepted"}, None
         raise AssertionError(f"unexpected CLI request: {args}")
 
     monkeypatch.setattr(connector, "_run_json", fake_run)
+    params = {"recipient": "reviewer", "message": "Hello"}
     refused = connector.execute_api_anything_operation(
-        "linkedin-workspace", "sendMessage", {"recipient": "reviewer", "message": "Hello"},
+        "linkedin-workspace", "sendMessage", params,
         user_id="user-a", allow_writes=False, max_tier=3,
     )
     assert refused["status"] == "write_confirmation_required"
@@ -867,16 +870,37 @@ def test_general_api_anything_executor_rejects_write_without_allowance_and_suppo
     assert len(calls) == 2
 
     connector._GENERIC_COOLDOWNS.clear()
+    no_preview = connector.execute_api_anything_operation(
+        "linkedin-workspace", "sendMessage", params,
+        user_id="user-a", allow_writes=True, max_tier=3,
+    )
+    assert no_preview["status"] == "dry_run_required"
+    assert no_preview["executed"] is False
+    assert len(calls) == 4
+
+    connector._GENERIC_COOLDOWNS.clear()
     preview = connector.execute_api_anything_operation(
-        "linkedin-workspace", "sendMessage", {"recipient": "reviewer", "message": "Hello"},
+        "linkedin-workspace", "sendMessage", params,
         user_id="user-a", allow_writes=True, max_tier=3, dry_run=True,
     )
     assert preview["status"] == "dry_run_ready"
     assert preview["executed"] is False
+    assert preview["preview_receipt_saved"] is True
     call_args = calls[-1][0]
     assert "--allow-writes" in call_args
     assert "--dry" in call_args
     assert call_args[call_args.index("--max-tier") + 1] == "3"
+
+    connector._GENERIC_COOLDOWNS.clear()
+    executed = connector.execute_api_anything_operation(
+        "linkedin-workspace", "sendMessage", params,
+        user_id="user-a", allow_writes=True, max_tier=3,
+    )
+    assert executed["status"] == "write_accepted_not_independently_verified"
+    assert executed["executed"] is True
+    final_args = calls[-1][0]
+    assert "--allow-writes" in final_args
+    assert "--dry" not in final_args
 
 
 def test_general_api_anything_executor_executes_scoped_user_read_with_selected_tier(monkeypatch, tmp_path):
