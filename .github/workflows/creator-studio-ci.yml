@@ -3,7 +3,7 @@ name: Creator Studio Build Guard
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "feat/api-anything-research-connector"]
     paths:
       - "*.py"
       - "ai_infinity/**"
@@ -57,7 +57,7 @@ on:
       - "bridge-requirements.txt"
       - ".github/workflows/creator-studio-ci.yml"
 concurrency:
-  group: ai-infinity-creator-studio-main
+  group: ai-infinity-creator-studio-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
