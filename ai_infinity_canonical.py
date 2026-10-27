@@ -740,7 +740,7 @@ def classify_command(command, raw=None):
 
     public_api_intent = bool(
         re.search(r"\b(?:public|free|open)\s+(?:web\s+)?apis?\b|\bapi anything\b", low)
-        and re.search(r"\b(use|search|find|look up|query|fetch|retrieve|call|discover|catalog|run)\b", low)
+        and re.search(r"\b(use|search|find|look up|query|fetch|retrieve|call|discover|catalog|run|show|list|inspect|enumerate)\b", low)
     )
     if explicit == "public_api" or public_api_intent:
         return {
