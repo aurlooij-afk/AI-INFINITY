@@ -484,3 +484,83 @@ def test_explicit_site_operation_syntax_routes_to_verified_public_api_without_pr
 
     assert result["route"] == "public_api"
     assert "verified" in result["reason"].lower()
+
+
+def test_api_anything_write_requires_explicit_allowance_and_returns_confirmation_state(monkeypatch):
+    import api_anything_connector as connector
+
+    calls = []
+    connector_fake = SimpleNamespace(
+        execute_bundled_read_only=lambda *args: {
+            "status": "operation_not_verified_read_only", "executed": False, "truthful": True,
+        },
+        execute_bundled_operation=lambda site, operation, params, allow_writes=False, dry_run=False: (
+            calls.append((site, operation, params, allow_writes, dry_run)) or {
+                "status": "write_confirmation_required", "executed": False,
+                "read_only": False, "write": True, "truthful": True,
+            }
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "api_anything_connector", connector_fake)
+
+    result = canonical.dispatch_command(
+        "Run site=demo-site operation=sendMessage recipient=test-user message=hello",
+        "user-1", {},
+    )
+
+    assert result["route"] == "public_api"
+    assert result["status"] == "write_confirmation_required"
+    assert result["executed"] is False
+    assert result["write"] is True
+    assert calls == [("demo-site", "sendMessage", {"recipient": "test-user", "message": "hello"}, False, False)]
+
+
+def test_api_anything_explicit_allow_writes_reaches_write_executor(monkeypatch):
+    calls = []
+    connector_fake = SimpleNamespace(
+        execute_bundled_operation=lambda site, operation, params, allow_writes=False, dry_run=False: (
+            calls.append((site, operation, params, allow_writes, dry_run)) or {
+                "status": "write_accepted_not_independently_verified",
+                "executed": True, "read_only": False, "write": True, "truthful": True,
+            }
+        ),
+        execute_bundled_read_only=lambda *args: (_ for _ in ()).throw(
+            AssertionError("explicit write must use the generalized operation executor")
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "api_anything_connector", connector_fake)
+
+    result = canonical.dispatch_command(
+        "Run site=demo-site operation=sendMessage recipient=test-user message=hello --allow-writes",
+        "user-1", {},
+    )
+
+    assert result["status"] == "write_accepted_not_independently_verified"
+    assert result["executed"] is True
+    assert result["write"] is True
+    assert calls == [("demo-site", "sendMessage", {"recipient": "test-user", "message": "hello"}, True, False)]
+
+
+def test_api_anything_can_list_read_and_write_capabilities_separately(monkeypatch):
+    captured = []
+    connector_fake = SimpleNamespace(
+        list_bundled_operations=lambda site_name="", limit=100, include_writes=True: (
+            captured.append((site_name, limit, include_writes)) or {
+                "status": "ready", "sites": ["demo-site"], "operations": [
+                    {"site": "demo-site", "operation": "search", "read_only": True},
+                    {"site": "demo-site", "operation": "sendMessage", "read_only": False, "write": True},
+                ], "executed": False, "truthful": True,
+            }
+        ),
+        list_bundled_read_only_operations=lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("write catalog was requested explicitly")
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "api_anything_connector", connector_fake)
+
+    result = canonical.dispatch_command("Show API Anything write operations", "user-1", {})
+
+    assert result["status"] == "completed"
+    assert result["executed"] is False
+    assert any(operation.get("write") for operation in result["operations"])
+    assert captured == [("", 100, True)]
