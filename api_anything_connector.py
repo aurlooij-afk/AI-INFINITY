@@ -547,6 +547,11 @@ def list_bundled_read_only_operations(site_name: str = "", limit: int = 100) -> 
                 for operation in rows:
                     if not isinstance(operation, dict) or operation.get("readOnly") is not True:
                         continue
+                    # Do not offer operations requiring browser/session fallback in the
+                    # production command path; tier-one is the supported transport.
+                    min_tier = operation.get("minTier", 1)
+                    if type(min_tier) is not int or min_tier != 1:
+                        continue
                     name = operation.get("name")
                     if not isinstance(name, str) or not _SAFE_OPERATION_NAME.fullmatch(name):
                         continue
@@ -651,6 +656,9 @@ def execute_bundled_read_only(
             )
             if not operation or operation.get("readOnly") is not True:
                 return {"status": "operation_not_verified_read_only", "executed": False, "truthful": True}
+            min_tier = operation.get("minTier", 1)
+            if type(min_tier) is not int or min_tier != 1:
+                return {"status": "tier_one_transport_required", "executed": False, "truthful": True}
             declared = _declared_parameter_names(operation)
             unknown = sorted(set(safe_params) - declared)
             if unknown:
@@ -671,6 +679,8 @@ def execute_bundled_read_only(
                 return {"status": error, "executed": False, "truthful": True}
             if not isinstance(result, dict) or result.get("ok") is not True:
                 return {"status": "operation_failed", "executed": False, "truthful": True}
+            if result.get("site") != site_name or result.get("op") != operation_name:
+                return {"status": "result_identity_mismatch", "executed": False, "truthful": True}
             if result.get("tier") != 1:
                 return {"status": "unexpected_transport_tier", "executed": False, "truthful": True}
             data = _safe_public_data(result.get("data"))
