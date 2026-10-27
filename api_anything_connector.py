@@ -616,19 +616,13 @@ def execute_bundled_operation(
     for key, value in params.items():
         if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", key):
             return {"status": "invalid_parameter_name", "executed": False, "truthful": True}
-        if _SENSITIVE_OUTPUT_KEY.search(key):
-            return {"status": "sensitive_parameter_not_allowed", "executed": False, "truthful": True}
-        if isinstance(value, str):
-            if len(value) > MAX_QUERY_CHARS or chr(0) in value:
-                return {"status": "invalid_parameter_value", "executed": False, "truthful": True}
-            safe_params[key] = value
-        elif type(value) in (int, bool):
-            safe_params[key] = value
-        elif type(value) is float and math.isfinite(value):
-            safe_params[key] = value
-        else:
-            return {"status": "scalar_parameters_required", "executed": False, "truthful": True}
-    if len(json.dumps(safe_params, ensure_ascii=False)) > 4000:
+        try:
+            # Declared API inputs may legitimately include an API key/token or nested JSON.
+            # Values are sent only to the selected verified operation and never echoed here.
+            safe_params[key] = _validate_api_argument(value)
+        except ValueError:
+            return {"status": "invalid_parameter_value", "executed": False, "truthful": True}
+    if len(json.dumps(safe_params, ensure_ascii=False, allow_nan=False)) > 12000:
         return {"status": "parameters_too_large", "executed": False, "truthful": True}
     executable = shutil.which("api-anything")
     if not executable:
@@ -878,6 +872,38 @@ def list_api_anything_operations(
             }
     except Exception as exc:
         return {"status": "internal_error", "error_type": type(exc).__name__, "sites": [], "operations": [], "truthful": True}
+
+
+def _validate_api_argument(value: Any, depth: int = 0) -> Any:
+    """Accept JSON parameters needed by real APIs while bounding shape and rejecting prototype keys."""
+    if depth > 6:
+        raise ValueError("parameter nesting too deep")
+    if value is None or type(value) in (bool, int):
+        return value
+    if isinstance(value, str):
+        if len(value) > MAX_QUERY_CHARS or chr(0) in value:
+            raise ValueError("invalid string argument")
+        return value
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise ValueError("non-finite numeric argument")
+        return value
+    if isinstance(value, list):
+        if len(value) > 100:
+            raise ValueError("array argument too large")
+        return [_validate_api_argument(item, depth + 1) for item in value]
+    if isinstance(value, dict):
+        if len(value) > 100:
+            raise ValueError("object argument too large")
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", key):
+                raise ValueError("invalid object key")
+            if key in {"__proto__", "prototype", "constructor"}:
+                raise ValueError("unsafe object key")
+            out[key] = _validate_api_argument(item, depth + 1)
+        return out
+    raise ValueError("argument must be JSON-compatible")
 
 
 def _write_preview_key(site_name: str, operation_name: str, parameters: dict[str, Any], max_tier: int) -> str:
