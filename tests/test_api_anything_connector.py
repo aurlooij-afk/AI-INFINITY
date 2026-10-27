@@ -1039,3 +1039,55 @@ def test_status_distinguishes_empty_bundled_writes_from_supported_user_write_exe
     assert state["browser_learning_supported"] is True
     assert state["browser_learning_runtime_verified"] is False
     assert state["durable_profile_storage_verified"] is False
+
+
+def test_learning_supports_interactive_steps_and_soft_navigation(monkeypatch, tmp_path):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
+    calls = []
+
+    def fake_run(runner, executable, args, *, cwd, env, timeout):
+        calls.append((list(args), dict(env)))
+        return {"ok": True, "status": "learned", "preview": {"operation": "search"}}, None
+
+    monkeypatch.setattr(connector, "_run_json", fake_run)
+    result = connector.learn_api_anything_operation(
+        "example.com", "search", "https://example.com/search",
+        {"q": "cats"}, {"q": "dogs"},
+        user_id="step-user",
+        steps=[
+            {"action": "fill", "selector": "#search", "value": "{q}"},
+            {"action": "press", "selector": "#search", "value": "Enter"},
+        ],
+        soft_from="https://example.com/",
+        description="Search records through the website UI",
+    )
+
+    assert result["status"] == "learned"
+    assert result["has_browser_steps"] is True
+    assert result["has_soft_navigation"] is True
+    args = calls[-1][0]
+    assert "--steps" in args
+    step_json = json.loads(args[args.index("--steps") + 1])
+    assert step_json[0]["value"] == "{q}"
+    assert "--soft-from" in args
+    assert args[args.index("--soft-from") + 1] == "https://example.com/"
+    assert "--description" in args
+
+
+def test_learning_rejects_private_browser_goto_step(monkeypatch, tmp_path):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
+    calls = []
+    monkeypatch.setattr(
+        connector, "_run_json",
+        lambda *args, **kwargs: (calls.append(args) or ({"ok": True, "status": "learned"}, None)),
+    )
+    result = connector.learn_api_anything_operation(
+        "example.com", "search", "https://example.com/search?q={q}",
+        {"q": "cats"}, {"q": "dogs"},
+        user_id="step-user",
+        steps=[{"action": "goto", "value": "http://127.0.0.1/private"}],
+    )
+    assert result["status"] == "public_https_url_required"
+    assert calls == []
