@@ -599,6 +599,10 @@ def list_bundled_operations(site_name: str = "", limit: int = 100, include_write
 def list_bundled_read_only_operations(site_name: str = "", limit: int = 100) -> dict[str, Any]:
     """Backwards-compatible read-only catalog for research tools."""
     result = list_bundled_operations(site_name=site_name, limit=limit, include_writes=False)
+    result["operations"] = [
+        {key: value for key, value in operation.items() if key not in {"write", "execution_mode"}}
+        for operation in result.get("operations", [])
+    ]
     result["generic_bundled_read_only_operations"] = True
     return result
 
@@ -784,8 +788,17 @@ def execute_bundled_read_only(
     operation_name: str,
     parameters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Backwards-compatible entry point for read-only research operations."""
-    return execute_bundled_operation(site_name, operation_name, parameters, allow_writes=False, dry_run=False)
+    """Backwards-compatible entry point that never executes write operations."""
+    result = execute_bundled_operation(
+        site_name, operation_name, parameters, allow_writes=False, dry_run=False,
+    )
+    if result.get("status") == "write_confirmation_required":
+        return {
+            "status": "operation_not_verified_read_only",
+            "site": site_name, "operation": operation_name,
+            "executed": False, "truthful": True,
+        }
+    return result
 
 
 def _user_profile_env(root: Path, user_id: str) -> dict[str, str]:
