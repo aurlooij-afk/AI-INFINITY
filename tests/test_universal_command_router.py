@@ -632,14 +632,13 @@ def test_api_anything_write_requires_preview_and_reports_unknown_write_state(mon
             "write_capable": True, "truthful": True,
         },
     )
-    import sys
-    sys.modules["api_anything_connector"] = connector_fake
+    monkeypatch.setitem(sys.modules, "api_anything_connector", connector_fake)
     result = canonical.dispatch_command(
         "Send message using API Anything site=social-site operation=sendMessage recipient=reviewer message=hello --allow-writes",
         "user-write-4", {},
     )
     assert result["route"] == "public_api"
     assert result["executed"] is False
-    assert result["status"] == "degraded"
+    assert result["status"] == "dry_run_required"
     assert result["write"] is True
 
