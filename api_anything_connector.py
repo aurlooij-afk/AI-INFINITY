@@ -35,6 +35,8 @@ def status() -> dict[str, Any]:
         "available": bool(executable),
         "convenience_search_operations": ["youtube.search", "hacker-news.search", "goodreads.searchBooks", "rottentomatoes.searchMovies", "amazon.search"],
         "generic_bundled_read_only_operations": True,
+        "generic_bundled_write_operations": True,
+        "write_execution_requires_explicit_allowance": True,
         "mode": "dynamic_bundled_read_only_plain_http",
         "browser_learning_enabled": False,
         "upstream_commit": UPSTREAM_COMMIT,
@@ -173,7 +175,7 @@ def _bundled_search(
     if not executable:
         return {"status": "not_configured", "items": [], "truthful": True}
     try:
-        timeout = max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))))
+        timeout = max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))))))
         safe_limit = max(1, min(10, int(limit or 10)))
     except (TypeError, ValueError, OverflowError):
         return {"status": "invalid_configuration", "items": [], "truthful": True}
