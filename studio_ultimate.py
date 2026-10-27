@@ -5137,7 +5137,7 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
         "original_or_public_visual_sources": all(str(x.get("source") or "") != "CI test fixture (not production)" for x in (assets or [])),
         "no_fake_slideshow_flag": True,
     }
-    passed = all(bool(x) for k, x in checks.items() if k != "full_hd")
+    passed = all(bool(x) for k, x in checks.items() if k != "full_hd" or not FAST_MODE)
     return {"passed": passed, "checks": checks, "duration_seconds": round(duration, 2), "resolution": [int(v.get("width") or 0), int(v.get("height") or 0)], "video_codec": v.get("codec_name"), "audio_codec": a.get("codec_name"), "file_size_bytes": master.stat().st_size if master.exists() else 0}
 
 
@@ -6962,7 +6962,19 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             rights_manifest_ok = False
         qc.setdefault("checks", {})["production_manifest"] = production_manifest_ok
         qc.setdefault("checks", {})["rights_manifest"] = rights_manifest_ok
-        qc["passed"] = all(bool(v) for k, v in qc["checks"].items() if k not in {"full_hd", "embedded_subtitles", "fallback_visual_used"})
+        quality_preset = str(req.get("quality_preset") or "balanced").strip().lower()
+        requires_full_hd = (
+            not FAST_MODE
+            or quality_preset in {"high", "professional", "cinematic", "ultra"}
+            or bool(req.get("require_full_hd"))
+        )
+        ignored_quality_checks = {"embedded_subtitles", "fallback_visual_used"}
+        if not requires_full_hd:
+            ignored_quality_checks.add("full_hd")
+        qc["passed"] = all(
+            bool(value) for key, value in qc["checks"].items()
+            if key not in ignored_quality_checks
+        )
 
         feature_report = _feature_execution_report(project_id, project["user_id"], [str(x) for x in (req.get("features") or [])], outdir, qc=qc, req=req)
         metadata = {
