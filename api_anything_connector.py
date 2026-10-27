@@ -432,3 +432,256 @@ def search_candidates(query: str, limit: int = 10) -> dict[str, Any]:
         "operations": statuses,
         "truthful": True,
     }
+
+
+# Generic bundled-operation access widens capability beyond a five-operation demo.
+# This is deliberately capability-open but execution-closed: only operations
+# advertised as bundled + readOnly by the pinned CLI are callable, with declared
+# scalar inputs, isolated credentials, and plain-HTTP tier 1 transport.
+_MAX_GENERIC_PARAMS = 12
+_MAX_GENERIC_RESULT_ITEMS = 20
+_SENSITIVE_OUTPUT_KEY = re.compile(r"(?:password|cookie|authorization|token|secret|api[_-]?key|session)", re.I)
+_SAFE_SITE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
+_SAFE_OPERATION_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}\Z")
+_GENERIC_COOLDOWNS: dict[str, float] = {}
+
+
+def _isolated_cli_env(root: Path) -> dict[str, str]:
+    home = root / "home"
+    api_home = root / "api-anything"
+    home.mkdir(mode=0o700, exist_ok=True)
+    api_home.mkdir(mode=0o700, exist_ok=True)
+    # Do not inherit application secrets, browser credentials, proxy settings,
+    # or caller-controlled Node options into the third-party process.
+    return {
+        "PATH": os.getenv("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "HOME": str(home),
+        "API_ANYTHING_HOME": str(api_home),
+        "TMPDIR": str(root),
+        "NODE_ENV": "production",
+    }
+
+
+def _declared_parameter_names(operation: dict[str, Any]) -> set[str]:
+    schema: Any = None
+    for field in ("parameters", "params", "inputs", "arguments"):
+        if field in operation:
+            schema = operation[field]
+            break
+    if isinstance(schema, dict):
+        props = schema.get("properties")
+        if isinstance(props, dict):
+            return {str(name) for name in props if re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", str(name))}
+        return {str(name) for name in schema if re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", str(name))}
+    if isinstance(schema, list):
+        names = set()
+        for row in schema:
+            if isinstance(row, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", row):
+                names.add(row)
+            elif isinstance(row, dict):
+                name = row.get("name") or row.get("key") or row.get("parameter")
+                if isinstance(name, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", name):
+                    names.add(name)
+        return names
+    return set()
+
+
+def _safe_public_data(value: Any, depth: int = 0) -> Any:
+    """Bound generic upstream data before it enters the UI, event logs, or prompt context."""
+    if depth >= 6:
+        return "[depth limit]"
+    if isinstance(value, str):
+        return value.replace("\\x00", "")[:2000]
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, list):
+        return [_safe_public_data(item, depth + 1) for item in value[:_MAX_GENERIC_RESULT_ITEMS]]
+    if isinstance(value, dict):
+        out = {}
+        for key, item in list(value.items())[:80]:
+            label = str(key)[:100]
+            out[label] = "[redacted]" if _SENSITIVE_OUTPUT_KEY.search(label) else _safe_public_data(item, depth + 1)
+        return out
+    return _clean_text(value, 500)
+
+
+def list_bundled_read_only_operations(site_name: str = "", limit: int = 100) -> dict[str, Any]:
+    """Discover current pinned, bundled read-only operations without executing them."""
+    executable = shutil.which("api-anything")
+    if not executable:
+        return {"status": "not_configured", "sites": [], "operations": [], "truthful": True}
+    requested_site = _clean_text(site_name, 64).lower()
+    if requested_site and not _SAFE_SITE_NAME.fullmatch(requested_site):
+        return {"status": "invalid_site", "sites": [], "operations": [], "truthful": True}
+    safe_limit = max(1, min(100, int(limit or 100)))
+    try:
+        timeout = max(3, min(10, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))))
+        with tempfile.TemporaryDirectory(prefix="ai-infinity-api-catalog-") as temporary:
+            root = Path(temporary).resolve()
+            env = _isolated_cli_env(root)
+
+            def run(args: list[str]) -> tuple[Any | None, str | None]:
+                return _run_json(subprocess.run, executable, args, cwd=str(root), env=env, timeout=timeout)
+
+            site_rows, error = run(["sites"])
+            if error or not isinstance(site_rows, list):
+                return {"status": error or "invalid_catalog", "sites": [], "operations": [], "truthful": True}
+            sites = [
+                row for row in site_rows
+                if isinstance(row, dict) and row.get("source") == "bundled"
+                and isinstance(row.get("name"), str) and _SAFE_SITE_NAME.fullmatch(row["name"])
+                and (not requested_site or row["name"] == requested_site)
+            ][:30]
+            operations: list[dict[str, Any]] = []
+            for site in sites:
+                payload, op_error = run(["ops", site["name"]])
+                rows = payload.get("operations") if isinstance(payload, dict) else None
+                if op_error or not isinstance(rows, list):
+                    continue
+                for operation in rows:
+                    if not isinstance(operation, dict) or operation.get("readOnly") is not True:
+                        continue
+                    name = operation.get("name")
+                    if not isinstance(name, str) or not _SAFE_OPERATION_NAME.fullmatch(name):
+                        continue
+                    operations.append({
+                        "site": site["name"],
+                        "operation": name,
+                        "read_only": True,
+                        "parameters": sorted(_declared_parameter_names(operation)),
+                        "description": _clean_text(operation.get("summary") or operation.get("description") or "", 300),
+                        "notes": _clean_text(operation.get("notes") or "", 500),
+                        "transport": "tier_1_plain_http_only",
+                    })
+                    if len(operations) >= safe_limit:
+                        break
+                if len(operations) >= safe_limit:
+                    break
+            return {
+                "status": "ready" if operations else "empty",
+                "site_count": len(sites),
+                "operation_count": len(operations),
+                "sites": [row["name"] for row in sites],
+                "operations": operations,
+                "executed": False,
+                "upstream_commit": UPSTREAM_COMMIT,
+                "truthful": True,
+            }
+    except Exception as exc:
+        return {"status": "internal_error", "error_type": type(exc).__name__, "sites": [], "operations": [], "truthful": True}
+
+
+def execute_bundled_read_only(
+    site_name: str,
+    operation_name: str,
+    parameters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Execute a selected bundled operation when its current spec explicitly says readOnly."""
+    site_name = _clean_text(site_name, 64).lower()
+    operation_name = _clean_text(operation_name, 64)
+    if not _SAFE_SITE_NAME.fullmatch(site_name) or not _SAFE_OPERATION_NAME.fullmatch(operation_name):
+        return {"status": "invalid_operation", "executed": False, "truthful": True}
+    params = parameters if isinstance(parameters, dict) else {}
+    if len(params) > _MAX_GENERIC_PARAMS:
+        return {"status": "too_many_parameters", "executed": False, "truthful": True}
+    safe_params: dict[str, Any] = {}
+    for key, value in params.items():
+        if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", key):
+            return {"status": "invalid_parameter_name", "executed": False, "truthful": True}
+        if _SENSITIVE_OUTPUT_KEY.search(key):
+            return {"status": "sensitive_parameter_not_allowed", "executed": False, "truthful": True}
+        if isinstance(value, str):
+            if len(value) > MAX_QUERY_CHARS or "\\x00" in value:
+                return {"status": "invalid_parameter_value", "executed": False, "truthful": True}
+            safe_params[key] = value
+        elif isinstance(value, (int, float, bool)) and not isinstance(value, complex):
+            safe_params[key] = value
+        else:
+            return {"status": "scalar_parameters_required", "executed": False, "truthful": True}
+    if len(json.dumps(safe_params, ensure_ascii=False)) > 4000:
+        return {"status": "parameters_too_large", "executed": False, "truthful": True}
+    executable = shutil.which("api-anything")
+    if not executable:
+        return {"status": "not_configured", "executed": False, "truthful": True}
+    if not _EXECUTION_GATE.acquire(timeout=0.5):
+        return {"status": "busy", "executed": False, "truthful": True}
+    started = time.monotonic()
+    try:
+        now = time.monotonic()
+        with _RATE_LOCK:
+            last = _GENERIC_COOLDOWNS.get(site_name)
+            if last is not None and now - last < MIN_SITE_INTERVAL_SECONDS:
+                return {"status": "rate_limited", "executed": False, "truthful": True}
+            _GENERIC_COOLDOWNS[site_name] = now
+        try:
+            timeout = max(3, min(20, int(os.getenv("AI_INFINITY_API_ANYTHING_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))))
+        except (TypeError, ValueError, OverflowError):
+            return {"status": "invalid_configuration", "executed": False, "truthful": True}
+        with tempfile.TemporaryDirectory(prefix="ai-infinity-api-anything-call-") as temporary:
+            root = Path(temporary).resolve()
+            env = _isolated_cli_env(root)
+
+            def run(args: list[str]) -> tuple[Any | None, str | None]:
+                return _run_json(subprocess.run, executable, args, cwd=str(root), env=env, timeout=timeout)
+
+            sites, error = run(["sites"])
+            if error:
+                return {"status": error, "executed": False, "truthful": True}
+            site = next(
+                (row for row in sites if isinstance(row, dict) and row.get("name") == site_name and row.get("source") == "bundled"),
+                None,
+            ) if isinstance(sites, list) else None
+            if not site:
+                return {"status": "untrusted_site_spec", "executed": False, "truthful": True}
+            catalog, error = run(["ops", site_name])
+            operations = catalog.get("operations") if isinstance(catalog, dict) else None
+            if error or not isinstance(operations, list):
+                return {"status": error or "invalid_operation_catalog", "executed": False, "truthful": True}
+            operation = next(
+                (row for row in operations if isinstance(row, dict) and row.get("name") == operation_name),
+                None,
+            )
+            if not operation or operation.get("readOnly") is not True:
+                return {"status": "operation_not_verified_read_only", "executed": False, "truthful": True}
+            declared = _declared_parameter_names(operation)
+            unknown = sorted(set(safe_params) - declared)
+            if unknown:
+                return {
+                    "status": "undeclared_parameters", "executed": False,
+                    "allowed_parameters": sorted(declared), "rejected_parameters": unknown[:12], "truthful": True,
+                }
+            if not declared and safe_params:
+                return {"status": "parameter_schema_unavailable", "executed": False, "truthful": True}
+            # CLI receives a JSON argument, never shell-expanded user content. Tier 1
+            # forbids browser/session fallback. The bundled spec must also stay read-only.
+            result, error = run([
+                "call", site_name, operation_name,
+                "--json", json.dumps(safe_params, ensure_ascii=False, separators=(",", ":")),
+                "--max-tier", "1",
+            ])
+            if error:
+                return {"status": error, "executed": False, "truthful": True}
+            if not isinstance(result, dict) or result.get("ok") is not True:
+                return {"status": "operation_failed", "executed": False, "truthful": True}
+            if result.get("tier") != 1:
+                return {"status": "unexpected_transport_tier", "executed": False, "truthful": True}
+            data = _safe_public_data(result.get("data"))
+            encoded = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+            if len(encoded) > 50000:
+                data = encoded[:50000] + "…[truncated]"
+            return {
+                "status": "completed", "provider": "api-anything",
+                "site": site_name, "operation": operation_name,
+                "read_only": True, "transport_tier": 1,
+                "parameters_sha256": __import__("hashlib").sha256(
+                    json.dumps(safe_params, sort_keys=True, ensure_ascii=False).encode("utf-8")
+                ).hexdigest(),
+                "result": data,
+                "latency_ms": round((time.monotonic() - started) * 1000, 2),
+                "upstream_commit": UPSTREAM_COMMIT,
+                "executed": True, "truthful": True,
+            }
+    except Exception as exc:
+        return {"status": "internal_error", "error_type": type(exc).__name__, "executed": False, "truthful": True}
+    finally:
+        _EXECUTION_GATE.release()
