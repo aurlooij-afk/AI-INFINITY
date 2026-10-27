@@ -564,3 +564,82 @@ def test_api_anything_can_list_read_and_write_capabilities_separately(monkeypatc
     assert result["executed"] is False
     assert any(operation.get("write") for operation in result["operations"])
     assert captured == [("", 100, True)]
+
+
+def test_api_anything_user_profile_operation_dispatches_tier_and_user_id(monkeypatch):
+    calls = []
+    connector_fake = SimpleNamespace(
+        execute_api_anything_operation=lambda site, operation, params, **kwargs: (
+            calls.append((site, operation, params, kwargs)) or {
+                "status": "completed", "executed": True, "read_only": True,
+                "write_capable": False, "transport_tier": 2, "truthful": True,
+            }
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "api_anything_connector", connector_fake)
+
+    result = canonical.dispatch_command(
+        "Use API Anything site=reader-site operation=getRecord recordId=rec-42 max_tier=2",
+        "user-research-7", {},
+    )
+
+    assert result["status"] == "completed"
+    assert result["executed"] is True
+    assert result["read_only"] is True
+    assert calls == [(
+        "reader-site", "getRecord", {"recordId": "rec-42"},
+        {
+            "user_id": "user-research-7", "allow_writes": False,
+            "max_tier": 2, "dry_run": False, "idempotency_key": "", "again": False,
+        },
+    )]
+
+
+def test_api_anything_learn_command_passes_two_examples_to_profiled_learner(monkeypatch):
+    calls = []
+    connector_fake = SimpleNamespace(
+        learn_api_anything_operation=lambda site, operation, trigger, example, example2, **kwargs: (
+            calls.append((site, operation, trigger, example, example2, kwargs)) or {
+                "status": "learned", "executed": False, "truthful": True,
+            }
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "api_anything_connector", connector_fake)
+
+    result = canonical.dispatch_command(
+        "API Anything learn site=reader-site operation=search trigger_url=https://example.com/search?q={q}",
+        "user-learn-3",
+        {
+            "api_anything_action": "learn",
+            "api_anything_example": {"q": "cats"},
+            "api_anything_example2": {"q": "dogs"},
+        },
+    )
+
+    assert result["status"] == "learned"
+    assert result["executed"] is False
+    assert calls == [(
+        "reader-site", "search", "https://example.com/search?q={q}",
+        {"q": "cats"}, {"q": "dogs"},
+        {"user_id": "user-learn-3", "write": False, "match": {}},
+    )]
+
+
+def test_api_anything_write_requires_preview_and_reports_unknown_write_state(monkeypatch):
+    connector_fake = SimpleNamespace(
+        execute_api_anything_operation=lambda site, operation, params, **kwargs: {
+            "status": "dry_run_required", "executed": False,
+            "write_capable": True, "truthful": True,
+        },
+    )
+    import sys
+    sys.modules["api_anything_connector"] = connector_fake
+    result = canonical.dispatch_command(
+        "Send message using API Anything site=social-site operation=sendMessage recipient=reviewer message=hello --allow-writes",
+        "user-write-4", {},
+    )
+    assert result["route"] == "public_api"
+    assert result["executed"] is False
+    assert result["status"] == "degraded"
+    assert result["write"] is True
+
