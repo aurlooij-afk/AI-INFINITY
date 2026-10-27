@@ -214,7 +214,7 @@ jobs:
           # can diverge from the canonical main:app process.
           docker stop ai-infinity-ci >/dev/null
           docker rm ai-infinity-ci >/dev/null 2>&1 || true
-          docker run -d --rm --name ai-infinity-ci --platform linux/amd64             -e AI_INFINITY_3601_BACKGROUND=false             -e AI_INFINITY_FAST_MODE=1             -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity             -p 10000:10000 ai-infinity:ci
+          docker run -d --rm --name ai-infinity-ci --platform linux/amd64             -e AI_INFINITY_3601_BACKGROUND=false             -e AI_INFINITY_FAST_MODE=0             -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity             -p 10000:10000 ai-infinity:ci
           ready=0
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:10000/health >/tmp/restarted-health.json; then
@@ -237,7 +237,7 @@ jobs:
         env:
           AI_INFINITY_REQUIRE_SOURCE_VISUALS: "1"
           AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE: "0"
-          AI_INFINITY_FAST_MODE: "1"
+          AI_INFINITY_FAST_MODE: "0"
           AI_INFINITY_3601_BACKGROUND: "false"
           AI_INFINITY_DATA_DIR: /tmp/ai-infinity-real-smoke
         run: |
@@ -245,10 +245,10 @@ jobs:
           python - <<'PY'
           import json
           p = {
-            "title": "ONE IDEA. INFINITE WORLDS. — AI Infinity Brand Film",
+            "title": "ONE IDEA. INFINITE WORLDS.",
             "objective": "Create an extraordinary 60-second cinematic brand film for AI Infinity titled ONE IDEA. INFINITE WORLDS. It must feel like a premium global technology brand campaign and emotional short film, not a generic ad, slideshow or tutorial. Story: 0–4s an arresting night-room hook, lone creator facing a blank screen; narration “Every extraordinary world begins with something nobody else can see.” 4–12s the idea opens into dramatic landscapes, a futuristic city and human emotion tied together with continuous story motifs. 12–25s real research becomes a clear narrative, script and storyboard; never invent research, URLs or UI. 25–40s the emotional cinematic peak: materially distinct compositions, deliberate movement, atmospheric light, believable depth and motivated transitions. 40–49s show actual editable timeline, synchronized captions, balanced audio, verification and recoverable package only when those capabilities really exist. 49–56s return to the creator and reveal the complete work; narration “Research it. Shape it. Bring it to life. Then make it better.” 56–60s restrained AI Infinity signature and line “AI Infinity. One idea. Infinite worlds.” Visuals: midnight blue, restrained cyan/violet, warm gold, natural textures, premium typography, no noisy neon or random effects. Target 1920x1080, 16:9, 60 seconds exactly. Use free-first production only. Use a natural English neural voice only if a genuinely available free provider is verified; otherwise report the actual local voice. Prefer verified public-domain/licensed sources and preserve source URL, creator, licence, attribution, provenance and integrity; uncertain rights, fallback assets or unsupported provider must stay REVIEW_REQUIRED. Deliver MP4, thumbnail, master audio, narration-only audio if supported, captions.srt, final script, sources.json, provenance/rights manifests, production manifest, editable timeline if supported, ZIP and an honest human-review packet. Never fabricate source research, licence evidence, provider usage or success.",
             "topic": "AI Infinity — One Idea. Infinite Worlds.",
-            "format": "video",
+            "format": "long",
             "duration": 60,
             "content_type": "video",
             "audience": "general audience",
