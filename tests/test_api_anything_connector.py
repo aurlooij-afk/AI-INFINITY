@@ -798,3 +798,164 @@ def test_generic_write_ambiguous_result_warns_not_to_retry(monkeypatch):
 
     assert result["status"] == "write_outcome_ambiguous_check_target_do_not_retry"
     assert result["executed"] is True
+
+
+def test_general_api_anything_catalog_includes_user_learned_reads_writes_and_tiers(monkeypatch, tmp_path):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
+    calls = []
+
+    def fake_run(runner, executable, args, *, cwd, env, timeout):
+        calls.append((list(args), dict(env)))
+        if args == ["sites"]:
+            return [
+                {"name": "hacker-news", "source": "bundled"},
+                {"name": "linkedin-workspace", "source": "user"},
+            ], None
+        if args == ["ops", "hacker-news"]:
+            return {"operations": [{
+                "name": "search", "readOnly": True, "minTier": 1,
+                "parameters": [{"name": "query", "type": "string"}],
+                "summary": "Search public stories",
+            }]}, None
+        if args == ["ops", "linkedin-workspace"]:
+            return {"operations": [{
+                "name": "sendMessage", "readOnly": False, "minTier": 3,
+                "parameters": [{"name": "recipient"}, {"name": "message"}],
+                "summary": "Send a message",
+            }]}, None
+        raise AssertionError(f"unexpected CLI request: {args}")
+
+    monkeypatch.setattr(connector, "_run_json", fake_run)
+    result = connector.list_api_anything_operations(user_id="user-a", include_writes=True)
+
+    assert result["status"] == "ready"
+    assert result["read_operation_count"] == 1
+    assert result["write_operation_count"] == 1
+    assert any(op["source"] == "user" and op["write_capable"] and op["min_tier"] == 3 for op in result["operations"])
+    homes = {env["API_ANYTHING_HOME"] for _, env in calls}
+    assert len(homes) == 1
+    assert all(env.get("OPENAI_API_KEY") is None for _, env in calls)
+
+
+def test_general_api_anything_executor_rejects_write_without_allowance_and_supports_dry_run(monkeypatch, tmp_path):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
+    connector._GENERIC_COOLDOWNS.clear()
+    calls = []
+
+    def fake_run(runner, executable, args, *, cwd, env, timeout):
+        calls.append((list(args), dict(env)))
+        if args == ["sites"]:
+            return [{"name": "linkedin-workspace", "source": "user"}], None
+        if args == ["ops", "linkedin-workspace"]:
+            return {"operations": [{
+                "name": "sendMessage", "readOnly": False, "minTier": 3,
+                "parameters": [{"name": "recipient"}, {"name": "message"}],
+            }]}, None
+        if args[0:3] == ["call", "linkedin-workspace", "sendMessage"]:
+            return {"ok": True, "tier": 3, "data": {"preview": "redacted target"}, "write": "not_sent"}, None
+        raise AssertionError(f"unexpected CLI request: {args}")
+
+    monkeypatch.setattr(connector, "_run_json", fake_run)
+    refused = connector.execute_api_anything_operation(
+        "linkedin-workspace", "sendMessage", {"recipient": "reviewer", "message": "Hello"},
+        user_id="user-a", allow_writes=False, max_tier=3,
+    )
+    assert refused["status"] == "write_confirmation_required"
+    assert refused["executed"] is False
+    assert len(calls) == 2
+
+    connector._GENERIC_COOLDOWNS.clear()
+    preview = connector.execute_api_anything_operation(
+        "linkedin-workspace", "sendMessage", {"recipient": "reviewer", "message": "Hello"},
+        user_id="user-a", allow_writes=True, max_tier=3, dry_run=True,
+    )
+    assert preview["status"] == "dry_run_ready"
+    assert preview["executed"] is False
+    call_args = calls[-1][0]
+    assert "--allow-writes" in call_args
+    assert "--dry" in call_args
+    assert call_args[call_args.index("--max-tier") + 1] == "3"
+
+
+def test_general_api_anything_executor_executes_scoped_user_read_with_selected_tier(monkeypatch, tmp_path):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
+    connector._GENERIC_COOLDOWNS.clear()
+    calls = []
+
+    def fake_run(runner, executable, args, *, cwd, env, timeout):
+        calls.append((list(args), dict(env)))
+        if args == ["sites"]:
+            return [{"name": "reader-site", "source": "user"}], None
+        if args == ["ops", "reader-site"]:
+            return {"operations": [{
+                "name": "getRecord", "readOnly": True, "minTier": 2,
+                "parameters": [{"name": "recordId"}],
+            }]}, None
+        if args[0:3] == ["call", "reader-site", "getRecord"]:
+            return {"ok": True, "tier": 2, "data": {"title": "Test record"}}, None
+        raise AssertionError(f"unexpected CLI request: {args}")
+
+    monkeypatch.setattr(connector, "_run_json", fake_run)
+    result = connector.execute_api_anything_operation(
+        "reader-site", "getRecord", {"recordId": "rec-42"},
+        user_id="user-b", allow_writes=False, max_tier=2,
+    )
+    assert result["status"] == "completed"
+    assert result["executed"] is True
+    assert result["transport_tier"] == 2
+    assert calls[-1][0][calls[-1][0].index("--max-tier") + 1] == "2"
+    assert calls[-1][1]["API_ANYTHING_HOME"] != calls[0][1]["API_ANYTHING_HOME"]
+
+
+def test_api_anything_learning_accepts_two_examples_and_refuses_local_targets(monkeypatch, tmp_path):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
+    calls = []
+
+    def fake_run(runner, executable, args, *, cwd, env, timeout):
+        calls.append((list(args), dict(env)))
+        return {"ok": True, "status": "learned", "preview": {"operation": "search"}}, None
+
+    monkeypatch.setattr(connector, "_run_json", fake_run)
+    invalid = connector.learn_api_anything_operation(
+        "demo-site", "search", "http://127.0.0.1/admin?q={q}",
+        {"q": "cat"}, {"q": "dog"}, user_id="user-a",
+    )
+    assert invalid["status"] == "public_https_url_required"
+    assert calls == []
+
+    learned = connector.learn_api_anything_operation(
+        "demo-site", "search", "https://example.com/search?q={q}",
+        {"q": "cat"}, {"q": "dog"}, user_id="user-a", write=False,
+        match={"method": "GET", "host": "example.com", "path": "/search"},
+    )
+    assert learned["status"] == "learned"
+    args = calls[-1][0]
+    assert args[:4] == ["add", "demo-site", "search", "--trigger"]
+    assert "https://example.com/search?q={q}" in args
+    assert args.count("--example") == 1
+    assert args.count("--example2") == 1
+    assert calls[-1][1]["API_ANYTHING_HOME"]
+
+
+def test_api_anything_write_learning_uses_aborted_write_capture_flag(monkeypatch, tmp_path):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
+    calls = []
+
+    def fake_run(runner, executable, args, *, cwd, env, timeout):
+        calls.append(list(args))
+        return {"ok": True, "status": "learned", "preview": {"operation": "sendMessage"}}, None
+
+    monkeypatch.setattr(connector, "_run_json", fake_run)
+    result = connector.learn_api_anything_operation(
+        "social-site", "sendMessage", "https://example.com/messages?to={recipient}",
+        {"recipient": "person-a"}, {"recipient": "person-b"},
+        user_id="user-a", write=True,
+    )
+    assert result["status"] == "learned"
+    assert result["learning_aborts_write_requests"] is True
+    assert "--write" in calls[-1]
