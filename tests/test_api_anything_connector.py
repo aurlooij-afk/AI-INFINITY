@@ -14,8 +14,10 @@ import api_anything_connector as connector
 @pytest.fixture(autouse=True)
 def clear_connector_call_limits():
     connector._LAST_CALL_AT.clear()
+    connector._GENERIC_COOLDOWNS.clear()
     yield
     connector._LAST_CALL_AT.clear()
+    connector._GENERIC_COOLDOWNS.clear()
 
 
 def _stub_runner(*, site_name="youtube", operation_name="search", site_source="bundled", read_only=True, result=None, error=False):
