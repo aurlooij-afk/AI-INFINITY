@@ -1,8 +1,7 @@
-"""Isolated, read-only bridge from AI Infinity research to API Anything.
+"""API Anything integration for public research and user-learned site operations.
 
-This integration exposes five pinned bundled read-only operations across public research,
-books, games, and product search. It uses tier-one HTTP only, refuses user/registry overrides,
-and gives each invocation a fresh private API Anything home so sessions cannot cross users.
+The adapter discovers bundled, registry, and user-scoped operations, learns operations from
+public HTTPS triggers, and runs reads or explicitly authorized writes with tier and dry-run evidence.
 """
 from __future__ import annotations
 
@@ -446,7 +445,7 @@ def search_candidates(query: str, limit: int = 10) -> dict[str, Any]:
 _MAX_GENERIC_PARAMS = 12
 _MAX_GENERIC_RESULT_ITEMS = 20
 _SENSITIVE_OUTPUT_KEY = re.compile(r"(?:password|cookie|authorization|token|secret|api[_-]?key|session)", re.I)
-_SAFE_SITE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
+_SAFE_SITE_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
 _SAFE_OPERATION_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}\Z")
 _GENERIC_COOLDOWNS: dict[str, float] = {}
 
@@ -833,7 +832,7 @@ def list_api_anything_operations(
                 return {"status": error or "invalid_catalog", "sites": [], "operations": [], "truthful": True}
             sites = [
                 row for row in site_rows
-                if isinstance(row, dict) and row.get("source") in {"bundled", "user"}
+                if isinstance(row, dict) and row.get("source") in {"bundled", "user", "registry"}
                 and isinstance(row.get("name"), str) and _SAFE_SITE_NAME.fullmatch(row["name"])
                 and (not requested_site or row["name"] == requested_site)
             ][:50]
@@ -950,7 +949,7 @@ def execute_api_anything_operation(
             if error:
                 return {"status": error, "executed": False, "truthful": True}
             site = next(
-                (row for row in sites if isinstance(row, dict) and row.get("name") == site_name and row.get("source") in {"bundled", "user"}),
+                (row for row in sites if isinstance(row, dict) and row.get("name") == site_name and row.get("source") in {"bundled", "user", "registry"}),
                 None,
             ) if isinstance(sites, list) else None
             if not site:
@@ -1103,11 +1102,16 @@ def learn_api_anything_operation(
     trigger_url = _clean_text(trigger_url, 1200)
     parsed = urlparse(trigger_url)
     host = (parsed.hostname or "").rstrip(".").lower()
+    try:
+        port = parsed.port
+    except ValueError:
+        return {"status": "public_https_url_required", "executed": False, "truthful": True}
     if (
         parsed.scheme != "https" or not host or parsed.username or parsed.password
-        or (parsed.port not in (None, 443))
+        or port not in (None, 443)
         or host in {"localhost", "localhost.localdomain"}
         or host.endswith((".local", ".internal", ".localhost", ".test", ".invalid"))
+        or ".." in site_name
     ):
         return {"status": "public_https_url_required", "executed": False, "truthful": True}
     try:
@@ -1120,7 +1124,7 @@ def learn_api_anything_operation(
         return {"status": "two_examples_required", "executed": False, "truthful": True}
     if set(example) != set(example2):
         return {"status": "example_parameters_must_match", "executed": False, "truthful": True}
-    if set(example.items()) == set(example2.items()):
+    if example == example2:
         return {"status": "examples_must_differ", "executed": False, "truthful": True}
     def validate_example(row: dict[str, Any]) -> dict[str, str] | None:
         safe: dict[str, str] = {}
