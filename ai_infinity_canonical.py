@@ -1084,7 +1084,11 @@ def dispatch_command(command, user_id, raw=None):
 
             # Listing is side-effect-free; include learned write operations by default so the
             # command catalog reflects available capabilities instead of hiding them.
-            include_writes = payload.get("api_anything_read_only") is not True and payload.get("api_anything_include_writes") is not False
+            include_writes = (
+                payload.get("api_anything_read_only") is not True
+                and payload.get("api_anything_include_writes") is not False
+                and not bool(re.search(r"\bread[- ]only\b", cmd.lower()))
+            )
             if hasattr(connector, "list_api_anything_operations"):
                 result = connector.list_api_anything_operations(
                     site_name=site_name, limit=200, user_id=user_id, include_writes=include_writes,
