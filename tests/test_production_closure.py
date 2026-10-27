@@ -107,7 +107,9 @@ def test_final_audio_master_pads_early_ended_audio_stream_to_video_duration(tmp_
     import subprocess
 
     ffmpeg_bin = shutil.which("ffmpeg")
-    assert ffmpeg_bin, "FFmpeg is required for the real-stream regression"
+    if not ffmpeg_bin:
+        import pytest
+        pytest.skip("Real FFmpeg stream regression runs only on media-enabled workers")
     source = tmp_path / "short_audio_source.mp4"
     mastered = tmp_path / "duration_aligned.mp4"
     subprocess.run(
