@@ -913,6 +913,10 @@ def dispatch_command(command, user_id, raw=None):
         use_api_anything = (
             "api anything" in cmd.lower()
             or bool(payload.get("api_anything_site"))
+            or (
+                bool(re.search(r"(?<![A-Za-z0-9_])site\s*=", cmd, re.I))
+                and bool(re.search(r"(?<![A-Za-z0-9_])(?:operation|op)\s*=", cmd, re.I))
+            )
         )
         if use_api_anything:
             import api_anything_connector as connector
@@ -948,23 +952,66 @@ def dispatch_command(command, user_id, raw=None):
                     "next_action": "Specify the bundled site and operation, for example site=goodreads operation=searchBooks q=Piranesi.",
                     "executed": False, "truthful": True,
                 }
+            write_allowance = (
+                payload.get("api_anything_allow_writes") is True
+                or bool(re.search(r"(?:^|\s)--allow-writes(?:\s|$)", cmd, re.I))
+            )
+            dry_run = payload.get("api_anything_dry_run") is True or bool(
+                re.search(r"(?:^|\s)--dry(?:\s|$)", cmd, re.I)
+            )
             if operation_name:
-                result = connector.execute_bundled_read_only(site_name, operation_name, params)
-                completed = result.get("status") == "completed" and result.get("executed") is True
+                if hasattr(connector, "execute_bundled_operation") and (write_allowance or dry_run):
+                    result = connector.execute_bundled_operation(
+                        site_name, operation_name, params,
+                        allow_writes=write_allowance, dry_run=dry_run,
+                    )
+                else:
+                    result = connector.execute_bundled_read_only(site_name, operation_name, params)
+                    if (
+                        result.get("status") == "operation_not_verified_read_only"
+                        and hasattr(connector, "execute_bundled_operation")
+                    ):
+                        result = connector.execute_bundled_operation(
+                            site_name, operation_name, params, allow_writes=False, dry_run=False,
+                        )
+                result_status = result.get("status")
+                executed = result.get("executed") is True
+                if result_status == "write_confirmation_required":
+                    status = "write_confirmation_required"
+                elif result_status == "dry_run_ready":
+                    status = "dry_run_ready"
+                elif result_status == "completed" and executed:
+                    status = "completed"
+                elif result_status == "write_accepted_not_independently_verified":
+                    status = "write_accepted_not_independently_verified"
+                elif result_status == "write_outcome_ambiguous_check_target_do_not_retry":
+                    status = "write_outcome_ambiguous"
+                else:
+                    status = "degraded"
                 return {
-                    "status": "completed" if completed else "degraded",
-                    "route": route, "provider": "api-anything",
-                    "result": result, "executed": completed,
-                    "read_only": True, "truthful": True,
+                    "status": status, "route": route, "provider": "api-anything",
+                    "result": result, "executed": executed,
+                    "read_only": result.get("read_only", result.get("status") == "completed"),
+                    "write": result.get("write", False),
+                    "truthful": True,
                 }
-            result = connector.list_bundled_read_only_operations(site_name=site_name, limit=100)
+            include_writes = payload.get("api_anything_include_writes") is True or bool(
+                re.search(r"\b(?:write|writable|writes|read\s*(?:and|&)\s*write|all\s+operations)\b", cmd.lower())
+            )
+            if include_writes and hasattr(connector, "list_bundled_operations"):
+                result = connector.list_bundled_operations(
+                    site_name=site_name, limit=100, include_writes=True,
+                )
+                next_action = "Choose a listed operation and provide its declared parameters. Write operations require a dry run and explicit --allow-writes."
+            else:
+                result = connector.list_bundled_read_only_operations(site_name=site_name, limit=100)
+                next_action = "Choose a listed bundled read-only site/operation and provide its declared parameters to execute it."
             return {
                 "status": "completed" if result.get("status") == "ready" else "degraded",
                 "route": route, "provider": "api-anything",
                 "result": result, "sites": result.get("sites", []),
                 "operations": result.get("operations", []),
-                "executed": False,
-                "next_action": "Choose a listed bundled read-only site/operation and provide its declared parameters to execute it.",
+                "executed": False, "next_action": next_action,
                 "truthful": True,
             }
 
