@@ -174,5 +174,9 @@ def test_final_delivery_loudness_master_applies_post_normalization_sample_peak_c
     audio_filter = args[args.index("-af") + 1]
 
     assert "loudnorm=I=-16.0:TP=-1.5:LRA=11.0" in audio_filter
-    assert "alimiter=limit=0.80:attack=5:release=50:level=false" in audio_filter
+    limiter = "alimiter=limit=0.80:attack=5:release=50:level=false"
+    assert limiter in audio_filter
+    assert audio_filter.index("loudnorm=") < audio_filter.index(limiter), (
+        "the hard sample-peak ceiling must run after loudness normalization"
+    )
     assert result["status"] == "completed"
