@@ -488,7 +488,7 @@ def test_curated_launch_uses_distinct_scriptwriting_source_instead_of_fallback(m
         "narration": "The idea becomes a researched story and a script.",
         "on_screen": "Research. Shape. Create.",
     }
-    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=4)
+    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=13)
 
     assert selected is not None
     assert selected["source_id"] == 8086204
@@ -496,7 +496,7 @@ def test_curated_launch_uses_distinct_scriptwriting_source_instead_of_fallback(m
     assert selected["quality_tier"] == "curated_free_source_motion_video"
     assert selected["validated_media"] is True
     assert selected["asset_sha256"] == hashlib.sha256(alternate_bytes).hexdigest()
-    assert Path(selected["path"]).name == "selected_visual_02.mp4"
+    assert Path(selected["path"]).name == "pexels_launch_video_8086204.mp4"
 
 
 def test_source_black_frame_gate_detects_sustained_near_black_segments(monkeypatch, tmp_path):
