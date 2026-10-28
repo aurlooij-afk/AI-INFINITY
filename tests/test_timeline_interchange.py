@@ -181,7 +181,9 @@ def test_qc_review_omission_metadata_survives_otio_and_bundle_roundtrip(tmp_path
     }
     result = export_otio_bundle(tmp_path, "project-test-review-only", project, timeline, truth)
 
-    exported = otio.adapters.read_from_file(str(result["timeline_path"]), adapter_name="otio_json")
+    exported = __import__("opentimelineio").adapters.read_from_file(
+        result["timeline_path"], adapter_name="otio_json"
+    )
     review_meta = (exported.metadata.get("ai_infinity") or {}).get("review_export")
     assert review_meta["complete"] is False
     assert review_meta["missing_scene_masters"] == ["scene_09.mp4"]
