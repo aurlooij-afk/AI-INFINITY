@@ -6465,9 +6465,13 @@ def _normalize_delivery_loudness(
     # duration-fitter passed. The requested programme duration remains authoritative
     # at the very last mastering step, including audio padding/trimming.
     audio_filter = (
-        # Reset non-zero audio timestamps before padding; otherwise the final
-        # mux's -t can clip an apparently full-length audio programme.
-        "asetpts=PTS-STARTPTS,"
+        # Scene concatenation can leave timestamp gaps or reordered AAC frames.
+        # asetpts=PTS-STARTPTS only shifts the clock; it preserves those gaps and
+        # can leave the mastered stream ~1 second shorter than the copied video.
+        # Resample with bounded async timestamp correction, then rebuild monotonic
+        # sample-based PTS before padding/trimming, loudness normalization and limiting.
+        "aresample=48000:async=1:first_pts=0,"
+        "asetpts=N/SR/TB,"
         f"atrim=duration={requested_duration:.3f},"
         f"apad=whole_dur={requested_duration:.3f},"
         f"atrim=duration={requested_duration:.3f},"
