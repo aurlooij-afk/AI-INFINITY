@@ -19,6 +19,30 @@ from ai_infinity.timeline_interchange import (
 VERSION = "TARGET-2050.PRO-CREATOR-TIMELINE.1"
 BUILD_NOTE = "stable-scene-identity-v1"
 
+def _otio_export_allowed(project: Dict[str, Any], project_root: Path) -> bool:
+    """Allow review-only OTIO export after QC failure when all scene masters exist.
+
+    A failed creative-quality gate must block delivery/publishing, but should not
+    destroy the creator's ability to inspect and revise the actual rendered work.
+    The exporter still validates each timeline reference and carries the failed
+    truth state into the resulting package; this helper never marks it publishable.
+    """
+    status = str(project.get("status") or "").strip().lower()
+    if status in {"completed", "completed_with_qc_warnings"}:
+        return True
+    if status != "failed" or str(project.get("stage") or "").strip().lower() != "quality_control":
+        return False
+    try:
+        expected = int(project.get("total_scenes") or 0)
+    except (TypeError, ValueError):
+        return False
+    final = project_root / "final.mp4"
+    if expected < 1 or not final.is_file() or final.stat().st_size <= 0:
+        return False
+    masters = [path for path in project_root.glob("scene_*.mp4") if path.is_file() and path.stat().st_size > 0]
+    return len(masters) >= expected
+
+
 def install(app: Any) -> None:
     import studio_ultimate as studio
     import professional_creator_v2 as base
@@ -363,9 +387,9 @@ def install(app: Any) -> None:
     @app.post("/infinity/pro2/project/{pid}/timeline/otio/export")
     def export_timeline_otio(pid: str, request: Request):
         uid, project = owned(pid, request)
-        if project.get("status") not in {"completed", "completed_with_qc_warnings"}:
-            raise HTTPException(409, "OTIO export requires completed scene masters")
         root = studio._project_dir(pid)
+        if not _otio_export_allowed(project, root):
+            raise HTTPException(409, "OTIO export requires completed scene masters or a complete QC-failed review render")
         timeline_data = otio_timeline_source(pid, project)
         truth = base._truth(studio, studio._get_project(pid))
         try:
