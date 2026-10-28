@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import reality_first_3901 as reality
 import studio_ultimate as studio
 
 
@@ -295,6 +296,14 @@ def test_scene_concatenation_copies_rendered_video_but_reencodes_aac_audio(monke
         Path(args[-1]).write_bytes(b"assembled master fixture" * 2000)
 
     monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
+    # reality_first_3901 wraps the concat function during normal app startup and
+    # independently probes its output. This test is about command construction,
+    # so stub only that wrapper's acceptance helpers; the production smoke test
+    # still uses the real FFmpeg output probe and decoder.
+    monkeypatch.setattr(reality, "_valid_file", lambda path, minimum=1: Path(path).is_file() and Path(path).stat().st_size >= minimum)
+    monkeypatch.setattr(reality, "_media_probe", lambda _path: {"ok": True})
+    monkeypatch.setattr(reality, "_upsert_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr(reality, "_event", lambda *args, **kwargs: None)
 
     studio.concat_segments(scenes, output)
 
