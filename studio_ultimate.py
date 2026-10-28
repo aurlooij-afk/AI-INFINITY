@@ -6353,6 +6353,9 @@ def _normalize_delivery_loudness(
     # duration-fitter passed. The requested programme duration remains authoritative
     # at the very last mastering step, including audio padding/trimming.
     audio_filter = (
+        # Reset non-zero audio timestamps before padding; otherwise the final
+        # mux's -t can clip an apparently full-length audio programme.
+        "asetpts=PTS-STARTPTS,"
         f"atrim=duration={requested_duration:.3f},"
         f"apad=whole_dur={requested_duration:.3f},"
         f"atrim=duration={requested_duration:.3f},"
@@ -6432,6 +6435,73 @@ def _normalize_delivery_loudness(
         "video_stream_copied": True,
         "audio_codec": str(output_audio.get("codec_name") or ""),
         "subtitle_stream_count": sum(row.get("codec_type") == "subtitle" for row in output_streams),
+        "truthful": True,
+    }
+
+
+def _export_programme_audio_master(
+    source: Path,
+    out: Path,
+    target_duration_seconds: float,
+    fast_mode: bool = False,
+) -> Dict[str, Any]:
+    """Export the full programme mix with zero-based timestamps and exact runtime.
+
+    Some MP4s carry an audio start timestamp later than the video start. Extracting
+    the stream without resetting PTS can silently shorten the separate MP3 master.
+    Reset PTS, pad the actual mixed programme to the video runtime, and verify the
+    exported file that is included in the creator package.
+    """
+    source = Path(source)
+    out = Path(out)
+    try:
+        target = float(target_duration_seconds)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("programme audio target duration must be finite and positive") from exc
+    if target <= 0 or target != target or target == float("inf"):
+        raise ValueError("programme audio target duration must be finite and positive")
+    if not source.is_file() or source.stat().st_size <= 10_000:
+        raise RuntimeError("programme audio export requires a real completed programme video")
+
+    source_duration = float(probe_duration(source))
+    if source_duration <= 0:
+        raise RuntimeError("programme audio export cannot determine the video runtime")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.unlink(missing_ok=True)
+    audio_filter = (
+        "asetpts=PTS-STARTPTS,"
+        f"apad=whole_dur={target:.3f},"
+        f"atrim=duration={target:.3f}"
+    )
+    ffmpeg(
+        "-i", source,
+        "-map", "0:a:0",
+        "-vn",
+        "-af", audio_filter,
+        "-t", f"{target:.3f}",
+        "-c:a", "libmp3lame",
+        "-q:a", "2",
+        "-ar", "48000",
+        "-ac", "2",
+        out,
+        timeout=max(120, int(max(source_duration, target) * (3 if fast_mode else 4))),
+    )
+    if not _valid_audio_file(out, minimum_peak_db=-45.0):
+        raise RuntimeError("programme audio master is invalid or effectively silent")
+    output_duration = float(probe_duration(out))
+    if abs(output_duration - target) > 1.0:
+        raise RuntimeError(
+            "programme audio master duration mismatch after timestamp reset and padding: "
+            f"{output_duration:.3f}s vs video {target:.3f}s"
+        )
+    return {
+        "status": "verified",
+        "source_duration_seconds": round(source_duration, 3),
+        "requested_duration_seconds": round(target, 3),
+        "output_duration_seconds": round(output_duration, 3),
+        "audio_filter": audio_filter,
+        "sha256": file_sha256(out),
+        "size_bytes": out.stat().st_size,
         "truthful": True,
     }
 
@@ -7116,19 +7186,14 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 raise RuntimeError("narration-only track is invalid or effectively silent")
 
             audio_master = outdir / "audio_master.mp3"
-            ffmpeg(
-                "-i", captioned, "-map", "0:a:0", "-vn",
-                "-c:a", "libmp3lame", "-q:a", "2", "-ar", "48000", "-ac", "2",
-                audio_master, timeout=max(120, int(probe_duration(captioned) * 4)),
-            )
-            if not _valid_audio_file(audio_master, minimum_peak_db=-45.0):
-                raise RuntimeError("programme audio master is invalid or effectively silent")
             video_seconds = float(probe_duration(captioned))
-            audio_seconds = float(probe_duration(audio_master))
-            if abs(audio_seconds - video_seconds) > 1.0:
-                raise RuntimeError(
-                    f"programme audio master duration mismatch: {audio_seconds:.3f}s vs video {video_seconds:.3f}s"
-                )
+            audio_master_export_report = _export_programme_audio_master(
+                captioned, audio_master, video_seconds, FAST_MODE
+            )
+            checkpoint(project_id, "programme_audio_master_verified", {
+                **audio_master_export_report,
+                "source_video_sha256": file_sha256(captioned),
+            })
         if True:
             article = outdir / "article.md"
             article_lines = [f"# {plan.get('title') or topic}", "", str(plan.get('hook') or ""), ""]
@@ -7374,7 +7439,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "visual_policy": "connected-ai-or-real-public-media-only; no-placeholder-video",
             "ai_provider": ai_provider, "voice_provider": voice_provider,
             "voice_providers_by_scene": voice_providers_by_scene,
-            "research": research, "quality": qc,
+            "research": research, "quality": qc, "audio_master_export": audio_master_export_report,
             "assets": assets_meta, "shorts": [{k: v for k, v in x.items() if k != "path"} for x in shorts],
             "self_upgrade": True, "truthful": True,
             "production_profile": _project_meta(project_id),

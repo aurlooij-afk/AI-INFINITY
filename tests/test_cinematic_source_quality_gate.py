@@ -3,6 +3,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 import studio_ultimate as studio
 
 
@@ -225,3 +227,56 @@ def test_final_loudness_mux_caps_a_sixty_six_second_input_to_the_requested_sixty
     assert result["requested_duration_seconds"] == 60.0
     assert result["output_duration_seconds"] == 60.0
     assert result["audio_video_duration_match"] is True
+
+
+def test_programme_audio_master_resets_pts_and_pads_to_the_video_runtime(monkeypatch, tmp_path):
+    source = tmp_path / "final.mp4"
+    source.write_bytes(b"real programme container fixture" * 1000)
+    output = tmp_path / "audio_master.mp3"
+    captured = {}
+
+    def fake_ffmpeg(*args, timeout=240):
+        captured["args"] = list(args)
+        Path(args[-1]).write_bytes(b"padded audio master bytes" * 2000)
+
+    def fake_duration(path):
+        if Path(path) == source:
+            return 60.0
+        return 60.026
+
+    monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(studio, "probe_duration", fake_duration)
+    monkeypatch.setattr(studio, "_valid_audio_file", lambda _path, minimum_peak_db=-45.0: True)
+
+    result = studio._export_programme_audio_master(source, output, 60.0, fast_mode=False)
+
+    args = captured["args"]
+    audio_filter = args[args.index("-af") + 1]
+    assert audio_filter.startswith("asetpts=PTS-STARTPTS,")
+    assert "apad=whole_dur=60.000" in audio_filter
+    assert "atrim=duration=60.000" in audio_filter
+    assert args[args.index("-t") + 1] == "60.000"
+    assert result["status"] == "verified"
+    assert result["requested_duration_seconds"] == 60.0
+    assert result["output_duration_seconds"] == 60.026
+    assert result["truthful"] is True
+
+
+def test_programme_audio_master_rejects_still_short_output_after_pts_reset(monkeypatch, tmp_path):
+    source = tmp_path / "final.mp4"
+    source.write_bytes(b"real programme container fixture" * 1000)
+    output = tmp_path / "audio_master.mp3"
+
+    def fake_ffmpeg(*args, timeout=240):
+        Path(args[-1]).write_bytes(b"short audio master bytes" * 2000)
+
+    def fake_duration(path):
+        return 60.0 if Path(path) == source else 53.832
+
+    monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(studio, "probe_duration", fake_duration)
+    monkeypatch.setattr(studio, "_valid_audio_file", lambda _path, minimum_peak_db=-45.0: True)
+
+    with pytest.raises(RuntimeError, match="duration mismatch after timestamp reset and padding"):
+        studio._export_programme_audio_master(source, output, 60.0, fast_mode=False)
+
