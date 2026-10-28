@@ -621,13 +621,8 @@ jobs:
             /tmp/artifacts.json
             /tmp/verify.json
             /tmp/reality-proof.json
-            /tmp/final-probe.json
-            /tmp/final.mp4
-            /tmp/thumbnail.jpg
-            /tmp/AI_Infinity_ONE_IDEA_INFINITE_WORLDS_human_review.zip
             /tmp/ai-infinity-brand-film-review/**
-            /tmp/ai-infinity-real-smoke/**/*.json
-            /tmp/ai-infinity-real-smoke/**/*.md
+            !/tmp/ai-infinity-brand-film-review/named_creator_package.zip
           if-no-files-found: warn
 
       - name: Stop test container
