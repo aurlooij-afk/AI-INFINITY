@@ -101,8 +101,8 @@ def test_professional_launch_video_rejects_illustration_heavy_result_even_when_m
 
 def test_standard_mode_can_still_label_visual_fallback_without_claiming_source_coverage(monkeypatch, tmp_path):
     monkeypatch.delenv("AI_INFINITY_REQUIRE_SOURCE_VISUALS", raising=False)
-    monkeypatch.setattr(studio, "FAST_MODE", True)
     master, captions, chapters = _setup_quality(monkeypatch, tmp_path)
+    monkeypatch.setattr(studio, "FAST_MODE", True)
     assets = _licensed_motion_assets(tmp_path, 1) + [_truthful_fallback(tmp_path) for _ in range(6)]
 
     result = studio.quality_check(master, chapters, assets, captions)
