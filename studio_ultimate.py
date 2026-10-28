@@ -3966,6 +3966,16 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
             "tags": "mountains landscape clouds timelapse moving clouds nature horizon terrain cinematic",
             "required_concepts": {"landscape"},
         },
+        16: {
+            "source_id": 8086204,
+            "source_url": "https://www.pexels.com/video/close-up-of-a-script-8086204/",
+            "media_url": "https://videos.pexels.com/video-files/8086204/8086204-uhd_4096_2160_25fps.mp4",
+            "creator": "Ron Lach",
+            "title": "Close up of a Script",
+            "description": "Detailed view of the scriptwriting process with focus on pen and script.",
+            "tags": "scriptwriting storyboard writing research pages paper pen handwriting planning creative process screenplay manuscript",
+            "required_concepts": {"storyboard"},
+        },
     }
     # Scene ordinals are a hint, not an asset specification: a five-scene short's
     # closing shot can mean finished playback while an eight-scene storyboard's
