@@ -12,6 +12,25 @@ from fastapi.testclient import TestClient
 client = TestClient(main.app)
 
 
+
+def test_explicit_launch_preserves_all_nine_authored_story_beats():
+    assert studio._max_scene_count(
+        is_short=False, fast_mode=True, smoke=False,
+        explicitly_single_scene=False, explicit_launch=True,
+    ) == 9
+    assert studio._max_scene_count(
+        is_short=False, fast_mode=True, smoke=False,
+        explicitly_single_scene=False,
+    ) == 8
+    assert studio._max_scene_count(
+        is_short=True, fast_mode=True, smoke=False,
+        explicitly_single_scene=False, explicit_launch=True,
+    ) == 5
+    assert studio._max_scene_count(
+        is_short=False, fast_mode=False, smoke=True,
+        explicitly_single_scene=False, explicit_launch=True,
+    ) == 1
+
 def test_closure_routes_and_truthful_readiness():
     r = client.get("/infinity/studio/production/contract")
     assert r.status_code == 200, r.text
