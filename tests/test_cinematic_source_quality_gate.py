@@ -398,3 +398,45 @@ def test_procedural_fallback_title_uses_scene_subject_not_render_prompt_boilerpl
     assert asset["topic"] == "AI Infinity logo reveal against a deep cinematic background"
     assert "Premium cinematic" not in asset["topic"]
     assert "Overall visual direction" not in asset["topic"]
+
+def test_curated_launch_retries_a_second_distinct_landscape_source(monkeypatch, tmp_path):
+    """A duplicate mountain clip must not force an avoidable illustrative fallback."""
+    monkeypatch.setattr(studio, "FAST_MODE", False)
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: True)
+    monkeypatch.setattr(studio, "_curated_launch_visual_candidate_relevant", lambda *_args: True)
+
+    first_bytes = b"previously selected landscape source" * 900
+    (tmp_path / "selected_visual_01.mp4").write_bytes(first_bytes)
+    # Simulate the first curated mountain clip having already been selected by
+    # an earlier scene in this same project.
+    (tmp_path / "pexels_launch_video_5040711.mp4").write_bytes(first_bytes)
+
+    def fake_download(url, path, **_kwargs):
+        if "28946305" in url:
+            Path(path).write_bytes(b"second distinct mountain landscape source" * 900)
+            return
+        raise AssertionError(f"Unexpected source download: {url}")
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 8.0)
+
+    scene = {
+        "topic": "AI Infinity — One Idea. Infinite Worlds.",
+        "heading": "The Spark",
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": "A dramatic mountain landscape with moving clouds",
+        "visual_query": "mountain landscape clouds moving at sunset",
+        "narration": "One idea opens into a world of possibility.",
+        "on_screen": "Step into the vision",
+    }
+
+    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=2)
+
+    assert selected is not None
+    assert selected["source_id"] == 28946305
+    assert selected["source_url"] == "https://www.pexels.com/video/clouds-over-mountain-landscape-timelapse-28946305/"
+    assert selected["validated_media"] is True
+    assert selected["quality_tier"] == "curated_free_source_motion_video"
