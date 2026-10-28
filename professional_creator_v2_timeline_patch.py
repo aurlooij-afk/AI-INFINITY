@@ -386,9 +386,14 @@ def install(app: Any) -> None:
         # review copy in that state so the creator can inspect real scene masters.
         # Publishing/acceptance remains blocked; the saved editor timeline is not
         # rewritten and missing media is recorded explicitly in the bundle.
+        canonical_truth_state = str(canonical_truth.get("state") or "").strip().upper()
         allow_unverified_qc_review = (
             canonical_truth.get("verified") is not True
-            and canonical_truth.get("publish_allowed_by_quality_gate") is False
+            and (
+                canonical_truth.get("publish_allowed_by_quality_gate") is False
+                or canonical_truth.get("publish_gate") is False
+                or canonical_truth_state in {"FAILED", "REVIEW_REQUIRED", "DEGRADED", "BLOCKED"}
+            )
         )
         path = studio._project_dir(pid) / "timeline.json"
         user_id = str(project.get("user_id") or "")
