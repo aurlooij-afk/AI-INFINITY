@@ -5277,7 +5277,23 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
         "no_fake_slideshow_flag": True,
     }
     passed = all(bool(x) for k, x in checks.items() if k != "full_hd" or not FAST_MODE)
-    return {"passed": passed, "checks": checks, "duration_seconds": round(duration, 2), "resolution": [int(v.get("width") or 0), int(v.get("height") or 0)], "video_codec": v.get("codec_name"), "audio_codec": a.get("codec_name"), "file_size_bytes": master.stat().st_size if master.exists() else 0}
+    return {
+        "passed": passed,
+        "checks": checks,
+        "duration_seconds": round(duration, 2),
+        "resolution": [int(v.get("width") or 0), int(v.get("height") or 0)],
+        "video_codec": v.get("codec_name"),
+        "audio_codec": a.get("codec_name"),
+        "file_size_bytes": master.stat().st_size if master.exists() else 0,
+        "visual_source_coverage": {
+            "required": require_source_visuals,
+            "scene_count": len(chapters),
+            "distinct_verified_motion_sources": len(motion_source_keys),
+            "minimum_motion_sources": minimum_motion_sources,
+            "fallback_visual_count": fallback_visual_count,
+            "maximum_fallback_visuals": maximum_fallback_visuals,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -6779,6 +6795,9 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         _stage(project_id, "production_ready", 22, total_scenes=len(chapters), current_scene=0)
 
         assets_meta: List[Dict[str, Any]] = []
+        # Keep local file paths in this internal-only list for media inspection.
+        # The exportable asset/provenance manifests intentionally omit host paths.
+        quality_assets_meta: List[Dict[str, Any]] = []
         scene_paths: List[Path] = []
         voice_provider = None
         voice_providers_by_scene: List[Dict[str, Any]] = []
@@ -6826,7 +6845,21 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 and abs(cached_scene_duration - expected_scene_duration) <= 0.35
             ):
                 if cached.get("duration"): ch["actual_duration"] = float(cached["duration"])
-                if cached.get("asset"): assets_meta.append(redact(cached["asset"]))
+                if isinstance(cached.get("asset"), dict):
+                    cached_asset = dict(cached["asset"])
+                    assets_meta.append(redact(cached_asset))
+                    candidates = sorted(
+                        candidate for candidate in outdir.glob(f"selected_visual_{i:02d}.*")
+                        if candidate.is_file()
+                    )
+                    fallback_path = outdir / f"procedural_visual_{i:02d}.png"
+                    cached_path = candidates[0] if candidates else (
+                        fallback_path if fallback_path.is_file() else None
+                    )
+                    quality_assets_meta.append({
+                        **cached_asset,
+                        "path": str(cached_path.resolve()) if cached_path else "",
+                    })
                 cached_voice_provider = str(cached.get("voice_provider") or "unknown")
                 voice_provider = voice_provider or cached_voice_provider
                 voice_providers_by_scene.append({"scene": i, "provider": cached_voice_provider, "resumed": True})
@@ -6889,6 +6922,12 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 asset_record["asset_sha256"] = None
                 asset_record["asset_size_bytes"] = 0
             assets_meta.append(redact(asset_record))
+            # Quality evaluation needs the exact media bytes, while the public
+            # asset metadata above stays free of host-local absolute paths.
+            quality_assets_meta.append({
+                **asset_record,
+                "path": str(Path(str(asset.get("path") or "")).resolve()),
+            })
             _save_asset(project_id, "visual", Path(asset["path"]), "video/mp4" if asset.get("kind") == "video" else "image/png", asset_record)
             try:
                 sfx = shared_sfx if FAST_MODE else make_sfx(outdir, ch["actual_duration"], i)
@@ -7192,7 +7231,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "generated_at": utc_iso(),
             "truthful": True,
         }), encoding="utf-8")
-        qc = extended_quality_check(captioned, chapters, captions, outdir, assets_meta)
+        qc = extended_quality_check(captioned, chapters, captions, outdir, quality_assets_meta)
 
         # Explicit professional delivery manifests required by the creator
         # contract. These are real records derived from the actual production
