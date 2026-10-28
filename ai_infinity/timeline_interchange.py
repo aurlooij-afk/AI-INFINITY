@@ -172,6 +172,28 @@ def export_otio_bundle(
         "media_references": "project-relative",
         "included_sidecars_recorded_in_bundle_manifest": True,
     }
+    review_export = timeline_data.get("review_export")
+    if isinstance(review_export, dict):
+        # Only explicit QC-failed review exports carry this metadata. Keep the
+        # omitted scene identities inside both the OTIO and portable bundle.
+        missing = [
+            str(name) for name in (review_export.get("missing_scene_masters") or [])
+            if isinstance(name, str) and name.startswith("scene_") and name.endswith(".mp4")
+            and len(name) == 12 and name[6:8].isdigit()
+        ]
+        included = [
+            str(name) for name in (review_export.get("included_scene_masters") or [])
+            if isinstance(name, str) and name.startswith("scene_") and name.endswith(".mp4")
+            and len(name) == 12 and name[6:8].isdigit()
+        ]
+        metadata["review_export"] = {
+            "status": "partial_scene_master_review_only",
+            "complete": False,
+            "missing_scene_masters": sorted(set(missing)),
+            "included_scene_masters": included,
+            "publish_allowed": False,
+            "reason": str(review_export.get("reason") or "Partial QC-failed scene-master review export.")[:700],
+        }
 
     with tempfile.TemporaryDirectory(prefix=".aii-otio-", dir=str(root)) as work_value:
         work = Path(work_value)
@@ -415,6 +437,7 @@ def export_otio_bundle(
         "truth_state": metadata["truth_state"],
         "truth_verified": metadata["truth_verified"],
         "human_review_status": "PENDING",
+        "review_export": metadata.get("review_export"),
         "truthful": True,
     }
 
