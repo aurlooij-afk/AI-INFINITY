@@ -252,12 +252,12 @@ def test_programme_audio_master_resets_pts_and_pads_to_the_video_runtime(monkeyp
     result = studio._export_programme_audio_master(source, output, 60.0, fast_mode=False)
 
     args = captured["args"]
-    audio_filter = args[args.index("-filter_complex") + 1]
-    assert audio_filter.startswith("[0:a:0]asetpts=PTS-STARTPTS,aresample=48000[audio];")
-    assert "anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=60.000[silence]" in audio_filter
-    assert "[audio][silence]amix=inputs=2:duration=longest:dropout_transition=0" in audio_filter
-    assert "atrim=duration=60.000[outa]" in audio_filter
-    assert args[args.index("-map") + 1] == "[outa]"
+    audio_filter = args[args.index("-af") + 1]
+    assert audio_filter.startswith("aresample=48000:async=1:first_pts=0,asetpts=N/SR/TB,")
+    assert "apad=whole_dur=60.000" in audio_filter
+    assert "atrim=duration=60.000" in audio_filter
+    assert "loudnorm=I=-16.0:TP=-1.5:LRA=11.0" in audio_filter
+    assert args[args.index("-map") + 1] == "0:a:0"
     assert args[args.index("-t") + 1] == "60.000"
     assert result["status"] == "verified"
     assert result["requested_duration_seconds"] == 60.0
