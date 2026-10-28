@@ -400,14 +400,37 @@ jobs:
           for path in /tmp/request.json /tmp/create-response.json /tmp/project.json /tmp/artifacts.json /tmp/verify.json /tmp/reality-proof.json /tmp/final-probe.json; do
             if [ -s "$path" ]; then cp "$path" "$REVIEW/"; fi
           done
-          if [ -s /tmp/create-response.json ] && [ -s /tmp/cookies.txt ] && curl -fsS http://127.0.0.1:10000/health >/dev/null 2>&1; then
+          if [ -s /tmp/create-response.json ]; then
             PROJECT_ID=$(python -c 'import json; print(json.load(open("/tmp/create-response.json")).get("project_id",""))')
             if [ -n "$PROJECT_ID" ]; then
-              for name in final.mp4 thumbnail.jpg audio_master.mp3 narration_only.mp3 captions.srt script.md sources.json manifest.json production_manifest.json rights_manifest.json visual_rights.json provenance.json package.zip timeline.otio; do
-                curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/asset/$name" -o "$REVIEW/$name" 2>/dev/null
-                if [ $? -ne 0 ]; then rm -f "$REVIEW/$name"; fi
-              done
               printf '%s\n' "$PROJECT_ID" > "$REVIEW/project_id.txt"
+              # This is a review-only evidence export from this workflow's own
+              # isolated container. It does not authorize or weaken user-facing
+              # delivery; the project's verified download route remains fail-closed.
+              CONTAINER_ROOT=$(docker exec ai-infinity-ci sh -lc "find /tmp -type d -path '*/creator_studio/$PROJECT_ID' -print -quit" 2>/dev/null | head -n 1)
+              if [ -n "$CONTAINER_ROOT" ]; then
+                for name in final.mp4 thumbnail.jpg audio_master.mp3 narration_only.mp3 captions.srt script.md sources.json manifest.json production_manifest.json rights_manifest.json visual_rights.json provenance.json asset_registry.json production_truth.json timeline.json; do
+                  if docker exec ai-infinity-ci test -s "$CONTAINER_ROOT/$name" >/dev/null 2>&1; then
+                    docker cp "ai-infinity-ci:$CONTAINER_ROOT/$name" "$REVIEW/$name" >/dev/null 2>&1 || true
+                  fi
+                done
+                PACKAGE_PATH=$(docker exec ai-infinity-ci sh -lc "find '$CONTAINER_ROOT' -maxdepth 1 -type f -iname '*package*.zip' -print -quit" 2>/dev/null | head -n 1)
+                if [ -n "$PACKAGE_PATH" ]; then docker cp "ai-infinity-ci:$PACKAGE_PATH" "$REVIEW/package.zip" >/dev/null 2>&1 || true; fi
+                OTIO_PATH=$(docker exec ai-infinity-ci sh -lc "find '$CONTAINER_ROOT' -maxdepth 1 -type f -iname '*.otio' -print -quit" 2>/dev/null | head -n 1)
+                if [ -n "$OTIO_PATH" ]; then docker cp "ai-infinity-ci:$OTIO_PATH" "$REVIEW/timeline.otio" >/dev/null 2>&1 || true; fi
+                OTIO_BUNDLE=$(docker exec ai-infinity-ci sh -lc "find '$CONTAINER_ROOT' -maxdepth 1 -type f -iname 'timeline-export*.zip' -print -quit" 2>/dev/null | head -n 1)
+                if [ -n "$OTIO_BUNDLE" ]; then docker cp "ai-infinity-ci:$OTIO_BUNDLE" "$REVIEW/timeline-export.zip" >/dev/null 2>&1 || true; fi
+              else
+                echo "Review-only local artifact export unavailable: project directory not found in the isolated container." > "$REVIEW/review_export_warning.txt"
+              fi
+              # Collect non-gated metadata through the public route only as a
+              # fallback. Never substitute a synthetic MP4 or claim a blocked
+              # final/package download succeeded.
+              for name in audio_master.mp3 narration_only.mp3 captions.srt script.md sources.json manifest.json production_manifest.json rights_manifest.json visual_rights.json provenance.json; do
+                if [ ! -s "$REVIEW/$name" ]; then
+                  curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/asset/$name" -o "$REVIEW/$name" 2>/dev/null || rm -f "$REVIEW/$name"
+                fi
+              done
             fi
           fi
           if [ -s "$REVIEW/final.mp4" ]; then
@@ -437,6 +460,27 @@ jobs:
                   with p.open("rb") as f:
                       for chunk in iter(lambda:f.read(1024*1024),b""): h.update(chunk)
                   files.append({"path":str(p.relative_to(root)),"size_bytes":p.stat().st_size,"sha256":h.hexdigest()})
+          project={}
+          if (root/"project.json").is_file():
+              try: project=json.loads((root/"project.json").read_text(encoding="utf-8"))
+              except Exception: project={}
+          result=project.get("result") if isinstance(project.get("result"),dict) else {}
+          quality=result.get("quality") if isinstance(result.get("quality"),dict) else {}
+          visual={}
+          if (root/"visual_rights.json").is_file():
+              try: visual=json.loads((root/"visual_rights.json").read_text(encoding="utf-8"))
+              except Exception: visual={}
+          visual_assets=visual.get("assets") if isinstance(visual.get("assets"),list) else []
+          fallback_assets=[x for x in visual_assets if "vector editorial fallback" in str(x.get("source") or "").lower() or "fallback" in str(x.get("asset_kind") or "").lower()]
+          motion_assets=[x for x in visual_assets if Path(str(x.get("asset") or "")).suffix.lower() in {".mp4",".mov",".mkv",".webm"} and str(x.get("source_url") or "").startswith("https://") and str(x.get("license") or "").strip()]
+          scene_count=max(1,int(project.get("total_scenes") or len(visual_assets) or 1))
+          min_motion_sources=max(3,int(scene_count*0.70+0.9999))
+          max_fallback_visuals=max(1,int(scene_count*0.15))
+          source_motion_count=len({str(x.get("asset_sha256") or x.get("source_id") or x.get("asset")) for x in motion_assets})
+          fallback_count=len(fallback_assets)
+          creative_visual_gate=source_motion_count>=min_motion_sources and fallback_count<=max_fallback_visuals
+          technical_spec="PASS" if media.is_file() and fmt and abs(float(fmt.get("duration") or 0)-60.0)<=0.15 and int(v.get("width") or 0)==1920 and int(v.get("height") or 0)==1080 and (root/"full_decode_status.txt").exists() and (root/"full_decode_status.txt").read_text().strip()=="PASS" else "REVIEW_REQUIRED"
+          release_spec="PASS" if technical_spec=="PASS" and quality.get("passed") is True and creative_visual_gate else "REVIEW_REQUIRED"
           integrity={
             "truthful":True,"generator":"AI Infinity real container workflow (GitHub Actions)",
             "project_id":(root/"project_id.txt").read_text().strip() if (root/"project_id.txt").exists() else None,
@@ -451,6 +495,15 @@ jobs:
             "sources_evidence_available":(root/"sources.json").is_file(),
             "rights_or_visual_rights_evidence_available":any((root/n).is_file() for n in ("rights_manifest.json","visual_rights.json")),
             "editable_timeline_available":(root/"timeline.otio").is_file(),
+            "editable_timeline_bundle_available":(root/"timeline-export.zip").is_file(),
+            "source_motion_scene_count":source_motion_count,
+            "minimum_source_motion_scenes":min_motion_sources,
+            "fallback_visual_count":fallback_count,
+            "maximum_fallback_visuals":max_fallback_visuals,
+            "creative_visual_gate":"PASS" if creative_visual_gate else "REVIEW_REQUIRED",
+            "technical_spec_gate":technical_spec,
+            "spec_gate":release_spec,
+            "ai_infinity_quality_gate":"PASS" if quality.get("passed") is True else "REVIEW_REQUIRED",
             "human_creative_review":"PENDING",
             "files":files
           }
@@ -459,15 +512,19 @@ jobs:
           for label,names in [("final MP4",["final.mp4"]),("thumbnail",["thumbnail.jpg"]),("captions",["captions.srt"]),("sources",["sources.json"]),("rights evidence",["rights_manifest.json","visual_rights.json"])]:
               if not any((root/n).exists() for n in names): missing.append(label)
           duration=integrity["duration_seconds"]
-          spec="PASS" if integrity["media_available"] and duration is not None and abs(duration-60.0)<=0.15 and v.get("width")==1920 and v.get("height")==1080 and integrity["full_decode"]=="PASS" else "REVIEW_REQUIRED"
+          spec=integrity["spec_gate"]
           notes=[
             "# AI Infinity — ONE IDEA. INFINITE WORLDS. | Human Review Packet",
             "",
             "## Evidence source",
             "Generated by the real AI Infinity application inside the current GitHub Actions Docker runtime via /infinity/divine/create; this is CI-hosted production, not a live Render deployment.",
+            "Media copied from this isolated run's project directory is for human review only; it does not override any failed verification or authorize production release.",
             "",
             "## Technical target check",
-            f"- 60-second / 1920×1080 target: **{spec}**",
+            f"- 60-second / 1920×1080 technical target: **{integrity["technical_spec_gate"]}**",
+            f"- Professional visual/source gate: **{integrity["creative_visual_gate"]}**",
+            f"- Verified distinct source-motion scenes: {integrity["source_motion_scene_count"]}/{integrity["minimum_source_motion_scenes"]} required",
+            f"- Explicitly labelled fallback visuals: {integrity["fallback_visual_count"]} (maximum allowed: {integrity["maximum_fallback_visuals"]})",
             f"- Actual duration: {duration} seconds",
             f"- Actual resolution: {v.get('width')}×{v.get('height')}",
             f"- Video codec: {v.get('codec_name')}; audio codec: {a.get('codec_name')}",
