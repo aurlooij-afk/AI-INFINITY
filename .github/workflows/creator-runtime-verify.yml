@@ -662,6 +662,13 @@ jobs:
                 for name in final.mp4 master.mp4 thumbnail.jpg audio_master.mp3 narration_only.mp3 captions.srt script.md sources.json manifest.json production_manifest.json rights_manifest.json visual_rights.json provenance.json asset_registry.json production_truth.json timeline.json; do
                   if [ -s "$CONTAINER_ROOT/$name" ]; then cp -- "$CONTAINER_ROOT/$name" "$REVIEW/$name"; fi
                 done
+                # Preserve the exact selected visual bytes so the reviewer packet can
+                # independently recompute hashes, not merely repeat manifest claims.
+                for asset_path in "$CONTAINER_ROOT"/selected_visual_* "$CONTAINER_ROOT"/procedural_visual_* "$CONTAINER_ROOT"/pexels_launch_video_*.mp4; do
+                  if [ -f "$asset_path" ] && [ ! -L "$asset_path" ] && [ -s "$asset_path" ]; then
+                    cp -- "$asset_path" "$REVIEW/$(basename "$asset_path")"
+                  fi
+                done
                 PACKAGE_PATH=$(find "$CONTAINER_ROOT" -maxdepth 1 -type f -name 'package.zip' -print -quit)
                 if [ -n "$PACKAGE_PATH" ]; then cp -- "$PACKAGE_PATH" "$REVIEW/package.zip"; fi
                 NAMED_PACKAGE=$(find "$CONTAINER_ROOT" -maxdepth 1 -type f -iname '*creator-package*.zip' -print -quit)
