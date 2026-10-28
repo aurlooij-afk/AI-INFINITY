@@ -214,7 +214,9 @@ jobs:
           # can diverge from the canonical main:app process.
           docker stop ai-infinity-ci >/dev/null
           docker rm ai-infinity-ci >/dev/null 2>&1 || true
-          docker run -d --rm --name ai-infinity-ci --platform linux/amd64             -e AI_INFINITY_3601_BACKGROUND=false             -e AI_INFINITY_FAST_MODE=0             -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity             -p 10000:10000 ai-infinity:ci
+          # Preserve the exited container until review artifacts have been copied.
+          # An OOM/worker crash must not auto-delete the only output filesystem.
+          docker run -d --name ai-infinity-ci --platform linux/amd64             -e AI_INFINITY_3601_BACKGROUND=false             -e AI_INFINITY_FAST_MODE=0             -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity             -p 10000:10000 ai-infinity:ci
           ready=0
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:10000/health >/tmp/restarted-health.json; then
@@ -407,21 +409,24 @@ jobs:
               # This is a review-only evidence export from this workflow's own
               # isolated container. It does not authorize or weaken user-facing
               # delivery; the project's verified download route remains fail-closed.
-              CONTAINER_ROOT=$(docker exec ai-infinity-ci sh -lc "find /tmp -type d -path '*/creator_studio/$PROJECT_ID' -print -quit" 2>/dev/null | head -n 1)
-              if [ -n "$CONTAINER_ROOT" ]; then
+              # docker cp supports stopped containers; docker exec does not.
+              # Copy the project's real output directory, never a synthesized
+              # replacement, and retain it for inspection even after an OOM exit.
+              CONTAINER_ROOT="/tmp/ai-infinity/creator_studio/$PROJECT_ID"
+              REVIEW_PROJECT="$REVIEW/project-files"
+              mkdir -p "$REVIEW_PROJECT"
+              if docker cp "ai-infinity-ci:$CONTAINER_ROOT/." "$REVIEW_PROJECT/" >/dev/null 2>&1; then
                 for name in final.mp4 thumbnail.jpg audio_master.mp3 narration_only.mp3 captions.srt script.md sources.json manifest.json production_manifest.json rights_manifest.json visual_rights.json provenance.json asset_registry.json production_truth.json timeline.json; do
-                  if docker exec ai-infinity-ci test -s "$CONTAINER_ROOT/$name" >/dev/null 2>&1; then
-                    docker cp "ai-infinity-ci:$CONTAINER_ROOT/$name" "$REVIEW/$name" >/dev/null 2>&1 || true
-                  fi
+                  if [ -s "$REVIEW_PROJECT/$name" ]; then cp "$REVIEW_PROJECT/$name" "$REVIEW/$name"; fi
                 done
-                PACKAGE_PATH=$(docker exec ai-infinity-ci sh -lc "find '$CONTAINER_ROOT' -maxdepth 1 -type f -iname '*package*.zip' -print -quit" 2>/dev/null | head -n 1)
-                if [ -n "$PACKAGE_PATH" ]; then docker cp "ai-infinity-ci:$PACKAGE_PATH" "$REVIEW/package.zip" >/dev/null 2>&1 || true; fi
-                OTIO_PATH=$(docker exec ai-infinity-ci sh -lc "find '$CONTAINER_ROOT' -maxdepth 1 -type f -iname '*.otio' -print -quit" 2>/dev/null | head -n 1)
-                if [ -n "$OTIO_PATH" ]; then docker cp "ai-infinity-ci:$OTIO_PATH" "$REVIEW/timeline.otio" >/dev/null 2>&1 || true; fi
-                OTIO_BUNDLE=$(docker exec ai-infinity-ci sh -lc "find '$CONTAINER_ROOT' -maxdepth 1 -type f -iname 'timeline-export*.zip' -print -quit" 2>/dev/null | head -n 1)
-                if [ -n "$OTIO_BUNDLE" ]; then docker cp "ai-infinity-ci:$OTIO_BUNDLE" "$REVIEW/timeline-export.zip" >/dev/null 2>&1 || true; fi
+                PACKAGE_PATH=$(find "$REVIEW_PROJECT" -maxdepth 2 -type f -iname '*package*.zip' -print -quit)
+                if [ -n "$PACKAGE_PATH" ]; then cp "$PACKAGE_PATH" "$REVIEW/package.zip"; fi
+                OTIO_PATH=$(find "$REVIEW_PROJECT" -maxdepth 3 -type f -iname '*.otio' -print -quit)
+                if [ -n "$OTIO_PATH" ]; then cp "$OTIO_PATH" "$REVIEW/timeline.otio"; fi
+                OTIO_BUNDLE=$(find "$REVIEW_PROJECT" -maxdepth 3 -type f -iname 'timeline-export*.zip' -print -quit)
+                if [ -n "$OTIO_BUNDLE" ]; then cp "$OTIO_BUNDLE" "$REVIEW/timeline-export.zip"; fi
               else
-                echo "Review-only local artifact export unavailable: project directory not found in the isolated container." > "$REVIEW/review_export_warning.txt"
+                echo "Review-only local artifact export unavailable: expected project directory $CONTAINER_ROOT could not be copied from ai-infinity-ci." > "$REVIEW/review_export_warning.txt"
               fi
               # Collect non-gated metadata through the public route only as a
               # fallback. Never substitute a synthetic MP4 or claim a blocked
