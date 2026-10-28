@@ -221,13 +221,16 @@ def test_otio_export_filters_missing_master_from_qc_failed_saved_copy_without_re
         json.dumps({"project_id": project_id, "scenes": saved_rows, "truthful": True}),
         encoding="utf-8",
     )
+    # This mirrors the real failure mode: the regular project lifecycle says
+    # rendering completed, while canonical quality truth says REVIEW_REQUIRED.
+    # OTIO export may provide a partial review-only copy without promoting truth.
     project = {
         "project_id": project_id,
         "user_id": "test-user",
-        "status": "failed",
-        "stage": "quality_control",
+        "status": "completed",
+        "stage": "complete",
         "total_scenes": 8,
-        "title": "QC-failed creator review",
+        "title": "QC-unverified creator review",
     }
     calls: dict[str, list] = {"saved": [], "registered": [], "audits": []}
 
