@@ -526,17 +526,20 @@ jobs:
           response = json.load(open("/tmp/otio-export.json")) if os.path.getsize("/tmp/otio-export.json") else {}
           root = Path("/tmp/ai-infinity-container-data/creator_studio") / pid
           assert response.get("status") == "exported", {"otio_http": os.getenv("OTIO_HTTP"), "response": response}
-          for key in ("timeline", "bundle"):
-              item = response.get(key) or {}
-              path = root / item.get("name", "")
-              assert path.is_file() and path.stat().st_size > 0, {"kind": key, "path": str(path)}
-              h = hashlib.sha256(path.read_bytes()).hexdigest()
-              assert h == item.get("sha256"), {"kind": key, "expected": item.get("sha256"), "actual": h}
-              if key == "bundle":
-                  with zipfile.ZipFile(path) as archive:
-                      bad = archive.testzip()
-                      assert bad is None, {"bad_member": bad}
-                      assert "project.otio" in archive.namelist()
+          timeline = response.get("timeline") or {}
+          bundle = response.get("bundle") or {}
+          timeline_path = root / timeline.get("name", "")
+          bundle_path = root / bundle.get("name", "")
+          assert timeline_path.is_file() and timeline_path.stat().st_size > 0, {"kind": "timeline", "path": str(timeline_path)}
+          assert bundle_path.is_file() and bundle_path.stat().st_size > 0, {"kind": "bundle", "path": str(bundle_path)}
+          timeline_hash = hashlib.sha256(timeline_path.read_bytes()).hexdigest()
+          bundle_hash = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+          assert timeline_hash == timeline.get("sha256"), {"kind": "timeline", "expected": timeline.get("sha256"), "actual": timeline_hash}
+          assert bundle_hash == bundle.get("sha256"), {"kind": "bundle", "expected": bundle.get("sha256"), "actual": bundle_hash}
+          with zipfile.ZipFile(bundle_path) as archive:
+              bad = archive.testzip()
+              assert bad is None, {"bad_member": bad}
+              assert "project.otio" in archive.namelist()
           Path("/tmp/otio-review-export-proof.json").write_text(json.dumps({
               "status": "PASS_REVIEW_EXPORT_ONLY",
               "project_id": pid,
