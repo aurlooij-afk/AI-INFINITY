@@ -5201,18 +5201,28 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
         if bool(asset.get("fallback")) or not source_url.startswith("https://"):
             continue
         # A source URL alone is not proof that the downloaded shot exists.
-        # Count only decoded, non-empty scene media whose digest is available.
+        # Probe the actual file, then recompute its bytes' digest rather than
+        # trusting metadata supplied by the acquisition layer.
         try:
             if not path_value.is_file() or path_value.stat().st_size <= 20_000:
                 continue
-            digest = str(asset.get("asset_sha256") or asset.get("sha256") or "").strip()
-            if not digest:
-                digest = file_sha256(path_value)
-            if len(digest) != 64 or not re.fullmatch(r"[0-9a-f]{64}", digest.lower()):
+            source_probe = ffprobe_json(path_value)
+            source_streams = source_probe.get("streams") or []
+            source_video = next((row for row in source_streams if row.get("codec_type") == "video"), {})
+            source_width = int(source_video.get("width") or 0)
+            source_height = int(source_video.get("height") or 0)
+            source_seconds = float((source_probe.get("format") or {}).get("duration") or 0)
+            if not source_video or min(source_width, source_height) < 720 or source_seconds < 2.0:
+                continue
+            actual_digest = file_sha256(path_value).lower()
+            recorded_digest = str(asset.get("asset_sha256") or asset.get("sha256") or "").strip().lower()
+            if recorded_digest and recorded_digest != actual_digest:
+                continue
+            if len(actual_digest) != 64 or not re.fullmatch(r"[0-9a-f]{64}", actual_digest):
                 continue
         except Exception:
             continue
-        motion_source_keys.add(digest.lower())
+        motion_source_keys.add(actual_digest)
     fallback_visual_count = sum(bool(asset.get("fallback")) for asset in (assets or []))
     minimum_motion_sources = max(3, int(len(chapters) * 0.70 + 0.9999))
     maximum_fallback_visuals = max(1, int(len(chapters) * 0.15))
