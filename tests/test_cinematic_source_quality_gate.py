@@ -675,3 +675,98 @@ def test_explicit_launch_profile_matches_scene_local_landscape_without_repeating
     assert selected["quality_tier"] == "curated_free_source_motion_video"
     assert hashlib.sha256(Path(selected["path"]).read_bytes()).hexdigest() == hashlib.sha256(media_bytes).hexdigest()
 
+
+
+
+@pytest.mark.parametrize(
+    ("scene", "expected_source_id"),
+    [
+        ({
+            "topic": "AI Infinity — One Idea. Infinite Worlds.",
+            "heading": "The Cinematic World",
+            "campaign_profile": "ai_infinity_launch",
+            "visual_focus": "A futuristic cityscape skyline at night, tall illuminated architecture and moving city lights",
+            "visual_search_subject": "futuristic cityscape at night",
+            "visual_query": "futuristic cityscape skyline at night",
+            "narration": "The imagined idea expands into a city of tomorrow.",
+            "on_screen": "A world takes shape",
+        }, 34719182),
+        ({
+            "topic": "AI Infinity — One Idea. Infinite Worlds.",
+            "heading": "Transformation in Motion",
+            "campaign_profile": "ai_infinity_launch",
+            "visual_focus": "Abstract glowing-line tunnel transitioning from the imagined idea into a crafted visual world",
+            "visual_search_subject": "abstract tunnel with glowing lines cinematic transition",
+            "visual_query": "abstract tunnel with glowing lines cinematic transition",
+            "narration": "Each transition carries the same idea forward through light and motion.",
+            "on_screen": "Possibility becomes motion",
+        }, 29109378),
+    ],
+)
+def test_launch_focal_scenes_choose_matching_city_or_abstract_motion_source(
+    monkeypatch, tmp_path, scene, expected_source_id
+):
+    monkeypatch.setattr(studio, "FAST_MODE", False)
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: False)
+    payload = (f"source-{expected_source_id}-verified-motion-bytes\n".encode() * 1400)
+
+    def fake_download(url, path, **_kwargs):
+        assert str(expected_source_id) in url, f"focal source mismatch: {url}"
+        Path(path).write_bytes(payload)
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 8.0)
+    monkeypatch.setattr(studio, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
+
+    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=99)
+
+    assert selected is not None
+    assert selected["source_id"] == expected_source_id
+    assert selected["kind"] == "video"
+    assert selected["validated_media"] is True
+    assert selected["quality_tier"] == "curated_free_source_motion_video"
+    assert selected["asset_sha256"] == hashlib.sha256(payload).hexdigest()
+    assert Path(selected["path"]).is_file()
+
+
+def test_launch_signature_endcard_uses_real_screen_motion_source(monkeypatch, tmp_path):
+    monkeypatch.setattr(studio, "FAST_MODE", False)
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: False)
+    payload = b"genuine-metadata-validated-screen-motion-source-bytes\n" * 1400
+
+    def fake_download(url, path, **_kwargs):
+        assert any(str(source_id) in url for source_id in (15517230, 35820856, 12358562)), url
+        Path(path).write_bytes(payload)
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 8.0)
+    monkeypatch.setattr(studio, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
+
+    scene = {
+        "topic": "AI Infinity — One Idea. Infinite Worlds.",
+        "heading": "Signature Ending",
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": (
+            "Restrained midnight-blue brand end-card displayed on a large dark monitor, "
+            "subtle cyan and violet light, clean negative space, elegant AI Infinity title reveal"
+        ),
+        "visual_search_subject": "minimal dark cinematic brand end card",
+        "visual_query": "minimal dark cinematic brand end card; display the finished title on screen",
+        "narration": "AI Infinity. One idea. Infinite worlds.",
+        "on_screen": "AI INFINITY • ONE IDEA. INFINITE WORLDS.",
+    }
+
+    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=99)
+
+    assert selected is not None
+    assert selected["source_id"] in {15517230, 35820856, 12358562}
+    assert selected["kind"] == "video"
+    assert selected["validated_media"] is True
+    assert selected["quality_tier"] == "curated_free_source_motion_video"
+    assert selected["asset_sha256"] == hashlib.sha256(payload).hexdigest()
