@@ -4137,6 +4137,8 @@ def _parse_scene_visual_intent(
 
 
 _MEDIA_PROVIDER_COOLDOWN_LOCK = threading.RLock()
+# Serialize per-project distinct-asset reservation across concurrent scene workers.
+_SCENE_VISUAL_SELECTION_LOCK = threading.RLock()
 _MEDIA_PROVIDER_COOLDOWNS: Dict[str, Dict[str, Any]] = {}
 
 
@@ -4290,8 +4292,18 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             pass
 
     def candidate_is_relevant(candidate: Dict[str, Any]) -> bool:
-        # Use the storyboard's scene focus; provider query matches are provenance,
-        # not a replacement for substantive metadata evidence.
+        # Curated launch clips have already passed the stricter launch-specific
+        # focal-concept + item-metadata check in _curated_pexels_launch_video.
+        # Do not reject them a second time with the generic multi-concept matcher:
+        # that double validation was dropping correctly matched mountain/tunnel shots.
+        if (
+            isinstance(candidate, dict)
+            and candidate.get("quality_tier") == "curated_free_source_motion_video"
+            and candidate.get("selection_reason") == "scene_concepts_and_source_metadata_match"
+            and candidate.get("validated_media") is True
+        ):
+            return True
+        # For every other source, provider query text remains provenance—not proof.
         return _visual_candidate_relevant(candidate, search_subject or topic, focus or heading)
 
     def candidate_media_is_usable(candidate: Dict[str, Any]) -> bool:
@@ -4324,15 +4336,26 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             digest=file_sha256(path)
         except Exception:
             return None
-        if digest in used_visual_hashes:
-            return None
-        suffix=path.suffix.lower() or ".bin"
-        selected=outdir / f"selected_visual_{index:02d}{suffix}"
-        try:
-            shutil.copy2(path, selected)
-        except Exception:
-            return None
-        used_visual_hashes.add(digest)
+        # Other scene workers share this project directory. Re-read committed
+        # selections while holding one lock, otherwise two workers can both observe
+        # an unused hash and save the same source clip for different scenes.
+        with _SCENE_VISUAL_SELECTION_LOCK:
+            current_hashes = set(used_visual_hashes)
+            for previous in outdir.glob("selected_visual_*"):
+                try:
+                    if previous.is_file():
+                        current_hashes.add(file_sha256(previous))
+                except Exception:
+                    continue
+            if digest in current_hashes:
+                return None
+            suffix=path.suffix.lower() or ".bin"
+            selected=outdir / f"selected_visual_{index:02d}{suffix}"
+            try:
+                shutil.copy2(path, selected)
+            except Exception:
+                return None
+            used_visual_hashes.add(digest)
         selected_candidate=dict(candidate)
         selected_candidate["path"]=str(selected)
         selected_candidate["source_file"]=str(path)
@@ -4345,8 +4368,14 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     # "editing" and "workstation". The ordinary provider ladder is unchanged
     # for every other brief and remains the fallback when this source fails.
     try:
-        launch_motion = _curated_pexels_launch_video(scene, outdir, index)
-        if launch_motion:
+        # Retry up to three curated candidates if another worker has just committed
+        # the same bytes for a different scene. The helper re-scans selected files
+        # on every call, so a retry chooses the next distinct relevant clip instead
+        # of unnecessarily degrading the scene to an illustration.
+        for launch_attempt in range(3):
+            launch_motion = _curated_pexels_launch_video(scene, outdir, index)
+            if not launch_motion:
+                break
             source_path = Path(str(launch_motion.get("path") or ""))
             if source_path.is_file():
                 MEDIA_SOURCE_METADATA_BY_PATH[str(source_path.resolve())] = dict(launch_motion)
@@ -4359,9 +4388,12 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
                     "source_id": launch_motion.get("source_id"),
                     "duration_seconds": launch_motion.get("duration_seconds"),
                     "sha256": selected_motion.get("asset_sha256"),
+                    "selection_attempt": launch_attempt + 1,
                 })
                 return selected_motion
-            source_failures.append("_pexels-curated-launch-video:duplicate-or-not-relevant")
+            source_failures.append(
+                f"_pexels-curated-launch-video:duplicate-or-unusable:attempt-{launch_attempt + 1}"
+            )
     except Exception as exc:
         source_failures.append("_pexels-curated-launch-video:" + type(exc).__name__ + ":" + str(exc)[:160])
 
@@ -6439,7 +6471,8 @@ def _normalize_delivery_loudness(
         f"atrim=duration={requested_duration:.3f},"
         f"apad=whole_dur={requested_duration:.3f},"
         f"atrim=duration={requested_duration:.3f},"
-        f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}"
+        f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra},"
+        "alimiter=limit=0.80:attack=5:release=50:level=false"
     )
     rate = "96k" if fast_mode else "192k"
     ffmpeg(
