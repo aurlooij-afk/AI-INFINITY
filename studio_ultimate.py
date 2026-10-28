@@ -4034,15 +4034,19 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
         # bridges give the matching catalog category priority only when the user's
         # actual scene describes that visual. Source metadata, media decode,
         # black-frame rejection, byte uniqueness and rights gates still apply.
+        primary_focal_text = " ".join(
+            str(scene.get(key) or "")
+            for key in ("heading", "visual_focus", "visual_search_subject")
+        )
         cityscape_focal = (
             explicit_launch_profile
             and required == {"cityscape"}
-            and bool(re.search(r"\b(?:futuristic city|cityscape|city skyline|metropolis|urban skyline)\b", scene_visual_text, re.I))
+            and bool(re.search(r"\b(?:futuristic city|cityscape|city skyline|metropolis|urban skyline)\b", primary_focal_text, re.I))
         )
         abstract_transition_focal = (
             explicit_launch_profile
             and required == {"abstract_motion"}
-            and bool(re.search(r"\b(?:abstract|digital tunnel|glowing[- ]lines?|light trails|transformation in motion|possibility becomes motion)\b", scene_visual_text, re.I))
+            and bool(re.search(r"\b(?:abstract|digital tunnel|glowing[- ]lines?|light trails|transformation in motion|possibility becomes motion)\b", primary_focal_text, re.I))
         )
         final_screen_bridge = (
             "finished_video" in scene_concepts
