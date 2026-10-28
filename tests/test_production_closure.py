@@ -147,3 +147,32 @@ def test_final_audio_master_pads_early_ended_audio_stream_to_video_duration(tmp_
         timeout=60,
     )
 
+def test_final_delivery_loudness_master_applies_post_normalization_sample_peak_ceiling(monkeypatch, tmp_path):
+    source = tmp_path / "programme.mp4"
+    output = tmp_path / "mastered.mp4"
+    source.write_bytes(b"source-programme-bytes" * 1000)
+    captured = {}
+
+    probe = {
+        "format": {"duration": "20.0"},
+        "streams": [
+            {"codec_type": "video", "codec_name": "h264", "width": 1280, "height": 720, "duration": "20.0"},
+            {"codec_type": "audio", "codec_name": "aac", "duration": "20.0", "sample_rate": "48000"},
+        ],
+    }
+
+    def fake_ffmpeg(*args, **kwargs):
+        captured["args"] = [str(value) for value in args]
+        output.write_bytes(b"normalized-and-peak-limited-delivery" * 500)
+
+    monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: probe)
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 20.0)
+
+    result = studio._normalize_delivery_loudness(source, output, fast_mode=True)
+    args = captured["args"]
+    audio_filter = args[args.index("-af") + 1]
+
+    assert "loudnorm=I=-16.0:TP=-1.5:LRA=11.0" in audio_filter
+    assert "alimiter=limit=0.80:attack=5:release=50:level=false" in audio_filter
+    assert result["status"] == "completed"
