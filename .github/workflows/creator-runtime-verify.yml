@@ -139,6 +139,12 @@ jobs:
           # be reviewed even if OOM kills/removes the producer container. This is
           # ephemeral CI evidence, not a claim of durable production storage.
           mkdir -p /tmp/ai-infinity-container-data
+          # The production image runs as UID 10001. Give that UID write access
+          # while retaining the runner group as readers, so project data survives
+          # container exit and can be copied into the review packet by the runner.
+          RUNNER_GID="$(id -g)"
+          sudo chown "10001:$RUNNER_GID" /tmp/ai-infinity-container-data
+          sudo chmod 2770 /tmp/ai-infinity-container-data
           docker run -d --name ai-infinity-ci --platform linux/amd64 \
             --memory=512m --memory-swap=512m \
             -v /tmp/ai-infinity-container-data:/tmp/ai-infinity \
