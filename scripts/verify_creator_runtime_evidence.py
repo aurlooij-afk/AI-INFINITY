@@ -63,20 +63,89 @@ def main():
     source_motion_count = int(coverage.get("distinct_verified_motion_sources") or truth_checks.get("verified_motion_source_count") or 0)
     fallback_count = int(coverage.get("fallback_visual_count") or truth_checks.get("fallback_visual_count") or 0)
 
+    # The public project-status response does not include a reliable asset registry.
+    # Read the saved visual source manifest and artifact registry collected from the
+    # actual running container. Compare declared source hashes against the selected
+    # media files copied from the project directory; do not infer source identity
+    # from a provider label or generate hashes for absent media.
+    sources_manifest = read_json(root / "sources.json")
+    artifact_payload = read_json(root / "artifacts.json")
+    artifact_rows = artifact_payload.get("artifacts") if isinstance(artifact_payload.get("artifacts"), list) else []
+    visual_assets = sources_manifest.get("visual_assets") if isinstance(sources_manifest.get("visual_assets"), list) else []
     source_evidence = []
-    project_assets = project.get("assets") if isinstance(project.get("assets"), list) else []
-    for asset in project_assets:
-        meta = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
-        if meta.get("source_id") is not None or meta.get("fallback"):
+    for index, raw in enumerate(visual_assets, 1):
+        if not isinstance(raw, dict):
             source_evidence.append({
-                "asset_name": asset.get("name"),
-                "source_id": meta.get("source_id"),
-                "source_url": meta.get("source_url"),
-                "sha256": meta.get("asset_sha256") or meta.get("sha256"),
-                "fallback": bool(meta.get("fallback")),
-                "fallback_reason": meta.get("fallback_reason"),
-                "rights_status": meta.get("rights_status"),
+                "scene_index": index, "source_id": None, "sha256": None,
+                "fallback": False, "hash_verified_against_file": False,
+                "evidence_status": "INVALID_SOURCE_RECORD",
             })
+            continue
+        fallback = bool(raw.get("fallback"))
+        declared_hash = raw.get("asset_sha256") or raw.get("sha256")
+        source_id = raw.get("source_id")
+        candidates = []
+        for key in ("asset_name", "filename", "file_name", "name"):
+            value = raw.get(key)
+            if isinstance(value, str) and value and Path(value).name == value:
+                candidates.append(root / value)
+        candidates.extend(sorted(root.glob(f"selected_visual_{index:02d}.*")))
+        candidates.extend(sorted(root.glob(f"procedural_visual_{index:02d}.*")))
+        candidates.extend(sorted(root.glob(f"pexels_launch_video_{index:02d}.*")))
+        local_path = next((path for path in candidates if path.is_file() and not path.is_symlink() and path.stat().st_size > 0), None)
+        observed_hash = sha256_file(local_path) if local_path else None
+        matching_artifacts = []
+        for artifact in artifact_rows:
+            if not isinstance(artifact, dict):
+                continue
+            metadata = artifact.get("metadata") if isinstance(artifact.get("metadata"), dict) else {}
+            if source_id is not None and str(metadata.get("source_id")) == str(source_id):
+                matching_artifacts.append(artifact)
+            elif local_path and Path(str(artifact.get("asset_name") or "")).name == local_path.name:
+                matching_artifacts.append(artifact)
+        artifact_hashes = sorted({
+            str(artifact.get("sha256"))
+            for artifact in matching_artifacts
+            if isinstance(artifact.get("sha256"), str) and len(artifact.get("sha256")) == 64
+        })
+        hash_matches = bool(
+            observed_hash
+            and isinstance(declared_hash, str)
+            and len(declared_hash) == 64
+            and observed_hash.lower() == declared_hash.lower()
+        )
+        artifact_hash_matches = bool(observed_hash and observed_hash in artifact_hashes)
+        source_evidence.append({
+            "scene_index": index,
+            "asset_name": local_path.name if local_path else next((Path(value).name for value in candidates if value.name), None),
+            "source_id": source_id,
+            "source_url": raw.get("source_url"),
+            "provider": raw.get("provider"),
+            "source": raw.get("source"),
+            "declared_sha256": declared_hash,
+            "sha256": observed_hash or declared_hash,
+            "observed_file_sha256": observed_hash,
+            "artifact_registry_sha256": artifact_hashes,
+            "hash_verified_against_file": hash_matches or artifact_hash_matches,
+            "hash_matches_declared_manifest": hash_matches,
+            "hash_matches_artifact_registry": artifact_hash_matches,
+            "fallback": fallback,
+            "fallback_reason": raw.get("fallback_reason"),
+            "rights_status": raw.get("rights_status"),
+            "license": raw.get("license"),
+            "license_url": raw.get("license_url"),
+            "evidence_status": (
+                "VERIFIED_FALLBACK_HASHED" if fallback and observed_hash
+                else "VERIFIED_SOURCE_HASHED" if source_id is not None and (hash_matches or artifact_hash_matches)
+                else "REVIEW_REQUIRED_MISSING_SOURCE_ID" if not fallback and source_id is None
+                else "REVIEW_REQUIRED_MISSING_FILE_OR_HASH"
+            ),
+        })
+    source_evidence_verified = bool(source_evidence) and all(
+        item.get("hash_verified_against_file") is True
+        and (item.get("fallback") is True or item.get("source_id") is not None)
+        for item in source_evidence
+    )
 
     canonical_quality_gate = (
         truth.get("truthful") is True
@@ -128,6 +197,7 @@ def main():
         and quality.get("passed") is True
         and creative_visual_gate
         and canonical_quality_gate
+        and source_evidence_verified
         and editable_timeline_gate
         and creator_package_gate
     ) else "REVIEW_REQUIRED"
@@ -163,6 +233,9 @@ def main():
         "canonical_quality_verified": truth.get("verified") is True,
         "canonical_quality_failures": truth.get("failures") or [],
         "source_asset_evidence": source_evidence,
+        "source_evidence_verified": source_evidence_verified,
+        "source_evidence_count": len(source_evidence),
+        "source_evidence_unverified_count": sum(1 for item in source_evidence if item.get("hash_verified_against_file") is not True),
         "creative_visual_gate": "PASS" if creative_visual_gate else "REVIEW_REQUIRED",
         "technical_spec_gate": technical_spec,
         "spec_gate": release_spec,
@@ -214,7 +287,8 @@ def main():
         *([f"- Canonical QC failure: {failure}" for failure in integrity["canonical_quality_failures"]] or ["- Canonical QC failure details: none recorded"]),
         "",
         "## Selected visual source IDs and SHA-256 evidence",
-        *([f"- source_id={item['source_id']}; sha256={item['sha256']}; fallback={item['fallback']}; rights={item['rights_status']}; url={item['source_url']}" for item in integrity["source_asset_evidence"]] or ["- No selected source records were available in the captured project asset registry."]),
+        f"- File-backed source evidence verified: {integrity['source_evidence_verified']} ({integrity['source_evidence_count']} visual records; {integrity['source_evidence_unverified_count']} without file-backed hash confirmation)",
+        *([f"- scene={item['scene_index']}; source_id={item['source_id']}; sha256={item['sha256']}; observed_file_sha256={item['observed_file_sha256']}; hash_verified={item['hash_verified_against_file']}; fallback={item['fallback']}; evidence={item['evidence_status']}; rights={item['rights_status']}; url={item['source_url']}" for item in integrity["source_asset_evidence"]] or ["- No visual source records were available in sources.json; source acceptance is REVIEW_REQUIRED."]),
         "",
         "## Creative and rights review",
         "- Human creative review: **PENDING — not yet reviewed or approved**",
