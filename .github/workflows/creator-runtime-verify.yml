@@ -475,15 +475,20 @@ jobs:
           if (root/"visual_rights.json").is_file():
               try: visual=json.loads((root/"visual_rights.json").read_text(encoding="utf-8"))
               except Exception: visual={}
-          visual_assets=visual.get("assets") if isinstance(visual.get("assets"),list) else []
-          fallback_assets=[x for x in visual_assets if "vector editorial fallback" in str(x.get("source") or "").lower() or "fallback" in str(x.get("asset_kind") or "").lower()]
-          motion_assets=[x for x in visual_assets if Path(str(x.get("asset") or "")).suffix.lower() in {".mp4",".mov",".mkv",".webm"} and str(x.get("source_url") or "").startswith("https://") and str(x.get("license") or "").strip()]
-          scene_count=max(1,int(project.get("total_scenes") or len(visual_assets) or 1))
-          min_motion_sources=max(3,int(scene_count*0.70+0.9999))
-          max_fallback_visuals=max(1,int(scene_count*0.15))
-          source_motion_count=len({str(x.get("asset_sha256") or x.get("source_id") or x.get("asset")) for x in motion_assets})
-          fallback_count=len(fallback_assets)
-          creative_visual_gate=source_motion_count>=min_motion_sources and fallback_count<=max_fallback_visuals
+          coverage=quality.get("visual_source_coverage") if isinstance(quality.get("visual_source_coverage"),dict) else {}
+          quality_checks=quality.get("checks") if isinstance(quality.get("checks"),dict) else {}
+          scene_count=max(1,int(coverage.get("scene_count") or project.get("total_scenes") or 1))
+          min_motion_sources=int(coverage.get("minimum_motion_sources") or max(3,int(scene_count*0.70+0.9999)))
+          max_fallback_visuals=int(coverage.get("maximum_fallback_visuals") or max(1,int(scene_count*0.15)))
+          source_motion_count=int(coverage.get("distinct_verified_motion_sources") or 0)
+          fallback_count=int(coverage.get("fallback_visual_count") or 0)
+          creative_visual_gate=(
+              coverage.get("required") is True
+              and source_motion_count>=min_motion_sources
+              and fallback_count<=max_fallback_visuals
+              and quality_checks.get("required_source_motion_coverage") is True
+              and quality_checks.get("fallback_visual_budget_ok") is True
+          )
           technical_spec="PASS" if media.is_file() and fmt and abs(float(fmt.get("duration") or 0)-60.0)<=0.15 and int(v.get("width") or 0)==1920 and int(v.get("height") or 0)==1080 and (root/"full_decode_status.txt").exists() and (root/"full_decode_status.txt").read_text().strip()=="PASS" else "REVIEW_REQUIRED"
           release_spec="PASS" if technical_spec=="PASS" and quality.get("passed") is True and creative_visual_gate else "REVIEW_REQUIRED"
           integrity={
