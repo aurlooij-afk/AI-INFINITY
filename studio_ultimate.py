@@ -1685,7 +1685,7 @@ def _explicit_timed_storyboard_plan(
         "abstract glowing-line tunnel transitioning from the imagined landscape into a crafted visual world",
         "editing workstation, real timeline, caption preview, sound meters and deliberate hands-on craft",
         "the same creator watching the finished film on a computer screen, close-up human reaction, warm gold practical light",
-        "restrained midnight-blue brand end-card, subtle cyan and violet light, clean negative space",
+        "restrained midnight-blue brand end-card displayed on a large dark monitor, subtle cyan and violet light, clean negative space, elegant AI Infinity title reveal",
     ]
     overlays = [
         "Every extraordinary world begins",
