@@ -506,7 +506,7 @@ jobs:
           mkdir -p "$REVIEW"
           docker ps -a > "$REVIEW/docker_containers.txt" 2>&1
           docker logs ai-infinity-ci > "$REVIEW/docker_runtime.log" 2>&1
-          for path in /tmp/request.json /tmp/create-response.json /tmp/project.json /tmp/artifacts.json /tmp/verify.json /tmp/reality-proof.json /tmp/final-probe.json /tmp/otio-export.json /tmp/otio-export-warning.txt; do
+          for path in /tmp/request.json /tmp/create-response.json /tmp/project.json /tmp/artifacts.json /tmp/verify.json /tmp/reality-proof.json /tmp/final-probe.json /tmp/otio-export.json /tmp/otio-export-warning.txt /tmp/otio-review-export-proof.json; do
             if [ -s "$path" ]; then cp "$path" "$REVIEW/"; fi
           done
           if [ -s /tmp/create-response.json ]; then
@@ -694,6 +694,7 @@ jobs:
             /tmp/artifacts.json
             /tmp/verify.json
             /tmp/reality-proof.json
+            /tmp/otio-review-export-proof.json
             /tmp/ai-infinity-brand-film-review/**
             !/tmp/ai-infinity-brand-film-review/named_creator_package.zip
           if-no-files-found: warn
