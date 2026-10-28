@@ -173,3 +173,45 @@ def test_delivery_loudness_mastering_caps_output_to_source_programme_duration(mo
     assert args[args.index("-t") + 1] == "60.000"
     assert result["output_duration_seconds"] == 60.0
     assert result["audio_video_duration_match"] is True
+
+
+def test_final_loudness_mux_caps_a_sixty_six_second_input_to_the_requested_sixty_seconds(monkeypatch, tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source-master" * 2000)
+    out = tmp_path / "final.mp4"
+    captured = {}
+
+    def fake_ffmpeg(*args, timeout=240):
+        captured["args"] = [str(value) for value in args]
+        out_path = Path(str(args[-1]))
+        out_path.write_bytes(b"final-master" * 2000)
+
+    def fake_probe(path):
+        duration = "66.245" if Path(path) == source else "60.000"
+        return {
+            "format": {"duration": duration},
+            "streams": [
+                {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080, "duration": duration},
+                {"codec_type": "audio", "codec_name": "aac", "duration": duration},
+                {"codec_type": "subtitle", "codec_name": "mov_text"},
+            ],
+        }
+
+    monkeypatch.setattr(studio, "probe_duration", lambda path: 66.245)
+    monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(studio, "ffprobe_json", fake_probe)
+
+    result = studio._normalize_delivery_loudness(
+        source, out, fast_mode=False, target_duration_seconds=60.0
+    )
+
+    args = captured["args"]
+    assert args[args.index("-t") + 1] == "60.000"
+    audio_filter = args[args.index("-af") + 1]
+    assert "atrim=duration=60.000" in audio_filter
+    assert "apad=whole_dur=60.000" in audio_filter
+    assert args[args.index("-c:v") + 1] == "copy"
+    assert result["source_duration_seconds"] == 66.245
+    assert result["requested_duration_seconds"] == 60.0
+    assert result["output_duration_seconds"] == 60.0
+    assert result["audio_video_duration_match"] is True
