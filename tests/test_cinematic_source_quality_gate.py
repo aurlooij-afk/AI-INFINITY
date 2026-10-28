@@ -110,3 +110,29 @@ def test_standard_mode_can_still_label_visual_fallback_without_claiming_source_c
     assert result["checks"]["fallback_visual_used"] is True
     assert result["checks"]["required_source_motion_coverage"] is True
     assert result["checks"]["fallback_visual_budget_ok"] is True
+
+def test_timecoded_ai_infinity_brand_film_sets_curated_campaign_profile():
+    brief = """Create an extraordinary 60-second cinematic brand film for AI Infinity.
+    0–4 seconds — The hook. A creator sees the first idea. Voiceover: “Every extraordinary world begins with something nobody else can see.”
+    4–12 seconds — The spark. A dramatic landscape reveals an imagined future city.
+    12–25 seconds — The transformation. Research notes and storyboards turn the idea into a script.
+    25–40 seconds — The cinematic experience. Landscapes, futuristic architecture and a luminous tunnel reveal possibility.
+    40–49 seconds — The craft. A creator edits the timeline and captions.
+    49–56 seconds — The payoff. The creator sees the finished film.
+    56–60 seconds — The signature ending. AI Infinity. One idea. Infinite worlds.
+    VISUAL DIRECTION: Deep midnight blues, controlled cyan and violet, warm gold practical light.
+    VOICE, MUSIC AND SOUND: Original narration and score."""
+    plan = studio._explicit_timed_storyboard_plan(
+        title="ONE IDEA. INFINITE WORLDS.",
+        objective=brief,
+        fmt="long",
+        duration=60,
+        audience="global creators",
+        tone="premium cinematic, human, emotionally intelligent",
+        language="English",
+        topic="AI Infinity — One Idea. Infinite Worlds.",
+    )
+
+    assert plan is not None
+    assert plan["storyboard_origin"] == "explicit_timecoded_user_brief"
+    assert all(scene["campaign_profile"] == "ai_infinity_launch" for scene in plan["chapters"])
