@@ -420,8 +420,8 @@ jobs:
           curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
             "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/asset/$BUNDLE_NAME" -o /tmp/review-timeline-bundle.zip
           
-          python - <<'PY'
-          import hashlib, json, zipfile
+          OTIO_CONTROLLED_QC_FAILURE_TEST="$export_review_test" python - <<'PY'
+          import hashlib, json, os, zipfile
           from pathlib import Path, PurePosixPath
           import opentimelineio as otio
           pid=json.load(open("/tmp/create-response.json"))["project_id"]
@@ -463,7 +463,7 @@ jobs:
               assert any("media/audio_master.mp3" in name for name in names), "programme audio missing from portable bundle"
           assert checked, "OTIO did not reference any rendered scene master"
           proof={"status":"PASS_REVIEW_EXPORT_MEDIA_INSPECTION","project_id":pid,
-                 "controlled_qc_failure_test":True,"truth_verified":info.get("truth_verified"),
+                 "controlled_qc_failure_test":os.getenv("OTIO_CONTROLLED_QC_FAILURE_TEST") == "true","truth_verified":info.get("truth_verified"),
                  "publish_allowed_by_quality_gate":info.get("publish_allowed_by_quality_gate"),
                  "scene_count":response.get("scene_count"),"referenced_scene_masters":checked,
                  "timeline_sha256":response["timeline"]["sha256"],"bundle_sha256":response["bundle"]["sha256"],
@@ -606,6 +606,9 @@ jobs:
               "project_id": pid,
               "project_status": "failed",
               "failure_stage": "quality_control",
+              "controlled_qc_failure_test": False,
+              "review_export": response.get("review_export"),
+              "publish_allowed": False,
               "truth_state": response.get("truth_state"),
               "truth_verified": response.get("truth_verified"),
               "human_review_status": response.get("human_review_status"),
