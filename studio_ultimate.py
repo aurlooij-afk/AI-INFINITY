@@ -6525,20 +6525,27 @@ def _export_programme_audio_master(
         raise RuntimeError("programme audio export cannot determine the video runtime")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.unlink(missing_ok=True)
-    # An audio stream can end at 53.6 seconds even when the container's video
-    # programme is 60 seconds. Reset and resample the programme, then mix it with
-    # a precisely target-length silence bed. The latter guarantees a real 60s
-    # output timeline even when the input audio ends early or has timestamp gaps.
+    # Reset stream timestamps, resample with gap correction, and build the
+    # programme duration on the audio stream itself. A silence-bed amix can
+    # report the shorter input duration on some mux/decoder combinations even
+    # when the container is 60s; apad after timestamp normalization is explicit.
+    # Loudness-normalize this separate downloadable master as well as the MP4.
+    target_i = float(os.getenv("AI_INFINITY_DELIVERY_TARGET_LUFS", "-16"))
+    target_tp = float(os.getenv("AI_INFINITY_DELIVERY_TRUE_PEAK_DBTP", "-1.5"))
+    target_lra = float(os.getenv("AI_INFINITY_DELIVERY_LRA", "11"))
+    if not (-20.0 <= target_i <= -14.0) or not (-3.0 <= target_tp <= -1.0) or not (5.0 <= target_lra <= 20.0):
+        raise ValueError("programme audio master loudness targets are outside safe delivery bounds")
     audio_filter = (
-        f"[0:a:0]asetpts=PTS-STARTPTS,aresample=48000[audio];"
-        f"anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration={target:.3f}[silence];"
-        f"[audio][silence]amix=inputs=2:duration=longest:dropout_transition=0,"
-        f"atrim=duration={target:.3f}[outa]"
+        "aresample=48000:async=1:first_pts=0,"
+        "asetpts=N/SR/TB,"
+        f"apad=whole_dur={target:.3f},"
+        f"atrim=duration={target:.3f},"
+        f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}"
     )
     ffmpeg(
         "-i", source,
-        "-filter_complex", audio_filter,
-        "-map", "[outa]",
+        "-map", "0:a:0",
+        "-af", audio_filter,
         "-vn",
         "-t", f"{target:.3f}",
         "-c:a", "libmp3lame",
