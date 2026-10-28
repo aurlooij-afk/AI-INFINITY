@@ -724,7 +724,7 @@ jobs:
           quality_checks=quality.get("checks") if isinstance(quality.get("checks"),dict) else {}
           scene_count=max(1,int(coverage.get("scene_count") or project.get("total_scenes") or 1))
           min_motion_sources=max(
-              int(coverage.get("minimum_motion_sources") or max(3,int(scene_count*0.70+0.9999)),
+              int(coverage.get("minimum_motion_sources") or max(3,int(scene_count*0.70+0.9999))),
               int(truth_checks.get("minimum_motion_source_count") or 0),
           )
           min_professional_scenes=int(truth_checks.get("minimum_professional_scene_count") or 0)
