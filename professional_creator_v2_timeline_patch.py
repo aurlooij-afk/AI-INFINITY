@@ -428,7 +428,9 @@ def install(app: Any) -> None:
                 if completed_masters:
                     source = base._timeline(studio, project)
                     source = _review_only_filter_generated_missing_masters(
-                        project, studio._project_dir(pid), source,
+                        project,
+                        studio._project_dir(pid),
+                        source,
                         allow_unverified_qc_review=allow_unverified_qc_review,
                     )
                     if not isinstance(source, dict) or not isinstance(source.get("scenes"), list) or not source["scenes"]:
@@ -467,8 +469,10 @@ def install(app: Any) -> None:
                 )
             source = base._timeline(studio, project)
             source = _review_only_filter_generated_missing_masters(
-                project, studio._project_dir(pid), source,
-                        allow_unverified_qc_review=allow_unverified_qc_review,
+                project,
+                studio._project_dir(pid),
+                source,
+                allow_unverified_qc_review=allow_unverified_qc_review,
             )
         # The GET timeline route already applies this same in-memory filter to
         # QC-failed saved timelines. OTIO export must apply it too, otherwise a
@@ -477,8 +481,10 @@ def install(app: Any) -> None:
         # The helper filters only the export copy for QC-failed projects; it
         # never rewrites the saved editor timeline or promotes project quality.
         source = _review_only_filter_generated_missing_masters(
-            project, studio._project_dir(pid), source,
-                        allow_unverified_qc_review=allow_unverified_qc_review,
+            project,
+            studio._project_dir(pid),
+            source,
+            allow_unverified_qc_review=allow_unverified_qc_review,
         )
         try:
             review_export = source.get("review_export") if isinstance(source, dict) else None
