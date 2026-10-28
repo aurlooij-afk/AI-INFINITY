@@ -1746,6 +1746,9 @@ def _explicit_timed_storyboard_plan(
         chapters.append({
             "heading": heading,
             "topic": str(topic or title or "AI Infinity").strip()[:180],
+            # Pass the explicit campaign profile through to the visual source
+            # selector; scene-local relevance matching still governs each clip.
+            "campaign_profile": "ai_infinity_launch" if _is_explicit_ai_infinity_launch_brief(raw_objective) else None,
             "visual_focus": visual_focus,
             "visual_search_subject": search_subject,
             "narration": narration,
@@ -3847,9 +3850,13 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
     if not isinstance(scene, dict):
         return None
     profile_text = " ".join(str(scene.get(key) or "") for key in ("topic", "title", "heading", "visual_focus", "visual_query"))
+    explicit_launch_profile = str(scene.get("campaign_profile") or "").strip().lower() == "ai_infinity_launch"
     if not (
         re.search(r"\bAI\s+Infinity\b", profile_text, re.I)
-        and re.search(r"\b(?:launch|creator|studio|production|editing|software)\b", profile_text, re.I)
+        and (
+            explicit_launch_profile
+            or re.search(r"\b(?:launch|creator|studio|production|editing|software)\b", profile_text, re.I)
+        )
     ):
         return None
 
