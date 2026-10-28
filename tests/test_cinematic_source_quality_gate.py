@@ -518,3 +518,38 @@ def test_acquire_scene_asset_accepts_curated_focal_match_and_retries_duplicate_m
     selected_path = Path(selected["path"])
     assert selected_path.is_file()
     assert selected_path.name == "selected_visual_02.mp4"
+
+def test_explicit_launch_profile_matches_scene_local_landscape_without_repeating_brand(monkeypatch, tmp_path):
+    """Project-level launch intent must not be lost when scene text names only its focal shot."""
+    monkeypatch.setattr(studio, "FAST_MODE", False)
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: False)
+    media_bytes = b"distinct validated mountain motion source" * 1200
+
+    def fake_download(url, path, **_kwargs):
+        assert "5040711" in url, f"unexpected source URL: {url}"
+        Path(path).write_bytes(media_bytes)
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 8.0)
+
+    scene = {
+        "topic": "A mountain landscape opens into a futuristic city",
+        "heading": "The Spark",
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": "A dramatic mountain landscape with moving clouds",
+        "visual_query": "mountain landscape clouds moving at sunset",
+        "narration": "One small idea opens into a vast world of possibility.",
+        "on_screen": "One idea. Infinite worlds.",
+    }
+
+    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=9)
+
+    assert selected is not None
+    assert selected["source_id"] == 5040711
+    assert selected["validated_media"] is True
+    assert selected["quality_tier"] == "curated_free_source_motion_video"
+    assert selected["asset_sha256"] == hashlib.sha256(media_bytes).hexdigest()
+
