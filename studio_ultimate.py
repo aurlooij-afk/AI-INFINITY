@@ -3767,6 +3767,45 @@ def _curated_launch_visual_candidate_relevant(
     return bool(required & metadata_concepts)
 
 
+def _source_has_prolonged_black_frames(path: Path, threshold_seconds: float = 0.75) -> bool:
+    """Fail closed on public motion clips containing a sustained near-black interval.
+
+    This inexpensive decode preflight avoids selecting a source whose footage can
+    inject a long black hole into an otherwise valid rendered scene. The renderer's
+    final-program black-frame QC remains authoritative; this is only a source gate.
+    """
+    ffmpeg_path = shutil.which("ffmpeg")
+    try:
+        threshold = max(0.25, min(5.0, float(threshold_seconds)))
+    except (TypeError, ValueError):
+        threshold = 0.75
+    if not ffmpeg_path or not Path(path).is_file():
+        return True
+    try:
+        result = subprocess.run(
+            [
+                ffmpeg_path, "-hide_banner", "-nostats", "-i", str(path),
+                "-vf", f"blackdetect=d={threshold:.3f}:pix_th=0.10:pic_th=0.98",
+                "-an", "-f", "null", "-",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=45,
+            check=False,
+        )
+    except Exception:
+        return True
+    if result.returncode != 0:
+        return True
+    for raw_duration in re.findall(r"black_duration:([0-9]+(?:\.[0-9]+)?)", result.stderr or ""):
+        try:
+            if float(raw_duration) >= threshold:
+                return True
+        except (TypeError, ValueError):
+            return True
+    return False
+
+
 def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int) -> Optional[Dict[str, Any]]:
     """Keyless, item-attributed Pexels motion footage for the eight-shot AI Infinity launch profile.
 
@@ -4080,6 +4119,13 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
             if not video_stream or min(width, height) < 720 or seconds < 2.0 or media_path.stat().st_size <= 20_000:
                 media_path.unlink(missing_ok=True)
                 last_error = f"source_{source_id}_failed_media_validation"
+                continue
+
+            # Source metadata, resolution and decode success are not sufficient:
+            # reject clips with a sustained black segment before they enter the edit.
+            if _source_has_prolonged_black_frames(media_path):
+                media_path.unlink(missing_ok=True)
+                last_error = f"source_{source_id}_has_prolonged_black_frames"
                 continue
 
             media_hash = file_sha256(media_path)
