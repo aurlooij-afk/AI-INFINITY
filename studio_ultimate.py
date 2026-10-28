@@ -5196,9 +5196,20 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
     for asset in (assets or []):
         path_value = Path(str(asset.get("path") or ""))
         source_url = str(asset.get("source_url") or "").strip()
+        license_name = str(asset.get("license") or "").strip()
+        license_url = str(asset.get("license_url") or asset.get("license_deed_url") or "").strip()
+        rights_state = str(asset.get("rights_status") or "").strip().lower()
         if path_value.suffix.lower() not in {".mp4", ".mov", ".mkv", ".webm"}:
             continue
         if bool(asset.get("fallback")) or not source_url.startswith("https://"):
+            continue
+        # Footage counts towards the professional source gate only when its
+        # provider attribution and explicit licence evidence are present.
+        if not license_name or not license_url.startswith("https://"):
+            continue
+        if license_name.lower() in {"unknown", "not verified", "not_verified", "none"}:
+            continue
+        if rights_state in {"unknown", "review_required", "not_verified", "not_verified_review_required"}:
             continue
         # A source URL alone is not proof that the downloaded shot exists.
         # Probe the actual file, then recompute its bytes' digest rather than

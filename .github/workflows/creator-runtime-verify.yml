@@ -316,6 +316,20 @@ jobs:
             *) cat /tmp/project.json; docker logs ai-infinity-ci || true; exit 1 ;;
           esac
 
+          # Explicitly create the editable timeline and portable media bundle.
+          # Its result carries its own truth/durability state and remains separate
+          # from project verification; missing OTIO is reported as a closure gap.
+          otio_http=$(curl -sS -o /tmp/otio-export.json -w "%{http_code}" \
+            -c /tmp/cookies.txt -b /tmp/cookies.txt -X POST \
+            "http://127.0.0.1:10000/infinity/pro2/project/$PROJECT_ID/timeline/otio/export" || true)
+          cat /tmp/otio-export.json || true
+          if [ "$otio_http" = "200" ]; then
+            echo "OPEN_TIMELINE_IO_EXPORT_PASS"
+          else
+            printf 'OTIO export endpoint returned HTTP %s\n' "${otio_http:-unavailable}" > /tmp/otio-export-warning.txt
+            echo "OPEN_TIMELINE_IO_EXPORT_REVIEW_REQUIRED"
+          fi
+
           curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
             "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/artifacts" > /tmp/artifacts.json
           cat /tmp/artifacts.json
@@ -408,7 +422,7 @@ jobs:
           mkdir -p "$REVIEW"
           docker ps -a > "$REVIEW/docker_containers.txt" 2>&1
           docker logs ai-infinity-ci > "$REVIEW/docker_runtime.log" 2>&1
-          for path in /tmp/request.json /tmp/create-response.json /tmp/project.json /tmp/artifacts.json /tmp/verify.json /tmp/reality-proof.json /tmp/final-probe.json; do
+          for path in /tmp/request.json /tmp/create-response.json /tmp/project.json /tmp/artifacts.json /tmp/verify.json /tmp/reality-proof.json /tmp/final-probe.json /tmp/otio-export.json /tmp/otio-export-warning.txt; do
             if [ -s "$path" ]; then cp "$path" "$REVIEW/"; fi
           done
           if [ -s /tmp/create-response.json ]; then
@@ -495,7 +509,19 @@ jobs:
               and quality_checks.get("fallback_visual_budget_ok") is True
           )
           technical_spec="PASS" if media.is_file() and fmt and abs(float(fmt.get("duration") or 0)-60.0)<=0.15 and int(v.get("width") or 0)==1920 and int(v.get("height") or 0)==1080 and (root/"full_decode_status.txt").exists() and (root/"full_decode_status.txt").read_text().strip()=="PASS" else "REVIEW_REQUIRED"
-          release_spec="PASS" if technical_spec=="PASS" and quality.get("passed") is True and creative_visual_gate else "REVIEW_REQUIRED"
+          editable_timeline_gate=(
+              (root/"timeline.otio").is_file()
+              and (root/"timeline-export.zip").is_file()
+              and not (root/"otio-export-warning.txt").exists()
+          )
+          creator_package_gate=(root/"package.zip").is_file()
+          release_spec="PASS" if (
+              technical_spec=="PASS"
+              and quality.get("passed") is True
+              and creative_visual_gate
+              and editable_timeline_gate
+              and creator_package_gate
+          ) else "REVIEW_REQUIRED"
           integrity={
             "truthful":True,"generator":"AI Infinity real container workflow (GitHub Actions)",
             "project_id":(root/"project_id.txt").read_text().strip() if (root/"project_id.txt").exists() else None,
@@ -511,6 +537,8 @@ jobs:
             "rights_or_visual_rights_evidence_available":any((root/n).is_file() for n in ("rights_manifest.json","visual_rights.json")),
             "editable_timeline_available":(root/"timeline.otio").is_file(),
             "editable_timeline_bundle_available":(root/"timeline-export.zip").is_file(),
+            "editable_timeline_gate":"PASS" if editable_timeline_gate else "REVIEW_REQUIRED",
+            "creator_package_available":creator_package_gate,
             "source_motion_scene_count":source_motion_count,
             "minimum_source_motion_scenes":min_motion_sources,
             "fallback_visual_count":fallback_count,
@@ -524,7 +552,7 @@ jobs:
           }
           (root/"integrity_manifest.json").write_text(json.dumps(integrity,indent=2,sort_keys=True)+"\n",encoding="utf-8")
           missing=[]
-          for label,names in [("final MP4",["final.mp4"]),("thumbnail",["thumbnail.jpg"]),("captions",["captions.srt"]),("sources",["sources.json"]),("rights evidence",["rights_manifest.json","visual_rights.json"])]:
+          for label,names in [("final MP4",["final.mp4"]),("creator package",["package.zip"]),("thumbnail",["thumbnail.jpg"]),("captions",["captions.srt"]),("programme audio master",["audio_master.mp3"]),("sources",["sources.json"]),("rights evidence",["rights_manifest.json","visual_rights.json"]),("editable OTIO timeline",["timeline.otio"]),("portable timeline bundle",["timeline-export.zip"])]:
               if not any((root/n).exists() for n in names): missing.append(label)
           duration=integrity["duration_seconds"]
           spec=integrity["spec_gate"]
@@ -538,6 +566,7 @@ jobs:
             "## Technical target check",
             f"- 60-second / 1920×1080 technical target: **{integrity['technical_spec_gate']}**",
             f"- Professional visual/source gate: **{integrity['creative_visual_gate']}**",
+            f"- Editable timeline and package gate: **{integrity['editable_timeline_gate']} / {'PASS' if integrity['creator_package_available'] else 'REVIEW_REQUIRED'}**",
             f"- Verified distinct source-motion scenes: {integrity['source_motion_scene_count']}/{integrity['minimum_source_motion_scenes']} required",
             f"- Explicitly labelled fallback visuals: {integrity['fallback_visual_count']} (maximum allowed: {integrity['maximum_fallback_visuals']})",
             f"- Actual duration: {duration} seconds",

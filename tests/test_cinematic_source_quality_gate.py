@@ -49,6 +49,8 @@ def _licensed_motion_assets(tmp_path, count):
             "path": str(path),
             "source_url": f"https://www.pexels.com/video/verified-free-clip-{index + 1}/",
             "license": "Pexels License",
+            "license_url": "https://www.pexels.com/license/",
+            "rights_status": "license_metadata_present",
             "source_id": index + 1,
             "asset_sha256": digest,
             "fallback": False,
@@ -81,6 +83,14 @@ def test_professional_launch_video_passes_with_six_distinct_motion_sources_and_o
 
     assert result["checks"]["required_source_motion_coverage"] is True, result["checks"]
     assert result["checks"]["fallback_visual_budget_ok"] is True, result["checks"]
+    assert result["visual_source_coverage"] == {
+        "required": True,
+        "scene_count": 7,
+        "distinct_verified_motion_sources": 6,
+        "minimum_motion_sources": 5,
+        "fallback_visual_count": 1,
+        "maximum_fallback_visuals": 1,
+    }
     assert result["passed"] is True, json.dumps(result, indent=2)
 
 
