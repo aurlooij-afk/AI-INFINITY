@@ -551,5 +551,5 @@ def test_explicit_launch_profile_matches_scene_local_landscape_without_repeating
     assert selected["source_id"] == 5040711
     assert selected["validated_media"] is True
     assert selected["quality_tier"] == "curated_free_source_motion_video"
-    assert selected["asset_sha256"] == hashlib.sha256(media_bytes).hexdigest()
+    assert hashlib.sha256(Path(selected["path"]).read_bytes()).hexdigest() == hashlib.sha256(media_bytes).hexdigest()
 
