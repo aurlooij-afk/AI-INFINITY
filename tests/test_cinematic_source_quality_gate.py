@@ -359,3 +359,28 @@ def test_curated_launch_uses_scene_focal_concept_when_brief_has_multiple_visual_
         focus="mountain landscape opens into a futuristic city",
     ) is False
 
+def test_explicit_launch_uses_scene_local_visual_query_for_landscape_clip(monkeypatch, tmp_path):
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: False)
+    media = tmp_path / "pexels_launch_video_5040711.mp4"
+    media.write_bytes(b"validated landscape source fixture" * 1500)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 8.0)
+    scene = {
+        "topic": "AI Infinity — One Idea. Infinite Worlds.",
+        "heading": "The Spark",
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": "An idea opens into an imagined world",
+        "visual_query": "dramatic mountain landscape opens toward a futuristic city",
+        "narration": "The first idea reveals a vast landscape of possibility.",
+        "on_screen": "Step into the vision",
+    }
+
+    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=2)
+
+    assert selected is not None
+    assert selected["source_id"] == 5040711
+    assert selected["source"] == "Pexels curated free editorial video"
+    assert selected["validated_media"] is True
+    assert selected["path"] == str(media)
