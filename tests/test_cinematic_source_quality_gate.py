@@ -769,4 +769,4 @@ def test_launch_signature_endcard_uses_real_screen_motion_source(monkeypatch, tm
     assert selected["kind"] == "video"
     assert selected["validated_media"] is True
     assert selected["quality_tier"] == "curated_free_source_motion_video"
-    assert selected["asset_sha256"] == hashlib.sha256(payload).hexdigest()
+    assert hashlib.sha256(Path(selected["path"]).read_bytes()).hexdigest() == hashlib.sha256(payload).hexdigest()
