@@ -231,7 +231,12 @@ jobs:
           docker rm ai-infinity-ci >/dev/null 2>&1 || true
           # Preserve the exited container until review artifacts have been copied.
           # An OOM/worker crash must not auto-delete the only output filesystem.
-          docker run -d --name ai-infinity-ci --platform linux/amd64             -e AI_INFINITY_3601_BACKGROUND=false             -e AI_INFINITY_FAST_MODE=0             -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity             -p 10000:10000 ai-infinity:ci
+          docker run -d --name ai-infinity-ci --platform linux/amd64 \
+            -v /tmp/ai-infinity-container-data:/tmp/ai-infinity \
+            -e AI_INFINITY_3601_BACKGROUND=false \
+            -e AI_INFINITY_FAST_MODE=0 \
+            -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity \
+            -p 10000:10000 ai-infinity:ci
           ready=0
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:10000/health >/tmp/restarted-health.json; then
