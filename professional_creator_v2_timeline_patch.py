@@ -454,8 +454,14 @@ def install(app: Any) -> None:
     @app.post("/infinity/pro2/project/{pid}/timeline/otio/import")
     async def import_timeline_otio_route(pid: str, request: Request):
         uid, project = owned(pid, request)
-        if project.get("status") not in {"completed", "completed_with_qc_warnings"}:
-            raise HTTPException(409, "OTIO import requires completed scene masters")
+        if (
+            project.get("status") not in {"completed", "completed_with_qc_warnings"}
+            and not _otio_export_allowed(project, studio._project_dir(pid))
+        ):
+            raise HTTPException(
+                409,
+                "OTIO import requires completed scene masters or a complete QC-failed review render",
+            )
         body = bytearray()
         async for chunk in request.stream():
             body.extend(chunk)
