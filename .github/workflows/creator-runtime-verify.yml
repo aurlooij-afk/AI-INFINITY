@@ -135,8 +135,13 @@ jobs:
           # Match the free Render memory envelope and preserve the container
           # after an early crash so the actual bootstrap logs remain available.
           docker rm -f ai-infinity-ci >/dev/null 2>&1 || true
+          # Bind-mount only this job's disposable state so the exact artifacts can
+          # be reviewed even if OOM kills/removes the producer container. This is
+          # ephemeral CI evidence, not a claim of durable production storage.
+          mkdir -p /tmp/ai-infinity-container-data
           docker run -d --name ai-infinity-ci --platform linux/amd64 \
             --memory=512m --memory-swap=512m \
+            -v /tmp/ai-infinity-container-data:/tmp/ai-infinity \
             -e AI_INFINITY_3601_BACKGROUND=false \
             -e AI_INFINITY_FAST_MODE=1 \
             -e AI_INFINITY_FFMPEG_THREADS=1 \
@@ -170,7 +175,11 @@ jobs:
           # a persisted malformed Start Command must not replace main:app.
           docker stop ai-infinity-ci >/dev/null
           docker rm ai-infinity-ci >/dev/null 2>&1 || true
-          docker run -d --rm --name ai-infinity-ci --platform linux/amd64 -e AI_INFINITY_3601_BACKGROUND=false -e AI_INFINITY_FAST_MODE=0 -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity -p 10000:10000 ai-infinity:ci "[sh,-c,exec uvicorn ai_infinity_app:app --host 0.0.0.0 --port 10000]"
+          docker run -d --rm --name ai-infinity-ci --platform linux/amd64 \
+            -v /tmp/ai-infinity-container-data:/tmp/ai-infinity \
+            -e AI_INFINITY_3601_BACKGROUND=false -e AI_INFINITY_FAST_MODE=0 \
+            -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity -p 10000:10000 ai-infinity:ci \
+            "[sh,-c,exec uvicorn ai_infinity_app:app --host 0.0.0.0 --port 10000]"
           ready=0
           for i in $(seq 1 20); do
             if curl -fsS http://127.0.0.1:10000/infinity/studio/system/readiness > /tmp/closure-readiness.json; then
@@ -404,38 +413,34 @@ jobs:
           done
           if [ -s /tmp/create-response.json ]; then
             PROJECT_ID=$(python -c 'import json; print(json.load(open("/tmp/create-response.json")).get("project_id",""))')
-            if [ -n "$PROJECT_ID" ]; then
+            if [[ "$PROJECT_ID" =~ ^studio_[A-Za-z0-9_-]+$ ]]; then
               printf '%s\n' "$PROJECT_ID" > "$REVIEW/project_id.txt"
-              # This is a review-only evidence export from this workflow's own
-              # isolated container. It does not authorize or weaken user-facing
-              # delivery; the project's verified download route remains fail-closed.
-              # docker cp supports stopped containers; docker exec does not.
-              # Copy the project's real output directory, never a synthesized
-              # replacement, and retain it for inspection even after an OOM exit.
-              CONTAINER_ROOT="/tmp/ai-infinity/creator_studio/$PROJECT_ID"
-              REVIEW_PROJECT="$REVIEW/project-files"
-              mkdir -p "$REVIEW_PROJECT"
-              if docker cp "ai-infinity-ci:$CONTAINER_ROOT/." "$REVIEW_PROJECT/" >/dev/null 2>&1; then
-                for name in final.mp4 thumbnail.jpg audio_master.mp3 narration_only.mp3 captions.srt script.md sources.json manifest.json production_manifest.json rights_manifest.json visual_rights.json provenance.json asset_registry.json production_truth.json timeline.json; do
-                  if [ -s "$REVIEW_PROJECT/$name" ]; then cp "$REVIEW_PROJECT/$name" "$REVIEW/$name"; fi
+              # The host bind mount is still available after docker exits/OOMs.
+              CONTAINER_ROOT="/tmp/ai-infinity-container-data/creator_studio/$PROJECT_ID"
+              if [ -d "$CONTAINER_ROOT" ]; then
+                for name in final.mp4 master.mp4 thumbnail.jpg audio_master.mp3 narration_only.mp3 captions.srt script.md sources.json manifest.json production_manifest.json rights_manifest.json visual_rights.json provenance.json asset_registry.json production_truth.json timeline.json; do
+                  if [ -s "$CONTAINER_ROOT/$name" ]; then cp -- "$CONTAINER_ROOT/$name" "$REVIEW/$name"; fi
                 done
-                PACKAGE_PATH=$(find "$REVIEW_PROJECT" -maxdepth 2 -type f -iname '*package*.zip' -print -quit)
-                if [ -n "$PACKAGE_PATH" ]; then cp "$PACKAGE_PATH" "$REVIEW/package.zip"; fi
-                OTIO_PATH=$(find "$REVIEW_PROJECT" -maxdepth 3 -type f -iname '*.otio' -print -quit)
-                if [ -n "$OTIO_PATH" ]; then cp "$OTIO_PATH" "$REVIEW/timeline.otio"; fi
-                OTIO_BUNDLE=$(find "$REVIEW_PROJECT" -maxdepth 3 -type f -iname 'timeline-export*.zip' -print -quit)
-                if [ -n "$OTIO_BUNDLE" ]; then cp "$OTIO_BUNDLE" "$REVIEW/timeline-export.zip"; fi
+                PACKAGE_PATH=$(find "$CONTAINER_ROOT" -maxdepth 1 -type f -name 'package.zip' -print -quit)
+                if [ -n "$PACKAGE_PATH" ]; then cp -- "$PACKAGE_PATH" "$REVIEW/package.zip"; fi
+                NAMED_PACKAGE=$(find "$CONTAINER_ROOT" -maxdepth 1 -type f -iname '*creator-package*.zip' -print -quit)
+                if [ -n "$NAMED_PACKAGE" ]; then cp -- "$NAMED_PACKAGE" "$REVIEW/named_creator_package.zip"; fi
+                OTIO_PATH=$(find "$CONTAINER_ROOT" -maxdepth 1 -type f -iname '*.otio' -print -quit)
+                if [ -n "$OTIO_PATH" ]; then cp -- "$OTIO_PATH" "$REVIEW/timeline.otio"; fi
+                OTIO_BUNDLE=$(find "$CONTAINER_ROOT" -maxdepth 1 -type f -iname 'timeline-export*.zip' -print -quit)
+                if [ -n "$OTIO_BUNDLE" ]; then cp -- "$OTIO_BUNDLE" "$REVIEW/timeline-export.zip"; fi
               else
-                echo "Review-only local artifact export unavailable: expected project directory $CONTAINER_ROOT could not be copied from ai-infinity-ci." > "$REVIEW/review_export_warning.txt"
+                echo "Review-only host-mounted project directory was not created; no final media was substituted." > "$REVIEW/review_export_warning.txt"
               fi
-              # Collect non-gated metadata through the public route only as a
-              # fallback. Never substitute a synthetic MP4 or claim a blocked
-              # final/package download succeeded.
+              # Collect remaining accessible metadata only as a fallback; a failed
+              # gated public download is never misrepresented as a successful export.
               for name in audio_master.mp3 narration_only.mp3 captions.srt script.md sources.json manifest.json production_manifest.json rights_manifest.json visual_rights.json provenance.json; do
-                if [ ! -s "$REVIEW/$name" ]; then
+                if [ ! -s "$REVIEW/$name" ] && [ -s /tmp/cookies.txt ] && curl -fsS http://127.0.0.1:10000/health >/dev/null 2>&1; then
                   curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/asset/$name" -o "$REVIEW/$name" 2>/dev/null || rm -f "$REVIEW/$name"
                 fi
               done
+            else
+              echo "Creator returned an invalid project identifier; review-only export aborted." > "$REVIEW/review_export_warning.txt"
             fi
           fi
           if [ -s "$REVIEW/final.mp4" ]; then
