@@ -173,6 +173,10 @@ def test_final_delivery_loudness_master_applies_post_normalization_sample_peak_c
     args = captured["args"]
     audio_filter = args[args.index("-af") + 1]
 
+    # Final mastering must heal timestamp gaps before sample-based PTS rebuild;
+    # otherwise an already-padded AAC stream can still be muxed ~1 second short.
+    assert audio_filter.startswith("aresample=48000:async=1:first_pts=0,asetpts=N/SR/TB,")
+    assert audio_filter.index("asetpts=N/SR/TB") < audio_filter.index("atrim=duration=")
     assert "loudnorm=I=-16.0:TP=-1.5:LRA=11.0" in audio_filter
     limiter = "alimiter=limit=0.80:attack=5:release=50:level=false"
     assert limiter in audio_filter
