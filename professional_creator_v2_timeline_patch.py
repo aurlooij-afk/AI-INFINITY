@@ -39,8 +39,67 @@ def _otio_export_allowed(project: Dict[str, Any], project_root: Path) -> bool:
     final = project_root / "final.mp4"
     if expected < 1 or not final.is_file() or final.stat().st_size <= 0:
         return False
-    masters = [path for path in project_root.glob("scene_*.mp4") if path.is_file() and path.stat().st_size > 0]
-    return len(masters) >= expected
+    # Scene numbering is the identity contract used by the editor/OTIO adapters.
+    # A raw count can conceal a hole (for example scenes 01..08 plus scene_10).
+    # Review export is permitted only when every expected rendered master exists.
+    return all(
+        (project_root / f"scene_{index:02d}.mp4").is_file()
+        and not (project_root / f"scene_{index:02d}.mp4").is_symlink()
+        and (project_root / f"scene_{index:02d}.mp4").stat().st_size > 0
+        for index in range(1, expected + 1)
+    )
+
+
+def _review_only_filter_generated_missing_masters(
+    project: Dict[str, Any], project_root: Path, source: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Build an honest partial review timeline only from real masters.
+
+    Used only when the system-generated timeline source points at a missing
+    master in a QC-failed project. Persisted non-empty editor timelines are not
+    passed through this helper, so user edits are never silently rewritten.
+    """
+    if (
+        str(project.get("status") or "").strip().lower() != "failed"
+        or str(project.get("stage") or "").strip().lower() != "quality_control"
+    ):
+        return source
+    rows = source.get("scenes")
+    if not isinstance(rows, list) or not rows:
+        return source
+    included = []
+    missing = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise HTTPException(409, "generated review timeline contains an invalid scene row")
+        raw_asset = str(row.get("source_asset") or "").strip()
+        asset = Path(raw_asset).name
+        if raw_asset != asset or len(asset) != 12 or not asset.startswith("scene_") or not asset[6:8].isdigit() or asset[8:] != ".mp4":
+            raise HTTPException(409, "generated review timeline contains an unsafe scene reference")
+        path = project_root / asset
+        if path.is_file() and not path.is_symlink() and path.stat().st_size > 0:
+            included.append(dict(row))
+        else:
+            missing.append(asset)
+    if not missing:
+        return source
+    if not included:
+        raise HTTPException(409, "QC-failed project has no real scene masters available for review export")
+    reviewed = dict(source)
+    reviewed["scenes"] = included
+    reviewed["review_export"] = {
+        "status": "partial_scene_master_review_only",
+        "complete": False,
+        "missing_scene_masters": sorted(set(missing)),
+        "included_scene_masters": [row["source_asset"] for row in included],
+        "publish_allowed": False,
+        "reason": (
+            "The generated plan referenced scene masters that were not present. "
+            "Only existing scene files are included; missing scenes were not fabricated. "
+            "This partial timeline remains review-only."
+        ),
+    }
+    return reviewed
 
 
 def install(app: Any) -> None:
@@ -179,7 +238,10 @@ def install(app: Any) -> None:
         }
 
     def save(pid: str, payload: Dict[str, Any]):
+        review_export = payload.get("review_export")
         tl = normalize(pid, payload)
+        if isinstance(review_export, dict):
+            tl["review_export"] = dict(review_export)
         path = studio._project_dir(pid) / "timeline.json"
         path.write_text(json.dumps(tl, ensure_ascii=False, indent=2), encoding="utf-8")
         storage = studio._save_asset(pid, "timeline", path, "application/json", {"editor": VERSION})
@@ -345,9 +407,15 @@ def install(app: Any) -> None:
                 )
                 if completed_masters:
                     source = base._timeline(studio, project)
+                    source = _review_only_filter_generated_missing_masters(
+                        project, studio._project_dir(pid), source
+                    )
                     if not isinstance(source, dict) or not isinstance(source.get("scenes"), list) or not source["scenes"]:
                         raise HTTPException(409, "saved timeline is empty and completed scene masters could not produce a recoverable timeline")
+                    review_export = source.get("review_export")
                     source = normalize(pid, source)
+                    if isinstance(review_export, dict):
+                        source["review_export"] = dict(review_export)
                     # Use the editor's normal save path so recovery also records
                     # artifact durability/read-back evidence. Merely registering local
                     # bytes would leave the asset manifest stale and make this recovery
@@ -377,8 +445,15 @@ def install(app: Any) -> None:
                     "saved timeline is missing and no verified recovery copy is available; refusing to export a replacement",
                 )
             source = base._timeline(studio, project)
+            source = _review_only_filter_generated_missing_masters(
+                project, studio._project_dir(pid), source
+            )
         try:
-            return normalize(pid, source)
+            review_export = source.get("review_export") if isinstance(source, dict) else None
+            normalized = normalize(pid, source)
+            if isinstance(review_export, dict):
+                normalized["review_export"] = dict(review_export)
+            return normalized
         except HTTPException:
             raise
         except Exception as exc:
@@ -439,6 +514,7 @@ def install(app: Any) -> None:
             "truth_state": result["truth_state"],
             "truth_verified": result["truth_verified"],
             "human_review_status": result["human_review_status"],
+            "review_export": result.get("review_export") or timeline_data.get("review_export"),
             "requires_human_review": True,
             "durability": {
                 "timeline": durability_summary(
