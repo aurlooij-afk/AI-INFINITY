@@ -298,6 +298,7 @@ jobs:
           test -n "$PROJECT_ID"
 
           status=""
+          stage=""
           for i in $(seq 1 240); do
             curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
               "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID" > /tmp/project.json
@@ -314,9 +315,23 @@ jobs:
           print(json.load(open("/tmp/project.json")).get("status",""))
           PY
           )
+            stage=$(python - <<'PY'
+          import json
+          print(json.load(open("/tmp/project.json")).get("stage",""))
+          PY
+          )
             case "$status" in
               completed|completed_with_qc_warnings) break ;;
-              failed|cancelled)
+              failed)
+                if [ "$stage" = "quality_control" ]; then
+                  echo "QC_FAILED_RENDER_AVAILABLE_FOR_REVIEW_EXPORT_ONLY"
+                  break
+                fi
+                cat /tmp/project.json
+                docker logs ai-infinity-ci || true
+                exit 1
+                ;;
+              cancelled)
                 cat /tmp/project.json
                 docker logs ai-infinity-ci || true
                 exit 1
@@ -324,8 +339,21 @@ jobs:
             esac
             sleep 2
           done
+          review_only=false
+          stage=$(python - <<'PY'
+          import json
+          print(json.load(open("/tmp/project.json")).get("stage",""))
+          PY
+          )
           case "$status" in
             completed|completed_with_qc_warnings) ;;
+            failed)
+              if [ "$stage" = "quality_control" ]; then
+                review_only=true
+              else
+                cat /tmp/project.json; docker logs ai-infinity-ci || true; exit 1
+              fi
+              ;;
             *) cat /tmp/project.json; docker logs ai-infinity-ci || true; exit 1 ;;
           esac
 
@@ -346,6 +374,49 @@ jobs:
           curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
             "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/artifacts" > /tmp/artifacts.json
           cat /tmp/artifacts.json
+          if [ "$review_only" = "true" ]; then
+            # A render that fails creative QC must never pass acceptance, but the
+            # actual completed scene masters must remain exportable for review.
+            # Keep the review export evidence, then exit non-zero so the failed
+            # quality gate remains visible in CI.
+            curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
+              "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/verify" > /tmp/verify.json || true
+            cat /tmp/verify.json || true
+            python - <<'PY'
+          import hashlib, json, os, zipfile
+          from pathlib import Path
+          pid = json.load(open("/tmp/create-response.json"))["project_id"]
+          response = json.load(open("/tmp/otio-export.json")) if os.path.getsize("/tmp/otio-export.json") else {}
+          root = Path("/tmp/ai-infinity-container-data/creator_studio") / pid
+          assert response.get("status") == "exported", {"otio_http": os.getenv("OTIO_HTTP"), "response": response}
+          for key in ("timeline", "bundle"):
+              item = response.get(key) or {}
+              path = root / item.get("name", "")
+              assert path.is_file() and path.stat().st_size > 0, {"kind": key, "path": str(path)}
+              h = hashlib.sha256(path.read_bytes()).hexdigest()
+              assert h == item.get("sha256"), {"kind": key, "expected": item.get("sha256"), "actual": h}
+              if key == "bundle":
+                  with zipfile.ZipFile(path) as archive:
+                      bad = archive.testzip()
+                      assert bad is None, {"bad_member": bad}
+                      assert "project.otio" in archive.namelist()
+          Path("/tmp/otio-review-export-proof.json").write_text(json.dumps({
+              "status": "PASS_REVIEW_EXPORT_ONLY",
+              "project_id": pid,
+              "project_status": "failed",
+              "failure_stage": "quality_control",
+              "truth_state": response.get("truth_state"),
+              "truth_verified": response.get("truth_verified"),
+              "human_review_status": response.get("human_review_status"),
+              "timeline_sha256": response["timeline"]["sha256"],
+              "bundle_sha256": response["bundle"]["sha256"],
+              "bundle_size_bytes": response["bundle"]["size_bytes"],
+              "acceptance_pass": False
+          }, indent=2) + "\\n", encoding="utf-8")
+          print("OTIO_REVIEW_EXPORT_HASH_AND_ZIP_PASS — CREATIVE_QC_STILL_FAILED")
+          PY
+            exit 1
+          fi
           curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
             "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/verify" > /tmp/verify.json
           cat /tmp/verify.json
