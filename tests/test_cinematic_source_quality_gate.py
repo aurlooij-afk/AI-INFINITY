@@ -136,3 +136,40 @@ def test_timecoded_ai_infinity_brand_film_sets_curated_campaign_profile():
     assert plan is not None
     assert plan["storyboard_origin"] == "explicit_timecoded_user_brief"
     assert all(scene["campaign_profile"] == "ai_infinity_launch" for scene in plan["chapters"])
+
+def test_delivery_loudness_mastering_caps_output_to_source_programme_duration(monkeypatch, tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source programme bytes" * 1000)
+    output = tmp_path / "mastered.mp4"
+    source_probe = {
+        "format": {"duration": "60.000"},
+        "streams": [
+            {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080, "duration": "60.000"},
+            {"codec_type": "audio", "codec_name": "aac", "duration": "60.000", "time_base": "1/48000"},
+            {"codec_type": "subtitle", "codec_name": "mov_text", "duration": "66.245"},
+        ],
+    }
+    output_probe = {
+        "format": {"duration": "60.000"},
+        "streams": [
+            {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080, "duration": "60.000"},
+            {"codec_type": "audio", "codec_name": "aac", "duration": "60.000", "time_base": "1/48000"},
+            {"codec_type": "subtitle", "codec_name": "mov_text", "duration": "60.000"},
+        ],
+    }
+    command = {}
+
+    def fake_ffmpeg(*args, timeout=240):
+        command["args"] = args
+        Path(args[-1]).write_bytes(b"mastered programme bytes" * 1000)
+
+    monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda path: source_probe if Path(path) == source else output_probe)
+
+    result = studio._normalize_delivery_loudness(source, output, fast_mode=False)
+
+    args = list(command["args"])
+    assert "-t" in args
+    assert args[args.index("-t") + 1] == "60.000"
+    assert result["output_duration_seconds"] == 60.0
+    assert result["audio_video_duration_match"] is True
