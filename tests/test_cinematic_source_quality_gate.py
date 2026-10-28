@@ -440,3 +440,81 @@ def test_curated_launch_retries_a_second_distinct_landscape_source(monkeypatch, 
     assert selected["source_url"] == "https://www.pexels.com/video/clouds-over-mountain-landscape-timelapse-28946305/"
     assert selected["validated_media"] is True
     assert selected["quality_tier"] == "curated_free_source_motion_video"
+
+def test_acquire_scene_asset_accepts_curated_focal_match_and_retries_duplicate_motion(monkeypatch, tmp_path):
+    """Curated concept matches bypass only duplicate generic relevance and retry collisions."""
+    monkeypatch.setattr(studio, "_external_providers_disabled", lambda: True)
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: False)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 8.0)
+
+    duplicate_bytes = b"same landscape source already committed by another scene" * 100
+    alternate_bytes = b"second distinct mountain source for the spark scene" * 100
+    prior = tmp_path / "selected_visual_01.mp4"
+    prior.write_bytes(duplicate_bytes)
+    duplicate_source = tmp_path / "pexels_launch_video_5040711.mp4"
+    duplicate_source.write_bytes(duplicate_bytes)
+    alternate_source = tmp_path / "pexels_launch_video_28946305.mp4"
+    alternate_source.write_bytes(alternate_bytes)
+
+    def curated(path, source_id, title, source_url):
+        return {
+            "kind": "video",
+            "path": str(path),
+            "source": "Pexels curated free editorial video",
+            "provider": "Pexels",
+            "source_id": source_id,
+            "source_url": source_url,
+            "creator": "Verified Pexels contributor",
+            "attribution": "Video by contributor / Pexels",
+            "license": "Pexels License",
+            "license_url": "https://www.pexels.com/license/",
+            "rights_status": "license_metadata_present",
+            "quality_tier": "curated_free_source_motion_video",
+            "selection_reason": "scene_concepts_and_source_metadata_match",
+            "validated_media": True,
+            "title": title,
+        }
+
+    candidates = [
+        curated(
+            duplicate_source, 5040711,
+            "Clouds formation in the sky above the mountains",
+            "https://www.pexels.com/video/clouds-formation-in-the-sky-above-the-mountains-5040711/",
+        ),
+        curated(
+            alternate_source, 28946305,
+            "Clouds Over Mountain Landscape Timelapse",
+            "https://www.pexels.com/video/clouds-over-mountain-landscape-timelapse-28946305/",
+        ),
+    ]
+    calls = []
+
+    def next_curated(_scene, _outdir, _index):
+        calls.append(1)
+        return candidates.pop(0) if candidates else None
+
+    monkeypatch.setattr(studio, "_curated_pexels_launch_video", next_curated)
+    scene = {
+        "topic": "AI Infinity — One Idea. Infinite Worlds.",
+        "heading": "The Spark",
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": "wide dramatic mountain landscape and futuristic cityscape",
+        "visual_search_subject": "cinematic mountains ocean and futuristic city",
+        "visual_query": "mountain landscape clouds moving at sunset",
+        "narration": "One small idea becomes a doorway into another world.",
+        "on_screen": "One idea. Infinite possibilities.",
+    }
+
+    selected = studio.acquire_scene_asset(scene, tmp_path, index=2, prefer_motion=True, duration=8)
+
+    assert len(calls) == 2, "a duplicate first choice should trigger a bounded second-source attempt"
+    assert selected["kind"] == "video"
+    assert selected["source_id"] == 28946305
+    assert selected["quality_tier"] == "curated_free_source_motion_video"
+    assert selected["asset_sha256"] == hashlib.sha256(alternate_bytes).hexdigest()
+    selected_path = Path(selected["path"])
+    assert selected_path.is_file()
+    assert selected_path.name == "selected_visual_02.mp4"
