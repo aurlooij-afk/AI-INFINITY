@@ -453,6 +453,15 @@ def install(app: Any) -> None:
             source = _review_only_filter_generated_missing_masters(
                 project, studio._project_dir(pid), source
             )
+        # The GET timeline route already applies this same in-memory filter to
+        # QC-failed saved timelines. OTIO export must apply it too, otherwise a
+        # persisted plan can reference a never-rendered scene_NN.mp4 and abort
+        # review export even though all actual scene masters are available.
+        # The helper filters only the export copy for QC-failed projects; it
+        # never rewrites the saved editor timeline or promotes project quality.
+        source = _review_only_filter_generated_missing_masters(
+            project, studio._project_dir(pid), source
+        )
         try:
             review_export = source.get("review_export") if isinstance(source, dict) else None
             normalized = normalize(pid, source)
