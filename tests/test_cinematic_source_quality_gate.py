@@ -1,4 +1,5 @@
 """Regression coverage for strict source-motion requirements on professional video jobs."""
+import hashlib
 import json
 from pathlib import Path
 
@@ -41,13 +42,15 @@ def _licensed_motion_assets(tmp_path, count):
     rows = []
     for index in range(count):
         path = tmp_path / f"scene_{index + 1:02d}.mp4"
+        path.write_bytes((f"real-media-fixture-{index + 1}".encode("utf-8") * 3000))
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
         rows.append({
             "kind": "video",
             "path": str(path),
             "source_url": f"https://www.pexels.com/video/verified-free-clip-{index + 1}/",
             "license": "Pexels License",
             "source_id": index + 1,
-            "asset_sha256": f"distinct-sha256-{index + 1}",
+            "asset_sha256": digest,
             "fallback": False,
         })
     return rows
