@@ -367,23 +367,23 @@ jobs:
           original_stage="$stage"
           if [ "$review_only" != "true" ]; then
             docker exec ai-infinity-ci python - "$PROJECT_ID" <<'PY'
-import sys
-import studio_ultimate as studio
-pid = sys.argv[1]
-p = studio._get_project(pid)
-assert p and p.get("status") in {"completed", "completed_with_qc_warnings"}, p
-root = studio._project_dir(pid)
-expected = int(p.get("total_scenes") or 0)
-masters = [x for x in root.glob("scene_*.mp4") if x.is_file() and x.stat().st_size > 0]
-assert (root / "final.mp4").is_file() and expected > 0 and len(masters) >= expected, {
-    "root": str(root), "expected": expected, "masters": len(masters)
-}
-studio._update_project(pid, status="failed", stage="quality_control", error="CI_CONTROLLED_QC_FAILURE_FOR_REAL_MEDIA_REVIEW_EXPORT_TEST")
-print("CONTROLLED_QC_FAILED_EXPORT_STATE_READY", pid, len(masters))
-PY
+          import sys
+          import studio_ultimate as studio
+          pid = sys.argv[1]
+          p = studio._get_project(pid)
+          assert p and p.get("status") in {"completed", "completed_with_qc_warnings"}, p
+          root = studio._project_dir(pid)
+          expected = int(p.get("total_scenes") or 0)
+          masters = [x for x in root.glob("scene_*.mp4") if x.is_file() and x.stat().st_size > 0]
+          assert (root / "final.mp4").is_file() and expected > 0 and len(masters) >= expected, {
+          "root": str(root), "expected": expected, "masters": len(masters)
+          }
+          studio._update_project(pid, status="failed", stage="quality_control", error="CI_CONTROLLED_QC_FAILURE_FOR_REAL_MEDIA_REVIEW_EXPORT_TEST")
+          print("CONTROLLED_QC_FAILED_EXPORT_STATE_READY", pid, len(masters))
+          PY
             export_review_test=true
           fi
-
+          
           otio_http=$(curl -sS -o /tmp/otio-export.json -w "%{http_code}" \
             -c /tmp/cookies.txt -b /tmp/cookies.txt -X POST \
             "http://127.0.0.1:10000/infinity/pro2/project/$PROJECT_ID/timeline/otio/export" || true)
@@ -393,125 +393,126 @@ PY
             exit 1
           fi
           echo "OPEN_TIMELINE_IO_REVIEW_EXPORT_ENDPOINT_PASS"
-
+          
           python - <<'PY'
-import json
-x=json.load(open("/tmp/otio-export.json"))
-assert x.get("status") == "exported", x
-assert x.get("truth_verified") is False, x
-assert x.get("human_review_status") == "PENDING" and x.get("requires_human_review") is True, x
-assert x.get("truthful") is True, x
-for key in ("timeline", "bundle"):
-    item=x.get(key) or {}
-    assert item.get("name") and len(item.get("sha256") or "") == 64, (key,item)
-    assert item.get("download_url","").startswith("/infinity/studio/project/"), (key,item)
-open("/tmp/otio-export-names.json","w").write(json.dumps({
-    "timeline_name":x["timeline"]["name"], "bundle_name":x["bundle"]["name"]
-}, indent=2))
-print("OTIO_EXPORT_RESPONSE_TRUTH_GATE_PASS", x["scene_count"], x["truth_state"])
-PY
+          import json
+          x=json.load(open("/tmp/otio-export.json"))
+          assert x.get("status") == "exported", x
+          assert x.get("truth_verified") is False, x
+          assert x.get("human_review_status") == "PENDING" and x.get("requires_human_review") is True, x
+          assert x.get("truthful") is True, x
+          for key in ("timeline", "bundle"):
+          item=x.get(key) or {}
+          assert item.get("name") and len(item.get("sha256") or "") == 64, (key,item)
+          assert item.get("download_url","").startswith("/infinity/studio/project/"), (key,item)
+          open("/tmp/otio-export-names.json","w").write(json.dumps({
+          "timeline_name":x["timeline"]["name"], "bundle_name":x["bundle"]["name"]
+          }, indent=2))
+          print("OTIO_EXPORT_RESPONSE_TRUTH_GATE_PASS", x["scene_count"], x["truth_state"])
+          PY
           OTIO_NAME=$(python -c 'import json;print(json.load(open("/tmp/otio-export-names.json"))["timeline_name"])')
           BUNDLE_NAME=$(python -c 'import json;print(json.load(open("/tmp/otio-export-names.json"))["bundle_name"])')
           curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
             "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/asset/$OTIO_NAME" -o /tmp/review-project.otio
           curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
             "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/asset/$BUNDLE_NAME" -o /tmp/review-timeline-bundle.zip
-
+          
           python - <<'PY'
-import hashlib, json, zipfile
-from pathlib import Path, PurePosixPath
-import opentimelineio as otio
-pid=json.load(open("/tmp/create-response.json"))["project_id"]
-response=json.load(open("/tmp/otio-export.json"))
-root=Path("/tmp/ai-infinity-container-data/creator_studio")/pid
-timeline_path=Path("/tmp/review-project.otio")
-bundle_path=Path("/tmp/review-timeline-bundle.zip")
-for path, item in ((timeline_path,response["timeline"]),(bundle_path,response["bundle"])):
-    actual=hashlib.sha256(path.read_bytes()).hexdigest()
-    assert actual == item["sha256"], {"path":str(path),"expected":item["sha256"],"actual":actual}
-with zipfile.ZipFile(bundle_path) as archive:
-    assert archive.testzip() is None, "portable media bundle has a corrupt ZIP member"
-    names=set(archive.namelist())
-    assert "project.otio" in names, sorted(names)[:40]
-    timeline_bytes=archive.read("project.otio")
-    assert hashlib.sha256(timeline_bytes).hexdigest() == hashlib.sha256(timeline_path.read_bytes()).hexdigest()
-    for name in names:
-        if name.startswith("media/scene_") and name.endswith(".mp4"):
+          import hashlib, json, zipfile
+          from pathlib import Path, PurePosixPath
+          import opentimelineio as otio
+          pid=json.load(open("/tmp/create-response.json"))["project_id"]
+          response=json.load(open("/tmp/otio-export.json"))
+          root=Path("/tmp/ai-infinity-container-data/creator_studio")/pid
+          timeline_path=Path("/tmp/review-project.otio")
+          bundle_path=Path("/tmp/review-timeline-bundle.zip")
+          for path, item in ((timeline_path,response["timeline"]),(bundle_path,response["bundle"])):
+          actual=hashlib.sha256(path.read_bytes()).hexdigest()
+          assert actual == item["sha256"], {"path":str(path),"expected":item["sha256"],"actual":actual}
+          with zipfile.ZipFile(bundle_path) as archive:
+          assert archive.testzip() is None, "portable media bundle has a corrupt ZIP member"
+          names=set(archive.namelist())
+          assert "project.otio" in names, sorted(names)[:40]
+          timeline_bytes=archive.read("project.otio")
+          assert hashlib.sha256(timeline_bytes).hexdigest() == hashlib.sha256(timeline_path.read_bytes()).hexdigest()
+          for name in names:
+          if name.startswith("media/scene_") and name.endswith(".mp4"):
             assert Path(name).name in names, name
-timeline=otio.adapters.read_from_file(str(timeline_path), adapter_name="otio_json")
-assert isinstance(timeline, otio.schema.Timeline), type(timeline)
-info=timeline.metadata.get("ai_infinity") or {}
-assert info.get("truth_verified") is False and info.get("publish_allowed_by_quality_gate") is False, info
-assert info.get("human_review_status") == "PENDING", info
-video_tracks=[t for t in timeline.tracks if isinstance(t,otio.schema.Track) and t.kind==otio.schema.TrackKind.Video]
-assert len(video_tracks)==1, len(video_tracks)
-checked=[]
-with zipfile.ZipFile(bundle_path) as archive:
-    names=set(archive.namelist())
-    for item in video_tracks[0]:
-        if isinstance(item,otio.schema.Gap):
+          timeline=otio.adapters.read_from_file(str(timeline_path), adapter_name="otio_json")
+          assert isinstance(timeline, otio.schema.Timeline), type(timeline)
+          info=timeline.metadata.get("ai_infinity") or {}
+          assert info.get("truth_verified") is False and info.get("publish_allowed_by_quality_gate") is False, info
+          assert info.get("human_review_status") == "PENDING", info
+          video_tracks=[t for t in timeline.tracks if isinstance(t,otio.schema.Track) and t.kind==otio.schema.TrackKind.Video]
+          assert len(video_tracks)==1, len(video_tracks)
+          checked=[]
+          with zipfile.ZipFile(bundle_path) as archive:
+          names=set(archive.namelist())
+          for item in video_tracks[0]:
+          if isinstance(item,otio.schema.Gap):
             continue
-        assert isinstance(item,otio.schema.Clip), type(item)
-        ref=item.media_reference
-        assert isinstance(ref,otio.schema.ExternalReference), type(ref)
-        member="media/"+PurePosixPath(ref.target_url).name
-        assert member in names, {"member":member,"target":ref.target_url}
-        meta=ref.metadata.get("ai_infinity") or {}
-        digest=hashlib.sha256(archive.read(member)).hexdigest()
-        assert digest == meta.get("sha256"), {"member":member,"expected":meta.get("sha256"),"actual":digest}
-        local=root/PurePosixPath(ref.target_url).name
-        assert local.is_file() and hashlib.sha256(local.read_bytes()).hexdigest()==digest, str(local)
-        checked.append({"member":member,"sha256":digest,"size_bytes":local.stat().st_size})
-assert checked, "OTIO did not reference any rendered scene master"
-assert any("media/audio_master.mp3" in name for name in names), "programme audio missing from portable bundle"
-proof={"status":"PASS_REVIEW_EXPORT_MEDIA_INSPECTION","project_id":pid,
-       "controlled_qc_failure_test":True,"truth_verified":info.get("truth_verified"),
-       "publish_allowed_by_quality_gate":info.get("publish_allowed_by_quality_gate"),
-       "scene_count":response.get("scene_count"),"referenced_scene_masters":checked,
-       "timeline_sha256":response["timeline"]["sha256"],"bundle_sha256":response["bundle"]["sha256"],
-       "bundle_size_bytes":bundle_path.stat().st_size,"human_review_status":response.get("human_review_status"),
-       "truthful":True}
-Path("/tmp/otio-review-export-proof.json").write_text(json.dumps(proof,indent=2)+"\\n")
-print("OTIO_BUNDLE_CRC_TIMELINE_SCENE_HASHES_AND_AUDIO_PASS",json.dumps(proof,sort_keys=True))
-PY
+          assert isinstance(item,otio.schema.Clip), type(item)
+          ref=item.media_reference
+          assert isinstance(ref,otio.schema.ExternalReference), type(ref)
+          member="media/"+PurePosixPath(ref.target_url).name
+          assert member in names, {"member":member,"target":ref.target_url}
+          meta=ref.metadata.get("ai_infinity") or {}
+          digest=hashlib.sha256(archive.read(member)).hexdigest()
+          assert digest == meta.get("sha256"), {"member":member,"expected":meta.get("sha256"),"actual":digest}
+          local=root/PurePosixPath(ref.target_url).name
+          assert local.is_file() and hashlib.sha256(local.read_bytes()).hexdigest()==digest, str(local)
+          checked.append({"member":member,"sha256":digest,"size_bytes":local.stat().st_size})
+          assert checked, "OTIO did not reference any rendered scene master"
+          assert any("media/audio_master.mp3" in name for name in names), "programme audio missing from portable bundle"
+          proof={"status":"PASS_REVIEW_EXPORT_MEDIA_INSPECTION","project_id":pid,
+          "controlled_qc_failure_test":True,"truth_verified":info.get("truth_verified"),
+          "publish_allowed_by_quality_gate":info.get("publish_allowed_by_quality_gate"),
+          "scene_count":response.get("scene_count"),"referenced_scene_masters":checked,
+          "timeline_sha256":response["timeline"]["sha256"],"bundle_sha256":response["bundle"]["sha256"],
+          "bundle_size_bytes":bundle_path.stat().st_size,"human_review_status":response.get("human_review_status"),
+          "truthful":True}
+          Path("/tmp/otio-review-export-proof.json").write_text(json.dumps(proof,indent=2)+"\\n")
+          print("OTIO_BUNDLE_CRC_TIMELINE_SCENE_HASHES_AND_AUDIO_PASS",json.dumps(proof,sort_keys=True))
+          PY
           curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
             -H 'content-type: application/vnd.opentimelineio+json' --data-binary @/tmp/review-project.otio \
             "http://127.0.0.1:10000/infinity/pro2/project/$PROJECT_ID/timeline/otio/import" > /tmp/otio-import.json
           python - <<'PY'
-import json
-from pathlib import Path
-pid=json.load(open("/tmp/create-response.json"))["project_id"]
-export=json.load(open("/tmp/otio-export.json"))
-x=json.load(open("/tmp/otio-import.json"))
-assert x.get("status") == "imported" and x.get("project_id") == pid, x
-assert x.get("truth_verified") is False and x.get("human_review_status") == "PENDING", x
-rows=(x.get("timeline") or {}).get("scenes") or []
-assert len(rows) == int(export.get("scene_count") or 0), {"expected":export.get("scene_count"),"actual":len(rows)}
-root=Path("/tmp/ai-infinity-container-data/creator_studio")/pid
-for row in rows:
-    asset=row.get("source_asset") or ""
-    path=root/asset
-    assert asset.startswith("scene_") and path.is_file() and path.stat().st_size > 0, {"asset":asset,"path":str(path)}
-open("/tmp/otio-import-proof.json","w").write(json.dumps({
- "status":"PASS_OTIO_API_IMPORT_RELOAD","project_id":pid,"scene_count":len(rows),
- "render_required":x.get("render_required"),"truth_verified":x.get("truth_verified"),
- "all_scene_masters_present":True,"truthful":x.get("truthful")},indent=2)+"\\n")
-print("OTIO_REIMPORT_API_PASS",len(rows),"render_required",x.get("render_required"))
-PY
-
+          import json
+          from pathlib import Path
+          pid=json.load(open("/tmp/create-response.json"))["project_id"]
+          export=json.load(open("/tmp/otio-export.json"))
+          x=json.load(open("/tmp/otio-import.json"))
+          assert x.get("status") == "imported" and x.get("project_id") == pid, x
+          assert x.get("truth_verified") is False and x.get("human_review_status") == "PENDING", x
+          rows=(x.get("timeline") or {}).get("scenes") or []
+          assert len(rows) == int(export.get("scene_count") or 0), {"expected":export.get("scene_count"),"actual":len(rows)}
+          root=Path("/tmp/ai-infinity-container-data/creator_studio")/pid
+          for row in rows:
+          asset=row.get("source_asset") or ""
+          path=root/asset
+          assert asset.startswith("scene_") and path.is_file() and path.stat().st_size > 0, {"asset":asset,"path":str(path)}
+          open("/tmp/otio-import-proof.json","w").write(json.dumps({
+          "status":"PASS_OTIO_API_IMPORT_RELOAD","project_id":pid,"scene_count":len(rows),
+          "render_required":x.get("render_required"),"truth_verified":x.get("truth_verified"),
+          "all_scene_masters_present":True,"truthful":x.get("truthful")},indent=2)+"\\n")
+          print("OTIO_REIMPORT_API_PASS",len(rows),"render_required",x.get("render_required"))
+          PY
+          
           if [ "$export_review_test" = "true" ]; then
             docker exec ai-infinity-ci python - "$PROJECT_ID" "$original_status" "$original_stage" <<'PY'
-import sys
-import studio_ultimate as studio
-pid, status, stage = sys.argv[1:4]
-assert status in {"completed", "completed_with_qc_warnings"}, status
-studio._update_project(pid, status=status, stage=stage, error="", progress=100.0)
-p=studio._get_project(pid)
-assert p and p.get("status")==status and p.get("stage")==stage, p
-print("RESTORED_ORIGINAL_PROJECT_STATE_AFTER_QC_EXPORT_TEST",pid,status,stage)
-PY
+          import sys
+          import studio_ultimate as studio
+          pid, status, stage = sys.argv[1:4]
+          assert status in {"completed", "completed_with_qc_warnings"}, status
+          studio._update_project(pid, status=status, stage=stage, error="", progress=100.0)
+          p=studio._get_project(pid)
+          assert p and p.get("status")==status and p.get("stage")==stage, p
+          print("RESTORED_ORIGINAL_PROJECT_STATE_AFTER_QC_EXPORT_TEST",pid,status,stage)
+          PY
           fi
-
+          
+          
           curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
             "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/artifacts" > /tmp/artifacts.json
           cat /tmp/artifacts.json
