@@ -280,3 +280,33 @@ def test_programme_audio_master_rejects_still_short_output_after_pts_reset(monke
     with pytest.raises(RuntimeError, match="duration mismatch after timestamp reset and padding"):
         studio._export_programme_audio_master(source, output, 60.0, fast_mode=False)
 
+
+def test_scene_concatenation_copies_rendered_video_but_reencodes_aac_audio(monkeypatch, tmp_path):
+    scenes = []
+    for index in range(2):
+        scene = tmp_path / f"scene_{index + 1:02d}.mp4"
+        scene.write_bytes((f"rendered scene fixture {index + 1}".encode("utf-8") * 2000))
+        scenes.append(scene)
+    output = tmp_path / "master.mp4"
+    captured = {}
+
+    def fake_ffmpeg(*args, timeout=240):
+        captured["args"] = list(args)
+        Path(args[-1]).write_bytes(b"assembled master fixture" * 2000)
+
+    monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
+
+    studio.concat_segments(scenes, output)
+
+    args = captured["args"]
+    assert args[args.index("-c:v") + 1] == "copy"
+    assert args[args.index("-c:a") + 1] == "aac"
+    assert args[args.index("-b:a") + 1] == "192k"
+    assert args[args.index("-ar") + 1] == "48000"
+    assert args[args.index("-ac") + 1] == "2"
+    manifest_path = Path(args[args.index("-i") + 1])
+    manifest = manifest_path.read_text(encoding="utf-8")
+    assert all(str(scene) in manifest for scene in scenes)
+    assert output.is_file()
+    assert output.stat().st_size > 10_000
+

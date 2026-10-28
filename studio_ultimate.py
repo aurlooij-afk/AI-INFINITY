@@ -5083,9 +5083,27 @@ def _scene_mix(video: Path, voice: Path, music: Path, sfx: Path, duration: float
 
 
 def concat_segments(paths: List[Path], out: Path) -> None:
+    """Join rendered scenes without copying independently primed AAC packets.
+
+    Each scene is encoded in its own FFmpeg invocation. Copy-concatenating those
+    packets can preserve differing AAC priming/timestamp state; the final decode
+    then fails even when each scene file individually opened successfully. Keep
+    the already-rendered H.264 video bitstream, but decode/re-encode the audio into
+    one continuous AAC stream before final mastering and programme verification.
+    """
+    if not paths:
+        raise ValueError("cannot assemble an empty scene list")
     manifest = out.with_suffix(".txt")
     manifest.write_text("".join(f"file '{str(p).replace(chr(39), chr(39)+chr(92)+chr(39)+chr(39))}'\n" for p in paths), encoding="utf-8")
-    ffmpeg("-f", "concat", "-safe", "0", "-i", manifest, "-c", "copy", "-movflags", "+faststart", out, timeout=600)
+    ffmpeg(
+        "-f", "concat", "-safe", "0", "-i", manifest,
+        "-map", "0:v:0", "-map", "0:a:0",
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+        "-movflags", "+faststart",
+        out,
+        timeout=600,
+    )
 
 
 def make_variants(master: Path, outdir: Path, chapters: List[Dict[str, Any]], title: str) -> List[Dict[str, Any]]:
