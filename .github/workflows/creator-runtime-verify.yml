@@ -235,6 +235,8 @@ jobs:
             -v /tmp/ai-infinity-container-data:/tmp/ai-infinity \
             -e AI_INFINITY_3601_BACKGROUND=false \
             -e AI_INFINITY_FAST_MODE=0 \
+            -e AI_INFINITY_REQUIRE_SOURCE_VISUALS=1 \
+            -e AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE=0 \
             -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity \
             -p 10000:10000 ai-infinity:ci
           ready=0
