@@ -139,3 +139,22 @@ def test_otio_export_recovers_empty_legacy_scaffold_via_normal_save_path(
     assert recovered_events[0] == "professional_timeline_recovered_from_completed_scene_masters"
     assert response["truth_verified"] is False
     assert response["truthful"] is True
+
+def test_failed_quality_control_project_can_export_review_timeline_only_with_complete_scene_masters(tmp_path: Path) -> None:
+    root = tmp_path / "qc-failed-review"
+    root.mkdir()
+    (root / "final.mp4").write_bytes(b"rendered review master")
+    for index in range(1, 8):
+        (root / f"scene_{index:02d}.mp4").write_bytes(f"scene-{index}".encode())
+    failed_qc = {"status": "failed", "stage": "quality_control", "total_scenes": 7}
+
+    assert patch._otio_export_allowed(failed_qc, root) is True
+
+    (root / "scene_07.mp4").unlink()
+    assert patch._otio_export_allowed(failed_qc, root) is False
+    assert patch._otio_export_allowed(
+        {"status": "failed", "stage": "rendering", "total_scenes": 6}, root
+    ) is False
+    assert patch._otio_export_allowed(
+        {"status": "completed", "total_scenes": 7}, root
+    ) is True
