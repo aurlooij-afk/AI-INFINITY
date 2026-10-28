@@ -2662,7 +2662,7 @@ _VISUAL_CONCEPTS = {
     "workstation": r"\b(?:workstation|computer|desktop|laptop|monitors?|screens?|editing suite|suite|desk|keyboard|display)\b",
     "landscape": r"\b(?:landscape|mountains?|ocean|sea|coast|clouds?|cloudscape|valley|nature|horizon|terrain)\b",
     "cityscape": r"\b(?:cityscape|futuristic city|city skyline|skyline|metropolis|urban skyline|futuristic architecture)\b",
-    "abstract_motion": r"\b(?:abstract motion|digital tunnel|glowing lines|light trails|surreal landscape|imagination portal|luminous tunnel|worlds of possibility)\b",
+    "abstract_motion": r"\b(?:abstract[- ]motion|abstract[- ](?:glowing[- ]lines?|light[- ]trails?|tunnel)|digital tunnel|glowing[- ]lines?|light trails|surreal landscape|imagination portal|luminous tunnel|worlds of possibility)\b",
     "research_writing": r"\b(?:research|researching|notes|notebook|writing|script pages|storyboard frames|printed notes|writing notes)\b",
     "camera": r"\b(?:camera|camcorder|lens|tripod|filming|shooting|recording|cinematography)\b",
     "studio": r"\b(?:studio|production room|recording room|video set|film set|broadcast booth|soundstage)\b",
@@ -4003,7 +4003,7 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
     # candidate's own title/description/tags to prove the same focal concept.
     scene_concept_text = " ".join(
         str(scene.get(key) or "")
-        for key in ("topic", "title", "heading", "visual_focus", "visual_query", "narration", "on_screen")
+        for key in ("topic", "title", "heading", "visual_focus", "visual_search_subject", "visual_query", "narration", "on_screen")
     ).lower()
     scene_concepts = {
         key for key, pattern in _VISUAL_CONCEPTS.items()
@@ -4025,15 +4025,40 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
     for source_index, candidate in sources.items():
         required = set(candidate.get("required_concepts") or ())
         direct_match = bool(required) and required.issubset(scene_concepts)
-        # A display/finished-playback brief can legitimately use a clip showing
-        # an editing workstation. This bridge is narrowly scoped to that explicit
-        # final-video intent; unrelated camera/studio clips still fail closed.
+        scene_visual_text = " ".join(
+            str(scene.get(key) or "")
+            for key in ("heading", "visual_focus", "visual_search_subject", "visual_query", "narration", "on_screen")
+        )
+        # The launch storyboard contains deliberate focal transitions: landscape
+        # -> futuristic city -> abstract tunnel -> editing craft. These narrow
+        # bridges give the matching catalog category priority only when the user's
+        # actual scene describes that visual. Source metadata, media decode,
+        # black-frame rejection, byte uniqueness and rights gates still apply.
+        cityscape_focal = (
+            explicit_launch_profile
+            and required == {"cityscape"}
+            and bool(re.search(r"\b(?:futuristic city|cityscape|city skyline|metropolis|urban skyline)\b", scene_visual_text, re.I))
+        )
+        abstract_transition_focal = (
+            explicit_launch_profile
+            and required == {"abstract_motion"}
+            and bool(re.search(r"\b(?:abstract|digital tunnel|glowing[- ]lines?|light trails|transformation in motion|possibility becomes motion)\b", scene_visual_text, re.I))
+        )
         final_screen_bridge = (
             "finished_video" in scene_concepts
             and "workstation" in scene_concepts
             and required == {"editing", "workstation"}
         )
-        if not (direct_match or final_screen_bridge):
+        # The signature end-card can be composited as legible title treatment
+        # over real computer-screen motion footage. This is a scene-local bridge,
+        # not a substitution of stills or an unrestricted category bypass.
+        signature_screen_bridge = (
+            explicit_launch_profile
+            and required == {"editing", "workstation"}
+            and bool(re.search(r"\b(?:signature ending|brand end[ -]card|logo reveal|end card)\b", scene_visual_text, re.I))
+            and bool(re.search(r"\b(?:screen|monitor|display)\b", scene_visual_text, re.I))
+        )
+        if not (direct_match or final_screen_bridge or cityscape_focal or abstract_transition_focal or signature_screen_bridge):
             continue
 
         metadata_text = " ".join((
@@ -4046,8 +4071,16 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
             "description": candidate.get("description"),
             "tags": candidate.get("tags"),
         }
+        relevance_concepts = set(scene_concepts)
+        if signature_screen_bridge:
+            # The explicit end-card-on-screen composition means a screen clip is
+            # a truthful visual medium for the brand reveal; metadata still has to
+            # independently match editing/workstation and identify a real screen.
+            if not re.search(r"\b(?:screen|monitor|display|computer)\b", metadata_text, re.I):
+                continue
+            relevance_concepts.update({"editing", "workstation"})
         if not _curated_launch_visual_candidate_relevant(
-            metadata_record, required, scene_concepts, explicit_launch_profile, search_subject, focus
+            metadata_record, required, relevance_concepts, explicit_launch_profile, search_subject, focus
         ):
             continue
         metadata_terms = set(re.findall(r"[a-z0-9]{4,}", metadata_text.lower()))
@@ -4070,7 +4103,12 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
         # Preserve an ordinal asset only when it independently passed the semantic
         # matcher. A true exact-scene clip beats a merely cheaper generic alternative.
         preferred_bonus = 12 if direct_match and source_index == preferred_index else 0
-        score = len(required & scene_concepts) * 10 + lexical_overlap + screen_bonus + preferred_bonus - resolution_penalty
+        focal_bonus = (
+            28 if abstract_transition_focal
+            else 24 if cityscape_focal or signature_screen_bridge
+            else 0
+        )
+        score = len(required & scene_concepts) * 10 + lexical_overlap + screen_bonus + preferred_bonus + focal_bonus - resolution_penalty
         ranked.append((score, source_index, candidate))
 
     ranked.sort(key=lambda row: (-row[0], row[1]))
@@ -6725,10 +6763,21 @@ def _export_programme_audio_master(
     }
 
 
-def _max_scene_count(is_short: bool, fast_mode: bool, smoke: bool, explicitly_single_scene: bool) -> int:
-    """Bound rendering without reducing normal work to four long scene holds."""
+def _max_scene_count(
+    is_short: bool,
+    fast_mode: bool,
+    smoke: bool,
+    explicitly_single_scene: bool,
+    explicit_launch: bool = False,
+) -> int:
+    """Bound render cost while preserving authored beats in explicit launch films."""
     if smoke or explicitly_single_scene:
         return 1
+    if explicit_launch and not is_short:
+        # The canonical 60-second AI Infinity launch storyboard has nine authored
+        # beats. They each have a distinct narrative job and fit the 4s minimum.
+        # Do not discard the cinematic-world beat merely to satisfy a generic cap.
+        return 9
     # Normal shorts have five planned beats; ordinary landscape work has eight.
     # FAST_MODE changes encoder cost, not the narrative coverage requirement.
     return 5 if is_short else 8
@@ -7099,19 +7148,43 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             r"\b(single[- ]scene|single[- ]shot|one[- ]shot|one continuous shot|static shot|still[- ]image video|looping background)\b",
             brief_for_scene_policy, re.I
         ))
+        explicit_launch_profile = _is_explicit_ai_infinity_launch_brief(
+            str(req.get("objective") or req.get("topic") or req.get("title") or "")
+        )
         max_chapters = _max_scene_count(
             is_short=is_short,
             fast_mode=FAST_MODE,
             smoke=SMOKE,
             explicitly_single_scene=explicitly_single_scene,
+            explicit_launch=explicit_launch_profile,
         )
         if FAST_MODE and not SMOKE:
             target = min(target, 180 if is_short else 900)
+        original_chapter_count = len(chapters)
         chapters = _select_scene_coverage(chapters, max_chapters)
         # Allocate the runtime before rendering. Scene-level clamping after the
         # fact caused short jobs to render longer than requested, then trim the
         # video without trimming the captions to the same timeline.
         chapters = _allocate_scene_durations(chapters, float(target))
+        # Keep the persisted blueprint aligned with the storyboard actually sent
+        # to the renderer. Otherwise OTIO can load the original nine-scene plan
+        # after an eight-scene render and reference a nonexistent scene_09.mp4.
+        # Record selection explicitly rather than pretending any omitted beats
+        # were rendered; explicit launch storyboards are preserved at nine scenes.
+        plan["chapters"] = [dict(chapter) for chapter in chapters]
+        brief_fidelity = plan.get("brief_fidelity")
+        if isinstance(brief_fidelity, dict):
+            brief_fidelity["rendered_timecoded_scenes"] = len(chapters)
+            brief_fidelity["rendered_scene_selection_applied"] = len(chapters) < original_chapter_count
+            brief_fidelity["rendered_scene_selection_policy"] = (
+                "all_explicit_launch_beats_preserved"
+                if explicit_launch_profile and len(chapters) == original_chapter_count
+                else "bounded_evenly_spaced_narrative_coverage"
+            )
+            brief_fidelity["rendered_scene_durations_seconds"] = [
+                float(chapter["duration"]) for chapter in chapters
+            ]
+        _update_project(project_id, blueprint_json=jdump(plan))
         _stage(project_id, "production_ready", 22, total_scenes=len(chapters), current_scene=0)
 
         assets_meta: List[Dict[str, Any]] = []
