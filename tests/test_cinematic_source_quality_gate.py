@@ -384,3 +384,17 @@ def test_explicit_launch_uses_scene_local_visual_query_for_landscape_clip(monkey
     assert selected["source"] == "Pexels curated free editorial video"
     assert selected["validated_media"] is True
     assert selected["path"] == str(media)
+
+def test_procedural_fallback_title_uses_scene_subject_not_render_prompt_boilerplate(tmp_path):
+    prompt = (
+        "Premium cinematic live-action film still: AI Infinity logo reveal against a deep cinematic background. "
+        "Overall visual direction: midnight blue, restrained cyan and warm gold. "
+        "No fabricated UI, no gibberish text."
+    )
+
+    asset = studio._procedural_image(prompt, tmp_path, 7, width=640, height=360)
+
+    assert asset is not None
+    assert asset["topic"] == "AI Infinity logo reveal against a deep cinematic background"
+    assert "Premium cinematic" not in asset["topic"]
+    assert "Overall visual direction" not in asset["topic"]
