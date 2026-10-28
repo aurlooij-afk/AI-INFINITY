@@ -454,6 +454,51 @@ def test_curated_launch_retries_a_second_distinct_landscape_source(monkeypatch, 
     assert selected["validated_media"] is True
     assert selected["quality_tier"] == "curated_free_source_motion_video"
 
+def test_curated_launch_uses_distinct_scriptwriting_source_instead_of_fallback(monkeypatch, tmp_path):
+    """A duplicate first writing clip should retry a second relevant source."""
+    monkeypatch.setattr(studio, "FAST_MODE", False)
+
+    duplicate_bytes = b"existing writing clip already assigned to another scene" * 900
+    alternate_bytes = b"second distinct scriptwriting and storyboard clip" * 1000
+    (tmp_path / "selected_visual_01.mp4").write_bytes(duplicate_bytes)
+
+    def fake_download(url, path, **_kwargs):
+        if "6550131" in url:
+            Path(path).write_bytes(duplicate_bytes)
+            return
+        if "8086204" in url:
+            Path(path).write_bytes(alternate_bytes)
+            return
+        raise AssertionError(f"Unexpected source download: {url}")
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 8.0)
+    monkeypatch.setattr(studio, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
+
+    scene = {
+        "topic": "AI Infinity — One Idea. Infinite Worlds.",
+        "heading": "The Transformation",
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": "Overhead script pages and storyboard thumbnails, deliberate marks and natural paper texture",
+        "visual_query": "close up of scriptwriting process with pen and script",
+        "visual_search_subject": "script pages and storyboard thumbnails",
+        "narration": "The idea becomes a researched story and a script.",
+        "on_screen": "Research. Shape. Create.",
+    }
+    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=4)
+
+    assert selected is not None
+    assert selected["source_id"] == 8086204
+    assert selected["source_url"] == "https://www.pexels.com/video/close-up-of-a-script-8086204/"
+    assert selected["quality_tier"] == "curated_free_source_motion_video"
+    assert selected["validated_media"] is True
+    assert selected["asset_sha256"] == hashlib.sha256(alternate_bytes).hexdigest()
+    assert Path(selected["path"]).name == "selected_visual_02.mp4"
+
+
 def test_source_black_frame_gate_detects_sustained_near_black_segments(monkeypatch, tmp_path):
     source = tmp_path / "source.mp4"
     source.write_bytes(b"test media bytes")
