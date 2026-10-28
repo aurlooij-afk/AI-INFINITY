@@ -6297,7 +6297,12 @@ def _ensure_delivery_subtitle_track(source: Path, captions: Path, out: Path) -> 
     return out
 
 
-def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = False) -> Dict[str, Any]:
+def _normalize_delivery_loudness(
+    source: Path,
+    out: Path,
+    fast_mode: bool = False,
+    target_duration_seconds: Optional[float] = None,
+) -> Dict[str, Any]:
     """Master the actual delivered programme to a measurable dialogue-safe target.
 
     Scene-level normalization alone is insufficient: concatenation, duration
@@ -6325,9 +6330,21 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
     source_duration = float(probe_duration(source))
     if source_duration <= 0:
         raise RuntimeError("final loudness mastering cannot determine the programme duration")
+    try:
+        requested_duration = (
+            source_duration if target_duration_seconds is None else float(target_duration_seconds)
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("final delivery duration must be a finite positive number") from exc
+    if requested_duration <= 0 or requested_duration != requested_duration or requested_duration == float("inf"):
+        raise ValueError("final delivery duration must be a finite positive number")
+    # Later profile/subtitle muxes may add trailing packets even after the earlier
+    # duration-fitter passed. The requested programme duration remains authoritative
+    # at the very last mastering step, including audio padding/trimming.
     audio_filter = (
-        f"atrim=duration={source_duration:.3f},"
-        f"apad=whole_dur={source_duration:.3f},"
+        f"atrim=duration={requested_duration:.3f},"
+        f"apad=whole_dur={requested_duration:.3f},"
+        f"atrim=duration={requested_duration:.3f},"
         f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}"
     )
     rate = "96k" if fast_mode else "192k"
@@ -6349,7 +6366,7 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
         # Subtitle timestamps and AAC priming can extend format duration beyond
         # the video programme. Cap the muxed deliverable at the measured source
         # duration; we independently verify audio/video alignment below.
-        "-t", f"{source_duration:.3f}",
+        "-t", f"{requested_duration:.3f}",
         out,
         timeout=max(120, int(probe_duration(source) * (4 if fast_mode else 6))),
     )
@@ -6370,9 +6387,11 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
         int(output_video.get("width") or 0), int(output_video.get("height") or 0)
     ):
         raise RuntimeError("final loudness mastering unexpectedly changed video dimensions")
-    if abs(output_duration - source_duration) > 0.5:
+    if abs(output_duration - requested_duration) > 0.5:
         raise RuntimeError(
-            f"final loudness mastering changed duration from {source_duration:.3f}s to {output_duration:.3f}s"
+            "final loudness mastering violated the requested duration: "
+            f"{output_duration:.3f}s output vs {requested_duration:.3f}s target "
+            f"(input was {source_duration:.3f}s)"
         )
     output_audio_duration = float(output_audio.get("duration") or 0)
     if not output_audio_duration:
@@ -6395,6 +6414,7 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
         "target_true_peak_dbtp": target_tp,
         "target_loudness_range_lu": target_lra,
         "source_duration_seconds": round(source_duration, 3),
+        "requested_duration_seconds": round(requested_duration, 3),
         "output_duration_seconds": round(output_duration, 3),
         "audio_duration_seconds": round(output_audio_duration, 3),
         "audio_video_duration_match": True,
@@ -7043,7 +7063,9 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         # and exact-duration fitting. Preserve the video bitstream, so this adds no
         # extra video generation loss, and then verify the finished mix separately.
         mastered_final = outdir / "final_loudness_mastered.mp4"
-        loudness_master = _normalize_delivery_loudness(captioned, mastered_final, FAST_MODE)
+        loudness_master = _normalize_delivery_loudness(
+            captioned, mastered_final, FAST_MODE, target_duration_seconds=float(target)
+        )
         os.replace(mastered_final, captioned)
         final_duration_after_loudness = probe_duration(captioned)
         if abs(float(final_duration_after_loudness) - float(target)) > 1.0:
