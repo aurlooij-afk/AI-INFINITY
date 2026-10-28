@@ -252,10 +252,12 @@ def test_programme_audio_master_resets_pts_and_pads_to_the_video_runtime(monkeyp
     result = studio._export_programme_audio_master(source, output, 60.0, fast_mode=False)
 
     args = captured["args"]
-    audio_filter = args[args.index("-af") + 1]
-    assert audio_filter.startswith("asetpts=PTS-STARTPTS,")
-    assert "apad=whole_dur=60.000" in audio_filter
-    assert "atrim=duration=60.000" in audio_filter
+    audio_filter = args[args.index("-filter_complex") + 1]
+    assert audio_filter.startswith("[0:a:0]asetpts=PTS-STARTPTS,aresample=48000[audio];")
+    assert "anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=60.000[silence]" in audio_filter
+    assert "[audio][silence]amix=inputs=2:duration=longest:dropout_transition=0" in audio_filter
+    assert "atrim=duration=60.000[outa]" in audio_filter
+    assert args[args.index("-map") + 1] == "[outa]"
     assert args[args.index("-t") + 1] == "60.000"
     assert result["status"] == "verified"
     assert result["requested_duration_seconds"] == 60.0
@@ -318,4 +320,42 @@ def test_scene_concatenation_copies_rendered_video_but_reencodes_aac_audio(monke
     assert all(str(scene) in manifest for scene in scenes)
     assert output.is_file()
     assert output.stat().st_size > 10_000
+
+def test_curated_launch_uses_scene_focal_concept_when_brief_has_multiple_visual_concepts(monkeypatch):
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: False)
+    mountains = {
+        "title": "Clouds formation in the sky above the mountains",
+        "description": "Dynamic clouds move over peaceful mountain peaks during sunset.",
+        "tags": "cinematic mountains landscape clouds moving clouds panoramic horizon nature",
+    }
+    assert studio._curated_launch_visual_candidate_relevant(
+        mountains,
+        required_concepts={"landscape"},
+        scene_concepts={"landscape", "cityscape"},
+        explicit_launch_profile=True,
+        search_subject="dramatic mountains and futuristic city",
+        focus="mountain landscape opens into a futuristic city",
+    ) is True
+
+    unrelated = {
+        "title": "A cat in a garden",
+        "description": "A house cat sleeping in a garden",
+        "tags": "cat pet garden",
+    }
+    assert studio._curated_launch_visual_candidate_relevant(
+        unrelated,
+        required_concepts={"landscape"},
+        scene_concepts={"landscape", "cityscape"},
+        explicit_launch_profile=True,
+        search_subject="dramatic mountains and futuristic city",
+        focus="mountain landscape opens into a futuristic city",
+    ) is False
+    assert studio._curated_launch_visual_candidate_relevant(
+        mountains,
+        required_concepts={"landscape"},
+        scene_concepts={"landscape", "cityscape"},
+        explicit_launch_profile=False,
+        search_subject="dramatic mountains and futuristic city",
+        focus="mountain landscape opens into a futuristic city",
+    ) is False
 

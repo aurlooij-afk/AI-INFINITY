@@ -3693,6 +3693,43 @@ def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: 
     }
 
 
+def _curated_launch_visual_candidate_relevant(
+    candidate: Dict[str, Any],
+    required_concepts: Iterable[str],
+    scene_concepts: Iterable[str],
+    explicit_launch_profile: bool,
+    search_subject: str,
+    focus: str,
+) -> bool:
+    """Match a curated launch clip to its focal subject, not every element in a composite brief.
+
+    The campaign storyboard intentionally moves from a landscape to a city to a
+    research desk. Requiring any one stock shot's metadata to describe every noun
+    in a multi-concept scene rejected even directly relevant footage. The fallback
+    below is limited to the explicit AI Infinity launch profile and requires both
+    (a) the candidate's declared focal concept to be present in the scene brief and
+    (b) the actual item title/description/tags to match that same concept. General
+    public-provider relevance remains strict; unrelated clips still fail closed.
+    """
+    if _visual_candidate_relevant(candidate, search_subject, focus):
+        return True
+    if not explicit_launch_profile or not isinstance(candidate, dict):
+        return False
+    required = {str(value) for value in (required_concepts or ())}
+    visible = {str(value) for value in (scene_concepts or ())}
+    if not required or not (required & visible):
+        return False
+    text = " ".join(
+        str(candidate.get(key) or "")
+        for key in ("title", "description", "alt", "caption", "tags", "category")
+    ).lower()
+    metadata_concepts = {
+        key for key, pattern in _VISUAL_CONCEPTS.items()
+        if re.search(pattern, text, re.I)
+    }
+    return bool(required & metadata_concepts)
+
+
 def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int) -> Optional[Dict[str, Any]]:
     """Keyless, item-attributed Pexels motion footage for the eight-shot AI Infinity launch profile.
 
@@ -3903,7 +3940,9 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
             "description": candidate.get("description"),
             "tags": candidate.get("tags"),
         }
-        if not _visual_candidate_relevant(metadata_record, search_subject, focus):
+        if not _curated_launch_visual_candidate_relevant(
+            metadata_record, required, scene_concepts, explicit_launch_profile, search_subject, focus
+        ):
             continue
         metadata_terms = set(re.findall(r"[a-z0-9]{4,}", metadata_text.lower()))
         lexical_overlap = len(focus_terms & metadata_terms)
@@ -6486,16 +6525,21 @@ def _export_programme_audio_master(
         raise RuntimeError("programme audio export cannot determine the video runtime")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.unlink(missing_ok=True)
+    # An audio stream can end at 53.6 seconds even when the container's video
+    # programme is 60 seconds. Reset and resample the programme, then mix it with
+    # a precisely target-length silence bed. The latter guarantees a real 60s
+    # output timeline even when the input audio ends early or has timestamp gaps.
     audio_filter = (
-        "asetpts=PTS-STARTPTS,"
-        f"apad=whole_dur={target:.3f},"
-        f"atrim=duration={target:.3f}"
+        f"[0:a:0]asetpts=PTS-STARTPTS,aresample=48000[audio];"
+        f"anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration={target:.3f}[silence];"
+        f"[audio][silence]amix=inputs=2:duration=longest:dropout_transition=0,"
+        f"atrim=duration={target:.3f}[outa]"
     )
     ffmpeg(
         "-i", source,
-        "-map", "0:a:0",
+        "-filter_complex", audio_filter,
+        "-map", "[outa]",
         "-vn",
-        "-af", audio_filter,
         "-t", f"{target:.3f}",
         "-c:a", "libmp3lame",
         "-q:a", "2",
