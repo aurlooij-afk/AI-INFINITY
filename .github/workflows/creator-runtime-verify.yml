@@ -514,6 +514,64 @@ jobs:
           curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
             "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/artifacts" > /tmp/artifacts.json
           cat /tmp/artifacts.json
+
+          # Produce an explicit evidence record for both branches: a naturally
+          # QC-failed project, or a completed render temporarily put behind the
+          # QC-failed state to exercise the review-export endpoint. The export
+          # sub-gate is never mistaken for overall production acceptance.
+          if [ "$review_only" != "true" ]; then
+            python - "$PROJECT_ID" "$export_review_test" "$original_status" "$original_stage" "$review_only" <<'PY'
+          import hashlib, json, sys, zipfile
+          from pathlib import Path
+          pid, controlled, original_status, original_stage, review_only = sys.argv[1:6]
+          root = Path("/tmp/ai-infinity-container-data/creator_studio") / pid
+          response = json.load(open("/tmp/otio-export.json", encoding="utf-8"))
+          imported = json.load(open("/tmp/otio-import-proof.json", encoding="utf-8"))
+          timeline_item = response.get("timeline") or {}
+          bundle_item = response.get("bundle") or {}
+          timeline_path = root / timeline_item.get("name", "")
+          bundle_path = root / bundle_item.get("name", "")
+          assert response.get("status") == "exported", response
+          assert response.get("truth_verified") is False and response.get("requires_human_review") is True, response
+          assert response.get("human_review_status") == "PENDING" and response.get("truthful") is True, response
+          assert timeline_path.is_file() and bundle_path.is_file(), {"timeline": str(timeline_path), "bundle": str(bundle_path)}
+          timeline_sha = hashlib.sha256(timeline_path.read_bytes()).hexdigest()
+          bundle_sha = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+          assert timeline_sha == timeline_item.get("sha256"), {"expected": timeline_item.get("sha256"), "actual": timeline_sha}
+          assert bundle_sha == bundle_item.get("sha256"), {"expected": bundle_item.get("sha256"), "actual": bundle_sha}
+          with zipfile.ZipFile(bundle_path) as archive:
+              assert archive.testzip() is None
+              names = set(archive.namelist())
+              assert "project.otio" in names
+              assert hashlib.sha256(archive.read("project.otio")).hexdigest() == timeline_sha
+          assert imported.get("status") == "PASS_OTIO_API_IMPORT_RELOAD", imported
+          assert imported.get("truth_verified") is False and imported.get("human_review_status") == "PENDING", imported
+          proof = {
+              "status": "PASS_REVIEW_EXPORT_AND_RELOAD_SUBGATE",
+              "project_id": pid,
+              "project_status_during_export": "failed",
+              "failure_stage_during_export": "quality_control",
+              "controlled_qc_failure_test": controlled == "true",
+              "original_project_status": original_status,
+              "original_project_stage": original_stage,
+              "naturally_qc_failed_review_only": review_only == "true",
+              "truth_state": response.get("truth_state"),
+              "truth_verified": response.get("truth_verified"),
+              "human_review_status": response.get("human_review_status"),
+              "timeline_sha256": timeline_sha,
+              "bundle_sha256": bundle_sha,
+              "bundle_size_bytes": bundle_path.stat().st_size,
+              "import_reload": imported,
+              "review_export": response.get("review_export"),
+              "publish_allowed": False,
+              "acceptance_pass": False,
+              "truthful": True
+          }
+          Path("/tmp/otio-review-export-proof.json").write_text(json.dumps(proof, indent=2) + "\n", encoding="utf-8")
+          print("OTIO_REVIEW_EXPORT_AND_RELOAD_SUBGATE_PASS", json.dumps(proof, sort_keys=True))
+          PY
+          fi
+
           if [ "$review_only" = "true" ]; then
             # A render that fails creative QC must never pass acceptance, but the
             # actual completed scene masters must remain exportable for review.
@@ -649,7 +707,7 @@ jobs:
           mkdir -p "$REVIEW"
           docker ps -a > "$REVIEW/docker_containers.txt" 2>&1
           docker logs ai-infinity-ci > "$REVIEW/docker_runtime.log" 2>&1
-          for path in /tmp/request.json /tmp/create-response.json /tmp/project.json /tmp/artifacts.json /tmp/verify.json /tmp/reality-proof.json /tmp/final-probe.json /tmp/otio-export.json /tmp/otio-export-warning.txt /tmp/otio-review-export-proof.json; do
+          for path in /tmp/request.json /tmp/create-response.json /tmp/project.json /tmp/artifacts.json /tmp/verify.json /tmp/reality-proof.json /tmp/final-probe.json /tmp/otio-export.json /tmp/otio-import.json /tmp/otio-import-proof.json /tmp/otio-export-warning.txt /tmp/otio-review-export-proof.json; do
             if [ -s "$path" ]; then cp "$path" "$REVIEW/"; fi
           done
           if [ -s /tmp/create-response.json ]; then
@@ -713,6 +771,9 @@ jobs:
             /tmp/artifacts.json
             /tmp/verify.json
             /tmp/reality-proof.json
+            /tmp/otio-export.json
+            /tmp/otio-import.json
+            /tmp/otio-import-proof.json
             /tmp/otio-review-export-proof.json
             /tmp/ai-infinity-brand-film-review/**
             !/tmp/ai-infinity-brand-film-review/named_creator_package.zip
