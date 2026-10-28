@@ -3903,12 +3903,14 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
         return None
     profile_text = " ".join(str(scene.get(key) or "") for key in ("topic", "title", "heading", "visual_focus", "visual_query"))
     explicit_launch_profile = str(scene.get("campaign_profile") or "").strip().lower() == "ai_infinity_launch"
-    if not (
+    # An explicit launch-profile marker is project-level intent. Scene-local
+    # topics intentionally describe the shot (for example, "mountain landscape")
+    # and need not repeat the brand name. Requiring the literal brand in every
+    # scene rejected valid launch-profile shots before concept matching even ran.
+    # Ordinary projects still need both the brand and a creator/production term.
+    if not explicit_launch_profile and not (
         re.search(r"\bAI\s+Infinity\b", profile_text, re.I)
-        and (
-            explicit_launch_profile
-            or re.search(r"\b(?:launch|creator|studio|production|editing|software)\b", profile_text, re.I)
-        )
+        and re.search(r"\b(?:launch|creator|studio|production|editing|software)\b", profile_text, re.I)
     ):
         return None
 
