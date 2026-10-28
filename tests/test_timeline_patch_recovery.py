@@ -158,3 +158,43 @@ def test_failed_quality_control_project_can_export_review_timeline_only_with_com
     assert patch._otio_export_allowed(
         {"status": "completed", "total_scenes": 7}, root
     ) is True
+
+
+def test_qc_failed_generated_timeline_exports_only_real_masters_and_records_omissions(tmp_path: Path) -> None:
+    root = tmp_path / "qc-review-partial"
+    root.mkdir()
+    (root / "final.mp4").write_bytes(b"rendered review master")
+    for index in range(1, 9):
+        (root / f"scene_{index:02d}.mp4").write_bytes(f"real-scene-{index}".encode())
+    project = {"status": "failed", "stage": "quality_control", "total_scenes": 8}
+    planned = {
+        "scenes": [
+            {"source_asset": f"scene_{index:02d}.mp4", "source_index": index,
+             "heading": f"Scene {index}", "duration": 2.0, "enabled": True}
+            for index in range(1, 10)
+        ],
+        "duration_seconds": 18.0,
+    }
+
+    reviewed = patch._review_only_filter_generated_missing_masters(project, root, planned)
+
+    assert [row["source_asset"] for row in reviewed["scenes"]] == [
+        f"scene_{index:02d}.mp4" for index in range(1, 9)
+    ]
+    assert reviewed["review_export"]["status"] == "partial_scene_master_review_only"
+    assert reviewed["review_export"]["complete"] is False
+    assert reviewed["review_export"]["missing_scene_masters"] == ["scene_09.mp4"]
+    assert reviewed["review_export"]["publish_allowed"] is False
+    assert patch._otio_export_allowed(project, root) is True
+
+
+def test_missing_master_filter_never_rewrites_a_completed_project_timeline(tmp_path: Path) -> None:
+    root = tmp_path / "completed-project"
+    root.mkdir()
+    (root / "scene_01.mp4").write_bytes(b"scene 1")
+    project = {"status": "completed", "stage": "complete", "total_scenes": 1}
+    source = {"scenes": [
+        {"source_asset": "scene_01.mp4"}, {"source_asset": "scene_02.mp4"}
+    ]}
+
+    assert patch._review_only_filter_generated_missing_masters(project, root, source) is source
