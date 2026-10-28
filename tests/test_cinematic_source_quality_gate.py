@@ -149,6 +149,17 @@ def test_timecoded_ai_infinity_brand_film_sets_curated_campaign_profile():
     assert plan is not None
     assert plan["storyboard_origin"] == "explicit_timecoded_user_brief"
     assert all(scene["campaign_profile"] == "ai_infinity_launch" for scene in plan["chapters"])
+    # Keep every authored beat boundary, while splitting the two broad
+    # transformation beats into shots that can carry distinct verified footage.
+    assert len(plan["chapters"]) == 9
+    assert [(scene["timecode"]["start_seconds"], scene["timecode"]["end_seconds"])
+            for scene in plan["chapters"]] == [
+        (0, 4), (4, 12), (12, 19), (19, 25), (25, 32),
+        (32, 40), (40, 49), (49, 56), (56, 60),
+    ]
+    assert sum(float(scene["duration"]) for scene in plan["chapters"]) == 60.0
+    assert len({scene["visual_search_subject"] for scene in plan["chapters"]}) == 9
+    assert sum(len(scene["narration"].split()) for scene in plan["chapters"]) >= 120
 
 def test_delivery_loudness_mastering_caps_output_to_source_programme_duration(monkeypatch, tmp_path):
     source = tmp_path / "source.mp4"
