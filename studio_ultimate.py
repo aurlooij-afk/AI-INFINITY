@@ -1648,36 +1648,66 @@ def _explicit_timed_storyboard_plan(
     if source_span < max(20, target - 2) or source_span > target + 2:
         return None
 
+    # The launch brief expresses seven editorial beats, but two beats deliberately
+    # cover multi-stage transformations. Split those *within* their original time
+    # windows into dedicated shots: preserve every supplied beat boundary, total
+    # duration, narration intent and end card while meeting the eight-motion-source
+    # production gate. Only apply to this exact 60-second launch storyboard shape.
+    expected_launch_intervals = [
+        (0, 4), (4, 12), (12, 25), (25, 40), (40, 49), (49, 56), (56, 60),
+    ]
+    if (
+        target == 60
+        and _is_explicit_ai_infinity_launch_brief(raw_objective)
+        and [(start, end) for start, end, _ in intervals] == expected_launch_intervals
+    ):
+        expanded_intervals = []
+        for index, (start, end, description) in enumerate(intervals):
+            if index == 2:
+                expanded_intervals.extend(((start, 19, description), (19, end, description)))
+            elif index == 3:
+                expanded_intervals.extend(((start, 32, description), (32, end, description)))
+            else:
+                expanded_intervals.append((start, end, description))
+        intervals = expanded_intervals
+
     headings = [
-        "The Hook", "The Spark", "The Transformation", "The Cinematic Experience",
-        "The Craft", "The Payoff", "Signature Ending",
+        "The Hook", "The Spark", "Research and Discovery", "Script and Storyboard",
+        "The Cinematic World", "Transformation in Motion", "The Craft", "The Payoff",
+        "Signature Ending",
     ]
     visual_anchors = [
         "intimate late-night room, lone creator, blank screen, close-up, quiet tension",
         "wide dramatic mountain landscape and futuristic cityscape, expansive horizon and moving clouds",
-        "hands researching real sources, writing notes in a notebook, script pages and storyboard frames",
-        "cinematic landscape, futuristic cityscape and an abstract glowing-line tunnel transition, human scale",
+        "close-up hands tracing research sources and handwritten notes under warm desk light",
+        "overhead script pages and storyboard thumbnails, deliberate marks and natural paper texture",
+        "wide aerial landscape opening into a futuristic city with layered depth and visible movement",
+        "abstract glowing-line tunnel transitioning from the imagined landscape into a crafted visual world",
         "editing workstation, real timeline, caption preview, sound meters and deliberate hands-on craft",
         "the same creator watching the finished film on a computer screen, close-up human reaction, warm gold practical light",
         "restrained midnight-blue brand end-card, subtle cyan and violet light, clean negative space",
     ]
     overlays = [
         "Every extraordinary world begins",
-        "One idea. Infinite possibilities.",
-        "Research. Script. Storyboard.",
-        "Step into the vision.",
-        "Edit. Listen. Verify.",
-        "Research it. Shape it. Make it better.",
+        "A single idea",
+        "Find what is true",
+        "Give the idea a story",
+        "A world takes shape",
+        "Possibility becomes motion",
+        "Every frame has purpose",
+        "The idea, brought to life",
         "AI INFINITY  •  ONE IDEA. INFINITE WORLDS.",
     ]
     fallback_narration = [
         "Every extraordinary world begins with something nobody else can see.",
-        "One small idea becomes a doorway. Beyond the room, new worlds begin to unfold.",
-        "We gather the evidence, shape the research into a story, then give it form in a script and storyboard.",
-        "Mountains, water and a city of tomorrow come alive. Each shot reveals another part of the same vision.",
-        "Cut with purpose. Keep the voice clear, the captions in sync, and the master verifiable before it leaves the studio.",
-        "Research it. Shape it. Bring it to life. Then make it better.",
-        "AI Infinity. One idea. Infinite worlds.",
+        "One small idea becomes a doorway, and a quiet room opens into a world of possibility.",
+        "We begin with real questions, trace relevant sources, and separate what is confirmed from what still needs proof.",
+        "Research becomes a focused story and a script, then storyboard frames give every shot a clear purpose.",
+        "Mountains, water and a city of tomorrow rise beyond the screen; the imagined world begins to feel real.",
+        "Each transition carries the same idea forward, changing scale and emotion without losing the human story.",
+        "In the edit, precise timing connects voice, captions, music and picture into a deliberate rhythm.",
+        "The creator sees an idea become a finished film—something real that can be reviewed, edited and improved.",
+        "AI Infinity. One idea. Infinite worlds. Keep creating, keep refining, bring the next vision to life.",
     ]
     chapters = []
     raw_durations = [end - start for start, end, _ in intervals]
@@ -1736,8 +1766,10 @@ def _explicit_timed_storyboard_plan(
         search_subjects = [
             "creator alone in a dark room at night",
             "cinematic mountains ocean and futuristic city",
-            "hands writing research notes and storyboard sketches",
-            "moving mountain clouds futuristic cityscape and luminous abstract tunnel",
+            "hands researching real sources and writing notes",
+            "script writing and storyboard sketching",
+            "futuristic city skyline and dramatic landscape in motion",
+            "abstract tunnel with glowing lines cinematic transition",
             "professional video editing timeline and captions",
             "creator watching a finished film",
             "minimal dark cinematic brand end card",
