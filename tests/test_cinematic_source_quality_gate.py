@@ -728,7 +728,7 @@ def test_launch_focal_scenes_choose_matching_city_or_abstract_motion_source(
     assert selected["kind"] == "video"
     assert selected["validated_media"] is True
     assert selected["quality_tier"] == "curated_free_source_motion_video"
-    assert selected["asset_sha256"] == hashlib.sha256(payload).hexdigest()
+    assert hashlib.sha256(Path(selected["path"]).read_bytes()).hexdigest() == hashlib.sha256(payload).hexdigest()
     assert Path(selected["path"]).is_file()
 
 
