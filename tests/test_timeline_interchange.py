@@ -185,13 +185,24 @@ def test_qc_review_omission_metadata_survives_otio_and_bundle_roundtrip(tmp_path
         result["timeline_path"], adapter_name="otio_json"
     )
     review_meta = (exported.metadata.get("ai_infinity") or {}).get("review_export")
-    assert review_meta["complete"] is False
-    assert review_meta["missing_scene_masters"] == ["scene_09.mp4"]
-    assert review_meta["publish_allowed"] is False
+    # OTIO wraps nested metadata arrays in AnyVector, which is list-like but
+    # intentionally not equal to a native Python list; normalize before comparing.
+    normalized_review_meta = {
+        "status": str(review_meta["status"]),
+        "complete": bool(review_meta["complete"]),
+        "missing_scene_masters": list(review_meta["missing_scene_masters"]),
+        "included_scene_masters": list(review_meta["included_scene_masters"]),
+        "publish_allowed": bool(review_meta["publish_allowed"]),
+        "reason": str(review_meta["reason"]),
+    }
+    assert normalized_review_meta["complete"] is False
+    assert normalized_review_meta["missing_scene_masters"] == ["scene_09.mp4"]
+    assert normalized_review_meta["included_scene_masters"] == ["scene_01.mp4", "scene_02.mp4"]
+    assert normalized_review_meta["publish_allowed"] is False
     with zipfile.ZipFile(result["bundle_path"]) as archive:
         manifest = json.loads(archive.read("metadata/timeline-export-manifest.json"))
-        assert manifest["review_export"] == review_meta
-    assert result["review_export"] == review_meta
+        assert manifest["review_export"] == normalized_review_meta
+    assert result["review_export"] == normalized_review_meta
 
 
 def test_otio_import_rejects_path_traversal_and_remote_media(tmp_path: Path) -> None:
