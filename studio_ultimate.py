@@ -3899,9 +3899,17 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
 
     focus = re.sub(r"\s+", " ", str(scene.get("visual_focus") or scene.get("heading") or "")).strip()
     heading = str(scene.get("heading") or "")
+    # A timed campaign scene can describe its visible subject in the search
+    # brief or narration even when its short heading/focus is metaphorical.
+    # Include scene-local fields for concept matching, while still requiring the
+    # candidate's own title/description/tags to prove the same focal concept.
+    scene_concept_text = " ".join(
+        str(scene.get(key) or "")
+        for key in ("topic", "title", "heading", "visual_focus", "visual_query", "narration", "on_screen")
+    ).lower()
     scene_concepts = {
         key for key, pattern in _VISUAL_CONCEPTS.items()
-        if re.search(pattern, (focus + " " + heading).lower())
+        if re.search(pattern, scene_concept_text)
     }
     preferred_index = int(index) if str(index).isdigit() else None
     search_subject = str(scene.get("visual_search_subject") or scene.get("topic") or "content creator")
