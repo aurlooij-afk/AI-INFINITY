@@ -51,7 +51,11 @@ def _otio_export_allowed(project: Dict[str, Any], project_root: Path) -> bool:
 
 
 def _review_only_filter_generated_missing_masters(
-    project: Dict[str, Any], project_root: Path, source: Dict[str, Any]
+    project: Dict[str, Any],
+    project_root: Path,
+    source: Dict[str, Any],
+    *,
+    allow_unverified_qc_review: bool = False,
 ) -> Dict[str, Any]:
     """Build an honest partial review timeline only from real masters.
 
@@ -59,10 +63,11 @@ def _review_only_filter_generated_missing_masters(
     master in a QC-failed project. Persisted non-empty editor timelines are not
     passed through this helper, so user edits are never silently rewritten.
     """
-    if (
-        str(project.get("status") or "").strip().lower() != "failed"
-        or str(project.get("stage") or "").strip().lower() != "quality_control"
-    ):
+    strict_failed_qc = (
+        str(project.get("status") or "").strip().lower() == "failed"
+        and str(project.get("stage") or "").strip().lower() == "quality_control"
+    )
+    if not strict_failed_qc and not allow_unverified_qc_review:
         return source
     rows = source.get("scenes")
     if not isinstance(rows, list) or not rows:
@@ -375,6 +380,16 @@ def install(app: Any) -> None:
             raise HTTPException(500, "professional timeline render failed: " + str(exc)[:500])
 
     def otio_timeline_source(pid: str, project: Dict[str, Any]) -> Dict[str, Any]:
+        canonical_truth = base._truth(studio, project)
+        # The application can store a render as completed while the canonical
+        # quality truth remains REVIEW_REQUIRED. For OTIO only, allow a partial
+        # review copy in that state so the creator can inspect real scene masters.
+        # Publishing/acceptance remains blocked; the saved editor timeline is not
+        # rewritten and missing media is recorded explicitly in the bundle.
+        allow_unverified_qc_review = (
+            canonical_truth.get("verified") is not True
+            and canonical_truth.get("publish_allowed_by_quality_gate") is False
+        )
         path = studio._project_dir(pid) / "timeline.json"
         user_id = str(project.get("user_id") or "")
         if not path.is_file():
@@ -413,7 +428,8 @@ def install(app: Any) -> None:
                 if completed_masters:
                     source = base._timeline(studio, project)
                     source = _review_only_filter_generated_missing_masters(
-                        project, studio._project_dir(pid), source
+                        project, studio._project_dir(pid), source,
+                        allow_unverified_qc_review=allow_unverified_qc_review,
                     )
                     if not isinstance(source, dict) or not isinstance(source.get("scenes"), list) or not source["scenes"]:
                         raise HTTPException(409, "saved timeline is empty and completed scene masters could not produce a recoverable timeline")
@@ -451,7 +467,8 @@ def install(app: Any) -> None:
                 )
             source = base._timeline(studio, project)
             source = _review_only_filter_generated_missing_masters(
-                project, studio._project_dir(pid), source
+                project, studio._project_dir(pid), source,
+                        allow_unverified_qc_review=allow_unverified_qc_review,
             )
         # The GET timeline route already applies this same in-memory filter to
         # QC-failed saved timelines. OTIO export must apply it too, otherwise a
@@ -460,7 +477,8 @@ def install(app: Any) -> None:
         # The helper filters only the export copy for QC-failed projects; it
         # never rewrites the saved editor timeline or promotes project quality.
         source = _review_only_filter_generated_missing_masters(
-            project, studio._project_dir(pid), source
+            project, studio._project_dir(pid), source,
+                        allow_unverified_qc_review=allow_unverified_qc_review,
         )
         try:
             review_export = source.get("review_export") if isinstance(source, dict) else None
