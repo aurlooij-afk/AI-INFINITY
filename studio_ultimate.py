@@ -1654,11 +1654,11 @@ def _explicit_timed_storyboard_plan(
     ]
     visual_anchors = [
         "intimate late-night room, lone creator, blank screen, close-up, quiet tension",
-        "wide dramatic natural landscape opening into a futuristic city, scale and wonder",
-        "hands researching real sources, printed notes, script pages and storyboard frames",
-        "cinematic landscape, ocean, mountain textures, futuristic architecture and human emotion",
+        "wide dramatic mountain landscape and futuristic cityscape, expansive horizon and moving clouds",
+        "hands researching real sources, writing notes in a notebook, script pages and storyboard frames",
+        "cinematic landscape, futuristic cityscape and an abstract glowing-line tunnel transition, human scale",
         "editing workstation, real timeline, caption preview, sound meters and deliberate hands-on craft",
-        "the same creator watching the finished film, a human emotional reaction, warm gold practical light",
+        "the same creator watching the finished film on a computer screen, close-up human reaction, warm gold practical light",
         "restrained midnight-blue brand end-card, subtle cyan and violet light, clean negative space",
     ]
     overlays = [
@@ -1736,8 +1736,8 @@ def _explicit_timed_storyboard_plan(
         search_subjects = [
             "creator alone in a dark room at night",
             "cinematic mountains ocean and futuristic city",
-            "research notes script pages and storyboard",
-            "dramatic cinematic landscapes and futuristic city",
+            "hands writing research notes and storyboard sketches",
+            "moving mountain clouds futuristic cityscape and luminous abstract tunnel",
             "professional video editing timeline and captions",
             "creator watching a finished film",
             "minimal dark cinematic brand end card",
@@ -2625,6 +2625,10 @@ _VISUAL_CONCEPTS = {
     "creator": r"\b(?:content creator|creator|filmmaker|video editor|videographer|photographer|producer|youtuber|camera operator|film crew)\b",
     "editing": r"\b(?:edit(?:s|ed|ing|ors?)?|post[- ]production|timeline|montage|cutting|clips?|video workflow)\b",
     "workstation": r"\b(?:workstation|computer|desktop|laptop|monitors?|screens?|editing suite|suite|desk|keyboard|display)\b",
+    "landscape": r"\b(?:landscape|mountains?|ocean|sea|coast|clouds?|cloudscape|valley|nature|horizon|terrain)\b",
+    "cityscape": r"\b(?:cityscape|futuristic city|city skyline|skyline|metropolis|urban skyline|futuristic architecture)\b",
+    "abstract_motion": r"\b(?:abstract motion|digital tunnel|glowing lines|light trails|surreal landscape|imagination portal|luminous tunnel|worlds of possibility)\b",
+    "research_writing": r"\b(?:research|researching|notes|notebook|writing|script pages|storyboard frames|printed notes|writing notes)\b",
     "camera": r"\b(?:camera|camcorder|lens|tripod|filming|shooting|recording|cinematography)\b",
     "studio": r"\b(?:studio|production room|recording room|video set|film set|broadcast booth|soundstage)\b",
     "audio": r"\b(?:microphone|mic|headphones?|audio|sound|waveform|voiceover|mixing console)\b",
@@ -3775,6 +3779,66 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
             "description": "Behind-the-scenes video production team setting up equipment in a studio.",
             "tags": "video production studio team setup equipment camera film shooting raw footage for editing practice cinematography production crew",
             "required_concepts": {"studio"},
+        },
+        9: {
+            "source_id": 11800515,
+            "source_url": "https://www.pexels.com/video/clouds-over-mountains-11800515/",
+            "media_url": "https://videos.pexels.com/video-files/11800515/11800515-uhd_3840_2160_25fps.mp4",
+            "creator": "Akshit Garg",
+            "title": "Clouds over mountains",
+            "description": "Dramatic time lapse of mountains and clouds under a vivid sky.",
+            "tags": "cinematic mountains landscape clouds moving clouds panoramic horizon nature time lapse dramatic terrain awe inspiring natural beauty",
+            "required_concepts": {"landscape"},
+        },
+        10: {
+            "source_id": 34719182,
+            "source_url": "https://www.pexels.com/video/futuristic-neon-cityscape-at-night-34719182/",
+            "media_url": "https://videos.pexels.com/video-files/34719182/14717093_1920_1080_30fps.mp4",
+            "creator": "Nicola Narracci",
+            "title": "Futuristic neon cityscape at night",
+            "description": "A vibrant, neon-lit digital cityscape at night, evoking futuristic themes.",
+            "tags": "futuristic cityscape skyline metropolis night architecture digital neon glowing urban technology cinematic future city",
+            "required_concepts": {"cityscape"},
+        },
+        11: {
+            "source_id": 29109378,
+            "source_url": "https://www.pexels.com/video/futuristic-abstract-tunnel-with-glowing-lines-29109378/",
+            "media_url": "https://videos.pexels.com/video-files/29109378/12575278_3840_2160_30fps.mp4",
+            "creator": "Chandresh Uike",
+            "title": "Futuristic abstract tunnel with glowing lines",
+            "description": "Dynamic digital tunnel effect with glowing lines for technology themes.",
+            "tags": "abstract motion digital tunnel glowing lines luminous tunnel universe virtual sci fi future moving light cinematic transformation",
+            "required_concepts": {"abstract_motion"},
+        },
+        12: {
+            "source_id": 6237878,
+            "source_url": "https://www.pexels.com/video/man-looking-at-screen-6237878/",
+            "media_url": "https://videos.pexels.com/video-files/6237878/6237878-uhd_3840_2160_25fps.mp4",
+            "creator": "Tima Miroshnichenko",
+            "title": "Man looking at screen",
+            "description": "A young man concentrating on work in a dimly lit home office at night.",
+            "tags": "creator staring at screen dimly lit room home office night computer concentration solitude cinematic portrait workstation",
+            "required_concepts": {"creator", "workstation"},
+        },
+        13: {
+            "source_id": 6550131,
+            "source_url": "https://www.pexels.com/video/man-writing-down-in-a-notebook-6550131/",
+            "media_url": "https://videos.pexels.com/video-files/6550131/6550131-uhd_3840_2160_25fps.mp4",
+            "creator": "Tima Miroshnichenko",
+            "title": "Man writing down in a notebook",
+            "description": "A focused view of a person writing notes in a notebook using a pen.",
+            "tags": "research writing notes notebook script pages handwriting planning storyboard thinking creative process",
+            "required_concepts": {"research_writing"},
+        },
+        14: {
+            "source_id": 35331907,
+            "source_url": "https://www.pexels.com/video/focused-man-in-modern-home-office-at-night-35331907/",
+            "media_url": "https://videos.pexels.com/video-files/35331907/14970170_3840_2160_25fps.mp4",
+            "creator": "Tom Shutkin",
+            "title": "Focused man in modern home office at night",
+            "description": "Man working on a laptop in a modern home office setting at night.",
+            "tags": "creator home office laptop screen warm practical lighting night workstation finished film review",
+            "required_concepts": {"creator", "workstation"},
         },
     }
     # Scene ordinals are a hint, not an asset specification: a five-scene short's
@@ -5115,6 +5179,24 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
     # Short captions are intentionally split into multiple cues per scene. Validate
     # their timing/readability contract rather than requiring one cue per scene.
     expected_caption_cues = max(1, int((max(0.0, expected_voice) + 5.749) // 5.75))
+    require_source_visuals = (
+        str(os.getenv("AI_INFINITY_REQUIRE_SOURCE_VISUALS", "")).strip().lower() in {"1", "true", "yes"}
+        or not FAST_MODE
+    )
+    motion_source_keys = set()
+    for asset in (assets or []):
+        path_value = Path(str(asset.get("path") or ""))
+        source_url = str(asset.get("source_url") or "").strip()
+        if path_value.suffix.lower() not in {".mp4", ".mov", ".mkv", ".webm"}:
+            continue
+        if bool(asset.get("fallback")) or not source_url.startswith("https://"):
+            continue
+        key = str(asset.get("asset_sha256") or asset.get("sha256") or asset.get("source_id") or source_url).strip()
+        if key:
+            motion_source_keys.add(key)
+    fallback_visual_count = sum(bool(asset.get("fallback")) for asset in (assets or []))
+    minimum_motion_sources = max(3, int(len(chapters) * 0.70 + 0.9999))
+    maximum_fallback_visuals = max(1, int(len(chapters) * 0.15))
     checks = {
         "file_present": master.exists() and master.stat().st_size > 10000,
         "duration_nonzero": duration > 2,
@@ -5149,6 +5231,8 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
         "scene_count": len(chapters) >= (1 if SMOKE else (3 if FAST_MODE else 4)),
         "visual_assets_present": len(assets) >= len(chapters),
         "fallback_visual_used": any(bool(x.get("fallback")) for x in (assets or [])),
+        "required_source_motion_coverage": (not require_source_visuals) or len(motion_source_keys) >= minimum_motion_sources,
+        "fallback_visual_budget_ok": (not require_source_visuals) or fallback_visual_count <= maximum_fallback_visuals,
         "fallback_visual_policy_passed": all(
             (not bool(x.get("fallback"))) or (
                 isinstance(x.get("fallback_record"), dict)
