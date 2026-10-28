@@ -495,7 +495,7 @@ def test_curated_launch_uses_distinct_scriptwriting_source_instead_of_fallback(m
     assert selected["source_url"] == "https://www.pexels.com/video/close-up-of-a-script-8086204/"
     assert selected["quality_tier"] == "curated_free_source_motion_video"
     assert selected["validated_media"] is True
-    assert selected["asset_sha256"] == hashlib.sha256(alternate_bytes).hexdigest()
+    assert hashlib.sha256(Path(selected["path"]).read_bytes()).hexdigest() == hashlib.sha256(alternate_bytes).hexdigest()
     assert Path(selected["path"]).name == "pexels_launch_video_8086204.mp4"
 
 
