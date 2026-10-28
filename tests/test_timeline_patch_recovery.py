@@ -178,6 +178,9 @@ def test_qc_failed_generated_timeline_exports_only_real_masters_and_records_omis
 
     reviewed = patch._review_only_filter_generated_missing_masters(project, root, planned)
 
+    # Review-only filtering must not mutate a creator's saved plan in place.
+    assert len(planned["scenes"]) == 9
+    assert planned["scenes"][-1]["source_asset"] == "scene_09.mp4"
     assert [row["source_asset"] for row in reviewed["scenes"]] == [
         f"scene_{index:02d}.mp4" for index in range(1, 9)
     ]
