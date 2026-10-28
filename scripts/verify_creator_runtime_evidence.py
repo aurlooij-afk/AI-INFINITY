@@ -52,62 +52,6 @@ def main():
     coverage = quality.get("visual_source_coverage") if isinstance(quality.get("visual_source_coverage"), dict) else {}
     quality_checks = quality.get("checks") if isinstance(quality.get("checks"), dict) else {}
 
-    # Preserve explicit zeroes from a completed QC record; only infer counts
-    # from the file-backed source manifest when the QC record has not been
-    # written yet (for example, an interrupted run captured at packaging).
-    visual_assets = sources_manifest.get("visual_assets") if isinstance(sources_manifest.get("visual_assets"), list) else []
-    verified_motion_source_ids = {
-        str(item.get("source_id"))
-        for item in source_evidence
-        if item.get("source_id") is not None
-        and item.get("fallback") is not True
-        and item.get("hash_verified_against_file") is True
-        and item.get("evidence_status") == "VERIFIED_SOURCE_HASHED"
-    }
-    verified_fallback_count = sum(
-        1 for item in source_evidence
-        if item.get("fallback") is True and item.get("hash_verified_against_file") is True
-    )
-
-    def _recorded_count(primary: dict, primary_key: str, secondary: dict, secondary_key: str, inferred: int) -> int:
-        for record, key in ((primary, primary_key), (secondary, secondary_key)):
-            if key in record:
-                try:
-                    value = int(record[key])
-                    if value >= 0:
-                        return value
-                except (TypeError, ValueError, OverflowError):
-                    pass
-        return int(inferred)
-
-    scene_count = max(1, int(
-        coverage.get("scene_count")
-        or project.get("total_scenes")
-        or len(visual_assets)
-        or 1
-    ))
-    min_motion_sources = max(
-        int(coverage.get("minimum_motion_sources") or max(3, int(scene_count * 0.70 + 0.9999))),
-        int(truth_checks.get("minimum_motion_source_count") or 0),
-    )
-    min_professional_scenes = int(truth_checks.get("minimum_professional_scene_count") or 0)
-    actual_scene_count = int(truth_checks.get("actual_rendered_scene_count") or scene_count)
-    max_fallback_visuals = int(
-        coverage.get("maximum_fallback_visuals")
-        if "maximum_fallback_visuals" in coverage
-        else max(1, int(scene_count * 0.15))
-    )
-    source_motion_count = _recorded_count(
-        coverage, "distinct_verified_motion_sources",
-        truth_checks, "verified_motion_source_count",
-        len(verified_motion_source_ids),
-    )
-    fallback_count = _recorded_count(
-        coverage, "fallback_visual_count",
-        truth_checks, "fallback_visual_count",
-        verified_fallback_count,
-    )
-
     # The public project-status response does not include a reliable asset registry.
     # Read the saved visual source manifest and artifact registry collected from the
     # actual running container. Compare declared source hashes against the selected
@@ -190,6 +134,62 @@ def main():
         item.get("hash_verified_against_file") is True
         and (item.get("fallback") is True or item.get("source_id") is not None)
         for item in source_evidence
+    )
+
+    # Preserve explicit zeroes from a completed QC record; only infer counts
+    # from the file-backed source manifest when the QC record has not been
+    # written yet (for example, an interrupted run captured at packaging).
+    visual_assets = sources_manifest.get("visual_assets") if isinstance(sources_manifest.get("visual_assets"), list) else []
+    verified_motion_source_ids = {
+        str(item.get("source_id"))
+        for item in source_evidence
+        if item.get("source_id") is not None
+        and item.get("fallback") is not True
+        and item.get("hash_verified_against_file") is True
+        and item.get("evidence_status") == "VERIFIED_SOURCE_HASHED"
+    }
+    verified_fallback_count = sum(
+        1 for item in source_evidence
+        if item.get("fallback") is True and item.get("hash_verified_against_file") is True
+    )
+
+    def _recorded_count(primary: dict, primary_key: str, secondary: dict, secondary_key: str, inferred: int) -> int:
+        for record, key in ((primary, primary_key), (secondary, secondary_key)):
+            if key in record:
+                try:
+                    value = int(record[key])
+                    if value >= 0:
+                        return value
+                except (TypeError, ValueError, OverflowError):
+                    pass
+        return int(inferred)
+
+    scene_count = max(1, int(
+        coverage.get("scene_count")
+        or project.get("total_scenes")
+        or len(visual_assets)
+        or 1
+    ))
+    min_motion_sources = max(
+        int(coverage.get("minimum_motion_sources") or max(3, int(scene_count * 0.70 + 0.9999))),
+        int(truth_checks.get("minimum_motion_source_count") or 0),
+    )
+    min_professional_scenes = int(truth_checks.get("minimum_professional_scene_count") or 0)
+    actual_scene_count = int(truth_checks.get("actual_rendered_scene_count") or scene_count)
+    max_fallback_visuals = int(
+        coverage.get("maximum_fallback_visuals")
+        if "maximum_fallback_visuals" in coverage
+        else max(1, int(scene_count * 0.15))
+    )
+    source_motion_count = _recorded_count(
+        coverage, "distinct_verified_motion_sources",
+        truth_checks, "verified_motion_source_count",
+        len(verified_motion_source_ids),
+    )
+    fallback_count = _recorded_count(
+        coverage, "fallback_visual_count",
+        truth_checks, "fallback_visual_count",
+        verified_fallback_count,
     )
 
     canonical_quality_gate = (
