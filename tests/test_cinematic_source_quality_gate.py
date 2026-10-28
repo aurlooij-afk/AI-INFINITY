@@ -388,6 +388,7 @@ def test_explicit_launch_uses_scene_local_visual_query_for_landscape_clip(monkey
         "on_screen": "Step into the vision",
     }
 
+    monkeypatch.setattr(studio, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
     selected = studio._curated_pexels_launch_video(scene, tmp_path, index=2)
 
     assert selected is not None
@@ -444,6 +445,7 @@ def test_curated_launch_retries_a_second_distinct_landscape_source(monkeypatch, 
         "on_screen": "Step into the vision",
     }
 
+    monkeypatch.setattr(studio, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
     selected = studio._curated_pexels_launch_video(scene, tmp_path, index=2)
 
     assert selected is not None
@@ -451,6 +453,69 @@ def test_curated_launch_retries_a_second_distinct_landscape_source(monkeypatch, 
     assert selected["source_url"] == "https://www.pexels.com/video/clouds-over-mountain-landscape-timelapse-28946305/"
     assert selected["validated_media"] is True
     assert selected["quality_tier"] == "curated_free_source_motion_video"
+
+def test_source_black_frame_gate_detects_sustained_near_black_segments(monkeypatch, tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"test media bytes")
+    monkeypatch.setattr(studio.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+    simulated = {"returncode": 0, "stderr": "[blackdetect] black_start:3.29 black_end:5.00 black_duration:1.710000", "stdout": ""}
+
+    def fake_run(*_args, **_kwargs):
+        return type("ProcessResult", (), simulated)()
+
+    monkeypatch.setattr(studio.subprocess, "run", fake_run)
+    assert studio._source_has_prolonged_black_frames(source, threshold_seconds=0.75) is True
+
+    simulated["stderr"] = "ffmpeg decoded every frame; no sustained black interval"
+    assert studio._source_has_prolonged_black_frames(source, threshold_seconds=0.75) is False
+
+    simulated["returncode"] = 1
+    assert studio._source_has_prolonged_black_frames(source, threshold_seconds=0.75) is True
+
+
+def test_curated_launch_skips_a_black_source_and_selects_a_distinct_alternate(monkeypatch, tmp_path):
+    monkeypatch.setattr(studio, "FAST_MODE", False)
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: True)
+    monkeypatch.setattr(studio, "_curated_launch_visual_candidate_relevant", lambda *_args: True)
+
+    first_bytes = b"source containing prolonged near-black interval" * 800
+    second_bytes = b"distinct clean mountain-motion source bytes" * 900
+
+    def fake_download(url, path, **_kwargs):
+        if "5040711" in url:
+            Path(path).write_bytes(first_bytes)
+        elif "28946305" in url:
+            Path(path).write_bytes(second_bytes)
+        else:
+            raise AssertionError(f"Unexpected source download: {url}")
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 8.0)
+    monkeypatch.setattr(
+        studio, "_source_has_prolonged_black_frames",
+        lambda path, **_kwargs: "5040711" in str(path),
+    )
+
+    scene = {
+        "topic": "AI Infinity — One Idea. Infinite Worlds.",
+        "heading": "The Spark",
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": "A dramatic mountain landscape with moving clouds",
+        "visual_search_subject": "cinematic mountains and moving clouds",
+        "visual_query": "mountain landscape clouds moving at sunset",
+        "narration": "One idea opens into a world of possibility.",
+        "on_screen": "One idea. Infinite worlds.",
+    }
+    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=9)
+
+    assert selected is not None
+    assert selected["source_id"] == 28946305
+    assert hashlib.sha256(Path(selected["path"]).read_bytes()).hexdigest() == hashlib.sha256(second_bytes).hexdigest()
+    assert not (tmp_path / "pexels_launch_video_5040711.mp4").exists()
+
 
 def test_acquire_scene_asset_accepts_curated_focal_match_and_retries_duplicate_motion(monkeypatch, tmp_path):
     """Curated concept matches bypass only duplicate generic relevance and retry collisions."""
@@ -556,6 +621,7 @@ def test_explicit_launch_profile_matches_scene_local_landscape_without_repeating
         "on_screen": "One idea. Infinite worlds.",
     }
 
+    monkeypatch.setattr(studio, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
     selected = studio._curated_pexels_launch_video(scene, tmp_path, index=9)
 
     assert selected is not None
