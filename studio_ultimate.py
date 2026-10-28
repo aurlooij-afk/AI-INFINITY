@@ -3885,6 +3885,16 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
             "tags": "creator home office laptop screen warm practical lighting night workstation finished film review",
             "required_concepts": {"creator", "workstation"},
         },
+        15: {
+            "source_id": 28946305,
+            "source_url": "https://www.pexels.com/video/clouds-over-mountain-landscape-timelapse-28946305/",
+            "media_url": "https://videos.pexels.com/video-files/28946305/12525373_1920_1080_30fps.mp4",
+            "creator": "Karthick",
+            "title": "Clouds Over Mountain Landscape Timelapse",
+            "description": "Dynamic cloud movement over a mountain backdrop captured in a timelapse.",
+            "tags": "mountains landscape clouds timelapse moving clouds nature horizon terrain cinematic",
+            "required_concepts": {"landscape"},
+        },
     }
     # Scene ordinals are a hint, not an asset specification: a five-scene short's
     # closing shot can mean finished playback while an eight-scene storyboard's
