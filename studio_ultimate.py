@@ -5191,9 +5191,19 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
             continue
         if bool(asset.get("fallback")) or not source_url.startswith("https://"):
             continue
-        key = str(asset.get("asset_sha256") or asset.get("sha256") or asset.get("source_id") or source_url).strip()
-        if key:
-            motion_source_keys.add(key)
+        # A source URL alone is not proof that the downloaded shot exists.
+        # Count only decoded, non-empty scene media whose digest is available.
+        try:
+            if not path_value.is_file() or path_value.stat().st_size <= 20_000:
+                continue
+            digest = str(asset.get("asset_sha256") or asset.get("sha256") or "").strip()
+            if not digest:
+                digest = file_sha256(path_value)
+            if len(digest) != 64 or not re.fullmatch(r"[0-9a-f]{64}", digest.lower()):
+                continue
+        except Exception:
+            continue
+        motion_source_keys.add(digest.lower())
     fallback_visual_count = sum(bool(asset.get("fallback")) for asset in (assets or []))
     minimum_motion_sources = max(3, int(len(chapters) * 0.70 + 0.9999))
     maximum_fallback_visuals = max(1, int(len(chapters) * 0.15))
