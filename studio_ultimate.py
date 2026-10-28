@@ -5186,9 +5186,11 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
     # Short captions are intentionally split into multiple cues per scene. Validate
     # their timing/readability contract rather than requiring one cue per scene.
     expected_caption_cues = max(1, int((max(0.0, expected_voice) + 5.749) // 5.75))
+    # Source-motion requirements are explicit and auditable. A general render
+    # may still use labelled artwork, but the cinematic acceptance workflow sets
+    # this flag and must not mistake those illustrations for live-action footage.
     require_source_visuals = (
         str(os.getenv("AI_INFINITY_REQUIRE_SOURCE_VISUALS", "")).strip().lower() in {"1", "true", "yes"}
-        or not FAST_MODE
     )
     motion_source_keys = set()
     for asset in (assets or []):
@@ -6318,6 +6320,10 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
         "-metadata:s:s:0", "language=eng",
         "-disposition:s:0", "default",
         "-movflags", "+faststart",
+        # Subtitle timestamps and AAC priming can extend format duration beyond
+        # the video programme. Cap the muxed deliverable at the measured source
+        # duration; we independently verify audio/video alignment below.
+        "-t", f"{source_duration:.3f}",
         out,
         timeout=max(120, int(probe_duration(source) * (4 if fast_mode else 6))),
     )
