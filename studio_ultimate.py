@@ -3834,7 +3834,7 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
             "source_id": 35331907,
             "source_url": "https://www.pexels.com/video/focused-man-in-modern-home-office-at-night-35331907/",
             "media_url": "https://videos.pexels.com/video-files/35331907/14970170_3840_2160_25fps.mp4",
-            "creator": "Tom Shutkin",
+            "creator": "Artem Shutkin",
             "title": "Focused man in modern home office at night",
             "description": "Man working on a laptop in a modern home office setting at night.",
             "tags": "creator home office laptop screen warm practical lighting night workstation finished film review",
