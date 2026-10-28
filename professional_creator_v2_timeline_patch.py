@@ -297,6 +297,11 @@ def install(app: Any) -> None:
                     ) from exc
             stored["owner"] = uid
             stored["truthful"] = True
+            # Export from the in-memory copy only. If a QC-failed project has a
+            # saved timeline that still names a master which was never rendered,
+            # the portable review export may omit that missing source with an
+            # explicit incomplete marker. Do not overwrite the creator's saved edit.
+            stored = _review_only_filter_generated_missing_masters(p, root, stored)
             return stored
 
         # Missing local data is not the same as a never-saved project. If a
