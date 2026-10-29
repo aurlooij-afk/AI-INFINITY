@@ -5090,10 +5090,186 @@ def _fit_audio_duration(source: Path, target_seconds: float, out: Path) -> Tuple
         raise RuntimeError(f"retimed narration is {fitted:.2f}s, expected {target:.2f}s")
     return out, fitted
 
-def make_music(outdir: Path, seconds: float) -> Path:
+def _openverse_music_tracks(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
+    """Fetch a small set of openly licensed, downloadable music tracks with item-level provenance."""
+    out: List[Dict[str, Any]] = []
+    try:
+        params = _openverse_search_params(
+            str(query or "cinematic ambient instrumental music no vocals")[:240],
+            limit=max(1, min(8, int(limit) * 2)),
+        )
+        response = http_json(
+            "https://api.openverse.org/v1/audio/?" + urlencode(params),
+            timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 25),
+        )
+        results = response.get("results", []) if isinstance(response, dict) else []
+    except Exception as exc:
+        _media_debug("openverse-audio", exc)
+        return out
+
+    seen_ids = set()
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        source_id = str(item.get("id") or "").strip()
+        direct_url = str(item.get("url") or "").strip()
+        landing_url = str(item.get("foreign_landing_url") or "").strip()
+        title = str(item.get("title") or "").strip()
+        creator = str(item.get("creator") or "").strip()
+        license_id = str(item.get("license") or "").strip().lower()
+        license_version = str(item.get("license_version") or "").strip()
+        license_labels = {
+            "cc0": "CC0", "by": "CC BY", "by-sa": "CC BY-SA",
+            "by-nc": "CC BY-NC", "by-nd": "CC BY-ND",
+            "by-nc-sa": "CC BY-NC-SA", "by-nc-nd": "CC BY-NC-ND",
+            "pdm": "Public Domain Mark",
+        }
+        license_name = str(item.get("license_name") or license_labels.get(license_id, license_id)).strip()
+        if license_version and license_name and license_version.lower() not in license_name.lower():
+            license_name = f"{license_name} {license_version}"
+        license_url = str(item.get("license_url") or "").strip()
+        commercial_state = _commercial_use_from_license(license_name, license_url)
+        complete = bool(
+            source_id and direct_url.startswith("https://") and landing_url.startswith("https://")
+            and title and license_name and license_url.startswith("https://")
+            and (creator or commercial_state == "public_domain_cc0_1_0")
+            and commercial_state in {"public_domain_cc0_1_0", "commercial_use_allowed_with_attribution"}
+        )
+        if not complete or source_id in seen_ids:
+            continue
+        seen_ids.add(source_id)
+
+        suffix = Path(str(urlparse(direct_url).path or "")).suffix.lower()
+        if suffix not in {".mp3", ".m4a", ".aac", ".wav", ".ogg", ".oga", ".opus", ".flac", ".webm"}:
+            kind = str(item.get("filetype") or "").lower()
+            suffix = ".mp3" if "mpeg" in kind or kind == "mp3" else (".ogg" if "ogg" in kind else ".audio")
+        safe_id = re.sub(r"[^A-Za-z0-9_-]+", "", source_id)[:32] or hashlib.sha256(direct_url.encode()).hexdigest()[:16]
+        path = outdir / f"openverse_music_{safe_id}{suffix}"
+        try:
+            if not path.is_file() or path.stat().st_size < 20_000:
+                download(
+                    direct_url,
+                    path,
+                    timeout=(max(FAST_REMOTE_TIMEOUT, 20) if FAST_MODE else 75),
+                    max_bytes=(24_000_000 if FAST_MODE else 90_000_000),
+                )
+            probe = ffprobe_json(path)
+            streams = probe.get("streams") or []
+            audio = next((stream for stream in streams if stream.get("codec_type") == "audio"), None)
+            duration = float((probe.get("format") or {}).get("duration") or 0.0)
+            if not audio or duration < 30.0 or path.stat().st_size < 20_000:
+                path.unlink(missing_ok=True)
+                continue
+            # Fully decode selected source bytes before using the track. This does
+            # not claim the license metadata itself has been independently audited.
+            ffmpeg("-v", "error", "-i", path, "-f", "null", "-", timeout=max(60, min(240, int(duration + 30))))
+            record = {
+                "kind": "audio",
+                "source": "Openverse",
+                "provider": str(item.get("provider") or item.get("source") or "Openverse"),
+                "source_id": source_id,
+                "source_url": landing_url,
+                "downloaded_media_url": direct_url,
+                "title": title,
+                "creator": creator or None,
+                "creator_url": item.get("creator_url"),
+                "attribution": str(item.get("attribution") or "").strip() or None,
+                "license": license_name,
+                "license_url": license_url,
+                "commercial_use_state": commercial_state,
+                "rights_status": "license_metadata_present",
+                "rights_notice": "Openverse aggregates item-level license metadata; source terms and attribution stay attached to this production.",
+                "duration_seconds": round(duration, 3),
+                "bit_rate": item.get("bit_rate"),
+                "asset_sha256": file_sha256(path),
+                "path": str(path),
+            }
+            MEDIA_SOURCE_METADATA_BY_PATH[str(path.resolve())] = dict(record)
+            out.append(record)
+            if len(out) >= max(1, min(3, int(limit))):
+                break
+        except Exception as exc:
+            _media_debug("openverse-audio-download", exc)
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            continue
+    if out:
+        _media_success("openverse-audio", {"count": len(out), "query": str(query)[:180]})
+    return out
+
+
+def make_music(outdir: Path, seconds: float, query: str = "cinematic ambient instrumental soundtrack no vocals") -> Path:
     """Create an original, restrained cinematic underscore without external music dependency."""
     out = outdir / "music.m4a"
     s = max(1.0, float(seconds))
+    music_manifest_path = outdir / "music_source.json"
+    # Prefer a real, openly licensed instrumental master over a synthetic tone bed.
+    # One anonymous Openverse query is made per project; selected files are
+    # downloaded, probed and fully decoded before they are used.
+    tracks = _openverse_music_tracks(query, outdir, limit=3)
+    if tracks:
+        try:
+            input_args: List[Any] = []
+            filters: List[str] = []
+            track_labels: List[str] = []
+            segment_lengths: List[float] = []
+            for idx, track in enumerate(tracks):
+                input_args += ["-i", str(track["path"])]
+                seg = max(30.0, min(180.0, float(track["duration_seconds"]), s / max(1, len(tracks))))
+                segment_lengths.append(seg)
+                label = f"ov{idx}"
+                filters.append(
+                    f"[{idx}:a]atrim=duration={seg:.3f},asetpts=PTS-STARTPTS,"
+                    f"aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                    f"loudnorm=I=-25:TP=-5:LRA=10,"
+                    f"afade=t=in:st=0:d=1,"
+                    f"afade=t=out:st={max(0.0, seg - 1.0):.3f}:d=1[{label}]"
+                )
+                track_labels.append(f"[{label}]")
+            combined = track_labels[0]
+            combined_duration = segment_lengths[0]
+            for idx in range(1, len(track_labels)):
+                next_label = f"mix{idx}"
+                filters.append(f"{combined}{track_labels[idx]}acrossfade=d=2:c1=tri:c2=tri[{next_label}]")
+                combined = f"[{next_label}]"
+                combined_duration += segment_lengths[idx] - 2.0
+            loop_samples = max(1, int(combined_duration * 48000))
+            filters.append(
+                f"{combined}aloop=loop=-1:size={loop_samples},atrim=duration={s:.3f},"
+                f"asetpts=PTS-STARTPTS,afade=t=in:st=0:d=1,alimiter=limit=0.80[m]"
+            )
+            ffmpeg(
+                *input_args, "-filter_complex", ";".join(filters), "-map", "[m]",
+                "-t", f"{s:.3f}", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+                "-movflags", "+faststart", out, timeout=max(120, int(45 + s * 3)),
+            )
+            actual_duration = probe_duration(out)
+            if actual_duration < s - 0.75:
+                raise RuntimeError(f"licensed soundtrack shorter than requested: {actual_duration:.3f}/{s:.3f}s")
+            music_manifest = {
+                "schema": "ai-infinity-music-source.v1",
+                "method": "openverse_openly_licensed_tracks_crossfaded_and_arranged",
+                "query": str(query)[:240],
+                "requested_duration_seconds": s,
+                "actual_duration_seconds": round(actual_duration, 3),
+                "tracks": [{k: v for k, v in track.items() if k != "path"} for track in tracks],
+                "output_sha256": file_sha256(out),
+                "rights_status": "license_metadata_present",
+                "human_rights_review": "PENDING",
+                "truthful": True,
+            }
+            music_manifest_path.write_text(jdump(music_manifest), encoding="utf-8")
+            return out
+        except Exception as exc:
+            audit_event("", "openverse_music_render_fallback", {
+                "error": str(exc)[:600],
+                "candidate_track_count": len(tracks),
+                "truthful": True,
+            })
+    # Last resort: a disclosed synthetic underscore. It can keep preview work
+    # moving, but must not be described as a professionally composed score.
     # Four-bar style chord movement. The score is deliberately quiet beneath narration.
     seg = max(1.5, min(3.0, s / 6.0))
     chords = [
@@ -5135,6 +5311,21 @@ def make_music(outdir: Path, seconds: float) -> Path:
             "-af", "volume=0.025,lowpass=f=1800,afade=t=in:st=0:d=0.5,afade=t=out:st=" + str(max(0.5, s - 0.5)) + ":d=0.5",
             "-c:a", "aac", "-b:a", "128k", out, timeout=max(60, int(12 + s * 2))
         )
+    fallback_manifest = {
+        "schema": "ai-infinity-music-source.v1",
+        "method": "synthetic_procedural_chord_bed_fallback",
+        "query": str(query)[:240],
+        "requested_duration_seconds": s,
+        "actual_duration_seconds": round(probe_duration(out), 3) if out.is_file() else None,
+        "tracks": [],
+        "rights_status": "original_procedural_audio",
+        "quality_notice": "Synthetic chord-bed fallback; not a substitute for a professionally composed soundtrack.",
+        "reason": "No fully decodable, eligible, openly licensed Openverse soundtrack could be assembled.",
+        "output_sha256": file_sha256(out) if out.is_file() else None,
+        "human_rights_review": "PENDING",
+        "truthful": True,
+    }
+    music_manifest_path.write_text(jdump(fallback_manifest), encoding="utf-8")
     return out
 
 
@@ -7448,7 +7639,12 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         # Shared music bed avoids repeatedly generating the same soundtrack.
         music_seconds = max(12.0, min(3600.0, float(target) + 12.0))
         try:
-            shared_music = make_music(outdir, music_seconds)
+            music_query = " ".join(str(value) for value in (
+            req.get("music_direction") or plan.get("music_direction") or plan.get("tone") or "",
+            plan.get("title") or topic,
+            "instrumental cinematic background music no vocals",
+        ) if str(value).strip())[:240]
+        shared_music = make_music(outdir, music_seconds, query=music_query)
         except Exception as music_exc:
             audit_event(project_id, "music_fallback_failed", {"error": str(music_exc)[:800]})
             shared_music = _make_silent_voice(outdir, 9901, music_seconds)[0]
