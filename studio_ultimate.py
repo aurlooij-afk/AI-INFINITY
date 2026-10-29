@@ -3045,7 +3045,9 @@ def _commons_media(query: str, outdir: Path, limit: int = 6, prefer_motion: bool
             meta=info.get("extmetadata") or {}
             lic=(meta.get("LicenseShortName") or {}).get("value")
             creator=(meta.get("Artist") or {}).get("value")
-            is_video="video" in mime or re.search(r"\.(webm|ogv|mp4)(\?|$)", original, re.I)
+            is_video="video" in mime or re.search(r"\.(webm|ogv|ogg|mp4|mov|mkv)(\?|$)", original, re.I)
+            if prefer_motion and not is_video:
+                continue
             if is_video:
                 # Motion-first long-form acquisition must remain available on the
                 # bounded/FAST runtime too. The old blanket FAST_MODE skip silently
@@ -4407,12 +4409,23 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         MEDIA_DEBUG_ERRORS["external-visual-providers"] = "disabled_by_policy"
     if os.getenv("AI_INFINITY_FORCE_PRIMARY_VISUAL_FAILURE","0").strip().lower() in {"1","true","yes","on"}:
         MEDIA_DEBUG_ERRORS["primary-visual-provider"]="forced_failure"
+    requested_ai_video_scenes = max(0, min(12, int(os.getenv("AI_INFINITY_AI_VIDEO_SCENES", "2"))))
+    allow_heavy_fast = os.getenv("AI_INFINITY_ALLOW_HEAVY_VIDEO_FAST", "0").strip().lower() in {"1", "true", "yes", "on"}
+    ai_video_scene_budget = (
+        min(requested_ai_video_scenes, 1 if allow_heavy_fast else 0)
+        if FAST_MODE else min(requested_ai_video_scenes, 4)
+    )
+    allow_metered_video = os.getenv("AI_INFINITY_ALLOW_METERED_VIDEO_API", "0").strip().lower() in {"1", "true", "yes", "on"}
     if (not external_disabled
             and prefer_motion
+            and index <= ai_video_scene_budget
+            and allow_metered_video
             and os.getenv("AI_INFINITY_FORCE_PRIMARY_VISUAL_FAILURE","0").strip().lower() not in {"1","true","yes","on"}):
         motion=_hf_video(ai_prompt,outdir,index,duration)
         if motion:
             return motion
+    elif prefer_motion and index <= ai_video_scene_budget and not allow_metered_video:
+        MEDIA_DEBUG_ERRORS["huggingface-video"] = "skipped: video inference can incur provider charges; set AI_INFINITY_ALLOW_METERED_VIDEO_API=1 only when intentionally authorized"
 
     ai = None
     if not external_disabled and os.getenv("AI_INFINITY_FORCE_PRIMARY_VISUAL_FAILURE","0").strip().lower() not in {"1","true","yes","on"}:
