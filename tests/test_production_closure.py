@@ -287,6 +287,7 @@ def test_visual_rights_evidence_survives_artifact_registry_read_failure(monkeypa
     root.mkdir()
     fake_studio = SimpleNamespace(
         _project_dir=lambda _project_id: root,
+        _get_project=lambda project_id: {"project_id": project_id},
         _timeline_rows=lambda _project_id: [],
         _asset_rows=lambda _project_id: [],
     )
