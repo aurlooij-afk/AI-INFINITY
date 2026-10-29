@@ -10,6 +10,20 @@ os.environ.setdefault("AI_INFINITY_FAST_MODE", "1")
 import studio_ultimate as studio
 
 
+def _base_scene_renderer():
+    # The application wraps the canonical renderer with the reality/provenance
+    # layer at startup. Unit tests for FFmpeg argument construction should call
+    # the preserved base implementation; wrapper forwarding is tested separately.
+    try:
+        import reality_first_3901 as reality
+        original = reality._ORIGINALS.get("_render_scene")
+        if callable(original):
+            return original
+    except Exception:
+        pass
+    return studio._render_scene
+
+
 def _chapter(index: int, sentence_count: int = 10) -> dict:
     sentences = [
         f"Chapter {index} observation {n} reveals a specific human detail about creative work."
@@ -181,7 +195,7 @@ def test_scene_renderer_offsets_shared_music_to_the_scene_programme_time(monkeyp
     sfx = tmp_path / "sfx.wav"
     output = tmp_path / "scene.mp4"
 
-    studio._render_scene(
+    _base_scene_renderer()(
         {"kind": "video", "path": str(source)},
         voice,
         music,
@@ -349,7 +363,7 @@ def test_scene_renderer_does_not_burn_generic_heading_when_no_overlay_is_request
         captured["args"] = list(args)
 
     monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
-    studio._render_scene(
+    _base_scene_renderer()(
         {"kind": "video", "path": str(tmp_path / "source.webm")},
         tmp_path / "voice.mp3",
         tmp_path / "music.m4a",
@@ -364,3 +378,41 @@ def test_scene_renderer_does_not_burn_generic_heading_when_no_overlay_is_request
     assert "color=black@0.0:t=fill" in filter_graph
     assert "text=''" in filter_graph
     assert "Chapter" not in filter_graph
+
+
+
+def test_reality_render_wrapper_forwards_programme_music_offset(monkeypatch, tmp_path):
+    import reality_first_3901 as reality
+
+    wrapper = studio._render_scene
+    if not getattr(wrapper, "_reality_first_wrapped", False):
+        return
+
+    captured = {}
+
+    def fake_safe_render(
+        original, asset, voice, music, sfx, duration, out, title,
+        aspect_ratio, attempt, music_offset_seconds=0.0,
+    ):
+        captured["offset"] = music_offset_seconds
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        Path(out).write_bytes(b"valid-test-artifact" * 2000)
+
+    monkeypatch.setattr(reality, "_safe_render", fake_safe_render)
+    monkeypatch.setattr(reality, "_upsert_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr(reality, "_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(reality, "_file_hash", lambda *_: "a" * 64)
+
+    wrapper(
+        {"kind": "video", "path": str(tmp_path / "source.webm")},
+        tmp_path / "voice.mp3",
+        tmp_path / "music.m4a",
+        tmp_path / "sfx.wav",
+        10.0,
+        tmp_path / "scene.mp4",
+        "",
+        "16:9",
+        music_offset_seconds=42.25,
+    )
+
+    assert captured["offset"] == 42.25
