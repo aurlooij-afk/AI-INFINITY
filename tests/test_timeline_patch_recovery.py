@@ -349,3 +349,19 @@ def test_ci_controlled_qc_state_mutations_forward_stdin_to_container() -> None:
     ) in workflow
     assert 'docker exec ai-infinity-ci python - "$PROJECT_ID" <<\'PY\'' not in workflow
 
+
+def test_creator_runtime_full_decode_verifier_imports_subprocess() -> None:
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github"
+        / "workflows"
+        / "creator-runtime-verify.yml"
+    ).read_text(encoding="utf-8")
+    marker = 'print("FINAL_MEDIA_DURATION_STREAMS_ASPECT_PASS"'
+    marker_index = workflow.index(marker)
+    block_start = workflow.rfind("python - <<'PY'", 0, marker_index)
+    block_end = workflow.index("\n          PY", marker_index)
+    block = workflow[block_start:block_end]
+    assert "import subprocess" in block
+    assert block.index("import subprocess") < block.index("subprocess.run")
+
