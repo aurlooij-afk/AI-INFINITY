@@ -554,29 +554,6 @@ def _write_production_evidence(project_id: str, truth: Optional[Dict[str, Any]] 
     root = s._project_dir(project_id)
     root.mkdir(parents=True, exist_ok=True)
 
-    try:
-        events = s._timeline_rows(project_id)
-    except Exception:
-        events = []
-    timeline = {
-        "version": CLOSURE_VERSION,
-        "project_id": project_id,
-        "events": events,
-        "event_count": len(events),
-        "truthful": True,
-    }
-    (root / "timeline.json").write_text(json.dumps(timeline, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-
-    registry = _artifact_registry(project_id)
-    registry_payload = {
-        "version": CLOSURE_VERSION,
-        "project_id": project_id,
-        "integrity": "sha256",
-        "artifacts": sorted([dict(item) for item in registry.values()], key=lambda x: str(x.get("asset_name") or "")),
-        "truthful": True,
-    }
-    (root / "asset_registry.json").write_text(json.dumps(registry_payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-
     # Persist source-level rights evidence without silently promoting incomplete metadata.
     rights = []
     for row in _source_assets(s._get_project(project_id) or {}):
@@ -619,6 +596,41 @@ def _write_production_evidence(project_id: str, truth: Optional[Dict[str, Any]] 
         "truthful": True,
     }
     (root / "visual_rights.json").write_text(json.dumps(rights_report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+    try:
+        events = s._timeline_rows(project_id)
+    except Exception:
+        events = []
+    timeline = {
+        "version": CLOSURE_VERSION,
+        "project_id": project_id,
+        "events": events,
+        "event_count": len(events),
+        "truthful": True,
+    }
+    (root / "timeline.json").write_text(json.dumps(timeline, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+    registry_error = None
+    try:
+        registry = _artifact_registry(project_id)
+    except Exception as exc:
+        # Rights evidence has already been written above. Keep the failure visible
+        # in the registry artifact, while allowing the professional truth gate to
+        # report the actual registry mismatch instead of losing all evidence files.
+        registry = {}
+        registry_error = f"{type(exc).__name__}: {str(exc)[:500]}"
+    registry_payload = {
+        "version": CLOSURE_VERSION,
+        "project_id": project_id,
+        "integrity": "sha256",
+        "registry_read_status": "available" if registry_error is None else "unavailable",
+        "registry_read_error": registry_error,
+        "artifacts": sorted([dict(item) for item in registry.values()], key=lambda x: str(x.get("asset_name") or "")),
+        "truthful": True,
+    }
+    (root / "asset_registry.json").write_text(json.dumps(registry_payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+
 
     if truth is not None:
         (root / "production_truth.json").write_text(json.dumps(truth, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
@@ -748,6 +760,15 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     blueprint = _parse_blueprint(p)
     plan = blueprint.get("plan") if isinstance(blueprint.get("plan"), dict) else blueprint
     chapters = list((plan or {}).get("chapters") or [])
+    evidence_write_error = None
+    rights_path = Path(s._project_dir(project_id)) / "visual_rights.json"
+    if not rights_path.is_file():
+        try:
+            # Repair only missing metadata derived from already-recorded real
+            # source assets. Unknown rights remain review-required and cannot pass.
+            _write_production_evidence(project_id, None)
+        except Exception as exc:
+            evidence_write_error = f"{type(exc).__name__}: {str(exc)[:500]}"
     files = _project_files(project_id)
     # Canonical contract is the source of user intent. Validate the rendered media
     # against it even if a legacy worker or heuristic altered request_json later.
@@ -806,6 +827,8 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     }
     warnings: List[str] = []
     failures: List[str] = []
+    if evidence_write_error:
+        failures.append("visual-rights evidence write failed: " + evidence_write_error)
 
     if final and final.exists():
         try:
