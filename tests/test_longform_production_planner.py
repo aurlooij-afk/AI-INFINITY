@@ -208,7 +208,7 @@ def test_scene_renderer_offsets_shared_music_to_the_scene_programme_time(monkeyp
     )
 
     args = captured["args"]
-    music_position = args.index(str(music))
+    music_position = next(i for i, value in enumerate(args) if str(value) == str(music))
     assert args[music_position - 1] == "-i"
     assert args[music_position - 2] == "125.500"
     assert args[music_position - 3] == "-ss"
