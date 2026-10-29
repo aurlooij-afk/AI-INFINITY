@@ -332,3 +332,20 @@ def test_missing_master_filter_never_rewrites_a_completed_project_timeline(tmp_p
     ]}
 
     assert patch._review_only_filter_generated_missing_masters(project, root, source) is source
+
+
+def test_ci_controlled_qc_state_mutations_forward_stdin_to_container() -> None:
+    """Docker exec must keep stdin attached or Python silently ignores heredocs."""
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github"
+        / "workflows"
+        / "creator-runtime-verify.yml"
+    ).read_text(encoding="utf-8")
+    assert 'docker exec -i ai-infinity-ci python - "$PROJECT_ID" <<\'PY\'' in workflow
+    assert (
+        'docker exec -i ai-infinity-ci python - "$PROJECT_ID" '
+        '"$original_status" "$original_stage" <<\'PY\''
+    ) in workflow
+    assert 'docker exec ai-infinity-ci python - "$PROJECT_ID" <<\'PY\'' not in workflow
+
