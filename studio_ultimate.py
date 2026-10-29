@@ -1205,7 +1205,7 @@ def creative_plan(req: Dict[str, Any], research: Dict[str, Any], model_fn: Optio
     platforms = ", ".join(str(x) for x in (req.get("platforms") or [])[:12]) or "multi-platform"
     # Long-form output needs a genuinely long script; a 15-minute request must not
     # be filled with a short generic narration stretched across a longer timeline.
-    target_narration_words = max(1, int((max(1, duration) * 115 + 59) // 60))
+    target_narration_words = max(1, int((max(1, duration) * 125 + 59) // 60))
     brand_voice = str(req.get("brand_voice") or "")[:1000]
     visual_style = str(req.get("visual_style") or "premium editorial")[:500]
     call_to_action = str(req.get("call_to_action") or "")[:500]
@@ -1251,7 +1251,50 @@ Use 5-18 chapters. Total durations should approximately equal the target. Narrat
             if isinstance(chapters, list) and len(chapters) >= 4 and _language_text_compatible(language, chapters):
                 clean = {**data}
                 clean["chapters"] = chapters[:18]
-                return clean, str(raw.get("provider") or "model")
+                provider = str(raw.get("provider") or "model")
+                if duration >= 120:
+                    required_words = max(target_narration_words, int(duration * 2.0 + 0.999))
+                    spoken_words = sum(
+                        len(re.findall(r"\b[\w'-]+\b", str(chapter.get("narration") or "")))
+                        for chapter in clean["chapters"] if isinstance(chapter, dict)
+                    )
+                    if spoken_words < required_words:
+                        # One bounded editorial repair pass uses the same actual
+                        # configured text model. It must expand the full narrative,
+                        # not recycle paragraphs or invent citations.
+                        repair_prompt = f"""You are the lead documentary screenwriter revising an under-length long-form script.
+The required programme duration is {duration} seconds and the spoken script currently contains only {spoken_words} words. Expand the existing story to at least {required_words} genuinely useful spoken words, aiming for {target_narration_words}.
+Preserve its central idea, intended audience, language, tone, chapter order, factual restraint, and useful visual direction. Add concrete explanations, specific examples, emotional turns, transitions, and human observation where they serve the story. Do not repeat sentences, pad with generic motivation, invent sources, fabricate quotations, or claim unsupported facts. For factual material, retain existing proof_needed requirements and use only the research context already supplied. If the request explicitly requires a non-verbal film, do not add narration.
+Return ONLY JSON using the same schema and chapter fields as the original plan.
+EXISTING PLAN JSON:
+{json.dumps(clean, ensure_ascii=False)[:45000]}
+"""
+                        try:
+                            repair_raw = model_fn({
+                                "messages": [{"role": "user", "content": repair_prompt}],
+                                "temperature": 0.55,
+                            }) or {}
+                            repaired_data = _extract_json(repair_raw.get("text") or repair_raw.get("answer") or "")
+                            repaired_chapters = repaired_data.get("chapters") if isinstance(repaired_data, dict) else None
+                            if (
+                                isinstance(repaired_chapters, list)
+                                and len(repaired_chapters) >= 4
+                                and _language_text_compatible(language, repaired_chapters)
+                            ):
+                                repaired_chapters = repaired_chapters[:18]
+                                repaired_words = sum(
+                                    len(re.findall(r"\b[\w'-]+\b", str(chapter.get("narration") or "")))
+                                    for chapter in repaired_chapters if isinstance(chapter, dict)
+                                )
+                                if repaired_words > spoken_words:
+                                    clean = {**repaired_data, "chapters": repaired_chapters}
+                                    provider = str(repair_raw.get("provider") or provider)
+                        except Exception:
+                            # The pre-render runtime guard below records a truthful
+                            # blocker if this configured model cannot produce enough
+                            # narration; do not silently pad the script.
+                            pass
+                return clean, provider
         except Exception:
             pass
     hf_plan, hf_provider = _hf_creator_plan(prompt, language)
@@ -7541,6 +7584,35 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 "source_file_sha256": plan["source_context"]["source_file_sha256"],
                 "truthful": True,
             })
+
+        # Reject underwritten long-form scripts before downloading assets or
+        # spending time on scene renders. The independent delivery gate requires
+        # at least 120 spoken words per minute; the planner aims above that floor.
+        nonverbal_request = (
+            req.get("narration_required") is False
+            or req.get("non_verbal") is True
+            or bool(re.search(
+                r"\b(?:no narration|without narration|music[- ]only|non[- ]verbal|silent film|no voice[- ]?over)\b",
+                str(req.get("objective") or req.get("topic") or req.get("title") or ""),
+                re.I,
+            ))
+        )
+        narrated_video = str(req.get("content_type") or "video").strip().lower() in {
+            "video", "short", "reel", "film", "documentary"
+        }
+        if float(req.get("duration") or 0) >= 120 and narrated_video and not nonverbal_request and not SMOKE:
+            required_spoken_words = int(float(req.get("duration") or 0) * 2.0 + 0.999)
+            planned_spoken_words = sum(
+                len(re.findall(r"\b[\w'-]+\b", str(chapter.get("narration") or "")))
+                for chapter in chapters if isinstance(chapter, dict)
+            )
+            if planned_spoken_words < required_spoken_words:
+                raise RuntimeError(
+                    "Long-form script preflight blocked before media generation: "
+                    f"{planned_spoken_words} spoken words for {float(req.get('duration') or 0):.0f}s; "
+                    f"at least {required_spoken_words} are required. The connected writer did not "
+                    "produce a complete script, so the system will not pad a short script across a long timeline."
+                )
 
         # Avoid burning generic planner labels such as "Hook" into the media.
         # Use the selected language's concise editorial overlay instead.
