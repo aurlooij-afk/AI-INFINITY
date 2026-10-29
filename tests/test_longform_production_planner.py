@@ -163,3 +163,39 @@ def test_commons_motion_first_search_keeps_real_video_extension_and_license(monk
     assert asset["license"] == "CC BY 4.0"
     assert asset["license_url"] == "https://creativecommons.org/licenses/by/4.0/"
     assert asset["rights_status"] == "license_metadata_present"
+
+
+
+def test_scene_renderer_offsets_shared_music_to_the_scene_programme_time(monkeypatch, tmp_path):
+    captured = {}
+    monkeypatch.setattr(studio, "FAST_MODE", True)
+
+    def fake_ffmpeg(*args, **kwargs):
+        captured["args"] = list(args)
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
+    source = tmp_path / "source.webm"
+    voice = tmp_path / "voice.mp3"
+    music = tmp_path / "shared-music.m4a"
+    sfx = tmp_path / "sfx.wav"
+    output = tmp_path / "scene.mp4"
+
+    studio._render_scene(
+        {"kind": "video", "path": str(source)},
+        voice,
+        music,
+        sfx,
+        10.0,
+        output,
+        "A meaningful scene",
+        "16:9",
+        music_offset_seconds=125.5,
+    )
+
+    args = captured["args"]
+    music_position = args.index(str(music))
+    assert args[music_position - 1] == "-i"
+    assert args[music_position - 3] == "125.500"
+    assert args[music_position - 4] == "-ss"
+    assert args[music_position - 5:music_position - 3] == ["-1", "-ss"] or args[music_position - 5:music_position - 3] == ["-stream_loop", "-1"]
