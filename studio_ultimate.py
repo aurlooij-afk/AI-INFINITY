@@ -3032,7 +3032,7 @@ def _commons_media(query: str, outdir: Path, limit: int = 6, prefer_motion: bool
         params = {
             "action":"query","format":"json","generator":"search",
             "gsrsearch":(str(query).strip() + (" filetype:video" if prefer_motion else "")),
-            "gsrnamespace":6,"gsrlimit":min(limit,10),"prop":"imageinfo",
+            "gsrnamespace":6,"gsrlimit":min(limit,10),"prop":"info|imageinfo","inprop":"url",
             "iiprop":"url|mime|extmetadata","iiurlwidth":1280 if FAST_MODE else 1920,
         }
         data = http_json("https://commons.wikimedia.org/w/api.php?" + urlencode(params), timeout=timeout)
