@@ -716,9 +716,13 @@ def _safe_render(original: Any, asset: Dict[str, Any], voice: Path, music: Path,
                  aspect_ratio: str, attempt: int, music_offset_seconds: float = 0.0) -> None:
     s = _studio()
     try:
+        music_offset = max(0.0, float(music_offset_seconds))
+    except (TypeError, ValueError, OverflowError):
+        music_offset = 0.0
+    try:
         original(
             asset, voice, music, sfx, duration, out, title, aspect_ratio,
-            music_offset_seconds=music_offset_seconds,
+            music_offset_seconds=music_offset,
         )
         if _valid_file(out, 10000) and _media_probe(out).get("ok"):
             return
@@ -745,10 +749,13 @@ def _safe_render(original: Any, asset: Dict[str, Any], voice: Path, music: Path,
             visual_args = ["-stream_loop", "-1", "-i", src] if str(asset.get("kind")) == "video" else ["-loop", "1", "-i", src]
             simple_vf = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps=24"
             ff = getattr(s, "ffmpeg")
+            audio_args: List[Any] = ["-i", voice]
+            if music_offset > 0.0:
+                audio_args.extend(["-ss", f"{music_offset:.3f}"])
+            audio_args.extend(["-i", music])
             ff(
                 *visual_args,
-                "-i", voice,
-                "-i", music,
+                *audio_args,
                 "-filter_complex", "[1:a]volume=0.95[v];[2:a]volume=0.04[m];[v][m]amix=inputs=2:duration=first[a]",
                 "-map", "0:v:0", "-map", "[a]", "-vf", simple_vf, "-t", max(1.0, float(duration)),
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-pix_fmt", "yuv420p",
