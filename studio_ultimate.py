@@ -5465,14 +5465,14 @@ def _video_scene(asset: Dict[str, Any], duration: float, out: Path, title: str) 
         src = asset["path"]
         escaped = str(out).replace("'", "'\\''")
         # Real motion video path: loop source, crop to 16:9, add subtle title label.
-        vf = "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,eq=contrast=1.02:saturation=1.03,drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='" + title.replace("'", "\\'")[:70] + "':x=75:y=915:fontsize=42:fontcolor=white"
+        vf = "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,eq=contrast=1.02:saturation=1.03,drawbox=x=45:y=865:w=1820:h=150:color={overlay_color}:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='" + title.replace("'", "\\'")[:70] + "':x=75:y=915:fontsize=42:fontcolor=white"
         ffmpeg("-stream_loop", "-1", "-i", src, "-t", duration, "-vf", vf, "-an", "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", out, timeout=240)
         return
     # Still/AI visual: generate true motion via zoom/pan rather than a static slide.
     src = asset["path"]
     frames = max(1, int(round(duration * 30)))
     title_escaped = title.replace("'", "\\'")[:70]
-    vf = f"scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,zoompan=z='min(zoom+0.0008,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s=1920x1080:fps=30,drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':x=75:y=915:fontsize=42:fontcolor=white"
+    vf = f"scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,zoompan=z='min(zoom+0.0008,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s=1920x1080:fps=30,drawbox=x=45:y=865:w=1820:h=150:color={overlay_color}:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':x=75:y=915:fontsize=42:fontcolor=white"
     ffmpeg("-loop", "1", "-i", src, "-t", duration, "-vf", vf, "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", out, timeout=240)
 
 
@@ -5489,7 +5489,11 @@ def _render_scene(
 ) -> None:
     """Render one moving scene with a predictable CPU cost on the free worker."""
     duration = max(0.5, float(duration))
-    title_escaped = str(title).replace("\\", "\\\\").replace("'", "\\'")[:70]
+    title_escaped = str(title or "").strip().replace("\\", "\\\\").replace("'", "\\'")[:70]
+    # Generic chapter headings are not titles. The caller passes only explicit
+    # on-screen copy; without it, keep the image clean and let the synchronized
+    # caption track carry narration. This avoids a permanent title bar on every shot.
+    overlay_color = "black@0.40" if title_escaped else "black@0.0"
     if FAST_MODE:
         ratio_dims = {
             "16:9": (1280, 720),
@@ -5524,7 +5528,7 @@ def _render_scene(
             vf = (
                 f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
                 f"eq=contrast=1.02:saturation=1.04,scale={width}:{height}:flags=lanczos,fps=24,"
-                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color=black@0.48:t=fill,"
+                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color={overlay_color}:t=fill,"
                 f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
                 f"x={text_x}:y={text_y}:fontsize={font}:fontcolor=white"
             )
@@ -5540,7 +5544,7 @@ def _render_scene(
                 f"crop={work_w}:{work_h}:x='(in_w-out_w)*(0.5-0.5*cos(PI*t/{duration}))':"
                 f"y='(in_h-out_h)*(0.5+0.5*sin(PI*t/{duration}))',"
                 f"scale={width}:{height}:flags=lanczos,eq=contrast=1.02:saturation=1.04,"
-                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color=black@0.38:t=fill,"
+                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color={overlay_color}:t=fill,"
                 f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
                 f"x={text_x}:y={text_y}:fontsize={font}:fontcolor=white"
             )
@@ -5565,7 +5569,7 @@ def _render_scene(
             vf = (
                 f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
                 f"eq=contrast=1.02:saturation=1.03,scale={width}:{height}:flags=lanczos,fps={fps},"
-                f"drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,"
+                f"drawbox=x=45:y=865:w=1820:h=150:color={overlay_color}:t=fill,"
                 f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
                 f"x=75:y=915:fontsize={font}:fontcolor=white"
             )
@@ -5576,7 +5580,7 @@ def _render_scene(
                 f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
                 f"zoompan=z='min(zoom+0.0008,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
                 f"d={frames}:s={work_w}x{work_h}:fps={fps},scale={width}:{height}:flags=lanczos,fps={fps},"
-                f"drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,"
+                f"drawbox=x=45:y=865:w=1820:h=150:color={overlay_color}:t=fill,"
                 f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
                 f"x=75:y=915:fontsize={font}:fontcolor=white"
             )
@@ -7865,7 +7869,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             mixed = outdir / f"scene_{i:02d}.mp4"
             _render_scene(
                 asset, voice, shared_music, sfx, ch["actual_duration"], mixed,
-                str(ch.get("on_screen") or ch.get("heading") or topic),
+                str(ch.get("on_screen") or ""),
                 str(req.get("aspect_ratio") or "16:9"),
                 music_offset_seconds=max(0.0, actual_total - float(ch["actual_duration"])),
             )
