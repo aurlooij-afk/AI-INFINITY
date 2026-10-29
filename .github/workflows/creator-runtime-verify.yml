@@ -762,7 +762,12 @@ jobs:
           fi
           python -m py_compile scripts/verify_creator_runtime_evidence.py
           python scripts/verify_creator_runtime_evidence.py
-          cd "$REVIEW" && zip -qr /tmp/AI_Infinity_ONE_IDEA_INFINITE_WORLDS_human_review.zip .
+          # The quick-review packet contains the final QC summary and contact sheet,
+          # not duplicate source footage or nested delivery bundles. Those are uploaded
+          # as separate artifacts below for independent inspection and hash verification.
+          cd "$REVIEW" && zip -qr /tmp/AI_Infinity_ONE_IDEA_INFINITE_WORLDS_human_review.zip . \\
+            -x 'final.mp4' 'master.mp4' 'selected_visual_*' 'procedural_visual_*' \\
+               'pexels_launch_video_*.mp4' 'package.zip' 'named_creator_package.zip' 'timeline-export*.zip'
           echo "Brand-film evidence collection completed; review gates are recorded in the packet."
       - name: Upload standalone production closure evidence
         if: always()
@@ -775,12 +780,78 @@ jobs:
             /tmp/artifacts.json
             /tmp/verify.json
             /tmp/reality-proof.json
+            /tmp/final-probe.json
             /tmp/otio-export.json
             /tmp/otio-import.json
             /tmp/otio-import-proof.json
+            /tmp/otio-export-warning.txt
             /tmp/otio-review-export-proof.json
-            /tmp/ai-infinity-brand-film-review/**
-            !/tmp/ai-infinity-brand-film-review/named_creator_package.zip
+            /tmp/AI_Infinity_ONE_IDEA_INFINITE_WORLDS_human_review.zip
+            /tmp/ai-infinity-brand-film-review/human_review_packet.md
+            /tmp/ai-infinity-brand-film-review/integrity_manifest.json
+            /tmp/ai-infinity-brand-film-review/ffprobe.json
+            /tmp/ai-infinity-brand-film-review/ffprobe_error.txt
+            /tmp/ai-infinity-brand-film-review/full_decode.log
+            /tmp/ai-infinity-brand-film-review/full_decode_status.txt
+            /tmp/ai-infinity-brand-film-review/contact_sheet.jpg
+            /tmp/ai-infinity-brand-film-review/contact_sheet_error.txt
+            /tmp/ai-infinity-brand-film-review/audio_loudness.txt
+            /tmp/ai-infinity-brand-film-review/review_export_warning.txt
+          if-no-files-found: warn
+
+      - name: Upload final film and review deliverables
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-infinity-one-idea-film-deliverables
+          compression-level: 0
+          path: |
+            /tmp/ai-infinity-brand-film-review/final.mp4
+            /tmp/ai-infinity-brand-film-review/thumbnail.jpg
+            /tmp/ai-infinity-brand-film-review/audio_master.mp3
+            /tmp/ai-infinity-brand-film-review/narration_only.mp3
+            /tmp/ai-infinity-brand-film-review/captions.srt
+            /tmp/ai-infinity-brand-film-review/script.md
+            /tmp/ai-infinity-brand-film-review/sources.json
+            /tmp/ai-infinity-brand-film-review/manifest.json
+            /tmp/ai-infinity-brand-film-review/production_manifest.json
+            /tmp/ai-infinity-brand-film-review/rights_manifest.json
+            /tmp/ai-infinity-brand-film-review/visual_rights.json
+            /tmp/ai-infinity-brand-film-review/provenance.json
+            /tmp/ai-infinity-brand-film-review/asset_registry.json
+            /tmp/ai-infinity-brand-film-review/production_truth.json
+          if-no-files-found: warn
+
+      - name: Upload complete creator package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-infinity-creator-package
+          compression-level: 0
+          path: /tmp/ai-infinity-brand-film-review/package.zip
+          if-no-files-found: warn
+
+      - name: Upload editable timeline and portable media bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-infinity-editable-timeline-bundle
+          compression-level: 0
+          path: |
+            /tmp/ai-infinity-brand-film-review/timeline.otio
+            /tmp/ai-infinity-brand-film-review/timeline-export.zip
+          if-no-files-found: warn
+
+      - name: Upload source media for independent hash verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-infinity-source-media-hash-evidence
+          compression-level: 0
+          path: |
+            /tmp/ai-infinity-brand-film-review/selected_visual_*
+            /tmp/ai-infinity-brand-film-review/procedural_visual_*
+            /tmp/ai-infinity-brand-film-review/pexels_launch_video_*.mp4
           if-no-files-found: warn
 
       - name: Stop test container
