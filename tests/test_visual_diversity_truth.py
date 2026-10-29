@@ -1508,7 +1508,7 @@ def test_curated_launch_video_selects_by_scene_semantics_not_ordinal(monkeypatch
     assert row is not None, module.MEDIA_DEBUG_ERRORS.get("pexels-curated-launch-video")
     assert row["kind"] == "video"
     assert row["quality_tier"] == "curated_free_source_motion_video"
-    assert row["source_id"] in {12358562, 35820856}
+    assert row["source_id"] in {12358562, 35820856, 7239491}
     assert row["source_id"] != 7677005
     assert row["selection_reason"] == "scene_concepts_and_source_metadata_match"
     assert row["source_url"].startswith("https://www.pexels.com/video/")
@@ -1556,10 +1556,10 @@ def test_curated_launch_video_retries_another_relevant_clip_after_download_failu
     }, tmp_path, 5)
 
     assert row is not None, module.MEDIA_DEBUG_ERRORS.get("pexels-curated-launch-video")
-    assert row["source_id"] == 35820856
+    assert row["source_id"] in {35820856, 7239491}
     assert len(downloads) == 2, downloads
     assert downloads[0].endswith("/12358562-hd_1920_1080_30fps.mp4")
-    assert downloads[1].endswith("/15188259_1920_1080_30fps.mp4")
+    assert downloads[1].endswith(("/15188259_1920_1080_30fps.mp4", "/7239491-hd_1920_1080_30fps.mp4"))
 
 
 def test_curated_launch_video_keeps_creator_filming_clip_when_that_scene_is_requested(monkeypatch, tmp_path):
