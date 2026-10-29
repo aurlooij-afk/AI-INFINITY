@@ -196,6 +196,6 @@ def test_scene_renderer_offsets_shared_music_to_the_scene_programme_time(monkeyp
     args = captured["args"]
     music_position = args.index(str(music))
     assert args[music_position - 1] == "-i"
-    assert args[music_position - 3] == "125.500"
-    assert args[music_position - 4] == "-ss"
-    assert args[music_position - 5:music_position - 3] == ["-1", "-ss"] or args[music_position - 5:music_position - 3] == ["-stream_loop", "-1"]
+    assert args[music_position - 2] == "125.500"
+    assert args[music_position - 3] == "-ss"
+    assert args[music_position - 5:music_position - 3] == ["-stream_loop", "-1"]
