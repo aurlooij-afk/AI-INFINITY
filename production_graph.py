@@ -89,7 +89,7 @@ def graph(pid):
 def providers():
     return {"version":VERSION,"providers":[
     {"id":"runway","video":True,"configured":bool(os.getenv("RUNWAYML_API_SECRET","").strip()),"model":os.getenv("AI_INFINITY_RUNWAY_MODEL","gen4.5")},
-    {"id":"openai_video","video":True,"configured":bool(os.getenv("OPENAI_API_KEY","").strip()),"model":os.getenv("AI_INFINITY_OPENAI_VIDEO_MODEL","sora-2-pro")},
+    {"id":"openai_video","video":False,"configured":False,"enabled":False,"status":"deprecated","reason":"The Sora API was discontinued on 2026-09-24.","model":os.getenv("AI_INFINITY_OPENAI_VIDEO_MODEL","sora-2-pro")},
     {"id":"elevenlabs","voice":True,"sfx":True,"configured":bool(os.getenv("ELEVENLABS_API_KEY","").strip())},
     {"id":"tavily","research":True,"configured":bool(os.getenv("TAVILY_API_KEY","").strip())},
     {"id":"exa","research":True,"configured":bool(os.getenv("EXA_API_KEY","").strip())},
