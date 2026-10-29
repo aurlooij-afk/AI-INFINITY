@@ -770,3 +770,83 @@ def test_launch_signature_endcard_uses_real_screen_motion_source(monkeypatch, tm
     assert selected["validated_media"] is True
     assert selected["quality_tier"] == "curated_free_source_motion_video"
     assert hashlib.sha256(Path(selected["path"]).read_bytes()).hexdigest() == hashlib.sha256(payload).hexdigest()
+
+@pytest.mark.parametrize(
+    "index,source_id,expected_title,heading,focus",
+    [
+        (
+            17, 8478102, "Close Up video of a Person Writing",
+            "Research notes and writing", "A close-up of a person writing research notes in a notebook",
+        ),
+        (
+            23, 7504395, "A Team Discussing and Brainstorming Ideas",
+            "Team brainstorming and collaboration", "Colleagues collaborating while developing an idea",
+        ),
+        (
+            26, 34707439, "Futuristic Abstract Light Tunnel Animation",
+            "Digital abstract light tunnel", "A glowing abstract tunnel carrying the idea into motion",
+        ),
+        (
+            31, 40304903, "Video Editing Software on Monitor Display",
+            "Editing software on a monitor", "A close-up of an editor's timeline on a monitor",
+        ),
+    ],
+)
+def test_curated_launch_expanded_catalog_selects_distinct_verified_source_motion(
+    monkeypatch, tmp_path, index, source_id, expected_title, heading, focus
+):
+    """New item-level sources are candidates, not unconditional successes.
+
+    The ordinary acquisition flow still applies the source metadata matcher,
+    media probe, minimum duration/resolution, black-frame check and byte-uniqueness
+    check before returning an item as usable motion footage.
+    """
+    monkeypatch.setattr(studio, "FAST_MODE", False)
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: True)
+    monkeypatch.setattr(
+        studio,
+        "_curated_launch_visual_candidate_relevant",
+        lambda candidate, *_args: candidate.get("title") == expected_title,
+    )
+    monkeypatch.setattr(
+        studio,
+        "ffprobe_json",
+        lambda _path: {
+            "streams": [
+                {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}
+            ]
+        },
+    )
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 8.0)
+    monkeypatch.setattr(studio, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
+    output_dir = tmp_path / str(source_id)
+    output_dir.mkdir()
+    payload = (f"real source-media fixture {source_id} with distinct bytes ".encode("utf-8") * 900)
+
+    def fake_download(_url, path, **_kwargs):
+        Path(path).write_bytes(payload)
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    scene = {
+        "topic": "AI Infinity product launch",
+        "heading": heading,
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": focus,
+        "visual_query": focus,
+        "visual_search_subject": focus,
+        "narration": focus,
+        "on_screen": "",
+    }
+
+    selected = studio._curated_pexels_launch_video(scene, output_dir, index=index)
+
+    assert selected is not None
+    assert selected["source_id"] == source_id
+    assert selected["kind"] == "video"
+    assert selected["validated_media"] is True
+    assert selected["quality_tier"] == "curated_free_source_motion_video"
+    assert selected["source_url"].startswith("https://www.pexels.com/video/")
+    assert selected["license"] == "Pexels License"
+    assert selected["license_url"] == "https://www.pexels.com/license/"
+    assert hashlib.sha256(Path(selected["path"]).read_bytes()).hexdigest() == hashlib.sha256(payload).hexdigest()
+
