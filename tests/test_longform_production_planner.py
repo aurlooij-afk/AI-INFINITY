@@ -1,6 +1,7 @@
 """Regression tests for duration-aware long-form storyboard expansion."""
 
 import os
+from pathlib import Path
 
 os.environ.setdefault("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity-longform-planner-test")
 os.environ.setdefault("AI_INFINITY_3601_BACKGROUND", "false")
