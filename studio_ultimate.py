@@ -6863,21 +6863,37 @@ _LONGFORM_SHOT_TYPES = (
 
 
 def _longform_narration_units(value: Any) -> List[str]:
-    """Split existing authored narration into ordered, non-invented editorial units."""
-    text = re.sub(r"\\s+", " ", str(value or "")).strip()
+    """Split authored narration into ordered, non-invented, shot-sized units.
+
+    Preserve every source word and its order. Natural sentence boundaries are
+    preferred, but unusually long sentences are split near a clause boundary or
+    at a bounded word boundary so long-form output does not become a handful of
+    90-second shots. The writer, not this splitter, remains responsible for prose.
+    """
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
     if not text:
         return []
-    # Sentence boundaries come first; clause boundaries are used only when a
-    # short section has too few units for the planned visual coverage.
-    units = [x.strip() for x in re.split(r"(?<=[.!?؟。])\\s+", text) if x.strip()]
-    if len(units) < 2:
-        units = [x.strip() for x in re.split(r"(?<=[;:—])\\s+|(?<=,)\\s+", text) if x.strip()]
-    if len(units) < 2:
-        words = text.split()
-        if len(words) >= 12:
-            size = max(6, int((len(words) + 1) // 2))
-            units = [" ".join(words[:size]), " ".join(words[size:])]
-    return units or [text]
+    sentences = [x.strip() for x in re.split(r"(?<=[.!?؟。])\s+", text) if x.strip()]
+    if not sentences:
+        sentences = [text]
+    units: List[str] = []
+    for sentence in sentences:
+        words = sentence.split()
+        while len(words) > 24:
+            # Prefer a natural clause boundary between 15 and 24 words. If the
+            # sentence has none, split at 21 words and preserve token punctuation.
+            boundary = next(
+                (i + 1 for i in range(min(24, len(words)) - 1, 14, -1)
+                 if re.search(r"[,;:—]$", words[i])),
+                min(21, len(words) - 1),
+            )
+            boundary = max(1, min(boundary, len(words) - 1))
+            units.append(" ".join(words[:boundary]).strip())
+            words = words[boundary:]
+        if words:
+            units.append(" ".join(words).strip())
+    return [unit for unit in units if unit]
+
 
 
 def _pack_narration_units(units: List[str], count: int) -> List[str]:
@@ -6939,7 +6955,7 @@ def _expand_longform_chapters(
             duration_weight = max(1.0, float(ch.get("duration") or ch.get("actual_duration") or 1.0))
         except (TypeError, ValueError, OverflowError):
             duration_weight = 1.0
-        word_weight = sum(len(re.findall(r"\\b[\\w’'-]+\\b", part, flags=re.UNICODE)) for part in units) / 12.0
+        word_weight = sum(len(re.findall(r"\b[\w’'-]+\b", part, flags=re.UNICODE)) for part in units) / 12.0
         weights.append(max(duration_weight, word_weight, 1.0))
 
     allocations = [1] * len(source)
