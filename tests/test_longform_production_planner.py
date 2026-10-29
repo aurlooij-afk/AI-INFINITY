@@ -274,3 +274,67 @@ def test_music_builder_crossfades_tracks_and_writes_source_manifest(monkeypatch,
     assert [track["source_id"] for track in manifest["tracks"]] == ["a", "b"]
     assert manifest["requested_duration_seconds"] == 90.0
     assert len(manifest["output_sha256"]) == 64
+
+
+
+def test_creative_planner_repairs_an_underwritten_15_minute_script():
+    import json
+
+    calls = []
+
+    def short_plan():
+        return {
+            "title": "The Future of Human Creativity",
+            "hook": "Every meaningful work begins with a question.",
+            "premise": "A grounded documentary about how people make things.",
+            "chapters": [
+                {
+                    "heading": f"Chapter {index}",
+                    "narration": f"Chapter {index} introduces an important idea and explains why it matters.",
+                    "visual_query": f"documentary creative work chapter {index}",
+                    "image_prompt": f"Human creativity documentary shot in chapter {index}",
+                    "on_screen": "",
+                    "duration": 100,
+                    "proof_needed": [],
+                }
+                for index in range(1, 6)
+            ],
+        }
+
+    def complete_plan():
+        plan = short_plan()
+        for chapter_index, chapter in enumerate(plan["chapters"], 1):
+            chapter["narration"] = " ".join(
+                f"In chapter {chapter_index}, observation {n} follows a creator through a specific decision, a real constraint, a failed attempt, and a meaningful improvement."
+                for n in range(1, 28)
+            )
+        return plan
+
+    def model_fn(payload):
+        calls.append(payload)
+        plan = short_plan() if len(calls) == 1 else complete_plan()
+        return {"text": json.dumps(plan), "provider": "test-longform-writer"}
+
+    plan, provider = studio.creative_plan(
+        {
+            "title": "The Future of Human Creativity",
+            "objective": "Create a grounded long-form documentary about the future of human creativity.",
+            "topic": "human creativity",
+            "format": "long",
+            "duration": 900,
+            "language": "English",
+            "tone": "curious, cinematic, compassionate",
+        },
+        {"sources": []},
+        model_fn,
+    )
+
+    word_count = sum(
+        len(chapter["narration"].split())
+        for chapter in plan["chapters"]
+    )
+    assert len(calls) == 2
+    assert "TARGET SPOKEN WORD COUNT" in calls[0]["messages"][0]["content"]
+    assert "Expand the existing story" in calls[1]["messages"][0]["content"]
+    assert word_count >= 1800
+    assert provider == "test-longform-writer"
