@@ -375,11 +375,7 @@ def test_creator_runtime_evidence_uploads_are_split_for_reliable_review() -> Non
         / "creator-runtime-verify.yml"
     ).read_text(encoding="utf-8")
 
-    review_zip = (
-        'zip -qr /tmp/AI_Infinity_ONE_IDEA_INFINITE_WORLDS_human_review.zip . \\\n'
-        "            -x 'final.mp4' 'master.mp4' 'selected_visual_*' 'procedural_visual_*' \\\n"
-        "               'pexels_launch_video_*.mp4' 'package.zip' 'named_creator_package.zip' 'timeline-export*.zip'"
-    )
+    review_zip = "zip -qr /tmp/AI_Infinity_ONE_IDEA_INFINITE_WORLDS_human_review.zip . -x 'final.mp4' 'master.mp4' 'selected_visual_*' 'procedural_visual_*' 'pexels_launch_video_*.mp4' 'package.zip' 'named_creator_package.zip' 'timeline-export*.zip'"
     assert review_zip in workflow
     assert "/tmp/ai-infinity-brand-film-review/**" not in workflow
 
