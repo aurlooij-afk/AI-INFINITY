@@ -203,3 +203,60 @@ def test_final_delivery_loudness_master_applies_post_normalization_sample_peak_c
         "the hard sample-peak ceiling must run after loudness normalization"
     )
     assert result["status"] == "completed"
+
+def test_music_generation_exception_uses_truthful_emergency_fallback(monkeypatch, tmp_path):
+    import hashlib
+    import json
+    from pathlib import Path
+
+    def broken_music(*args, **kwargs):
+        raise RuntimeError("simulated music provider and normal renderer failure")
+
+    def fake_ffmpeg(*args, **kwargs):
+        Path(args[-1]).write_bytes(b"verified fake encoded audio bytes " * 80)
+
+    events = []
+    monkeypatch.setattr(studio, "make_music", broken_music)
+    monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 20.0)
+    monkeypatch.setattr(
+        studio, "audit_event",
+        lambda project_id, event, payload: events.append((project_id, event, payload)),
+    )
+
+    result = studio._resolve_music_bed(
+        tmp_path, 20.0, "cinematic test underscore", "project-music-fallback-test"
+    )
+
+    assert result == tmp_path / "music.m4a"
+    assert result.is_file() and result.stat().st_size > 1024
+    manifest = json.loads((tmp_path / "music_source.json").read_text(encoding="utf-8"))
+    assert manifest["method"] == "emergency_procedural_tone_bed_after_music_generation_failure"
+    assert manifest["fallback"] is True
+    assert manifest["truthful"] is True
+    assert manifest["human_rights_review"] == "PENDING"
+    assert "not a professionally composed soundtrack" in manifest["quality_notice"]
+    assert manifest["reason"] == "simulated music provider and normal renderer failure"
+    assert manifest["output_sha256"] == hashlib.sha256(result.read_bytes()).hexdigest()
+    assert ("project-music-fallback-test", "music_fallback_failed", events[0][2]) in events
+    assert any(
+        event == "music_fallback" and payload["quality_state"] == "DEGRADED"
+        and payload["professional_score_verified"] is False
+        for _, event, payload in events
+    )
+
+
+def test_emergency_music_fallback_failure_is_reported_without_name_error(monkeypatch, tmp_path):
+    import pytest
+
+    monkeypatch.setattr(
+        studio, "make_music",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("normal music failed")),
+    )
+    monkeypatch.setattr(
+        studio, "_emergency_music_fallback",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("ffmpeg fallback failed")),
+    )
+    with pytest.raises(RuntimeError, match="emergency procedural audio fallback could not be verified"):
+        studio._resolve_music_bed(tmp_path, 20.0, "test", "project-music-fallback-failure")
+

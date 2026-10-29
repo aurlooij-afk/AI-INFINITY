@@ -5372,6 +5372,90 @@ def make_music(outdir: Path, seconds: float, query: str = "cinematic ambient ins
     return out
 
 
+
+def _emergency_music_fallback(outdir: Path, seconds: float, reason: str) -> Path:
+    """Write an honest, low-quality emergency audio bed if normal music generation raises.
+
+    This is a continuity fallback, not a professionally composed soundtrack. Its
+    manifest intentionally records that limitation so downstream review cannot
+    mistake a technical audio file for a cleared creative score.
+    """
+    outdir.mkdir(parents=True, exist_ok=True)
+    duration = max(1.0, float(seconds))
+    out = outdir / "music.m4a"
+    fade_out_start = max(0.5, duration - 0.5)
+    ffmpeg(
+        "-f", "lavfi", "-i",
+        f"sine=frequency=196:sample_rate=48000:duration={duration:.3f}",
+        "-af",
+        "volume=0.025,lowpass=f=1800,"
+        f"afade=t=in:st=0:d=0.5,afade=t=out:st={fade_out_start:.3f}:d=0.5",
+        "-t", f"{duration:.3f}",
+        "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+        "-movflags", "+faststart", out,
+        timeout=max(60, int(12 + duration * 2)),
+    )
+    if not out.is_file() or out.stat().st_size <= 1024:
+        raise RuntimeError("Emergency procedural music fallback produced no valid-sized audio file.")
+    actual_duration = float(probe_duration(out))
+    duration_tolerance = max(0.75, min(3.0, duration * 0.002))
+    if actual_duration < duration - duration_tolerance:
+        raise RuntimeError(
+            "Emergency procedural music fallback is truncated: "
+            f"{actual_duration:.3f}s for {duration:.3f}s requested."
+        )
+    manifest = {
+        "schema": "ai-infinity-music-source.v1",
+        "method": "emergency_procedural_tone_bed_after_music_generation_failure",
+        "requested_duration_seconds": duration,
+        "actual_duration_seconds": round(actual_duration, 3),
+        "tracks": [],
+        "rights_status": "original_procedural_audio",
+        "quality_notice": (
+            "Emergency synthetic tone fallback; not a professionally composed soundtrack. "
+            "Human creative review is required and professional soundtrack quality is not verified."
+        ),
+        "reason": str(reason or "normal music generation failed")[:800],
+        "output_sha256": file_sha256(out),
+        "human_rights_review": "PENDING",
+        "fallback": True,
+        "truthful": True,
+    }
+    (outdir / "music_source.json").write_text(jdump(manifest), encoding="utf-8")
+    return out
+
+
+def _resolve_music_bed(outdir: Path, seconds: float, query: str, project_id: str) -> Path:
+    """Generate the normal programme music, with a bounded and explicitly degraded fallback."""
+    try:
+        result = Path(make_music(outdir, seconds, query=query))
+        if not result.is_file() or result.stat().st_size <= 1024:
+            raise RuntimeError("music generator returned a missing or empty soundtrack")
+        return result
+    except Exception as music_exc:
+        reason = str(music_exc)[:800] or type(music_exc).__name__
+        audit_event(project_id, "music_fallback_failed", {
+            "error": reason,
+            "requested_duration_seconds": float(seconds),
+            "truthful": True,
+        })
+        try:
+            fallback = _emergency_music_fallback(outdir, seconds, reason)
+        except Exception as fallback_exc:
+            raise RuntimeError(
+                "Music generation failed and the emergency procedural audio fallback "
+                f"could not be verified: {fallback_exc}"
+            ) from fallback_exc
+        audit_event(project_id, "music_fallback", {
+            "method": "emergency_procedural_tone_bed_after_music_generation_failure",
+            "quality_state": "DEGRADED",
+            "professional_score_verified": False,
+            "manifest": "music_source.json",
+            "truthful": True,
+        })
+        return fallback
+
+
 def make_sfx(outdir: Path, duration: float, index: int) -> Path:
     out = outdir / f"transition_{index:02d}.wav"
     d = max(0.15, min(1.1, float(duration) * 0.15))
@@ -7724,10 +7808,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 )
                 if str(value).strip()
             )[:240]
-            shared_music = make_music(outdir, music_seconds, query=music_query)
-        except Exception as music_exc:
-            audit_event(project_id, "music_fallback_failed", {"error": str(music_exc)[:800]})
-            shared_music = _make_silent_voice(outdir, 9901, music_seconds)[0]
+            shared_music = _resolve_music_bed(outdir, music_seconds, music_query, project_id)
         ai_video_enabled = os.getenv("AI_INFINITY_AI_VIDEO", "1").strip().lower() in {"1","true","yes","auto"}
         requested_ai_video_scenes = max(0, int(os.getenv("AI_INFINITY_AI_VIDEO_SCENES", "2")))
         # The free Render tier cannot safely host text-to-video model memory in the
