@@ -7639,12 +7639,16 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         # Shared music bed avoids repeatedly generating the same soundtrack.
         music_seconds = max(12.0, min(3600.0, float(target) + 12.0))
         try:
-            music_query = " ".join(str(value) for value in (
-            req.get("music_direction") or plan.get("music_direction") or plan.get("tone") or "",
-            plan.get("title") or topic,
-            "instrumental cinematic background music no vocals",
-        ) if str(value).strip())[:240]
-        shared_music = make_music(outdir, music_seconds, query=music_query)
+            music_query = " ".join(
+                str(value)
+                for value in (
+                    req.get("music_direction") or plan.get("music_direction") or plan.get("tone") or "",
+                    plan.get("title") or topic,
+                    "instrumental cinematic background music no vocals",
+                )
+                if str(value).strip()
+            )[:240]
+            shared_music = make_music(outdir, music_seconds, query=music_query)
         except Exception as music_exc:
             audit_event(project_id, "music_fallback_failed", {"error": str(music_exc)[:800]})
             shared_music = _make_silent_voice(outdir, 9901, music_seconds)[0]
