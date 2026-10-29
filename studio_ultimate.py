@@ -4194,7 +4194,7 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
         },
         32: {
             "source_id": 36036747,
-            "source_url": "https://www.pexels.com/video/dynamic-video-editing-in-professional-software-36036747/",
+            "source_url": "https://www.pexels.com/es-es/video/edicion-de-video-dinamica-en-software-profesional-36036747/",
             "media_url": "https://videos.pexels.com/video-files/36036747/15283259_1920_1080_60fps.mp4",
             "creator": "Nothing Ahead",
             "title": "Dynamic Video Editing in Professional Software",
