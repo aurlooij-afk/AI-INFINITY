@@ -713,10 +713,13 @@ def reconcile_project(project_id: str) -> Dict[str, Any]:
 
 def _safe_render(original: Any, asset: Dict[str, Any], voice: Path, music: Path,
                  sfx: Path, duration: float, out: Path, title: str,
-                 aspect_ratio: str, attempt: int) -> None:
+                 aspect_ratio: str, attempt: int, music_offset_seconds: float = 0.0) -> None:
     s = _studio()
     try:
-        original(asset, voice, music, sfx, duration, out, title, aspect_ratio)
+        original(
+            asset, voice, music, sfx, duration, out, title, aspect_ratio,
+            music_offset_seconds=music_offset_seconds,
+        )
         if _valid_file(out, 10000) and _media_probe(out).get("ok"):
             return
         raise RuntimeError("primary renderer produced an invalid artifact")
@@ -1192,13 +1195,17 @@ def install() -> None:
 
     original_render = _ORIGINALS["_render_scene"]
     if not getattr(original_render, "_reality_first_wrapped", False):
-        def render_wrapped(asset, voice, music, sfx, duration, out, title, aspect_ratio="16:9"):
+        def render_wrapped(asset, voice, music, sfx, duration, out, title, aspect_ratio="16:9", music_offset_seconds=0.0):
             pid = str(getattr(s.ACTIVE_PROJECT, "project_id", "") or "")
             attempt = 1
             try:
                 root = _project_path(pid) if pid else Path(out).parent
                 _event(pid, f"scene:{Path(out).stem}", "RUNNING", 1, metadata={"output": str(out)})
-                _safe_render(original_render, asset, Path(voice), Path(music), Path(sfx), duration, Path(out), title, aspect_ratio, attempt)
+                _safe_render(
+                    original_render, asset, Path(voice), Path(music), Path(sfx),
+                    duration, Path(out), title, aspect_ratio, attempt,
+                    music_offset_seconds=music_offset_seconds,
+                )
                 source_hashes = []
                 for x in (asset.get("path"), str(voice), str(music), str(sfx)):
                     try:
