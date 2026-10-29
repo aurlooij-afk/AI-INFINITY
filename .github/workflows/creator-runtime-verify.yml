@@ -482,7 +482,7 @@ jobs:
           export=json.load(open("/tmp/otio-export.json"))
           x=json.load(open("/tmp/otio-import.json"))
           assert x.get("status") == "imported" and x.get("project_id") == pid, x
-          assert x.get("truth_verified") is False and x.get("human_review_status") == "PENDING", x
+          assert x.get("truth_verified") is False and x.get("truthful") is True and x.get("render_required") is True, x
           rows=(x.get("timeline") or {}).get("scenes") or []
           assert len(rows) == int(export.get("scene_count") or 0), {"expected":export.get("scene_count"),"actual":len(rows)}
           root=Path("/tmp/ai-infinity-container-data/creator_studio")/pid
@@ -545,7 +545,7 @@ jobs:
               assert "project.otio" in names
               assert hashlib.sha256(archive.read("project.otio")).hexdigest() == timeline_sha
           assert imported.get("status") == "PASS_OTIO_API_IMPORT_RELOAD", imported
-          assert imported.get("truth_verified") is False and imported.get("human_review_status") == "PENDING", imported
+          assert imported.get("truth_verified") is False and imported.get("render_required") is True and imported.get("all_scene_masters_present") is True and imported.get("truthful") is True, imported
           proof = {
               "status": "PASS_REVIEW_EXPORT_AND_RELOAD_SUBGATE",
               "project_id": pid,
