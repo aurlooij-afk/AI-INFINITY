@@ -6,6 +6,7 @@ os.environ["AI_INFINITY_3601_BACKGROUND"] = "false"
 os.environ["AI_INFINITY_FAST_MODE"] = "1"
 
 import main
+import production_closure_3624 as closure
 import studio_ultimate as studio
 from fastapi.testclient import TestClient
 
@@ -277,4 +278,32 @@ def test_silent_voice_recovery_helper_creates_measured_audio_track(tmp_path):
     )
     actual_duration = float((metadata.get("format") or {}).get("duration") or 0.0)
     assert abs(actual_duration - 1.25) <= 0.25
+
+def test_visual_rights_evidence_survives_artifact_registry_read_failure(monkeypatch, tmp_path):
+    import json
+    from types import SimpleNamespace
+
+    root = tmp_path / "rights-first-test"
+    root.mkdir()
+    fake_studio = SimpleNamespace(
+        _project_dir=lambda _project_id: root,
+        _timeline_rows=lambda _project_id: [],
+        _asset_rows=lambda _project_id: [],
+    )
+    monkeypatch.setattr(closure, "_studio", lambda: fake_studio)
+    monkeypatch.setattr(
+        closure,
+        "_artifact_registry",
+        lambda _project_id: (_ for _ in ()).throw(RuntimeError("simulated database busy")),
+    )
+
+    closure._write_production_evidence("rights-first-test")
+
+    rights = json.loads((root / "visual_rights.json").read_text(encoding="utf-8"))
+    registry = json.loads((root / "asset_registry.json").read_text(encoding="utf-8"))
+    assert rights["project_id"] == "rights-first-test"
+    assert rights["assets"] == []
+    assert registry["project_id"] == "rights-first-test"
+    assert registry["registry_read_status"] == "unavailable"
+    assert "simulated database busy" in registry["registry_read_error"]
 
