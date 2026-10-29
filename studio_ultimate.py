@@ -1203,6 +1203,9 @@ def creative_plan(req: Dict[str, Any], research: Dict[str, Any], model_fn: Optio
     tone = str(req.get("tone") or "cinematic, intelligent, useful")
     language = str(req.get("language") or "English")
     platforms = ", ".join(str(x) for x in (req.get("platforms") or [])[:12]) or "multi-platform"
+    # Long-form output needs a genuinely long script; a 15-minute request must not
+    # be filled with a short generic narration stretched across a longer timeline.
+    target_narration_words = max(1, int((max(1, duration) * 115 + 59) // 60))
     brand_voice = str(req.get("brand_voice") or "")[:1000]
     visual_style = str(req.get("visual_style") or "premium editorial")[:500]
     call_to_action = str(req.get("call_to_action") or "")[:500]
@@ -1225,6 +1228,7 @@ TITLE: {title}
 OBJECTIVE: {objective}
 FORMAT: {fmt}
 DURATION: {duration} seconds
+TARGET SPOKEN WORD COUNT: approximately {target_narration_words} words for narrated formats. For a long-form request, write enough specific, useful narration to support the intended runtime at a natural speaking pace. Do not pad time with repetition, empty motivational language, invented facts, or recycled paragraphs. If the requested format is intentionally non-verbal, make that creative choice explicit in the plan.
 AUDIENCE: {audience}
 TONE: {tone}
 LANGUAGE: {language}
@@ -6773,18 +6777,165 @@ def _max_scene_count(
     smoke: bool,
     explicitly_single_scene: bool,
     explicit_launch: bool = False,
+    requested_duration_seconds: Optional[float] = None,
 ) -> int:
-    """Bound render cost while preserving authored beats in explicit launch films."""
+    """Select an editorial coverage budget from the requested programme duration.
+
+    A long-form programme must not be reduced to the 8- or 9-scene budget meant
+    for a short. FAST_MODE may change encoder settings, but it must never silently
+    shorten the user's requested runtime or the narrative coverage plan.
+    """
     if smoke or explicitly_single_scene:
         return 1
+    try:
+        duration = max(0.0, float(requested_duration_seconds or 0.0))
+    except (TypeError, ValueError, OverflowError):
+        duration = 0.0
+    if duration >= 120.0:
+        # Documentary/editorial coverage starts at about one shot per ten seconds.
+        # Bound the plan so a malformed request cannot create unbounded work.
+        return min(180, max(12, int((duration + 9.999) // 10.0)))
     if explicit_launch and not is_short:
-        # The canonical 60-second AI Infinity launch storyboard has nine authored
-        # beats. They each have a distinct narrative job and fit the 4s minimum.
-        # Do not discard the cinematic-world beat merely to satisfy a generic cap.
+        # Preserve all authored beats in the canonical short launch-film profile.
         return 9
-    # Normal shorts have five planned beats; ordinary landscape work has eight.
-    # FAST_MODE changes encoder cost, not the narrative coverage requirement.
     return 5 if is_short else 8
+
+
+_LONGFORM_SHOT_TYPES = (
+    "wide establishing view",
+    "medium observational action",
+    "close detail with tactile texture",
+    "human reaction or point-of-view",
+    "moving environmental cutaway",
+    "process or hands-at-work insert",
+    "overhead or geometric composition",
+    "slow tracking or lateral movement",
+    "foreground-to-background depth shot",
+    "quiet transition image",
+)
+
+
+def _longform_narration_units(value: Any) -> List[str]:
+    """Split existing authored narration into ordered, non-invented editorial units."""
+    text = re.sub(r"\\s+", " ", str(value or "")).strip()
+    if not text:
+        return []
+    # Sentence boundaries come first; clause boundaries are used only when a
+    # short section has too few units for the planned visual coverage.
+    units = [x.strip() for x in re.split(r"(?<=[.!?؟。])\\s+", text) if x.strip()]
+    if len(units) < 2:
+        units = [x.strip() for x in re.split(r"(?<=[;:—])\\s+|(?<=,)\\s+", text) if x.strip()]
+    if len(units) < 2:
+        words = text.split()
+        if len(words) >= 12:
+            size = max(6, int((len(words) + 1) // 2))
+            units = [" ".join(words[:size]), " ".join(words[size:])]
+    return units or [text]
+
+
+def _pack_narration_units(units: List[str], count: int) -> List[str]:
+    """Pack neighbouring text units into balanced contiguous chunks without rewriting."""
+    values = [str(x).strip() for x in (units or []) if str(x).strip()]
+    if not values:
+        return []
+    groups = min(max(1, int(count)), len(values))
+    chunks: List[str] = []
+    cursor = 0
+    for slot in range(groups):
+        remaining_groups = groups - slot
+        remaining_units = len(values) - cursor
+        take = max(1, int((remaining_units + remaining_groups - 1) // remaining_groups))
+        chunks.append(" ".join(values[cursor:cursor + take]).strip())
+        cursor += take
+    return chunks
+
+
+def _expand_longform_chapters(
+    chapters: List[Dict[str, Any]],
+    target_seconds: float,
+    target_shot_count: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Expand narrative sections into distinct shot-level scenes for long-form work.
+
+    This preserves the authored narration in order, gives each shot a distinct
+    visual/camera intention, and does not invent new narration to fill runtime.
+    If a section does not contain enough meaningful narration units, it receives
+    fewer cuts instead of duplicating lines or creating empty TTS requests.
+    """
+    source = [dict(ch) for ch in (chapters or []) if isinstance(ch, dict)]
+    if not source:
+        return []
+    try:
+        target = max(0.0, float(target_seconds))
+    except (TypeError, ValueError, OverflowError):
+        target = 0.0
+    if target < 120.0:
+        return source
+    try:
+        shot_budget = int(target_shot_count or _max_scene_count(False, False, False, False, requested_duration_seconds=target))
+    except (TypeError, ValueError, OverflowError):
+        shot_budget = min(180, max(12, int((target + 9.999) // 10.0)))
+    shot_budget = min(180, max(len(source), shot_budget))
+    if len(source) >= shot_budget:
+        return _select_scene_coverage(source, shot_budget)
+
+    units_by_chapter = [_longform_narration_units(ch.get("narration")) for ch in source]
+    capacities = [max(1, len(units)) for units in units_by_chapter]
+    maximum_feasible = sum(capacities)
+    shot_budget = min(shot_budget, maximum_feasible)
+    if shot_budget <= len(source):
+        return source
+
+    weights: List[float] = []
+    for ch, units in zip(source, units_by_chapter):
+        try:
+            duration_weight = max(1.0, float(ch.get("duration") or ch.get("actual_duration") or 1.0))
+        except (TypeError, ValueError, OverflowError):
+            duration_weight = 1.0
+        word_weight = sum(len(re.findall(r"\\b[\\w’'-]+\\b", part, flags=re.UNICODE)) for part in units) / 12.0
+        weights.append(max(duration_weight, word_weight, 1.0))
+
+    allocations = [1] * len(source)
+    while sum(allocations) < shot_budget:
+        eligible = [i for i in range(len(source)) if allocations[i] < capacities[i]]
+        if not eligible:
+            break
+        selected = max(eligible, key=lambda i: weights[i] / allocations[i])
+        allocations[selected] += 1
+
+    expanded: List[Dict[str, Any]] = []
+    for chapter_index, (chapter, units, count) in enumerate(zip(source, units_by_chapter, allocations), 1):
+        narration_chunks = _pack_narration_units(units, count)
+        if not narration_chunks:
+            narration_chunks = [str(chapter.get("narration") or "").strip()]
+        count = len(narration_chunks)
+        if count < 1:
+            continue
+        try:
+            chapter_duration = max(1.0, float(chapter.get("duration") or chapter.get("actual_duration") or target / len(source)))
+        except (TypeError, ValueError, OverflowError):
+            chapter_duration = target / len(source)
+        base_heading = str(chapter.get("heading") or chapter.get("title") or f"Section {chapter_index}").strip()
+        base_query = str(chapter.get("visual_query") or chapter.get("visual_search_subject") or base_heading).strip()
+        base_prompt = str(chapter.get("image_prompt") or base_query).strip()
+        base_overlay = str(chapter.get("on_screen") or "").strip()
+        for shot_index, narration in enumerate(narration_chunks, 1):
+            shot_type = _LONGFORM_SHOT_TYPES[(shot_index - 1) % len(_LONGFORM_SHOT_TYPES)]
+            shot = dict(chapter)
+            shot["heading"] = f"{base_heading} — {shot_type}"
+            shot["parent_chapter_heading"] = base_heading
+            shot["chapter_index"] = chapter_index
+            shot["shot_index_within_chapter"] = shot_index
+            shot["editorial_shot_type"] = shot_type
+            shot["narration"] = narration
+            shot["duration"] = chapter_duration / count
+            shot["visual_search_subject"] = base_query
+            shot["visual_query"] = f"{base_query}; {shot_type}; distinct composition, purposeful camera movement, story-relevant action"
+            shot["image_prompt"] = f"{base_prompt}; {shot_type}; cinematic composition, motivated movement, consistent visual identity, no repeated framing"
+            shot["on_screen"] = base_overlay if shot_index == 1 else ""
+            shot["longform_expansion"] = True
+            expanded.append(shot)
+    return expanded[:shot_budget]
 
 
 def _allocate_scene_durations(
@@ -7155,17 +7306,26 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         explicit_launch_profile = _is_explicit_ai_infinity_launch_brief(
             str(req.get("objective") or req.get("topic") or req.get("title") or "")
         )
+        original_chapter_count = len(chapters)
         max_chapters = _max_scene_count(
             is_short=is_short,
             fast_mode=FAST_MODE,
             smoke=SMOKE,
             explicitly_single_scene=explicitly_single_scene,
             explicit_launch=explicit_launch_profile,
+            requested_duration_seconds=target,
         )
-        if FAST_MODE and not SMOKE:
-            target = min(target, 180 if is_short else 900)
-        original_chapter_count = len(chapters)
-        chapters = _select_scene_coverage(chapters, max_chapters)
+        longform_expansion_applied = False
+        if target >= 120 and not SMOKE and not explicitly_single_scene:
+            # Preserve the complete narrative arc before expanding sections into
+            # shot-level coverage. Never silently truncate a long request to 8/9
+            # scenes or to a 15-minute ceiling in FAST_MODE.
+            chapters = _select_scene_coverage(chapters, min(len(chapters), max_chapters))
+            chapters = _expand_longform_chapters(chapters, float(target), max_chapters)
+            longform_expansion_applied = len(chapters) > original_chapter_count
+            max_chapters = max(1, len(chapters))
+        else:
+            chapters = _select_scene_coverage(chapters, max_chapters)
         # Allocate the runtime before rendering. Scene-level clamping after the
         # fact caused short jobs to render longer than requested, then trim the
         # video without trimming the captions to the same timeline.
@@ -7180,8 +7340,11 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         if isinstance(brief_fidelity, dict):
             brief_fidelity["rendered_timecoded_scenes"] = len(chapters)
             brief_fidelity["rendered_scene_selection_applied"] = len(chapters) < original_chapter_count
+            brief_fidelity["rendered_scene_expansion_applied"] = longform_expansion_applied
             brief_fidelity["rendered_scene_selection_policy"] = (
-                "all_explicit_launch_beats_preserved"
+                "duration_aware_longform_shot_expansion"
+                if longform_expansion_applied
+                else "all_explicit_launch_beats_preserved"
                 if explicit_launch_profile and len(chapters) == original_chapter_count
                 else "bounded_evenly_spaced_narrative_coverage"
             )
@@ -7200,7 +7363,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         voice_providers_by_scene: List[Dict[str, Any]] = []
         actual_total = 0.0
         # Shared music bed avoids repeatedly generating the same soundtrack.
-        music_seconds = max(12.0, min(600.0, float(target) + 12.0))
+        music_seconds = max(12.0, min(3600.0, float(target) + 12.0))
         try:
             shared_music = make_music(outdir, music_seconds)
         except Exception as music_exc:
