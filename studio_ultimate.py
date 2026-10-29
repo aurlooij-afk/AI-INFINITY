@@ -3025,12 +3025,13 @@ def _openverse_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str
         _media_debug("openverse", exc)
         return []
 
-def _commons_media(query: str, outdir: Path, limit: int = 6) -> List[Dict[str, Any]]:
+def _commons_media(query: str, outdir: Path, limit: int = 6, prefer_motion: bool = False) -> List[Dict[str, Any]]:
     timeout = FAST_REMOTE_TIMEOUT if FAST_MODE else 20
     image_timeout = FAST_REMOTE_TIMEOUT if FAST_MODE else 60
     try:
         params = {
-            "action":"query","format":"json","generator":"search","gsrsearch":query,
+            "action":"query","format":"json","generator":"search",
+            "gsrsearch":(str(query).strip() + (" filetype:video" if prefer_motion else "")),
             "gsrnamespace":6,"gsrlimit":min(limit,10),"prop":"imageinfo",
             "iiprop":"url|mime|extmetadata","iiurlwidth":1280 if FAST_MODE else 1920,
         }
@@ -3046,11 +3047,25 @@ def _commons_media(query: str, outdir: Path, limit: int = 6) -> List[Dict[str, A
             creator=(meta.get("Artist") or {}).get("value")
             is_video="video" in mime or re.search(r"\.(webm|ogv|mp4)(\?|$)", original, re.I)
             if is_video:
-                if FAST_MODE:
+                # Motion-first long-form acquisition must remain available on the
+                # bounded/FAST runtime too. The old blanket FAST_MODE skip silently
+                # forced image slideshows, while the generic ".media" extension
+                # prevented independently verified Commons clips from satisfying
+                # the motion-source gate.
+                if FAST_MODE and not prefer_motion:
                     continue
-                p=outdir/f"commons_{pge.get('pageid','x')}.media"
+                original_path = str(urlparse(str(original)).path or "")
+                suffix = Path(original_path).suffix.lower()
+                if suffix not in {".webm", ".ogv", ".ogg", ".mp4", ".mov", ".mkv"}:
+                    suffix = ".webm" if "webm" in mime.lower() else (".ogv" if "ogg" in mime.lower() else ".mp4")
+                p=outdir/f"commons_{pge.get('pageid','x')}{suffix}"
                 try:
-                    download(original,p,timeout=90)
+                    download(
+                        original,
+                        p,
+                        timeout=(max(FAST_REMOTE_TIMEOUT, 20) if FAST_MODE else 90),
+                        max_bytes=(24_000_000 if FAST_MODE else 70_000_000),
+                    )
                     source_url = str(pge.get("canonicalurl") or "").strip()
                     license_url = str((meta.get("LicenseUrl") or {}).get("value") or "").strip()
                     license_name = str(lic or "").strip()
@@ -4413,7 +4428,14 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     )
 
     source_failures=[]
-    getters=() if external_disabled else (_nasa_images,_openverse_images,_commons_media,_pexels,_pixabay,_pexels_photos,_pixabay_images,_loc_images)
+    if external_disabled:
+        getters = ()
+    elif prefer_motion:
+        # Long-form/cinematic scenes search real motion first. Images remain an
+        # explicit fallback if the relevant licensed footage cannot be found.
+        getters = (_commons_media, _pexels, _pixabay, _nasa_images, _openverse_images, _pexels_photos, _pixabay_images, _loc_images)
+    else:
+        getters = (_nasa_images, _openverse_images, _commons_media, _pexels, _pixabay, _pexels_photos, _pixabay_images, _loc_images)
 
     # Never reuse identical visual bytes for multiple scene source records when
     # another real candidate is available. This keeps visual provenance aligned
@@ -4556,7 +4578,19 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             # provider response that simply returned no relevant results.
             MEDIA_DEBUG_ERRORS.pop(debug_key, None)
             try:
-                items=getter(q,outdir,limit=_scene_asset_search_limit(index,getter.__name__))
+                search_limit = _scene_asset_search_limit(index,getter.__name__)
+                if getter is _commons_media:
+                    try:
+                        items = getter(q, outdir, limit=search_limit, prefer_motion=prefer_motion)
+                    except TypeError as signature_error:
+                        # Older third-party/test adapters may implement the
+                        # pre-motion-aware signature. Keep the compatibility
+                        # path explicit; do not retry unrelated runtime TypeErrors.
+                        if "prefer_motion" not in str(signature_error):
+                            raise
+                        items = getter(q, outdir, limit=search_limit)
+                else:
+                    items = getter(q, outdir, limit=search_limit)
             except Exception as exc:
                 reason = f"{type(exc).__name__}: {str(exc)[:180]}"
                 source_failures.append(f"{getter.__name__}:{reason}")
@@ -7470,7 +7504,16 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 fixture_id = str(req.get("_acceptance_fixture_id") or "")
                 if fixture_id == "cc0-recovery-illustration-v1":
                     scene_for_acquisition["_acceptance_fixture_id"] = fixture_id
-                asset = acquire_scene_asset(scene_for_acquisition, outdir, i, prefer_motion=(i <= max_ai_video_scenes), duration=scene_duration)
+                asset = acquire_scene_asset(
+                    scene_for_acquisition,
+                    outdir,
+                    i,
+                    # For long-form work, choose real moving footage ahead of stills
+                    # across the whole shot list. AI video generation remains bounded
+                    # by max_ai_video_scenes inside the acquisition adapter.
+                    prefer_motion=(i <= max_ai_video_scenes or (target >= 120 and not explicitly_single_scene and not SMOKE)),
+                    duration=scene_duration,
+                )
             except Exception as asset_exc:
                 audit_event(project_id, "visual_source_unavailable", {"scene": i, "error": str(asset_exc)[:500]})
                 raise RuntimeError(f"scene {i}: professional visual source unavailable: {str(asset_exc)[:1600]}") from asset_exc
