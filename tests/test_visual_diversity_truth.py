@@ -1545,6 +1545,14 @@ def test_curated_launch_video_retries_another_relevant_clip_after_download_failu
     # These tests mock media bytes and FFprobe. Keep the independent real-media
     # black-frame check disabled only for the synthetic fixture, not production.
     monkeypatch.setattr(module, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        module,
+        "_curated_launch_visual_candidate_relevant",
+        lambda candidate, *_args, **_kwargs: candidate.get("title") in {
+            "Close up of computer screen",
+            "Professional video editing at workstation",
+        },
+    )
 
     row = module._curated_pexels_launch_video({
         "topic": "AI Infinity launch",
