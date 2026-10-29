@@ -85,3 +85,80 @@ def test_short_and_explicit_single_shot_plans_keep_existing_behavior():
         explicit_launch=True,
         requested_duration_seconds=60,
     ) == 9
+
+
+
+def test_longform_narration_splitter_creates_shot_sized_units_without_losing_words():
+    sentence = "A creator works through the night, tests a risky idea, learns from the first failure, and discovers a more honest way to tell the story."
+    source = " ".join([sentence] * 8)
+    units = studio._longform_narration_units(source)
+
+    assert len(units) >= 8
+    assert max(len(unit.split()) for unit in units) <= 24
+    assert " ".join(" ".join(units).split()) == " ".join(source.split())
+
+
+def test_commons_motion_first_search_keeps_real_video_extension_and_license(monkeypatch, tmp_path):
+    video_page = {
+        "pageid": 12345,
+        "title": "File:Creative-workshop.webm",
+        "canonicalurl": "https://commons.wikimedia.org/wiki/File:Creative-workshop.webm",
+        "imageinfo": [{
+            "url": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Creative-workshop.webm",
+            "mime": "video/webm",
+            "extmetadata": {
+                "LicenseShortName": {"value": "CC BY 4.0"},
+                "LicenseUrl": {"value": "https://creativecommons.org/licenses/by/4.0/"},
+                "Artist": {"value": "Example Contributor"},
+                "ImageDescription": {"value": "A real workshop in motion"},
+                "Credit": {"value": "Example Contributor"},
+            },
+        }],
+    }
+    still_page = {
+        "pageid": 67890,
+        "title": "File:Creative-workshop.jpg",
+        "canonicalurl": "https://commons.wikimedia.org/wiki/File:Creative-workshop.jpg",
+        "imageinfo": [{
+            "url": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Creative-workshop.jpg",
+            "mime": "image/jpeg",
+            "extmetadata": {
+                "LicenseShortName": {"value": "CC BY 4.0"},
+                "LicenseUrl": {"value": "https://creativecommons.org/licenses/by/4.0/"},
+                "Artist": {"value": "Example Contributor"},
+            },
+        }],
+    }
+    requests = []
+
+    def fake_http_json(url, *args, **kwargs):
+        requests.append(url)
+        return {"query": {"pages": {"12345": video_page, "67890": still_page}}}
+
+    def fake_download(url, path, headers=None, timeout=60, max_bytes=40_000_000):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"test-motion-file" * 300)
+        return path
+
+    monkeypatch.setattr(studio, "FAST_MODE", True)
+    monkeypatch.setattr(studio, "http_json", fake_http_json)
+    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setattr(studio, "_commercial_use_from_license", lambda license_name, license_url: "commercial_use_allowed_with_attribution")
+
+    results = studio._commons_media(
+        "people collaborating on creative work",
+        tmp_path,
+        limit=6,
+        prefer_motion=True,
+    )
+
+    assert requests and "filetype%3Avideo" in requests[0]
+    assert len(results) == 1
+    asset = results[0]
+    assert asset["kind"] == "video"
+    assert Path(asset["path"]).suffix == ".webm"
+    assert asset["source_id"] == 12345
+    assert asset["source_url"] == video_page["canonicalurl"]
+    assert asset["license"] == "CC BY 4.0"
+    assert asset["license_url"] == "https://creativecommons.org/licenses/by/4.0/"
+    assert asset["rights_status"] == "license_metadata_present"
