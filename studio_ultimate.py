@@ -4202,6 +4202,28 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
             "tags": "video editing computer screen professional software timeline editing workflow",
             "required_concepts": {"editing", "workstation"},
         },
+        33: {
+            "source_id": 34663551,
+            "source_url": "https://www.pexels.com/video/futuristic-neon-light-tunnel-animation-34663551/",
+            # Follow the item's own public download redirect instead of guessing
+            # a CDN filename. download() follows only bounded, public HTTPS redirects.
+            "media_url": "https://www.pexels.com/download/video/34663551/",
+            "creator": "Colors Motion Graphics",
+            "title": "Futuristic Neon Light Tunnel Animation",
+            "description": "Dynamic green neon lights create a tunnel illusion in this animated video.",
+            "tags": "futuristic neon light tunnel animation glowing lines abstract motion graphics technology",
+            "required_concepts": {"abstract_motion"},
+        },
+        34: {
+            "source_id": 36999006,
+            "source_url": "https://www.pexels.com/video/futuristic-geometric-digital-tunnel-36999006/",
+            "media_url": "https://www.pexels.com/download/video/36999006/",
+            "creator": "Chandresh Uike",
+            "title": "Futuristic Geometric Digital Tunnel",
+            "description": "A dynamic, glowing geometric tunnel in a modern digital style.",
+            "tags": "futuristic geometric digital tunnel glowing abstract motion technology imagination portal",
+            "required_concepts": {"abstract_motion"},
+        },
     }
     # Scene ordinals are a hint, not an asset specification: a five-scene short's
     # closing shot can mean finished playback while an eight-scene storyboard's
