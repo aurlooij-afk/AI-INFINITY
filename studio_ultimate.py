@@ -4832,6 +4832,52 @@ def ffmpeg(*args: Any, timeout: int = 240) -> None:
         raise RuntimeError((stderr or stdout or "ffmpeg failed")[-4000:])
 
 
+def _make_silent_voice(outdir: Path, index: int, duration: float) -> Path:
+    """Create a measured silent audio track for visual-render recovery only.
+
+    This is a renderer safety fallback, never narration. A project that needed
+    it must still fail narration/professional truth checks unless genuine speech
+    is independently present and verified.
+    """
+    try:
+        requested = float(duration)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("silent voice duration must be a finite positive number") from exc
+    if not (requested > 0.0 and requested < float("inf")):
+        raise ValueError("silent voice duration must be a finite positive number")
+    target = min(3600.0, max(0.1, requested))
+
+    root = Path(outdir)
+    root.mkdir(parents=True, exist_ok=True)
+    output = root / f"silent_voice_{int(index):02d}_{uuid.uuid4().hex[:10]}.m4a"
+    ffmpeg(
+        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+        "-t", f"{target:.3f}",
+        "-vn", "-c:a", "aac", "-b:a", "96k", "-ar", "48000", "-ac", "2",
+        "-movflags", "+faststart", output,
+        timeout=max(30, min(120, int(target * 2) + 10)),
+    )
+
+    metadata = ffprobe_json(output)
+    audio_streams = [
+        stream for stream in (metadata.get("streams") or [])
+        if isinstance(stream, dict) and stream.get("codec_type") == "audio"
+    ]
+    try:
+        actual = float((metadata.get("format") or {}).get("duration") or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        actual = 0.0
+    if not output.is_file() or output.stat().st_size < 128 or not audio_streams:
+        output.unlink(missing_ok=True)
+        raise RuntimeError("silent voice recovery produced no valid audio stream")
+    if actual <= 0.0 or abs(actual - target) > max(0.25, target * 0.02):
+        output.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"silent voice recovery duration mismatch: expected {target:.3f}s, got {actual:.3f}s"
+        )
+    return output
+
+
 def ffprobe_json(path: Path) -> Dict[str, Any]:
     p = subprocess.run(["ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(path)], capture_output=True, text=True, timeout=40)
     if p.returncode:
