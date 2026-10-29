@@ -7760,7 +7760,11 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                     # For long-form work, choose real moving footage ahead of stills
                     # across the whole shot list. AI video generation remains bounded
                     # by max_ai_video_scenes inside the acquisition adapter.
-                    prefer_motion=(i <= max_ai_video_scenes or (target >= 120 and not explicitly_single_scene and not SMOKE)),
+                    prefer_motion=(
+                        i <= max_ai_video_scenes
+                        or explicit_launch_profile
+                        or (target >= 120 and not explicitly_single_scene and not SMOKE)
+                    ),
                     duration=scene_duration,
                 )
             except Exception as asset_exc:
