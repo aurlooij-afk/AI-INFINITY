@@ -7798,17 +7798,16 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         actual_total = 0.0
         # Shared music bed avoids repeatedly generating the same soundtrack.
         music_seconds = max(12.0, min(3600.0, float(target) + 12.0))
-        try:
-            music_query = " ".join(
-                str(value)
-                for value in (
-                    req.get("music_direction") or plan.get("music_direction") or plan.get("tone") or "",
-                    plan.get("title") or topic,
-                    "instrumental cinematic background music no vocals",
-                )
-                if str(value).strip()
-            )[:240]
-            shared_music = _resolve_music_bed(outdir, music_seconds, music_query, project_id)
+        music_query = " ".join(
+            str(value)
+            for value in (
+                req.get("music_direction") or plan.get("music_direction") or plan.get("tone") or "",
+                plan.get("title") or topic,
+                "instrumental cinematic background music no vocals",
+            )
+            if str(value).strip()
+        )[:240]
+        shared_music = _resolve_music_bed(outdir, music_seconds, music_query, project_id)
         ai_video_enabled = os.getenv("AI_INFINITY_AI_VIDEO", "1").strip().lower() in {"1","true","yes","auto"}
         requested_ai_video_scenes = max(0, int(os.getenv("AI_INFINITY_AI_VIDEO_SCENES", "2")))
         # The free Render tier cannot safely host text-to-video model memory in the

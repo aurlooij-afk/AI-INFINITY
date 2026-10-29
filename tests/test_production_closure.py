@@ -238,7 +238,8 @@ def test_music_generation_exception_uses_truthful_emergency_fallback(monkeypatch
     assert "not a professionally composed soundtrack" in manifest["quality_notice"]
     assert manifest["reason"] == "simulated music provider and normal renderer failure"
     assert manifest["output_sha256"] == hashlib.sha256(result.read_bytes()).hexdigest()
-    assert ("project-music-fallback-test", "music_fallback_failed", events[0][2]) in events
+    assert events[0][0] == "project-music-fallback-test"
+    assert events[0][1] == "music_fallback_failed"
     assert any(
         event == "music_fallback" and payload["quality_state"] == "DEGRADED"
         and payload["professional_score_verified"] is False
@@ -257,6 +258,7 @@ def test_emergency_music_fallback_failure_is_reported_without_name_error(monkeyp
         studio, "_emergency_music_fallback",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("ffmpeg fallback failed")),
     )
+    monkeypatch.setattr(studio, "audit_event", lambda *args, **kwargs: None)
     with pytest.raises(RuntimeError, match="emergency procedural audio fallback could not be verified"):
         studio._resolve_music_bed(tmp_path, 20.0, "test", "project-music-fallback-failure")
 
