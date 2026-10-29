@@ -790,6 +790,14 @@ def test_launch_signature_endcard_uses_real_screen_motion_source(monkeypatch, tm
             31, 40304903, "Video Editing Software on Monitor Display",
             "Editing software on a monitor", "A close-up of an editor's timeline on a monitor",
         ),
+        (
+            33, 34663551, "Futuristic Neon Light Tunnel Animation",
+            "Digital tunnel", "A glowing neon tunnel carries an imagined world into motion",
+        ),
+        (
+            34, 36999006, "Futuristic Geometric Digital Tunnel",
+            "Digital tunnel", "A luminous geometric tunnel creates a feeling of entering a new world",
+        ),
     ],
 )
 def test_curated_launch_expanded_catalog_selects_distinct_verified_source_motion(
