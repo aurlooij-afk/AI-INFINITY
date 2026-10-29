@@ -338,3 +338,29 @@ def test_creative_planner_repairs_an_underwritten_15_minute_script():
     assert "Expand the existing story" in calls[1]["messages"][0]["content"]
     assert word_count >= 1800
     assert provider == "test-longform-writer"
+
+
+
+def test_scene_renderer_does_not_burn_generic_heading_when_no_overlay_is_requested(monkeypatch, tmp_path):
+    captured = {}
+    monkeypatch.setattr(studio, "FAST_MODE", True)
+
+    def fake_ffmpeg(*args, **kwargs):
+        captured["args"] = list(args)
+
+    monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
+    studio._render_scene(
+        {"kind": "video", "path": str(tmp_path / "source.webm")},
+        tmp_path / "voice.mp3",
+        tmp_path / "music.m4a",
+        tmp_path / "sfx.wav",
+        6.0,
+        tmp_path / "scene.mp4",
+        "",
+        "16:9",
+    )
+    args = captured["args"]
+    filter_graph = args[args.index("-vf") + 1]
+    assert "color=black@0.0:t=fill" in filter_graph
+    assert "text=''" in filter_graph
+    assert "Chapter" not in filter_graph
