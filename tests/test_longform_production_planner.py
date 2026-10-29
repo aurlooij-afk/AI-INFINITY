@@ -199,3 +199,78 @@ def test_scene_renderer_offsets_shared_music_to_the_scene_programme_time(monkeyp
     assert args[music_position - 2] == "125.500"
     assert args[music_position - 3] == "-ss"
     assert args[music_position - 5:music_position - 3] == ["-stream_loop", "-1"]
+
+
+
+def test_openverse_music_picker_requires_valid_license_source_and_decodable_audio(monkeypatch, tmp_path):
+    item = {
+        "id": "music-source-uuid-01",
+        "url": "https://media.example.org/music-theme.mp3",
+        "foreign_landing_url": "https://example.org/music-theme",
+        "title": "Cinematic ambient theme",
+        "creator": "Example Composer",
+        "license": "by",
+        "license_version": "4.0",
+        "license_name": "CC BY",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "filetype": "mp3",
+        "duration": 120,
+    }
+    monkeypatch.setattr(studio, "http_json", lambda *args, **kwargs: {"results": [item]})
+    monkeypatch.setattr(studio, "_commercial_use_from_license", lambda *_: "commercial_use_allowed_with_attribution")
+
+    def fake_download(url, path, headers=None, timeout=60, max_bytes=40_000_000):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"test-music-audio" * 3000)
+        return path
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda path: {
+        "format": {"duration": "120.0"},
+        "streams": [{"codec_type": "audio", "codec_name": "mp3", "sample_rate": "44100", "channels": 2}],
+    })
+    monkeypatch.setattr(studio, "ffmpeg", lambda *args, **kwargs: None)
+
+    tracks = studio._openverse_music_tracks("cinematic ambient instrumental", tmp_path, limit=1)
+
+    assert len(tracks) == 1
+    assert tracks[0]["source_id"] == item["id"]
+    assert tracks[0]["rights_status"] == "license_metadata_present"
+    assert tracks[0]["license_url"] == item["license_url"]
+    assert tracks[0]["creator"] == "Example Composer"
+    assert Path(tracks[0]["path"]).is_file()
+    assert len(tracks[0]["asset_sha256"]) == 64
+
+
+def test_music_builder_crossfades_tracks_and_writes_source_manifest(monkeypatch, tmp_path):
+    track_a = tmp_path / "licensed-a.mp3"
+    track_b = tmp_path / "licensed-b.mp3"
+    track_a.write_bytes(b"a" * 1024)
+    track_b.write_bytes(b"b" * 1024)
+    tracks = [
+        {"path": str(track_a), "source_id": "a", "title": "A", "license": "CC BY 4.0", "license_url": "https://creativecommons.org/licenses/by/4.0/", "duration_seconds": 60.0},
+        {"path": str(track_b), "source_id": "b", "title": "B", "license": "CC BY 4.0", "license_url": "https://creativecommons.org/licenses/by/4.0/", "duration_seconds": 60.0},
+    ]
+    captured = {}
+
+    def fake_ffmpeg(*args, **kwargs):
+        captured["args"] = list(args)
+        out = args[-1]
+        if isinstance(out, Path):
+            out.write_bytes(b"composed-music" * 3000)
+
+    monkeypatch.setattr(studio, "_openverse_music_tracks", lambda *args, **kwargs: tracks)
+    monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(studio, "probe_duration", lambda *_: 90.0)
+
+    output = studio.make_music(tmp_path, 90.0, query="quiet cinematic instrumental")
+
+    manifest = __import__("json").loads((tmp_path / "music_source.json").read_text(encoding="utf-8"))
+    command = " ".join(str(value) for value in captured["args"])
+    assert output.is_file()
+    assert "acrossfade=d=2" in command
+    assert "aloop=loop=-1" in command
+    assert manifest["method"] == "openverse_openly_licensed_tracks_crossfaded_and_arranged"
+    assert [track["source_id"] for track in manifest["tracks"]] == ["a", "b"]
+    assert manifest["requested_duration_seconds"] == 90.0
+    assert len(manifest["output_sha256"]) == 64
