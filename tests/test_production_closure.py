@@ -262,3 +262,19 @@ def test_emergency_music_fallback_failure_is_reported_without_name_error(monkeyp
     with pytest.raises(RuntimeError, match="emergency procedural audio fallback could not be verified"):
         studio._resolve_music_bed(tmp_path, 20.0, "test", "project-music-fallback-failure")
 
+def test_silent_voice_recovery_helper_creates_measured_audio_track(tmp_path):
+    # This path is used by reality_first_3901._safe_render after the primary
+    # renderer fails and the scene's voice file is absent. The output is only a
+    # silence track to recover the video render; it must not masquerade as speech.
+    voice = studio._make_silent_voice(tmp_path, 9, 1.25)
+
+    assert voice.is_file()
+    assert voice.name.startswith("silent_voice_09_")
+    metadata = studio.ffprobe_json(voice)
+    assert any(
+        item.get("codec_type") == "audio"
+        for item in (metadata.get("streams") or [])
+    )
+    actual_duration = float((metadata.get("format") or {}).get("duration") or 0.0)
+    assert abs(actual_duration - 1.25) <= 0.25
+
