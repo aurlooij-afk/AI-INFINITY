@@ -684,6 +684,7 @@ jobs:
           cat /tmp/final-probe.json
           python - <<'PY'
           import json
+          import subprocess
           x=json.load(open("/tmp/final-probe.json"))
           duration=float((x.get("format") or {}).get("duration") or 0)
           streams=x.get("streams") or []
