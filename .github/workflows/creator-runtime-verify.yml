@@ -369,7 +369,7 @@ jobs:
           original_status="$status"
           original_stage="$stage"
           if [ "$review_only" != "true" ]; then
-            docker exec ai-infinity-ci python - "$PROJECT_ID" <<'PY'
+            docker exec -i ai-infinity-ci python - "$PROJECT_ID" <<'PY'
           import sys
           import studio_ultimate as studio
           pid = sys.argv[1]
@@ -498,7 +498,7 @@ jobs:
           PY
           
           if [ "$export_review_test" = "true" ]; then
-            docker exec ai-infinity-ci python - "$PROJECT_ID" "$original_status" "$original_stage" <<'PY'
+            docker exec -i ai-infinity-ci python - "$PROJECT_ID" "$original_status" "$original_stage" <<'PY'
           import sys
           import studio_ultimate as studio
           pid, status, stage = sys.argv[1:4]
