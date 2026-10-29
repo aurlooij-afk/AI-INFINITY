@@ -5242,7 +5242,17 @@ def _video_scene(asset: Dict[str, Any], duration: float, out: Path, title: str) 
     ffmpeg("-loop", "1", "-i", src, "-t", duration, "-vf", vf, "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", out, timeout=240)
 
 
-def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, duration: float, out: Path, title: str, aspect_ratio: str = "16:9") -> None:
+def _render_scene(
+    asset: Dict[str, Any],
+    voice: Path,
+    music: Path,
+    sfx: Path,
+    duration: float,
+    out: Path,
+    title: str,
+    aspect_ratio: str = "16:9",
+    music_offset_seconds: float = 0.0,
+) -> None:
     """Render one moving scene with a predictable CPU cost on the free worker."""
     duration = max(0.5, float(duration))
     title_escaped = str(title).replace("\\", "\\\\").replace("'", "\\'")[:70]
@@ -5341,7 +5351,17 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
         # Keep encoder buffering bounded on the free tier without changing the
         # actual 1080p output dimensions or codecs.
         preset, crf, ab = os.getenv("AI_INFINITY_VIDEO_PRESET", "veryfast"), "18", "192k"
-    args: List[Any] = visual_args + ["-i", voice, "-stream_loop", "-1", "-i", music, "-i", sfx,
+    try:
+        music_offset = max(0.0, float(music_offset_seconds))
+    except (TypeError, ValueError, OverflowError):
+        music_offset = 0.0
+    # Every scene must start the shared soundtrack at its actual programme
+    # offset. Starting music from zero on every scene creates obvious resets at
+    # every cut and is especially damaging in long-form documentaries.
+    args: List[Any] = visual_args + ["-i", voice, "-stream_loop", "-1"]
+    if music_offset > 0.0:
+        args += ["-ss", f"{music_offset:.3f}"]
+    args += ["-i", music, "-i", sfx,
         "-filter_complex", audio_filter, "-map", "0:v:0", "-map", "[a]", "-vf", vf, "-t", duration,
         "-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p",
         "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
@@ -7567,7 +7587,12 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 audit_event(project_id, "sfx_fallback_failed", {"scene": i, "error": str(sfx_exc)[:600]})
                 sfx = shared_sfx
             mixed = outdir / f"scene_{i:02d}.mp4"
-            _render_scene(asset, voice, shared_music, sfx, ch["actual_duration"], mixed, str(ch.get("on_screen") or ch.get("heading") or topic), str(req.get("aspect_ratio") or "16:9"))
+            _render_scene(
+                asset, voice, shared_music, sfx, ch["actual_duration"], mixed,
+                str(ch.get("on_screen") or ch.get("heading") or topic),
+                str(req.get("aspect_ratio") or "16:9"),
+                music_offset_seconds=max(0.0, actual_total - float(ch["actual_duration"])),
+            )
             scene_paths.append(mixed)
             checkpoint(project_id, f"scene_{i:04d}", {"scene":i,"path":str(mixed),"sha256":file_sha256(mixed) if mixed.exists() else None,"duration":ch.get("actual_duration"),"scene_signature":scene_signature,"voice_provider":provider,"asset":redact({k:v for k,v in asset.items() if k != "path"})})
             audit_event(project_id, "scene_completed", {"scene": i, "duration": ch.get("actual_duration"), "asset_source": asset.get("source"), "asset_kind": asset.get("kind")})
