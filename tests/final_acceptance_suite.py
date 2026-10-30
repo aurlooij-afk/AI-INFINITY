@@ -1,5 +1,9 @@
 from __future__ import annotations
-import concurrent.futures, hashlib, json, os, re, shutil, sqlite3, subprocess, sys, time, zipfile
+import concurrent.futures, datetime, hashlib, json, os, re, shutil, sqlite3, subprocess, sys, time, traceback, zipfile
+try:
+    import resource
+except ImportError:  # pragma: no cover - some non-POSIX development hosts
+    resource = None
 from pathlib import Path
 from urllib.parse import quote
 import requests
@@ -10,6 +14,157 @@ if str(REPO_ROOT) not in sys.path:
 
 TMP=Path("/tmp/ai-infinity-final-acceptance"); TMP.mkdir(parents=True,exist_ok=True)
 PYURL="https://www.python.org/"
+
+SCENARIO_COUNT = 13
+SCENARIO_RESULTS: list[dict] = []
+SCENARIO_STARTED_AT = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def _utc_now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def _redact_diagnostic(value: str) -> str:
+    value = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,'\"]+", r"\1[REDACTED]", value)
+    value = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}", "Bearer [REDACTED]", value)
+    value = re.sub(
+        r"(?i)\b(api[_-]?key|access[_-]?key|secret|token|password)(\s*[:=]\s*)['\"]?[^\s,'\"}]+",
+        r"\1\2[REDACTED]",
+        value,
+    )
+    value = re.sub(r"(https?://[^\s?]+)\?[^\s]+", r"\1?[REDACTED]", value)
+    return value[:120_000]
+
+
+def _acceptance_result_document() -> dict:
+    statuses = [str(row.get("status") or "") for row in SCENARIO_RESULTS]
+    terminal = {"PASS", "FAIL", "BLOCKED", "REVIEW_REQUIRED"}
+    completed = sum(status in terminal for status in statuses)
+    complete = len(SCENARIO_RESULTS) == SCENARIO_COUNT and completed == SCENARIO_COUNT
+    passed = complete and all(status == "PASS" for status in statuses)
+    if passed:
+        overall = "PASS"
+    elif complete and any(status == "FAIL" for status in statuses):
+        overall = "FAIL"
+    elif complete:
+        overall = "BLOCKED"
+    else:
+        overall = "INCOMPLETE"
+    server = os.getenv("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
+    repository = os.getenv("GITHUB_REPOSITORY", "aurlooij-afk/AI-INFINITY")
+    run_id = os.getenv("AI_INFINITY_WORKFLOW_RUN_ID") or os.getenv("GITHUB_RUN_ID")
+    return {
+        "schema": "ai-infinity-final-acceptance-result.v2",
+        "repository": repository,
+        "branch": os.getenv("GITHUB_HEAD_REF") or os.getenv("GITHUB_REF_NAME"),
+        "source_revision": os.getenv("AI_INFINITY_SOURCE_REVISION") or os.getenv("GITHUB_SHA"),
+        "workflow_run_id": run_id,
+        "workflow_run_url": f"{server}/{repository}/actions/runs/{run_id}" if run_id else None,
+        "run_attempt": os.getenv("AI_INFINITY_WORKFLOW_RUN_ATTEMPT") or os.getenv("GITHUB_RUN_ATTEMPT"),
+        "started_at_utc": SCENARIO_STARTED_AT,
+        "updated_at_utc": _utc_now(),
+        "scenario_count": SCENARIO_COUNT,
+        "completed_scenarios": completed,
+        "overall_status": overall,
+        "passed": passed,
+        "tests": SCENARIO_RESULTS,
+    }
+
+
+def _persist_acceptance_result() -> bool:
+    configured = os.getenv("AI_INFINITY_EVIDENCE_DIR", "").strip()
+    root = Path(configured).resolve() if configured else TMP
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "final-acceptance-result.json"
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    payload = json.dumps(_acceptance_result_document(), ensure_ascii=False, indent=2, default=str) + "\n"
+    try:
+        temporary.write_text(payload, encoding="utf-8")
+        os.replace(temporary, path)
+        return True
+    except Exception as exc:
+        print("ACCEPTANCE_RESULT_WRITE_FAILED=" + _redact_diagnostic(type(exc).__name__ + ": " + str(exc)))
+        return False
+
+
+def _record_scenario(
+    scenario_id: str,
+    description: str,
+    runner=None,
+    *,
+    requested: dict | None = None,
+    blocked_reason: str | None = None,
+) -> dict:
+    started_wall = time.monotonic()
+    record = {
+        "scenario_id": scenario_id,
+        "description": description,
+        "source_revision": os.getenv("AI_INFINITY_SOURCE_REVISION") or os.getenv("GITHUB_SHA"),
+        "project_id": None,
+        "requested": requested or {},
+        "status": "RUNNING",
+        "started_at_utc": _utc_now(),
+        "completed_at_utc": None,
+        "wall_clock_seconds": None,
+    }
+    SCENARIO_RESULTS.append(record)
+    _persist_acceptance_result()
+    if blocked_reason:
+        record["status"] = "BLOCKED"
+        record["failure"] = {"reason": _redact_diagnostic(blocked_reason)}
+    else:
+        try:
+            actual = runner()
+            record["result"] = actual
+            if isinstance(actual, dict):
+                record["project_id"] = actual.get("project_id")
+                if actual.get("project_ids"):
+                    record["project_ids"] = actual.get("project_ids")
+            record["status"] = "PASS"
+        except Exception as exc:
+            assertion_payload = next((arg for arg in exc.args if isinstance(arg, dict)), None)
+            failure = {
+                "exception_type": type(exc).__name__,
+                "message": _redact_diagnostic(str(exc) or repr(exc.args)),
+                "traceback": _redact_diagnostic(traceback.format_exc()),
+            }
+            if assertion_payload is not None:
+                safe_payload = json.loads(json.dumps(assertion_payload, ensure_ascii=False, default=str))
+                failure["assertion_payload"] = safe_payload
+                record["project_id"] = safe_payload.get("project_id")
+                result_payload = safe_payload.get("result") if isinstance(safe_payload.get("result"), dict) else {}
+                quality = result_payload.get("quality") if isinstance(result_payload.get("quality"), dict) else {}
+                checks = quality.get("checks") if isinstance(quality.get("checks"), dict) else {}
+                if checks:
+                    failure["failed_quality_checks"] = [key for key, value in checks.items() if value is False]
+            record["failure"] = failure
+            record["status"] = "FAIL"
+    record["completed_at_utc"] = _utc_now()
+    record["wall_clock_seconds"] = round(time.monotonic() - started_wall, 3)
+    if resource is not None:
+        try:
+            own = resource.getrusage(resource.RUSAGE_SELF)
+            children = resource.getrusage(resource.RUSAGE_CHILDREN)
+            record["runtime_resources"] = {
+                "process_user_cpu_seconds": round(float(own.ru_utime), 3),
+                "process_system_cpu_seconds": round(float(own.ru_stime), 3),
+                "process_peak_rss_kib": int(own.ru_maxrss),
+                "completed_children_user_cpu_seconds": round(float(children.ru_utime), 3),
+                "completed_children_system_cpu_seconds": round(float(children.ru_stime), 3),
+                "highest_completed_child_peak_rss_kib": int(children.ru_maxrss),
+                "gpu_telemetry": "not_measured",
+            }
+        except Exception:
+            record["runtime_resources"] = {"gpu_telemetry": "not_measured", "cpu_memory_telemetry": "unavailable"}
+    print("ACCEPTANCE_SCENARIO_RESULT=" + json.dumps(record, ensure_ascii=False, default=str))
+    _persist_acceptance_result()
+    return record
+
+
+def _record_blocked_scenario(scenario_id: str, description: str, reason: str, requested: dict | None = None) -> dict:
+    return _record_scenario(scenario_id, description, requested=requested, blocked_reason=reason)
+
+
 def req(s,b,p,m="GET",**kw):
     r=s.request(m,b+p,timeout=180,**kw)
     if not r.ok:
@@ -107,6 +262,24 @@ def dl(s,b,pid,name,min_bytes=1):
     assert r.ok,(name,r.status_code,r.text[:1000])
     p=TMP/f"{pid}-{name.replace('/','_')}"; p.write_bytes(r.content); assert p.stat().st_size>=min_bytes,(name,p.stat().st_size); return p
 def jart(s,b,pid,name):return json.loads(dl(s,b,pid,name).read_text(encoding="utf-8"))
+def dl_streaming(s,b,pid,name,min_bytes=1):
+    """Stream large artifacts to disk without buffering the complete file in RAM."""
+    url=b+f"/infinity/studio/project/{quote(pid,safe='')}/asset/{quote(name,safe='')}"
+    response=s.get(url,stream=True,timeout=600)
+    assert response.ok,(name,response.status_code,response.text[:1000])
+    path=TMP/f"{pid}-{name.replace('/','_')}"
+    digest=hashlib.sha256()
+    size=0
+    with path.open("wb") as output:
+        for chunk in response.iter_content(chunk_size=1024*1024):
+            if not chunk:
+                continue
+            output.write(chunk)
+            digest.update(chunk)
+            size+=len(chunk)
+    response.close()
+    assert size>=min_bytes,(name,size)
+    return path,size,digest.hexdigest()
 def sha(p):
     h=hashlib.sha256()
     with p.open("rb") as f:
@@ -331,7 +504,7 @@ def capture_failed_project_evidence(s, b, project_id, status_payload):
 
 
 def t1(s,b):
-    pid=create(s,b,"Create a professional 60-second AI Infinity launch video in English, 16:9, cinematic, research-backed, with voiceover, background music, captions, thumbnail, article, SEO metadata, social campaign package and production/rights manifests.",duration=60,format="long",aspect_ratio="16:9"); waitp(s,b,pid)
+    pid=create(s,b,"Create the flagship film titled ONE IDEA. INFINITE WORLDS. Exactly 60 seconds, 1920x1080, 16:9 landscape. Premium global technology campaign fused with an emotional cinematic short film. A lone creator sits at night before a blank screen; a small idea grows through research, imagination, story shaping, creation, refinement and the finished result. Use relevant distinct motion imagery, deliberate visual progression, purposeful cinematography, controlled transitions and professional sound. Avoid a slideshow, generic stock montage, tutorial and text-heavy advertisement. Include this exact spoken narration sentence: Every extraordinary world begins with something nobody else can see. End with AI Infinity. One idea. Infinite worlds.",title="ONE IDEA. INFINITE WORLDS.",duration=60,format="long",aspect_ratio="16:9",language="English",quality_preset="cinematic",require_full_hd=True); waitp(s,b,pid,timeout=1500)
     reqd={"final.mp4","thumbnail.jpg","audio_master.mp3","narration_only.mp3","captions.srt","article.md","seo.json","social_campaign.json","production_manifest.json","rights_manifest.json","package.zip"}; got=names(s,b,pid); assert reqd<=got,(reqd-got,got)
     src=jart(s,b,pid,"sources.json"); assert int(src.get("source_count") or len(src.get("sources")or[]))>0,src
     # Truth comes before final-file download: an unverified project must fail at
@@ -360,7 +533,11 @@ def t1(s,b):
     assert checks.get("aspect_ratio_passed") is True and checks.get("requested_aspect_ratio") == "16:9", truth
     assert int(checks.get("actual_rendered_scene_count") or 0) >= int(checks.get("minimum_professional_scene_count") or 1), truth
     assert checks.get("visual_rights_evidence_present") is True, truth
+    assert int(checks.get("visual_rights_unresolved_count") or 0) == 0, truth
+    assert int(checks.get("visual_rights_review_required_count") or 0) == 0, truth
     files={n:dl(s,b,pid,n) for n in reqd}; m=probe(files["final.mp4"]); dur=float((m.get("format")or{}).get("duration")or 0); assert 59<=dur<=61,m
+    video=next((x for x in m.get("streams",[]) if x.get("codec_type")=="video"),{}); assert (int(video.get("width") or 0),int(video.get("height") or 0))==(1920,1080),m
+    script_text=dl(s,b,pid,"script.md").read_text(encoding="utf-8"); caption_text=dl(s,b,pid,"captions.srt").read_text(encoding="utf-8"); required_line="Every extraordinary world begins with something nobody else can see."; assert required_line.casefold() in script_text.casefold(),script_text[:3000]; assert required_line.casefold() in caption_text.casefold(),caption_text[:3000]
     assert any(x.get("codec_type")=="video" for x in m.get("streams",[])); assert any(x.get("codec_type")=="audio" for x in m.get("streams",[]))
     audio_probe=probe(files["audio_master.mp3"]); audio_dur=float((audio_probe.get("format")or{}).get("duration")or 0)
     assert any(x.get("codec_type")=="audio" for x in audio_probe.get("streams",[])),audio_probe
@@ -394,6 +571,13 @@ def t1(s,b):
     return {
         "test":1,"project_id":pid,"duration":dur,"truth_verified":True,
         "manifest_hash_verified":True,"reviewer_packet":reviewer_packet,
+        "final_media_sha256":sha(files["final.mp4"]),
+        "final_media_bytes":files["final.mp4"].stat().st_size,
+        "ffprobe":m,
+        "resolution":[int(video.get("width") or 0),int(video.get("height") or 0)],
+        "fallback_visual_count":int(checks.get("fallback_visual_count") or 0),
+        "visual_rights_unresolved_count":int(checks.get("visual_rights_unresolved_count") or 0),
+        "artifact_inventory":{name:{"size_bytes":path.stat().st_size,"sha256":sha(path)} for name,path in sorted(files.items()) if path.is_file()},
     }
 def t2(s,b):
     pid=create(s,b,"Create a professional 60-second AI Infinity launch video in Pashto, 9:16 vertical, cinematic, with natural voiceover, captions and music.",duration=60,format="short",aspect_ratio="9:16",language="Pashto"); waitp(s,b,pid)
@@ -805,8 +989,10 @@ def _production_profile_acceptance(label: str, duration: int, fast_mode: bool, p
         project_id = create(
             session, base, brief,
             duration=duration, format=fmt, aspect_ratio="16:9", language="English",
+            quality_preset=("balanced" if fast_mode else "cinematic"),
+            require_full_hd=(not fast_mode),
         )
-        state = waitp(session, base, project_id, timeout=1500)
+        state = waitp(session, base, project_id, timeout=(3600 if duration >= 900 else 1500))
         truth = req(
             session, base,
             f"/infinity/studio/project/{quote(project_id, safe='')}/truth",
@@ -816,6 +1002,8 @@ def _production_profile_acceptance(label: str, duration: int, fast_mode: bool, p
         assert checks.get("source_visual_policy_passed") is True, truth
         assert int(checks.get("fallback_visual_count") or 0) == 0, truth
         assert checks.get("visual_rights_evidence_present") is True, truth
+        assert int(checks.get("visual_rights_unresolved_count") or 0) == 0, truth
+        assert int(checks.get("visual_rights_review_required_count") or 0) == 0, truth
         assert checks.get("caption_sync_passed") is True, truth
         assert checks.get("script_sentence_integrity_passed") is True, truth
         assert checks.get("professional_scene_coverage_passed") is True, truth
@@ -836,7 +1024,7 @@ def _production_profile_acceptance(label: str, duration: int, fast_mode: bool, p
             assert (int(video.get("width") or 0), int(video.get("height") or 0)) == (1920, 1080), media
         decode = subprocess.run(
             ["ffmpeg", "-v", "error", "-xerror", "-i", str(final_file), "-f", "null", "-"],
-            capture_output=True, text=True, timeout=600,
+            capture_output=True, text=True, timeout=(1800 if duration >= 900 else 600),
         )
         assert decode.returncode == 0, decode.stderr[-3000:]
 
@@ -844,8 +1032,51 @@ def _production_profile_acceptance(label: str, duration: int, fast_mode: bool, p
         assert manifest.get("truthful") is True and manifest.get("project_id") == project_id, manifest
         entries = {str(item.get("name")): str(item.get("sha256")) for item in (manifest.get("artifacts") or [])}
         assert entries.get("final.mp4") == sha(final_file), entries
+        rights = jart(session, base, project_id, "rights_manifest.json")
+        sources = jart(session, base, project_id, "sources.json")
+        rights_assets = rights.get("assets") or []
+        unresolved_rights = [
+            row for row in rights_assets
+            if str(row.get("rights_status") or "").strip().lower() in {
+                "unknown", "review_required", "not_verified", "not_verified_review_required",
+            }
+            or str(row.get("commercial_use_state") or "").strip().lower() in {
+                "unknown", "unknown_review_required", "review_required", "not_verified",
+            }
+        ]
+        assert not unresolved_rights, {"unresolved_rights": unresolved_rights[:20], "truth": truth}
+        package_file, package_bytes, package_sha256 = dl_streaming(
+            session, base, project_id, "package.zip", min_bytes=100_000
+        )
+        required_package = {
+            "final.mp4", "production_manifest.json", "rights_manifest.json",
+            "sources.json", "script.md", "captions.srt", "audio_master.mp3",
+        }
+        with zipfile.ZipFile(package_file) as archive:
+            assert archive.testzip() is None, "creator package contains a corrupt ZIP member"
+            package_names = set(archive.namelist())
+            assert required_package <= package_names, {
+                "missing_package_members": sorted(required_package - package_names),
+                "available": sorted(package_names)[:100],
+            }
+            archived_media_hash = hashlib.sha256()
+            with archive.open("final.mp4") as media_stream:
+                for chunk in iter(lambda: media_stream.read(1024 * 1024), b""):
+                    archived_media_hash.update(chunk)
+            assert archived_media_hash.hexdigest() == sha(final_file), {
+                "package_final_media_sha256": archived_media_hash.hexdigest(),
+                "downloaded_final_media_sha256": sha(final_file),
+            }
+        checks_summary = {
+            key: checks.get(key) for key in (
+                "actual_rendered_scene_count", "verified_motion_source_count",
+                "minimum_motion_source_count", "fallback_visual_count",
+                "visual_rights_cleared_count", "visual_rights_review_required_count",
+                "visual_rights_unresolved_count", "research_sources",
+            ) if key in checks
+        }
         return {
-            "test": 11 if label == "1080p-20s" else 12,
+            "test": 11 if label == "1080p-20s" else (12 if label == "720p-900s" else 13),
             "profile": label,
             "project_id": project_id,
             "requested_duration_seconds": duration,
@@ -853,32 +1084,126 @@ def _production_profile_acceptance(label: str, duration: int, fast_mode: bool, p
             "resolution": [int(video.get("width") or 0), int(video.get("height") or 0)],
             "scene_count": checks.get("actual_rendered_scene_count"),
             "fallback_visual_count": checks.get("fallback_visual_count"),
+            "visual_rights_unresolved_count": checks.get("visual_rights_unresolved_count"),
+            "truth_state": truth.get("state"),
             "truth_verified": True,
             "full_decode_passed": True,
+            "media_sha256": sha(final_file),
+            "media_size_bytes": final_file.stat().st_size,
+            "ffprobe": media,
+            "quality_truth_checks": checks_summary,
+            "source_count": sources.get("source_count", len(sources.get("sources") or [])),
+            "rights_asset_count": len(rights_assets),
+            "package_sha256": package_sha256,
+            "package_size_bytes": package_bytes,
+            "package_round_trip_hash_verified": True,
             "manifest_hash_verified": True,
+            "provider": state.get("result", {}).get("ai_provider") if isinstance(state.get("result"), dict) else None,
+            "voice_provider": state.get("result", {}).get("voice_provider") if isinstance(state.get("result"), dict) else None,
         }
     finally:
         stop(process, log)
 
 
 def t11():
-    # Exercise the non-fast production renderer on a real 20-second deliverable.
+    # Separate 20-second 1080p acceptance profile.
     return _production_profile_acceptance("1080p-20s", 20, False, 18083, "short")
 
 
 def t12():
-    # Exercise the long-form timeline against a measured three-minute deliverable.
-    return _production_profile_acceptance("720p-180s", 180, True, 18084, "long")
+    # Actual 15-minute / 900-second long-form project at 720p.
+    return _production_profile_acceptance("720p-900s", 900, True, 18084, "long")
+
+
+def t13():
+    # Separate real 20-second 720p baseline project.
+    return _production_profile_acceptance("720p-20s", 20, True, 18085, "short")
+
 
 def main():
-    d=TMP/"base";shutil.rmtree(d,ignore_errors=True);p,b,l=start(d,18080,{"AI_INFINITY_TEST_MEDIA":"1"});s=requests.Session();out=[]
+    SCENARIO_RESULTS.clear()
+    _persist_acceptance_result()
+    descriptions = {
+        "01": "Flagship ONE IDEA. INFINITE WORLDS. 60-second 1080p cinematic production and creator package",
+        "02": "Pashto-language narration, script, captions and verified voice output",
+        "03": "Real PDF upload, text extraction and upload-to-creation influence",
+        "04": "Research-grounded creation and editable OTIO export, import and media bundle",
+        "05": "Three distinct short-form repurposed variants",
+        "06": "Provider-failure fallback transparency and fail-closed quality truth",
+        "07": "Degraded research remains review-required and blocks final delivery",
+        "08": "Process restart recovery without claiming persistent storage",
+        "09": "Four concurrent independent source-backed projects",
+        "10": "Corrupt-intermediate retry, recovery and cross-project isolation",
+        "11": "Independent 20-second 1080p delivery profile",
+        "12": "Real 15-minute / 900-second 720p long-form production",
+        "13": "Independent 20-second 720p baseline production",
+    }
+    requested = {
+        "01": {"duration_seconds": 60, "resolution": [1920, 1080], "aspect_ratio": "16:9", "quality_preset": "cinematic"},
+        "02": {"duration_seconds": 60, "language": "Pashto", "aspect_ratio": "9:16"},
+        "03": {"input": "acceptance-source.pdf", "workflow": "upload_to_creation"},
+        "04": {"duration_seconds": 20, "workflow": "research_and_otio_round_trip"},
+        "05": {"distinct_variants": 3},
+        "06": {"workflow": "provider_failure_fallback", "expected_truth": "REVIEW_REQUIRED"},
+        "07": {"workflow": "degraded_research", "expected_truth": "REVIEW_REQUIRED"},
+        "08": {"workflow": "ephemeral_process_restart", "persistent_storage_claimed": False},
+        "09": {"concurrency": 4, "duration_seconds_per_project": 20},
+        "10": {"workflow": "corrupt_intermediate_retry_and_isolation"},
+        "11": {"duration_seconds": 20, "resolution": [1920, 1080], "aspect_ratio": "16:9"},
+        "12": {"duration_seconds": 900, "resolution": [1280, 720], "aspect_ratio": "16:9"},
+        "13": {"duration_seconds": 20, "resolution": [1280, 720], "aspect_ratio": "16:9"},
+    }
+    process = None
+    server_log = None
     try:
-        out += [t1(s,b),t2(s,b),t3(s,b),t4(s,b),t5(),t6(),t7(),t8(),t9(s,b)]
-        out.append(t10(s,b,d,out[-1]["project_ids"][0]))
+        data_dir = TMP / "base"
+        shutil.rmtree(data_dir, ignore_errors=True)
+        process, base, server_log = start(data_dir, 18080, {"AI_INFINITY_TEST_MEDIA": "1"})
+        session = requests.Session()
+        records = []
+        records.append(_record_scenario("01", descriptions["01"], lambda: t1(session, base), requested=requested["01"]))
+        records.append(_record_scenario("02", descriptions["02"], lambda: t2(session, base), requested=requested["02"]))
+        records.append(_record_scenario("03", descriptions["03"], lambda: t3(session, base), requested=requested["03"]))
+        records.append(_record_scenario("04", descriptions["04"], lambda: t4(session, base), requested=requested["04"]))
+        records.append(_record_scenario("05", descriptions["05"], lambda: t5(), requested=requested["05"]))
+        records.append(_record_scenario("06", descriptions["06"], lambda: t6(), requested=requested["06"]))
+        records.append(_record_scenario("07", descriptions["07"], lambda: t7(), requested=requested["07"]))
+        records.append(_record_scenario("08", descriptions["08"], lambda: t8(), requested=requested["08"]))
+        records.append(_record_scenario("09", descriptions["09"], lambda: t9(session, base), requested=requested["09"]))
+        concurrency_result = records[-1].get("result") if records[-1].get("status") == "PASS" else None
+        concurrency_ids = concurrency_result.get("project_ids") if isinstance(concurrency_result, dict) else None
+        if isinstance(concurrency_ids, list) and concurrency_ids:
+            records.append(_record_scenario(
+                "10", descriptions["10"],
+                lambda: t10(session, base, data_dir, concurrency_ids[0]),
+                requested=requested["10"],
+            ))
+        else:
+            records.append(_record_blocked_scenario(
+                "10", descriptions["10"],
+                "Requires the four-project concurrency scenario to return a valid isolated project ID.",
+                requested["10"],
+            ))
+    except Exception as exc:
+        bootstrap_reason = "Shared API runtime could not be started: " + type(exc).__name__ + ": " + str(exc)
+        print("ACCEPTANCE_BOOTSTRAP_FAILURE=" + _redact_diagnostic(bootstrap_reason))
+        for scenario_id in map(lambda value: f"{value:02d}", range(1, 11)):
+            if not any(row.get("scenario_id") == scenario_id for row in SCENARIO_RESULTS):
+                _record_blocked_scenario(scenario_id, descriptions[scenario_id], bootstrap_reason, requested[scenario_id])
     finally:
-        stop(p,l)
-    # Run actual profile acceptance after shutting down the shared ten-scenario app.
-    out.append(t11())
-    out.append(t12())
-    print(json.dumps({"passed":True,"tests":out},ensure_ascii=False,indent=2))
-if __name__=="__main__":main()
+        if process is not None and server_log is not None:
+            stop(process, server_log)
+
+    # Isolated profiles run even when another scenario fails.
+    _record_scenario("11", descriptions["11"], t11, requested=requested["11"])
+    _record_scenario("12", descriptions["12"], t12, requested=requested["12"])
+    _record_scenario("13", descriptions["13"], t13, requested=requested["13"])
+
+    document = _acceptance_result_document()
+    _persist_acceptance_result()
+    print(json.dumps(document, ensure_ascii=False, indent=2, default=str))
+    return 0 if document["passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
