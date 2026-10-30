@@ -6,11 +6,31 @@ os.environ["AI_INFINITY_3601_BACKGROUND"] = "false"
 os.environ["AI_INFINITY_FAST_MODE"] = "1"
 
 import main
+import production_closure_3624 as closure
 import studio_ultimate as studio
 from fastapi.testclient import TestClient
 
 client = TestClient(main.app)
 
+
+
+def test_explicit_launch_preserves_all_nine_authored_story_beats():
+    assert studio._max_scene_count(
+        is_short=False, fast_mode=True, smoke=False,
+        explicitly_single_scene=False, explicit_launch=True,
+    ) == 9
+    assert studio._max_scene_count(
+        is_short=False, fast_mode=True, smoke=False,
+        explicitly_single_scene=False,
+    ) == 8
+    assert studio._max_scene_count(
+        is_short=True, fast_mode=True, smoke=False,
+        explicitly_single_scene=False, explicit_launch=True,
+    ) == 5
+    assert studio._max_scene_count(
+        is_short=False, fast_mode=False, smoke=True,
+        explicitly_single_scene=False, explicit_launch=True,
+    ) == 1
 
 def test_closure_routes_and_truthful_readiness():
     r = client.get("/infinity/studio/production/contract")
@@ -146,4 +166,145 @@ def test_final_audio_master_pads_early_ended_audio_stream_to_video_duration(tmp_
         check=True,
         timeout=60,
     )
+
+def test_final_delivery_loudness_master_applies_post_normalization_sample_peak_ceiling(monkeypatch, tmp_path):
+    source = tmp_path / "programme.mp4"
+    output = tmp_path / "mastered.mp4"
+    source.write_bytes(b"source-programme-bytes" * 1000)
+    captured = {}
+
+    probe = {
+        "format": {"duration": "20.0"},
+        "streams": [
+            {"codec_type": "video", "codec_name": "h264", "width": 1280, "height": 720, "duration": "20.0"},
+            {"codec_type": "audio", "codec_name": "aac", "duration": "20.0", "sample_rate": "48000"},
+        ],
+    }
+
+    def fake_ffmpeg(*args, **kwargs):
+        captured["args"] = [str(value) for value in args]
+        output.write_bytes(b"normalized-and-peak-limited-delivery" * 500)
+
+    monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: probe)
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 20.0)
+
+    result = studio._normalize_delivery_loudness(source, output, fast_mode=True)
+    args = captured["args"]
+    audio_filter = args[args.index("-af") + 1]
+
+    # Final mastering must heal timestamp gaps before sample-based PTS rebuild;
+    # otherwise an already-padded AAC stream can still be muxed ~1 second short.
+    assert audio_filter.startswith("aresample=48000:async=1:first_pts=0,asetpts=N/SR/TB,")
+    assert audio_filter.index("asetpts=N/SR/TB") < audio_filter.index("atrim=duration=")
+    assert "loudnorm=I=-16.0:TP=-1.5:LRA=11.0" in audio_filter
+    limiter = "alimiter=limit=0.80:attack=5:release=50:level=false"
+    assert limiter in audio_filter
+    assert audio_filter.index("loudnorm=") < audio_filter.index(limiter), (
+        "the hard sample-peak ceiling must run after loudness normalization"
+    )
+    assert result["status"] == "completed"
+
+def test_music_generation_exception_uses_truthful_emergency_fallback(monkeypatch, tmp_path):
+    import hashlib
+    import json
+    from pathlib import Path
+
+    def broken_music(*args, **kwargs):
+        raise RuntimeError("simulated music provider and normal renderer failure")
+
+    def fake_ffmpeg(*args, **kwargs):
+        Path(args[-1]).write_bytes(b"verified fake encoded audio bytes " * 80)
+
+    events = []
+    monkeypatch.setattr(studio, "make_music", broken_music)
+    monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 20.0)
+    monkeypatch.setattr(
+        studio, "audit_event",
+        lambda project_id, event, payload: events.append((project_id, event, payload)),
+    )
+
+    result = studio._resolve_music_bed(
+        tmp_path, 20.0, "cinematic test underscore", "project-music-fallback-test"
+    )
+
+    assert result == tmp_path / "music.m4a"
+    assert result.is_file() and result.stat().st_size > 1024
+    manifest = json.loads((tmp_path / "music_source.json").read_text(encoding="utf-8"))
+    assert manifest["method"] == "emergency_procedural_tone_bed_after_music_generation_failure"
+    assert manifest["fallback"] is True
+    assert manifest["truthful"] is True
+    assert manifest["human_rights_review"] == "PENDING"
+    assert "not a professionally composed soundtrack" in manifest["quality_notice"]
+    assert manifest["reason"] == "simulated music provider and normal renderer failure"
+    assert manifest["output_sha256"] == hashlib.sha256(result.read_bytes()).hexdigest()
+    assert events[0][0] == "project-music-fallback-test"
+    assert events[0][1] == "music_fallback_failed"
+    assert any(
+        event == "music_fallback" and payload["quality_state"] == "DEGRADED"
+        and payload["professional_score_verified"] is False
+        for _, event, payload in events
+    )
+
+
+def test_emergency_music_fallback_failure_is_reported_without_name_error(monkeypatch, tmp_path):
+    import pytest
+
+    monkeypatch.setattr(
+        studio, "make_music",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("normal music failed")),
+    )
+    monkeypatch.setattr(
+        studio, "_emergency_music_fallback",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("ffmpeg fallback failed")),
+    )
+    monkeypatch.setattr(studio, "audit_event", lambda *args, **kwargs: None)
+    with pytest.raises(RuntimeError, match="emergency procedural audio fallback could not be verified"):
+        studio._resolve_music_bed(tmp_path, 20.0, "test", "project-music-fallback-failure")
+
+def test_silent_voice_recovery_helper_creates_measured_audio_track(tmp_path):
+    # This path is used by reality_first_3901._safe_render after the primary
+    # renderer fails and the scene's voice file is absent. The output is only a
+    # silence track to recover the video render; it must not masquerade as speech.
+    voice = studio._make_silent_voice(tmp_path, 9, 1.25)
+
+    assert voice.is_file()
+    assert voice.name.startswith("silent_voice_09_")
+    metadata = studio.ffprobe_json(voice)
+    assert any(
+        item.get("codec_type") == "audio"
+        for item in (metadata.get("streams") or [])
+    )
+    actual_duration = float((metadata.get("format") or {}).get("duration") or 0.0)
+    assert abs(actual_duration - 1.25) <= 0.25
+
+def test_visual_rights_evidence_survives_artifact_registry_read_failure(monkeypatch, tmp_path):
+    import json
+    from types import SimpleNamespace
+
+    root = tmp_path / "rights-first-test"
+    root.mkdir()
+    fake_studio = SimpleNamespace(
+        _project_dir=lambda _project_id: root,
+        _get_project=lambda project_id: {"project_id": project_id},
+        _timeline_rows=lambda _project_id: [],
+        _asset_rows=lambda _project_id: [],
+    )
+    monkeypatch.setattr(closure, "_studio", lambda: fake_studio)
+    monkeypatch.setattr(
+        closure,
+        "_artifact_registry",
+        lambda _project_id: (_ for _ in ()).throw(RuntimeError("simulated database busy")),
+    )
+
+    closure._write_production_evidence("rights-first-test")
+
+    rights = json.loads((root / "visual_rights.json").read_text(encoding="utf-8"))
+    registry = json.loads((root / "asset_registry.json").read_text(encoding="utf-8"))
+    assert rights["project_id"] == "rights-first-test"
+    assert rights["assets"] == []
+    assert registry["project_id"] == "rights-first-test"
+    assert registry["registry_read_status"] == "unavailable"
+    assert "simulated database busy" in registry["registry_read_error"]
 

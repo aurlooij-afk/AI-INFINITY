@@ -19,6 +19,94 @@ from ai_infinity.timeline_interchange import (
 VERSION = "TARGET-2050.PRO-CREATOR-TIMELINE.1"
 BUILD_NOTE = "stable-scene-identity-v1"
 
+def _otio_export_allowed(project: Dict[str, Any], project_root: Path) -> bool:
+    """Allow review-only OTIO export after QC failure when all scene masters exist.
+
+    A failed creative-quality gate must block delivery/publishing, but should not
+    destroy the creator's ability to inspect and revise the actual rendered work.
+    The exporter still validates each timeline reference and carries the failed
+    truth state into the resulting package; this helper never marks it publishable.
+    """
+    status = str(project.get("status") or "").strip().lower()
+    if status in {"completed", "completed_with_qc_warnings"}:
+        return True
+    if status != "failed" or str(project.get("stage") or "").strip().lower() != "quality_control":
+        return False
+    try:
+        expected = int(project.get("total_scenes") or 0)
+    except (TypeError, ValueError):
+        return False
+    final = project_root / "final.mp4"
+    if expected < 1 or not final.is_file() or final.stat().st_size <= 0:
+        return False
+    # Scene numbering is the identity contract used by the editor/OTIO adapters.
+    # A raw count can conceal a hole (for example scenes 01..08 plus scene_10).
+    # Review export is permitted only when every expected rendered master exists.
+    return all(
+        (project_root / f"scene_{index:02d}.mp4").is_file()
+        and not (project_root / f"scene_{index:02d}.mp4").is_symlink()
+        and (project_root / f"scene_{index:02d}.mp4").stat().st_size > 0
+        for index in range(1, expected + 1)
+    )
+
+
+def _review_only_filter_generated_missing_masters(
+    project: Dict[str, Any],
+    project_root: Path,
+    source: Dict[str, Any],
+    *,
+    allow_unverified_qc_review: bool = False,
+) -> Dict[str, Any]:
+    """Build an honest partial review timeline only from real masters.
+
+    Used only when the system-generated timeline source points at a missing
+    master in a QC-failed project. Persisted non-empty editor timelines are not
+    passed through this helper, so user edits are never silently rewritten.
+    """
+    strict_failed_qc = (
+        str(project.get("status") or "").strip().lower() == "failed"
+        and str(project.get("stage") or "").strip().lower() == "quality_control"
+    )
+    if not strict_failed_qc and not allow_unverified_qc_review:
+        return source
+    rows = source.get("scenes")
+    if not isinstance(rows, list) or not rows:
+        return source
+    included = []
+    missing = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise HTTPException(409, "generated review timeline contains an invalid scene row")
+        raw_asset = str(row.get("source_asset") or "").strip()
+        asset = Path(raw_asset).name
+        if raw_asset != asset or len(asset) != 12 or not asset.startswith("scene_") or not asset[6:8].isdigit() or asset[8:] != ".mp4":
+            raise HTTPException(409, "generated review timeline contains an unsafe scene reference")
+        path = project_root / asset
+        if path.is_file() and not path.is_symlink() and path.stat().st_size > 0:
+            included.append(dict(row))
+        else:
+            missing.append(asset)
+    if not missing:
+        return source
+    if not included:
+        raise HTTPException(409, "QC-failed project has no real scene masters available for review export")
+    reviewed = dict(source)
+    reviewed["scenes"] = included
+    reviewed["review_export"] = {
+        "status": "partial_scene_master_review_only",
+        "complete": False,
+        "missing_scene_masters": sorted(set(missing)),
+        "included_scene_masters": [row["source_asset"] for row in included],
+        "publish_allowed": False,
+        "reason": (
+            "The generated plan referenced scene masters that were not present. "
+            "Only existing scene files are included; missing scenes were not fabricated. "
+            "This partial timeline remains review-only."
+        ),
+    }
+    return reviewed
+
+
 def install(app: Any) -> None:
     import studio_ultimate as studio
     import professional_creator_v2 as base
@@ -155,7 +243,10 @@ def install(app: Any) -> None:
         }
 
     def save(pid: str, payload: Dict[str, Any]):
+        review_export = payload.get("review_export")
         tl = normalize(pid, payload)
+        if isinstance(review_export, dict):
+            tl["review_export"] = dict(review_export)
         path = studio._project_dir(pid) / "timeline.json"
         path.write_text(json.dumps(tl, ensure_ascii=False, indent=2), encoding="utf-8")
         storage = studio._save_asset(pid, "timeline", path, "application/json", {"editor": VERSION})
@@ -211,6 +302,11 @@ def install(app: Any) -> None:
                     ) from exc
             stored["owner"] = uid
             stored["truthful"] = True
+            # Export from the in-memory copy only. If a QC-failed project has a
+            # saved timeline that still names a master which was never rendered,
+            # the portable review export may omit that missing source with an
+            # explicit incomplete marker. Do not overwrite the creator's saved edit.
+            stored = _review_only_filter_generated_missing_masters(p, root, stored)
             return stored
 
         # Missing local data is not the same as a never-saved project. If a
@@ -284,6 +380,21 @@ def install(app: Any) -> None:
             raise HTTPException(500, "professional timeline render failed: " + str(exc)[:500])
 
     def otio_timeline_source(pid: str, project: Dict[str, Any]) -> Dict[str, Any]:
+        canonical_truth = base._truth(studio, project)
+        # The application can store a render as completed while the canonical
+        # quality truth remains REVIEW_REQUIRED. For OTIO only, allow a partial
+        # review copy in that state so the creator can inspect real scene masters.
+        # Publishing/acceptance remains blocked; the saved editor timeline is not
+        # rewritten and missing media is recorded explicitly in the bundle.
+        canonical_truth_state = str(canonical_truth.get("state") or "").strip().upper()
+        allow_unverified_qc_review = (
+            canonical_truth.get("verified") is not True
+            and (
+                canonical_truth.get("publish_allowed_by_quality_gate") is False
+                or canonical_truth.get("publish_gate") is False
+                or canonical_truth_state in {"FAILED", "REVIEW_REQUIRED", "DEGRADED", "BLOCKED"}
+            )
+        )
         path = studio._project_dir(pid) / "timeline.json"
         user_id = str(project.get("user_id") or "")
         if not path.is_file():
@@ -321,9 +432,18 @@ def install(app: Any) -> None:
                 )
                 if completed_masters:
                     source = base._timeline(studio, project)
+                    source = _review_only_filter_generated_missing_masters(
+                        project,
+                        studio._project_dir(pid),
+                        source,
+                        allow_unverified_qc_review=allow_unverified_qc_review,
+                    )
                     if not isinstance(source, dict) or not isinstance(source.get("scenes"), list) or not source["scenes"]:
                         raise HTTPException(409, "saved timeline is empty and completed scene masters could not produce a recoverable timeline")
+                    review_export = source.get("review_export")
                     source = normalize(pid, source)
+                    if isinstance(review_export, dict):
+                        source["review_export"] = dict(review_export)
                     # Use the editor's normal save path so recovery also records
                     # artifact durability/read-back evidence. Merely registering local
                     # bytes would leave the asset manifest stale and make this recovery
@@ -353,8 +473,30 @@ def install(app: Any) -> None:
                     "saved timeline is missing and no verified recovery copy is available; refusing to export a replacement",
                 )
             source = base._timeline(studio, project)
+            source = _review_only_filter_generated_missing_masters(
+                project,
+                studio._project_dir(pid),
+                source,
+                allow_unverified_qc_review=allow_unverified_qc_review,
+            )
+        # The GET timeline route already applies this same in-memory filter to
+        # QC-failed saved timelines. OTIO export must apply it too, otherwise a
+        # persisted plan can reference a never-rendered scene_NN.mp4 and abort
+        # review export even though all actual scene masters are available.
+        # The helper filters only the export copy for QC-failed projects; it
+        # never rewrites the saved editor timeline or promotes project quality.
+        source = _review_only_filter_generated_missing_masters(
+            project,
+            studio._project_dir(pid),
+            source,
+            allow_unverified_qc_review=allow_unverified_qc_review,
+        )
         try:
-            return normalize(pid, source)
+            review_export = source.get("review_export") if isinstance(source, dict) else None
+            normalized = normalize(pid, source)
+            if isinstance(review_export, dict):
+                normalized["review_export"] = dict(review_export)
+            return normalized
         except HTTPException:
             raise
         except Exception as exc:
@@ -363,9 +505,9 @@ def install(app: Any) -> None:
     @app.post("/infinity/pro2/project/{pid}/timeline/otio/export")
     def export_timeline_otio(pid: str, request: Request):
         uid, project = owned(pid, request)
-        if project.get("status") not in {"completed", "completed_with_qc_warnings"}:
-            raise HTTPException(409, "OTIO export requires completed scene masters")
         root = studio._project_dir(pid)
+        if not _otio_export_allowed(project, root):
+            raise HTTPException(409, "OTIO export requires completed scene masters or a complete QC-failed review render")
         timeline_data = otio_timeline_source(pid, project)
         truth = base._truth(studio, studio._get_project(pid))
         try:
@@ -415,6 +557,7 @@ def install(app: Any) -> None:
             "truth_state": result["truth_state"],
             "truth_verified": result["truth_verified"],
             "human_review_status": result["human_review_status"],
+            "review_export": result.get("review_export") or timeline_data.get("review_export"),
             "requires_human_review": True,
             "durability": {
                 "timeline": durability_summary(
@@ -430,8 +573,14 @@ def install(app: Any) -> None:
     @app.post("/infinity/pro2/project/{pid}/timeline/otio/import")
     async def import_timeline_otio_route(pid: str, request: Request):
         uid, project = owned(pid, request)
-        if project.get("status") not in {"completed", "completed_with_qc_warnings"}:
-            raise HTTPException(409, "OTIO import requires completed scene masters")
+        if (
+            project.get("status") not in {"completed", "completed_with_qc_warnings"}
+            and not _otio_export_allowed(project, studio._project_dir(pid))
+        ):
+            raise HTTPException(
+                409,
+                "OTIO import requires completed scene masters or a complete QC-failed review render",
+            )
         body = bytearray()
         async for chunk in request.stream():
             body.extend(chunk)

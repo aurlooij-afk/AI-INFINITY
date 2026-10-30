@@ -1,10 +1,21 @@
 # AI Infinity — Known Production Blockers
 
-Last evidence refresh: 2026-10-23 UTC  
+Last evidence refresh: 2026-10-30 UTC  
 Repository: `aurlooij-afk/AI-INFINITY`  
-Primary workstream: PR [#37](https://github.com/aurlooij-afk/AI-INFINITY/pull/37) merged as `0a2f0c929f68d9a8c2dbf16a3dd49e1a1ed58ba4`; follow-up B2 canary-scope hardening is in branch `fix/b2-project-state-canary-scope`.
+Primary workstream: PR [#48](https://github.com/aurlooij-afk/AI-INFINITY/pull/48), branch `fix/cinematic-creative-gates-and-review-export`, based on current `main`; PR [#37](https://github.com/aurlooij-afk/AI-INFINITY/pull/37) remains merged as `0a2f0c929f68d9a8c2dbf16a3dd49e1a1ed58ba4`.
 
 This file is a live release checklist, not a claim that the product is complete. A blocker is closed only by fresh evidence from the exact tested/deployed revision.
+
+
+## Fresh acceptance failure evidence — 2026-10-30
+
+- PR #48 head before this evidence-runner update: 27b6bc5c11fbd4a165fd82b2e5f163ec127757ed; the PR base matched main at 726199a5f2d68228c5ba3d2afa4fdae17dfd5ed2.
+- [Final Complete Acceptance Suite run 40961860402](https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/40961860402) failed on scenario 12. The CI merge-ref SHA printed by the job was 13d9606593a0ddca85f5a56d3eee706f4329668f; the PR head SHA is recorded separately above.
+- Failed long-form project: studio_15e72ea2f0894332b9a803a45c440a21. The renderer produced final.mp4 (42,075,916 bytes; SHA-256 5694b2015b18df8ebcc474911de6665d108a5ea5d4f44fddf8ccb0a258faaf60) with FFprobe duration 180.041 seconds, H.264 1280×720 at 24 fps, AAC stereo audio, and embedded subtitles. The project nevertheless failed its truthful production gate.
+- Recorded failures: full_hd, required_source_motion_coverage, and fallback_visual_budget_ok. The quality evidence recorded 12 distinct qualifying motion sources against a requirement of 13, five procedural fallback visuals against a budget of two, and one rights-review-required visual asset. Research returned 19 sources; the voice provider was Edge neural English, with zero voice fallbacks. The final media's technical decodability does not override these failures.
+- The acceptance script had an all-or-nothing reporting defect: it printed its scenario JSON only after every scenario completed. A failure in the final profile meant earlier results were absent from the final JSON; the workflow then wrote a generic result object rather than preserving scenario results.
+- The previous profile labelled itself long-form but exercised 180 seconds, not the required 900-second / 15-minute workload. The updated acceptance matrix adds the 900-second 720p workload and separate 20-second 720p and 1080p profiles. These checks are pending execution on the new commit; they are not passes.
+- Three other workflows on the same PR head passed: Visual Diversity Truth Regression (40961860255), Creator Studio Build Guard (40961860290), and Standalone Runtime Verification (40961860268). The failed final acceptance run remains a failure.
 
 ## Recorded passing CI and artifact evidence (historical exact tested SHA)
 

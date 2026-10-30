@@ -1203,6 +1203,9 @@ def creative_plan(req: Dict[str, Any], research: Dict[str, Any], model_fn: Optio
     tone = str(req.get("tone") or "cinematic, intelligent, useful")
     language = str(req.get("language") or "English")
     platforms = ", ".join(str(x) for x in (req.get("platforms") or [])[:12]) or "multi-platform"
+    # Long-form output needs a genuinely long script; a 15-minute request must not
+    # be filled with a short generic narration stretched across a longer timeline.
+    target_narration_words = max(1, int((max(1, duration) * 125 + 59) // 60))
     brand_voice = str(req.get("brand_voice") or "")[:1000]
     visual_style = str(req.get("visual_style") or "premium editorial")[:500]
     call_to_action = str(req.get("call_to_action") or "")[:500]
@@ -1225,6 +1228,7 @@ TITLE: {title}
 OBJECTIVE: {objective}
 FORMAT: {fmt}
 DURATION: {duration} seconds
+TARGET SPOKEN WORD COUNT: approximately {target_narration_words} words for narrated formats. For a long-form request, write enough specific, useful narration to support the intended runtime at a natural speaking pace. Do not pad time with repetition, empty motivational language, invented facts, or recycled paragraphs. If the requested format is intentionally non-verbal, make that creative choice explicit in the plan.
 AUDIENCE: {audience}
 TONE: {tone}
 LANGUAGE: {language}
@@ -1247,7 +1251,50 @@ Use 5-18 chapters. Total durations should approximately equal the target. Narrat
             if isinstance(chapters, list) and len(chapters) >= 4 and _language_text_compatible(language, chapters):
                 clean = {**data}
                 clean["chapters"] = chapters[:18]
-                return clean, str(raw.get("provider") or "model")
+                provider = str(raw.get("provider") or "model")
+                if duration >= 120:
+                    required_words = max(target_narration_words, int(duration * 2.0 + 0.999))
+                    spoken_words = sum(
+                        len(re.findall(r"\b[\w'-]+\b", str(chapter.get("narration") or "")))
+                        for chapter in clean["chapters"] if isinstance(chapter, dict)
+                    )
+                    if spoken_words < required_words:
+                        # One bounded editorial repair pass uses the same actual
+                        # configured text model. It must expand the full narrative,
+                        # not recycle paragraphs or invent citations.
+                        repair_prompt = f"""You are the lead documentary screenwriter revising an under-length long-form script.
+The required programme duration is {duration} seconds and the spoken script currently contains only {spoken_words} words. Expand the existing story to at least {required_words} genuinely useful spoken words, aiming for {target_narration_words}.
+Preserve its central idea, intended audience, language, tone, chapter order, factual restraint, and useful visual direction. Add concrete explanations, specific examples, emotional turns, transitions, and human observation where they serve the story. Do not repeat sentences, pad with generic motivation, invent sources, fabricate quotations, or claim unsupported facts. For factual material, retain existing proof_needed requirements and use only the research context already supplied. If the request explicitly requires a non-verbal film, do not add narration.
+Return ONLY JSON using the same schema and chapter fields as the original plan.
+EXISTING PLAN JSON:
+{json.dumps(clean, ensure_ascii=False)[:45000]}
+"""
+                        try:
+                            repair_raw = model_fn({
+                                "messages": [{"role": "user", "content": repair_prompt}],
+                                "temperature": 0.55,
+                            }) or {}
+                            repaired_data = _extract_json(repair_raw.get("text") or repair_raw.get("answer") or "")
+                            repaired_chapters = repaired_data.get("chapters") if isinstance(repaired_data, dict) else None
+                            if (
+                                isinstance(repaired_chapters, list)
+                                and len(repaired_chapters) >= 4
+                                and _language_text_compatible(language, repaired_chapters)
+                            ):
+                                repaired_chapters = repaired_chapters[:18]
+                                repaired_words = sum(
+                                    len(re.findall(r"\b[\w'-]+\b", str(chapter.get("narration") or "")))
+                                    for chapter in repaired_chapters if isinstance(chapter, dict)
+                                )
+                                if repaired_words > spoken_words:
+                                    clean = {**repaired_data, "chapters": repaired_chapters}
+                                    provider = str(repair_raw.get("provider") or provider)
+                        except Exception:
+                            # The pre-render runtime guard below records a truthful
+                            # blocker if this configured model cannot produce enough
+                            # narration; do not silently pad the script.
+                            pass
+                return clean, provider
         except Exception:
             pass
     hf_plan, hf_provider = _hf_creator_plan(prompt, language)
@@ -1648,36 +1695,66 @@ def _explicit_timed_storyboard_plan(
     if source_span < max(20, target - 2) or source_span > target + 2:
         return None
 
+    # The launch brief expresses seven editorial beats, but two beats deliberately
+    # cover multi-stage transformations. Split those *within* their original time
+    # windows into dedicated shots: preserve every supplied beat boundary, total
+    # duration, narration intent and end card while meeting the eight-motion-source
+    # production gate. Only apply to this exact 60-second launch storyboard shape.
+    expected_launch_intervals = [
+        (0, 4), (4, 12), (12, 25), (25, 40), (40, 49), (49, 56), (56, 60),
+    ]
+    if (
+        target == 60
+        and _is_explicit_ai_infinity_launch_brief(raw_objective)
+        and [(start, end) for start, end, _ in intervals] == expected_launch_intervals
+    ):
+        expanded_intervals = []
+        for index, (start, end, description) in enumerate(intervals):
+            if index == 2:
+                expanded_intervals.extend(((start, 19, description), (19, end, description)))
+            elif index == 3:
+                expanded_intervals.extend(((start, 32, description), (32, end, description)))
+            else:
+                expanded_intervals.append((start, end, description))
+        intervals = expanded_intervals
+
     headings = [
-        "The Hook", "The Spark", "The Transformation", "The Cinematic Experience",
-        "The Craft", "The Payoff", "Signature Ending",
+        "The Hook", "The Spark", "Research and Discovery", "Script and Storyboard",
+        "The Cinematic World", "Transformation in Motion", "The Craft", "The Payoff",
+        "Signature Ending",
     ]
     visual_anchors = [
         "intimate late-night room, lone creator, blank screen, close-up, quiet tension",
-        "wide dramatic natural landscape opening into a futuristic city, scale and wonder",
-        "hands researching real sources, printed notes, script pages and storyboard frames",
-        "cinematic landscape, ocean, mountain textures, futuristic architecture and human emotion",
+        "wide dramatic mountain landscape and futuristic cityscape, expansive horizon and moving clouds",
+        "close-up hands tracing research sources and handwritten notes under warm desk light",
+        "overhead script pages and storyboard thumbnails, deliberate marks and natural paper texture",
+        "wide aerial landscape opening into a futuristic city with layered depth and visible movement",
+        "abstract glowing-line tunnel transitioning from the imagined landscape into a crafted visual world",
         "editing workstation, real timeline, caption preview, sound meters and deliberate hands-on craft",
-        "the same creator watching the finished film, a human emotional reaction, warm gold practical light",
-        "restrained midnight-blue brand end-card, subtle cyan and violet light, clean negative space",
+        "the same creator watching the finished film on a computer screen, close-up human reaction, warm gold practical light",
+        "restrained midnight-blue brand end-card displayed on a large dark monitor, subtle cyan and violet light, clean negative space, elegant AI Infinity title reveal",
     ]
     overlays = [
         "Every extraordinary world begins",
-        "One idea. Infinite possibilities.",
-        "Research. Script. Storyboard.",
-        "Step into the vision.",
-        "Edit. Listen. Verify.",
-        "Research it. Shape it. Make it better.",
+        "A single idea",
+        "Find what is true",
+        "Give the idea a story",
+        "A world takes shape",
+        "Possibility becomes motion",
+        "Every frame has purpose",
+        "The idea, brought to life",
         "AI INFINITY  •  ONE IDEA. INFINITE WORLDS.",
     ]
     fallback_narration = [
         "Every extraordinary world begins with something nobody else can see.",
-        "One small idea becomes a doorway. Beyond the room, new worlds begin to unfold.",
-        "We gather the evidence, shape the research into a story, then give it form in a script and storyboard.",
-        "Mountains, water and a city of tomorrow come alive. Each shot reveals another part of the same vision.",
-        "Cut with purpose. Keep the voice clear, the captions in sync, and the master verifiable before it leaves the studio.",
-        "Research it. Shape it. Bring it to life. Then make it better.",
-        "AI Infinity. One idea. Infinite worlds.",
+        "One small idea becomes a doorway, and a quiet room opens into a world of possibility.",
+        "We begin with real questions, trace relevant sources, and separate what is confirmed from what still needs proof.",
+        "Research becomes a focused story and a script, then storyboard frames give every shot a clear purpose.",
+        "Mountains, water and a city of tomorrow rise beyond the screen; the imagined world begins to feel real.",
+        "Each transition carries the same idea forward, changing scale and emotion without losing the human story.",
+        "In the edit, precise timing connects voice, captions, music and picture into a deliberate rhythm.",
+        "The creator sees an idea become a finished film—something real that can be reviewed, edited and improved.",
+        "AI Infinity. One idea. Infinite worlds. Keep creating, keep refining, bring the next vision to life.",
     ]
     chapters = []
     raw_durations = [end - start for start, end, _ in intervals]
@@ -1736,8 +1813,10 @@ def _explicit_timed_storyboard_plan(
         search_subjects = [
             "creator alone in a dark room at night",
             "cinematic mountains ocean and futuristic city",
-            "research notes script pages and storyboard",
-            "dramatic cinematic landscapes and futuristic city",
+            "hands researching real sources and writing notes",
+            "script writing and storyboard sketching",
+            "futuristic city skyline and dramatic landscape in motion",
+            "abstract tunnel with glowing lines cinematic transition",
             "professional video editing timeline and captions",
             "creator watching a finished film",
             "minimal dark cinematic brand end card",
@@ -1746,6 +1825,9 @@ def _explicit_timed_storyboard_plan(
         chapters.append({
             "heading": heading,
             "topic": str(topic or title or "AI Infinity").strip()[:180],
+            # Pass the explicit campaign profile through to the visual source
+            # selector; scene-local relevance matching still governs each clip.
+            "campaign_profile": "ai_infinity_launch" if _is_explicit_ai_infinity_launch_brief(raw_objective) else None,
             "visual_focus": visual_focus,
             "visual_search_subject": search_subject,
             "narration": narration,
@@ -2623,8 +2705,13 @@ def _nasa_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any
 
 _VISUAL_CONCEPTS = {
     "creator": r"\b(?:content creator|creator|filmmaker|video editor|videographer|photographer|producer|youtuber|camera operator|film crew)\b",
+    "collaboration": r"\b(?:brainstorm(?:ing)?|collaborat(?:e|ion|ing)|team discussion|colleagues|team meeting|planning together)\b",
     "editing": r"\b(?:edit(?:s|ed|ing|ors?)?|post[- ]production|timeline|montage|cutting|clips?|video workflow)\b",
     "workstation": r"\b(?:workstation|computer|desktop|laptop|monitors?|screens?|editing suite|suite|desk|keyboard|display)\b",
+    "landscape": r"\b(?:landscape|mountains?|ocean|sea|coast|clouds?|cloudscape|valley|nature|horizon|terrain)\b",
+    "cityscape": r"\b(?:cityscape|futuristic city|city skyline|skyline|metropolis|urban skyline|futuristic architecture)\b",
+    "abstract_motion": r"\b(?:abstract[- ]motion|abstract[- ](?:glowing[- ]lines?|light[- ]trails?|tunnel)|digital tunnel|glowing[- ]lines?|light trails|surreal landscape|imagination portal|luminous tunnel|worlds of possibility)\b",
+    "research_writing": r"\b(?:research|researching|notes|notebook|writing|script pages|storyboard frames|printed notes|writing notes)\b",
     "camera": r"\b(?:camera|camcorder|lens|tripod|filming|shooting|recording|cinematography)\b",
     "studio": r"\b(?:studio|production room|recording room|video set|film set|broadcast booth|soundstage)\b",
     "audio": r"\b(?:microphone|mic|headphones?|audio|sound|waveform|voiceover|mixing console)\b",
@@ -2982,13 +3069,14 @@ def _openverse_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str
         _media_debug("openverse", exc)
         return []
 
-def _commons_media(query: str, outdir: Path, limit: int = 6) -> List[Dict[str, Any]]:
+def _commons_media(query: str, outdir: Path, limit: int = 6, prefer_motion: bool = False) -> List[Dict[str, Any]]:
     timeout = FAST_REMOTE_TIMEOUT if FAST_MODE else 20
     image_timeout = FAST_REMOTE_TIMEOUT if FAST_MODE else 60
     try:
         params = {
-            "action":"query","format":"json","generator":"search","gsrsearch":query,
-            "gsrnamespace":6,"gsrlimit":min(limit,10),"prop":"imageinfo",
+            "action":"query","format":"json","generator":"search",
+            "gsrsearch":(str(query).strip() + (" filetype:video" if prefer_motion else "")),
+            "gsrnamespace":6,"gsrlimit":min(limit,10),"prop":"info|imageinfo","inprop":"url",
             "iiprop":"url|mime|extmetadata","iiurlwidth":1280 if FAST_MODE else 1920,
         }
         data = http_json("https://commons.wikimedia.org/w/api.php?" + urlencode(params), timeout=timeout)
@@ -3001,13 +3089,29 @@ def _commons_media(query: str, outdir: Path, limit: int = 6) -> List[Dict[str, A
             meta=info.get("extmetadata") or {}
             lic=(meta.get("LicenseShortName") or {}).get("value")
             creator=(meta.get("Artist") or {}).get("value")
-            is_video="video" in mime or re.search(r"\.(webm|ogv|mp4)(\?|$)", original, re.I)
+            is_video="video" in mime or re.search(r"\.(webm|ogv|ogg|mp4|mov|mkv)(\?|$)", original, re.I)
+            if prefer_motion and not is_video:
+                continue
             if is_video:
-                if FAST_MODE:
+                # Motion-first long-form acquisition must remain available on the
+                # bounded/FAST runtime too. The old blanket FAST_MODE skip silently
+                # forced image slideshows, while the generic ".media" extension
+                # prevented independently verified Commons clips from satisfying
+                # the motion-source gate.
+                if FAST_MODE and not prefer_motion:
                     continue
-                p=outdir/f"commons_{pge.get('pageid','x')}.media"
+                original_path = str(urlparse(str(original)).path or "")
+                suffix = Path(original_path).suffix.lower()
+                if suffix not in {".webm", ".ogv", ".ogg", ".mp4", ".mov", ".mkv"}:
+                    suffix = ".webm" if "webm" in mime.lower() else (".ogv" if "ogg" in mime.lower() else ".mp4")
+                p=outdir/f"commons_{pge.get('pageid','x')}{suffix}"
                 try:
-                    download(original,p,timeout=90)
+                    download(
+                        original,
+                        p,
+                        timeout=(max(FAST_REMOTE_TIMEOUT, 20) if FAST_MODE else 90),
+                        max_bytes=(24_000_000 if FAST_MODE else 70_000_000),
+                    )
                     source_url = str(pge.get("canonicalurl") or "").strip()
                     license_url = str((meta.get("LicenseUrl") or {}).get("value") or "").strip()
                     license_name = str(lic or "").strip()
@@ -3221,16 +3325,21 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
         return None
     outdir.mkdir(parents=True, exist_ok=True)
     raw = re.sub(r"\s+", " ", str(prompt or "")).strip()
-    subject_match = re.search(r"\babout\\s+(.+?)(?:;|\\.\\s|$)", raw, re.I)
+    subject_match = re.search(r"\babout\s+(.+?)(?:;|\.\s|$)", raw, re.I)
     subject = subject_match.group(1).strip(" .;,:") if subject_match else raw
     subject = re.split(
-        r"\b(?:visual focus|visual emphasis|composition|photorealistic|professional editorial)\b",
+        r"\b(?:overall visual direction|visual focus|visual emphasis|composition|photorealistic|professional editorial)\b",
         subject, maxsplit=1, flags=re.I
     )[0].strip(" .;,:")
-    subject = re.sub(r"^(?:premium|original|cinematic|editorial|documentary|image|visuals?)\\s+", "", subject, flags=re.I)
+    # Rendering instructions must not leak into visible artwork titles.
+    subject = re.sub(
+        r"^(?:premium\s+)?cinematic\s+live[- ]action\s+film\s+still\s*:\s*",
+        "", subject, flags=re.I
+    )
+    subject = re.sub(r"^(?:premium|original|cinematic|editorial|documentary|image|visuals?)\s+", "", subject, flags=re.I)
     subject = re.sub(r"\s+", " ", subject).strip()[:100] or "Ideas into real creative work"
 
-    focus_match = re.search(r"\bvisual focus\\s*:\\s*(.+?)(?:;|\\.\\s|$)", raw, re.I)
+    focus_match = re.search(r"\bvisual focus\s*:\s*(.+?)(?:;|\.\s|$)", raw, re.I)
     focus = focus_match.group(1).strip(" .;,:") if focus_match else ""
     focus = re.sub(r"\s+", " ", focus)[:115]
     seed = int(hashlib.sha256(f"{subject}|{focus}|{index}".encode("utf-8")).hexdigest()[:12], 16)
@@ -3686,6 +3795,82 @@ def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: 
     }
 
 
+def _curated_launch_visual_candidate_relevant(
+    candidate: Dict[str, Any],
+    required_concepts: Iterable[str],
+    scene_concepts: Iterable[str],
+    explicit_launch_profile: bool,
+    search_subject: str,
+    focus: str,
+) -> bool:
+    """Match a curated launch clip to its focal subject, not every element in a composite brief.
+
+    The campaign storyboard intentionally moves from a landscape to a city to a
+    research desk. Requiring any one stock shot's metadata to describe every noun
+    in a multi-concept scene rejected even directly relevant footage. The fallback
+    below is limited to the explicit AI Infinity launch profile and requires both
+    (a) the candidate's declared focal concept to be present in the scene brief and
+    (b) the actual item title/description/tags to match that same concept. General
+    public-provider relevance remains strict; unrelated clips still fail closed.
+    """
+    if _visual_candidate_relevant(candidate, search_subject, focus):
+        return True
+    if not explicit_launch_profile or not isinstance(candidate, dict):
+        return False
+    required = {str(value) for value in (required_concepts or ())}
+    visible = {str(value) for value in (scene_concepts or ())}
+    if not required or not (required & visible):
+        return False
+    text = " ".join(
+        str(candidate.get(key) or "")
+        for key in ("title", "description", "alt", "caption", "tags", "category")
+    ).lower()
+    metadata_concepts = {
+        key for key, pattern in _VISUAL_CONCEPTS.items()
+        if re.search(pattern, text, re.I)
+    }
+    return bool(required & metadata_concepts)
+
+
+def _source_has_prolonged_black_frames(path: Path, threshold_seconds: float = 0.75) -> bool:
+    """Fail closed on public motion clips containing a sustained near-black interval.
+
+    This inexpensive decode preflight avoids selecting a source whose footage can
+    inject a long black hole into an otherwise valid rendered scene. The renderer's
+    final-program black-frame QC remains authoritative; this is only a source gate.
+    """
+    ffmpeg_path = shutil.which("ffmpeg")
+    try:
+        threshold = max(0.25, min(5.0, float(threshold_seconds)))
+    except (TypeError, ValueError):
+        threshold = 0.75
+    if not ffmpeg_path or not Path(path).is_file():
+        return True
+    try:
+        result = subprocess.run(
+            [
+                ffmpeg_path, "-hide_banner", "-nostats", "-i", str(path),
+                "-vf", f"blackdetect=d={threshold:.3f}:pix_th=0.10:pic_th=0.98",
+                "-an", "-f", "null", "-",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=45,
+            check=False,
+        )
+    except Exception:
+        return True
+    if result.returncode != 0:
+        return True
+    for raw_duration in re.findall(r"black_duration:([0-9]+(?:\.[0-9]+)?)", result.stderr or ""):
+        try:
+            if float(raw_duration) >= threshold:
+                return True
+        except (TypeError, ValueError):
+            return True
+    return False
+
+
 def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int) -> Optional[Dict[str, Any]]:
     """Keyless, item-attributed Pexels motion footage for the eight-shot AI Infinity launch profile.
 
@@ -3776,6 +3961,269 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
             "tags": "video production studio team setup equipment camera film shooting raw footage for editing practice cinematography production crew",
             "required_concepts": {"studio"},
         },
+        9: {
+            "source_id": 5040711,
+            "source_url": "https://www.pexels.com/video/clouds-formation-in-the-sky-above-the-mountains-5040711/",
+            "media_url": "https://videos.pexels.com/video-files/5040711/5040711-hd_1920_1080_30fps.mp4",
+            "creator": "Joshua Woroniecki",
+            "title": "Clouds formation in the sky above the mountains",
+            "description": "Dynamic clouds move over peaceful mountain peaks during sunset.",
+            "tags": "cinematic mountains landscape clouds moving clouds panoramic horizon nature sunset dramatic terrain",
+            "required_concepts": {"landscape"},
+        },
+        10: {
+            "source_id": 34719182,
+            "source_url": "https://www.pexels.com/video/futuristic-neon-cityscape-at-night-34719182/",
+            "media_url": "https://videos.pexels.com/video-files/34719182/14717093_1920_1080_30fps.mp4",
+            "creator": "Nicola Narracci",
+            "title": "Futuristic neon cityscape at night",
+            "description": "A vibrant, neon-lit digital cityscape at night, evoking futuristic themes.",
+            "tags": "futuristic cityscape skyline metropolis night architecture digital neon glowing urban technology cinematic future city",
+            "required_concepts": {"cityscape"},
+        },
+        11: {
+            "source_id": 29109378,
+            "source_url": "https://www.pexels.com/video/futuristic-abstract-tunnel-with-glowing-lines-29109378/",
+            "media_url": "https://videos.pexels.com/video-files/29109378/12575278_3840_2160_30fps.mp4",
+            "creator": "Chandresh Uike",
+            "title": "Futuristic abstract tunnel with glowing lines",
+            "description": "Dynamic digital tunnel effect with glowing lines for technology themes.",
+            "tags": "abstract motion digital tunnel glowing lines luminous tunnel universe virtual sci fi future moving light cinematic transformation",
+            "required_concepts": {"abstract_motion"},
+        },
+        12: {
+            "source_id": 7239491,
+            "source_url": "https://www.pexels.com/video/a-person-watching-video-on-a-laptop-7239491/",
+            "media_url": "https://videos.pexels.com/video-files/7239491/7239491-hd_1920_1080_30fps.mp4",
+            "creator": "Max Medyk",
+            "title": "A person watching video on a laptop",
+            "description": "A person watches an online influencer's video on a laptop at home.",
+            "tags": "creator finished video laptop screen watching video playback home office content creator final film review",
+            "required_concepts": {"creator", "workstation"},
+        },
+        13: {
+            "source_id": 6550131,
+            "source_url": "https://www.pexels.com/video/man-writing-down-in-a-notebook-6550131/",
+            "media_url": "https://videos.pexels.com/video-files/6550131/6550131-uhd_3840_2160_25fps.mp4",
+            "creator": "Tima Miroshnichenko",
+            "title": "Man writing down in a notebook",
+            "description": "A focused view of a person writing notes in a notebook using a pen.",
+            "tags": "research writing notes notebook script pages handwriting planning storyboard thinking creative process",
+            "required_concepts": {"research_writing"},
+        },
+        14: {
+            "source_id": 35331907,
+            "source_url": "https://www.pexels.com/video/focused-man-in-modern-home-office-at-night-35331907/",
+            "media_url": "https://videos.pexels.com/video-files/35331907/14970170_3840_2160_25fps.mp4",
+            "creator": "Artem Shutkin",
+            "title": "Focused man in modern home office at night",
+            "description": "Man working on a laptop in a modern home office setting at night.",
+            "tags": "creator home office laptop screen warm practical lighting night workstation finished film review",
+            "required_concepts": {"creator", "workstation"},
+        },
+        15: {
+            "source_id": 28946305,
+            "source_url": "https://www.pexels.com/video/clouds-over-mountain-landscape-timelapse-28946305/",
+            "media_url": "https://videos.pexels.com/video-files/28946305/12525373_1920_1080_30fps.mp4",
+            "creator": "Karthick",
+            "title": "Clouds Over Mountain Landscape Timelapse",
+            "description": "Dynamic cloud movement over a mountain backdrop captured in a timelapse.",
+            "tags": "mountains landscape clouds timelapse moving clouds nature horizon terrain cinematic",
+            "required_concepts": {"landscape"},
+        },
+        16: {
+            "source_id": 8086204,
+            "source_url": "https://www.pexels.com/video/close-up-of-a-script-8086204/",
+            "media_url": "https://videos.pexels.com/video-files/8086204/8086204-uhd_4096_2160_25fps.mp4",
+            "creator": "Ron Lach",
+            "title": "Close up of a Script",
+            "description": "Detailed view of the scriptwriting process with focus on pen and script.",
+            "tags": "scriptwriting storyboard writing research pages paper pen handwriting planning creative process screenplay manuscript",
+            "required_concepts": {"storyboard"},
+        },
+
+        17: {
+            "source_id": 8478102,
+            "source_url": "https://www.pexels.com/video/close-up-video-of-a-person-writing-8478102/",
+            "media_url": "https://videos.pexels.com/video-files/8478102/8478102-uhd_4096_2160_25fps.mp4",
+            "creator": "ArtHouse Studio",
+            "title": "Close Up video of a Person Writing",
+            "description": "Close-up of a person writing notes in a notebook surrounded by books.",
+            "tags": "writing notes notebook books creative process script research",
+            "required_concepts": {"research_writing"},
+        },
+        18: {
+            "source_id": 6798789,
+            "source_url": "https://www.pexels.com/video/close-up-video-of-a-person-writing-on-a-notebook-6798789/",
+            "media_url": "https://videos.pexels.com/video-files/6798789/6798789-hd_1920_1080_24fps.mp4",
+            "creator": "RDNE Stock project",
+            "title": "Close Up Video of a Person Writing on a Notebook",
+            "description": "Close-up of a person writing notes in a notebook under warm light.",
+            "tags": "writing notebook warm light notes writing process close up",
+            "required_concepts": {"research_writing"},
+        },
+        19: {
+            "source_id": 8069596,
+            "source_url": "https://www.pexels.com/video/close-up-footage-of-a-person-writing-on-a-notebook-8069596/",
+            "media_url": "https://videos.pexels.com/video-files/8069596/8069596-hd_1920_1080_30fps.mp4",
+            "creator": "RDNE Stock project",
+            "title": "Close-up Footage of a Person Writing on a Notebook",
+            "description": "Close-up of hands writing in a business meeting with laptops and documents.",
+            "tags": "hands writing business meeting laptops documents notes planning research",
+            "required_concepts": {"research_writing"},
+        },
+        20: {
+            "source_id": 6928979,
+            "source_url": "https://www.pexels.com/video/close-up-view-of-a-person-writing-notes-on-her-notebook-6928979/",
+            "media_url": "https://videos.pexels.com/video-files/6928979/6928979-hd_1920_1080_25fps.mp4",
+            "creator": "Polina Tankilevitch",
+            "title": "Close-Up View of a Person Writing Notes on Her Notebook",
+            "description": "Two people writing and discussing notes in a study setting.",
+            "tags": "writing discussing notes notebook study people collaboration",
+            "required_concepts": {"research_writing"},
+        },
+        21: {
+            "source_id": 33350918,
+            "source_url": "https://www.pexels.com/video/person-writing-in-notebook-at-desk-33350918/",
+            "media_url": "https://videos.pexels.com/video-files/33350918/14201076_2160_3840_24fps.mp4",
+            "creator": "8 K",
+            "title": "Person Writing in Notebook at Desk",
+            "description": "Close-up of a person writing in a notebook with a pen indoors.",
+            "tags": "person writing notebook pen desk notes creative planning handwriting",
+            "required_concepts": {"research_writing"},
+        },
+        22: {
+            "source_id": 8478097,
+            "source_url": "https://www.pexels.com/video/person-writing-on-a-notebook-8478097/",
+            "media_url": "https://videos.pexels.com/video-files/8478097/8478097-hd_1080_1920_25fps.mp4",
+            "creator": "ArtHouse Studio",
+            "title": "Person Writing on a Notebook",
+            "description": "Close-up of a student writing notes in a notebook during a study session.",
+            "tags": "student writing notes notebook study session script research handwriting",
+            "required_concepts": {"research_writing"},
+        },
+        23: {
+            "source_id": 7504395,
+            "source_url": "https://www.pexels.com/video/a-team-discussing-and-brainstorming-ideas-7504395/",
+            "media_url": "https://videos.pexels.com/video-files/7504395/7504395-uhd_3840_2160_25fps.mp4",
+            "creator": "Moe Magners",
+            "title": "A Team Discussing and Brainstorming Ideas",
+            "description": "A diverse group of colleagues collaborate and brainstorm in a modern office setting.",
+            "tags": "team colleagues collaborate brainstorming ideas modern office meeting discussion",
+            "required_concepts": {"collaboration"},
+        },
+        24: {
+            "source_id": 8125940,
+            "source_url": "https://www.pexels.com/video/people-brainstorming-at-a-meeting-8125940/",
+            "media_url": "https://videos.pexels.com/video-files/8125940/8125940-hd_1920_1080_25fps.mp4",
+            "creator": "Ivan S",
+            "title": "People Brainstorming at a Meeting",
+            "description": "A diverse team collaborating in a modern office setting.",
+            "tags": "people brainstorming meeting diverse team collaboration modern office colleagues",
+            "required_concepts": {"collaboration"},
+        },
+        25: {
+            "source_id": 3256770,
+            "source_url": "https://www.pexels.com/video/people-brainstorming-3256770/",
+            "media_url": "https://videos.pexels.com/video-files/3256770/3256770-uhd_2160_3840_25fps.mp4",
+            "creator": "fauxels",
+            "title": "People Brainstorming",
+            "description": "A diverse group of colleagues brainstorming in a modern conference room.",
+            "tags": "people colleagues brainstorming modern conference room teamwork ideas discussion",
+            "required_concepts": {"collaboration"},
+        },
+        26: {
+            "source_id": 34707439,
+            "source_url": "https://www.pexels.com/video/futuristic-abstract-light-tunnel-animation-34707439/",
+            "media_url": "https://videos.pexels.com/video-files/34707439/14711213_1920_1080_30fps.mp4",
+            "creator": "Nicola Narracci",
+            "title": "Futuristic Abstract Light Tunnel Animation",
+            "description": "Dynamic view through a futuristic light tunnel with vibrant glowing effects.",
+            "tags": "futuristic abstract light tunnel glowing effects digital animation motion graphics technology",
+            "required_concepts": {"abstract_motion"},
+        },
+        27: {
+            "source_id": 35668127,
+            "source_url": "https://www.pexels.com/video/mesmerizing-abstract-light-tunnel-in-motion-35668127/",
+            "media_url": "https://videos.pexels.com/video-files/35668127/15115047_1920_1080_30fps.mp4",
+            "creator": "Nicola Narracci",
+            "title": "Mesmerizing Abstract Light Tunnel in Motion",
+            "description": "Hypnotic geometric light tunnel animation with a spinning effect.",
+            "tags": "abstract light tunnel geometric motion spinning technology neon animation",
+            "required_concepts": {"abstract_motion"},
+        },
+        28: {
+            "source_id": 34688250,
+            "source_url": "https://www.pexels.com/video/futuristic-tunnel-with-abstract-light-patterns-34688250/",
+            "media_url": "https://videos.pexels.com/video-files/34688250/14703012_3840_2160_60fps.mp4",
+            "creator": "Colors Motion Graphics",
+            "title": "Futuristic Tunnel with Abstract Light Patterns",
+            "description": "Mesmerizing abstract tunnel with teal and black patterns for a futuristic vibe.",
+            "tags": "futuristic tunnel abstract light patterns teal black motion graphics animation",
+            "required_concepts": {"abstract_motion"},
+        },
+        29: {
+            "source_id": 36036735,
+            "source_url": "https://www.pexels.com/video/video-editing-process-on-laptop-screen-36036735/",
+            "media_url": "https://videos.pexels.com/video-files/36036735/15283027_1920_1080_60fps.mp4",
+            "creator": "Nothing Ahead",
+            "title": "Video Editing Process on Laptop Screen",
+            "description": "A person editing video on a laptop in a dark room, focusing on details.",
+            "tags": "video editing laptop screen dark room creative process editing software timeline production",
+            "required_concepts": {"editing", "workstation"},
+        },
+        30: {
+            "source_id": 40304886,
+            "source_url": "https://www.pexels.com/video/young-man-video-editing-at-home-desk-40304886/",
+            "media_url": "https://videos.pexels.com/video-files/40304886/17217439_1920_1080_60fps.mp4",
+            "creator": "Nothing Ahead",
+            "title": "Young Man Video Editing at Home Desk",
+            "description": "A young man editing video on a laptop at a home desk during the daytime.",
+            "tags": "young man video editing laptop home desk editor workstation post production",
+            "required_concepts": {"editing", "workstation"},
+        },
+        31: {
+            "source_id": 40304903,
+            "source_url": "https://www.pexels.com/video/video-editing-software-on-monitor-display-40304903/",
+            "media_url": "https://videos.pexels.com/video-files/40304903/17217542_1920_1080_60fps.mp4",
+            "creator": "Nothing Ahead",
+            "title": "Video Editing Software on Monitor Display",
+            "description": "Close-up of a video editing software interface on a monitor.",
+            "tags": "video editing software interface monitor display editing timeline post production",
+            "required_concepts": {"editing", "workstation"},
+        },
+        32: {
+            "source_id": 36036747,
+            "source_url": "https://www.pexels.com/es-es/video/edicion-de-video-dinamica-en-software-profesional-36036747/",
+            "media_url": "https://videos.pexels.com/video-files/36036747/15283259_1920_1080_60fps.mp4",
+            "creator": "Nothing Ahead",
+            "title": "Dynamic Video Editing in Professional Software",
+            "description": "Close-up of video editing in progress on a computer screen.",
+            "tags": "video editing computer screen professional software timeline editing workflow",
+            "required_concepts": {"editing", "workstation"},
+        },
+        33: {
+            "source_id": 34663551,
+            "source_url": "https://www.pexels.com/video/futuristic-neon-light-tunnel-animation-34663551/",
+            # Follow the item's own public download redirect instead of guessing
+            # a CDN filename. download() follows only bounded, public HTTPS redirects.
+            "media_url": "https://www.pexels.com/download/video/34663551/",
+            "creator": "Colors Motion Graphics",
+            "title": "Futuristic Neon Light Tunnel Animation",
+            "description": "Dynamic green neon lights create a tunnel illusion in this animated video.",
+            "tags": "futuristic neon light tunnel animation glowing lines abstract motion graphics technology",
+            "required_concepts": {"abstract_motion"},
+        },
+        34: {
+            "source_id": 36999006,
+            "source_url": "https://www.pexels.com/video/futuristic-geometric-digital-tunnel-36999006/",
+            "media_url": "https://www.pexels.com/download/video/36999006/",
+            "creator": "Chandresh Uike",
+            "title": "Futuristic Geometric Digital Tunnel",
+            "description": "A dynamic, glowing geometric tunnel in a modern digital style.",
+            "tags": "futuristic geometric digital tunnel glowing abstract motion technology imagination portal",
+            "required_concepts": {"abstract_motion"},
+        },
     }
     # Scene ordinals are a hint, not an asset specification: a five-scene short's
     # closing shot can mean finished playback while an eight-scene storyboard's
@@ -3783,7 +4231,13 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
     if not isinstance(scene, dict):
         return None
     profile_text = " ".join(str(scene.get(key) or "") for key in ("topic", "title", "heading", "visual_focus", "visual_query"))
-    if not (
+    explicit_launch_profile = str(scene.get("campaign_profile") or "").strip().lower() == "ai_infinity_launch"
+    # An explicit launch-profile marker is project-level intent. Scene-local
+    # topics intentionally describe the shot (for example, "mountain landscape")
+    # and need not repeat the brand name. Requiring the literal brand in every
+    # scene rejected valid launch-profile shots before concept matching even ran.
+    # Ordinary projects still need both the brand and a creator/production term.
+    if not explicit_launch_profile and not (
         re.search(r"\bAI\s+Infinity\b", profile_text, re.I)
         and re.search(r"\b(?:launch|creator|studio|production|editing|software)\b", profile_text, re.I)
     ):
@@ -3791,9 +4245,17 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
 
     focus = re.sub(r"\s+", " ", str(scene.get("visual_focus") or scene.get("heading") or "")).strip()
     heading = str(scene.get("heading") or "")
+    # A timed campaign scene can describe its visible subject in the search
+    # brief or narration even when its short heading/focus is metaphorical.
+    # Include scene-local fields for concept matching, while still requiring the
+    # candidate's own title/description/tags to prove the same focal concept.
+    scene_concept_text = " ".join(
+        str(scene.get(key) or "")
+        for key in ("topic", "title", "heading", "visual_focus", "visual_search_subject", "visual_query", "narration", "on_screen")
+    ).lower()
     scene_concepts = {
         key for key, pattern in _VISUAL_CONCEPTS.items()
-        if re.search(pattern, (focus + " " + heading).lower())
+        if re.search(pattern, scene_concept_text)
     }
     preferred_index = int(index) if str(index).isdigit() else None
     search_subject = str(scene.get("visual_search_subject") or scene.get("topic") or "content creator")
@@ -3811,15 +4273,44 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
     for source_index, candidate in sources.items():
         required = set(candidate.get("required_concepts") or ())
         direct_match = bool(required) and required.issubset(scene_concepts)
-        # A display/finished-playback brief can legitimately use a clip showing
-        # an editing workstation. This bridge is narrowly scoped to that explicit
-        # final-video intent; unrelated camera/studio clips still fail closed.
+        scene_visual_text = " ".join(
+            str(scene.get(key) or "")
+            for key in ("heading", "visual_focus", "visual_search_subject", "visual_query", "narration", "on_screen")
+        )
+        # The launch storyboard contains deliberate focal transitions: landscape
+        # -> futuristic city -> abstract tunnel -> editing craft. These narrow
+        # bridges give the matching catalog category priority only when the user's
+        # actual scene describes that visual. Source metadata, media decode,
+        # black-frame rejection, byte uniqueness and rights gates still apply.
+        primary_focal_text = " ".join(
+            str(scene.get(key) or "")
+            for key in ("heading", "visual_focus", "visual_search_subject")
+        )
+        cityscape_focal = (
+            explicit_launch_profile
+            and required == {"cityscape"}
+            and bool(re.search(r"\b(?:futuristic city|cityscape|city skyline|metropolis|urban skyline)\b", primary_focal_text, re.I))
+        )
+        abstract_transition_focal = (
+            explicit_launch_profile
+            and required == {"abstract_motion"}
+            and bool(re.search(r"\b(?:abstract|digital tunnel|glowing[- ]lines?|light trails|transformation in motion|possibility becomes motion)\b", primary_focal_text, re.I))
+        )
         final_screen_bridge = (
             "finished_video" in scene_concepts
             and "workstation" in scene_concepts
             and required == {"editing", "workstation"}
         )
-        if not (direct_match or final_screen_bridge):
+        # The signature end-card can be composited as legible title treatment
+        # over real computer-screen motion footage. This is a scene-local bridge,
+        # not a substitution of stills or an unrestricted category bypass.
+        signature_screen_bridge = (
+            explicit_launch_profile
+            and required == {"editing", "workstation"}
+            and bool(re.search(r"\b(?:signature ending|brand end[ -]card|logo reveal|end card)\b", scene_visual_text, re.I))
+            and bool(re.search(r"\b(?:screen|monitor|display)\b", scene_visual_text, re.I))
+        )
+        if not (direct_match or final_screen_bridge or cityscape_focal or abstract_transition_focal or signature_screen_bridge):
             continue
 
         metadata_text = " ".join((
@@ -3832,7 +4323,17 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
             "description": candidate.get("description"),
             "tags": candidate.get("tags"),
         }
-        if not _visual_candidate_relevant(metadata_record, search_subject, focus):
+        relevance_concepts = set(scene_concepts)
+        if signature_screen_bridge:
+            # The explicit end-card-on-screen composition means a screen clip is
+            # a truthful visual medium for the brand reveal; metadata still has to
+            # independently match editing/workstation and identify a real screen.
+            if not re.search(r"\b(?:screen|monitor|display|computer)\b", metadata_text, re.I):
+                continue
+            relevance_concepts.update({"editing", "workstation"})
+        if not _curated_launch_visual_candidate_relevant(
+            metadata_record, required, relevance_concepts, explicit_launch_profile, search_subject, focus
+        ):
             continue
         metadata_terms = set(re.findall(r"[a-z0-9]{4,}", metadata_text.lower()))
         lexical_overlap = len(focus_terms & metadata_terms)
@@ -3854,7 +4355,12 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
         # Preserve an ordinal asset only when it independently passed the semantic
         # matcher. A true exact-scene clip beats a merely cheaper generic alternative.
         preferred_bonus = 12 if direct_match and source_index == preferred_index else 0
-        score = len(required & scene_concepts) * 10 + lexical_overlap + screen_bonus + preferred_bonus - resolution_penalty
+        focal_bonus = (
+            28 if abstract_transition_focal
+            else 24 if cityscape_focal or signature_screen_bridge
+            else 0
+        )
+        score = len(required & scene_concepts) * 10 + lexical_overlap + screen_bonus + preferred_bonus + focal_bonus - resolution_penalty
         ranked.append((score, source_index, candidate))
 
     ranked.sort(key=lambda row: (-row[0], row[1]))
@@ -3913,6 +4419,13 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
             if not video_stream or min(width, height) < 720 or seconds < 2.0 or media_path.stat().st_size <= 20_000:
                 media_path.unlink(missing_ok=True)
                 last_error = f"source_{source_id}_failed_media_validation"
+                continue
+
+            # Source metadata, resolution and decode success are not sufficient:
+            # reject clips with a sustained black segment before they enter the edit.
+            if _source_has_prolonged_black_frames(media_path):
+                media_path.unlink(missing_ok=True)
+                last_error = f"source_{source_id}_has_prolonged_black_frames"
                 continue
 
             media_hash = file_sha256(media_path)
@@ -4004,6 +4517,8 @@ def _parse_scene_visual_intent(
 
 
 _MEDIA_PROVIDER_COOLDOWN_LOCK = threading.RLock()
+# Serialize per-project distinct-asset reservation across concurrent scene workers.
+_SCENE_VISUAL_SELECTION_LOCK = threading.RLock()
 _MEDIA_PROVIDER_COOLDOWNS: Dict[str, Dict[str, Any]] = {}
 
 
@@ -4121,12 +4636,23 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         MEDIA_DEBUG_ERRORS["external-visual-providers"] = "disabled_by_policy"
     if os.getenv("AI_INFINITY_FORCE_PRIMARY_VISUAL_FAILURE","0").strip().lower() in {"1","true","yes","on"}:
         MEDIA_DEBUG_ERRORS["primary-visual-provider"]="forced_failure"
+    requested_ai_video_scenes = max(0, min(12, int(os.getenv("AI_INFINITY_AI_VIDEO_SCENES", "2"))))
+    allow_heavy_fast = os.getenv("AI_INFINITY_ALLOW_HEAVY_VIDEO_FAST", "0").strip().lower() in {"1", "true", "yes", "on"}
+    ai_video_scene_budget = (
+        min(requested_ai_video_scenes, 1 if allow_heavy_fast else 0)
+        if FAST_MODE else min(requested_ai_video_scenes, 4)
+    )
+    allow_metered_video = os.getenv("AI_INFINITY_ALLOW_METERED_VIDEO_API", "0").strip().lower() in {"1", "true", "yes", "on"}
     if (not external_disabled
             and prefer_motion
+            and index <= ai_video_scene_budget
+            and allow_metered_video
             and os.getenv("AI_INFINITY_FORCE_PRIMARY_VISUAL_FAILURE","0").strip().lower() not in {"1","true","yes","on"}):
         motion=_hf_video(ai_prompt,outdir,index,duration)
         if motion:
             return motion
+    elif prefer_motion and index <= ai_video_scene_budget and not allow_metered_video:
+        MEDIA_DEBUG_ERRORS["huggingface-video"] = "skipped: video inference can incur provider charges; set AI_INFINITY_ALLOW_METERED_VIDEO_API=1 only when intentionally authorized"
 
     ai = None
     if not external_disabled and os.getenv("AI_INFINITY_FORCE_PRIMARY_VISUAL_FAILURE","0").strip().lower() not in {"1","true","yes","on"}:
@@ -4142,7 +4668,14 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     )
 
     source_failures=[]
-    getters=() if external_disabled else (_nasa_images,_openverse_images,_commons_media,_pexels,_pixabay,_pexels_photos,_pixabay_images,_loc_images)
+    if external_disabled:
+        getters = ()
+    elif prefer_motion:
+        # Long-form/cinematic scenes search real motion first. Images remain an
+        # explicit fallback if the relevant licensed footage cannot be found.
+        getters = (_commons_media, _pexels, _pixabay, _nasa_images, _openverse_images, _pexels_photos, _pixabay_images, _loc_images)
+    else:
+        getters = (_nasa_images, _openverse_images, _commons_media, _pexels, _pixabay, _pexels_photos, _pixabay_images, _loc_images)
 
     # Never reuse identical visual bytes for multiple scene source records when
     # another real candidate is available. This keeps visual provenance aligned
@@ -4157,8 +4690,18 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             pass
 
     def candidate_is_relevant(candidate: Dict[str, Any]) -> bool:
-        # Use the storyboard's scene focus; provider query matches are provenance,
-        # not a replacement for substantive metadata evidence.
+        # Curated launch clips have already passed the stricter launch-specific
+        # focal-concept + item-metadata check in _curated_pexels_launch_video.
+        # Do not reject them a second time with the generic multi-concept matcher:
+        # that double validation was dropping correctly matched mountain/tunnel shots.
+        if (
+            isinstance(candidate, dict)
+            and candidate.get("quality_tier") == "curated_free_source_motion_video"
+            and candidate.get("selection_reason") == "scene_concepts_and_source_metadata_match"
+            and candidate.get("validated_media") is True
+        ):
+            return True
+        # For every other source, provider query text remains provenance—not proof.
         return _visual_candidate_relevant(candidate, search_subject or topic, focus or heading)
 
     def candidate_media_is_usable(candidate: Dict[str, Any]) -> bool:
@@ -4191,15 +4734,26 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             digest=file_sha256(path)
         except Exception:
             return None
-        if digest in used_visual_hashes:
-            return None
-        suffix=path.suffix.lower() or ".bin"
-        selected=outdir / f"selected_visual_{index:02d}{suffix}"
-        try:
-            shutil.copy2(path, selected)
-        except Exception:
-            return None
-        used_visual_hashes.add(digest)
+        # Other scene workers share this project directory. Re-read committed
+        # selections while holding one lock, otherwise two workers can both observe
+        # an unused hash and save the same source clip for different scenes.
+        with _SCENE_VISUAL_SELECTION_LOCK:
+            current_hashes = set(used_visual_hashes)
+            for previous in outdir.glob("selected_visual_*"):
+                try:
+                    if previous.is_file():
+                        current_hashes.add(file_sha256(previous))
+                except Exception:
+                    continue
+            if digest in current_hashes:
+                return None
+            suffix=path.suffix.lower() or ".bin"
+            selected=outdir / f"selected_visual_{index:02d}{suffix}"
+            try:
+                shutil.copy2(path, selected)
+            except Exception:
+                return None
+            used_visual_hashes.add(digest)
         selected_candidate=dict(candidate)
         selected_candidate["path"]=str(selected)
         selected_candidate["source_file"]=str(path)
@@ -4212,8 +4766,14 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     # "editing" and "workstation". The ordinary provider ladder is unchanged
     # for every other brief and remains the fallback when this source fails.
     try:
-        launch_motion = _curated_pexels_launch_video(scene, outdir, index)
-        if launch_motion:
+        # Retry up to three curated candidates if another worker has just committed
+        # the same bytes for a different scene. The helper re-scans selected files
+        # on every call, so a retry chooses the next distinct relevant clip instead
+        # of unnecessarily degrading the scene to an illustration.
+        for launch_attempt in range(3):
+            launch_motion = _curated_pexels_launch_video(scene, outdir, index)
+            if not launch_motion:
+                break
             source_path = Path(str(launch_motion.get("path") or ""))
             if source_path.is_file():
                 MEDIA_SOURCE_METADATA_BY_PATH[str(source_path.resolve())] = dict(launch_motion)
@@ -4226,9 +4786,12 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
                     "source_id": launch_motion.get("source_id"),
                     "duration_seconds": launch_motion.get("duration_seconds"),
                     "sha256": selected_motion.get("asset_sha256"),
+                    "selection_attempt": launch_attempt + 1,
                 })
                 return selected_motion
-            source_failures.append("_pexels-curated-launch-video:duplicate-or-not-relevant")
+            source_failures.append(
+                f"_pexels-curated-launch-video:duplicate-or-unusable:attempt-{launch_attempt + 1}"
+            )
     except Exception as exc:
         source_failures.append("_pexels-curated-launch-video:" + type(exc).__name__ + ":" + str(exc)[:160])
 
@@ -4255,7 +4818,19 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             # provider response that simply returned no relevant results.
             MEDIA_DEBUG_ERRORS.pop(debug_key, None)
             try:
-                items=getter(q,outdir,limit=_scene_asset_search_limit(index,getter.__name__))
+                search_limit = _scene_asset_search_limit(index,getter.__name__)
+                if getter is _commons_media:
+                    try:
+                        items = getter(q, outdir, limit=search_limit, prefer_motion=prefer_motion)
+                    except TypeError as signature_error:
+                        # Older third-party/test adapters may implement the
+                        # pre-motion-aware signature. Keep the compatibility
+                        # path explicit; do not retry unrelated runtime TypeErrors.
+                        if "prefer_motion" not in str(signature_error):
+                            raise
+                        items = getter(q, outdir, limit=search_limit)
+                else:
+                    items = getter(q, outdir, limit=search_limit)
             except Exception as exc:
                 reason = f"{type(exc).__name__}: {str(exc)[:180]}"
                 source_failures.append(f"{getter.__name__}:{reason}")
@@ -4439,6 +5014,52 @@ def ffmpeg(*args: Any, timeout: int = 240) -> None:
                     PROCESS_REGISTRY.pop(project_id, None)
     if p.returncode:
         raise RuntimeError((stderr or stdout or "ffmpeg failed")[-4000:])
+
+
+def _make_silent_voice(outdir: Path, index: int, duration: float) -> Path:
+    """Create a measured silent audio track for visual-render recovery only.
+
+    This is a renderer safety fallback, never narration. A project that needed
+    it must still fail narration/professional truth checks unless genuine speech
+    is independently present and verified.
+    """
+    try:
+        requested = float(duration)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("silent voice duration must be a finite positive number") from exc
+    if not (requested > 0.0 and requested < float("inf")):
+        raise ValueError("silent voice duration must be a finite positive number")
+    target = min(3600.0, max(0.1, requested))
+
+    root = Path(outdir)
+    root.mkdir(parents=True, exist_ok=True)
+    output = root / f"silent_voice_{int(index):02d}_{uuid.uuid4().hex[:10]}.m4a"
+    ffmpeg(
+        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+        "-t", f"{target:.3f}",
+        "-vn", "-c:a", "aac", "-b:a", "96k", "-ar", "48000", "-ac", "2",
+        "-movflags", "+faststart", output,
+        timeout=max(30, min(120, int(target * 2) + 10)),
+    )
+
+    metadata = ffprobe_json(output)
+    audio_streams = [
+        stream for stream in (metadata.get("streams") or [])
+        if isinstance(stream, dict) and stream.get("codec_type") == "audio"
+    ]
+    try:
+        actual = float((metadata.get("format") or {}).get("duration") or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        actual = 0.0
+    if not output.is_file() or output.stat().st_size < 128 or not audio_streams:
+        output.unlink(missing_ok=True)
+        raise RuntimeError("silent voice recovery produced no valid audio stream")
+    if actual <= 0.0 or abs(actual - target) > max(0.25, target * 0.02):
+        output.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"silent voice recovery duration mismatch: expected {target:.3f}s, got {actual:.3f}s"
+        )
+    return output
 
 
 def ffprobe_json(path: Path) -> Dict[str, Any]:
@@ -4742,10 +5363,186 @@ def _fit_audio_duration(source: Path, target_seconds: float, out: Path) -> Tuple
         raise RuntimeError(f"retimed narration is {fitted:.2f}s, expected {target:.2f}s")
     return out, fitted
 
-def make_music(outdir: Path, seconds: float) -> Path:
+def _openverse_music_tracks(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
+    """Fetch a small set of openly licensed, downloadable music tracks with item-level provenance."""
+    out: List[Dict[str, Any]] = []
+    try:
+        params = _openverse_search_params(
+            str(query or "cinematic ambient instrumental music no vocals")[:240],
+            limit=max(1, min(8, int(limit) * 2)),
+        )
+        response = http_json(
+            "https://api.openverse.org/v1/audio/?" + urlencode(params),
+            timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 25),
+        )
+        results = response.get("results", []) if isinstance(response, dict) else []
+    except Exception as exc:
+        _media_debug("openverse-audio", exc)
+        return out
+
+    seen_ids = set()
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        source_id = str(item.get("id") or "").strip()
+        direct_url = str(item.get("url") or "").strip()
+        landing_url = str(item.get("foreign_landing_url") or "").strip()
+        title = str(item.get("title") or "").strip()
+        creator = str(item.get("creator") or "").strip()
+        license_id = str(item.get("license") or "").strip().lower()
+        license_version = str(item.get("license_version") or "").strip()
+        license_labels = {
+            "cc0": "CC0", "by": "CC BY", "by-sa": "CC BY-SA",
+            "by-nc": "CC BY-NC", "by-nd": "CC BY-ND",
+            "by-nc-sa": "CC BY-NC-SA", "by-nc-nd": "CC BY-NC-ND",
+            "pdm": "Public Domain Mark",
+        }
+        license_name = str(item.get("license_name") or license_labels.get(license_id, license_id)).strip()
+        if license_version and license_name and license_version.lower() not in license_name.lower():
+            license_name = f"{license_name} {license_version}"
+        license_url = str(item.get("license_url") or "").strip()
+        commercial_state = _commercial_use_from_license(license_name, license_url)
+        complete = bool(
+            source_id and direct_url.startswith("https://") and landing_url.startswith("https://")
+            and title and license_name and license_url.startswith("https://")
+            and (creator or commercial_state == "public_domain_cc0_1_0")
+            and commercial_state in {"public_domain_cc0_1_0", "commercial_use_allowed_with_attribution"}
+        )
+        if not complete or source_id in seen_ids:
+            continue
+        seen_ids.add(source_id)
+
+        suffix = Path(str(urlparse(direct_url).path or "")).suffix.lower()
+        if suffix not in {".mp3", ".m4a", ".aac", ".wav", ".ogg", ".oga", ".opus", ".flac", ".webm"}:
+            kind = str(item.get("filetype") or "").lower()
+            suffix = ".mp3" if "mpeg" in kind or kind == "mp3" else (".ogg" if "ogg" in kind else ".audio")
+        safe_id = re.sub(r"[^A-Za-z0-9_-]+", "", source_id)[:32] or hashlib.sha256(direct_url.encode()).hexdigest()[:16]
+        path = outdir / f"openverse_music_{safe_id}{suffix}"
+        try:
+            if not path.is_file() or path.stat().st_size < 20_000:
+                download(
+                    direct_url,
+                    path,
+                    timeout=(max(FAST_REMOTE_TIMEOUT, 20) if FAST_MODE else 75),
+                    max_bytes=(24_000_000 if FAST_MODE else 90_000_000),
+                )
+            probe = ffprobe_json(path)
+            streams = probe.get("streams") or []
+            audio = next((stream for stream in streams if stream.get("codec_type") == "audio"), None)
+            duration = float((probe.get("format") or {}).get("duration") or 0.0)
+            if not audio or duration < 30.0 or path.stat().st_size < 20_000:
+                path.unlink(missing_ok=True)
+                continue
+            # Fully decode selected source bytes before using the track. This does
+            # not claim the license metadata itself has been independently audited.
+            ffmpeg("-v", "error", "-i", path, "-f", "null", "-", timeout=max(60, min(240, int(duration + 30))))
+            record = {
+                "kind": "audio",
+                "source": "Openverse",
+                "provider": str(item.get("provider") or item.get("source") or "Openverse"),
+                "source_id": source_id,
+                "source_url": landing_url,
+                "downloaded_media_url": direct_url,
+                "title": title,
+                "creator": creator or None,
+                "creator_url": item.get("creator_url"),
+                "attribution": str(item.get("attribution") or "").strip() or None,
+                "license": license_name,
+                "license_url": license_url,
+                "commercial_use_state": commercial_state,
+                "rights_status": "license_metadata_present",
+                "rights_notice": "Openverse aggregates item-level license metadata; source terms and attribution stay attached to this production.",
+                "duration_seconds": round(duration, 3),
+                "bit_rate": item.get("bit_rate"),
+                "asset_sha256": file_sha256(path),
+                "path": str(path),
+            }
+            MEDIA_SOURCE_METADATA_BY_PATH[str(path.resolve())] = dict(record)
+            out.append(record)
+            if len(out) >= max(1, min(3, int(limit))):
+                break
+        except Exception as exc:
+            _media_debug("openverse-audio-download", exc)
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            continue
+    if out:
+        _media_success("openverse-audio", {"count": len(out), "query": str(query)[:180]})
+    return out
+
+
+def make_music(outdir: Path, seconds: float, query: str = "cinematic ambient instrumental soundtrack no vocals") -> Path:
     """Create an original, restrained cinematic underscore without external music dependency."""
     out = outdir / "music.m4a"
     s = max(1.0, float(seconds))
+    music_manifest_path = outdir / "music_source.json"
+    # Prefer a real, openly licensed instrumental master over a synthetic tone bed.
+    # One anonymous Openverse query is made per project; selected files are
+    # downloaded, probed and fully decoded before they are used.
+    tracks = _openverse_music_tracks(query, outdir, limit=3)
+    if tracks:
+        try:
+            input_args: List[Any] = []
+            filters: List[str] = []
+            track_labels: List[str] = []
+            segment_lengths: List[float] = []
+            for idx, track in enumerate(tracks):
+                input_args += ["-i", str(track["path"])]
+                seg = max(30.0, min(180.0, float(track["duration_seconds"]), s / max(1, len(tracks))))
+                segment_lengths.append(seg)
+                label = f"ov{idx}"
+                filters.append(
+                    f"[{idx}:a]atrim=duration={seg:.3f},asetpts=PTS-STARTPTS,"
+                    f"aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                    f"loudnorm=I=-25:TP=-5:LRA=10,"
+                    f"afade=t=in:st=0:d=1,"
+                    f"afade=t=out:st={max(0.0, seg - 1.0):.3f}:d=1[{label}]"
+                )
+                track_labels.append(f"[{label}]")
+            combined = track_labels[0]
+            combined_duration = segment_lengths[0]
+            for idx in range(1, len(track_labels)):
+                next_label = f"mix{idx}"
+                filters.append(f"{combined}{track_labels[idx]}acrossfade=d=2:c1=tri:c2=tri[{next_label}]")
+                combined = f"[{next_label}]"
+                combined_duration += segment_lengths[idx] - 2.0
+            loop_samples = max(1, int(combined_duration * 48000))
+            filters.append(
+                f"{combined}aloop=loop=-1:size={loop_samples},atrim=duration={s:.3f},"
+                f"asetpts=PTS-STARTPTS,afade=t=in:st=0:d=1,alimiter=limit=0.80[m]"
+            )
+            ffmpeg(
+                *input_args, "-filter_complex", ";".join(filters), "-map", "[m]",
+                "-t", f"{s:.3f}", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+                "-movflags", "+faststart", out, timeout=max(120, int(45 + s * 3)),
+            )
+            actual_duration = probe_duration(out)
+            if actual_duration < s - 0.75:
+                raise RuntimeError(f"licensed soundtrack shorter than requested: {actual_duration:.3f}/{s:.3f}s")
+            music_manifest = {
+                "schema": "ai-infinity-music-source.v1",
+                "method": "openverse_openly_licensed_tracks_crossfaded_and_arranged",
+                "query": str(query)[:240],
+                "requested_duration_seconds": s,
+                "actual_duration_seconds": round(actual_duration, 3),
+                "tracks": [{k: v for k, v in track.items() if k != "path"} for track in tracks],
+                "output_sha256": file_sha256(out),
+                "rights_status": "license_metadata_present",
+                "human_rights_review": "PENDING",
+                "truthful": True,
+            }
+            music_manifest_path.write_text(jdump(music_manifest), encoding="utf-8")
+            return out
+        except Exception as exc:
+            audit_event("", "openverse_music_render_fallback", {
+                "error": str(exc)[:600],
+                "candidate_track_count": len(tracks),
+                "truthful": True,
+            })
+    # Last resort: a disclosed synthetic underscore. It can keep preview work
+    # moving, but must not be described as a professionally composed score.
     # Four-bar style chord movement. The score is deliberately quiet beneath narration.
     seg = max(1.5, min(3.0, s / 6.0))
     chords = [
@@ -4787,7 +5584,106 @@ def make_music(outdir: Path, seconds: float) -> Path:
             "-af", "volume=0.025,lowpass=f=1800,afade=t=in:st=0:d=0.5,afade=t=out:st=" + str(max(0.5, s - 0.5)) + ":d=0.5",
             "-c:a", "aac", "-b:a", "128k", out, timeout=max(60, int(12 + s * 2))
         )
+    fallback_manifest = {
+        "schema": "ai-infinity-music-source.v1",
+        "method": "synthetic_procedural_chord_bed_fallback",
+        "query": str(query)[:240],
+        "requested_duration_seconds": s,
+        "actual_duration_seconds": round(probe_duration(out), 3) if out.is_file() else None,
+        "tracks": [],
+        "rights_status": "original_procedural_audio",
+        "quality_notice": "Synthetic chord-bed fallback; not a substitute for a professionally composed soundtrack.",
+        "reason": "No fully decodable, eligible, openly licensed Openverse soundtrack could be assembled.",
+        "output_sha256": file_sha256(out) if out.is_file() else None,
+        "human_rights_review": "PENDING",
+        "truthful": True,
+    }
+    music_manifest_path.write_text(jdump(fallback_manifest), encoding="utf-8")
     return out
+
+
+
+def _emergency_music_fallback(outdir: Path, seconds: float, reason: str) -> Path:
+    """Write an honest, low-quality emergency audio bed if normal music generation raises.
+
+    This is a continuity fallback, not a professionally composed soundtrack. Its
+    manifest intentionally records that limitation so downstream review cannot
+    mistake a technical audio file for a cleared creative score.
+    """
+    outdir.mkdir(parents=True, exist_ok=True)
+    duration = max(1.0, float(seconds))
+    out = outdir / "music.m4a"
+    fade_out_start = max(0.5, duration - 0.5)
+    ffmpeg(
+        "-f", "lavfi", "-i",
+        f"sine=frequency=196:sample_rate=48000:duration={duration:.3f}",
+        "-af",
+        "volume=0.025,lowpass=f=1800,"
+        f"afade=t=in:st=0:d=0.5,afade=t=out:st={fade_out_start:.3f}:d=0.5",
+        "-t", f"{duration:.3f}",
+        "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+        "-movflags", "+faststart", out,
+        timeout=max(60, int(12 + duration * 2)),
+    )
+    if not out.is_file() or out.stat().st_size <= 1024:
+        raise RuntimeError("Emergency procedural music fallback produced no valid-sized audio file.")
+    actual_duration = float(probe_duration(out))
+    duration_tolerance = max(0.75, min(3.0, duration * 0.002))
+    if actual_duration < duration - duration_tolerance:
+        raise RuntimeError(
+            "Emergency procedural music fallback is truncated: "
+            f"{actual_duration:.3f}s for {duration:.3f}s requested."
+        )
+    manifest = {
+        "schema": "ai-infinity-music-source.v1",
+        "method": "emergency_procedural_tone_bed_after_music_generation_failure",
+        "requested_duration_seconds": duration,
+        "actual_duration_seconds": round(actual_duration, 3),
+        "tracks": [],
+        "rights_status": "original_procedural_audio",
+        "quality_notice": (
+            "Emergency synthetic tone fallback; not a professionally composed soundtrack. "
+            "Human creative review is required and professional soundtrack quality is not verified."
+        ),
+        "reason": str(reason or "normal music generation failed")[:800],
+        "output_sha256": file_sha256(out),
+        "human_rights_review": "PENDING",
+        "fallback": True,
+        "truthful": True,
+    }
+    (outdir / "music_source.json").write_text(jdump(manifest), encoding="utf-8")
+    return out
+
+
+def _resolve_music_bed(outdir: Path, seconds: float, query: str, project_id: str) -> Path:
+    """Generate the normal programme music, with a bounded and explicitly degraded fallback."""
+    try:
+        result = Path(make_music(outdir, seconds, query=query))
+        if not result.is_file() or result.stat().st_size <= 1024:
+            raise RuntimeError("music generator returned a missing or empty soundtrack")
+        return result
+    except Exception as music_exc:
+        reason = str(music_exc)[:800] or type(music_exc).__name__
+        audit_event(project_id, "music_fallback_failed", {
+            "error": reason,
+            "requested_duration_seconds": float(seconds),
+            "truthful": True,
+        })
+        try:
+            fallback = _emergency_music_fallback(outdir, seconds, reason)
+        except Exception as fallback_exc:
+            raise RuntimeError(
+                "Music generation failed and the emergency procedural audio fallback "
+                f"could not be verified: {fallback_exc}"
+            ) from fallback_exc
+        audit_event(project_id, "music_fallback", {
+            "method": "emergency_procedural_tone_bed_after_music_generation_failure",
+            "quality_state": "DEGRADED",
+            "professional_score_verified": False,
+            "manifest": "music_source.json",
+            "truthful": True,
+        })
+        return fallback
 
 
 def make_sfx(outdir: Path, duration: float, index: int) -> Path:
@@ -4883,21 +5779,35 @@ def _video_scene(asset: Dict[str, Any], duration: float, out: Path, title: str) 
         src = asset["path"]
         escaped = str(out).replace("'", "'\\''")
         # Real motion video path: loop source, crop to 16:9, add subtle title label.
-        vf = "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,eq=contrast=1.02:saturation=1.03,drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='" + title.replace("'", "\\'")[:70] + "':x=75:y=915:fontsize=42:fontcolor=white"
+        vf = "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,eq=contrast=1.02:saturation=1.03,drawbox=x=45:y=865:w=1820:h=150:color={overlay_color}:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='" + title.replace("'", "\\'")[:70] + "':x=75:y=915:fontsize=42:fontcolor=white"
         ffmpeg("-stream_loop", "-1", "-i", src, "-t", duration, "-vf", vf, "-an", "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", out, timeout=240)
         return
     # Still/AI visual: generate true motion via zoom/pan rather than a static slide.
     src = asset["path"]
     frames = max(1, int(round(duration * 30)))
     title_escaped = title.replace("'", "\\'")[:70]
-    vf = f"scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,zoompan=z='min(zoom+0.0008,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s=1920x1080:fps=30,drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':x=75:y=915:fontsize=42:fontcolor=white"
+    vf = f"scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,zoompan=z='min(zoom+0.0008,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s=1920x1080:fps=30,drawbox=x=45:y=865:w=1820:h=150:color={overlay_color}:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':x=75:y=915:fontsize=42:fontcolor=white"
     ffmpeg("-loop", "1", "-i", src, "-t", duration, "-vf", vf, "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", out, timeout=240)
 
 
-def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, duration: float, out: Path, title: str, aspect_ratio: str = "16:9") -> None:
+def _render_scene(
+    asset: Dict[str, Any],
+    voice: Path,
+    music: Path,
+    sfx: Path,
+    duration: float,
+    out: Path,
+    title: str,
+    aspect_ratio: str = "16:9",
+    music_offset_seconds: float = 0.0,
+) -> None:
     """Render one moving scene with a predictable CPU cost on the free worker."""
     duration = max(0.5, float(duration))
-    title_escaped = str(title).replace("\\", "\\\\").replace("'", "\\'")[:70]
+    title_escaped = str(title or "").strip().replace("\\", "\\\\").replace("'", "\\'")[:70]
+    # Generic chapter headings are not titles. The caller passes only explicit
+    # on-screen copy; without it, keep the image clean and let the synchronized
+    # caption track carry narration. This avoids a permanent title bar on every shot.
+    overlay_color = "black@0.40" if title_escaped else "black@0.0"
     if FAST_MODE:
         ratio_dims = {
             "16:9": (1280, 720),
@@ -4932,7 +5842,7 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
             vf = (
                 f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
                 f"eq=contrast=1.02:saturation=1.04,scale={width}:{height}:flags=lanczos,fps=24,"
-                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color=black@0.48:t=fill,"
+                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color={overlay_color}:t=fill,"
                 f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
                 f"x={text_x}:y={text_y}:fontsize={font}:fontcolor=white"
             )
@@ -4948,7 +5858,7 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
                 f"crop={work_w}:{work_h}:x='(in_w-out_w)*(0.5-0.5*cos(PI*t/{duration}))':"
                 f"y='(in_h-out_h)*(0.5+0.5*sin(PI*t/{duration}))',"
                 f"scale={width}:{height}:flags=lanczos,eq=contrast=1.02:saturation=1.04,"
-                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color=black@0.38:t=fill,"
+                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color={overlay_color}:t=fill,"
                 f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
                 f"x={text_x}:y={text_y}:fontsize={font}:fontcolor=white"
             )
@@ -4973,7 +5883,7 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
             vf = (
                 f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
                 f"eq=contrast=1.02:saturation=1.03,scale={width}:{height}:flags=lanczos,fps={fps},"
-                f"drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,"
+                f"drawbox=x=45:y=865:w=1820:h=150:color={overlay_color}:t=fill,"
                 f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
                 f"x=75:y=915:fontsize={font}:fontcolor=white"
             )
@@ -4984,7 +5894,7 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
                 f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
                 f"zoompan=z='min(zoom+0.0008,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
                 f"d={frames}:s={work_w}x{work_h}:fps={fps},scale={width}:{height}:flags=lanczos,fps={fps},"
-                f"drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,"
+                f"drawbox=x=45:y=865:w=1820:h=150:color={overlay_color}:t=fill,"
                 f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
                 f"x=75:y=915:fontsize={font}:fontcolor=white"
             )
@@ -4993,7 +5903,17 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
         # Keep encoder buffering bounded on the free tier without changing the
         # actual 1080p output dimensions or codecs.
         preset, crf, ab = os.getenv("AI_INFINITY_VIDEO_PRESET", "veryfast"), "18", "192k"
-    args: List[Any] = visual_args + ["-i", voice, "-stream_loop", "-1", "-i", music, "-i", sfx,
+    try:
+        music_offset = max(0.0, float(music_offset_seconds))
+    except (TypeError, ValueError, OverflowError):
+        music_offset = 0.0
+    # Every scene must start the shared soundtrack at its actual programme
+    # offset. Starting music from zero on every scene creates obvious resets at
+    # every cut and is especially damaging in long-form documentaries.
+    args: List[Any] = visual_args + ["-i", voice, "-stream_loop", "-1"]
+    if music_offset > 0.0:
+        args += ["-ss", f"{music_offset:.3f}"]
+    args += ["-i", music, "-i", sfx,
         "-filter_complex", audio_filter, "-map", "0:v:0", "-map", "[a]", "-vf", vf, "-t", duration,
         "-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p",
         "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
@@ -5012,9 +5932,27 @@ def _scene_mix(video: Path, voice: Path, music: Path, sfx: Path, duration: float
 
 
 def concat_segments(paths: List[Path], out: Path) -> None:
+    """Join rendered scenes without copying independently primed AAC packets.
+
+    Each scene is encoded in its own FFmpeg invocation. Copy-concatenating those
+    packets can preserve differing AAC priming/timestamp state; the final decode
+    then fails even when each scene file individually opened successfully. Keep
+    the already-rendered H.264 video bitstream, but decode/re-encode the audio into
+    one continuous AAC stream before final mastering and programme verification.
+    """
+    if not paths:
+        raise ValueError("cannot assemble an empty scene list")
     manifest = out.with_suffix(".txt")
     manifest.write_text("".join(f"file '{str(p).replace(chr(39), chr(39)+chr(92)+chr(39)+chr(39))}'\n" for p in paths), encoding="utf-8")
-    ffmpeg("-f", "concat", "-safe", "0", "-i", manifest, "-c", "copy", "-movflags", "+faststart", out, timeout=600)
+    ffmpeg(
+        "-f", "concat", "-safe", "0", "-i", manifest,
+        "-map", "0:v:0", "-map", "0:a:0",
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+        "-movflags", "+faststart",
+        out,
+        timeout=600,
+    )
 
 
 def make_variants(master: Path, outdir: Path, chapters: List[Dict[str, Any]], title: str) -> List[Dict[str, Any]]:
@@ -5115,6 +6053,57 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
     # Short captions are intentionally split into multiple cues per scene. Validate
     # their timing/readability contract rather than requiring one cue per scene.
     expected_caption_cues = max(1, int((max(0.0, expected_voice) + 5.749) // 5.75))
+    # Source-motion requirements are explicit and auditable. A general render
+    # may still use labelled artwork, but the cinematic acceptance workflow sets
+    # this flag and must not mistake those illustrations for live-action footage.
+    require_source_visuals = (
+        str(os.getenv("AI_INFINITY_REQUIRE_SOURCE_VISUALS", "")).strip().lower() in {"1", "true", "yes"}
+    )
+    motion_source_keys = set()
+    for asset in (assets or []):
+        path_value = Path(str(asset.get("path") or ""))
+        source_url = str(asset.get("source_url") or "").strip()
+        license_name = str(asset.get("license") or "").strip()
+        license_url = str(asset.get("license_url") or asset.get("license_deed_url") or "").strip()
+        rights_state = str(asset.get("rights_status") or "").strip().lower()
+        if path_value.suffix.lower() not in {".mp4", ".mov", ".mkv", ".webm"}:
+            continue
+        if bool(asset.get("fallback")) or not source_url.startswith("https://"):
+            continue
+        # Footage counts towards the professional source gate only when its
+        # provider attribution and explicit licence evidence are present.
+        if not license_name or not license_url.startswith("https://"):
+            continue
+        if license_name.lower() in {"unknown", "not verified", "not_verified", "none"}:
+            continue
+        if rights_state in {"unknown", "review_required", "not_verified", "not_verified_review_required"}:
+            continue
+        # A source URL alone is not proof that the downloaded shot exists.
+        # Probe the actual file, then recompute its bytes' digest rather than
+        # trusting metadata supplied by the acquisition layer.
+        try:
+            if not path_value.is_file() or path_value.stat().st_size <= 20_000:
+                continue
+            source_probe = ffprobe_json(path_value)
+            source_streams = source_probe.get("streams") or []
+            source_video = next((row for row in source_streams if row.get("codec_type") == "video"), {})
+            source_width = int(source_video.get("width") or 0)
+            source_height = int(source_video.get("height") or 0)
+            source_seconds = float((source_probe.get("format") or {}).get("duration") or 0)
+            if not source_video or min(source_width, source_height) < 720 or source_seconds < 2.0:
+                continue
+            actual_digest = file_sha256(path_value).lower()
+            recorded_digest = str(asset.get("asset_sha256") or asset.get("sha256") or "").strip().lower()
+            if recorded_digest and recorded_digest != actual_digest:
+                continue
+            if len(actual_digest) != 64 or not re.fullmatch(r"[0-9a-f]{64}", actual_digest):
+                continue
+        except Exception:
+            continue
+        motion_source_keys.add(actual_digest)
+    fallback_visual_count = sum(bool(asset.get("fallback")) for asset in (assets or []))
+    minimum_motion_sources = max(3, int(len(chapters) * 0.70 + 0.9999))
+    maximum_fallback_visuals = max(1, int(len(chapters) * 0.15))
     checks = {
         "file_present": master.exists() and master.stat().st_size > 10000,
         "duration_nonzero": duration > 2,
@@ -5149,6 +6138,8 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
         "scene_count": len(chapters) >= (1 if SMOKE else (3 if FAST_MODE else 4)),
         "visual_assets_present": len(assets) >= len(chapters),
         "fallback_visual_used": any(bool(x.get("fallback")) for x in (assets or [])),
+        "required_source_motion_coverage": (not require_source_visuals) or len(motion_source_keys) >= minimum_motion_sources,
+        "fallback_visual_budget_ok": (not require_source_visuals) or fallback_visual_count <= maximum_fallback_visuals,
         "fallback_visual_policy_passed": all(
             (not bool(x.get("fallback"))) or (
                 isinstance(x.get("fallback_record"), dict)
@@ -5164,7 +6155,23 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
         "no_fake_slideshow_flag": True,
     }
     passed = all(bool(x) for k, x in checks.items() if k != "full_hd" or not FAST_MODE)
-    return {"passed": passed, "checks": checks, "duration_seconds": round(duration, 2), "resolution": [int(v.get("width") or 0), int(v.get("height") or 0)], "video_codec": v.get("codec_name"), "audio_codec": a.get("codec_name"), "file_size_bytes": master.stat().st_size if master.exists() else 0}
+    return {
+        "passed": passed,
+        "checks": checks,
+        "duration_seconds": round(duration, 2),
+        "resolution": [int(v.get("width") or 0), int(v.get("height") or 0)],
+        "video_codec": v.get("codec_name"),
+        "audio_codec": a.get("codec_name"),
+        "file_size_bytes": master.stat().st_size if master.exists() else 0,
+        "visual_source_coverage": {
+            "required": require_source_visuals,
+            "scene_count": len(chapters),
+            "distinct_verified_motion_sources": len(motion_source_keys),
+            "minimum_motion_sources": minimum_motion_sources,
+            "fallback_visual_count": fallback_visual_count,
+            "maximum_fallback_visuals": maximum_fallback_visuals,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -6168,7 +7175,12 @@ def _ensure_delivery_subtitle_track(source: Path, captions: Path, out: Path) -> 
     return out
 
 
-def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = False) -> Dict[str, Any]:
+def _normalize_delivery_loudness(
+    source: Path,
+    out: Path,
+    fast_mode: bool = False,
+    target_duration_seconds: Optional[float] = None,
+) -> Dict[str, Any]:
     """Master the actual delivered programme to a measurable dialogue-safe target.
 
     Scene-level normalization alone is insufficient: concatenation, duration
@@ -6196,10 +7208,30 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
     source_duration = float(probe_duration(source))
     if source_duration <= 0:
         raise RuntimeError("final loudness mastering cannot determine the programme duration")
+    try:
+        requested_duration = (
+            source_duration if target_duration_seconds is None else float(target_duration_seconds)
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("final delivery duration must be a finite positive number") from exc
+    if requested_duration <= 0 or requested_duration != requested_duration or requested_duration == float("inf"):
+        raise ValueError("final delivery duration must be a finite positive number")
+    # Later profile/subtitle muxes may add trailing packets even after the earlier
+    # duration-fitter passed. The requested programme duration remains authoritative
+    # at the very last mastering step, including audio padding/trimming.
     audio_filter = (
-        f"atrim=duration={source_duration:.3f},"
-        f"apad=whole_dur={source_duration:.3f},"
-        f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}"
+        # Scene concatenation can leave timestamp gaps or reordered AAC frames.
+        # asetpts=PTS-STARTPTS only shifts the clock; it preserves those gaps and
+        # can leave the mastered stream ~1 second shorter than the copied video.
+        # Resample with bounded async timestamp correction, then rebuild monotonic
+        # sample-based PTS before padding/trimming, loudness normalization and limiting.
+        "aresample=48000:async=1:first_pts=0,"
+        "asetpts=N/SR/TB,"
+        f"atrim=duration={requested_duration:.3f},"
+        f"apad=whole_dur={requested_duration:.3f},"
+        f"atrim=duration={requested_duration:.3f},"
+        f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra},"
+        "alimiter=limit=0.80:attack=5:release=50:level=false"
     )
     rate = "96k" if fast_mode else "192k"
     ffmpeg(
@@ -6217,6 +7249,10 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
         "-metadata:s:s:0", "language=eng",
         "-disposition:s:0", "default",
         "-movflags", "+faststart",
+        # Subtitle timestamps and AAC priming can extend format duration beyond
+        # the video programme. Cap the muxed deliverable at the measured source
+        # duration; we independently verify audio/video alignment below.
+        "-t", f"{requested_duration:.3f}",
         out,
         timeout=max(120, int(probe_duration(source) * (4 if fast_mode else 6))),
     )
@@ -6237,9 +7273,11 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
         int(output_video.get("width") or 0), int(output_video.get("height") or 0)
     ):
         raise RuntimeError("final loudness mastering unexpectedly changed video dimensions")
-    if abs(output_duration - source_duration) > 0.5:
+    if abs(output_duration - requested_duration) > 0.5:
         raise RuntimeError(
-            f"final loudness mastering changed duration from {source_duration:.3f}s to {output_duration:.3f}s"
+            "final loudness mastering violated the requested duration: "
+            f"{output_duration:.3f}s output vs {requested_duration:.3f}s target "
+            f"(input was {source_duration:.3f}s)"
         )
     output_audio_duration = float(output_audio.get("duration") or 0)
     if not output_audio_duration:
@@ -6262,6 +7300,7 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
         "target_true_peak_dbtp": target_tp,
         "target_loudness_range_lu": target_lra,
         "source_duration_seconds": round(source_duration, 3),
+        "requested_duration_seconds": round(requested_duration, 3),
         "output_duration_seconds": round(output_duration, 3),
         "audio_duration_seconds": round(output_audio_duration, 3),
         "audio_video_duration_match": True,
@@ -6272,13 +7311,266 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
     }
 
 
-def _max_scene_count(is_short: bool, fast_mode: bool, smoke: bool, explicitly_single_scene: bool) -> int:
-    """Bound rendering without reducing normal work to four long scene holds."""
+def _export_programme_audio_master(
+    source: Path,
+    out: Path,
+    target_duration_seconds: float,
+    fast_mode: bool = False,
+) -> Dict[str, Any]:
+    """Export the full programme mix with zero-based timestamps and exact runtime.
+
+    Some MP4s carry an audio start timestamp later than the video start. Extracting
+    the stream without resetting PTS can silently shorten the separate MP3 master.
+    Reset PTS, pad the actual mixed programme to the video runtime, and verify the
+    exported file that is included in the creator package.
+    """
+    source = Path(source)
+    out = Path(out)
+    try:
+        target = float(target_duration_seconds)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("programme audio target duration must be finite and positive") from exc
+    if target <= 0 or target != target or target == float("inf"):
+        raise ValueError("programme audio target duration must be finite and positive")
+    if not source.is_file() or source.stat().st_size <= 10_000:
+        raise RuntimeError("programme audio export requires a real completed programme video")
+
+    source_duration = float(probe_duration(source))
+    if source_duration <= 0:
+        raise RuntimeError("programme audio export cannot determine the video runtime")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.unlink(missing_ok=True)
+    # Reset stream timestamps, resample with gap correction, and build the
+    # programme duration on the audio stream itself. A silence-bed amix can
+    # report the shorter input duration on some mux/decoder combinations even
+    # when the container is 60s; apad after timestamp normalization is explicit.
+    # Loudness-normalize this separate downloadable master as well as the MP4.
+    target_i = float(os.getenv("AI_INFINITY_DELIVERY_TARGET_LUFS", "-16"))
+    target_tp = float(os.getenv("AI_INFINITY_DELIVERY_TRUE_PEAK_DBTP", "-1.5"))
+    target_lra = float(os.getenv("AI_INFINITY_DELIVERY_LRA", "11"))
+    if not (-20.0 <= target_i <= -14.0) or not (-3.0 <= target_tp <= -1.0) or not (5.0 <= target_lra <= 20.0):
+        raise ValueError("programme audio master loudness targets are outside safe delivery bounds")
+    audio_filter = (
+        "aresample=48000:async=1:first_pts=0,"
+        "asetpts=N/SR/TB,"
+        f"apad=whole_dur={target:.3f},"
+        f"atrim=duration={target:.3f},"
+        f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}"
+    )
+    ffmpeg(
+        "-i", source,
+        "-map", "0:a:0",
+        "-af", audio_filter,
+        "-vn",
+        "-t", f"{target:.3f}",
+        "-c:a", "libmp3lame",
+        "-q:a", "2",
+        "-ar", "48000",
+        "-ac", "2",
+        out,
+        timeout=max(120, int(max(source_duration, target) * (3 if fast_mode else 4))),
+    )
+    if not _valid_audio_file(out, minimum_peak_db=-45.0):
+        raise RuntimeError("programme audio master is invalid or effectively silent")
+    output_duration = float(probe_duration(out))
+    if abs(output_duration - target) > 1.0:
+        raise RuntimeError(
+            "programme audio master duration mismatch after timestamp reset and padding: "
+            f"{output_duration:.3f}s vs video {target:.3f}s"
+        )
+    return {
+        "status": "verified",
+        "source_duration_seconds": round(source_duration, 3),
+        "requested_duration_seconds": round(target, 3),
+        "output_duration_seconds": round(output_duration, 3),
+        "audio_filter": audio_filter,
+        "sha256": file_sha256(out),
+        "size_bytes": out.stat().st_size,
+        "truthful": True,
+    }
+
+
+def _max_scene_count(
+    is_short: bool,
+    fast_mode: bool,
+    smoke: bool,
+    explicitly_single_scene: bool,
+    explicit_launch: bool = False,
+    requested_duration_seconds: Optional[float] = None,
+) -> int:
+    """Select an editorial coverage budget from the requested programme duration.
+
+    A long-form programme must not be reduced to the 8- or 9-scene budget meant
+    for a short. FAST_MODE may change encoder settings, but it must never silently
+    shorten the user's requested runtime or the narrative coverage plan.
+    """
     if smoke or explicitly_single_scene:
         return 1
-    # Normal shorts have five planned beats; ordinary landscape work has eight.
-    # FAST_MODE changes encoder cost, not the narrative coverage requirement.
+    try:
+        duration = max(0.0, float(requested_duration_seconds or 0.0))
+    except (TypeError, ValueError, OverflowError):
+        duration = 0.0
+    if duration >= 120.0:
+        # Documentary/editorial coverage starts at about one shot per ten seconds.
+        # Bound the plan so a malformed request cannot create unbounded work.
+        return min(180, max(12, int((duration + 9.999) // 10.0)))
+    if explicit_launch and not is_short:
+        # Preserve all authored beats in the canonical short launch-film profile.
+        return 9
     return 5 if is_short else 8
+
+
+_LONGFORM_SHOT_TYPES = (
+    "wide establishing view",
+    "medium observational action",
+    "close detail with tactile texture",
+    "human reaction or point-of-view",
+    "moving environmental cutaway",
+    "process or hands-at-work insert",
+    "overhead or geometric composition",
+    "slow tracking or lateral movement",
+    "foreground-to-background depth shot",
+    "quiet transition image",
+)
+
+
+def _longform_narration_units(value: Any) -> List[str]:
+    """Split authored narration into ordered, non-invented, shot-sized units.
+
+    Preserve every source word and its order. Natural sentence boundaries are
+    preferred, but unusually long sentences are split near a clause boundary or
+    at a bounded word boundary so long-form output does not become a handful of
+    90-second shots. The writer, not this splitter, remains responsible for prose.
+    """
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return []
+    sentences = [x.strip() for x in re.split(r"(?<=[.!?؟。])\s+", text) if x.strip()]
+    if not sentences:
+        sentences = [text]
+    units: List[str] = []
+    for sentence in sentences:
+        words = sentence.split()
+        while len(words) > 24:
+            # Prefer a natural clause boundary between 15 and 24 words. If the
+            # sentence has none, split at 21 words and preserve token punctuation.
+            boundary = next(
+                (i + 1 for i in range(min(24, len(words)) - 1, 14, -1)
+                 if re.search(r"[,;:—]$", words[i])),
+                min(21, len(words) - 1),
+            )
+            boundary = max(1, min(boundary, len(words) - 1))
+            units.append(" ".join(words[:boundary]).strip())
+            words = words[boundary:]
+        if words:
+            units.append(" ".join(words).strip())
+    return [unit for unit in units if unit]
+
+
+
+def _pack_narration_units(units: List[str], count: int) -> List[str]:
+    """Pack neighbouring text units into balanced contiguous chunks without rewriting."""
+    values = [str(x).strip() for x in (units or []) if str(x).strip()]
+    if not values:
+        return []
+    groups = min(max(1, int(count)), len(values))
+    chunks: List[str] = []
+    cursor = 0
+    for slot in range(groups):
+        remaining_groups = groups - slot
+        remaining_units = len(values) - cursor
+        take = max(1, int((remaining_units + remaining_groups - 1) // remaining_groups))
+        chunks.append(" ".join(values[cursor:cursor + take]).strip())
+        cursor += take
+    return chunks
+
+
+def _expand_longform_chapters(
+    chapters: List[Dict[str, Any]],
+    target_seconds: float,
+    target_shot_count: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Expand narrative sections into distinct shot-level scenes for long-form work.
+
+    This preserves the authored narration in order, gives each shot a distinct
+    visual/camera intention, and does not invent new narration to fill runtime.
+    If a section does not contain enough meaningful narration units, it receives
+    fewer cuts instead of duplicating lines or creating empty TTS requests.
+    """
+    source = [dict(ch) for ch in (chapters or []) if isinstance(ch, dict)]
+    if not source:
+        return []
+    try:
+        target = max(0.0, float(target_seconds))
+    except (TypeError, ValueError, OverflowError):
+        target = 0.0
+    if target < 120.0:
+        return source
+    try:
+        shot_budget = int(target_shot_count or _max_scene_count(False, False, False, False, requested_duration_seconds=target))
+    except (TypeError, ValueError, OverflowError):
+        shot_budget = min(180, max(12, int((target + 9.999) // 10.0)))
+    shot_budget = min(180, max(len(source), shot_budget))
+    if len(source) >= shot_budget:
+        return _select_scene_coverage(source, shot_budget)
+
+    units_by_chapter = [_longform_narration_units(ch.get("narration")) for ch in source]
+    capacities = [max(1, len(units)) for units in units_by_chapter]
+    maximum_feasible = sum(capacities)
+    shot_budget = min(shot_budget, maximum_feasible)
+    if shot_budget <= len(source):
+        return source
+
+    weights: List[float] = []
+    for ch, units in zip(source, units_by_chapter):
+        try:
+            duration_weight = max(1.0, float(ch.get("duration") or ch.get("actual_duration") or 1.0))
+        except (TypeError, ValueError, OverflowError):
+            duration_weight = 1.0
+        word_weight = sum(len(re.findall(r"\b[\w’'-]+\b", part, flags=re.UNICODE)) for part in units) / 12.0
+        weights.append(max(duration_weight, word_weight, 1.0))
+
+    allocations = [1] * len(source)
+    while sum(allocations) < shot_budget:
+        eligible = [i for i in range(len(source)) if allocations[i] < capacities[i]]
+        if not eligible:
+            break
+        selected = max(eligible, key=lambda i: weights[i] / allocations[i])
+        allocations[selected] += 1
+
+    expanded: List[Dict[str, Any]] = []
+    for chapter_index, (chapter, units, count) in enumerate(zip(source, units_by_chapter, allocations), 1):
+        narration_chunks = _pack_narration_units(units, count)
+        if not narration_chunks:
+            narration_chunks = [str(chapter.get("narration") or "").strip()]
+        count = len(narration_chunks)
+        if count < 1:
+            continue
+        try:
+            chapter_duration = max(1.0, float(chapter.get("duration") or chapter.get("actual_duration") or target / len(source)))
+        except (TypeError, ValueError, OverflowError):
+            chapter_duration = target / len(source)
+        base_heading = str(chapter.get("heading") or chapter.get("title") or f"Section {chapter_index}").strip()
+        base_query = str(chapter.get("visual_query") or chapter.get("visual_search_subject") or base_heading).strip()
+        base_prompt = str(chapter.get("image_prompt") or base_query).strip()
+        base_overlay = str(chapter.get("on_screen") or "").strip()
+        for shot_index, narration in enumerate(narration_chunks, 1):
+            shot_type = _LONGFORM_SHOT_TYPES[(shot_index - 1) % len(_LONGFORM_SHOT_TYPES)]
+            shot = dict(chapter)
+            shot["heading"] = f"{base_heading} — {shot_type}"
+            shot["parent_chapter_heading"] = base_heading
+            shot["chapter_index"] = chapter_index
+            shot["shot_index_within_chapter"] = shot_index
+            shot["editorial_shot_type"] = shot_type
+            shot["narration"] = narration
+            shot["duration"] = chapter_duration / count
+            shot["visual_search_subject"] = base_query
+            shot["visual_query"] = f"{base_query}; {shot_type}; distinct composition, purposeful camera movement, story-relevant action"
+            shot["image_prompt"] = f"{base_prompt}; {shot_type}; cinematic composition, motivated movement, consistent visual identity, no repeated framing"
+            shot["on_screen"] = base_overlay if shot_index == 1 else ""
+            shot["longform_expansion"] = True
+            expanded.append(shot)
+    return expanded[:shot_budget]
 
 
 def _allocate_scene_durations(
@@ -6611,6 +7903,35 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 "truthful": True,
             })
 
+        # Reject underwritten long-form scripts before downloading assets or
+        # spending time on scene renders. The independent delivery gate requires
+        # at least 120 spoken words per minute; the planner aims above that floor.
+        nonverbal_request = (
+            req.get("narration_required") is False
+            or req.get("non_verbal") is True
+            or bool(re.search(
+                r"\b(?:no narration|without narration|music[- ]only|non[- ]verbal|silent film|no voice[- ]?over)\b",
+                str(req.get("objective") or req.get("topic") or req.get("title") or ""),
+                re.I,
+            ))
+        )
+        narrated_video = str(req.get("content_type") or "video").strip().lower() in {
+            "video", "short", "reel", "film", "documentary"
+        }
+        if float(req.get("duration") or 0) >= 120 and narrated_video and not nonverbal_request and not SMOKE:
+            required_spoken_words = int(float(req.get("duration") or 0) * 2.0 + 0.999)
+            planned_spoken_words = sum(
+                len(re.findall(r"\b[\w'-]+\b", str(chapter.get("narration") or "")))
+                for chapter in chapters if isinstance(chapter, dict)
+            )
+            if planned_spoken_words < required_spoken_words:
+                raise RuntimeError(
+                    "Long-form script preflight blocked before media generation: "
+                    f"{planned_spoken_words} spoken words for {float(req.get('duration') or 0):.0f}s; "
+                    f"at least {required_spoken_words} are required. The connected writer did not "
+                    "produce a complete script, so the system will not pad a short script across a long timeline."
+                )
+
         # Avoid burning generic planner labels such as "Hook" into the media.
         # Use the selected language's concise editorial overlay instead.
         generic_labels = {
@@ -6646,33 +7967,77 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             r"\b(single[- ]scene|single[- ]shot|one[- ]shot|one continuous shot|static shot|still[- ]image video|looping background)\b",
             brief_for_scene_policy, re.I
         ))
+        explicit_launch_profile = _is_explicit_ai_infinity_launch_brief(
+            str(req.get("objective") or req.get("topic") or req.get("title") or "")
+        )
+        original_chapter_count = len(chapters)
         max_chapters = _max_scene_count(
             is_short=is_short,
             fast_mode=FAST_MODE,
             smoke=SMOKE,
             explicitly_single_scene=explicitly_single_scene,
+            explicit_launch=explicit_launch_profile,
+            requested_duration_seconds=target,
         )
-        if FAST_MODE and not SMOKE:
-            target = min(target, 180 if is_short else 900)
-        chapters = _select_scene_coverage(chapters, max_chapters)
+        longform_expansion_applied = False
+        if target >= 120 and not SMOKE and not explicitly_single_scene:
+            # Preserve the complete narrative arc before expanding sections into
+            # shot-level coverage. Never silently truncate a long request to 8/9
+            # scenes or to a 15-minute ceiling in FAST_MODE.
+            chapters = _select_scene_coverage(chapters, min(len(chapters), max_chapters))
+            chapters = _expand_longform_chapters(chapters, float(target), max_chapters)
+            longform_expansion_applied = len(chapters) > original_chapter_count
+            max_chapters = max(1, len(chapters))
+        else:
+            chapters = _select_scene_coverage(chapters, max_chapters)
         # Allocate the runtime before rendering. Scene-level clamping after the
         # fact caused short jobs to render longer than requested, then trim the
         # video without trimming the captions to the same timeline.
         chapters = _allocate_scene_durations(chapters, float(target))
+        # Keep the persisted blueprint aligned with the storyboard actually sent
+        # to the renderer. Otherwise OTIO can load the original nine-scene plan
+        # after an eight-scene render and reference a nonexistent scene_09.mp4.
+        # Record selection explicitly rather than pretending any omitted beats
+        # were rendered; explicit launch storyboards are preserved at nine scenes.
+        plan["chapters"] = [dict(chapter) for chapter in chapters]
+        brief_fidelity = plan.get("brief_fidelity")
+        if isinstance(brief_fidelity, dict):
+            brief_fidelity["rendered_timecoded_scenes"] = len(chapters)
+            brief_fidelity["rendered_scene_selection_applied"] = len(chapters) < original_chapter_count
+            brief_fidelity["rendered_scene_expansion_applied"] = longform_expansion_applied
+            brief_fidelity["rendered_scene_selection_policy"] = (
+                "duration_aware_longform_shot_expansion"
+                if longform_expansion_applied
+                else "all_explicit_launch_beats_preserved"
+                if explicit_launch_profile and len(chapters) == original_chapter_count
+                else "bounded_evenly_spaced_narrative_coverage"
+            )
+            brief_fidelity["rendered_scene_durations_seconds"] = [
+                float(chapter["duration"]) for chapter in chapters
+            ]
+        _update_project(project_id, blueprint_json=jdump(plan))
         _stage(project_id, "production_ready", 22, total_scenes=len(chapters), current_scene=0)
 
         assets_meta: List[Dict[str, Any]] = []
+        # Keep local file paths in this internal-only list for media inspection.
+        # The exportable asset/provenance manifests intentionally omit host paths.
+        quality_assets_meta: List[Dict[str, Any]] = []
         scene_paths: List[Path] = []
         voice_provider = None
         voice_providers_by_scene: List[Dict[str, Any]] = []
         actual_total = 0.0
         # Shared music bed avoids repeatedly generating the same soundtrack.
-        music_seconds = max(12.0, min(600.0, float(target) + 12.0))
-        try:
-            shared_music = make_music(outdir, music_seconds)
-        except Exception as music_exc:
-            audit_event(project_id, "music_fallback_failed", {"error": str(music_exc)[:800]})
-            shared_music = _make_silent_voice(outdir, 9901, music_seconds)[0]
+        music_seconds = max(12.0, min(3600.0, float(target) + 12.0))
+        music_query = " ".join(
+            str(value)
+            for value in (
+                req.get("music_direction") or plan.get("music_direction") or plan.get("tone") or "",
+                plan.get("title") or topic,
+                "instrumental cinematic background music no vocals",
+            )
+            if str(value).strip()
+        )[:240]
+        shared_music = _resolve_music_bed(outdir, music_seconds, music_query, project_id)
         ai_video_enabled = os.getenv("AI_INFINITY_AI_VIDEO", "1").strip().lower() in {"1","true","yes","auto"}
         requested_ai_video_scenes = max(0, int(os.getenv("AI_INFINITY_AI_VIDEO_SCENES", "2")))
         # The free Render tier cannot safely host text-to-video model memory in the
@@ -6709,7 +8074,21 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 and abs(cached_scene_duration - expected_scene_duration) <= 0.35
             ):
                 if cached.get("duration"): ch["actual_duration"] = float(cached["duration"])
-                if cached.get("asset"): assets_meta.append(redact(cached["asset"]))
+                if isinstance(cached.get("asset"), dict):
+                    cached_asset = dict(cached["asset"])
+                    assets_meta.append(redact(cached_asset))
+                    candidates = sorted(
+                        candidate for candidate in outdir.glob(f"selected_visual_{i:02d}.*")
+                        if candidate.is_file()
+                    )
+                    fallback_path = outdir / f"procedural_visual_{i:02d}.png"
+                    cached_path = candidates[0] if candidates else (
+                        fallback_path if fallback_path.is_file() else None
+                    )
+                    quality_assets_meta.append({
+                        **cached_asset,
+                        "path": str(cached_path.resolve()) if cached_path else "",
+                    })
                 cached_voice_provider = str(cached.get("voice_provider") or "unknown")
                 voice_provider = voice_provider or cached_voice_provider
                 voice_providers_by_scene.append({"scene": i, "provider": cached_voice_provider, "resumed": True})
@@ -6760,7 +8139,20 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 fixture_id = str(req.get("_acceptance_fixture_id") or "")
                 if fixture_id == "cc0-recovery-illustration-v1":
                     scene_for_acquisition["_acceptance_fixture_id"] = fixture_id
-                asset = acquire_scene_asset(scene_for_acquisition, outdir, i, prefer_motion=(i <= max_ai_video_scenes), duration=scene_duration)
+                asset = acquire_scene_asset(
+                    scene_for_acquisition,
+                    outdir,
+                    i,
+                    # For long-form work, choose real moving footage ahead of stills
+                    # across the whole shot list. AI video generation remains bounded
+                    # by max_ai_video_scenes inside the acquisition adapter.
+                    prefer_motion=(
+                        i <= max_ai_video_scenes
+                        or explicit_launch_profile
+                        or (target >= 120 and not explicitly_single_scene and not SMOKE)
+                    ),
+                    duration=scene_duration,
+                )
             except Exception as asset_exc:
                 audit_event(project_id, "visual_source_unavailable", {"scene": i, "error": str(asset_exc)[:500]})
                 raise RuntimeError(f"scene {i}: professional visual source unavailable: {str(asset_exc)[:1600]}") from asset_exc
@@ -6772,6 +8164,12 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 asset_record["asset_sha256"] = None
                 asset_record["asset_size_bytes"] = 0
             assets_meta.append(redact(asset_record))
+            # Quality evaluation needs the exact media bytes, while the public
+            # asset metadata above stays free of host-local absolute paths.
+            quality_assets_meta.append({
+                **asset_record,
+                "path": str(Path(str(asset.get("path") or "")).resolve()),
+            })
             _save_asset(project_id, "visual", Path(asset["path"]), "video/mp4" if asset.get("kind") == "video" else "image/png", asset_record)
             try:
                 sfx = shared_sfx if FAST_MODE else make_sfx(outdir, ch["actual_duration"], i)
@@ -6779,7 +8177,12 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 audit_event(project_id, "sfx_fallback_failed", {"scene": i, "error": str(sfx_exc)[:600]})
                 sfx = shared_sfx
             mixed = outdir / f"scene_{i:02d}.mp4"
-            _render_scene(asset, voice, shared_music, sfx, ch["actual_duration"], mixed, str(ch.get("on_screen") or ch.get("heading") or topic), str(req.get("aspect_ratio") or "16:9"))
+            _render_scene(
+                asset, voice, shared_music, sfx, ch["actual_duration"], mixed,
+                str(ch.get("on_screen") or ""),
+                str(req.get("aspect_ratio") or "16:9"),
+                music_offset_seconds=max(0.0, actual_total - float(ch["actual_duration"])),
+            )
             scene_paths.append(mixed)
             checkpoint(project_id, f"scene_{i:04d}", {"scene":i,"path":str(mixed),"sha256":file_sha256(mixed) if mixed.exists() else None,"duration":ch.get("actual_duration"),"scene_signature":scene_signature,"voice_provider":provider,"asset":redact({k:v for k,v in asset.items() if k != "path"})})
             audit_event(project_id, "scene_completed", {"scene": i, "duration": ch.get("actual_duration"), "asset_source": asset.get("source"), "asset_kind": asset.get("kind")})
@@ -6887,7 +8290,9 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         # and exact-duration fitting. Preserve the video bitstream, so this adds no
         # extra video generation loss, and then verify the finished mix separately.
         mastered_final = outdir / "final_loudness_mastered.mp4"
-        loudness_master = _normalize_delivery_loudness(captioned, mastered_final, FAST_MODE)
+        loudness_master = _normalize_delivery_loudness(
+            captioned, mastered_final, FAST_MODE, target_duration_seconds=float(target)
+        )
         os.replace(mastered_final, captioned)
         final_duration_after_loudness = probe_duration(captioned)
         if abs(float(final_duration_after_loudness) - float(target)) > 1.0:
@@ -6927,19 +8332,14 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 raise RuntimeError("narration-only track is invalid or effectively silent")
 
             audio_master = outdir / "audio_master.mp3"
-            ffmpeg(
-                "-i", captioned, "-map", "0:a:0", "-vn",
-                "-c:a", "libmp3lame", "-q:a", "2", "-ar", "48000", "-ac", "2",
-                audio_master, timeout=max(120, int(probe_duration(captioned) * 4)),
-            )
-            if not _valid_audio_file(audio_master, minimum_peak_db=-45.0):
-                raise RuntimeError("programme audio master is invalid or effectively silent")
             video_seconds = float(probe_duration(captioned))
-            audio_seconds = float(probe_duration(audio_master))
-            if abs(audio_seconds - video_seconds) > 1.0:
-                raise RuntimeError(
-                    f"programme audio master duration mismatch: {audio_seconds:.3f}s vs video {video_seconds:.3f}s"
-                )
+            audio_master_export_report = _export_programme_audio_master(
+                captioned, audio_master, video_seconds, FAST_MODE
+            )
+            checkpoint(project_id, "programme_audio_master_verified", {
+                **audio_master_export_report,
+                "source_video_sha256": file_sha256(captioned),
+            })
         if True:
             article = outdir / "article.md"
             article_lines = [f"# {plan.get('title') or topic}", "", str(plan.get('hook') or ""), ""]
@@ -7075,7 +8475,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "generated_at": utc_iso(),
             "truthful": True,
         }), encoding="utf-8")
-        qc = extended_quality_check(captioned, chapters, captions, outdir, assets_meta)
+        qc = extended_quality_check(captioned, chapters, captions, outdir, quality_assets_meta)
 
         # Explicit professional delivery manifests required by the creator
         # contract. These are real records derived from the actual production
@@ -7185,7 +8585,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "visual_policy": "connected-ai-or-real-public-media-only; no-placeholder-video",
             "ai_provider": ai_provider, "voice_provider": voice_provider,
             "voice_providers_by_scene": voice_providers_by_scene,
-            "research": research, "quality": qc,
+            "research": research, "quality": qc, "audio_master_export": audio_master_export_report,
             "assets": assets_meta, "shorts": [{k: v for k, v in x.items() if k != "path"} for x in shorts],
             "self_upgrade": True, "truthful": True,
             "production_profile": _project_meta(project_id),

@@ -169,6 +169,42 @@ def test_otio_export_bundle_roundtrips_scene_order_trim_hashes_and_truth(tmp_pat
         assert restored["heading"] == original["heading"]
 
 
+def test_qc_review_omission_metadata_survives_otio_and_bundle_roundtrip(tmp_path: Path) -> None:
+    timeline, truth, project = _project(tmp_path)
+    timeline["review_export"] = {
+        "status": "partial_scene_master_review_only",
+        "complete": False,
+        "missing_scene_masters": ["scene_09.mp4"],
+        "included_scene_masters": ["scene_01.mp4", "scene_02.mp4"],
+        "publish_allowed": False,
+        "reason": "scene_09.mp4 was not rendered",
+    }
+    result = export_otio_bundle(tmp_path, "project-test-review-only", project, timeline, truth)
+
+    exported = __import__("opentimelineio").adapters.read_from_file(
+        result["timeline_path"], adapter_name="otio_json"
+    )
+    review_meta = (exported.metadata.get("ai_infinity") or {}).get("review_export")
+    # OTIO wraps nested metadata arrays in AnyVector, which is list-like but
+    # intentionally not equal to a native Python list; normalize before comparing.
+    normalized_review_meta = {
+        "status": str(review_meta["status"]),
+        "complete": bool(review_meta["complete"]),
+        "missing_scene_masters": list(review_meta["missing_scene_masters"]),
+        "included_scene_masters": list(review_meta["included_scene_masters"]),
+        "publish_allowed": bool(review_meta["publish_allowed"]),
+        "reason": str(review_meta["reason"]),
+    }
+    assert normalized_review_meta["complete"] is False
+    assert normalized_review_meta["missing_scene_masters"] == ["scene_09.mp4"]
+    assert normalized_review_meta["included_scene_masters"] == ["scene_01.mp4", "scene_02.mp4"]
+    assert normalized_review_meta["publish_allowed"] is False
+    with zipfile.ZipFile(result["bundle_path"]) as archive:
+        manifest = json.loads(archive.read("metadata/timeline-export-manifest.json"))
+        assert manifest["review_export"] == normalized_review_meta
+    assert result["review_export"] == normalized_review_meta
+
+
 def test_otio_import_rejects_path_traversal_and_remote_media(tmp_path: Path) -> None:
     timeline, truth, project = _project(tmp_path)
     result = export_otio_bundle(tmp_path, "project-test", project, timeline, truth)

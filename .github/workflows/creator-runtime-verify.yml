@@ -54,7 +54,7 @@ jobs:
           AI_INFINITY_FAST_MODE: "1"
         run: |
           set -euo pipefail
-          python -m py_compile main.py professional_creator_v2.py professional_creator_v2_timeline_patch.py professional_creator_fabric.py production_closure_3624.py studio_ultimate.py
+          python -m py_compile main.py professional_creator_v2.py professional_creator_v2_timeline_patch.py professional_creator_fabric.py production_closure_3624.py studio_ultimate.py tests/final_acceptance_suite.py tests/test_final_acceptance_reporting.py
           python - <<'PY'
           import os
           os.environ["AI_INFINITY_DATA_DIR"] = "/tmp/ai-infinity-ci"
@@ -96,7 +96,10 @@ jobs:
 
       - name: Verify professional closure regression tests
         run: |
-          python -m pytest -q tests/test_production_closure.py tests/test_production_fallback.py tests/test_professional_creator_system.py tests/test_project_state_backend.py
+          python -m pytest -q tests/test_production_closure.py tests/test_production_fallback.py tests/test_professional_creator_system.py tests/test_project_state_backend.py tests/test_cinematic_source_quality_gate.py tests/test_longform_production_planner.py tests/test_video_provider_availability.py tests/test_final_acceptance_reporting.py
+
+      - name: Compile standalone runtime evidence verifier
+        run: python -m py_compile scripts/verify_creator_runtime_evidence.py
 
       - name: Verify browser shell JavaScript syntax
         run: |
@@ -135,8 +138,19 @@ jobs:
           # Match the free Render memory envelope and preserve the container
           # after an early crash so the actual bootstrap logs remain available.
           docker rm -f ai-infinity-ci >/dev/null 2>&1 || true
+          # Bind-mount only this job's disposable state so the exact artifacts can
+          # be reviewed even if OOM kills/removes the producer container. This is
+          # ephemeral CI evidence, not a claim of durable production storage.
+          mkdir -p /tmp/ai-infinity-container-data
+          # The production image runs as UID 10001. Give that UID write access
+          # while retaining the runner group as readers, so project data survives
+          # container exit and can be copied into the review packet by the runner.
+          RUNNER_GID="$(id -g)"
+          sudo chown "10001:$RUNNER_GID" /tmp/ai-infinity-container-data
+          sudo chmod 2770 /tmp/ai-infinity-container-data
           docker run -d --name ai-infinity-ci --platform linux/amd64 \
             --memory=512m --memory-swap=512m \
+            -v /tmp/ai-infinity-container-data:/tmp/ai-infinity \
             -e AI_INFINITY_3601_BACKGROUND=false \
             -e AI_INFINITY_FAST_MODE=1 \
             -e AI_INFINITY_FFMPEG_THREADS=1 \
@@ -170,7 +184,11 @@ jobs:
           # a persisted malformed Start Command must not replace main:app.
           docker stop ai-infinity-ci >/dev/null
           docker rm ai-infinity-ci >/dev/null 2>&1 || true
-          docker run -d --rm --name ai-infinity-ci --platform linux/amd64 -e AI_INFINITY_3601_BACKGROUND=false -e AI_INFINITY_FAST_MODE=0 -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity -p 10000:10000 ai-infinity:ci "[sh,-c,exec uvicorn ai_infinity_app:app --host 0.0.0.0 --port 10000]"
+          docker run -d --rm --name ai-infinity-ci --platform linux/amd64 \
+            -v /tmp/ai-infinity-container-data:/tmp/ai-infinity \
+            -e AI_INFINITY_3601_BACKGROUND=false -e AI_INFINITY_FAST_MODE=0 \
+            -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity -p 10000:10000 ai-infinity:ci \
+            "[sh,-c,exec uvicorn ai_infinity_app:app --host 0.0.0.0 --port 10000]"
           ready=0
           for i in $(seq 1 20); do
             if curl -fsS http://127.0.0.1:10000/infinity/studio/system/readiness > /tmp/closure-readiness.json; then
@@ -214,7 +232,16 @@ jobs:
           # can diverge from the canonical main:app process.
           docker stop ai-infinity-ci >/dev/null
           docker rm ai-infinity-ci >/dev/null 2>&1 || true
-          docker run -d --rm --name ai-infinity-ci --platform linux/amd64             -e AI_INFINITY_3601_BACKGROUND=false             -e AI_INFINITY_FAST_MODE=0             -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity             -p 10000:10000 ai-infinity:ci
+          # Preserve the exited container until review artifacts have been copied.
+          # An OOM/worker crash must not auto-delete the only output filesystem.
+          docker run -d --name ai-infinity-ci --platform linux/amd64 \
+            -v /tmp/ai-infinity-container-data:/tmp/ai-infinity \
+            -e AI_INFINITY_3601_BACKGROUND=false \
+            -e AI_INFINITY_FAST_MODE=0 \
+            -e AI_INFINITY_REQUIRE_SOURCE_VISUALS=1 \
+            -e AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE=0 \
+            -e AI_INFINITY_DATA_DIR=/tmp/ai-infinity \
+            -p 10000:10000 ai-infinity:ci
           ready=0
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:10000/health >/tmp/restarted-health.json; then
@@ -274,6 +301,7 @@ jobs:
           test -n "$PROJECT_ID"
 
           status=""
+          stage=""
           for i in $(seq 1 240); do
             curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
               "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID" > /tmp/project.json
@@ -290,9 +318,23 @@ jobs:
           print(json.load(open("/tmp/project.json")).get("status",""))
           PY
           )
+            stage=$(python - <<'PY'
+          import json
+          print(json.load(open("/tmp/project.json")).get("stage",""))
+          PY
+          )
             case "$status" in
               completed|completed_with_qc_warnings) break ;;
-              failed|cancelled)
+              failed)
+                if [ "$stage" = "quality_control" ]; then
+                  echo "QC_FAILED_RENDER_AVAILABLE_FOR_REVIEW_EXPORT_ONLY"
+                  break
+                fi
+                cat /tmp/project.json
+                docker logs ai-infinity-ci || true
+                exit 1
+                ;;
+              cancelled)
                 cat /tmp/project.json
                 docker logs ai-infinity-ci || true
                 exit 1
@@ -300,14 +342,285 @@ jobs:
             esac
             sleep 2
           done
+          review_only=false
+          stage=$(python - <<'PY'
+          import json
+          print(json.load(open("/tmp/project.json")).get("stage",""))
+          PY
+          )
           case "$status" in
             completed|completed_with_qc_warnings) ;;
+            failed)
+              if [ "$stage" = "quality_control" ]; then
+                review_only=true
+              else
+                cat /tmp/project.json; docker logs ai-infinity-ci || true; exit 1
+              fi
+              ;;
             *) cat /tmp/project.json; docker logs ai-infinity-ci || true; exit 1 ;;
           esac
 
+          # A successful real render still gets a controlled QC-failed export test:
+          # temporarily mark the persisted project row as QC-failed, keep all real
+          # rendered scene masters untouched, exercise export + import, then restore
+          # the original state. A naturally QC-failed render stays failed and is not
+          # silently promoted by this test.
+          export_review_test=false
+          original_status="$status"
+          original_stage="$stage"
+          if [ "$review_only" != "true" ]; then
+            docker exec -i ai-infinity-ci python - "$PROJECT_ID" <<'PY'
+          import sys
+          import studio_ultimate as studio
+          pid = sys.argv[1]
+          p = studio._get_project(pid)
+          assert p and p.get("status") in {"completed", "completed_with_qc_warnings"}, p
+          root = studio._project_dir(pid)
+          expected = int(p.get("total_scenes") or 0)
+          masters = [x for x in root.glob("scene_*.mp4") if x.is_file() and x.stat().st_size > 0]
+          assert (root / "final.mp4").is_file() and expected > 0 and len(masters) >= expected, {
+          "root": str(root), "expected": expected, "masters": len(masters)
+          }
+          studio._update_project(pid, status="failed", stage="quality_control", error="CI_CONTROLLED_QC_FAILURE_FOR_REAL_MEDIA_REVIEW_EXPORT_TEST")
+          print("CONTROLLED_QC_FAILED_EXPORT_STATE_READY", pid, len(masters))
+          PY
+            export_review_test=true
+          fi
+          
+          otio_http=$(curl -sS -o /tmp/otio-export.json -w "%{http_code}" \
+            -c /tmp/cookies.txt -b /tmp/cookies.txt -X POST \
+            "http://127.0.0.1:10000/infinity/pro2/project/$PROJECT_ID/timeline/otio/export" || true)
+          cat /tmp/otio-export.json || true
+          if [ "$otio_http" != "200" ]; then
+            echo "OTIO export failed with HTTP ${otio_http:-unavailable}"
+            exit 1
+          fi
+          echo "OPEN_TIMELINE_IO_REVIEW_EXPORT_ENDPOINT_PASS"
+          
+          python - <<'PY'
+          import json
+          x=json.load(open("/tmp/otio-export.json"))
+          assert x.get("status") == "exported", x
+          assert x.get("truth_verified") is False, x
+          assert x.get("human_review_status") == "PENDING" and x.get("requires_human_review") is True, x
+          assert x.get("truthful") is True, x
+          for key in ("timeline", "bundle"):
+              item=x.get(key) or {}
+              assert item.get("name") and len(item.get("sha256") or "") == 64, (key,item)
+              assert item.get("download_url","").startswith("/infinity/studio/project/"), (key,item)
+          open("/tmp/otio-export-names.json","w").write(json.dumps({
+              "timeline_name":x["timeline"]["name"], "bundle_name":x["bundle"]["name"]
+          }, indent=2))
+          print("OTIO_EXPORT_RESPONSE_TRUTH_GATE_PASS", x["scene_count"], x["truth_state"])
+          PY
+          OTIO_NAME=$(python -c 'import json;print(json.load(open("/tmp/otio-export-names.json"))["timeline_name"])')
+          BUNDLE_NAME=$(python -c 'import json;print(json.load(open("/tmp/otio-export-names.json"))["bundle_name"])')
+          curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
+            "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/asset/$OTIO_NAME" -o /tmp/review-project.otio
+          curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
+            "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/asset/$BUNDLE_NAME" -o /tmp/review-timeline-bundle.zip
+          
+          OTIO_CONTROLLED_QC_FAILURE_TEST="$export_review_test" python - <<'PY'
+          import hashlib, json, os, zipfile
+          from pathlib import Path, PurePosixPath
+          import opentimelineio as otio
+          pid=json.load(open("/tmp/create-response.json"))["project_id"]
+          response=json.load(open("/tmp/otio-export.json"))
+          root=Path("/tmp/ai-infinity-container-data/creator_studio")/pid
+          timeline_path=Path("/tmp/review-project.otio")
+          bundle_path=Path("/tmp/review-timeline-bundle.zip")
+          for path, item in ((timeline_path,response["timeline"]),(bundle_path,response["bundle"])):
+              actual=hashlib.sha256(path.read_bytes()).hexdigest()
+              assert actual == item["sha256"], {"path":str(path),"expected":item["sha256"],"actual":actual}
+          timeline=otio.adapters.read_from_file(str(timeline_path), adapter_name="otio_json")
+          assert isinstance(timeline, otio.schema.Timeline), type(timeline)
+          info=timeline.metadata.get("ai_infinity") or {}
+          assert info.get("truth_verified") is False and info.get("publish_allowed_by_quality_gate") is False, info
+          assert info.get("human_review_status") == "PENDING", info
+          video_tracks=[t for t in timeline.tracks if isinstance(t,otio.schema.Track) and t.kind==otio.schema.TrackKind.Video]
+          assert len(video_tracks)==1, len(video_tracks)
+          checked=[]
+          with zipfile.ZipFile(bundle_path) as archive:
+              assert archive.testzip() is None, "portable media bundle has a corrupt ZIP member"
+              names=set(archive.namelist())
+              assert "project.otio" in names, sorted(names)[:40]
+              timeline_bytes=archive.read("project.otio")
+              assert hashlib.sha256(timeline_bytes).hexdigest() == hashlib.sha256(timeline_path.read_bytes()).hexdigest()
+              for item in video_tracks[0]:
+                  if isinstance(item,otio.schema.Gap):
+                      continue
+                  assert isinstance(item,otio.schema.Clip), type(item)
+                  ref=item.media_reference
+                  assert isinstance(ref,otio.schema.ExternalReference), type(ref)
+                  member="media/"+PurePosixPath(ref.target_url).name
+                  assert member in names, {"member":member,"target":ref.target_url}
+                  meta=ref.metadata.get("ai_infinity") or {}
+                  digest=hashlib.sha256(archive.read(member)).hexdigest()
+                  assert digest == meta.get("sha256"), {"member":member,"expected":meta.get("sha256"),"actual":digest}
+                  local=root/PurePosixPath(ref.target_url).name
+                  assert local.is_file() and hashlib.sha256(local.read_bytes()).hexdigest()==digest, str(local)
+                  checked.append({"member":member,"sha256":digest,"size_bytes":local.stat().st_size})
+              assert any("media/audio_master.mp3" in name for name in names), "programme audio missing from portable bundle"
+          assert checked, "OTIO did not reference any rendered scene master"
+          proof={"status":"PASS_REVIEW_EXPORT_MEDIA_INSPECTION","project_id":pid,
+                 "controlled_qc_failure_test":os.getenv("OTIO_CONTROLLED_QC_FAILURE_TEST") == "true","truth_verified":info.get("truth_verified"),
+                 "publish_allowed_by_quality_gate":info.get("publish_allowed_by_quality_gate"),
+                 "scene_count":response.get("scene_count"),"referenced_scene_masters":checked,
+                 "timeline_sha256":response["timeline"]["sha256"],"bundle_sha256":response["bundle"]["sha256"],
+                 "bundle_size_bytes":bundle_path.stat().st_size,"human_review_status":response.get("human_review_status"),
+                 "truthful":True}
+          Path("/tmp/otio-review-export-proof.json").write_text(json.dumps(proof,indent=2)+"\n")
+          print("OTIO_BUNDLE_CRC_TIMELINE_SCENE_HASHES_AND_AUDIO_PASS",json.dumps(proof,sort_keys=True))
+          PY
+          curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
+            -H 'content-type: application/vnd.opentimelineio+json' --data-binary @/tmp/review-project.otio \
+            "http://127.0.0.1:10000/infinity/pro2/project/$PROJECT_ID/timeline/otio/import" > /tmp/otio-import.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          pid=json.load(open("/tmp/create-response.json"))["project_id"]
+          export=json.load(open("/tmp/otio-export.json"))
+          x=json.load(open("/tmp/otio-import.json"))
+          assert x.get("status") == "imported" and x.get("project_id") == pid, x
+          assert x.get("truth_verified") is False and x.get("truthful") is True and x.get("render_required") is True, x
+          rows=(x.get("timeline") or {}).get("scenes") or []
+          assert len(rows) == int(export.get("scene_count") or 0), {"expected":export.get("scene_count"),"actual":len(rows)}
+          root=Path("/tmp/ai-infinity-container-data/creator_studio")/pid
+          for row in rows:
+              asset=row.get("source_asset") or ""
+              path=root/asset
+              assert asset.startswith("scene_") and path.is_file() and path.stat().st_size > 0, {"asset":asset,"path":str(path)}
+          open("/tmp/otio-import-proof.json","w").write(json.dumps({
+              "status":"PASS_OTIO_API_IMPORT_RELOAD","project_id":pid,"scene_count":len(rows),
+              "render_required":x.get("render_required"),"truth_verified":x.get("truth_verified"),
+              "all_scene_masters_present":True,"truthful":x.get("truthful")},indent=2)+"\n")
+          print("OTIO_REIMPORT_API_PASS",len(rows),"render_required",x.get("render_required"))
+          PY
+          
+          if [ "$export_review_test" = "true" ]; then
+            docker exec -i ai-infinity-ci python - "$PROJECT_ID" "$original_status" "$original_stage" <<'PY'
+          import sys
+          import studio_ultimate as studio
+          pid, status, stage = sys.argv[1:4]
+          assert status in {"completed", "completed_with_qc_warnings"}, status
+          studio._update_project(pid, status=status, stage=stage, error="", progress=100.0)
+          p=studio._get_project(pid)
+          assert p and p.get("status")==status and p.get("stage")==stage, p
+          print("RESTORED_ORIGINAL_PROJECT_STATE_AFTER_QC_EXPORT_TEST",pid,status,stage)
+          PY
+          fi
+          
+          
           curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
             "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/artifacts" > /tmp/artifacts.json
           cat /tmp/artifacts.json
+
+          # Produce an explicit evidence record for both branches: a naturally
+          # QC-failed project, or a completed render temporarily put behind the
+          # QC-failed state to exercise the review-export endpoint. The export
+          # sub-gate is never mistaken for overall production acceptance.
+          if [ "$review_only" != "true" ]; then
+            python - "$PROJECT_ID" "$export_review_test" "$original_status" "$original_stage" "$review_only" <<'PY'
+          import hashlib, json, sys, zipfile
+          from pathlib import Path
+          pid, controlled, original_status, original_stage, review_only = sys.argv[1:6]
+          root = Path("/tmp/ai-infinity-container-data/creator_studio") / pid
+          response = json.load(open("/tmp/otio-export.json", encoding="utf-8"))
+          imported = json.load(open("/tmp/otio-import-proof.json", encoding="utf-8"))
+          timeline_item = response.get("timeline") or {}
+          bundle_item = response.get("bundle") or {}
+          timeline_path = root / timeline_item.get("name", "")
+          bundle_path = root / bundle_item.get("name", "")
+          assert response.get("status") == "exported", response
+          assert response.get("truth_verified") is False and response.get("requires_human_review") is True, response
+          assert response.get("human_review_status") == "PENDING" and response.get("truthful") is True, response
+          assert timeline_path.is_file() and bundle_path.is_file(), {"timeline": str(timeline_path), "bundle": str(bundle_path)}
+          timeline_sha = hashlib.sha256(timeline_path.read_bytes()).hexdigest()
+          bundle_sha = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+          assert timeline_sha == timeline_item.get("sha256"), {"expected": timeline_item.get("sha256"), "actual": timeline_sha}
+          assert bundle_sha == bundle_item.get("sha256"), {"expected": bundle_item.get("sha256"), "actual": bundle_sha}
+          with zipfile.ZipFile(bundle_path) as archive:
+              assert archive.testzip() is None
+              names = set(archive.namelist())
+              assert "project.otio" in names
+              assert hashlib.sha256(archive.read("project.otio")).hexdigest() == timeline_sha
+          assert imported.get("status") == "PASS_OTIO_API_IMPORT_RELOAD", imported
+          assert imported.get("truth_verified") is False and imported.get("render_required") is True and imported.get("all_scene_masters_present") is True and imported.get("truthful") is True, imported
+          proof = {
+              "status": "PASS_REVIEW_EXPORT_AND_RELOAD_SUBGATE",
+              "project_id": pid,
+              "project_status_during_export": "failed",
+              "failure_stage_during_export": "quality_control",
+              "controlled_qc_failure_test": controlled == "true",
+              "original_project_status": original_status,
+              "original_project_stage": original_stage,
+              "naturally_qc_failed_review_only": review_only == "true",
+              "truth_state": response.get("truth_state"),
+              "truth_verified": response.get("truth_verified"),
+              "human_review_status": response.get("human_review_status"),
+              "timeline_sha256": timeline_sha,
+              "bundle_sha256": bundle_sha,
+              "bundle_size_bytes": bundle_path.stat().st_size,
+              "import_reload": imported,
+              "review_export": response.get("review_export"),
+              "publish_allowed": False,
+              "acceptance_pass": False,
+              "truthful": True
+          }
+          Path("/tmp/otio-review-export-proof.json").write_text(json.dumps(proof, indent=2) + "\n", encoding="utf-8")
+          print("OTIO_REVIEW_EXPORT_AND_RELOAD_SUBGATE_PASS", json.dumps(proof, sort_keys=True))
+          PY
+          fi
+
+          if [ "$review_only" = "true" ]; then
+            # A render that fails creative QC must never pass acceptance, but the
+            # actual completed scene masters must remain exportable for review.
+            # Keep the review export evidence, then exit non-zero so the failed
+            # quality gate remains visible in CI.
+            curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
+              "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/verify" > /tmp/verify.json || true
+            cat /tmp/verify.json || true
+            python - <<'PY'
+          import hashlib, json, os, zipfile
+          from pathlib import Path
+          pid = json.load(open("/tmp/create-response.json"))["project_id"]
+          response = json.load(open("/tmp/otio-export.json")) if os.path.getsize("/tmp/otio-export.json") else {}
+          root = Path("/tmp/ai-infinity-container-data/creator_studio") / pid
+          assert response.get("status") == "exported", {"otio_http": os.getenv("OTIO_HTTP"), "response": response}
+          timeline = response.get("timeline") or {}
+          bundle = response.get("bundle") or {}
+          timeline_path = root / timeline.get("name", "")
+          bundle_path = root / bundle.get("name", "")
+          assert timeline_path.is_file() and timeline_path.stat().st_size > 0, {"kind": "timeline", "path": str(timeline_path)}
+          assert bundle_path.is_file() and bundle_path.stat().st_size > 0, {"kind": "bundle", "path": str(bundle_path)}
+          timeline_hash = hashlib.sha256(timeline_path.read_bytes()).hexdigest()
+          bundle_hash = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+          assert timeline_hash == timeline.get("sha256"), {"kind": "timeline", "expected": timeline.get("sha256"), "actual": timeline_hash}
+          assert bundle_hash == bundle.get("sha256"), {"kind": "bundle", "expected": bundle.get("sha256"), "actual": bundle_hash}
+          with zipfile.ZipFile(bundle_path) as archive:
+              bad = archive.testzip()
+              assert bad is None, {"bad_member": bad}
+              assert "project.otio" in archive.namelist()
+          Path("/tmp/otio-review-export-proof.json").write_text(json.dumps({
+              "status": "PASS_REVIEW_EXPORT_ONLY",
+              "project_id": pid,
+              "project_status": "failed",
+              "failure_stage": "quality_control",
+              "controlled_qc_failure_test": False,
+              "review_export": response.get("review_export"),
+              "publish_allowed": False,
+              "truth_state": response.get("truth_state"),
+              "truth_verified": response.get("truth_verified"),
+              "human_review_status": response.get("human_review_status"),
+              "timeline_sha256": response["timeline"]["sha256"],
+              "bundle_sha256": response["bundle"]["sha256"],
+              "bundle_size_bytes": response["bundle"]["size_bytes"],
+              "acceptance_pass": False
+          }, indent=2) + "\n", encoding="utf-8")
+          print("OTIO_REVIEW_EXPORT_HASH_AND_ZIP_PASS — CREATIVE_QC_STILL_FAILED")
+          PY
+            exit 1
+          fi
           curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt \
             "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/verify" > /tmp/verify.json
           cat /tmp/verify.json
@@ -371,6 +684,7 @@ jobs:
           cat /tmp/final-probe.json
           python - <<'PY'
           import json
+          import subprocess
           x=json.load(open("/tmp/final-probe.json"))
           duration=float((x.get("format") or {}).get("duration") or 0)
           streams=x.get("streams") or []
@@ -397,17 +711,46 @@ jobs:
           mkdir -p "$REVIEW"
           docker ps -a > "$REVIEW/docker_containers.txt" 2>&1
           docker logs ai-infinity-ci > "$REVIEW/docker_runtime.log" 2>&1
-          for path in /tmp/request.json /tmp/create-response.json /tmp/project.json /tmp/artifacts.json /tmp/verify.json /tmp/reality-proof.json /tmp/final-probe.json; do
+          for path in /tmp/request.json /tmp/create-response.json /tmp/project.json /tmp/artifacts.json /tmp/verify.json /tmp/reality-proof.json /tmp/final-probe.json /tmp/otio-export.json /tmp/otio-import.json /tmp/otio-import-proof.json /tmp/otio-export-warning.txt /tmp/otio-review-export-proof.json; do
             if [ -s "$path" ]; then cp "$path" "$REVIEW/"; fi
           done
-          if [ -s /tmp/create-response.json ] && [ -s /tmp/cookies.txt ] && curl -fsS http://127.0.0.1:10000/health >/dev/null 2>&1; then
+          if [ -s /tmp/create-response.json ]; then
             PROJECT_ID=$(python -c 'import json; print(json.load(open("/tmp/create-response.json")).get("project_id",""))')
-            if [ -n "$PROJECT_ID" ]; then
-              for name in final.mp4 thumbnail.jpg audio_master.mp3 narration_only.mp3 captions.srt script.md sources.json manifest.json production_manifest.json rights_manifest.json visual_rights.json provenance.json package.zip timeline.otio; do
-                curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/asset/$name" -o "$REVIEW/$name" 2>/dev/null
-                if [ $? -ne 0 ]; then rm -f "$REVIEW/$name"; fi
-              done
+            if [[ "$PROJECT_ID" =~ ^studio_[A-Za-z0-9_-]+$ ]]; then
               printf '%s\n' "$PROJECT_ID" > "$REVIEW/project_id.txt"
+              # The host bind mount is still available after docker exits/OOMs.
+              CONTAINER_ROOT="/tmp/ai-infinity-container-data/creator_studio/$PROJECT_ID"
+              if [ -d "$CONTAINER_ROOT" ]; then
+                for name in final.mp4 master.mp4 thumbnail.jpg audio_master.mp3 narration_only.mp3 captions.srt script.md sources.json manifest.json production_manifest.json rights_manifest.json visual_rights.json provenance.json asset_registry.json production_truth.json timeline.json; do
+                  if [ -s "$CONTAINER_ROOT/$name" ]; then cp -- "$CONTAINER_ROOT/$name" "$REVIEW/$name"; fi
+                done
+                # Preserve the exact selected visual bytes so the reviewer packet can
+                # independently recompute hashes, not merely repeat manifest claims.
+                for asset_path in "$CONTAINER_ROOT"/selected_visual_* "$CONTAINER_ROOT"/procedural_visual_* "$CONTAINER_ROOT"/pexels_launch_video_*.mp4; do
+                  if [ -f "$asset_path" ] && [ ! -L "$asset_path" ] && [ -s "$asset_path" ]; then
+                    cp -- "$asset_path" "$REVIEW/$(basename "$asset_path")"
+                  fi
+                done
+                PACKAGE_PATH=$(find "$CONTAINER_ROOT" -maxdepth 1 -type f -name 'package.zip' -print -quit)
+                if [ -n "$PACKAGE_PATH" ]; then cp -- "$PACKAGE_PATH" "$REVIEW/package.zip"; fi
+                NAMED_PACKAGE=$(find "$CONTAINER_ROOT" -maxdepth 1 -type f -iname '*creator-package*.zip' -print -quit)
+                if [ -n "$NAMED_PACKAGE" ]; then cp -- "$NAMED_PACKAGE" "$REVIEW/named_creator_package.zip"; fi
+                OTIO_PATH=$(find "$CONTAINER_ROOT" -maxdepth 1 -type f -iname '*.otio' -print -quit)
+                if [ -n "$OTIO_PATH" ]; then cp -- "$OTIO_PATH" "$REVIEW/timeline.otio"; fi
+                OTIO_BUNDLE=$(find "$CONTAINER_ROOT" -maxdepth 1 -type f -iname 'timeline-export*.zip' -print -quit)
+                if [ -n "$OTIO_BUNDLE" ]; then cp -- "$OTIO_BUNDLE" "$REVIEW/timeline-export.zip"; fi
+              else
+                echo "Review-only host-mounted project directory was not created; no final media was substituted." > "$REVIEW/review_export_warning.txt"
+              fi
+              # Collect remaining accessible metadata only as a fallback; a failed
+              # gated public download is never misrepresented as a successful export.
+              for name in audio_master.mp3 narration_only.mp3 captions.srt script.md sources.json manifest.json production_manifest.json rights_manifest.json visual_rights.json provenance.json; do
+                if [ ! -s "$REVIEW/$name" ] && [ -s /tmp/cookies.txt ] && curl -fsS http://127.0.0.1:10000/health >/dev/null 2>&1; then
+                  curl -fsS -c /tmp/cookies.txt -b /tmp/cookies.txt "http://127.0.0.1:10000/infinity/studio/project/$PROJECT_ID/asset/$name" -o "$REVIEW/$name" 2>/dev/null || rm -f "$REVIEW/$name"
+                fi
+              done
+            else
+              echo "Creator returned an invalid project identifier; review-only export aborted." > "$REVIEW/review_export_warning.txt"
             fi
           fi
           if [ -s "$REVIEW/final.mp4" ]; then
@@ -417,86 +760,12 @@ jobs:
             ffmpeg -hide_banner -loglevel error -i "$REVIEW/final.mp4" -vf "fps=1/5,scale=480:270,tile=4x3" -frames:v 1 "$REVIEW/contact_sheet.jpg" 2>"$REVIEW/contact_sheet_error.txt"
             ffmpeg -hide_banner -i "$REVIEW/final.mp4" -af ebur128=peak=true -f null - 2>"$REVIEW/audio_loudness.txt"
           fi
-          python - <<'PY'
-          import hashlib, json
-          from pathlib import Path
-          root=Path("/tmp/ai-infinity-brand-film-review")
-          media=root/"final.mp4"
-          probe={}
-          if (root/"ffprobe.json").exists():
-              try: probe=json.loads((root/"ffprobe.json").read_text(encoding="utf-8"))
-              except Exception: probe={}
-          streams=probe.get("streams",[])
-          v=next((s for s in streams if s.get("codec_type")=="video"),{})
-          a=next((s for s in streams if s.get("codec_type")=="audio"),{})
-          fmt=probe.get("format",{})
-          files=[]
-          for p in sorted(root.rglob("*")):
-              if p.is_file() and p.name not in {"integrity_manifest.json"}:
-                  h=hashlib.sha256()
-                  with p.open("rb") as f:
-                      for chunk in iter(lambda:f.read(1024*1024),b""): h.update(chunk)
-                  files.append({"path":str(p.relative_to(root)),"size_bytes":p.stat().st_size,"sha256":h.hexdigest()})
-          integrity={
-            "truthful":True,"generator":"AI Infinity real container workflow (GitHub Actions)",
-            "project_id":(root/"project_id.txt").read_text().strip() if (root/"project_id.txt").exists() else None,
-            "media_available":media.is_file(),
-            "duration_seconds":float(fmt.get("duration") or 0) if fmt else None,
-            "width":v.get("width"),"height":v.get("height"),
-            "video_codec":v.get("codec_name"),"audio_codec":a.get("codec_name"),
-            "video_stream_present":bool(v),"audio_stream_present":bool(a),
-            "full_decode":"PASS" if (root/"full_decode_status.txt").exists() and (root/"full_decode_status.txt").read_text().strip()=="PASS" else "NOT_VERIFIED_OR_FAILED",
-            "contact_sheet_available":(root/"contact_sheet.jpg").is_file(),
-            "captions_available":(root/"captions.srt").is_file(),
-            "sources_evidence_available":(root/"sources.json").is_file(),
-            "rights_or_visual_rights_evidence_available":any((root/n).is_file() for n in ("rights_manifest.json","visual_rights.json")),
-            "editable_timeline_available":(root/"timeline.otio").is_file(),
-            "human_creative_review":"PENDING",
-            "files":files
-          }
-          (root/"integrity_manifest.json").write_text(json.dumps(integrity,indent=2,sort_keys=True)+"\n",encoding="utf-8")
-          missing=[]
-          for label,names in [("final MP4",["final.mp4"]),("thumbnail",["thumbnail.jpg"]),("captions",["captions.srt"]),("sources",["sources.json"]),("rights evidence",["rights_manifest.json","visual_rights.json"])]:
-              if not any((root/n).exists() for n in names): missing.append(label)
-          duration=integrity["duration_seconds"]
-          spec="PASS" if integrity["media_available"] and duration is not None and abs(duration-60.0)<=0.15 and v.get("width")==1920 and v.get("height")==1080 and integrity["full_decode"]=="PASS" else "REVIEW_REQUIRED"
-          notes=[
-            "# AI Infinity — ONE IDEA. INFINITE WORLDS. | Human Review Packet",
-            "",
-            "## Evidence source",
-            "Generated by the real AI Infinity application inside the current GitHub Actions Docker runtime via /infinity/divine/create; this is CI-hosted production, not a live Render deployment.",
-            "",
-            "## Technical target check",
-            f"- 60-second / 1920×1080 target: **{spec}**",
-            f"- Actual duration: {duration} seconds",
-            f"- Actual resolution: {v.get('width')}×{v.get('height')}",
-            f"- Video codec: {v.get('codec_name')}; audio codec: {a.get('codec_name')}",
-            f"- Full decode: {integrity['full_decode']}",
-            f"- Contact sheet: {'available' if integrity['contact_sheet_available'] else 'not available'}",
-            "",
-            "## Creative and rights review",
-            "- Human creative review: **PENDING — not yet reviewed or approved**",
-            "- Inspect the first 4 seconds, scene variation, story continuity, typography, pacing and emotional payoff.",
-            "- Verify voice provider from genuine production evidence; do not infer neural voice from a voice name.",
-            "- Check narration clarity, music balance, caption synchronization, loudness and ending.",
-            "- Verify sources, creator, source URL, licence, attribution and provenance for each external asset.",
-            "- If rights, provider, provenance, recovery or quality evidence is missing or uncertain, retain REVIEW_REQUIRED.",
-            "",
-            "## Missing items (automatically detected)",
-            *(["- None of the required media is missing from the basic review packet."] if not missing else [f"- Missing: {', '.join(missing)}"]),
-            "",
-            "## Files and integrity",
-            "integrity_manifest.json lists only files actually collected, with SHA-256 hashes, sizes and stream metadata.",
-            "",
-            "## Remaining release gates",
-            "- Live Render deployment remains blocked while the configured service is suspended.",
-            "- Durable object storage PUT→HEAD→GET→SHA and restart/fresh-instance recovery must be verified separately.",
-            "- Human/native-language creative review and rights acceptance remain open until an authorized reviewer completes them."
-          ]
-          (root/"human_review_packet.md").write_text("\n".join(notes)+"\n",encoding="utf-8")
-          print(json.dumps({"review_packet":str(root/"human_review_packet.md"),"integrity_manifest":str(root/"integrity_manifest.json"),"spec_gate":spec,"duration_seconds":duration,"resolution":[v.get("width"),v.get("height")],"missing":missing},indent=2))
-          PY
-          cd "$REVIEW" && zip -qr /tmp/AI_Infinity_ONE_IDEA_INFINITE_WORLDS_human_review.zip .
+          python -m py_compile scripts/verify_creator_runtime_evidence.py
+          python scripts/verify_creator_runtime_evidence.py
+          # The quick-review packet contains the final QC summary and contact sheet,
+          # not duplicate source footage or nested delivery bundles. Those are uploaded
+          # as separate artifacts below for independent inspection and hash verification.
+          cd "$REVIEW" && zip -qr /tmp/AI_Infinity_ONE_IDEA_INFINITE_WORLDS_human_review.zip . -x 'final.mp4' 'master.mp4' 'selected_visual_*' 'procedural_visual_*' 'pexels_launch_video_*.mp4' 'package.zip' 'named_creator_package.zip' 'timeline-export*.zip'
           echo "Brand-film evidence collection completed; review gates are recorded in the packet."
       - name: Upload standalone production closure evidence
         if: always()
@@ -510,12 +779,77 @@ jobs:
             /tmp/verify.json
             /tmp/reality-proof.json
             /tmp/final-probe.json
-            /tmp/final.mp4
-            /tmp/thumbnail.jpg
+            /tmp/otio-export.json
+            /tmp/otio-import.json
+            /tmp/otio-import-proof.json
+            /tmp/otio-export-warning.txt
+            /tmp/otio-review-export-proof.json
             /tmp/AI_Infinity_ONE_IDEA_INFINITE_WORLDS_human_review.zip
-            /tmp/ai-infinity-brand-film-review/**
-            /tmp/ai-infinity-real-smoke/**/*.json
-            /tmp/ai-infinity-real-smoke/**/*.md
+            /tmp/ai-infinity-brand-film-review/human_review_packet.md
+            /tmp/ai-infinity-brand-film-review/integrity_manifest.json
+            /tmp/ai-infinity-brand-film-review/ffprobe.json
+            /tmp/ai-infinity-brand-film-review/ffprobe_error.txt
+            /tmp/ai-infinity-brand-film-review/full_decode.log
+            /tmp/ai-infinity-brand-film-review/full_decode_status.txt
+            /tmp/ai-infinity-brand-film-review/contact_sheet.jpg
+            /tmp/ai-infinity-brand-film-review/contact_sheet_error.txt
+            /tmp/ai-infinity-brand-film-review/audio_loudness.txt
+            /tmp/ai-infinity-brand-film-review/review_export_warning.txt
+          if-no-files-found: warn
+
+      - name: Upload final film and review deliverables
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-infinity-one-idea-film-deliverables
+          compression-level: 0
+          path: |
+            /tmp/ai-infinity-brand-film-review/final.mp4
+            /tmp/ai-infinity-brand-film-review/thumbnail.jpg
+            /tmp/ai-infinity-brand-film-review/audio_master.mp3
+            /tmp/ai-infinity-brand-film-review/narration_only.mp3
+            /tmp/ai-infinity-brand-film-review/captions.srt
+            /tmp/ai-infinity-brand-film-review/script.md
+            /tmp/ai-infinity-brand-film-review/sources.json
+            /tmp/ai-infinity-brand-film-review/manifest.json
+            /tmp/ai-infinity-brand-film-review/production_manifest.json
+            /tmp/ai-infinity-brand-film-review/rights_manifest.json
+            /tmp/ai-infinity-brand-film-review/visual_rights.json
+            /tmp/ai-infinity-brand-film-review/provenance.json
+            /tmp/ai-infinity-brand-film-review/asset_registry.json
+            /tmp/ai-infinity-brand-film-review/production_truth.json
+          if-no-files-found: warn
+
+      - name: Upload complete creator package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-infinity-creator-package
+          compression-level: 0
+          path: /tmp/ai-infinity-brand-film-review/package.zip
+          if-no-files-found: warn
+
+      - name: Upload editable timeline and portable media bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-infinity-editable-timeline-bundle
+          compression-level: 0
+          path: |
+            /tmp/ai-infinity-brand-film-review/timeline.otio
+            /tmp/ai-infinity-brand-film-review/timeline-export.zip
+          if-no-files-found: warn
+
+      - name: Upload source media for independent hash verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-infinity-source-media-hash-evidence
+          compression-level: 0
+          path: |
+            /tmp/ai-infinity-brand-film-review/selected_visual_*
+            /tmp/ai-infinity-brand-film-review/procedural_visual_*
+            /tmp/ai-infinity-brand-film-review/pexels_launch_video_*.mp4
           if-no-files-found: warn
 
       - name: Stop test container
