@@ -54,7 +54,7 @@ jobs:
           AI_INFINITY_FAST_MODE: "1"
         run: |
           set -euo pipefail
-          python -m py_compile main.py professional_creator_v2.py professional_creator_v2_timeline_patch.py professional_creator_fabric.py production_closure_3624.py studio_ultimate.py
+          python -m py_compile main.py professional_creator_v2.py professional_creator_v2_timeline_patch.py professional_creator_fabric.py production_closure_3624.py studio_ultimate.py tests/final_acceptance_suite.py tests/test_final_acceptance_reporting.py
           python - <<'PY'
           import os
           os.environ["AI_INFINITY_DATA_DIR"] = "/tmp/ai-infinity-ci"
@@ -96,7 +96,7 @@ jobs:
 
       - name: Verify professional closure regression tests
         run: |
-          python -m pytest -q tests/test_production_closure.py tests/test_production_fallback.py tests/test_professional_creator_system.py tests/test_project_state_backend.py tests/test_cinematic_source_quality_gate.py tests/test_longform_production_planner.py tests/test_video_provider_availability.py
+          python -m pytest -q tests/test_production_closure.py tests/test_production_fallback.py tests/test_professional_creator_system.py tests/test_project_state_backend.py tests/test_cinematic_source_quality_gate.py tests/test_longform_production_planner.py tests/test_video_provider_availability.py tests/test_final_acceptance_reporting.py
 
       - name: Compile standalone runtime evidence verifier
         run: python -m py_compile scripts/verify_creator_runtime_evidence.py
