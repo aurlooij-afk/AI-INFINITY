@@ -238,7 +238,13 @@ def _model_fingerprint(manifest: dict[str, Any]) -> str:
         else:
             st = path.stat()
             values.append((rel, st.st_size, st.st_mtime_ns))
-    payload = {"files": values, "terms_acknowledged": _truthy(os.getenv("AI_INFINITY_WAN_MODEL_TERMS_ACKNOWLEDGED"))}
+    manifest_path = MODEL_DIR / MANIFEST_NAME
+    manifest_sha = _sha256(manifest_path) if manifest_path.is_file() and not manifest_path.is_symlink() else "missing"
+    payload = {
+        "manifest_sha256": manifest_sha,
+        "files": values,
+        "terms_acknowledged": _truthy(os.getenv("AI_INFINITY_WAN_MODEL_TERMS_ACKNOWLEDGED")),
+    }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
