@@ -75,6 +75,13 @@ services:
         sync: false
       - key: REMOTION_RENDER_URL
         sync: false
+      # Optional separately hosted open-source Wan2.2 GPU worker.
+      # No GPU is provisioned by this web service; only set these after a private,
+      # authenticated worker is independently deployed and verified.
+      - key: AI_INFINITY_WAN_WORKER_URL
+        sync: false
+      - key: AI_INFINITY_WAN_WORKER_TOKEN
+        sync: false
       - key: B2_ENDPOINT
         sync: false
       - key: B2_BUCKET
