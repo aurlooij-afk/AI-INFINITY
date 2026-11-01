@@ -49,8 +49,11 @@ def _db_fixture(tmp_path: Path, monkeypatch):
                 candidate_id TEXT, reviewer TEXT, score REAL, decision TEXT,
                 report_json TEXT, created_at REAL
             );
-            INSERT INTO pg_shots VALUES(
-                'shot-test','project-test','Opening shot',5.0,'A clear voice line',
+            INSERT INTO pg_shots(
+                shot_id, project_id, seq, purpose, duration, narration,
+                visual_prompt, metadata, status, winner_candidate_id
+            ) VALUES(
+                'shot-test','project-test',1,'Opening shot',5.0,'A clear voice line',
                 'A cinematic opening','{}','planned',NULL
             );
             INSERT INTO pg_candidates(
