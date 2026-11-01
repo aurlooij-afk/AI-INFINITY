@@ -44,6 +44,10 @@ services:
       # Optional external production connectors. Leave empty until authorized.
       - key: RUNWAYML_API_SECRET
         sync: false
+      # Runway is a paid metered generation API. Keep it disabled until the owner
+      # explicitly authorizes billable provider usage; key presence alone is not consent.
+      - key: AI_INFINITY_RUNWAY_PAID_USAGE_ACK
+        value: "false"
       # Optional Google AI Studio Free Tier writer. No billing is enabled by this Blueprint;
       # the owner must provide a Free Tier key and explicitly acknowledge data-use terms.
       - key: GEMINI_API_KEY
