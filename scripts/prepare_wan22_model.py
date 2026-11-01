@@ -47,7 +47,7 @@ def sha256_file(path: Path) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Prepare the verified Wan2.2-TI2V-5B model for AI Infinity")
     parser.add_argument("--model-dir", required=True, type=Path)
-    parser.add_argument("--minimum-free-gib", type=float, default=45.0)
+    parser.add_argument("--minimum-free-gib", type=float, default=55.0)
     args = parser.parse_args()
 
     model_dir = args.model_dir.expanduser().resolve()
@@ -90,14 +90,19 @@ def main() -> int:
     )
 
     files = []
-    for rel in REQUIRED_FILES:
-        path = (model_dir / rel).resolve()
-        try:
-            path.relative_to(model_dir)
-        except ValueError as exc:
-            raise RuntimeError(f"Unsafe model path: {rel}") from exc
+    required_missing = [rel for rel in REQUIRED_FILES if not (model_dir / rel).is_file()]
+    if required_missing:
+        raise RuntimeError("Required Wan2.2 model files are missing: " + ", ".join(required_missing))
+    # Hash every regular file in the actual pinned snapshot, not only the main
+    # weights. This includes tokenizer/config assets used by the upstream
+    # inference runtime and prevents an unverified sidecar from being swapped.
+    for path in sorted(model_dir.rglob("*")):
         if not path.is_file() or path.is_symlink():
-            raise RuntimeError(f"Required Wan2.2 model file is missing or symlinked: {rel}")
+            continue
+        rel_path = path.relative_to(model_dir)
+        if any(part == ".cache" for part in rel_path.parts) or path.name == MANIFEST_NAME:
+            continue
+        rel = rel_path.as_posix()
         files.append({
             "path": rel,
             "size_bytes": path.stat().st_size,
