@@ -185,6 +185,13 @@ def _source_state() -> dict[str, Any]:
         if remote.returncode != 0 or origin not in allowed:
             result["reason"] = "Wan2.2 code origin is not the official Wan-Video/Wan2.2 repository"
             return result
+        dirty = subprocess.run(
+            ["git", "-C", str(SOURCE_DIR), "status", "--porcelain"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+        if dirty.returncode != 0 or (dirty.stdout or "").strip():
+            result["reason"] = "official Wan2.2 source checkout has local modifications"
+            return result
         revision = subprocess.run(
             ["git", "-C", str(SOURCE_DIR), "rev-parse", "HEAD"],
             capture_output=True, text=True, timeout=5, check=False,
@@ -219,7 +226,8 @@ def _model_fingerprint(manifest: dict[str, Any]) -> str:
         else:
             st = path.stat()
             values.append((rel, st.st_size, st.st_mtime_ns))
-    return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
+    payload = {"files": values, "terms_acknowledged": _truthy(os.getenv("AI_INFINITY_WAN_MODEL_TERMS_ACKNOWLEDGED"))}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
 def _model_state(force: bool = False) -> dict[str, Any]:
@@ -703,10 +711,19 @@ def _run_job(job: dict[str, Any]) -> None:
             partial.unlink(missing_ok=True)
         except Exception:
             pass
-        _set_job(
-            job_id, status="failed",
-            error=f"{type(exc).__name__}: {str(exc)[:1800]}",
-        )
+        # A graceful service shutdown is recoverable: leave the job in running
+        # state so startup can deterministically requeue it. Other failures are
+        # terminal and remain visible to Creator Studio.
+        if STOP.is_set():
+            _set_job(
+                job_id, status="running",
+                error="Worker shutdown interrupted inference; startup recovery will retry this job.",
+            )
+        else:
+            _set_job(
+                job_id, status="failed",
+                error=f"{type(exc).__name__}: {str(exc)[:1800]}",
+            )
 
 
 def _worker_loop() -> None:
