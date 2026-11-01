@@ -374,3 +374,13 @@ def test_research_evidence_profile_does_not_count_bibliographic_placeholders_as_
     assert profile["substantive_excerpt_count"] == 0
     assert profile["metadata_only_count"] == 3
     assert profile["truthful"] is True
+
+
+def test_openalex_abstract_order():
+    index = {"evidence": [4], "A": [0], "well-grounded": [2], "documentary": [1], "requires": [3], "sources.": [5]}
+    assert studio_ultimate._reconstruct_openalex_abstract(index) == "A documentary well-grounded requires evidence sources."
+
+
+def test_openalex_incomplete_abstract_is_rejected():
+    assert studio_ultimate._reconstruct_openalex_abstract({"first": [0], "second": [2], "distant": [20]}) == ""
+    assert studio_ultimate._reconstruct_openalex_abstract(None) == ""
