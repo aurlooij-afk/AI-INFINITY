@@ -63,7 +63,7 @@ def sync(pid):
         ON CONFLICT(project_id) DO UPDATE SET brief_sha=excluded.brief_sha,status=excluded.status,stage=excluded.stage,progress=excluded.progress,updated_at=excluded.updated_at""",
         (pid,p.get("user_id"),sha(brief),p.get("status"),p.get("stage") or "intent",float(p.get("progress") or 0),t))
         chapters=plan(p).get("chapters") or plan(p).get("scenes") or []
-        for i,ch in enumerate(chapters[:60],1):
+        for i,ch in enumerate(chapters[:360],1):
             if not isinstance(ch,dict):continue
             sid=f"shot_{pid[:12]}_{i:03d}"
             c.execute("""INSERT INTO pg_shots(shot_id,project_id,seq,purpose,duration,narration,visual_prompt,status,metadata,updated_at)
