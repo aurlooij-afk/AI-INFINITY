@@ -1854,7 +1854,7 @@ def _readiness(user_id: str, request: Any) -> Dict[str, Any]:
             "tts": local_tts,
             "captions": True,
             "timeline": True,
-            "persistent_queue": True,
+            "persistent_queue": bool(persistence.get("persistent")),
         },
         "connections": configured,
         "worker": {
