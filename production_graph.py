@@ -188,7 +188,12 @@ def process(job):
         else:raise RuntimeError("unsupported production-graph provider/job")
         with LOCK,db() as c:c.execute("UPDATE pg_jobs SET status='completed',result_json=?,updated_at=? WHERE job_id=?",(jd(result),now(),jid))
     except Exception as e:
-        with LOCK,db() as c:c.execute("UPDATE pg_jobs SET status='failed',error=?,updated_at=? WHERE job_id=?",(str(e)[:3000],now(),jid))
+        message = f"{type(e).__name__}: {str(e)}"[:3000]
+        candidate_id = str(d.get("candidate_id") or "")
+        with LOCK,db() as c:
+            c.execute("UPDATE pg_jobs SET status='failed',error=?,updated_at=? WHERE job_id=?",(message,now(),jid))
+            if candidate_id:
+                c.execute("UPDATE pg_candidates SET status='failed',error=?,updated_at=? WHERE candidate_id=?",(message,now(),candidate_id))
 def worker():
     global WORKER_STARTED
     WORKER_STARTED=True;r=redis_client()
