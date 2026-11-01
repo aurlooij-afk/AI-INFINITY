@@ -183,9 +183,11 @@ def tech(path):
     size_ok = path.stat().st_size > 1000
     checks = {"file_present": True, "size_ok": size_ok, "audio_optional": True}
     ffprobe = shutil.which("ffprobe")
-    if not ffprobe:
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffprobe or not ffmpeg_bin:
         return {"score": 0, "decision": "technical_unavailable",
-                "checks": {**checks, "ffprobe_available": False},
+                "checks": {**checks, "ffprobe_available": bool(ffprobe),
+                           "ffmpeg_available": bool(ffmpeg_bin)},
                 "creative_approval": "NOT_EVALUATED"}
     if path.suffix.lower() not in {".mp4", ".mov", ".webm", ".m4v", ".mkv"}:
         return {"score": 0, "decision": "technical_reject",
@@ -207,18 +209,25 @@ def tech(path):
         has_video = bool(video)
         has_duration = duration > 0
         hd = max(width, height) >= 1280 and min(width, height) >= 720
+        decode = subprocess.run(
+            [ffmpeg_bin, "-v", "error", "-i", str(path), "-f", "null", "-"],
+            capture_output=True, text=True, timeout=120, check=False,
+        )
+        decode_ok = decode.returncode == 0
         checks.update({
-            "ffprobe_available": True, "supported_video_container": True,
-            "video": has_video, "audio": bool(audio), "duration": has_duration,
-            "duration_seconds": round(duration, 3), "width": width, "height": height,
-            "hd_resolution": hd,
+            "ffprobe_available": True, "ffmpeg_available": True,
+            "supported_video_container": True, "video": has_video,
+            "audio": bool(audio), "audio_optional": True,
+            "duration": has_duration, "duration_seconds": round(duration, 3),
+            "width": width, "height": height, "hd_resolution": hd,
+            "full_decode": decode_ok,
         })
         # Video models commonly emit silent clips. Requiring an embedded audio
         # stream would reject valid video-only candidates before the separate
         # narration/music mix stage can run.
-        score = (10 * bool(path.is_file()) + 10 * size_ok + 35 * has_video
-                 + 20 * has_duration + 20 * hd + 5 * bool(audio))
-        if size_ok and has_video and has_duration and hd:
+        score = (10 * bool(path.is_file()) + 10 * size_ok + 30 * has_video
+                 + 15 * has_duration + 20 * hd + 15 * decode_ok)
+        if size_ok and has_video and has_duration and hd and decode_ok:
             decision = "technical_pass"
         elif has_video and has_duration:
             decision = "technical_review"
@@ -345,6 +354,76 @@ def select_for_editor(cid, user, project_id):
         "editor_insertion": "NOT_IMPLEMENTED", "truthful": True,
     }
 
+def selected_candidate_asset(project_id, scene_index, requested_duration):
+    """Resolve a creator-selected native video candidate for the canonical render path."""
+    ensure()
+    try:
+        index = int(scene_index)
+    except (TypeError, ValueError):
+        return None
+    with LOCK, db() as c:
+        shot = c.execute(
+            "SELECT shot_id,winner_candidate_id,status FROM pg_shots WHERE project_id=? AND seq=?",
+            (project_id, index),
+        ).fetchone()
+        if not shot or not shot["winner_candidate_id"]:
+            return None
+        candidate = c.execute(
+            "SELECT * FROM pg_candidates WHERE candidate_id=? AND project_id=? AND shot_id=?",
+            (shot["winner_candidate_id"], project_id, shot["shot_id"]),
+        ).fetchone()
+    if not candidate or candidate["status"] != "selected_for_editor" or shot["status"] != "selected_for_editor":
+        raise RuntimeError("selected shot candidate state is inconsistent; refusing a fallback visual")
+
+    raw_path = Path(candidate["asset_path"] or "")
+    if raw_path.is_symlink():
+        raise RuntimeError("selected generated candidate is a symlink; refusing to use it")
+    path = raw_path.resolve()
+    allowed_root = (Path(os.getenv("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity")) / "production-jobs").resolve()
+    try:
+        path.relative_to(allowed_root)
+    except ValueError as exc:
+        raise RuntimeError("selected generated candidate is outside the production-job asset directory") from exc
+    if not path.is_file() or path.suffix.lower() != ".mp4":
+        raise RuntimeError("selected generated candidate media is missing or unsupported")
+
+    report = tech(path)
+    if report.get("decision") != "technical_pass":
+        raise RuntimeError("selected generated candidate no longer passes media decode/HD checks")
+    media_duration = float((report.get("checks") or {}).get("duration_seconds") or 0)
+    try:
+        target_duration = float(requested_duration)
+    except (TypeError, ValueError):
+        target_duration = 0.0
+    if target_duration <= 0 or media_duration + 0.25 < target_duration:
+        raise RuntimeError(
+            f"selected generated clip is {media_duration:.3f}s but this scene requires "
+            f"{target_duration:.3f}s; regenerate a sufficiently long shot or revise the scene duration"
+        )
+
+    return {
+        "kind": "video",
+        "path": str(path),
+        "source": "provider_generated_video",
+        "provider": str(candidate["provider"] or ""),
+        "model": str(candidate["model"] or ""),
+        "source_url": str(candidate["source_url"] or ""),
+        "candidate_id": str(candidate["candidate_id"]),
+        "generation_method": "native_ai_video_generation",
+        "quality_tier": "native_ai_generated_video",
+        "license": "provider_terms_not_independently_verified",
+        "license_url": "",
+        "rights_status": "REVIEW_REQUIRED",
+        "commercial_use_state": "UNKNOWN_REVIEW_REQUIRED",
+        "attribution": "provider_terms_to_be_checked",
+        "duration_seconds": media_duration,
+        "technical_report": report,
+        "creative_approval": "PENDING",
+        "truthful": True,
+    }
+
+
+
 def install():
     global PATCHED
     if PATCHED:return
@@ -359,6 +438,34 @@ def install():
                 ON CONFLICT(project_id) DO UPDATE SET status=excluded.status,stage=excluded.stage,progress=excluded.progress,updated_at=excluded.updated_at""",(pid,(p or {}).get("user_id"),sha((p or {}).get("request_json")),str((p or {}).get("status") or "running"),name,float(progress),now()))
             except Exception:pass
         m._stage=stage
+    if not hasattr(m, "_pg_original_acquire_scene_asset"):
+        original_acquire = m.acquire_scene_asset
+        m._pg_original_acquire_scene_asset = original_acquire
+        def acquire_with_selected_native_video(scene, outdir, index, prefer_motion=False, duration=6.0):
+            # Acceptance fixtures remain authoritative test inputs; normal user
+            # projects can opt into a selected, technically verified native shot.
+            try:
+                fixture = m._ci_test_visual(scene, outdir, index)
+            except Exception:
+                fixture = None
+            if fixture is not None:
+                return fixture
+            project_id = getattr(m.ACTIVE_PROJECT, "project_id", None)
+            if project_id:
+                selected = selected_candidate_asset(project_id, index, duration)
+                if selected is not None:
+                    m.audit_event(project_id, "native_video_candidate_used_in_render", {
+                        "scene": int(index),
+                        "candidate_id": selected["candidate_id"],
+                        "provider": selected["provider"],
+                        "model": selected["model"],
+                        "creative_approval": "PENDING",
+                        "rights_status": "REVIEW_REQUIRED",
+                        "truthful": True,
+                    })
+                    return selected
+            return original_acquire(scene, outdir, index, prefer_motion=prefer_motion, duration=duration)
+        m.acquire_scene_asset = acquire_with_selected_native_video
     PATCHED=True
     global WORKER_STARTED
     if not WORKER_STARTED and os.getenv("AI_INFINITY_PRODUCTION_GRAPH_WORKER","1").lower() in {"1","true","yes","on"}:threading.Thread(target=worker,name="ai-infinity-production-graph",daemon=True).start()
