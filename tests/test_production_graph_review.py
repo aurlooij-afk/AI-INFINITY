@@ -33,7 +33,12 @@ def _seed_project(tmp_path: Path, monkeypatch, *, status: str = "ready") -> tupl
             "INSERT INTO pg_candidates(candidate_id,shot_id,project_id,provider,model,status,asset_path,created_at,updated_at,storage_status,storage_json) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             ("candidate-test", "shot-test", "project-test", "runway", "gen4.5", status, str(media), 1.0, 1.0,
-             "primary_only", json.dumps({"status": "primary_only", "successful_providers": ["test-object-store"]})),
+             "primary_only", json.dumps({
+                 "status": "primary_only",
+                 "successful_providers": ["test-object-store"],
+                 "sha256": hashlib.sha256(media.read_bytes()).hexdigest(),
+                 "size_bytes": media.stat().st_size,
+             })),
         )
     return db_path, media
 
@@ -419,11 +424,12 @@ def test_selected_native_candidate_rehydrates_from_verified_storage_after_instan
             "UPDATE pg_shots SET winner_candidate_id=?,status=? WHERE shot_id=?",
             ("candidate-test", "selected_for_editor", "shot-test"),
         )
+    original_bytes = former_path.read_bytes()
     former_path.unlink()
     project_root = tmp_path / "creator_studio" / "project-test"
     project_root.mkdir(parents=True)
     restored = project_root / former_path.name
-    restored.write_bytes(b"restored verified video " * 100)
+    restored.write_bytes(original_bytes)
     calls = []
     monkeypatch.setattr(
         production_graph,
@@ -464,11 +470,12 @@ def test_creator_can_select_candidate_after_verified_media_rehydration(
 ):
     monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
     _db_path, previous = _seed_project(tmp_path, monkeypatch, status="ready_for_creative_review")
+    original_bytes = previous.read_bytes()
     previous.unlink()
     project_root = tmp_path / "creator_studio" / "project-test"
     project_root.mkdir(parents=True)
     restored = project_root / previous.name
-    restored.write_bytes(b"restored candidate for explicit selection " * 100)
+    restored.write_bytes(original_bytes)
     calls = []
     audit = []
     monkeypatch.setattr(
