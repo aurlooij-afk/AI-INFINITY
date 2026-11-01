@@ -192,3 +192,53 @@ def test_provider_status_does_not_advertise_vision_as_active_from_key_presence_a
     assert vision["enabled"] is False
     assert vision["status"] == "paid_usage_not_authorized"
     assert vision["pricing_class"] == "paid_metered"
+
+
+def test_positive_vision_recommendation_does_not_select_or_approve_candidate(
+    monkeypatch, tmp_path: Path
+):
+    _db_path, _media = _db_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        intelligence,
+        "openai_vision",
+        lambda _path, _shot: {
+            "status": "completed",
+            "provider": "openai",
+            "model": "test-model",
+            "narration_alignment": 94,
+            "composition": 91,
+            "visual_quality": 93,
+            "cinematography": 90,
+            "continuity": 88,
+            "brand_match": 92,
+            "artifact_free": 95,
+            "specific_issues": [],
+            "revision_prompt": "",
+            "decision": "accept",
+            "truthful": True,
+        },
+    )
+
+    result = intelligence.vision_review("project-test", "candidate-test", "user-test")
+
+    with intelligence.db() as conn:
+        candidate = conn.execute(
+            "SELECT status,score,critic_json FROM pg_candidates WHERE candidate_id=?",
+            ("candidate-test",),
+        ).fetchone()
+        shot = conn.execute(
+            "SELECT status,winner_candidate_id FROM pg_shots WHERE shot_id=?",
+            ("shot-test",),
+        ).fetchone()
+
+    assert result["score"] == 91.9
+    assert result["decision"] == "recommended_accept"
+    assert result["creative_approval"] == "PENDING"
+    assert result["human_review_status"] == "PENDING"
+    assert candidate["status"] == "ready_for_creative_review"
+    assert candidate["score"] == 95
+    assert shot["status"] == "planned"
+    assert shot["winner_candidate_id"] is None
+    saved = json.loads(candidate["critic_json"])
+    assert saved["creative_recommendation"] == "recommended_accept"
+    assert saved["rights_status"] == "REVIEW_REQUIRED"
