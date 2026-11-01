@@ -25,16 +25,20 @@ def db():
     # using a raw sqlite3 connection here bypasses the post-commit snapshot
     # scheduler and can strand graph/jobs/candidates outside the recovery point.
     studio = s()
+    target_path = dbpath()
+    canonical_path = Path(getattr(studio, "DB_PATH", target_path)).resolve()
     connect = getattr(studio, "_connect", None)
-    if callable(connect):
+    if callable(connect) and canonical_path == target_path:
         connection = connect()
         connection.row_factory = sqlite3.Row
         return connection
 
-    # Minimal Studio stubs used by isolated adapter tests do not own the
-    # canonical connection factory. Production always imports studio_ultimate
-    # and takes the durable path above.
-    connection = sqlite3.connect(dbpath(), timeout=30, check_same_thread=False)
+    # Some isolated adapter tests deliberately redirect only the graph's DB
+    # path. Do not let those test databases leak into Creator Studio's shared
+    # global DB. The real app's DB_PATH and dbpath() both derive from the same
+    # AI_INFINITY_DB_PATH / DATA_DIR configuration, so production takes the
+    # durable connection path above.
+    connection = sqlite3.connect(target_path, timeout=30, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     return connection
 def now(): return time.time()
