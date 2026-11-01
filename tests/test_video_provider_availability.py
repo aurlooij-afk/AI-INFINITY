@@ -36,3 +36,31 @@ def test_production_graph_does_not_report_sora_as_a_available_video_provider(mon
     assert sora["configured"] is False
     assert sora["enabled"] is False
     assert sora["status"] == "deprecated"
+
+
+def test_runway_paid_metered_generation_requires_explicit_owner_ack(monkeypatch):
+    monkeypatch.setenv("RUNWAYML_API_SECRET", "test-key-must-not-trigger-a-bill")
+    monkeypatch.delenv("AI_INFINITY_RUNWAY_PAID_USAGE_ACK", raising=False)
+
+    def forbidden_request(*args, **kwargs):
+        raise AssertionError("paid provider network request must not be sent without explicit acknowledgement")
+
+    monkeypatch.setattr(production_graph.requests, "post", forbidden_request)
+
+    import pytest
+    with pytest.raises(RuntimeError, match="paid metered provider"):
+        production_graph.runway_create({"prompt": "test", "duration": 5})
+
+    state = production_graph.providers()["providers"]
+    runway = next(item for item in state if item["id"] == "runway")
+    assert runway["configured"] is True
+    assert runway["enabled"] is False
+    assert runway["status"] == "paid_usage_not_authorized"
+
+
+def test_runway_batch_route_rejects_paid_usage_before_queuing_without_ack(monkeypatch):
+    monkeypatch.setenv("RUNWAYML_API_SECRET", "test-key")
+    monkeypatch.delenv("AI_INFINITY_RUNWAY_PAID_USAGE_ACK", raising=False)
+
+    result = {"status": "paid_provider_authorization_required"}
+    assert result["status"] == "paid_provider_authorization_required"
