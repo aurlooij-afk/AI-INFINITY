@@ -17,6 +17,7 @@ def _db_fixture(tmp_path: Path, monkeypatch):
 
     pg = SimpleNamespace(
         dbpath=lambda: db_path,
+        candidate_local_path=lambda _pid, _cid, _uid: media,
         tech=lambda _path: {
             "decision": "technical_pass",
             "score": 95,
