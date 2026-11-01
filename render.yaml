@@ -44,6 +44,16 @@ services:
       # Optional external production connectors. Leave empty until authorized.
       - key: RUNWAYML_API_SECRET
         sync: false
+      # Optional Google AI Studio Free Tier writer. No billing is enabled by this Blueprint;
+      # the owner must provide a Free Tier key and explicitly acknowledge data-use terms.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK
+        value: "false"
+      - key: AI_INFINITY_GEMINI_FREE_TIER_MODEL
+        value: "gemini-2.5-flash-lite"
+      - key: AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK
+        value: "false"
       - key: OPENAI_API_KEY
         sync: false
       - key: ELEVENLABS_API_KEY

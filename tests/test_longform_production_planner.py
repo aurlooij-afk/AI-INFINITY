@@ -416,3 +416,143 @@ def test_reality_render_wrapper_forwards_programme_music_offset(monkeypatch, tmp
     )
 
     assert captured["offset"] == 42.25
+
+
+
+def test_creative_planner_retries_underwritten_repairs_until_the_full_rate_target_is_met():
+    import json
+
+    calls = []
+
+    def plan_with_words(words_per_chapter):
+        plan = {
+            "title": "The Future of Human Creativity",
+            "premise": "A grounded documentary about human creativity.",
+            "chapters": [],
+        }
+        for chapter_index in range(1, 6):
+            narration = " ".join(
+                f"Chapter {chapter_index} observation {n} explains a distinct decision, constraint, cause, effect, example, and practical implication."
+                for n in range(1, words_per_chapter + 1)
+            )
+            plan["chapters"].append({
+                "heading": f"Chapter {chapter_index}",
+                "narration": narration,
+                "visual_query": f"documentary human creativity chapter {chapter_index}",
+                "image_prompt": f"Distinct documentary visual for chapter {chapter_index}",
+                "on_screen": "",
+                "duration": 180,
+                "proof_needed": [],
+            })
+        return plan
+
+    def model_fn(payload):
+        calls.append(payload)
+        plans = [
+            plan_with_words(2),   # Initial short outline.
+            plan_with_words(12),  # Better, but still below the 125-WPM target.
+            plan_with_words(22),  # Better again, but still below the target.
+            plan_with_words(32),  # Complete narration.
+        ]
+        selected = plans[min(len(calls) - 1, len(plans) - 1)]
+        return {"text": json.dumps(selected), "provider": "test-writer"}
+
+    plan, provider = studio.creative_plan(
+        {
+            "title": "The Future of Human Creativity",
+            "objective": "Create a grounded 15-minute documentary about human creativity.",
+            "topic": "human creativity",
+            "format": "long",
+            "duration": 900,
+            "speaking_rate_wpm": 125,
+            "language": "English",
+            "tone": "curious, cinematic, compassionate",
+        },
+        {"sources": []},
+        model_fn,
+    )
+
+    spoken_words = studio._narration_word_count(plan["chapters"])
+    assert len(calls) == 4
+    assert spoken_words >= 1875
+    assert plan["script_generation"]["status"] == "complete"
+    assert plan["script_generation"]["required_spoken_words"] == 1875
+    assert plan["script_generation"]["speaking_rate_wpm"] == 125
+    assert provider == "test-writer"
+
+
+def test_builtin_longform_outline_is_explicitly_marked_underwritten(monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGINGFACEHUB_API_TOKEN", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    plan, provider = studio.creative_plan(
+        {
+            "title": "A grounded documentary about human creativity",
+            "objective": "Create a 15-minute documentary about human creativity.",
+            "topic": "human creativity",
+            "format": "long",
+            "duration": 900,
+            "language": "English",
+        },
+        {"sources": []},
+        None,
+    )
+    assert provider == "builtin-creative-engine"
+    assert plan["script_generation"]["status"] == "underwritten"
+    assert plan["script_generation"]["actual_spoken_words"] < plan["script_generation"]["required_spoken_words"]
+
+
+def test_google_gemini_writer_requires_free_tier_and_data_use_acknowledgement(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK", "false")
+    assert studio._gemini_free_tier_text_model() is None
+
+
+def test_google_gemini_free_tier_writer_sends_json_mode_and_keeps_key_out_of_url(monkeypatch):
+    import json
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK", "true")
+    monkeypatch.setenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", "gemini-2.5-flash-lite")
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps({
+                "candidates": [{
+                    "finishReason": "STOP",
+                    "content": {"parts": [{"text": "{\"chapters\": []}"}]},
+                }],
+                "usageMetadata": {"totalTokenCount": 100},
+            }).encode("utf-8")
+
+    def fake_urlopen(request, timeout=0):
+        captured["url"] = request.full_url
+        captured["headers"] = dict(request.header_items())
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(studio, "urlopen", fake_urlopen)
+    writer = studio._gemini_free_tier_text_model()
+    assert callable(writer)
+    result = writer({
+        "messages": [
+            {"role": "system", "content": "Return only JSON."},
+            {"role": "user", "content": "Write a test blueprint."},
+        ],
+        "temperature": 0.4,
+    })
+    assert result["provider"] == "google-gemini-free-tier:gemini-2.5-flash-lite"
+    assert result["text"] == "{\"chapters\": []}"
+    assert "test-key" not in captured["url"]
+    assert captured["headers"].get("X-goog-api-key") == "test-key"
+    assert captured["body"]["generationConfig"]["responseMimeType"] == "application/json"
+    assert captured["body"]["generationConfig"]["maxOutputTokens"] == 8192
+    assert captured["timeout"] == 120

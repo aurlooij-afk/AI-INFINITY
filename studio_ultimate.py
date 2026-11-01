@@ -53,6 +53,7 @@ class StudioRequest(BaseModel):
     topic: str = ""
     format: str = "long"
     duration: int = Field(default=300, ge=20, le=3600)
+    speaking_rate_wpm: int = Field(default=125, ge=90, le=180)
     content_type: str = "video"
     audience: str = "general audience"
     tone: str = "cinematic, intelligent, useful"
@@ -1160,6 +1161,8 @@ def _hf_creator_plan(prompt: str, language: str = "English") -> Tuple[Optional[D
     token = os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
     if not token:
         return None, "no-hf-token"
+    if os.getenv("AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return None, "hf-free-tier-and-data-use-not-authorized"
     model = os.getenv("AI_INFINITY_TEXT_MODEL", "Qwen/Qwen2.5-7B-Instruct-1M").strip()
     try:
         from huggingface_hub import InferenceClient
@@ -1194,6 +1197,123 @@ def _hf_creator_plan(prompt: str, language: str = "English") -> Tuple[Optional[D
     return None, f"Hugging Face/{model}:invalid"
 
 
+
+def _narration_word_count(chapters: List[Dict[str, Any]]) -> int:
+    """Count spoken narration only; headings, overlays and metadata do not count."""
+    return sum(
+        len(re.findall(r"\b[\w'-]+\b", str(chapter.get("narration") or "")))
+        for chapter in (chapters or []) if isinstance(chapter, dict)
+    )
+
+
+def _required_narration_word_count(duration_seconds: Any, speaking_rate_wpm: Any = 125) -> int:
+    """Calculate the minimum narration from the requested programme length and WPM."""
+    try:
+        duration = max(1, int(float(duration_seconds or 1)))
+    except (TypeError, ValueError, OverflowError):
+        duration = 1
+    try:
+        rate = int(speaking_rate_wpm or 125)
+    except (TypeError, ValueError, OverflowError):
+        rate = 125
+    rate = max(90, min(180, rate))
+    return max(1, int((duration * rate + 59) // 60))
+
+
+
+
+def _gemini_free_tier_text_model() -> Optional[Callable]:
+    """Return an explicitly acknowledged Google AI Studio Free Tier writer.
+
+    This deliberately uses only the documented free-tier Gemini 2.5 Flash-Lite
+    model. No paid model fallback is attempted. The owner must separately confirm
+    that the key belongs to a Free Tier AI Studio project and accept the Free Tier
+    data-use terms before this adapter makes requests.
+    """
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    acknowledged = os.getenv("AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK", "").strip().lower()
+    model = os.getenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", "gemini-2.5-flash-lite").strip()
+    if not api_key or acknowledged not in {"1", "true", "yes", "on"}:
+        return None
+    # Do not let a model override silently route requests to a paid/unknown model.
+    if model != "gemini-2.5-flash-lite":
+        return None
+
+    def call(payload: Dict[str, Any]) -> Dict[str, Any]:
+        messages = payload.get("messages") if isinstance(payload, dict) else []
+        messages = messages if isinstance(messages, list) else []
+        system_parts = []
+        user_parts = []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role") or "user").strip().lower()
+            content = str(message.get("content") or "").strip()
+            if not content:
+                continue
+            if role in {"system", "developer"}:
+                system_parts.append(content)
+            else:
+                user_parts.append(content)
+        if not user_parts:
+            raise ValueError("Gemini writer requires a non-empty user message.")
+
+        body: Dict[str, Any] = {
+            "contents": [{
+                "role": "user",
+                "parts": [{"text": "\n\n".join(user_parts)}],
+            }],
+            "generationConfig": {
+                "temperature": max(0.0, min(1.0, float(payload.get("temperature", 0.55) or 0.55))),
+                "maxOutputTokens": 8192,
+                "responseMimeType": "application/json",
+            },
+        }
+        if system_parts:
+            body["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}
+
+        request = URLRequest(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "x-goog-api-key": api_key,
+                "User-Agent": f"AI-Infinity/{VERSION}",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=120) as response:
+                result = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            # Do not surface URLs, headers, provider response bodies, or API keys.
+            raise RuntimeError(f"Google Gemini Free Tier request failed: {type(exc).__name__}") from None
+
+        candidates = result.get("candidates") if isinstance(result, dict) else None
+        candidate = candidates[0] if isinstance(candidates, list) and candidates else {}
+        finish_reason = str(candidate.get("finishReason") or "")
+        content = candidate.get("content") if isinstance(candidate.get("content"), dict) else {}
+        parts = content.get("parts") if isinstance(content.get("parts"), list) else []
+        text_value = "\n".join(
+            str(part.get("text") or "").strip()
+            for part in parts if isinstance(part, dict) and part.get("text")
+        ).strip()
+        if not text_value:
+            raise RuntimeError("Google Gemini Free Tier returned no text.")
+        if finish_reason == "MAX_TOKENS":
+            raise RuntimeError("Google Gemini Free Tier output was truncated at the token limit.")
+        return {
+            "text": text_value,
+            "provider": f"google-gemini-free-tier:{model}",
+            "finish_reason": finish_reason or None,
+            "usage": result.get("usageMetadata") if isinstance(result, dict) else None,
+        }
+
+    return call
+
+
+
 def creative_plan(req: Dict[str, Any], research: Dict[str, Any], model_fn: Optional[Callable]) -> Tuple[Dict[str, Any], str]:
     title = str(req.get("title") or req.get("topic") or req.get("objective") or "AI content").strip()
     objective = str(req.get("objective") or "Create useful, original, high-retention content").strip()
@@ -1205,7 +1325,8 @@ def creative_plan(req: Dict[str, Any], research: Dict[str, Any], model_fn: Optio
     platforms = ", ".join(str(x) for x in (req.get("platforms") or [])[:12]) or "multi-platform"
     # Long-form output needs a genuinely long script; a 15-minute request must not
     # be filled with a short generic narration stretched across a longer timeline.
-    target_narration_words = max(1, int((max(1, duration) * 125 + 59) // 60))
+    speaking_rate_wpm = max(90, min(180, int(req.get("speaking_rate_wpm") or 125)))
+    target_narration_words = _required_narration_word_count(duration, speaking_rate_wpm)
     brand_voice = str(req.get("brand_voice") or "")[:1000]
     visual_style = str(req.get("visual_style") or "premium editorial")[:500]
     call_to_action = str(req.get("call_to_action") or "")[:500]
@@ -1243,6 +1364,22 @@ Return ONLY JSON with:
 title, hook, premise, audience, tone, cta, language, platform_adaptations, chapters
 Each chapter must include: heading, narration, visual_query, image_prompt, on_screen, duration, proof_needed.
 Use 5-18 chapters. Total durations should approximately equal the target. Narration must be original and information-dense rather than filler. Make every visual_query materially different from the previous scene. Favor concrete locations, people, objects, processes, macro details, environmental shots, diagrams or editorial compositions that can be found or generated for this exact topic. Never put generic labels such as "Hook" or "The key idea" in image prompts. On-screen text should be a concise claim or phrase, not a duplicate section heading. Separate factual claims from creative framing. For unsupported facts, put the topic/claim in proof_needed. Avoid deceptive impersonation, fabricated citations and synthetic claims presented as observed events."""
+    if model_fn is None and (
+        os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
+    ) and os.getenv("AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK", "").strip().lower() in {"1", "true", "yes", "on"}:
+        def _hf_model_call(call_payload):
+            messages = call_payload.get("messages") if isinstance(call_payload, dict) else []
+            user_prompt = "\n\n".join(
+                str(item.get("content") or "").strip()
+                for item in (messages or []) if isinstance(item, dict)
+            )
+            hf_data, hf_provider = _hf_creator_plan(user_prompt, language)
+            return {
+                "text": json.dumps(hf_data, ensure_ascii=False) if isinstance(hf_data, dict) else "",
+                "provider": hf_provider,
+            }
+        model_fn = _hf_model_call
+
     if model_fn:
         try:
             raw = model_fn({"messages": [{"role": "user", "content": prompt}], "temperature": 0.8}) or {}
@@ -1252,55 +1389,100 @@ Use 5-18 chapters. Total durations should approximately equal the target. Narrat
                 clean = {**data}
                 clean["chapters"] = chapters[:18]
                 provider = str(raw.get("provider") or "model")
+                speaking_rate_wpm = max(90, min(180, int(req.get("speaking_rate_wpm") or 125)))
+                clean["speaking_rate_wpm"] = speaking_rate_wpm
                 if duration >= 120:
-                    required_words = max(target_narration_words, int(duration * 2.0 + 0.999))
-                    spoken_words = sum(
-                        len(re.findall(r"\b[\w'-]+\b", str(chapter.get("narration") or "")))
-                        for chapter in clean["chapters"] if isinstance(chapter, dict)
-                    )
-                    if spoken_words < required_words:
-                        # One bounded editorial repair pass uses the same actual
-                        # configured text model. It must expand the full narrative,
-                        # not recycle paragraphs or invent citations.
-                        repair_prompt = f"""You are the lead documentary screenwriter revising an under-length long-form script.
-The required programme duration is {duration} seconds and the spoken script currently contains only {spoken_words} words. Expand the existing story to at least {required_words} genuinely useful spoken words, aiming for {target_narration_words}.
-Preserve its central idea, intended audience, language, tone, chapter order, factual restraint, and useful visual direction. Add concrete explanations, specific examples, emotional turns, transitions, and human observation where they serve the story. Do not repeat sentences, pad with generic motivation, invent sources, fabricate quotations, or claim unsupported facts. For factual material, retain existing proof_needed requirements and use only the research context already supplied. If the request explicitly requires a non-verbal film, do not add narration.
-Return ONLY JSON using the same schema and chapter fields as the original plan.
+                    required_words = _required_narration_word_count(duration, speaking_rate_wpm)
+                    best_words = _narration_word_count(clean["chapters"])
+                    repair_passes = 0
+                    last_repair_error = None
+
+                    # Three bounded attempts allow a model to expand an underwritten
+                    # outline without accepting a merely longer but still incomplete
+                    # script. This is a real content gate, not a word-count relabel.
+                    while best_words < required_words and repair_passes < 3:
+                        repair_passes += 1
+                        missing_words = required_words - best_words
+                        repair_prompt = f"""You are the lead documentary screenwriter finishing an underwritten long-form programme.
+The target runtime is {duration} seconds at {speaking_rate_wpm} spoken words per minute.
+The current script has {best_words} spoken words. The COMPLETE script must contain at least {required_words} spoken words; {missing_words} additional words are still required.
+Return a complete revised JSON blueprint with the same chapter schema. Expand the existing story with genuinely useful, distinct narration that explains the topic in depth. Keep the intended audience, language, tone, chapter sequence, and visual direction. Add concrete mechanisms, examples, counterpoints, limitations, transitions, and actionable takeaways where supported.
+Do not repeat sentences or paragraphs, pad with generic motivation, invent research, fabricate quotations, imply that illustrative material is observed fact, or claim product capabilities that are not demonstrated. For factual statements, use only the supplied research context and retain proof_needed for anything not supported.
+Aim for approximately {required_words + max(100, int(required_words * 0.08))} spoken words so normal editing does not make the delivered narration under-length.
 EXISTING PLAN JSON:
 {json.dumps(clean, ensure_ascii=False)[:45000]}
 """
                         try:
                             repair_raw = model_fn({
                                 "messages": [{"role": "user", "content": repair_prompt}],
-                                "temperature": 0.55,
+                                "temperature": 0.45,
                             }) or {}
                             repaired_data = _extract_json(repair_raw.get("text") or repair_raw.get("answer") or "")
                             repaired_chapters = repaired_data.get("chapters") if isinstance(repaired_data, dict) else None
                             if (
-                                isinstance(repaired_chapters, list)
-                                and len(repaired_chapters) >= 4
-                                and _language_text_compatible(language, repaired_chapters)
+                                not isinstance(repaired_chapters, list)
+                                or len(repaired_chapters) < 4
+                                or not _language_text_compatible(language, repaired_chapters)
                             ):
-                                repaired_chapters = repaired_chapters[:18]
-                                repaired_words = sum(
-                                    len(re.findall(r"\b[\w'-]+\b", str(chapter.get("narration") or "")))
-                                    for chapter in repaired_chapters if isinstance(chapter, dict)
-                                )
-                                if repaired_words > spoken_words:
-                                    clean = {**repaired_data, "chapters": repaired_chapters}
-                                    provider = str(repair_raw.get("provider") or provider)
-                        except Exception:
-                            # The pre-render runtime guard below records a truthful
-                            # blocker if this configured model cannot produce enough
-                            # narration; do not silently pad the script.
-                            pass
+                                last_repair_error = "writer_returned_invalid_or_language_incompatible_chapters"
+                                continue
+                            repaired_chapters = repaired_chapters[:18]
+                            repaired_words = _narration_word_count(repaired_chapters)
+                            # Reject duplicated padding and non-improving output. An
+                            # attempt only becomes the best candidate when it adds
+                            # genuinely new spoken material.
+                            sentence_rows = [
+                                re.sub(r"\s+", " ", row).strip().casefold()
+                                for chapter in repaired_chapters
+                                for row in re.split(r"(?<=[.!?؟。])\s+", str(chapter.get("narration") or ""))
+                                if row.strip()
+                            ]
+                            unique_sentence_ratio = (
+                                len(set(sentence_rows)) / len(sentence_rows) if sentence_rows else 0.0
+                            )
+                            if repaired_words <= best_words or unique_sentence_ratio < 0.85:
+                                last_repair_error = "writer_repair_did_not_add_sufficient_distinct_narration"
+                                continue
+                            clean = {**repaired_data, "chapters": repaired_chapters}
+                            clean["speaking_rate_wpm"] = speaking_rate_wpm
+                            best_words = repaired_words
+                            provider = str(repair_raw.get("provider") or provider)
+                        except Exception as repair_exc:
+                            # Avoid leaking provider URLs, credentials or request bodies.
+                            last_repair_error = type(repair_exc).__name__
+
+                    clean["script_generation"] = {
+                        "status": "complete" if best_words >= required_words else "underwritten",
+                        "provider": provider,
+                        "speaking_rate_wpm": speaking_rate_wpm,
+                        "required_spoken_words": required_words,
+                        "actual_spoken_words": best_words,
+                        "repair_passes": repair_passes,
+                        "last_repair_error": last_repair_error,
+                        "truthful": True,
+                    }
                 return clean, provider
         except Exception:
             pass
     hf_plan, hf_provider = _hf_creator_plan(prompt, language)
     if hf_plan:
         return hf_plan, hf_provider
-    return _fallback_creative_plan(title, objective, fmt, duration, audience, tone, research, language, topic=str(req.get("topic") or "")), "builtin-creative-engine"
+    fallback_plan = _fallback_creative_plan(
+        title, objective, fmt, duration, audience, tone, research, language,
+        topic=str(req.get("topic") or ""),
+    )
+    fallback_plan["speaking_rate_wpm"] = speaking_rate_wpm
+    fallback_words = _narration_word_count(fallback_plan.get("chapters") or [])
+    fallback_plan["script_generation"] = {
+        "status": "complete" if fallback_words >= target_narration_words else "underwritten",
+        "provider": "builtin-creative-engine",
+        "speaking_rate_wpm": speaking_rate_wpm,
+        "required_spoken_words": target_narration_words,
+        "actual_spoken_words": fallback_words,
+        "repair_passes": 0,
+        "truthful": True,
+    }
+    return fallback_plan, "builtin-creative-engine"
 
 
 def _localized_fallback_copy(language: str, name: str, title: str, topic: str) -> Dict[str, str]:
@@ -7919,17 +8101,28 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "video", "short", "reel", "film", "documentary"
         }
         if float(req.get("duration") or 0) >= 120 and narrated_video and not nonverbal_request and not SMOKE:
-            required_spoken_words = int(float(req.get("duration") or 0) * 2.0 + 0.999)
-            planned_spoken_words = sum(
-                len(re.findall(r"\b[\w'-]+\b", str(chapter.get("narration") or "")))
-                for chapter in chapters if isinstance(chapter, dict)
-            )
+            speaking_rate_wpm = max(90, min(180, int(req.get("speaking_rate_wpm") or plan.get("speaking_rate_wpm") or 125)))
+            required_spoken_words = _required_narration_word_count(req.get("duration"), speaking_rate_wpm)
+            planned_spoken_words = _narration_word_count(chapters)
+            script_generation = plan.get("script_generation") if isinstance(plan.get("script_generation"), dict) else {}
             if planned_spoken_words < required_spoken_words:
+                writer_provider = str(ai_provider or script_generation.get("provider") or "not_configured")
+                if writer_provider == "builtin-creative-engine":
+                    writer_diagnostic = (
+                        "No long-form text-generation provider is configured; the deterministic "
+                        "fallback is only an outline and is not a finished narrated script."
+                    )
+                else:
+                    writer_diagnostic = (
+                        f"The configured writer path '{writer_provider}' did not return a complete "
+                        "script after bounded repair attempts."
+                    )
                 raise RuntimeError(
                     "Long-form script preflight blocked before media generation: "
-                    f"{planned_spoken_words} spoken words for {float(req.get('duration') or 0):.0f}s; "
-                    f"at least {required_spoken_words} are required. The connected writer did not "
-                    "produce a complete script, so the system will not pad a short script across a long timeline."
+                    f"{planned_spoken_words} spoken words for {float(req.get('duration') or 0):.0f}s "
+                    f"at {speaking_rate_wpm} WPM; at least {required_spoken_words} are required. "
+                    + writer_diagnostic
+                    + " The system will not pad a short script across a long timeline."
                 )
 
         # Avoid burning generic planner labels such as "Hook" into the media.
@@ -10134,6 +10327,8 @@ def _media_provider_probe() -> Dict[str, Any]:
 
 
 def register(app: Any, model_fn: Optional[Callable] = None) -> None:
+    if model_fn is None:
+        model_fn = _gemini_free_tier_text_model()
     # Mount the real Creator Pro layer: editable storyboard, transcript-first clipping,
     # advanced FFmpeg controls, image lab, interactive export, variant matrix and
     # local/open-source provider probes. These are backend capabilities, not mock UI.
