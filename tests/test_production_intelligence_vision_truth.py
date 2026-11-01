@@ -35,12 +35,13 @@ def _db_fixture(tmp_path: Path, monkeypatch):
             """
             CREATE TABLE pg_shots(
                 shot_id TEXT PRIMARY KEY, project_id TEXT, purpose TEXT, duration REAL,
-                narration TEXT, visual_prompt TEXT, metadata TEXT
+                narration TEXT, visual_prompt TEXT, metadata TEXT, status TEXT,
+                winner_candidate_id TEXT
             );
             CREATE TABLE pg_candidates(
                 candidate_id TEXT PRIMARY KEY, shot_id TEXT, project_id TEXT,
                 status TEXT, asset_path TEXT, critic_json TEXT DEFAULT '{}',
-                score REAL, updated_at REAL
+                score REAL, created_at REAL, updated_at REAL
             );
             CREATE TABLE pg_reviews(
                 review_id TEXT PRIMARY KEY, project_id TEXT, shot_id TEXT,
@@ -49,13 +50,13 @@ def _db_fixture(tmp_path: Path, monkeypatch):
             );
             INSERT INTO pg_shots VALUES(
                 'shot-test','project-test','Opening shot',5.0,'A clear voice line',
-                'A cinematic opening','{}'
+                'A cinematic opening','{}','planned',NULL
             );
             INSERT INTO pg_candidates(
-                candidate_id,shot_id,project_id,status,asset_path,critic_json,score,updated_at
+                candidate_id,shot_id,project_id,status,asset_path,critic_json,score,created_at,updated_at
             ) VALUES(
                 'candidate-test','shot-test','project-test','ready_for_creative_review',
-                'PLACEHOLDER','{}',95,1.0
+                'PLACEHOLDER','{}',95,1.0,1.0
             );
             """
         )
@@ -174,7 +175,7 @@ def test_autoselect_returns_vision_recommendation_without_mutating_project(
     assert result["shots"][0]["suggested_candidate_id"] == "candidate-test"
     assert result["shots"][0]["creator_selection_required"] is True
     assert candidate["status"] == "ready_for_creative_review"
-    assert shot["status"] is None or shot["status"] == "planned" if "status" in shot.keys() else shot["winner_candidate_id"] is None
+    assert shot["status"] == "planned"
     assert shot["winner_candidate_id"] is None
 
 
