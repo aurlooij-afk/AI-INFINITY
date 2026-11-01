@@ -348,17 +348,23 @@ def candidate_local_path(project_id, candidate_id, user_id):
     studio_module = None
     project_root = None
     if path.exists():
-        studio_module = s()
-        project_root = studio_module._project_dir(project_id).resolve()
-        if not (within(path, jobs_root) or within(path, project_root)):
-            raise HTTPException(409, "candidate media is outside its verified job/project directory")
+        # Worker-created candidates normally live beneath production-jobs.
+        # Validate that trusted root first; resolving the Creator Studio project
+        # directory is needed only for project-local assets or recovery.
+        in_jobs_root = within(path, jobs_root)
+        if not in_jobs_root:
+            studio_module = s()
+            project_root = studio_module._project_dir(project_id).resolve()
+            if not within(path, project_root):
+                raise HTTPException(409, "candidate media is outside its verified job/project directory")
         if bytes_match(path):
             return path
     else:
-        # The normal live-worker path is under production-jobs. Do not import
-        # Creator Studio unless we actually need its project recovery service.
-        if path.parent.resolve() == jobs_root or within(path, jobs_root):
-            pass
+        # Do not import Creator Studio for the normal worker path unless a
+        # verified project-store recovery operation is actually required.
+        if not within(path, jobs_root):
+            studio_module = s()
+            project_root = studio_module._project_dir(project_id).resolve()
 
     if studio_module is None:
         studio_module = s()
