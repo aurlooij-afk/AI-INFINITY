@@ -253,7 +253,7 @@ def test_selected_candidate_counts_only_when_durably_stored(monkeypatch, tmp_pat
     assert production_graph.has_selected_candidates("project-test") is False
 
 
-def test_selected_candidate_rerender_signature_changes_only_for_selected_shot(
+def test_selected_candidate_identity_is_bound_to_the_correct_scene(
     monkeypatch, tmp_path: Path
 ):
     _db_path, _media = _seed_project(tmp_path, monkeypatch, status="selected_for_editor")
@@ -265,3 +265,95 @@ def test_selected_candidate_rerender_signature_changes_only_for_selected_shot(
 
     assert production_graph.selected_candidate_id_for_scene("project-test", 1) == "candidate-test"
     assert production_graph.selected_candidate_id_for_scene("project-test", 2) == ""
+
+
+def test_runway_candidate_worker_records_verified_storage_and_unique_asset_name(
+    monkeypatch, tmp_path: Path
+):
+    db_path = tmp_path / "production-worker.sqlite3"
+    monkeypatch.setattr(production_graph, "dbpath", lambda: db_path)
+    monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_INFINITY_RUNWAY_PAID_USAGE_ACK", "true")
+    production_graph.ensure()
+
+    project_id = "project-worker"
+    candidate_id = "cand_" + "a" * 32
+    job_id = "pgjob_" + "b" * 32
+    payload = {"candidate_id": candidate_id, "model": "gen4.5", "prompt": "test shot", "duration": 5}
+    with production_graph.db() as conn:
+        conn.execute(
+            "INSERT INTO pg_projects(project_id,user_id,brief_sha,status,stage,progress,updated_at) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (project_id, "user-worker", "brief", "completed", "complete", 100, 1.0),
+        )
+        conn.execute(
+            "INSERT INTO pg_shots(shot_id,project_id,seq,purpose,duration,narration,visual_prompt,status,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            ("shot-worker", project_id, 1, "Shot", 5.0, "Voice", "Visual", "planned", 1.0),
+        )
+        conn.execute(
+            "INSERT INTO pg_candidates(candidate_id,shot_id,project_id,provider,model,status,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (candidate_id, "shot-worker", project_id, "runway", "gen4.5", "queued", 1.0, 1.0),
+        )
+        conn.execute(
+            "INSERT INTO pg_jobs(job_id,user_id,project_id,shot_id,kind,provider,status,payload_json,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (job_id, "user-worker", project_id, "shot-worker", "video", "runway", "queued",
+             json.dumps(payload), 1.0, 1.0),
+        )
+
+    monkeypatch.setattr(production_graph, "runway_create", lambda _data: {"id": "remote-task"})
+    monkeypatch.setattr(
+        production_graph, "runway_poll",
+        lambda _task, _limit: {"status": "SUCCEEDED", "output": ["https://provider.example/generated.mp4"]},
+    )
+    def fake_download(_url, output):
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"generated video candidate " * 100)
+        return output
+    monkeypatch.setattr(production_graph, "download", fake_download)
+    saved = []
+    monkeypatch.setattr(
+        production_graph,
+        "s",
+        lambda: SimpleNamespace(
+            _save_asset=lambda pid, kind, path, media_type, metadata: (
+                saved.append((pid, kind, Path(path), media_type, metadata)) or {
+                    "durable_storage": {
+                        "status": "primary_only",
+                        "asset_id": "ast_verified",
+                        "sha256": "a" * 64,
+                        "size_bytes": Path(path).stat().st_size,
+                        "successful_providers": ["backblaze_b2"],
+                        "truthful": True,
+                    }
+                }
+            )
+        ),
+    )
+
+    production_graph.process({
+        "job_id": job_id,
+        "project_id": project_id,
+        "provider": "runway",
+        "kind": "video",
+        "payload_json": json.dumps(payload),
+    })
+
+    with production_graph.db() as conn:
+        candidate = conn.execute(
+            "SELECT status,asset_path,storage_status,storage_json FROM pg_candidates WHERE candidate_id=?",
+            (candidate_id,),
+        ).fetchone()
+        job = conn.execute("SELECT status,result_json FROM pg_jobs WHERE job_id=?", (job_id,)).fetchone()
+
+    assert len(saved) == 1
+    assert saved[0][1] == "candidate"
+    assert saved[0][2].name == candidate_id + ".mp4"
+    assert candidate["status"] == "ready"
+    assert candidate["storage_status"] == "primary_only"
+    assert json.loads(candidate["storage_json"])["successful_providers"] == ["backblaze_b2"]
+    assert Path(candidate["asset_path"]).is_file()
+    assert job["status"] == "completed"
+    assert json.loads(job["result_json"])["storage_status"] == "primary_only"
