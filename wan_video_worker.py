@@ -70,6 +70,7 @@ MODEL_CACHE_LOCK = threading.RLock()
 MODEL_CACHE: dict[str, Any] = {"fingerprint": None, "result": None}
 GPU_CACHE_LOCK = threading.RLock()
 GPU_CACHE: dict[str, Any] = {"at": 0.0, "result": None}
+ACTIVE_PROCESS: subprocess.Popen | None = None
 
 app = FastAPI(
     title="AI Infinity Open-Source Video Worker",
@@ -377,7 +378,9 @@ def _storage_state() -> dict[str, Any]:
 
 def _capabilities(force: bool = False) -> dict[str, Any]:
     source = _source_state()
-    model = _model_state(force=force)
+    # Re-hash the multi-GB checkpoint only when its file fingerprint changes;
+    # refresh GPU free-memory telemetry on demand before every new inference.
+    model = _model_state(force=False)
     gpu = _gpu_state(force=force)
     storage = _storage_state()
     ffmpeg = shutil.which("ffmpeg")
@@ -465,7 +468,7 @@ def _probe_artifact(path: Path, requested: dict[str, Any], frame_num: int) -> di
     video = next((x for x in data.get("streams", []) if x.get("codec_type") == "video"), None)
     if not video:
         raise RuntimeError("generated artifact contains no video stream")
-    expected = (1280, 704) if requested["aspect_ratio"] == "16:9" else (704, 1280)
+    expected = (1280, 720) if requested["aspect_ratio"] == "16:9" else (720, 1280)
     width, height = int(video.get("width") or 0), int(video.get("height") or 0)
     if (width, height) != expected:
         raise RuntimeError(f"generated resolution {width}x{height} does not match requested {expected[0]}x{expected[1]}")
@@ -494,6 +497,25 @@ def _probe_artifact(path: Path, requested: dict[str, Any], frame_num: int) -> di
         "size_bytes": size,
         "full_decode": True,
     }
+
+
+def _normalize_hd_output(source: Path, target: Path, aspect_ratio: str) -> None:
+    """Pad Wan's 1280x704 / 704x1280 frames to exact HD without stretching."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("FFmpeg is required to normalize the Wan model output to HD")
+    filters = "pad=1280:720:0:8:black" if aspect_ratio == "16:9" else "pad=720:1280:8:0:black"
+    result = subprocess.run(
+        [
+            ffmpeg, "-y", "-v", "error", "-i", str(source),
+            "-vf", filters, "-c:v", "libx264", "-preset", "veryfast",
+            "-crf", "18", "-pix_fmt", "yuv420p", "-r", "24",
+            "-an", "-movflags", "+faststart", str(target),
+        ],
+        capture_output=True, text=True, timeout=300, check=False,
+    )
+    if result.returncode != 0 or not target.is_file():
+        raise RuntimeError("Wan HD output normalization failed: " + (result.stderr or "")[-700:])
 
 
 def _command(request: dict[str, Any], output: Path, frame_num: int) -> list[str]:
@@ -584,6 +606,7 @@ def _frame_count(duration_seconds: float) -> int:
 
 
 def _run_job(job: dict[str, Any]) -> None:
+    global ACTIVE_PROCESS
     job_id = str(job["job_id"])
     request = json.loads(job["request_json"])
     final = OUTPUT_DIR / f"{job_id}.mp4"
@@ -591,6 +614,7 @@ def _run_job(job: dict[str, Any]) -> None:
     log_path = LOG_DIR / f"{job_id}.log"
     _set_job(job_id, status="running", attempt=int(job.get("attempt") or 0) + 1,
              started_at=_now(), error=None)
+    process = None
     try:
         capabilities = _capabilities(force=True)
         if not capabilities.get("execution_ready"):
@@ -629,6 +653,7 @@ def _run_job(job: dict[str, Any]) -> None:
                 _set_job(job_id, status="running")
                 time.sleep(2)
             return_code = int(process.returncode or 0)
+        ACTIVE_PROCESS = None
         if return_code != 0:
             try:
                 tail = log_path.read_text(encoding="utf-8", errors="replace")[-1200:]
@@ -637,8 +662,9 @@ def _run_job(job: dict[str, Any]) -> None:
             raise RuntimeError(f"Wan inference exited with code {return_code}: {tail}")
         if not partial.is_file() or partial.stat().st_size < 100_000:
             raise RuntimeError("Wan inference completed without a usable video file")
-        metadata = _probe_artifact(partial, request, frame_num)
-        os.replace(partial, final)
+        _normalize_hd_output(partial, final, request["aspect_ratio"])
+        partial.unlink(missing_ok=True)
+        metadata = _probe_artifact(final, request, frame_num)
         digest = _sha256(final)
         metadata.update({
             "model_id": MODEL_ID,
@@ -662,6 +688,16 @@ def _run_job(job: dict[str, Any]) -> None:
             error=None, completed_at=_now(),
         )
     except Exception as exc:
+        if process is not None and process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=10)
+            except Exception:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except Exception:
+                    pass
+        ACTIVE_PROCESS = None
         try:
             partial.unlink(missing_ok=True)
         except Exception:
@@ -704,6 +740,12 @@ def _start_worker() -> None:
 
 def _stop_processes() -> None:
     STOP.set()
+    process = ACTIVE_PROCESS
+    if process is not None and process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except Exception:
+            pass
 
 
 @app.on_event("startup")
