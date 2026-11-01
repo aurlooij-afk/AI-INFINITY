@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse,HTMLResponse
 
 VERSION="TARGET-2050.4000"; BUILD="PROFESSIONAL-PRODUCTION-GRAPH"; LOCK=threading.RLock(); PATCHED=False; WORKER_STARTED=False
 WAN_PROVIDER_ID="wan2.2-ti2v-5b"
+WAN_SOURCE_REVISION="1ea34ff48f87168174e12956e200b1d908b1c5ff"
 WAN_CAP_LOCK=threading.RLock()
 WAN_CAP_CACHE={"at":0.0,"value":None}
 WAN_CAP_TTL_SECONDS=15.0
@@ -158,8 +159,11 @@ def wan_worker_capabilities(force=False):
             and model.get("license") == "apache-2.0"
             and model.get("terms_acknowledged") is True
             and source.get("verified") is True
+            and source.get("revision") == WAN_SOURCE_REVISION
             and hardware.get("available") is True
             and int(hardware.get("total_vram_mb") or 0) >= 24576
+            and int(hardware.get("free_vram_mb") or 0) >= 22000
+            and re.fullmatch(r"[0-9a-f]{40}", str(model.get("revision") or "")) is not None
             and storage.get("persistent") is True
             and raw.get("ffmpeg") is True
             and raw.get("ffprobe") is True
@@ -173,6 +177,7 @@ def wan_worker_capabilities(force=False):
             "model": "Wan2.2-TI2V-5B",
             "model_id": model.get("model_id"),
             "model_revision": model.get("revision"),
+            "source_revision": source.get("revision"),
             "license": model.get("license"),
             "license_verified": bool(model.get("license_verified")),
             "gpu": hardware,
