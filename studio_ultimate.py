@@ -10901,7 +10901,7 @@ CLOUD_INFRASTRUCTURE_3621 = [
     {"id":"local-compute","name":"Local production compute","status":"ready","detail":"FFmpeg + local media generation run inside the service container."},
     {"id":"free-forever-routing","name":"Free-forever resource routing","status":"ready","detail":"Local, built-in and genuinely free/public providers are used; paid providers are never required by the application."},
     {"id":"https-edge","name":"HTTPS service edge","status":"ready","detail":"The web application is designed for HTTPS deployment and secure sessions."},
-    {"id":"persistent-sqlite","name":"Workspace database","status":"ready","detail":"SQLite-backed workspace state is available on the active instance."},
+    {"id":"persistent-sqlite","name":"Workspace SQLite database","status":"runtime-local","detail":"SQLite workspace state is available on this instance; restart-safe recovery requires a verified persistent mount or verified remote state snapshot."},
     {"id":"durable-object-storage","name":"Durable object storage","status":"adapter-dependent","detail":"Configure an external durable storage adapter for restart-safe media retention."},
     {"id":"distributed-workers","name":"Distributed worker fabric","status":"adapter-dependent","detail":"Current free deployment uses the in-process worker; distributed queues require an external worker/queue service."},
     {"id":"cdn-delivery","name":"CDN / global delivery","status":"adapter-dependent","detail":"Attach a real object-storage/CDN publisher for global edge delivery."},
@@ -11152,37 +11152,49 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
             durability = __import__("ai_infinity.persistence_truth", fromlist=["project_state_durability"]).project_state_durability(DATA_DIR)
         except Exception:
             durability = {"persistent": False, "reason": "durability_probe_failed", "truthful": True}
+        native_video = {}
+        try:
+            import production_graph
+            native_video = production_graph.wan_worker_capabilities()
+        except Exception as exc:
+            native_video = {
+                "enabled": False,
+                "status": "probe_failed",
+                "reason": f"{type(exc).__name__}: {str(exc)[:180]}",
+                "truthful": True,
+            }
+        native_video_ready = bool(native_video.get("enabled") is True)
+        video_credentials_present = bool(
+            os.getenv("HF_TOKEN", "").strip()
+            or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
+            or os.getenv("OPENAI_API_KEY", "").strip()
+            or os.getenv("RUNWAYML_API_SECRET", "").strip()
+        )
         return {
             "status": "healthy" if media_core and voice_core else "degraded", "version": VERSION, "build": BUILD,
             "research": external_enabled, "internet_sources": external_enabled, "creative_engine": True,
             "ai_image_generation": bool(os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()),
             "ai_image_generation_provider_available": bool(os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()),
-            "ai_video_generation": bool(
-                os.getenv("HF_TOKEN", "").strip()
-                or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
-                or os.getenv("OPENAI_API_KEY", "").strip()
-                or os.getenv("RUNWAYML_API_SECRET", "").strip()
-            ),
-            "ai_video_generation_provider_available": bool(
-                os.getenv("HF_TOKEN", "").strip()
-                or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
-                or os.getenv("OPENAI_API_KEY", "").strip()
-                or os.getenv("RUNWAYML_API_SECRET", "").strip()
-            ),
-            "real_motion_video": bool(
-                os.getenv("AI_INFINITY_AI_VIDEO", "1").strip().lower() in {"1","true","yes","auto"}
-                and bool(os.getenv("HF_TOKEN","").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN","").strip()
-                         or os.getenv("OPENAI_API_KEY","").strip() or os.getenv("RUNWAYML_API_SECRET","").strip())
-            ),
+            # A credential is configuration, not proof that inference is
+            # reachable. Only a live worker that passes its pinned model, GPU,
+            # licence and persistent-volume capability check is reported as
+            # available native video generation.
+            "ai_video_generation": native_video_ready,
+            "ai_video_generation_provider_available": native_video_ready,
+            "ai_video_generation_configured": video_credentials_present,
+            "native_video_generation": native_video,
+            "real_motion_video": native_video_ready,
             "motion_design_fallback": bool(Image is not None and media_core),
             "voice": voice_core, "music": media_core, "captions": media_core,
             "long_form": media_core and voice_core, "short_form": media_core and voice_core,
             "thumbnail": bool(Image is not None and media_core), "creator_package": media_core and voice_core,
             "persistent_jobs": bool(durability.get("persistent")),
+            "persistent_queue": bool(durability.get("persistent")),
             "adaptive_learning": True,
             "persistence": durability,
             "download_without_publishing": True, "youtube_publishing": True, "webhook_publishing": True,
-            "persistent_projects": bool(durability.get("persistent")), "queued_workers": True, "progress_tracking": True, "cancel_retry": True, "resumable_scene_checkpoints": True, "cancellable_ffmpeg": True, "artifact_sha256": True, "audit_trail": True, "signed_share_links": True,
+            "persistent_projects": bool(durability.get("persistent")),
+            "queued_workers": bool(getattr(__import__(__name__), "WORKER_STARTED", False)), "progress_tracking": True, "cancel_retry": True, "resumable_scene_checkpoints": True, "cancellable_ffmpeg": True, "artifact_sha256": True, "audit_trail": True, "signed_share_links": True,
             "truthful": True,
             "one_command_creation": True, "optional_publishing": True, "download_first": True, "one_time_connections": True,
             "universal_creator_workspace": True, "creator_profile": True, "multi_platform_workflows": True, "platform_deliverable_packages": True, "seo_package": True, "accessibility_package": True, "provenance_package": True, "podcast_rss": True,
