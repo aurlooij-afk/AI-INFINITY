@@ -52,6 +52,7 @@ then describe the worker as ready.
 ~~~sh
 git clone https://github.com/Wan-Video/Wan2.2.git /opt/Wan2.2
 cd /opt/Wan2.2
+git checkout 1ea34ff48f87168174e12956e200b1d908b1c5ff
 pip install -r requirements.txt
 ~~~
 
