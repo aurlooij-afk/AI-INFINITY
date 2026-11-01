@@ -495,7 +495,7 @@ def import_otio_timeline(
                 # custom properties attached to Gap objects. Recover the gap
                 # only when the same ordered catalog position explicitly marks
                 # a disabled AI Infinity scene; unrelated edits fail closed.
-                name_match = re.search(r"\[ai-infinity-disabled=(scene_\d{2}\.mp4)\]$", str(item.name or ""))
+                name_match = re.search(r"\[ai-infinity-disabled=(scene_\d{2,3}\.mp4)\]$", str(item.name or ""))
                 candidate = None
                 if name_match:
                     marker_asset = name_match.group(1)
@@ -566,7 +566,7 @@ def import_otio_timeline(
             "enabled": enabled,
         })
         if len(rows) > MAX_SCENES:
-            raise TimelineInterchangeError("OTIO timeline exceeds the 40-scene limit")
+            raise TimelineInterchangeError(f"OTIO timeline exceeds the {MAX_SCENES}-scene limit")
 
     if not rows or not any(row["enabled"] for row in rows):
         raise TimelineInterchangeError("OTIO timeline must include at least one enabled scene")
