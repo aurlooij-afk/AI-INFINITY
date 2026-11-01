@@ -286,7 +286,7 @@ def tech(path):
 
 
 def candidate_local_path(project_id, candidate_id, user_id):
-    """Return a verified local candidate path, restoring the exact durable object after restart."""
+    """Return candidate bytes only when they match the exact verified durable object."""
     ensure()
     with LOCK, db() as c:
         row = c.execute(
@@ -309,11 +309,17 @@ def candidate_local_path(project_id, candidate_id, user_id):
         storage_info = json.loads(row["storage_json"] or "{}")
     except Exception:
         storage_info = {}
+    providers = storage_info.get("successful_providers") if isinstance(storage_info, dict) else []
+    expected_sha = str(storage_info.get("sha256") or "") if isinstance(storage_info, dict) else ""
+    try:
+        expected_size = int(storage_info.get("size_bytes") or -1) if isinstance(storage_info, dict) else -1
+    except (TypeError, ValueError):
+        expected_size = -1
     if (
         storage_status not in {"primary_only", "durable_partial", "durable_multi_provider", "durable_5_provider"}
-        or not storage_info.get("successful_providers")
+        or not providers or not expected_sha or len(expected_sha) != 64 or expected_size <= 0
     ):
-        raise HTTPException(409, "candidate media has no verified durable object-storage copy")
+        raise HTTPException(409, "candidate media has no verified durable object, SHA-256 and size record")
 
     path = raw_path.resolve()
     jobs_root = (Path(os.getenv("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity")) / "production-jobs").resolve()
@@ -325,35 +331,54 @@ def candidate_local_path(project_id, candidate_id, user_id):
         except ValueError:
             return False
 
-    # The normal live-worker path is under production-jobs. Return it without
-    # importing the full Creator Studio object or opening a second recovery DB.
-    if path.is_file() and within(path, jobs_root) and not path.is_symlink():
-        return path
+    def bytes_match(candidate_path):
+        if candidate_path.is_symlink() or not candidate_path.is_file():
+            return False
+        try:
+            if candidate_path.stat().st_size != expected_size:
+                return False
+            digest = hashlib.sha256()
+            with candidate_path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.hexdigest() == expected_sha
+        except (OSError, PermissionError):
+            return False
 
-    studio_module = s()
-    project_root = studio_module._project_dir(project_id).resolve()
-    if path.is_file() and within(path, project_root) and not path.is_symlink():
-        return path
+    studio_module = None
+    project_root = None
     if path.exists():
-        raise HTTPException(409, "candidate media is outside its verified job/project directory")
+        studio_module = s()
+        project_root = studio_module._project_dir(project_id).resolve()
+        if not (within(path, jobs_root) or within(path, project_root)):
+            raise HTTPException(409, "candidate media is outside its verified job/project directory")
+        if bytes_match(path):
+            return path
+    else:
+        # The normal live-worker path is under production-jobs. Do not import
+        # Creator Studio unless we actually need its project recovery service.
+        if path.parent.resolve() == jobs_root or within(path, jobs_root):
+            pass
 
+    if studio_module is None:
+        studio_module = s()
+        project_root = studio_module._project_dir(project_id).resolve()
     restored = studio_module._rehydrate_project_asset(
         project_id, str(user_id), expected_name, force=True
     )
     if restored is None:
         raise HTTPException(409, "candidate media could not be restored from verified object storage")
-    path = Path(restored).resolve()
-    if path.is_symlink() or not path.is_file() or not within(path, project_root):
+    restored_path = Path(restored).resolve()
+    if restored_path.is_symlink() or not within(restored_path, project_root):
         raise HTTPException(409, "restored candidate media is outside its project directory")
-    if path.name != expected_name or path.suffix.lower() != ".mp4":
-        raise HTTPException(409, "restored candidate media identity is invalid")
-
+    if restored_path.name != expected_name or restored_path.suffix.lower() != ".mp4" or not bytes_match(restored_path):
+        raise HTTPException(409, "restored candidate does not match the verified object SHA-256 and size")
     with LOCK, db() as c:
         c.execute(
             "UPDATE pg_candidates SET asset_path=?,updated_at=? WHERE candidate_id=? AND project_id=?",
-            (str(path), now(), candidate_id, project_id),
+            (str(restored_path), now(), candidate_id, project_id),
         )
-    return path
+    return restored_path
 
 def review(cid, user):
     """Record technical QA without silently approving the shot creatively."""
