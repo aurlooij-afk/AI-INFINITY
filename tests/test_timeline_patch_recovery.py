@@ -391,3 +391,118 @@ def test_creator_runtime_evidence_uploads_are_split_for_reliable_review() -> Non
     assert "/tmp/ai-infinity-brand-film-review/package.zip" in workflow
     assert "/tmp/ai-infinity-brand-film-review/timeline-export.zip" in workflow
     assert "/tmp/ai-infinity-brand-film-review/selected_visual_*" in workflow
+
+
+def test_editor_saves_all_180_longform_scenes_including_three_digit_identities(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import asyncio
+
+    project_id = "longform-180-scene-editor"
+    root = tmp_path / project_id
+    root.mkdir()
+    for index in range(1, 181):
+        (root / f"scene_{index:02d}.mp4").write_bytes(b"scene master " + str(index).encode())
+
+    project = {
+        "project_id": project_id,
+        "user_id": "test-user",
+        "status": "completed",
+        "title": "One-hour editable timeline",
+        "total_scenes": 180,
+    }
+    calls = {"saved": [], "registered": [], "audits": []}
+    studio = SimpleNamespace(
+        _get_user_id=lambda _request: "test-user",
+        _get_project=lambda pid: project if pid == project_id else None,
+        _project_dir=lambda _pid: root,
+        probe_duration=lambda _path: 20.0,
+        _save_asset=lambda pid, kind, path, media_type, metadata=None: (
+            calls["saved"].append((pid, kind, Path(path).name)) or {
+                "durable_storage": {"status": "not_persisted", "successful_providers": []}
+            }
+        ),
+        register_artifact=lambda pid, path, media_type, metadata=None: (
+            calls["registered"].append((pid, Path(path).name)) or {"asset_name": Path(path).name}
+        ),
+        audit_event=lambda pid, event, metadata=None: calls["audits"].append((pid, event, dict(metadata or {}))),
+    )
+    base = SimpleNamespace(_safe=lambda value, maximum: str(value or "")[:maximum])
+    monkeypatch.setitem(__import__("sys").modules, "studio_ultimate", studio)
+    monkeypatch.setitem(__import__("sys").modules, "professional_creator_v2", base)
+
+    app = FastAPI()
+    patch.install(app)
+    endpoint = next(
+        route.endpoint for route in app.router.routes
+        if getattr(route, "path", "") == "/infinity/pro2/project/{pid}/timeline"
+        and "PUT" in (getattr(route, "methods", set()) or set())
+    )
+    payload = {
+        "scenes": [
+            {
+                "source_asset": f"scene_{index:02d}.mp4",
+                "heading": f"Shot {index}",
+                "narration": f"Long-form narration for shot {index}.",
+                "duration": 20.0,
+                "enabled": True,
+            }
+            for index in range(1, 181)
+        ]
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sent = False
+
+    async def receive():
+        nonlocal sent
+        if sent:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request({
+        "type": "http",
+        "method": "PUT",
+        "path": f"/infinity/pro2/project/{project_id}/timeline",
+        "headers": [(b"content-type", b"application/json")],
+        "query_string": b"",
+        "scheme": "http",
+        "server": ("test", 80),
+        "client": ("test", 12345),
+        "root_path": "",
+    }, receive)
+
+    result = asyncio.run(endpoint(project_id, request))
+
+    assert result["status"] == "saved"
+    assert len(result["timeline"]["scenes"]) == 180
+    assert result["timeline"]["scenes"][0]["source_asset"] == "scene_01.mp4"
+    assert result["timeline"]["scenes"][99]["source_asset"] == "scene_100.mp4"
+    assert result["timeline"]["scenes"][-1]["source_asset"] == "scene_180.mp4"
+    assert result["timeline"]["duration_seconds"] == 3600.0
+    assert calls["saved"] == [(project_id, "timeline", "timeline.json")]
+    assert calls["registered"] == [(project_id, "timeline.json")]
+    assert any(event == "professional_timeline_saved_corrected" for _pid, event, _meta in calls["audits"])
+
+
+def test_qc_review_filter_accepts_three_digit_scene_master_names(tmp_path: Path) -> None:
+    root = tmp_path / "three-digit-review"
+    root.mkdir()
+    (root / "scene_100.mp4").write_bytes(b"real scene 100")
+    source = {
+        "scenes": [{
+            "source_asset": "scene_100.mp4",
+            "source_index": 100,
+            "heading": "One hundred",
+            "enabled": True,
+        }]
+    }
+
+    reviewed = patch._review_only_filter_generated_missing_masters(
+        {"status": "failed", "stage": "quality_control"},
+        root,
+        source,
+    )
+
+    assert reviewed is source
+    assert reviewed["scenes"][0]["source_asset"] == "scene_100.mp4"
