@@ -34,7 +34,7 @@ browser device. It must have:
 - A compatible NVIDIA driver and CUDA-enabled PyTorch installation.
 - At least 24 GiB total VRAM and at least 22,000 MiB free before an inference starts.
 - The official Wan2.2 code repository and its dependencies installed.
-- At least 45 GiB free for model snapshot preparation.
+- At least 55 GiB free for the model snapshot and safe download/cache headroom.
 - A persistent worker volume with at least 10 GiB free for job state, logs and outputs.
 - A private network or HTTPS reverse proxy between AI Infinity and this worker.
 
@@ -93,7 +93,9 @@ WAN_WORKER_PERSISTENT_STORAGE_CONFIRMED=true is an operator attestation that
 WAN_WORKER_DATA_DIR is a durable mounted volume. Do not set it for /tmp, a
 container writable layer, or an ephemeral deployment disk.
 
-Start one process and one Uvicorn worker only. Do not scale this service horizontally
+Start one process and one Uvicorn worker only. The worker also acquires a persistent
+filesystem lock, so a second service process cannot silently start a second inference
+loop against the same single GPU. Do not scale this service horizontally
 against a single GPU volume/database:
 
 ~~~sh
