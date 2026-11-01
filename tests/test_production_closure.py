@@ -308,3 +308,66 @@ def test_visual_rights_evidence_survives_artifact_registry_read_failure(monkeypa
     assert registry["registry_read_status"] == "unavailable"
     assert "simulated database busy" in registry["registry_read_error"]
 
+def test_studio_health_does_not_treat_a_provider_token_as_video_inference_proof(monkeypatch):
+    import production_graph
+
+    monkeypatch.setenv("HF_TOKEN", "configured-but-not-a-live-inference-worker")
+    monkeypatch.setattr(
+        production_graph,
+        "wan_worker_capabilities",
+        lambda: {
+            "enabled": False,
+            "status": "not_configured",
+            "reason": "no independently verified GPU worker",
+            "truthful": True,
+        },
+    )
+
+    response = client.get("/infinity/studio/health")
+
+    assert response.status_code == 200, response.text
+    state = response.json()
+    assert state["ai_video_generation_configured"] is True
+    assert state["ai_video_generation"] is False
+    assert state["ai_video_generation_provider_available"] is False
+    assert state["real_motion_video"] is False
+    assert state["native_video_generation"]["status"] == "not_configured"
+
+
+def test_readiness_does_not_claim_persistent_queue_without_verified_project_storage(
+    monkeypatch, tmp_path
+):
+    from types import SimpleNamespace
+    import ai_infinity.persistence_truth as persistence_truth
+
+    monkeypatch.setattr(
+        persistence_truth,
+        "project_state_durability",
+        lambda _root: {
+            "persistent": False,
+            "reason": "durable_mode_requested_but_backend_not_verified",
+            "truthful": True,
+        },
+    )
+    monkeypatch.setattr(
+        closure,
+        "_studio",
+        lambda: SimpleNamespace(_connections=lambda _user_id: []),
+    )
+    monkeypatch.setattr(closure, "_data_dir", lambda: tmp_path / "runtime-local")
+
+    request = SimpleNamespace(base_url="https://example.test/")
+    state = closure._readiness("readiness-test-user", request)
+
+    assert state["storage"]["persistent_runtime"] is False
+    assert state["local_capabilities"]["persistent_queue"] is False
+
+
+def test_workspace_database_catalog_does_not_label_instance_local_sqlite_as_persistent():
+    row = next(
+        item for item in studio.CLOUD_INFRASTRUCTURE_3621
+        if item["id"] == "persistent-sqlite"
+    )
+
+    assert row["status"] == "runtime-local"
+    assert "restart-safe recovery requires" in row["detail"]
