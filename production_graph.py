@@ -94,7 +94,11 @@ def graph(pid):
                        "queued":sum(1 for x in jobs if x["status"]=="queued")},"truthful":True}
 def providers():
     return {"version":VERSION,"providers":[
-    {"id":"runway","video":True,"configured":bool(os.getenv("RUNWAYML_API_SECRET","").strip()),"model":os.getenv("AI_INFINITY_RUNWAY_MODEL","gen4.5")},
+    {"id":"runway","video":True,
+     "configured":bool(os.getenv("RUNWAYML_API_SECRET","").strip()),
+     "enabled":bool(os.getenv("RUNWAYML_API_SECRET","").strip()) and os.getenv("AI_INFINITY_RUNWAY_PAID_USAGE_ACK","").strip().lower() in {"1","true","yes","on"},
+     "status":("enabled_billing_acknowledged_unverified" if os.getenv("RUNWAYML_API_SECRET","").strip() and os.getenv("AI_INFINITY_RUNWAY_PAID_USAGE_ACK","").strip().lower() in {"1","true","yes","on"} else ("paid_usage_not_authorized" if os.getenv("RUNWAYML_API_SECRET","").strip() else "not_configured")),
+     "pricing_class":"paid_metered","availability":"not_verified","model":os.getenv("AI_INFINITY_RUNWAY_MODEL","gen4.5")},
     {"id":"openai_video","video":False,"configured":False,"enabled":False,"status":"deprecated","reason":"The Sora API was discontinued on 2026-09-24.","model":os.getenv("AI_INFINITY_OPENAI_VIDEO_MODEL","sora-2-pro")},
     {"id":"elevenlabs","voice":True,"sfx":True,"configured":bool(os.getenv("ELEVENLABS_API_KEY","").strip())},
     {"id":"tavily","research":True,"configured":bool(os.getenv("TAVILY_API_KEY","").strip())},
@@ -105,7 +109,9 @@ def providers():
     "queue":{"backend":"redis" if redis_client() else "sqlite-fallback","redis_configured":bool(os.getenv("REDIS_URL","").strip())},"truthful":True}
 def runway_create(d):
     k=os.getenv("RUNWAYML_API_SECRET","").strip()
+    ack=os.getenv("AI_INFINITY_RUNWAY_PAID_USAGE_ACK","").strip().lower() in {"1","true","yes","on"}
     if not k:raise RuntimeError("RUNWAYML_API_SECRET not configured")
+    if not ack:raise RuntimeError("Runway is a paid metered provider; explicit AI_INFINITY_RUNWAY_PAID_USAGE_ACK is required before any API request")
     body={"model":d.get("model") or os.getenv("AI_INFINITY_RUNWAY_MODEL","gen4.5"),"promptText":clean(d.get("prompt"),5000),"ratio":d.get("ratio") or "1280:768","duration":max(2,min(10,int(d.get("duration") or 5)))}
     if d.get("prompt_image"):body["promptImage"]=d["prompt_image"]
     r=requests.post("https://api.dev.runwayml.com/v1/image_to_video",headers={"Authorization":f"Bearer {k}","X-Runway-Version":"2024-11-06","Content-Type":"application/json"},json=body,timeout=60); r.raise_for_status(); return r.json()
@@ -143,6 +149,8 @@ def process(job):
     try:
         p=str(job.get("provider") or "").lower()
         if job["kind"]=="video" and p=="runway":
+            if os.getenv("AI_INFINITY_RUNWAY_PAID_USAGE_ACK","").strip().lower() not in {"1","true","yes","on"}:
+                raise RuntimeError("paid Runway usage is not authorized; job was not sent to provider")
             q=runway_create(d);tid=q.get("id")
             if not tid:raise RuntimeError("Runway returned no task id")
             done=runway_poll(tid,int(d.get("timeout") or 900))
@@ -488,13 +496,25 @@ def register(app):
         return {"status":"accepted","project_id":pid,"graph":sync(pid),"truthful":True}
     @app.post("/infinity/production/project/{pid}/generate-video-batch")
     async def gb(pid:str,r:Request):
-        owned(pid,r);d=await r.json();sid=clean(d.get("shot_id"),120);n=max(1,min(4,int(d.get("count") or 3)))
+        owned(pid,r);d=await r.json();sid=clean(d.get("shot_id"),120);n=max(1,min(4,int(d.get("count") or 2)))
         if not sid:raise HTTPException(422,"shot_id required")
-        if not os.getenv("RUNWAYML_API_SECRET","").strip():return {"status":"not_configured","required_secret":"RUNWAYML_API_SECRET","truthful":True}
+        if not os.getenv("RUNWAYML_API_SECRET","").strip():
+            return {"status":"not_configured","required_secret":"RUNWAYML_API_SECRET","truthful":True}
+        if os.getenv("AI_INFINITY_RUNWAY_PAID_USAGE_ACK","").strip().lower() not in {"1","true","yes","on"}:
+            return {"status":"paid_provider_authorization_required","provider":"runway","pricing_class":"paid_metered","api_request_sent":False,"truthful":True}
+        with LOCK,db() as c:
+            shot=c.execute("SELECT duration,visual_prompt FROM pg_shots WHERE shot_id=? AND project_id=?",(sid,pid)).fetchone()
+        if not shot:raise HTTPException(404,"shot not found")
+        try:requested_duration=float(d.get("duration") or shot["duration"] or 5)
+        except (TypeError,ValueError):raise HTTPException(422,"duration must be a number")
+        if not 2 <= requested_duration <= 10:
+            raise HTTPException(422,"this Runway adapter supports native clips from 2 to 10 seconds; revise this shot duration or use another verified provider")
         styles=["cinematic","documentary","editorial","commercial"];jobs=[]
         for i in range(n):
-            x=dict(d);x["prompt"]=clean(d.get("prompt") or "Professional cinematic shot",3800)+f"; variation {i+1}: {styles[i%4]}.";jobs.append(enqueue(uid(r),pid,sid,"video","runway",x))
-        return {"status":"accepted","jobs":jobs,"truthful":True}
+            x=dict(d);x["duration"]=requested_duration
+            x["prompt"]=clean(d.get("prompt") or shot["visual_prompt"] or "Professional cinematic shot",3800)+f"; variation {i+1}: {styles[i%4]}."
+            jobs.append(enqueue(uid(r),pid,sid,"video","runway",x))
+        return {"status":"accepted","jobs":jobs,"requested_clip_seconds":requested_duration,"truthful":True}
     @app.post("/infinity/production/project/{pid}/review/{cid}")
     def rv(pid:str,cid:str,r:Request):owned(pid,r);return review(cid,uid(r))
     @app.get("/infinity/production/project/{pid}/candidate/{cid}/media")
