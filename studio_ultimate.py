@@ -26,7 +26,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from fastapi import Request, Response
 from pydantic import BaseModel, Field
-from urllib.parse import quote, urlencode, urlparse
+from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 from urllib.request import Request as URLRequest, urlopen, HTTPRedirectHandler, build_opener
 
 try:
@@ -8373,7 +8373,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 f"{evidence_requirement['minimum_archetypes']} required"
             )
         research_sufficient = bool(research_count) and not evidence_shortfalls
-        research_status = "complete" if research_sufficient or not research_required else "degraded"
+        research_status = "complete" if research_count > 0 and (not research_required or research_sufficient) else "degraded"
         audit_event(project_id, "research_complete" if research_count > 0 else "research_degraded", {
             "source_count": research_count,
             "reference_count": len(reference_sources),
