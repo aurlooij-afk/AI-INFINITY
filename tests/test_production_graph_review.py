@@ -357,3 +357,51 @@ def test_runway_candidate_worker_records_verified_storage_and_unique_asset_name(
     assert Path(candidate["asset_path"]).is_file()
     assert job["status"] == "completed"
     assert json.loads(job["result_json"])["storage_status"] == "primary_only"
+
+
+def test_install_invalidates_only_the_selected_scene_render_cache(monkeypatch, tmp_path: Path):
+    import hashlib
+    import threading
+
+    db_path = tmp_path / "production-signature.sqlite3"
+    monkeypatch.setattr(production_graph, "dbpath", lambda: db_path)
+    monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_INFINITY_PRODUCTION_GRAPH_WORKER", "false")
+    monkeypatch.setattr(production_graph, "PATCHED", False)
+
+    production_graph.ensure()
+    project_id = "project-signature"
+    candidate_id = "cand_" + "c" * 32
+    with production_graph.db() as conn:
+        conn.execute(
+            "INSERT INTO pg_projects(project_id,user_id,brief_sha,status,stage,progress,updated_at) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (project_id, "user", "brief", "completed", "complete", 100, 1.0),
+        )
+        conn.execute(
+            "INSERT INTO pg_shots(shot_id,project_id,seq,purpose,duration,narration,visual_prompt,status,winner_candidate_id,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            ("shot-1", project_id, 1, "Shot", 5, "Voice", "Visual", "selected_for_editor", candidate_id, 1.0),
+        )
+
+    active = threading.local()
+    active.project_id = project_id
+    fake_studio = SimpleNamespace(
+        _stage=lambda *_args, **_kwargs: None,
+        _scene_render_signature=lambda _chapter, _request, index: f"base-{index}",
+        _ci_test_visual=lambda *_args, **_kwargs: None,
+        acquire_scene_asset=lambda *args, **kwargs: {"kind": "image", "path": "fallback.png"},
+        ACTIVE_PROJECT=active,
+        _get_project=lambda _pid: {"user_id": "user", "request_json": "{}"},
+        audit_event=lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(production_graph, "s", lambda: fake_studio)
+
+    production_graph.install()
+    selected_signature = fake_studio._scene_render_signature({}, {}, 1)
+    untouched_signature = fake_studio._scene_render_signature({}, {}, 2)
+
+    assert selected_signature == hashlib.sha256(
+        ("base-1|selected-native-candidate|" + candidate_id).encode()
+    ).hexdigest()
+    assert untouched_signature == "base-2"
