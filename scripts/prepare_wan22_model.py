@@ -96,8 +96,14 @@ def main() -> int:
     # Hash every regular file in the actual pinned snapshot, not only the main
     # weights. This includes tokenizer/config assets used by the upstream
     # inference runtime and prevents an unverified sidecar from being swapped.
+    for rel in REQUIRED_FILES:
+        candidate = model_dir / rel
+        if candidate.is_symlink() or not candidate.is_file():
+            raise RuntimeError(f"Required Wan2.2 model file is missing or symlinked: {rel}")
     for path in sorted(model_dir.rglob("*")):
-        if not path.is_file() or path.is_symlink():
+        if path.is_symlink():
+            raise RuntimeError(f"Model snapshot contains an unexpected symlink: {path.relative_to(model_dir)}")
+        if not path.is_file():
             continue
         rel_path = path.relative_to(model_dir)
         if any(part == ".cache" for part in rel_path.parts) or path.name == MANIFEST_NAME:
