@@ -879,16 +879,28 @@ def create_job(payload: GenerateRequest, authorization: str | None = Header(defa
             detail={"status": "unavailable", "reasons": capabilities.get("reasons") or []},
         )
     with _connect() as c:
-        queued = int(c.execute("SELECT COUNT(*) FROM wan_jobs WHERE status='queued'").fetchone()[0])
-        if queued >= MAX_QUEUED_JOBS:
-            raise HTTPException(status_code=429, detail="GPU worker queue is full; retry after a job completes")
-        job_id = "wan_" + uuid.uuid4().hex
-        ts = _now()
-        c.execute(
-            "INSERT INTO wan_jobs(job_id,idempotency_key,request_sha256,request_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
-            (job_id, payload.idempotency_key, request_sha, json.dumps(request_data), "queued", ts, ts),
-        )
-        row = c.execute("SELECT * FROM wan_jobs WHERE job_id=?", (job_id,)).fetchone()
+        c.execute("BEGIN IMMEDIATE")
+        # Recheck under the write lock so two concurrent retries with the same
+        # candidate id converge on exactly one persistent GPU job.
+        old = c.execute(
+            "SELECT * FROM wan_jobs WHERE idempotency_key=?",
+            (payload.idempotency_key,),
+        ).fetchone()
+        if old:
+            if old["request_sha256"] != request_sha:
+                raise HTTPException(status_code=409, detail="idempotency key was already used for a different request")
+            row = old
+        else:
+            queued = int(c.execute("SELECT COUNT(*) FROM wan_jobs WHERE status='queued'").fetchone()[0])
+            if queued >= MAX_QUEUED_JOBS:
+                raise HTTPException(status_code=429, detail="GPU worker queue is full; retry after a job completes")
+            job_id = "wan_" + uuid.uuid4().hex
+            ts = _now()
+            c.execute(
+                "INSERT INTO wan_jobs(job_id,idempotency_key,request_sha256,request_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                (job_id, payload.idempotency_key, request_sha, json.dumps(request_data), "queued", ts, ts),
+            )
+            row = c.execute("SELECT * FROM wan_jobs WHERE job_id=?", (job_id,)).fetchone()
     return _job_public(row)
 
 
