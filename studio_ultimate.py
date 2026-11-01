@@ -8340,7 +8340,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "minimum_unique_domains": 8 if requested_duration_for_research >= 600 and research_required else (
                 5 if requested_duration_for_research >= 180 and research_required else 0
             ),
-            "minimum_archetypes": 8 if requested_duration_for_research >= 600 and research_required else (
+            "minimum_archetypes": 10 if requested_duration_for_research >= 600 and research_required else (
                 5 if requested_duration_for_research >= 180 and research_required else 0
             ),
             "truthful": True,
