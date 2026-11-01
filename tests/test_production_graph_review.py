@@ -405,3 +405,53 @@ def test_install_invalidates_only_the_selected_scene_render_cache(monkeypatch, t
         ("base-1|selected-native-candidate|" + candidate_id).encode()
     ).hexdigest()
     assert untouched_signature == "base-2"
+
+
+def test_selected_native_candidate_rehydrates_from_verified_storage_after_instance_restart(
+    monkeypatch, tmp_path: Path
+):
+    monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
+    _db_path, former_path = _seed_project(tmp_path, monkeypatch, status="selected_for_editor")
+    with production_graph.db() as conn:
+        conn.execute(
+            "UPDATE pg_shots SET winner_candidate_id=?,status=? WHERE shot_id=?",
+            ("candidate-test", "selected_for_editor", "shot-test"),
+        )
+    former_path.unlink()
+    project_root = tmp_path / "creator_studio" / "project-test"
+    project_root.mkdir(parents=True)
+    restored = project_root / former_path.name
+    restored.write_bytes(b"restored verified video " * 100)
+    calls = []
+    monkeypatch.setattr(
+        production_graph,
+        "s",
+        lambda: SimpleNamespace(
+            _project_dir=lambda _pid: project_root,
+            _rehydrate_project_asset=lambda pid, uid, filename, force=False: (
+                calls.append((pid, uid, filename, force)) or restored
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        production_graph,
+        "tech",
+        lambda _path: {
+            "decision": "technical_pass",
+            "score": 95,
+            "checks": {"duration_seconds": 5.0, "full_decode": True, "hd_resolution": True},
+            "creative_approval": "NOT_EVALUATED",
+        },
+    )
+
+    selected = production_graph.selected_candidate_asset("project-test", 1, 5.0)
+
+    assert selected["path"] == str(restored.resolve())
+    assert restored.is_file()
+    assert calls == [("project-test", "user-test", former_path.name, True)]
+    with production_graph.db() as conn:
+        row = conn.execute(
+            "SELECT asset_path FROM pg_candidates WHERE candidate_id=?",
+            ("candidate-test",),
+        ).fetchone()
+    assert row["asset_path"] == str(restored.resolve())
