@@ -15,7 +15,7 @@ def _seed_project(tmp_path: Path, monkeypatch, *, status: str = "ready") -> tupl
 
     media_root = tmp_path / "production-jobs" / "job_test"
     media_root.mkdir(parents=True)
-    media = media_root / "candidate.mp4"
+    media = media_root / "candidate-test.mp4"
     media.write_bytes(b"candidate video bytes " * 100)
 
     with production_graph.db() as conn:
@@ -201,7 +201,9 @@ def test_selected_native_candidate_rejects_media_outside_job_asset_root(
 ):
     monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
     _db_path, media = _seed_project(tmp_path, monkeypatch, status="selected_for_editor")
-    outside = tmp_path / "outside.mp4"
+    outside_root = tmp_path / "outside"
+    outside_root.mkdir()
+    outside = outside_root / "candidate-test.mp4"
     outside.write_bytes(media.read_bytes())
     with production_graph.db() as conn:
         conn.execute(
