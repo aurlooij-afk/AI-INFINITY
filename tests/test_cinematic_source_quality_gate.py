@@ -938,7 +938,18 @@ def test_commons_motion_uses_videoinfo_transcodes_and_falls_back_from_an_oversiz
         return path
 
     monkeypatch.setattr(studio, "FAST_MODE", True)
-    monkeypatch.setitem(studio._commons_media.__globals__, "http_json", fake_http_json)
+    function_globals = studio._commons_media.__globals__
+    assert function_globals is studio.__dict__, {
+        "function_module": studio._commons_media.__module__,
+        "module_name": studio.__name__,
+        "function_globals_module": function_globals.get("__name__"),
+        "function_name": studio._commons_media.__name__,
+    }
+    assert function_globals.get("_commons_media") is studio._commons_media, {
+        "function_name": studio._commons_media.__name__,
+        "module_global_name": getattr(function_globals.get("_commons_media"), "__name__", None),
+    }
+    monkeypatch.setitem(function_globals, "http_json", fake_http_json)
     monkeypatch.setitem(studio._commons_media.__globals__, "download", fake_download)
     monkeypatch.setattr(studio, "_commercial_use_from_license", lambda _name, _url: "commercial_use_allowed_with_attribution")
     studio.MEDIA_DEBUG_ERRORS.clear()
@@ -998,7 +1009,18 @@ def test_commons_motion_never_substitutes_a_poster_image_for_missing_video_trans
         raise ValueError("original exceeds allowed size")
 
     monkeypatch.setattr(studio, "FAST_MODE", True)
-    monkeypatch.setitem(studio._commons_media.__globals__, "http_json", fake_http_json)
+    function_globals = studio._commons_media.__globals__
+    assert function_globals is studio.__dict__, {
+        "function_module": studio._commons_media.__module__,
+        "module_name": studio.__name__,
+        "function_globals_module": function_globals.get("__name__"),
+        "function_name": studio._commons_media.__name__,
+    }
+    assert function_globals.get("_commons_media") is studio._commons_media, {
+        "function_name": studio._commons_media.__name__,
+        "module_global_name": getattr(function_globals.get("_commons_media"), "__name__", None),
+    }
+    monkeypatch.setitem(function_globals, "http_json", fake_http_json)
     monkeypatch.setitem(studio._commons_media.__globals__, "download", fake_download)
     studio.MEDIA_DEBUG_ERRORS.clear()
 
