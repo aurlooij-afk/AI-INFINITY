@@ -198,7 +198,7 @@ def test_selected_native_candidate_enters_renderer_only_when_clip_covers_scene_d
     assert selected["rights_status"] == "REVIEW_REQUIRED"
     assert selected["creative_approval"] == "PENDING"
 
-    with __import__("pytest").raises(RuntimeError, match="shorter than planned scene"):
+    with __import__("pytest").raises(RuntimeError, match="scene requires"):
         production_graph.selected_candidate_asset("project-test", 1, 6.0)
 
 
@@ -221,6 +221,12 @@ def test_selected_native_candidate_rejects_media_outside_job_asset_root(
             (str(outside), "candidate-test"),
         )
 
+    project_root = tmp_path / "creator_studio" / "project-test"
+    project_root.mkdir(parents=True)
+    monkeypatch.setattr(
+        production_graph, "s",
+        lambda: SimpleNamespace(_project_dir=lambda _pid: project_root),
+    )
     with __import__("pytest").raises(RuntimeError, match="outside its verified job/project directory"):
         production_graph.selected_candidate_asset("project-test", 1, 5.0)
 
