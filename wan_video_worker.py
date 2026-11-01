@@ -225,12 +225,15 @@ def _model_fingerprint(manifest: dict[str, Any]) -> str:
     values = []
     for item in manifest.get("files") or []:
         rel = str(item.get("path") or "")
-        path = (MODEL_DIR / rel).resolve()
+        candidate = MODEL_DIR / rel
+        if candidate.is_symlink():
+            return "invalid-path"
+        path = candidate.resolve()
         try:
             path.relative_to(MODEL_DIR)
         except ValueError:
             return "invalid-path"
-        if not path.is_file() or path.is_symlink():
+        if not path.is_file():
             values.append((rel, "missing"))
         else:
             st = path.stat()
@@ -293,12 +296,15 @@ def _model_state(force: bool = False) -> dict[str, Any]:
 
         verified_count = 0
         for rel, item in indexed.items():
-            path = (MODEL_DIR / rel).resolve()
+            candidate = MODEL_DIR / rel
+            if candidate.is_symlink():
+                raise ValueError(f"model file is symlinked: {rel}")
+            path = candidate.resolve()
             try:
                 path.relative_to(MODEL_DIR)
             except ValueError:
                 raise ValueError("model manifest contains a path traversal entry")
-            if not path.is_file() or path.is_symlink():
+            if not path.is_file():
                 raise ValueError(f"model file missing or symlinked: {rel}")
             size = path.stat().st_size
             if size != int(item.get("size_bytes") or -1):
