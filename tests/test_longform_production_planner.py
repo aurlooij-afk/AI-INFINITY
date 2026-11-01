@@ -513,7 +513,7 @@ def test_google_gemini_free_tier_writer_sends_json_mode_and_keeps_key_out_of_url
 
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setenv("AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK", "true")
-    monkeypatch.setenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", "gemini-2.5-flash-lite")
+    monkeypatch.setenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", "gemini-3.5-flash-lite")
     captured = {}
 
     class FakeResponse:
@@ -549,7 +549,7 @@ def test_google_gemini_free_tier_writer_sends_json_mode_and_keeps_key_out_of_url
         ],
         "temperature": 0.4,
     })
-    assert result["provider"] == "google-gemini-free-tier:gemini-2.5-flash-lite"
+    assert result["provider"] == "google-gemini-free-tier:gemini-3.5-flash-lite"
     assert result["text"] == "{\"chapters\": []}"
     assert "test-key" not in captured["url"]
     assert captured["headers"].get("X-goog-api-key") == "test-key"
