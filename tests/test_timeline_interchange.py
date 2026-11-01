@@ -317,3 +317,50 @@ def test_disabled_gap_identity_survives_nle_reordering(tmp_path: Path) -> None:
         "scene_02.mp4", "scene_01.mp4"
     ]
     assert [row["enabled"] for row in restored["scenes"]] == [False, True]
+
+
+def test_otio_export_import_roundtrips_more_than_40_scenes_and_three_digit_ids(tmp_path: Path) -> None:
+    timeline, truth, project = _project(tmp_path)
+    seed = tmp_path / "scene_01.mp4"
+    rows = []
+
+    for index in range(1, 102):
+        filename = f"scene_{index:02d}.mp4"
+        target = tmp_path / filename
+        if not target.exists():
+            shutil.copyfile(seed, target)
+        duration = _duration_seconds(target)
+        trim_end = 0.05
+        rows.append({
+            "source_asset": filename,
+            "source_index": index,
+            "heading": f"Long-form shot {index}",
+            "narration": f"Editorial narration for shot {index}.",
+            "image_prompt": f"A distinct planned shot {index}.",
+            "on_screen": f"Shot {index}",
+            "trim_start": 0.0,
+            "trim_end": trim_end,
+            "duration": duration - trim_end,
+            "source_duration": duration,
+            "enabled": True,
+        })
+
+    timeline["scenes"] = rows
+    timeline["duration_seconds"] = sum(row["duration"] for row in rows)
+
+    result = export_otio_bundle(tmp_path, "project-longform-101", project, timeline, truth)
+
+    assert result["scene_count"] == 101
+    assert result["truth_verified"] is False
+    restored = import_otio_timeline(
+        Path(result["timeline_path"]).read_bytes(),
+        tmp_path,
+        "project-longform-101",
+        "Long-form timeline",
+    )
+    assert len(restored["scenes"]) == 101
+    assert restored["scenes"][0]["source_asset"] == "scene_01.mp4"
+    assert restored["scenes"][98]["source_asset"] == "scene_99.mp4"
+    assert restored["scenes"][99]["source_asset"] == "scene_100.mp4"
+    assert restored["scenes"][-1]["source_asset"] == "scene_101.mp4"
+    assert restored["scenes"][-1]["source_index"] == 101
