@@ -215,7 +215,7 @@ def test_selected_native_candidate_rejects_media_outside_job_asset_root(
             (str(outside), "candidate-test"),
         )
 
-    with __import__("pytest").raises(RuntimeError, match="outside its verified project/job asset directory"):
+    with __import__("pytest").raises(RuntimeError, match="outside its verified job/project directory"):
         production_graph.selected_candidate_asset("project-test", 1, 5.0)
 
 
@@ -457,3 +457,50 @@ def test_selected_native_candidate_rehydrates_from_verified_storage_after_instan
             ("candidate-test",),
         ).fetchone()
     assert row["asset_path"] == str(restored.resolve())
+
+
+def test_creator_can_select_candidate_after_verified_media_rehydration(
+    monkeypatch, tmp_path: Path
+):
+    monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
+    _db_path, previous = _seed_project(tmp_path, monkeypatch, status="ready_for_creative_review")
+    previous.unlink()
+    project_root = tmp_path / "creator_studio" / "project-test"
+    project_root.mkdir(parents=True)
+    restored = project_root / previous.name
+    restored.write_bytes(b"restored candidate for explicit selection " * 100)
+    calls = []
+    audit = []
+    monkeypatch.setattr(
+        production_graph,
+        "s",
+        lambda: SimpleNamespace(
+            _project_dir=lambda _pid: project_root,
+            _rehydrate_project_asset=lambda pid, uid, filename, force=False: (
+                calls.append((pid, uid, filename, force)) or restored
+            ),
+            audit_event=lambda *args, **kwargs: audit.append((args, kwargs)),
+        ),
+    )
+
+    result = production_graph.select_for_editor(
+        "candidate-test", "user-test", "project-test"
+    )
+
+    assert result["status"] == "selected_for_editor"
+    assert restored.is_file()
+    assert calls == [("project-test", "user-test", previous.name, True)]
+    assert audit
+    with production_graph.db() as conn:
+        candidate = conn.execute(
+            "SELECT asset_path,status FROM pg_candidates WHERE candidate_id=?",
+            ("candidate-test",),
+        ).fetchone()
+        shot = conn.execute(
+            "SELECT winner_candidate_id,status FROM pg_shots WHERE shot_id=?",
+            ("shot-test",),
+        ).fetchone()
+    assert candidate["asset_path"] == str(restored.resolve())
+    assert candidate["status"] == "selected_for_editor"
+    assert shot["winner_candidate_id"] == "candidate-test"
+    assert shot["status"] == "selected_for_editor"
