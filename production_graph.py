@@ -285,6 +285,62 @@ def tech(path):
                 "creative_approval": "NOT_EVALUATED"}
 
 
+def candidate_local_path(project_id, candidate_id, user_id):
+    """Return a verified local candidate path, restoring the exact durable object after restart."""
+    ensure()
+    with LOCK, db() as c:
+        row = c.execute(
+            "SELECT c.*,p.user_id FROM pg_candidates c JOIN pg_projects p ON p.project_id=c.project_id "
+            "WHERE c.candidate_id=? AND c.project_id=?",
+            (candidate_id, project_id),
+        ).fetchone()
+    if not row or str(row["user_id"] or "") != str(user_id or ""):
+        raise HTTPException(404, "candidate not found")
+    raw_path = Path(row["asset_path"] or "")
+    expected_name = str(candidate_id) + ".mp4"
+    if raw_path.name != expected_name:
+        raise HTTPException(409, "candidate media identity does not match its registered candidate id")
+    if raw_path.is_symlink():
+        raise HTTPException(409, "candidate media is a symlink; refusing access")
+    storage_status = str(row["storage_status"] or "not_persisted")
+    try:
+        storage_info = json.loads(row["storage_json"] or "{}")
+    except Exception:
+        storage_info = {}
+    if storage_status not in {"primary_only", "durable_partial", "durable_multi_provider", "durable_5_provider"} or not storage_info.get("successful_providers"):
+        raise HTTPException(409, "candidate media has no verified durable object-storage copy")
+
+    path = raw_path.resolve()
+    jobs_root = (Path(os.getenv("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity")) / "production-jobs").resolve()
+    project_root = s()._project_dir(project_id).resolve()
+
+    def within(candidate_path, root):
+        try:
+            candidate_path.relative_to(root)
+            return True
+        except ValueError:
+            return False
+
+    if path.is_file():
+        if not (within(path, jobs_root) or within(path, project_root)):
+            raise HTTPException(409, "candidate media is outside its verified job/project directory")
+    else:
+        restored = s()._rehydrate_project_asset(project_id, str(user_id), expected_name, force=True)
+        if restored is None:
+            raise HTTPException(409, "candidate media could not be restored from verified object storage")
+        path = Path(restored).resolve()
+        if path.is_symlink() or not path.is_file() or not within(path, project_root):
+            raise HTTPException(409, "restored candidate media is outside its project directory")
+        with LOCK, db() as c:
+            c.execute(
+                "UPDATE pg_candidates SET asset_path=?,updated_at=? WHERE candidate_id=? AND project_id=?",
+                (str(path), now(), candidate_id, project_id),
+            )
+    if not path.is_file() or path.suffix.lower() != ".mp4":
+        raise HTTPException(409, "candidate media is missing or unsupported")
+    return path
+
+
 def review(cid, user):
     """Record technical QA without silently approving the shot creatively."""
     ensure()
@@ -299,7 +355,8 @@ def review(cid, user):
     if not project:
         raise HTTPException(404, "project not found")
 
-    technical = tech(Path(row["asset_path"] or ""))
+    media_path = candidate_local_path(row["project_id"], cid, user)
+    technical = tech(media_path)
     score = float(technical.get("score") or 0)
     technical_decision = str(technical.get("decision") or "technical_unavailable")
     if technical_decision == "technical_pass":
@@ -369,17 +426,7 @@ def select_for_editor(cid, user, project_id):
             storage_info = {}
         if storage_status not in {"primary_only", "durable_partial", "durable_multi_provider", "durable_5_provider"} or not storage_info.get("successful_providers"):
             raise HTTPException(409, "candidate is previewable but not durably stored; verified object storage is required before editor selection")
-        media_path = Path(candidate["asset_path"] or "")
-        if media_path.is_symlink():
-            raise HTTPException(409, "candidate media is not available for selection")
-        resolved_media = media_path.resolve()
-        allowed_root = (Path(os.getenv("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity")) / "production-jobs").resolve()
-        try:
-            resolved_media.relative_to(allowed_root)
-        except ValueError:
-            raise HTTPException(409, "candidate media is outside the production-job asset directory")
-        if not resolved_media.is_file() or resolved_media.suffix.lower() != ".mp4":
-            raise HTTPException(409, "candidate media is not available for selection")
+        media_path = candidate_local_path(project_id, cid, user)
         report = {
             "selection": "creator_selected_candidate_for_editor",
             "selected_by": user,
@@ -460,46 +507,10 @@ def selected_candidate_asset(project_id, scene_index, requested_duration):
     if not candidate or candidate["status"] != "selected_for_editor" or shot["status"] != "selected_for_editor":
         raise RuntimeError("selected shot candidate state is inconsistent; refusing a fallback visual")
 
-    storage_status = str(candidate["storage_status"] or "not_persisted")
     try:
-        storage_info = json.loads(candidate["storage_json"] or "{}")
-    except Exception:
-        storage_info = {}
-    if storage_status not in {"primary_only", "durable_partial", "durable_multi_provider", "durable_5_provider"} or not storage_info.get("successful_providers"):
-        raise RuntimeError("selected native video has no verified durable object-storage copy")
-    raw_path = Path(candidate["asset_path"] or "")
-    if raw_path.is_symlink():
-        raise RuntimeError("selected generated candidate is a symlink; refusing to use it")
-    path = raw_path.resolve()
-    jobs_root = (Path(os.getenv("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity")) / "production-jobs").resolve()
-    project_root = s()._project_dir(project_id).resolve()
-    try:
-        path.relative_to(jobs_root)
-        allowed = True
-    except ValueError:
-        try:
-            path.relative_to(project_root)
-            allowed = True
-        except ValueError:
-            allowed = False
-    if not allowed or path.is_symlink():
-        raise RuntimeError("selected generated candidate is outside its verified project/job asset directory")
-    if not path.is_file():
-        restored = s()._rehydrate_project_asset(
-            project_id, str(candidate["user_id"] or ""), raw_path.name, force=True
-        )
-        if restored is None:
-            raise RuntimeError("durably stored native video could not be restored after restart")
-        path = Path(restored).resolve()
-        try:
-            path.relative_to(project_root)
-        except ValueError as exc:
-            raise RuntimeError("restored candidate is outside its project directory") from exc
-        with LOCK, db() as c:
-            c.execute("UPDATE pg_candidates SET asset_path=?,updated_at=? WHERE candidate_id=?",
-                      (str(path), now(), candidate["candidate_id"]))
-    if not path.is_file() or path.suffix.lower() != ".mp4":
-        raise RuntimeError("selected generated candidate media is missing or unsupported")
+        path = candidate_local_path(project_id, str(candidate["candidate_id"]), str(candidate["user_id"] or ""))
+    except HTTPException as exc:
+        raise RuntimeError(str(exc.detail)) from exc
 
     report = tech(path)
     if report.get("decision") != "technical_pass":
@@ -639,16 +650,7 @@ def register(app):
     @app.get("/infinity/production/project/{pid}/candidate/{cid}/media")
     def candidate_media(pid:str,cid:str,r:Request):
         owned(pid,r)
-        with LOCK,db() as c:
-            row=c.execute("SELECT asset_path FROM pg_candidates WHERE candidate_id=? AND project_id=?",(cid,pid)).fetchone()
-        if not row:raise HTTPException(404,"candidate not found")
-        raw_path=Path(row["asset_path"] or "")
-        if raw_path.is_symlink():raise HTTPException(404,"candidate media not found")
-        path=raw_path.resolve()
-        allowed=(Path(os.getenv("AI_INFINITY_DATA_DIR","/tmp/ai-infinity"))/"production-jobs").resolve()
-        try:path.relative_to(allowed)
-        except ValueError:raise HTTPException(404,"candidate media not found")
-        if not path.is_file() or path.suffix.lower()!=".mp4":raise HTTPException(404,"candidate media not found")
+        path=candidate_local_path(pid,cid,uid(r))
         return FileResponse(path,media_type="video/mp4",filename=f"{cid}.mp4")
     @app.post("/infinity/production/project/{pid}/candidate/{cid}/select")
     def candidate_select(pid:str,cid:str,r:Request):
