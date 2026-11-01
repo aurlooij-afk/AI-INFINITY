@@ -645,6 +645,7 @@ def _run_job(job: dict[str, Any]) -> None:
                 start_new_session=True,
                 close_fds=True,
             )
+            ACTIVE_PROCESS = process
             while process.poll() is None:
                 if STOP.is_set():
                     raise RuntimeError("worker is shutting down")
