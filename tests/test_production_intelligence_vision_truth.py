@@ -35,7 +35,7 @@ def _db_fixture(tmp_path: Path, monkeypatch):
         conn.executescript(
             """
             CREATE TABLE pg_shots(
-                shot_id TEXT PRIMARY KEY, project_id TEXT, purpose TEXT, duration REAL,
+                shot_id TEXT PRIMARY KEY, project_id TEXT, seq INTEGER DEFAULT 0, purpose TEXT, duration REAL,
                 narration TEXT, visual_prompt TEXT, metadata TEXT, status TEXT,
                 winner_candidate_id TEXT
             );
