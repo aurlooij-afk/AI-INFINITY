@@ -1,11 +1,30 @@
 # AI Infinity — Known Production Blockers
 
-Last evidence refresh: 2026-10-30 UTC  
+Last evidence refresh: 2026-11-02 UTC  
 Repository: `aurlooij-afk/AI-INFINITY`  
-Primary workstream: PR [#48](https://github.com/aurlooij-afk/AI-INFINITY/pull/48), branch `fix/cinematic-creative-gates-and-review-export`, based on current `main`; PR [#37](https://github.com/aurlooij-afk/AI-INFINITY/pull/37) remains merged as `0a2f0c929f68d9a8c2dbf16a3dd49e1a1ed58ba4`.
+Primary workstream: PR [#48](https://github.com/aurlooij-afk/AI-INFINITY/pull/48), branch `fix/cinematic-creative-gates-and-review-export` (current head `d5a909aa2edc37980102d61cbd944dc5f7f8adda`), based on current `main`; PR [#37](https://github.com/aurlooij-afk/AI-INFINITY/pull/37) remains merged as `0a2f0c929f68d9a8c2dbf16a3dd49e1a1ed58ba4`.
 
 This file is a live release checklist, not a claim that the product is complete. A blocker is closed only by fresh evidence from the exact tested/deployed revision.
 
+
+## Current production evidence refresh — 2026-11-02
+
+This inventory is a fresh read of Render and GitHub metadata. It does not prove runtime inference or state restoration.
+
+- PR #48 is still open and unmerged. Its current head is `d5a909aa2edc37980102d61cbd944dc5f7f8adda`.
+- Current PR-head CI: Visual Diversity Truth Regression run [41364303329](https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/41364303329) passed; Standalone Runtime Verification [41364303219](https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/41364303219) and Final Complete Acceptance Suite [41364303207](https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/41364303207) were still in progress at this refresh. These remain repository CI, not GPU-worker or live storage proof.
+- Render service `srv-dallhl740ujc73eetgp0` is a single-instance free web service on `main`. Its latest listed live deploy is `dep-dbdrn6e1egvs73f6pnhg`, commit `8cc20501b087064c9016d640ea5213477652a863` (2026-10-23). The current PR head is not deployed.
+- Render service inventory returned only this web service; no separate GPU worker is provisioned. A real GPU-backed Wan2.2 inference has therefore not been demonstrated.
+- The service event feed records a suspension by `Monthly Quota Exceeded` and subsequent resume on 2026-11-01. It is currently marked not suspended, but this is an operational availability warning.
+- The workspace contains a free Postgres instance `ai-infinity-free-durable` with status available and expiry `2026-11-06T02:35:01Z`. The PR Blueprint does not wire a `DATABASE_URL`/database reference, and this expiring free database is not an acceptable permanent production-state guarantee. A hosted MCP read-only SQL query was blocked because its external IP was not on the database allowlist; no table/data inventory was obtained.
+- The free Key Value resource `ai-infinity-production-queue` is suspended and reports persistence mode `off`. It is not a valid persistent queue at this time.
+- A fresh HTTP probe of the public health routes could not be completed from the current network environment (DNS resolution failed). Do not translate the Render service's metadata status into a live application-health claim.
+
+### Production graph durability propagation fix — committed, CI pending
+
+A source review on 2026-11-02 found that `production_graph.db()` opened a raw `sqlite3.Connection` rather than using Creator Studio's configured `_connect()` factory. The graph's job/candidate/shot writes could therefore bypass the `DurableConnection` post-commit snapshot scheduler even when the B2 state adapter was active. PR #48 now routes this graph connection through the Creator Studio factory and adds a regression test proving a committed graph write schedules a snapshot. The same update corrects two readiness claims: provider-token presence no longer counts as live native video inference, and the persistent-queue flag now depends on verified project-state durability. The SQLite workspace catalog now labels local-only state as runtime-local rather than persistent.
+
+These are code-side corrections only. They do not establish that B2 is configured, that its PUT/HEAD/GET/SHA canary currently succeeds, that a snapshot was restored on a fresh instance, or that a GPU inference completed. Their focused tests must pass on the exact PR head before the code fix itself is marked validated.
 
 ## Fresh acceptance failure evidence — 2026-10-30
 
