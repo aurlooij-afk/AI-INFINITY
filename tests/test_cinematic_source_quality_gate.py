@@ -858,3 +858,149 @@ def test_curated_launch_expanded_catalog_selects_distinct_verified_source_motion
     assert selected["license_url"] == "https://www.pexels.com/license/"
     assert hashlib.sha256(Path(selected["path"]).read_bytes()).hexdigest() == hashlib.sha256(payload).hexdigest()
 
+
+
+
+def test_commons_motion_uses_videoinfo_transcodes_and_falls_back_from_an_oversized_derivative(monkeypatch, tmp_path):
+    from urllib.parse import parse_qs, urlparse
+
+    calls = []
+    downloads = []
+    search_page = {
+        "pageid": 101,
+        "ns": 6,
+        "title": "File:Distinct documentary motion.webm",
+        "canonicalurl": "https://commons.wikimedia.org/wiki/File:Distinct_documentary_motion.webm",
+    }
+    media_page = {
+        "pageid": 101,
+        "ns": 6,
+        "title": "File:Distinct documentary motion.webm",
+        "canonicalurl": search_page["canonicalurl"],
+        "videoinfo": [{
+            "url": "https://upload.wikimedia.org/wikipedia/commons/1/10/Distinct_documentary_motion.webm",
+            "mime": "video/webm",
+            "extmetadata": {
+                "LicenseShortName": {"value": "CC BY 4.0"},
+                "LicenseUrl": {"value": "https://creativecommons.org/licenses/by/4.0/"},
+                "Artist": {"value": "Documentary Motion Creator"},
+                "Credit": {"value": "Documentary Motion Creator"},
+                "ImageDescription": {"value": "A real documentary motion shot of the intended subject."},
+                "UsageTerms": {"value": "Creative Commons Attribution 4.0"},
+            },
+            "derivatives": [
+                {
+                    "src": "https://upload.wikimedia.org/wikipedia/commons/transcoded/1/10/Distinct.webm/Distinct.1080p.vp9.webm",
+                    "type": "video/webm; codecs=vp9, opus",
+                    "transcodekey": "1080p.vp9.webm",
+                    "width": 1920,
+                    "height": 1080,
+                    "bandwidth": 4200000,
+                },
+                {
+                    "src": "https://upload.wikimedia.org/wikipedia/commons/transcoded/1/10/Distinct.webm/Distinct.720p.vp9.webm",
+                    "type": "video/webm; codecs=vp9, opus",
+                    "transcodekey": "720p.vp9.webm",
+                    "width": 1280,
+                    "height": 720,
+                    "bandwidth": 1800000,
+                },
+                {
+                    "src": "https://upload.wikimedia.org/wikipedia/commons/transcoded/1/10/Distinct.webm/Distinct.360p.vp9.webm",
+                    "type": "video/webm; codecs=vp9, opus",
+                    "transcodekey": "360p.vp9.webm",
+                    "width": 640,
+                    "height": 360,
+                    "bandwidth": 500000,
+                },
+            ],
+        }],
+    }
+
+    def fake_http_json(url, timeout=0):
+        params = parse_qs(urlparse(url).query)
+        calls.append(params)
+        if "generator" in params:
+            assert params.get("prop") == ["info"]
+            assert params.get("gsrsearch", [""])[0].endswith("filetype:video")
+            return {"query": {"pages": {"101": search_page}}}
+        assert params.get("pageids") == ["101"]
+        assert params.get("prop") == ["info|videoinfo"]
+        assert "derivatives" in params.get("viprop", [""])[0].split("|")
+        assert "imageinfo" not in params.get("prop", [""])[0]
+        return {"query": {"pages": {"101": media_page}}}
+
+    def fake_download(url, path, timeout=0, max_bytes=None, headers=None):
+        downloads.append((url, max_bytes))
+        if "1080p.vp9.webm" in url:
+            raise ValueError("file exceeded the bounded download size")
+        path.write_bytes(b"validated transcoded Commons motion bytes\n" * 300)
+        return path
+
+    monkeypatch.setattr(studio, "FAST_MODE", True)
+    monkeypatch.setattr(studio, "http_json", fake_http_json)
+    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setattr(studio, "_commercial_use_from_license", lambda _name, _url: "commercial_use_allowed_with_attribution")
+
+    result = studio._commons_media(
+        "documentary motion about a distinct topic",
+        tmp_path,
+        limit=4,
+        prefer_motion=True,
+    )
+
+    assert len(calls) == 2
+    assert downloads[0][0].endswith("1080p.vp9.webm")
+    assert downloads[1][0].endswith("720p.vp9.webm")
+    assert all(max_bytes == 24_000_000 for _url, max_bytes in downloads)
+    assert len(result) == 1
+    selected = result[0]
+    assert selected["kind"] == "video"
+    assert selected["source"] == "Wikimedia Commons"
+    assert selected["source_id"] == 101
+    assert selected["source_url"] == search_page["canonicalurl"]
+    assert selected["source_media_url"] == media_page["videoinfo"][0]["url"]
+    assert selected["downloaded_media_url"].endswith("720p.vp9.webm")
+    assert selected["media_width"] == 1280
+    assert selected["media_height"] == 720
+    assert selected["transcode_key"] == "720p.vp9.webm"
+    assert selected["transcoded_from_original"] is True
+    assert selected["rights_status"] == "license_metadata_present"
+    assert selected["commercial_use_state"] == "commercial_use_allowed_with_attribution"
+    assert Path(selected["path"]).is_file()
+
+
+def test_commons_motion_never_substitutes_a_poster_image_for_missing_video_transcodes(monkeypatch, tmp_path):
+    from urllib.parse import parse_qs, urlparse
+
+    page = {
+        "pageid": 102,
+        "title": "File:Video without a transcode.webm",
+        "canonicalurl": "https://commons.wikimedia.org/wiki/File:Video_without_a_transcode.webm",
+        "videoinfo": [{
+            "url": "https://upload.wikimedia.org/wikipedia/commons/2/20/Video_without_a_transcode.webm",
+            "mime": "video/webm",
+            "extmetadata": {},
+            "derivatives": [],
+        }],
+    }
+    downloaded = []
+
+    def fake_http_json(url, timeout=0):
+        params = parse_qs(urlparse(url).query)
+        if "generator" in params:
+            return {"query": {"pages": {"102": {"pageid": 102, "title": page["title"]}}}}
+        return {"query": {"pages": {"102": page}}}
+
+    def fake_download(url, path, timeout=0, max_bytes=None, headers=None):
+        downloaded.append(url)
+        raise ValueError("original exceeds allowed size")
+
+    monkeypatch.setattr(studio, "FAST_MODE", True)
+    monkeypatch.setattr(studio, "http_json", fake_http_json)
+    monkeypatch.setattr(studio, "download", fake_download)
+
+    result = studio._commons_media("documentary subject", tmp_path, limit=2, prefer_motion=True)
+    assert result == []
+    assert downloaded == [page["videoinfo"][0]["url"]]
+    assert all("thumb" not in url for url in downloaded)
