@@ -296,23 +296,27 @@ def candidate_local_path(project_id, candidate_id, user_id):
         ).fetchone()
     if not row or str(row["user_id"] or "") != str(user_id or ""):
         raise HTTPException(404, "candidate not found")
-    raw_path = Path(row["asset_path"] or "")
+
     expected_name = str(candidate_id) + ".mp4"
+    raw_path = Path(row["asset_path"] or "")
     if raw_path.name != expected_name:
         raise HTTPException(409, "candidate media identity does not match its registered candidate id")
     if raw_path.is_symlink():
         raise HTTPException(409, "candidate media is a symlink; refusing access")
+
     storage_status = str(row["storage_status"] or "not_persisted")
     try:
         storage_info = json.loads(row["storage_json"] or "{}")
     except Exception:
         storage_info = {}
-    if storage_status not in {"primary_only", "durable_partial", "durable_multi_provider", "durable_5_provider"} or not storage_info.get("successful_providers"):
+    if (
+        storage_status not in {"primary_only", "durable_partial", "durable_multi_provider", "durable_5_provider"}
+        or not storage_info.get("successful_providers")
+    ):
         raise HTTPException(409, "candidate media has no verified durable object-storage copy")
 
     path = raw_path.resolve()
     jobs_root = (Path(os.getenv("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity")) / "production-jobs").resolve()
-    project_root = s()._project_dir(project_id).resolve()
 
     def within(candidate_path, root):
         try:
@@ -321,25 +325,35 @@ def candidate_local_path(project_id, candidate_id, user_id):
         except ValueError:
             return False
 
-    if path.is_file():
-        if not (within(path, jobs_root) or within(path, project_root)):
-            raise HTTPException(409, "candidate media is outside its verified job/project directory")
-    else:
-        restored = s()._rehydrate_project_asset(project_id, str(user_id), expected_name, force=True)
-        if restored is None:
-            raise HTTPException(409, "candidate media could not be restored from verified object storage")
-        path = Path(restored).resolve()
-        if path.is_symlink() or not path.is_file() or not within(path, project_root):
-            raise HTTPException(409, "restored candidate media is outside its project directory")
-        with LOCK, db() as c:
-            c.execute(
-                "UPDATE pg_candidates SET asset_path=?,updated_at=? WHERE candidate_id=? AND project_id=?",
-                (str(path), now(), candidate_id, project_id),
-            )
-    if not path.is_file() or path.suffix.lower() != ".mp4":
-        raise HTTPException(409, "candidate media is missing or unsupported")
-    return path
+    # The normal live-worker path is under production-jobs. Return it without
+    # importing the full Creator Studio object or opening a second recovery DB.
+    if path.is_file() and within(path, jobs_root) and not path.is_symlink():
+        return path
 
+    studio_module = s()
+    project_root = studio_module._project_dir(project_id).resolve()
+    if path.is_file() and within(path, project_root) and not path.is_symlink():
+        return path
+    if path.exists():
+        raise HTTPException(409, "candidate media is outside its verified job/project directory")
+
+    restored = studio_module._rehydrate_project_asset(
+        project_id, str(user_id), expected_name, force=True
+    )
+    if restored is None:
+        raise HTTPException(409, "candidate media could not be restored from verified object storage")
+    path = Path(restored).resolve()
+    if path.is_symlink() or not path.is_file() or not within(path, project_root):
+        raise HTTPException(409, "restored candidate media is outside its project directory")
+    if path.name != expected_name or path.suffix.lower() != ".mp4":
+        raise HTTPException(409, "restored candidate media identity is invalid")
+
+    with LOCK, db() as c:
+        c.execute(
+            "UPDATE pg_candidates SET asset_path=?,updated_at=? WHERE candidate_id=? AND project_id=?",
+            (str(path), now(), candidate_id, project_id),
+        )
+    return path
 
 def review(cid, user):
     """Record technical QA without silently approving the shot creatively."""
@@ -398,19 +412,20 @@ def review(cid, user):
 
 
 def select_for_editor(cid, user, project_id):
-    """Let the authenticated project owner choose a technically ready candidate."""
+    """Let the authenticated project owner choose a durable, technically ready candidate."""
     ensure()
     with LOCK, db() as c:
-        candidate = c.execute(
+        candidate_row = c.execute(
             "SELECT * FROM pg_candidates WHERE candidate_id=? AND project_id=?",
             (cid, project_id),
         ).fetchone()
-        project = c.execute(
+        project_row = c.execute(
             "SELECT * FROM pg_projects WHERE project_id=? AND user_id=?",
             (project_id, user),
         ).fetchone()
-        if not candidate or not project:
+        if not candidate_row or not project_row:
             raise HTTPException(404, "candidate not found")
+        candidate = dict(candidate_row)
         shot = c.execute(
             "SELECT * FROM pg_shots WHERE shot_id=? AND project_id=?",
             (candidate["shot_id"], project_id),
@@ -424,31 +439,59 @@ def select_for_editor(cid, user, project_id):
             storage_info = json.loads(candidate["storage_json"] or "{}")
         except Exception:
             storage_info = {}
-        if storage_status not in {"primary_only", "durable_partial", "durable_multi_provider", "durable_5_provider"} or not storage_info.get("successful_providers"):
+        if (
+            storage_status not in {"primary_only", "durable_partial", "durable_multi_provider", "durable_5_provider"}
+            or not storage_info.get("successful_providers")
+        ):
             raise HTTPException(409, "candidate is previewable but not durably stored; verified object storage is required before editor selection")
-        media_path = candidate_local_path(project_id, cid, user)
-        report = {
-            "selection": "creator_selected_candidate_for_editor",
-            "selected_by": user,
-            "creative_approval": "PENDING",
-            "editor_insertion": "READY_FOR_CANONICAL_RERENDER",
-            "storage_status": storage_status,
-            "truthful": True,
-        }
-        review_id = "rev_" + uuid.uuid4().hex
+
+    # Restore outside the first SQLite read transaction; _rehydrate_project_asset
+    # may update the shared studio asset table and candidate path after restart.
+    candidate_local_path(project_id, cid, user)
+
+    report = {
+        "selection": "creator_selected_candidate_for_editor",
+        "selected_by": user,
+        "creative_approval": "PENDING",
+        "editor_insertion": "READY_FOR_CANONICAL_RERENDER",
+        "storage_status": storage_status,
+        "truthful": True,
+    }
+    review_id = "rev_" + uuid.uuid4().hex
+    with LOCK, db() as c:
+        current = c.execute(
+            "SELECT status,shot_id,storage_status,storage_json FROM pg_candidates "
+            "WHERE candidate_id=? AND project_id=?",
+            (cid, project_id),
+        ).fetchone()
+        current_project = c.execute(
+            "SELECT project_id FROM pg_projects WHERE project_id=? AND user_id=?",
+            (project_id, user),
+        ).fetchone()
+        if not current or not current_project or current["status"] != "ready_for_creative_review":
+            raise HTTPException(409, "candidate changed while it was being restored; refresh and try again")
+        if str(current["storage_status"] or "") != storage_status:
+            raise HTTPException(409, "candidate storage status changed while it was being restored")
+        try:
+            current_storage = json.loads(current["storage_json"] or "{}")
+        except Exception:
+            current_storage = {}
+        if not current_storage.get("successful_providers"):
+            raise HTTPException(409, "candidate lost verified durable storage during selection")
         c.execute(
-            "UPDATE pg_candidates SET status='selected_for_editor',updated_at=? WHERE candidate_id=?",
-            (now(), cid),
+            "UPDATE pg_candidates SET status='selected_for_editor',updated_at=? WHERE candidate_id=? AND project_id=?",
+            (now(), cid, project_id),
         )
         c.execute(
-            "UPDATE pg_shots SET winner_candidate_id=?,status='selected_for_editor',updated_at=? WHERE shot_id=?",
-            (cid, now(), candidate["shot_id"]),
+            "UPDATE pg_shots SET winner_candidate_id=?,status='selected_for_editor',updated_at=? WHERE shot_id=? AND project_id=?",
+            (cid, now(), current["shot_id"], project_id),
         )
         c.execute(
             "INSERT INTO pg_reviews(review_id,project_id,shot_id,candidate_id,reviewer,score,decision,report_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-            (review_id, project_id, candidate["shot_id"], cid, "creator", None,
+            (review_id, project_id, current["shot_id"], cid, "creator", None,
              "selected_for_editor", jd(report), now()),
         )
+
     try:
         s().audit_event(project_id, "production_candidate_selected_for_editor", {
             "candidate_id": cid, "shot_id": candidate["shot_id"], "truthful": True,
