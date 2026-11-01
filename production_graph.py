@@ -27,12 +27,17 @@ def ensure():
         CREATE TABLE IF NOT EXISTS pg_projects(project_id TEXT PRIMARY KEY,user_id TEXT,brief_sha TEXT,status TEXT,stage TEXT,progress REAL DEFAULT 0,updated_at REAL);
         CREATE TABLE IF NOT EXISTS pg_shots(shot_id TEXT PRIMARY KEY,project_id TEXT,seq INTEGER,purpose TEXT,duration REAL,narration TEXT,visual_prompt TEXT,status TEXT DEFAULT 'planned',winner_candidate_id TEXT,critic_score REAL,revision_count INTEGER DEFAULT 0,metadata TEXT DEFAULT '{}',updated_at REAL);
         CREATE INDEX IF NOT EXISTS pg_shots_i ON pg_shots(project_id,seq);
-        CREATE TABLE IF NOT EXISTS pg_candidates(candidate_id TEXT PRIMARY KEY,shot_id TEXT,project_id TEXT,provider TEXT,model TEXT,status TEXT,asset_path TEXT,source_url TEXT,score REAL,critic_json TEXT DEFAULT '{}',error TEXT,created_at REAL,updated_at REAL);
+        CREATE TABLE IF NOT EXISTS pg_candidates(candidate_id TEXT PRIMARY KEY,shot_id TEXT,project_id TEXT,provider TEXT,model TEXT,status TEXT,asset_path TEXT,source_url TEXT,score REAL,critic_json TEXT DEFAULT '{}',error TEXT,created_at REAL,updated_at REAL,storage_status TEXT DEFAULT 'not_persisted',storage_json TEXT DEFAULT '{}');
         CREATE INDEX IF NOT EXISTS pg_candidates_i ON pg_candidates(shot_id,created_at DESC);
         CREATE TABLE IF NOT EXISTS pg_reviews(review_id TEXT PRIMARY KEY,project_id TEXT,shot_id TEXT,candidate_id TEXT,reviewer TEXT,score REAL,decision TEXT,report_json TEXT,created_at REAL);
         CREATE TABLE IF NOT EXISTS pg_jobs(job_id TEXT PRIMARY KEY,user_id TEXT,project_id TEXT,shot_id TEXT,kind TEXT,provider TEXT,status TEXT,payload_json TEXT,result_json TEXT,error TEXT,created_at REAL,updated_at REAL);
         CREATE INDEX IF NOT EXISTS pg_jobs_i ON pg_jobs(status,created_at);
         """)
+        columns = {row["name"] for row in c.execute("PRAGMA table_info(pg_candidates)").fetchall()}
+        if "storage_status" not in columns:
+            c.execute("ALTER TABLE pg_candidates ADD COLUMN storage_status TEXT DEFAULT 'not_persisted'")
+        if "storage_json" not in columns:
+            c.execute("ALTER TABLE pg_candidates ADD COLUMN storage_json TEXT DEFAULT '{}'")
 def redis_client():
     u=os.getenv("REDIS_URL","").strip()
     if not u or redis is None:return None
@@ -157,12 +162,28 @@ def process(job):
             if str(done.get("status") or "").upper()!="SUCCEEDED":raise RuntimeError("Runway task failed: "+jd(done)[:1200])
             outs=done.get("output") or [];url=outs[0] if isinstance(outs,list) and outs else done.get("output_url")
             if not url:raise RuntimeError("Runway succeeded without output URL")
-            root=Path(os.getenv("AI_INFINITY_DATA_DIR","/tmp/ai-infinity"))/"production-jobs"/jid;root.mkdir(parents=True,exist_ok=True);fp=download(str(url),root/"candidate.mp4");cid=str(d.get("candidate_id") or "")
+            root=Path(os.getenv("AI_INFINITY_DATA_DIR","/tmp/ai-infinity"))/"production-jobs"/jid
+            root.mkdir(parents=True,exist_ok=True)
+            cid=str(d.get("candidate_id") or "")
+            safe_id = cid if re.fullmatch(r"cand_[a-f0-9]{32}", cid) else "candidate_" + hashlib.sha256(jid.encode()).hexdigest()[:20]
+            fp=download(str(url),root/(safe_id+".mp4"))
+            storage_meta={"durable_storage":{"status":"not_persisted","successful_providers":[],"truthful":True}}
             if cid:
-                try:s()._save_asset(job["project_id"],"candidate",fp,"video/mp4",{"provider":"runway","candidate_id":cid,"task_id":tid})
-                except Exception:pass
-                with LOCK,db() as c:c.execute("UPDATE pg_candidates SET status='ready',asset_path=?,source_url=?,model=?,updated_at=? WHERE candidate_id=?",(str(fp),str(url),d.get("model") or "gen4.5",now(),cid))
-            result={"status":"succeeded","task_id":tid,"output_url":url,"local_path":str(fp)}
+                try:
+                    saved=s()._save_asset(job["project_id"],"candidate",fp,"video/mp4",{"provider":"runway","candidate_id":cid,"task_id":tid})
+                    if isinstance(saved,dict):
+                        storage_meta=saved
+                except Exception as storage_exc:
+                    storage_meta={"durable_storage":{"status":"not_persisted","error":f"{type(storage_exc).__name__}: {str(storage_exc)[:400]}","successful_providers":[],"truthful":True}}
+                durable=storage_meta.get("durable_storage") if isinstance(storage_meta,dict) else {}
+                durable=durable if isinstance(durable,dict) else {}
+                storage_status=str(durable.get("status") or "not_persisted")
+                with LOCK,db() as c:c.execute(
+                    "UPDATE pg_candidates SET status='ready',asset_path=?,source_url=?,model=?,storage_status=?,storage_json=?,updated_at=? WHERE candidate_id=?",
+                    (str(fp),str(url),d.get("model") or "gen4.5",storage_status,jd(durable),now(),cid))
+            result={"status":"succeeded","task_id":tid,"output_url":url,"local_path":str(fp),
+                    "storage_status":str((storage_meta.get("durable_storage") or {}).get("status") or "not_persisted"),
+                    "truthful":True}
         else:raise RuntimeError("unsupported production-graph provider/job")
         with LOCK,db() as c:c.execute("UPDATE pg_jobs SET status='completed',result_json=?,updated_at=? WHERE job_id=?",(jd(result),now(),jid))
     except Exception as e:
@@ -326,6 +347,13 @@ def select_for_editor(cid, user, project_id):
             raise HTTPException(404, "shot not found")
         if candidate["status"] != "ready_for_creative_review":
             raise HTTPException(409, "candidate must pass technical QA before creator selection")
+        storage_status = str(candidate["storage_status"] or "not_persisted")
+        try:
+            storage_info = json.loads(candidate["storage_json"] or "{}")
+        except Exception:
+            storage_info = {}
+        if storage_status not in {"primary_only", "durable_partial", "durable_multi_provider", "durable_5_provider"} or not storage_info.get("successful_providers"):
+            raise HTTPException(409, "candidate is previewable but not durably stored; verified object storage is required before editor selection")
         media_path = Path(candidate["asset_path"] or "")
         if media_path.is_symlink():
             raise HTTPException(409, "candidate media is not available for selection")
@@ -341,7 +369,8 @@ def select_for_editor(cid, user, project_id):
             "selection": "creator_selected_candidate_for_editor",
             "selected_by": user,
             "creative_approval": "PENDING",
-            "editor_insertion": "NOT_IMPLEMENTED",
+            "editor_insertion": "READY_FOR_CANONICAL_RERENDER",
+            "storage_status": storage_status,
             "truthful": True,
         }
         review_id = "rev_" + uuid.uuid4().hex
@@ -367,8 +396,33 @@ def select_for_editor(cid, user, project_id):
     return {
         "review_id": review_id, "candidate_id": cid, "shot_id": candidate["shot_id"],
         "status": "selected_for_editor", "creative_approval": "PENDING",
-        "editor_insertion": "NOT_IMPLEMENTED", "truthful": True,
+        "editor_insertion": "READY_FOR_CANONICAL_RERENDER",
+        "storage_status": storage_status, "truthful": True,
     }
+
+def selected_candidate_id_for_scene(project_id, scene_index):
+    ensure()
+    with LOCK, db() as c:
+        row = c.execute(
+            "SELECT winner_candidate_id,status FROM pg_shots WHERE project_id=? AND seq=?",
+            (project_id, int(scene_index)),
+        ).fetchone()
+    if not row or row["status"] != "selected_for_editor":
+        return ""
+    return str(row["winner_candidate_id"] or "")
+
+
+def has_selected_candidates(project_id):
+    ensure()
+    with LOCK, db() as c:
+        row = c.execute(
+            "SELECT COUNT(*) FROM pg_shots s JOIN pg_candidates c ON c.candidate_id=s.winner_candidate_id "
+            "WHERE s.project_id=? AND s.status='selected_for_editor' AND c.status='selected_for_editor' "
+            "AND c.storage_status IN ('primary_only','durable_partial','durable_multi_provider','durable_5_provider')",
+            (project_id,),
+        ).fetchone()
+    return bool(row and int(row[0] or 0) > 0)
+
 
 def selected_candidate_asset(project_id, scene_index, requested_duration):
     """Resolve a creator-selected native video candidate for the canonical render path."""
@@ -385,21 +439,50 @@ def selected_candidate_asset(project_id, scene_index, requested_duration):
         if not shot or not shot["winner_candidate_id"]:
             return None
         candidate = c.execute(
-            "SELECT * FROM pg_candidates WHERE candidate_id=? AND project_id=? AND shot_id=?",
+            "SELECT c.*,p.user_id FROM pg_candidates c JOIN pg_projects p ON p.project_id=c.project_id WHERE c.candidate_id=? AND c.project_id=? AND c.shot_id=?",
             (shot["winner_candidate_id"], project_id, shot["shot_id"]),
         ).fetchone()
     if not candidate or candidate["status"] != "selected_for_editor" or shot["status"] != "selected_for_editor":
         raise RuntimeError("selected shot candidate state is inconsistent; refusing a fallback visual")
 
+    storage_status = str(candidate["storage_status"] or "not_persisted")
+    try:
+        storage_info = json.loads(candidate["storage_json"] or "{}")
+    except Exception:
+        storage_info = {}
+    if storage_status not in {"primary_only", "durable_partial", "durable_multi_provider", "durable_5_provider"} or not storage_info.get("successful_providers"):
+        raise RuntimeError("selected native video has no verified durable object-storage copy")
     raw_path = Path(candidate["asset_path"] or "")
     if raw_path.is_symlink():
         raise RuntimeError("selected generated candidate is a symlink; refusing to use it")
     path = raw_path.resolve()
-    allowed_root = (Path(os.getenv("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity")) / "production-jobs").resolve()
+    jobs_root = (Path(os.getenv("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity")) / "production-jobs").resolve()
+    project_root = s()._project_dir(project_id).resolve()
     try:
-        path.relative_to(allowed_root)
-    except ValueError as exc:
-        raise RuntimeError("selected generated candidate is outside the production-job asset directory") from exc
+        path.relative_to(jobs_root)
+        allowed = True
+    except ValueError:
+        try:
+            path.relative_to(project_root)
+            allowed = True
+        except ValueError:
+            allowed = False
+    if not allowed or path.is_symlink():
+        raise RuntimeError("selected generated candidate is outside its verified project/job asset directory")
+    if not path.is_file():
+        restored = s()._rehydrate_project_asset(
+            project_id, str(candidate["user_id"] or ""), raw_path.name, force=True
+        )
+        if restored is None:
+            raise RuntimeError("durably stored native video could not be restored after restart")
+        path = Path(restored).resolve()
+        try:
+            path.relative_to(project_root)
+        except ValueError as exc:
+            raise RuntimeError("restored candidate is outside its project directory") from exc
+        with LOCK, db() as c:
+            c.execute("UPDATE pg_candidates SET asset_path=?,updated_at=? WHERE candidate_id=?",
+                      (str(path), now(), candidate["candidate_id"]))
     if not path.is_file() or path.suffix.lower() != ".mp4":
         raise RuntimeError("selected generated candidate media is missing or unsupported")
 
