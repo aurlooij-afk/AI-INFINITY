@@ -269,14 +269,7 @@ def vision_review(pid,cid,user):
     if not row:raise HTTPException(404,"candidate not found")
     if row["status"] != "ready_for_creative_review":
         raise HTTPException(409,"candidate must pass technical QA before vision review")
-    path=Path(row["asset_path"] or "")
-    if path.is_symlink():
-        raise HTTPException(409,"candidate media is not a safe local file")
-    resolved=path.resolve()
-    allowed=(Path(os.getenv("AI_INFINITY_DATA_DIR","/tmp/ai-infinity"))/"production-jobs").resolve()
-    try:resolved.relative_to(allowed)
-    except ValueError:raise HTTPException(409,"candidate media is outside its generated-job directory")
-    if not resolved.is_file():raise HTTPException(404,"candidate media is unavailable")
+    resolved=pg().candidate_local_path(pid,cid,user)
     technical=pg().tech(resolved)
     if technical.get("decision") != "technical_pass":
         raise HTTPException(409,"candidate must pass full technical decode and HD checks before vision review")
