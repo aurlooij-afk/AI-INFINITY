@@ -180,7 +180,7 @@ def test_remote_worker_is_not_ready_without_explicit_model_license_proof(monkeyp
                     "revision": "a" * 40,
                 },
                 "source": {"verified": True},
-                "hardware": {"available": True, "total_vram_mb": 24576},
+                "hardware": {"available": True, "total_vram_mb": 24576, "free_vram_mb": 23000},
                 "storage": {"persistent": True},
                 "ffmpeg": True, "ffprobe": True,
                 "reasons": [],
@@ -195,3 +195,119 @@ def test_remote_worker_is_not_ready_without_explicit_model_license_proof(monkeyp
 
     assert result["enabled"] is False
     assert result["status"] == "worker_not_ready"
+
+
+
+def test_worker_restart_requeues_running_job_without_published_artifact(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    output = data / "artifacts"
+    monkeypatch.setattr(worker, "DATA_DIR", data)
+    monkeypatch.setattr(worker, "DB_PATH", data / "jobs.sqlite3")
+    monkeypatch.setattr(worker, "OUTPUT_DIR", output)
+    monkeypatch.setattr(worker, "LOG_DIR", data / "logs")
+    worker._ensure()
+    request_data = {
+        "prompt": "A cinematic establishing shot above the mountains",
+        "duration_seconds": 5.0,
+        "aspect_ratio": "16:9",
+        "seed": 12,
+    }
+    with worker._connect() as c:
+        c.execute(
+            "INSERT INTO wan_jobs(job_id,idempotency_key,request_sha256,request_json,status,attempt,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            ("wan_" + "a" * 32, "candidate-recovery-0001", "b" * 64,
+             json.dumps(request_data), "running", 1, 1.0, 1.0),
+        )
+
+    worker._recover_jobs()
+
+    row = worker._get_job("wan_" + "a" * 32)
+    assert row["status"] == "queued"
+    assert "Recovered after worker restart" in row["error"]
+
+
+def test_worker_restart_recovers_completed_artifact_with_verified_model_provenance(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    output = data / "artifacts"
+    output.mkdir(parents=True)
+    monkeypatch.setattr(worker, "DATA_DIR", data)
+    monkeypatch.setattr(worker, "DB_PATH", data / "jobs.sqlite3")
+    monkeypatch.setattr(worker, "OUTPUT_DIR", output)
+    monkeypatch.setattr(worker, "LOG_DIR", data / "logs")
+    worker._ensure()
+    job_id = "wan_" + "c" * 32
+    request_data = {
+        "prompt": "A cinematic establishing shot above the mountains",
+        "duration_seconds": 5.0,
+        "aspect_ratio": "16:9",
+        "seed": 12,
+    }
+    artifact = output / (job_id + ".mp4")
+    artifact.write_bytes(b"verified recovered video bytes " * 5000)
+    with worker._connect() as c:
+        c.execute(
+            "INSERT INTO wan_jobs(job_id,idempotency_key,request_sha256,request_json,status,attempt,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            (job_id, "candidate-recovery-0002", "c" * 64,
+             json.dumps(request_data), "running", 1, 1.0, 1.0),
+        )
+    monkeypatch.setattr(worker, "_probe_artifact", lambda *_args: {
+        "duration_seconds": 5.04, "width": 1280, "height": 720, "fps": 24,
+        "size_bytes": artifact.stat().st_size, "full_decode": True,
+    })
+    monkeypatch.setattr(worker, "_model_state", lambda force=False: {
+        "verified": True, "license_verified": True, "revision": "a" * 40,
+    })
+    monkeypatch.setattr(worker, "_source_state", lambda: {
+        "verified": True, "revision": worker.PINNED_SOURCE_REVISION,
+    })
+
+    worker._recover_jobs()
+
+    row = worker._get_job(job_id)
+    metadata = json.loads(row["metadata_json"])
+    assert row["status"] == "succeeded"
+    assert row["artifact_sha256"] == hashlib.sha256(artifact.read_bytes()).hexdigest()
+    assert metadata["license_verified"] is True
+    assert metadata["license"] == "apache-2.0"
+    assert metadata["model_id"] == worker.MODEL_ID
+    assert metadata["recovered_after_restart"] is True
+
+
+def test_remote_worker_is_ready_only_with_pinned_model_gpu_and_persistence_proof(monkeypatch):
+    class Response:
+        status_code = 200
+        def json(self):
+            return {
+                "provider": "wan2.2-ti2v-5b",
+                "execution_ready": True,
+                "model": {
+                    "verified": True, "license_verified": True,
+                    "model_id": "Wan-AI/Wan2.2-TI2V-5B",
+                    "license": "apache-2.0", "terms_acknowledged": True,
+                    "revision": "a" * 40,
+                },
+                "source": {
+                    "verified": True,
+                    "revision": production_graph.WAN_SOURCE_REVISION,
+                },
+                "hardware": {
+                    "available": True, "total_vram_mb": 24576,
+                    "free_vram_mb": 23000, "name": "test 24 GiB GPU",
+                },
+                "storage": {"persistent": True},
+                "ffmpeg": True, "ffprobe": True,
+                "reasons": [],
+            }
+
+    monkeypatch.setenv("AI_INFINITY_WAN_WORKER_URL", "https://gpu.example.com")
+    monkeypatch.setenv("AI_INFINITY_WAN_WORKER_TOKEN", "secret")
+    monkeypatch.setattr(production_graph.requests, "get", lambda *args, **kwargs: Response())
+    production_graph.WAN_CAP_CACHE.update({"at": 0.0, "value": None})
+
+    result = production_graph.wan_worker_capabilities(force=True)
+
+    assert result["enabled"] is True
+    assert result["status"] == "ready"
+    assert result["license_verified"] is True
+    assert result["persistent_storage"] is True
+    assert result["compute_cost_state"] == "operator_hosted_compute_cost_not_included"
