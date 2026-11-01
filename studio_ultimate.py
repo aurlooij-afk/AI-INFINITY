@@ -2788,7 +2788,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 "The core idea": "hands researching and writing notes at a desk with source pages, books and a laptop",
                 "How it works": "a close-up of storyboard frames and a handwritten script being arranged into a deliberate sequence",
                 "Real-world examples": "a creator bringing an idea to life by recording a cinematic shot with a camera and studio lighting",
-                "What changes": "a video editor refining a real multitrack timeline, adjusting color and aligning captions and audio",
+                "What changes": "a video editor at an editing workstation refining a real multitrack timeline, adjusting color and aligning captions and audio",
                 "Practical takeaway": "a small film crew and camera operator composing a real production shot on set",
                 "Closing": "a creator watching the finished film on a large monitor in a dark studio, with a restrained signature ending",
             }
