@@ -537,7 +537,7 @@ def t1(s,b):
     assert int(checks.get("visual_rights_review_required_count") or 0) == 0, truth
     files={n:dl(s,b,pid,n) for n in reqd}; m=probe(files["final.mp4"]); dur=float((m.get("format")or{}).get("duration")or 0); assert 59<=dur<=61,m
     video=next((x for x in m.get("streams",[]) if x.get("codec_type")=="video"),{}); assert (int(video.get("width") or 0),int(video.get("height") or 0))==(1920,1080),m
-    script_text=dl(s,b,pid,"script.md").read_text(encoding="utf-8"); caption_text=dl(s,b,pid,"captions.srt").read_text(encoding="utf-8"); required_line="Every extraordinary world begins with something nobody else can see."; assert required_line.casefold() in script_text.casefold(),script_text[:3000]; assert required_line.casefold() in caption_text.casefold(),caption_text[:3000]
+    script_text=dl(s,b,pid,"script.md").read_text(encoding="utf-8"); caption_text=dl(s,b,pid,"captions.srt").read_text(encoding="utf-8"); required_line="Every extraordinary world begins with something nobody else can see."; assert required_line.casefold() in script_text.casefold(),script_text[:3000]; assert required_line.casefold() in re.sub(r"\\s+", " ", caption_text).casefold(),caption_text[:3000]
     assert any(x.get("codec_type")=="video" for x in m.get("streams",[])); assert any(x.get("codec_type")=="audio" for x in m.get("streams",[]))
     audio_probe=probe(files["audio_master.mp3"]); audio_dur=float((audio_probe.get("format")or{}).get("duration")or 0)
     assert any(x.get("codec_type")=="audio" for x in audio_probe.get("streams",[])),audio_probe
