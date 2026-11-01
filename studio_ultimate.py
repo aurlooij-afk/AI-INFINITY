@@ -1017,6 +1017,32 @@ def _research_evidence_profile(sources: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 
+
+
+def _reconstruct_openalex_abstract(inverted_index: Any) -> str:
+    """Restore OpenAlex's positional abstract index into its original word order."""
+    if not isinstance(inverted_index, dict) or not inverted_index:
+        return ""
+    positions: Dict[int, str] = {}
+    for word, offsets in inverted_index.items():
+        if not isinstance(word, str) or not isinstance(offsets, list):
+            continue
+        for offset in offsets:
+            try:
+                position = int(offset)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if 0 <= position < 50_000 and position not in positions:
+                positions[position] = word
+    if not positions:
+        return ""
+    # Do not silently stitch a severely incomplete/corrupt abstract together.
+    expected = max(positions)
+    if expected > 0 and len(positions) < expected * 0.80:
+        return ""
+    return " ".join(positions[index] for index in sorted(positions)).strip()
+
+
 def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
     """Multi-source public research with explicit provider outcomes and truthful degradation."""
     from urllib.parse import quote_plus
@@ -1131,7 +1157,15 @@ def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
         data=http_json("https://api.openalex.org/works?"+urlencode({"search":clean_topic,"per-page":per}))
         out=[]
         for x in data.get("results") or []:
-            out.append({"title":x.get("display_name"),"url":x.get("doi") or x.get("id"),"summary":(x.get("abstract_inverted_index") and "Scholarly work; abstract index available") or "Scholarly work","published_at":x.get("publication_date")})
+            abstract = _reconstruct_openalex_abstract(x.get("abstract_inverted_index"))
+            out.append({
+                "title": x.get("display_name"),
+                "url": x.get("doi") or x.get("id"),
+                "summary": abstract[:5000],
+                "abstract_word_count": len(abstract.split()),
+                "content_type": "abstract" if abstract else "bibliographic_metadata",
+                "published_at": x.get("publication_date"),
+            })
         return out
 
     def crossref():
