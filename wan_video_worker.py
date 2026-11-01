@@ -9,6 +9,7 @@ worker storage are all present.
 """
 
 import hashlib
+import fcntl
 import hmac
 import json
 import os
@@ -71,6 +72,8 @@ MODEL_CACHE: dict[str, Any] = {"fingerprint": None, "result": None}
 GPU_CACHE_LOCK = threading.RLock()
 GPU_CACHE: dict[str, Any] = {"at": 0.0, "result": None}
 ACTIVE_PROCESS: subprocess.Popen | None = None
+WORKER_LOCK_HANDLE: int | None = None
+WORKER_PROCESS_LOCKED = False
 
 app = FastAPI(
     title="AI Infinity Open-Source Video Worker",
@@ -385,6 +388,10 @@ def _storage_state() -> dict[str, Any]:
 
 
 def _capabilities(force: bool = False) -> dict[str, Any]:
+    if not WORKER_PROCESS_LOCKED:
+        process_lock_reason = "another process owns the single-GPU worker lock; run one Uvicorn worker process"
+    else:
+        process_lock_reason = ""
     source = _source_state()
     # Re-hash the multi-GB checkpoint only when its file fingerprint changes;
     # refresh GPU free-memory telemetry on demand before every new inference.
@@ -397,6 +404,8 @@ def _capabilities(force: bool = False) -> dict[str, Any]:
     reasons = []
     if not token_configured:
         reasons.append("worker authentication token is not configured")
+    if process_lock_reason:
+        reasons.append(process_lock_reason)
     if not source.get("verified"):
         reasons.append(str(source.get("reason") or "Wan source is not verified"))
     if not model.get("verified") or not model.get("license_verified"):
@@ -585,6 +594,23 @@ def _recover_jobs() -> None:
                 request = json.loads(item["request_json"])
                 frame_num = _frame_count(float(request["duration_seconds"]))
                 metadata = _probe_artifact(final, request, frame_num)
+                model = _model_state(force=False)
+                source = _source_state()
+                if not model.get("verified") or not model.get("license_verified") or not source.get("verified"):
+                    raise RuntimeError("cannot recover a successful inference without re-verifying the model, license and official code")
+                metadata.update({
+                    "model_id": MODEL_ID,
+                    "model": MODEL_NAME,
+                    "model_revision": model.get("revision"),
+                    "license": LICENSE_ID,
+                    "license_url": LICENSE_URL,
+                    "license_verified": True,
+                    "source_revision": source.get("revision"),
+                    "generation_method": "open_source_wan2_2_local_gpu_inference",
+                    "creative_approval": "PENDING",
+                    "rights_status": "REVIEW_REQUIRED",
+                    "recovered_after_restart": True,
+                })
                 _set_job(
                     item["job_id"], status="succeeded", artifact_name=final.name,
                     artifact_sha256=digest, artifact_size_bytes=final.stat().st_size,
@@ -744,11 +770,26 @@ def _worker_loop() -> None:
 
 
 def _start_worker() -> None:
-    global WORKER_THREAD
+    global WORKER_THREAD, WORKER_LOCK_HANDLE, WORKER_PROCESS_LOCKED
     with WORKER_LOCK:
         if WORKER_THREAD and WORKER_THREAD.is_alive():
             return
         STOP.clear()
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        lock_path = DATA_DIR / ".wan-gpu-worker.lock"
+        try:
+            WORKER_LOCK_HANDLE = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+            fcntl.flock(WORKER_LOCK_HANDLE, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            WORKER_PROCESS_LOCKED = True
+        except (OSError, BlockingIOError):
+            WORKER_PROCESS_LOCKED = False
+            if WORKER_LOCK_HANDLE is not None:
+                try:
+                    os.close(WORKER_LOCK_HANDLE)
+                except Exception:
+                    pass
+                WORKER_LOCK_HANDLE = None
+            return
         _recover_jobs()
         WORKER_THREAD = threading.Thread(
             target=_worker_loop, name="ai-infinity-wan-gpu-worker", daemon=True
@@ -757,6 +798,7 @@ def _start_worker() -> None:
 
 
 def _stop_processes() -> None:
+    global WORKER_LOCK_HANDLE, WORKER_PROCESS_LOCKED
     STOP.set()
     process = ACTIVE_PROCESS
     if process is not None and process.poll() is None:
@@ -764,6 +806,14 @@ def _stop_processes() -> None:
             os.killpg(process.pid, signal.SIGTERM)
         except Exception:
             pass
+    if WORKER_LOCK_HANDLE is not None:
+        try:
+            fcntl.flock(WORKER_LOCK_HANDLE, fcntl.LOCK_UN)
+            os.close(WORKER_LOCK_HANDLE)
+        except Exception:
+            pass
+        WORKER_LOCK_HANDLE = None
+        WORKER_PROCESS_LOCKED = False
 
 
 @app.on_event("startup")
