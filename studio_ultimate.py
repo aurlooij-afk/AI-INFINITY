@@ -8496,6 +8496,34 @@ def _select_scene_coverage(chapters: List[Dict[str, Any]], max_scenes: int) -> L
     return [dict(scenes[index]) for index in indexes]
 
 
+def _sync_production_graph(project_id: str) -> Dict[str, Any]:
+    """Synchronize the canonical Creator Studio storyboard into its production graph.
+
+    The graph is a project-scoped execution/review view over the existing Studio
+    project, not a second project queue or a parallel project identity.
+    """
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise RuntimeError("production graph synchronization requires a project id")
+    import production_graph
+
+    snapshot = production_graph.sync(pid)
+    graph_project = snapshot.get("project") if isinstance(snapshot, dict) else None
+    if not isinstance(graph_project, dict) or str(graph_project.get("project_id") or "") != pid:
+        raise RuntimeError("production graph did not reconcile to the canonical Creator Studio project")
+    summary = snapshot.get("summary") if isinstance(snapshot.get("summary"), dict) else {}
+    state = {
+        "status": "synced",
+        "project_id": pid,
+        "graph_version": snapshot.get("version"),
+        "shot_count": int(summary.get("shots") or 0),
+        "candidate_count": int(summary.get("candidates") or 0),
+        "truthful": True,
+    }
+    audit_event(pid, "production_graph_synchronized", state)
+    return state
+
+
 def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
     ACTIVE_PROJECT.project_id = project_id
     project = _get_project(project_id)
@@ -8919,6 +8947,12 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 float(chapter["duration"]) for chapter in chapters
             ]
         _update_project(project_id, blueprint_json=jdump(plan))
+        # The canonical Creator Studio storyboard is now finalized. Synchronize
+        # its real scenes before media acquisition so candidate generation,
+        # technical review and creator selection address the same project/scenes
+        # that the existing FFmpeg renderer will consume.
+        graph_sync = _sync_production_graph(project_id)
+        checkpoint(project_id, "production_graph_ready", graph_sync)
         _stage(project_id, "production_ready", 22, total_scenes=len(chapters), current_scene=0)
 
         assets_meta: List[Dict[str, Any]] = []
@@ -11319,6 +11353,36 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         if not p or p.get("user_id") != user_id:
             raise HTTPException(404, "project not found")
         return _project_public(p)
+
+    @app.get("/infinity/studio/project/{project_id}/production-graph")
+    def studio_project_production_graph(project_id: str, request: Request, response: Response):
+        """Expose the real scene/candidate graph inside the canonical Studio project."""
+        user_id = _get_user_id(request); _set_session(response, request, user_id)
+        p = _get_project(project_id)
+        if not p or p.get("user_id") != user_id:
+            raise HTTPException(404, "project not found")
+        import production_graph
+
+        synchronization = _sync_production_graph(project_id)
+        snapshot = production_graph.graph(project_id)
+        provider_state = production_graph.providers()
+        provider_rows = provider_state.get("providers") if isinstance(provider_state, dict) else []
+        free_video = next((
+            row for row in provider_rows
+            if isinstance(row, dict) and row.get("video") is True
+            and row.get("enabled") is True and str(row.get("pricing_class") or "").lower() == "free"
+        ), None)
+        return {
+            **snapshot,
+            "synchronization": synchronization,
+            "provider_capabilities": provider_state,
+            "free_native_video": {
+                "status": "available" if free_video else "unavailable",
+                "provider": free_video.get("id") if free_video else None,
+                "reason": None if free_video else "No enabled, verified free native-video inference provider is configured. The existing free-first Creator Studio source-and-render workflow remains the default.",
+            },
+            "truthful": True,
+        }
 
     @app.get("/infinity/studio/project/{project_id}/asset/{asset_name:path}")
     def project_asset(project_id: str, asset_name: str, request: Request, response: Response):
