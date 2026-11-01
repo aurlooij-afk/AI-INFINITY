@@ -10594,16 +10594,22 @@ function openProject(id){
     var graph=production||{}, graphShots=graph.shots||[], graphCandidates=graph.candidates||[];
     var capabilityRows=(graph.provider_capabilities&&graph.provider_capabilities.providers)||[];
     var runway=capabilityRows.find(function(p){return p.id==="runway"})||{};
+    var wan=capabilityRows.find(function(p){return p.id==="wan2.2-ti2v-5b"})||{};
     var freeNative=graph.free_native_video||{status:"unavailable"};
     var nativeStatus=freeNative.status==="available"
-      ? "A free native-video provider is enabled: "+esc(freeNative.provider||"provider")
-      : "No verified free native-video inference worker is configured. The project continues through Creator Studio's existing free-first source, voice and FFmpeg rendering path.";
+      ? (freeNative.provider==="wan2.2-ti2v-5b"
+          ? "Open-source Wan2.2 TI2V-5B is verified on a separate GPU worker. No metered model API is used; GPU hosting and durable storage are provided by the operator."
+          : "A verified native-video provider is enabled: "+esc(freeNative.provider||"provider"))
+      : "Native AI video is unavailable until a verified GPU worker is configured. The existing free-first Creator Studio source, voice and FFmpeg renderer remain available.";
     var graphShotHtml=graphShots.map(function(sh){
       var d=Number(sh.duration||0);
+      var canWan=wan.enabled===true&&d>=2&&d<=5;
       var canPaid=runway.enabled===true&&runway.pricing_class==="paid_metered"&&d>=2&&d<=10;
-      var action=canPaid
-        ? "<button class='btn' data-pg-generate='"+esc(sh.shot_id)+"' data-pg-prompt='"+esc(sh.visual_prompt||"")+"' data-pg-duration='"+d+"'>Generate optional paid Runway candidate</button>"
-        : "<div class='tiny'>"+(runway.enabled===true&&runway.pricing_class==="paid_metered"?"Paid native clips support 2–10 seconds per shot.":nativeStatus)+"</div>";
+      var action=canWan
+        ? "<button class='btn' data-pg-generate='"+esc(sh.shot_id)+"' data-pg-prompt='"+esc(sh.visual_prompt||"")+"' data-pg-duration='"+d+"'>Generate open-source Wan2.2 shot</button>"
+        : canPaid
+          ? "<button class='btn' data-pg-generate='"+esc(sh.shot_id)+"' data-pg-prompt='"+esc(sh.visual_prompt||"")+"' data-pg-duration='"+d+"'>Generate optional paid Runway candidate</button>"
+          : "<div class='tiny'>"+(wan.enabled===true?"Wan2.2 supports 2–5 second native shots; split this scene to use it.":runway.enabled===true&&runway.pricing_class==="paid_metered"?"Paid Runway clips support 2–10 seconds per shot.":nativeStatus)+(wan.reason?" Worker: "+esc(wan.reason):"")+"</div>";
       return "<div class='item'><div class='row'><b>Scene "+String(sh.seq||0).padStart(2,"0")+" · "+esc(sh.purpose||"Scene")+"</b><span class='chip'>"+d.toFixed(1)+"s</span></div><div class='tiny'>"+esc(sh.status||"planned")+" · "+esc(sh.shot_id)+"</div><div style='margin-top:8px'>"+action+"</div></div>";
     }).join("");
     var graphCandidateHtml=graphCandidates.map(function(c){
@@ -11421,7 +11427,8 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         free_video = next((
             row for row in provider_rows
             if isinstance(row, dict) and row.get("video") is True
-            and row.get("enabled") is True and str(row.get("pricing_class") or "").lower() == "free"
+            and row.get("enabled") is True
+            and (row.get("free_model") is True or str(row.get("pricing_class") or "").lower() == "free")
         ), None)
         return {
             **snapshot,
@@ -11430,7 +11437,11 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
             "free_native_video": {
                 "status": "available" if free_video else "unavailable",
                 "provider": free_video.get("id") if free_video else None,
-                "reason": None if free_video else "No enabled, verified free native-video inference provider is configured. The existing free-first Creator Studio source-and-render workflow remains the default.",
+                "reason": (
+                    "An open-source native-video model is live on a separately hosted GPU worker; model inference has no paid API charge, but GPU hosting, power and persistent storage are operator-provided."
+                    if free_video and free_video.get("id") == "wan2.2-ti2v-5b"
+                    else None if free_video else "No verified native-video inference worker is configured. The existing free-first Creator Studio source-and-render workflow remains the default."
+                ),
             },
             "truthful": True,
         }
