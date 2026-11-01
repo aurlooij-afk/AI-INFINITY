@@ -46,14 +46,15 @@ def test_video_only_hd_candidate_passes_technical_checks_without_audio_requireme
             {"codec_type": "video", "codec_name": "h264", "width": 1280, "height": 720}
         ],
     }
-    monkeypatch.setattr(production_graph.shutil, "which", lambda name: "/usr/bin/ffprobe")
     monkeypatch.setattr(
-        production_graph.subprocess,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(
-            returncode=0, stdout=json.dumps(probe), stderr=""
-        ),
+        production_graph.shutil, "which",
+        lambda name: "/usr/bin/ffprobe" if name == "ffprobe" else "/usr/bin/ffmpeg",
     )
+    def fake_run(args, **kwargs):
+        if args[0] == "/usr/bin/ffprobe":
+            return SimpleNamespace(returncode=0, stdout=json.dumps(probe), stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    monkeypatch.setattr(production_graph.subprocess, "run", fake_run)
 
     result = production_graph.tech(media)
 
@@ -133,3 +134,83 @@ def test_creator_selection_is_explicit_and_does_not_claim_timeline_insertion(
     assert shot["status"] == "selected_for_editor"
     assert shot["winner_candidate_id"] == "candidate-test"
     assert audit
+
+
+def test_decode_failure_cannot_pass_technical_qc(monkeypatch, tmp_path: Path):
+    media = tmp_path / "corrupt-video.mp4"
+    media.write_bytes(b"candidate container bytes " * 100)
+    probe = {
+        "format": {"duration": "7.5"},
+        "streams": [
+            {"codec_type": "video", "codec_name": "h264", "width": 1280, "height": 720}
+        ],
+    }
+    monkeypatch.setattr(
+        production_graph.shutil, "which",
+        lambda name: "/usr/bin/ffprobe" if name == "ffprobe" else "/usr/bin/ffmpeg",
+    )
+    def fake_run(args, **kwargs):
+        if args[0] == "/usr/bin/ffprobe":
+            return SimpleNamespace(returncode=0, stdout=json.dumps(probe), stderr="")
+        return SimpleNamespace(returncode=1, stdout="", stderr="corrupt frame")
+    monkeypatch.setattr(production_graph.subprocess, "run", fake_run)
+
+    result = production_graph.tech(media)
+
+    assert result["decision"] == "technical_review"
+    assert result["checks"]["full_decode"] is False
+    assert result["creative_approval"] == "NOT_EVALUATED"
+
+
+def test_selected_native_candidate_enters_renderer_only_when_clip_covers_scene_duration(
+    monkeypatch, tmp_path: Path
+):
+    monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
+    _db_path, media = _seed_project(tmp_path, monkeypatch, status="selected_for_editor")
+    with production_graph.db() as conn:
+        conn.execute(
+            "UPDATE pg_shots SET winner_candidate_id=?,status=? WHERE shot_id=?",
+            ("candidate-test", "selected_for_editor", "shot-test"),
+        )
+    monkeypatch.setattr(
+        production_graph, "tech",
+        lambda _path: {
+            "decision": "technical_pass",
+            "score": 95,
+            "checks": {"duration_seconds": 5.0, "full_decode": True, "hd_resolution": True},
+            "creative_approval": "NOT_EVALUATED",
+        },
+    )
+
+    selected = production_graph.selected_candidate_asset("project-test", 1, 5.0)
+
+    assert selected is not None
+    assert selected["kind"] == "video"
+    assert selected["path"] == str(media.resolve())
+    assert selected["generation_method"] == "native_ai_video_generation"
+    assert selected["rights_status"] == "REVIEW_REQUIRED"
+    assert selected["creative_approval"] == "PENDING"
+
+    with __import__("pytest").raises(RuntimeError, match="shorter than planned scene"):
+        production_graph.selected_candidate_asset("project-test", 1, 6.0)
+
+
+def test_selected_native_candidate_rejects_media_outside_job_asset_root(
+    monkeypatch, tmp_path: Path
+):
+    monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
+    _db_path, media = _seed_project(tmp_path, monkeypatch, status="selected_for_editor")
+    outside = tmp_path / "outside.mp4"
+    outside.write_bytes(media.read_bytes())
+    with production_graph.db() as conn:
+        conn.execute(
+            "UPDATE pg_shots SET winner_candidate_id=?,status=? WHERE shot_id=?",
+            ("candidate-test", "selected_for_editor", "shot-test"),
+        )
+        conn.execute(
+            "UPDATE pg_candidates SET asset_path=? WHERE candidate_id=?",
+            (str(outside), "candidate-test"),
+        )
+
+    with __import__("pytest").raises(RuntimeError, match="outside the production-job asset directory"):
+        production_graph.selected_candidate_asset("project-test", 1, 5.0)
