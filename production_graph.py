@@ -19,7 +19,24 @@ WAN_CAP_TTL_SECONDS=15.0
 def s(): import studio_ultimate; return studio_ultimate
 def dbpath(): return Path(os.getenv("AI_INFINITY_DB_PATH",str(getattr(s(),"DB_PATH","/tmp/ai-infinity/ai_infinity.db")))).resolve()
 def db():
-    c=sqlite3.connect(dbpath(),timeout=30,check_same_thread=False); c.row_factory=sqlite3.Row; return c
+    # The graph shares Creator Studio's SQLite database and must share its
+    # configured connection factory too. In production this is a
+    # DurableConnection when the project-state snapshot adapter is active;
+    # using a raw sqlite3 connection here bypasses the post-commit snapshot
+    # scheduler and can strand graph/jobs/candidates outside the recovery point.
+    studio = s()
+    connect = getattr(studio, "_connect", None)
+    if callable(connect):
+        connection = connect()
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    # Minimal Studio stubs used by isolated adapter tests do not own the
+    # canonical connection factory. Production always imports studio_ultimate
+    # and takes the durable path above.
+    connection = sqlite3.connect(dbpath(), timeout=30, check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    return connection
 def now(): return time.time()
 def clean(x,n=4000): return str(x or "").replace("\x00"," ").strip()[:n]
 def jd(x): return json.dumps(x,ensure_ascii=False,sort_keys=True,separators=(",",":"),default=str)
