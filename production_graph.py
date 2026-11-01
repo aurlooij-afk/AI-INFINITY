@@ -6,7 +6,7 @@ import requests
 try: import redis
 except Exception: redis=None
 from fastapi import HTTPException,Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse,HTMLResponse
 
 VERSION="TARGET-2050.4000"; BUILD="PROFESSIONAL-PRODUCTION-GRAPH"; LOCK=threading.RLock(); PATCHED=False; WORKER_STARTED=False
 
@@ -84,8 +84,14 @@ def graph(pid):
         try:d["critic"]=json.loads(d.pop("critic_json") or "{}")
         except Exception:d["critic"]={}
         cs.append(d)
+    for candidate in cs:
+        candidate.pop("asset_path", None)
+        candidate["media_url"] = f"/infinity/production/project/{pid}/candidate/{candidate['candidate_id']}/media"
     return {"version":VERSION,"build":BUILD,"project":dict(p) if p else None,"shots":[dict(x) for x in shots],"candidates":cs,"reviews":[dict(x) for x in rev],"jobs":[dict(x) for x in jobs],
-            "summary":{"shots":len(shots),"candidates":len(cand),"accepted":sum(1 for x in cand if x["status"]=="accepted"),"queued":sum(1 for x in jobs if x["status"]=="queued")},"truthful":True}
+            "summary":{"shots":len(shots),"candidates":len(cand),
+                       "accepted":sum(1 for x in cand if x["status"]=="selected_for_editor"),
+                       "technical_ready":sum(1 for x in cand if x["status"]=="ready_for_creative_review"),
+                       "queued":sum(1 for x in jobs if x["status"]=="queued")},"truthful":True}
 def providers():
     return {"version":VERSION,"providers":[
     {"id":"runway","video":True,"configured":bool(os.getenv("RUNWAYML_API_SECRET","").strip()),"model":os.getenv("AI_INFINITY_RUNWAY_MODEL","gen4.5")},
@@ -169,27 +175,175 @@ def worker():
         except Exception:pass
         time.sleep(1)
 def tech(path):
-    if not path.is_file():return {"score":0,"decision":"reject"}
-    score=25;checks={"file_present":True,"size_ok":path.stat().st_size>1000};ff=shutil.which("ffprobe")
-    if ff and path.suffix.lower() in {".mp4",".mov",".webm",".m4v",".mkv"}:
-        try:
-            q=subprocess.run([ff,"-v","error","-show_format","-show_streams","-of","json",str(path)],capture_output=True,text=True,timeout=45);d=json.loads(q.stdout or "{}");ss=d.get("streams") or [];v=next((x for x in ss if x.get("codec_type")=="video"),{});a=next((x for x in ss if x.get("codec_type")=="audio"),{});w,h=int(v.get("width") or 0),int(v.get("height") or 0);dur=float((d.get("format") or {}).get("duration") or 0);checks.update({"video":bool(v),"audio":bool(a),"duration":dur>0,"resolution":max(w,h)>=720});score+=15*bool(v)+15*bool(a)+15*(dur>0)+20*(max(w,h)>=720)
-        except Exception:checks["probe"]=False
-    return {"score":min(100,score),"decision":"accept" if score>=70 else "review","checks":checks}
-def review(cid,user):
+    """Evaluate media mechanics only; this is never a creative approval."""
+    path = Path(path)
+    if not path.is_file() or path.is_symlink():
+        return {"score": 0, "decision": "technical_reject", "checks": {"file_present": False},
+                "creative_approval": "NOT_EVALUATED"}
+    size_ok = path.stat().st_size > 1000
+    checks = {"file_present": True, "size_ok": size_ok, "audio_optional": True}
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return {"score": 0, "decision": "technical_unavailable",
+                "checks": {**checks, "ffprobe_available": False},
+                "creative_approval": "NOT_EVALUATED"}
+    if path.suffix.lower() not in {".mp4", ".mov", ".webm", ".m4v", ".mkv"}:
+        return {"score": 0, "decision": "technical_reject",
+                "checks": {**checks, "supported_video_container": False},
+                "creative_approval": "NOT_EVALUATED"}
+    try:
+        result = subprocess.run(
+            [ffprobe, "-v", "error", "-show_format", "-show_streams", "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=45, check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or "ffprobe failed")[-500:])
+        data = json.loads(result.stdout or "{}")
+        streams = data.get("streams") or []
+        video = next((x for x in streams if x.get("codec_type") == "video"), {})
+        audio = next((x for x in streams if x.get("codec_type") == "audio"), {})
+        width, height = int(video.get("width") or 0), int(video.get("height") or 0)
+        duration = float((data.get("format") or {}).get("duration") or 0)
+        has_video = bool(video)
+        has_duration = duration > 0
+        hd = max(width, height) >= 1280 and min(width, height) >= 720
+        checks.update({
+            "ffprobe_available": True, "supported_video_container": True,
+            "video": has_video, "audio": bool(audio), "duration": has_duration,
+            "duration_seconds": round(duration, 3), "width": width, "height": height,
+            "hd_resolution": hd,
+        })
+        # Video models commonly emit silent clips. Requiring an embedded audio
+        # stream would reject valid video-only candidates before the separate
+        # narration/music mix stage can run.
+        score = (10 * bool(path.is_file()) + 10 * size_ok + 35 * has_video
+                 + 20 * has_duration + 20 * hd + 5 * bool(audio))
+        if size_ok and has_video and has_duration and hd:
+            decision = "technical_pass"
+        elif has_video and has_duration:
+            decision = "technical_review"
+        else:
+            decision = "technical_reject"
+        return {"score": min(100, score), "decision": decision, "checks": checks,
+                "creative_approval": "NOT_EVALUATED"}
+    except Exception as exc:
+        return {"score": 0, "decision": "technical_unavailable",
+                "checks": {**checks, "probe_error": f"{type(exc).__name__}: {str(exc)[:500]}"},
+                "creative_approval": "NOT_EVALUATED"}
+
+
+def review(cid, user):
+    """Record technical QA without silently approving the shot creatively."""
     ensure()
-    with LOCK,db() as c:
-        r=c.execute("SELECT * FROM pg_candidates WHERE candidate_id=?",(cid,)).fetchone()
-        if not r:raise HTTPException(404,"candidate not found")
-        p=c.execute("SELECT * FROM pg_projects WHERE project_id=? AND user_id=?",(r["project_id"],user)).fetchone()
-        sh=c.execute("SELECT * FROM pg_shots WHERE shot_id=?",(r["shot_id"],)).fetchone()
-    if not p:raise HTTPException(404,"project not found")
-    report={"technical":tech(Path(r["asset_path"] or "")),"truthful":True};score=float(report["technical"]["score"]);decision="accept" if score>=80 else ("review" if score>=60 else "reject");rid="rev_"+uuid.uuid4().hex
-    with LOCK,db() as c:
-        c.execute("INSERT INTO pg_reviews(review_id,project_id,shot_id,candidate_id,reviewer,score,decision,report_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)",(rid,p["project_id"],r["shot_id"],cid,"technical-qc",score,decision,jd(report),now()))
-        c.execute("UPDATE pg_candidates SET score=?,critic_json=?,status=?,updated_at=? WHERE candidate_id=?",(score,jd(report),"accepted" if decision=="accept" else "reviewed",now(),cid))
-        if decision=="accept":c.execute("UPDATE pg_shots SET winner_candidate_id=?,critic_score=?,status='approved',updated_at=? WHERE shot_id=?",(cid,score,now(),r["shot_id"]))
-    return {"review_id":rid,"score":score,"decision":decision,"report":report,"truthful":True}
+    with LOCK, db() as c:
+        row = c.execute("SELECT * FROM pg_candidates WHERE candidate_id=?", (cid,)).fetchone()
+        if not row:
+            raise HTTPException(404, "candidate not found")
+        project = c.execute(
+            "SELECT * FROM pg_projects WHERE project_id=? AND user_id=?",
+            (row["project_id"], user),
+        ).fetchone()
+    if not project:
+        raise HTTPException(404, "project not found")
+
+    technical = tech(Path(row["asset_path"] or ""))
+    score = float(technical.get("score") or 0)
+    technical_decision = str(technical.get("decision") or "technical_unavailable")
+    if technical_decision == "technical_pass":
+        candidate_status = "ready_for_creative_review"
+        decision = "technical_passed"
+    elif technical_decision == "technical_review":
+        candidate_status = "technical_review_required"
+        decision = "technical_review_required"
+    elif technical_decision == "technical_reject":
+        candidate_status = "technical_rejected"
+        decision = "technical_rejected"
+    else:
+        candidate_status = "technical_unavailable"
+        decision = "technical_unavailable"
+
+    report = {
+        "technical": technical,
+        "creative_review": {"status": "PENDING", "evaluated": False},
+        "human_review": {"status": "PENDING", "evaluated": False},
+        "truthful": True,
+    }
+    review_id = "rev_" + uuid.uuid4().hex
+    with LOCK, db() as c:
+        c.execute(
+            "INSERT INTO pg_reviews(review_id,project_id,shot_id,candidate_id,reviewer,score,decision,report_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (review_id, project["project_id"], row["shot_id"], cid, "technical-qc",
+             score, decision, jd(report), now()),
+        )
+        c.execute(
+            "UPDATE pg_candidates SET score=?,critic_json=?,status=?,updated_at=? WHERE candidate_id=?",
+            (score, jd(report), candidate_status, now(), cid),
+        )
+    return {
+        "review_id": review_id, "score": score, "decision": decision,
+        "candidate_status": candidate_status, "report": report,
+        "creative_approval": "PENDING", "human_review_status": "PENDING",
+        "truthful": True,
+    }
+
+
+def select_for_editor(cid, user, project_id):
+    """Let the authenticated project owner choose a technically ready candidate."""
+    ensure()
+    with LOCK, db() as c:
+        candidate = c.execute(
+            "SELECT * FROM pg_candidates WHERE candidate_id=? AND project_id=?",
+            (cid, project_id),
+        ).fetchone()
+        project = c.execute(
+            "SELECT * FROM pg_projects WHERE project_id=? AND user_id=?",
+            (project_id, user),
+        ).fetchone()
+        if not candidate or not project:
+            raise HTTPException(404, "candidate not found")
+        shot = c.execute(
+            "SELECT * FROM pg_shots WHERE shot_id=? AND project_id=?",
+            (candidate["shot_id"], project_id),
+        ).fetchone()
+        if not shot:
+            raise HTTPException(404, "shot not found")
+        if candidate["status"] != "ready_for_creative_review":
+            raise HTTPException(409, "candidate must pass technical QA before creator selection")
+        media_path = Path(candidate["asset_path"] or "")
+        if not media_path.is_file() or media_path.is_symlink():
+            raise HTTPException(409, "candidate media is not available for selection")
+        report = {
+            "selection": "creator_selected_candidate_for_editor",
+            "selected_by": user,
+            "creative_approval": "PENDING",
+            "editor_insertion": "NOT_IMPLEMENTED",
+            "truthful": True,
+        }
+        review_id = "rev_" + uuid.uuid4().hex
+        c.execute(
+            "UPDATE pg_candidates SET status='selected_for_editor',updated_at=? WHERE candidate_id=?",
+            (now(), cid),
+        )
+        c.execute(
+            "UPDATE pg_shots SET winner_candidate_id=?,status='selected_for_editor',updated_at=? WHERE shot_id=?",
+            (cid, now(), candidate["shot_id"]),
+        )
+        c.execute(
+            "INSERT INTO pg_reviews(review_id,project_id,shot_id,candidate_id,reviewer,score,decision,report_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (review_id, project_id, candidate["shot_id"], cid, "creator", None,
+             "selected_for_editor", jd(report), now()),
+        )
+    try:
+        s().audit_event(project_id, "production_candidate_selected_for_editor", {
+            "candidate_id": cid, "shot_id": candidate["shot_id"], "truthful": True,
+        })
+    except Exception:
+        pass
+    return {
+        "review_id": review_id, "candidate_id": cid, "shot_id": candidate["shot_id"],
+        "status": "selected_for_editor", "creative_approval": "PENDING",
+        "editor_insertion": "NOT_IMPLEMENTED", "truthful": True,
+    }
 
 def install():
     global PATCHED
@@ -236,6 +390,22 @@ def register(app):
         return {"status":"accepted","jobs":jobs,"truthful":True}
     @app.post("/infinity/production/project/{pid}/review/{cid}")
     def rv(pid:str,cid:str,r:Request):owned(pid,r);return review(cid,uid(r))
+    @app.get("/infinity/production/project/{pid}/candidate/{cid}/media")
+    def candidate_media(pid:str,cid:str,r:Request):
+        owned(pid,r)
+        with LOCK,db() as c:
+            row=c.execute("SELECT asset_path FROM pg_candidates WHERE candidate_id=? AND project_id=?",(cid,pid)).fetchone()
+        if not row:raise HTTPException(404,"candidate not found")
+        path=Path(row["asset_path"] or "").resolve()
+        allowed=(Path(os.getenv("AI_INFINITY_DATA_DIR","/tmp/ai-infinity"))/"production-jobs").resolve()
+        try:path.relative_to(allowed)
+        except ValueError:raise HTTPException(404,"candidate media not found")
+        if not path.is_file() or path.suffix.lower()!=".mp4":raise HTTPException(404,"candidate media not found")
+        return FileResponse(path,media_type="video/mp4",filename=f"{cid}.mp4")
+    @app.post("/infinity/production/project/{pid}/candidate/{cid}/select")
+    def candidate_select(pid:str,cid:str,r:Request):
+        owned(pid,r)
+        return select_for_editor(cid,uid(r),pid)
     @app.get("/production",response_class=HTMLResponse)
     def ui():return HTML
 
