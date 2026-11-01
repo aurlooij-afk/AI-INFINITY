@@ -10,6 +10,7 @@ import production_graph
 
 
 def _seed_project(tmp_path: Path, monkeypatch, *, status: str = "ready") -> tuple[Path, Path]:
+    monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
     db_path = tmp_path / "production-graph.sqlite3"
     monkeypatch.setattr(production_graph, "dbpath", lambda: db_path)
     production_graph.ensure()
