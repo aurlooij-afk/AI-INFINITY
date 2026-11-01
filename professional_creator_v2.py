@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse
+from ai_infinity.timeline_interchange import MAX_SCENES, SCENE_NAME
 
 VERSION = "TARGET-2050.PRO-CREATOR.2"
 BUILD = "PROFESSIONAL-CREATOR-SYSTEM-A-TO-Z"
@@ -73,11 +74,14 @@ def _normalise(studio,p,payload):
     root=studio._project_dir(p["project_id"])
     rows=payload.get("scenes")
     if not isinstance(rows,list) or not rows: raise HTTPException(422,"timeline.scenes is required")
+    if len(rows)>MAX_SCENES: raise HTTPException(413,f"timeline exceeds the {MAX_SCENES}-scene limit")
     out=[]; seen=set(); cursor=0.0
-    for pos,raw in enumerate(rows[:40],1):
+    for pos,raw in enumerate(rows,1):
         if not isinstance(raw,dict): continue
-        asset=Path(str(raw.get("source_asset") or "")).name
-        m=re.fullmatch(r"scene_([0-9]{2})\.mp4",asset)
+        raw_asset=str(raw.get("source_asset") or "").strip()
+        asset=Path(raw_asset).name
+        if raw_asset and raw_asset!=asset: raise HTTPException(422,"timeline contains an unsafe scene source")
+        m=SCENE_NAME.fullmatch(asset)
         if not m: raise HTTPException(422,"timeline contains an invalid scene source")
         source_index=int(m.group(1))
         if source_index in seen: raise HTTPException(422,"timeline contains a duplicate scene source")
