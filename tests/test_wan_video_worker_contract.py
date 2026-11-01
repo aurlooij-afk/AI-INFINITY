@@ -69,7 +69,9 @@ def test_model_manifest_verifies_revision_license_and_every_weight_hash(tmp_path
     assert verified["revision"] == "a" * 40
     assert verified["verified_file_count"] == len(worker.REQUIRED_MODEL_FILES)
 
-    (model_dir / "diffusion_pytorch_model-00001-of-00003.safetensors").write_bytes(b"tampered weights")
+    weights = model_dir / "diffusion_pytorch_model-00001-of-00003.safetensors"
+    original = weights.read_bytes()
+    weights.write_bytes(b"X" + original[1:])
     tampered = worker._model_state(force=True)
     assert tampered["verified"] is False
     assert "SHA-256 mismatch" in tampered["reason"]
