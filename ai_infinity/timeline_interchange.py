@@ -21,8 +21,8 @@ from typing import Any
 
 MAX_OTIO_BYTES = 2 * 1024 * 1024
 MAX_BUNDLE_BYTES = 512 * 1024 * 1024
-MAX_SCENES = 40
-SCENE_NAME = re.compile(r"scene_(\d{2})\.mp4\Z")
+MAX_SCENES = 360
+SCENE_NAME = re.compile(r"scene_(\d{2,3})\.mp4\Z")
 SIDE_CARS = (
     "captions.srt", "script.md", "article.md", "sources.json", "rights.json",
     "rights_manifest.json", "visual_rights.json", "manifest.json",
@@ -121,7 +121,7 @@ def export_otio_bundle(
         raise TimelineInterchangeError("project directory is unavailable")
     rows = timeline_data.get("scenes")
     if not isinstance(rows, list) or not rows or len(rows) > MAX_SCENES:
-        raise TimelineInterchangeError("timeline must contain between 1 and 40 scenes")
+        raise TimelineInterchangeError("timeline must contain between 1 and 360 scenes")
     try:
         fps = int(timeline_data.get("fps") or 30)
     except (TypeError, ValueError):
