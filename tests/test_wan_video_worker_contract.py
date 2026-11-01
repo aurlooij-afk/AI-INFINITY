@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -311,3 +312,150 @@ def test_remote_worker_is_ready_only_with_pinned_model_gpu_and_persistence_proof
     assert result["license_verified"] is True
     assert result["persistent_storage"] is True
     assert result["compute_cost_state"] == "operator_hosted_compute_cost_not_included"
+
+
+
+def test_creator_graph_reuses_persisted_remote_worker_job_after_app_restart(tmp_path, monkeypatch):
+    data_dir = tmp_path / "ai-infinity"
+    db_path = tmp_path / "production.sqlite3"
+    monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(data_dir))
+    monkeypatch.setattr(production_graph, "dbpath", lambda: db_path)
+    production_graph.ensure()
+
+    project_id = "studio-wan-recovery"
+    shot_id = "shot-wan-recovery"
+    candidate_id = "cand_" + "d" * 32
+    local_job_id = "pgjob_" + "e" * 32
+    remote_job_id = "wan_" + "f" * 32
+    artifact_bytes = b"native Wan test bytes " * 10000
+    artifact_sha = hashlib.sha256(artifact_bytes).hexdigest()
+
+    with production_graph.db() as c:
+        c.execute(
+            "INSERT INTO pg_projects(project_id,user_id,brief_sha,status,stage,progress,updated_at) VALUES(?,?,?,?,?,?,?)",
+            (project_id, "creator-1", "brief", "producing", "visuals", 40, 1.0),
+        )
+        c.execute(
+            "INSERT INTO pg_shots(shot_id,project_id,seq,purpose,duration,narration,visual_prompt,status,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (shot_id, project_id, 1, "Mountain reveal", 5.0, "A world opens", "A sweeping mountain reveal", "planned", 1.0),
+        )
+        c.execute(
+            "INSERT INTO pg_candidates(candidate_id,shot_id,project_id,provider,model,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            (candidate_id, shot_id, project_id, production_graph.WAN_PROVIDER_ID, "Wan2.2-TI2V-5B", "queued", 1.0, 1.0),
+        )
+        c.execute(
+            "INSERT INTO pg_jobs(job_id,user_id,project_id,shot_id,kind,provider,status,payload_json,provider_job_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (local_job_id, "creator-1", project_id, shot_id, "video", production_graph.WAN_PROVIDER_ID,
+             "running", json.dumps({"candidate_id": candidate_id, "prompt": "A sweeping mountain reveal", "duration": 5.0}),
+             remote_job_id, 1.0, 1.0),
+        )
+
+    post_calls = []
+    monkeypatch.setattr(
+        production_graph, "wan_worker_capabilities",
+        lambda force=False: {"enabled": True, "status": "ready"},
+    )
+    monkeypatch.setattr(
+        production_graph, "wan_worker_configuration",
+        lambda: {"configured": True, "base_url": "https://gpu.example.com", "token": "worker-secret"},
+    )
+    monkeypatch.setattr(
+        production_graph.requests, "post",
+        lambda *args, **kwargs: (post_calls.append((args, kwargs)) or (_ for _ in ()).throw(AssertionError("persisted remote job must be reused"))),
+    )
+
+    class Response:
+        status_code = 200
+        text = ""
+        def json(self):
+            return {
+                "status": "succeeded",
+                "job_id": remote_job_id,
+                "artifact": {
+                    "sha256": artifact_sha,
+                    "size_bytes": len(artifact_bytes),
+                    "url": "/v1/jobs/" + remote_job_id + "/artifact",
+                },
+                "metadata": {
+                    "model_id": "Wan-AI/Wan2.2-TI2V-5B",
+                    "model_revision": "a" * 40,
+                    "license": "apache-2.0",
+                    "license_verified": True,
+                    "source_revision": production_graph.WAN_SOURCE_REVISION,
+                },
+            }
+
+    monkeypatch.setattr(production_graph.requests, "get", lambda *args, **kwargs: Response())
+    out_dir = data_dir / "production-jobs" / local_job_id
+    out_dir.mkdir(parents=True)
+    local_artifact = out_dir / (candidate_id + ".mp4")
+
+    def fake_download(_url, _headers, output, expected_sha, expected_size):
+        output.write_bytes(artifact_bytes)
+        assert hashlib.sha256(output.read_bytes()).hexdigest() == expected_sha
+        assert output.stat().st_size == expected_size
+        return output
+
+    monkeypatch.setattr(production_graph, "_download_verified_worker_artifact", fake_download)
+    monkeypatch.setattr(production_graph, "tech", lambda _path: {
+        "decision": "technical_pass",
+        "score": 100,
+        "checks": {"video": True, "hd_resolution": True, "full_decode": True, "duration_seconds": 5.0},
+        "creative_approval": "NOT_EVALUATED",
+    })
+    saved = []
+    monkeypatch.setattr(
+        production_graph, "s",
+        lambda: SimpleNamespace(
+            _save_asset=lambda _pid, kind, path, media_type, metadata: (
+                saved.append((kind, Path(path), media_type, metadata)) or {
+                    "durable_storage": {
+                        "status": "primary_only",
+                        "sha256": artifact_sha,
+                        "size_bytes": len(artifact_bytes),
+                        "successful_providers": ["test-object-store"],
+                        "asset_id": "asset-wan-verified",
+                    }
+                }
+            )
+        ),
+    )
+
+    result = production_graph._process_wan_video_job(
+        {
+            "job_id": local_job_id,
+            "project_id": project_id,
+            "provider": production_graph.WAN_PROVIDER_ID,
+            "kind": "video",
+            "payload_json": json.dumps({
+                "candidate_id": candidate_id,
+                "prompt": "A sweeping mountain reveal",
+                "duration": 5.0,
+                "aspect_ratio": "16:9",
+            }),
+        },
+        {
+            "candidate_id": candidate_id,
+            "prompt": "A sweeping mountain reveal",
+            "duration": 5.0,
+            "aspect_ratio": "16:9",
+        },
+    )
+
+    assert post_calls == []
+    assert result["status"] == "succeeded"
+    assert result["remote_job_id"] == remote_job_id
+    assert result["storage_status"] == "primary_only"
+    assert result["license_verified"] is True
+    assert result["creative_approval"] == "PENDING"
+    assert result["rights_status"] == "REVIEW_REQUIRED"
+    assert saved and saved[0][0] == "candidate"
+    with production_graph.db() as c:
+        candidate = c.execute(
+            "SELECT status,provider,model,storage_status,storage_json FROM pg_candidates WHERE candidate_id=?",
+            (candidate_id,),
+        ).fetchone()
+    assert candidate["status"] == "ready"
+    assert candidate["provider"] == production_graph.WAN_PROVIDER_ID
+    assert candidate["storage_status"] == "primary_only"
+    assert json.loads(candidate["storage_json"])["successful_providers"] == ["test-object-store"]
