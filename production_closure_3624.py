@@ -342,7 +342,7 @@ def _minimum_professional_scene_count(req: Dict[str, Any]) -> int:
         return min(5, max(3, int((duration + 11.999) // 12)))
 
     launch_profile = bool(re.search(
-        r"\b(?:launch|promotional? video|promo film|brand film|product film|product launch|trailer)\b",
+        r"\b(?:launch|promotional? video|promo film|brand film|product film|product launch|technology campaign|brand campaign|campaign|trailer)\b",
         brief, re.I,
     ))
     if launch_profile and duration >= 30:
@@ -1008,7 +1008,7 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     cinematic_launch_profile = bool(
         video_quality_gate_required
         and re.search(
-            r"\b(?:launch|promotional? video|promo film|brand film|product film|product launch|trailer)\b",
+            r"\b(?:launch|promotional? video|promo film|brand film|product film|product launch|technology campaign|brand campaign|campaign|trailer)\b",
             launch_profile_text, re.I,
         )
         and float(checks.get("requested_duration") or 0) >= 30

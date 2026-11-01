@@ -1028,3 +1028,75 @@ def test_commons_motion_never_substitutes_a_poster_image_for_missing_video_trans
     assert result == []
     assert downloaded == [page["videoinfo"][0]["url"]], {"downloaded": downloaded, "provider_errors": dict(studio.MEDIA_DEBUG_ERRORS)}
     assert all("thumb" not in url for url in downloaded)
+
+
+
+def test_untimed_ai_infinity_technology_campaign_becomes_cinematic_brand_film_not_generic_explainer():
+    brief = (
+        "Create the flagship film titled ONE IDEA. INFINITE WORLDS. Exactly 60 seconds, "
+        "1920x1080, 16:9 landscape. Premium global technology campaign fused with an "
+        "emotional cinematic short film. A lone creator sits at night before a blank screen; "
+        "a small idea grows through research, imagination, story shaping, creation, refinement "
+        "and the finished result. Use relevant distinct motion imagery, deliberate visual "
+        "progression, purposeful cinematography, controlled transitions and professional sound. "
+        "Avoid a slideshow, generic stock montage, tutorial and text-heavy advertisement. "
+        "Include this exact spoken narration sentence: Every extraordinary world begins with "
+        "something nobody else can see. End with AI Infinity. One idea. Infinite worlds."
+    )
+    plan = studio._fallback_creative_plan(
+        title="ONE IDEA. INFINITE WORLDS.",
+        objective=brief,
+        fmt="long",
+        duration=60,
+        audience="global technology audience",
+        tone="premium cinematic and emotionally intelligent",
+        research={"sources": []},
+        language="English",
+        topic="AI Infinity — One Idea. Infinite Worlds.",
+    )
+
+    chapters = plan["chapters"]
+    narration = " ".join(chapter["narration"] for chapter in chapters)
+    assert studio._is_explicit_ai_infinity_launch_brief(brief) is True
+    assert plan["title"] == "ONE IDEA. INFINITE WORLDS."
+    assert plan["storyboard_origin"] == "deterministic_ai_infinity_cinematic_brand_film"
+    assert plan["campaign_profile"] == "ai_infinity_launch"
+    assert len(chapters) == 8
+    assert all(chapter["campaign_profile"] == "ai_infinity_launch" for chapter in chapters)
+    assert "Every extraordinary world begins with something nobody else can see." in narration
+    assert narration.rstrip().endswith("AI Infinity. One idea. Infinite worlds.")
+    assert len({chapter["visual_focus"] for chapter in chapters}) == 8
+    assert len(narration.split()) >= 120
+    assert "night" in chapters[0]["visual_focus"].lower()
+    assert "research" in chapters[2]["visual_focus"].lower()
+    assert "storyboard" in chapters[3]["visual_focus"].lower()
+    assert "editing" in chapters[5]["visual_focus"].lower()
+    assert "camera" in chapters[6]["visual_focus"].lower()
+    assert "watching the finished film" in chapters[7]["visual_focus"].lower()
+    assert plan["brief_fidelity"]["exact_opening_line_preserved"] is True
+    assert plan["brief_fidelity"]["storyboard_replaced_by_generic_fallback"] is False
+
+
+def test_technology_campaign_is_promotional_and_unresolved_nasa_rights_are_not_usable():
+    scene = {
+        "heading": "A striking production frame",
+        "visual_focus": "camera operator filming a production",
+        "_production_context": {
+            "title": "ONE IDEA. INFINITE WORLDS.",
+            "objective": (
+                "Premium global technology campaign fused with an emotional cinematic short film. "
+                "End with AI Infinity. One idea. Infinite worlds."
+            ),
+        },
+    }
+    assert studio._scene_is_explicitly_promotional(scene) is True
+    nasa_candidate = {
+        "source": "NASA Image and Video Library",
+        "license": "NASA media-use guidelines (not a blanket license)",
+        "license_url": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+        "commercial_use_state": "commercial_use_allowed_under_provider_terms",
+        "rights_status": "license_metadata_present",
+    }
+    assessed = studio._apply_nasa_scene_usage_policy(nasa_candidate, scene)
+    assert assessed["rights_status"] == "REVIEW_REQUIRED"
+    assert assessed["commercial_use_state"] == "UNKNOWN_REVIEW_REQUIRED"

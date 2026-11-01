@@ -2135,7 +2135,8 @@ def _is_explicit_ai_infinity_launch_brief(text: str) -> bool:
         re.search(r"\bAI\s+Infinity\b", value, re.I)
         and re.search(
             r"\b(?:launch(?:ing)?(?:\s+(?:film|video|campaign))?|promotional?\s+video|"
-            r"promo(?:tional)?\s+film|brand\s+film|product\s+film|product\s+launch|trailer)\b",
+            r"promo(?:tional)?\s+film|brand\s+film|product\s+film|product\s+launch|"
+            r"technology\s+campaign|brand\s+campaign|campaign|trailer)\b",
             value, re.I,
         )
     )
@@ -2397,7 +2398,14 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         extracted = _extract_brief_subject(subject)
         return extracted[:140] if extracted else subject[:140]
 
-    clean_title = subject_from_brief(raw_title)
+    # A supplied editorial title is an authored creative choice, not a topic query.
+    # Preserve punctuation and the complete title unless the field is itself a command.
+    title_is_command = bool(re.match(
+        r"^(?:please\s+)?(?:create|make|generate|produce|build|write|draft)\b",
+        raw_title,
+        re.I,
+    ))
+    clean_title = subject_from_brief(raw_title) if title_is_command else raw_title
     explicit_topic = re.sub(r"\s+", " ", str(topic or "")).strip()
     timecoded_plan = _explicit_timed_storyboard_plan(
         title=raw_title, objective=objective, fmt=fmt, duration=duration,
@@ -2510,6 +2518,30 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
     )
     ai_infinity_launch = _is_explicit_ai_infinity_launch_brief(brief_for_visuals)
     uploaded_points = _uploaded_source_narration_points(research)
+    ai_infinity_cinematic_film = bool(
+        ai_infinity_launch
+        and fmt != "short"
+        and 30 <= int(duration or 0) <= 120
+        and re.search(
+            r"\b(?:emotional\s+cinematic\s+short\s+film|cinematic\s+brand\s+film|"
+            r"premium\s+brand\s+film|technology\s+campaign)\b",
+            brief_for_visuals,
+            re.I,
+        )
+    )
+    exact_opening_line = "Every extraordinary world begins with something nobody else can see."
+    exact_line_match = re.search(
+        r"\binclude\s+this\s+exact\s+spoken\s+narration\s+sentence\s*:\s*(.+?)"
+        r"(?=\s+End\s+with\b|$)",
+        clean_objective,
+        re.I,
+    )
+    if exact_line_match:
+        exact_opening_line = re.sub(r"\s+", " ", exact_line_match.group(1)).strip().strip('"“”')
+    closing_signature_line = "AI Infinity. One idea. Infinite worlds."
+    closing_line_match = re.search(r"\bEnd\s+with\s+(.+?)\s*$", clean_objective, re.I)
+    if closing_line_match:
+        closing_signature_line = re.sub(r"\s+", " ", closing_line_match.group(1)).strip().strip('"“”')
     # Search public media for visible creator workflow rather than the brand name.
     visual_search_subject = (
         "content creator"
@@ -2596,6 +2628,17 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         ),
     }
 
+    ai_infinity_cinematic_narration = {
+        "Hook": f"{exact_opening_line} One creator sits before a blank screen.",
+        "Context": "One small thought becomes a question. Fragments gather, and possibility begins to take shape in the dark.",
+        "The core idea": "Research brings the first light: ideas are tested, sources checked, and uncertainty kept visible.",
+        "How it works": "A story emerges from those fragments. Words, images and sound find a deliberate order.",
+        "Real-world examples": "The first cut begins. Each shot earns its place; every movement carries the idea forward.",
+        "What changes": "Then comes refinement: timing tightens, color settles, captions align, and the soundtrack finds its pulse.",
+        "Practical takeaway": "What began as a thought becomes a complete work, ready to be watched, revised and shared.",
+        "Closing": f"The screen that was once blank now opens onto a world. {closing_signature_line}",
+    }
+
     # Product-launch copy for Pashto must be long enough for a real 60-second
     # narration track and should explain the actual workflow, not generic slogans.
     ai_infinity_launch_narration_pashto = {
@@ -2671,6 +2714,8 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             # close by synthesizing a short recap from those same points only.
             recap = " ".join(uploaded_points[:min(3, len(uploaded_points))])
             raw_text = "The uploaded source brings these points together: " + recap
+        elif ai_infinity_cinematic_film and english_target:
+            raw_text = ai_infinity_cinematic_narration.get(name) or ai_infinity_cinematic_narration.get("Closing")
         elif ai_infinity_launch and str(language or "English").strip().lower() == "english":
             raw_text = ai_infinity_launch_narration.get(name) or ai_infinity_launch_narration.get("Closing")
         elif pashto_launch:
@@ -2732,7 +2777,23 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "Practical takeaway": "creator applying the idea successfully",
             "Closing": "finished work, confident human subject, memorable final frame",
         }
-        if ai_infinity_creator_workflow:
+        if ai_infinity_cinematic_film:
+            # A natural-language brand-film brief still needs an authored narrative
+            # arc when no generative writer is configured. Keep its visual beats
+            # specific enough for source matching rather than reverting to generic
+            # "creator workflow" footage.
+            long_visual_focus = {
+                "Hook": "a lone creator sitting at a workstation late at night, facing a completely blank computer screen in a quiet dark room",
+                "Context": "a small point of light appearing on a dark monitor as one creator begins writing an idea in a notebook",
+                "The core idea": "hands researching and writing notes at a desk with source pages, books and a laptop",
+                "How it works": "a close-up of storyboard frames and a handwritten script being arranged into a deliberate sequence",
+                "Real-world examples": "a creator bringing an idea to life by recording a cinematic shot with a camera and studio lighting",
+                "What changes": "a video editor refining a real multitrack timeline, adjusting color and aligning captions and audio",
+                "Practical takeaway": "a small film crew and camera operator composing a real production shot on set",
+                "Closing": "a creator watching the finished film on a large monitor in a dark studio, with a restrained signature ending",
+            }
+            ratios = [0.15, 0.13, 0.12, 0.12, 0.11, 0.11, 0.12, 0.14]
+        elif ai_infinity_creator_workflow:
             long_visual_focus = {
                 "Hook": "dynamic establishing shot of a creator production workspace with camera gear and editing monitors",
                 "Context": "a creator setting up a ring light and smartphone before recording in a studio",
@@ -2781,7 +2842,18 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                     word if word.isupper() else word.capitalize()
                     for word in overlay_words[:5]
                 )[:60]
-        if ai_infinity_launch and str(language or "English").strip().lower() == "english":
+        if ai_infinity_cinematic_film:
+            localized_screen = {
+                "Hook": "Every extraordinary world begins with an idea",
+                "Context": "The first spark",
+                "The core idea": "Follow the evidence",
+                "How it works": "Shape the story",
+                "Real-world examples": "Bring it to life",
+                "What changes": "Refine every frame",
+                "Practical takeaway": "A thought becomes a world",
+                "Closing": closing_signature_line,
+            }.get(name, localized_screen)
+        elif ai_infinity_launch and str(language or "English").strip().lower() == "english":
             # Brand-launch overlays describe the product workflow, not planner
             # chapter labels or generic motivational copy.
             launch_overlays = {
@@ -2820,6 +2892,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "image_prompt": f"Premium editorial documentary image about {topic_label}; visual focus: {focus}; realistic people, locations, objects or processes, natural cinematic lighting, coherent composition, strong subject separation, no logos, no text, visually distinct from other scenes",
             "on_screen": localized_screen,
             "duration": sec,
+            "campaign_profile": "ai_infinity_launch" if ai_infinity_launch else None,
             "proof_needed": (
                 [src.get("title")]
                 if src.get("narration_point") and src.get("title") and src.get("title") != clean_title
@@ -2828,6 +2901,9 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         })
     localized_hook = _localized_fallback_copy(language, "Hook", clean_title, topic_label)["hook"]
     localized_cta = _localized_fallback_copy(language, "Closing", clean_title, topic_label)["cta"]
+    if ai_infinity_cinematic_film:
+        localized_hook = exact_opening_line
+        localized_cta = closing_signature_line
     if ai_infinity_launch and str(language or "English").strip().lower() == "english":
         # The launch hook flows into the editable script, article, social copy,
         # and experiment package; keep every derivative on the actual product story.
@@ -2863,6 +2939,18 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 if english_target and not ai_infinity_launch and not uploaded_points else 0
             ),
             "source_claims_invented": False,
+        },
+        "campaign_profile": "ai_infinity_launch" if ai_infinity_launch else None,
+        "storyboard_origin": (
+            "deterministic_ai_infinity_cinematic_brand_film"
+            if ai_infinity_cinematic_film else "duration_bounded_topic_coherent"
+        ),
+        "brief_fidelity": {
+            "source": "natural_language_brand_film_brief" if ai_infinity_cinematic_film else "deterministic_fallback",
+            "campaign_profile": bool(ai_infinity_launch),
+            "scene_specific_visuals": bool(ai_infinity_cinematic_film),
+            "exact_opening_line_preserved": bool(ai_infinity_cinematic_film and exact_opening_line in " ".join(ch.get("narration") or "" for ch in chapters)),
+            "storyboard_replaced_by_generic_fallback": False if ai_infinity_cinematic_film else None,
         },
         "fallback_mode": "duration_bounded_topic_coherent",
     }
@@ -5228,12 +5316,19 @@ def _scene_is_explicitly_promotional(scene: Dict[str, Any]) -> bool:
             if value:
                 values.append(str(value))
     text = " ".join(values).lower()
-    return bool(re.search(
-        r"\b(?:advertisement|advertising|promotional|promotion|marketing campaign|sales campaign|"
-        r"commercial campaign|product launch|brand launch|launch film|launch video|brand film|"
-        r"brand awareness|sponsored content|commercial)\b",
-        text,
-    ))
+    explicit_brand_campaign = bool(
+        re.search(r"\bAI\s+Infinity\b", text, re.I)
+        and re.search(r"\b(?:campaign|brand film)\b", text, re.I)
+    )
+    return bool(
+        explicit_brand_campaign
+        or re.search(
+            r"\b(?:advertisement|advertising|promotional|promotion|marketing campaign|sales campaign|"
+            r"commercial campaign|product launch|brand launch|launch film|launch video|brand film|"
+            r"brand awareness|sponsored content|commercial)\b",
+            text,
+        )
+    )
 
 
 def _apply_nasa_scene_usage_policy(candidate: Dict[str, Any], scene: Dict[str, Any]) -> Dict[str, Any]:
@@ -5444,11 +5539,23 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             except Exception:
                 return None
             used_visual_hashes.add(digest)
-        selected_candidate=dict(candidate)
+        rights_assessed = _apply_nasa_scene_usage_policy(candidate, scene)
+        if _scene_is_explicitly_promotional(scene):
+            rights_status = str(rights_assessed.get("rights_status") or "").strip().lower()
+            commercial_state = str(rights_assessed.get("commercial_use_state") or "").strip().lower()
+            if (
+                rights_status in {"review_required", "unknown", "not_verified", "unknown_review_required"}
+                or commercial_state in {"review_required", "unknown", "not_verified", "unknown_review_required"}
+            ):
+                source_failures.append(
+                    f"{rights_assessed.get('source') or 'visual source'}:blocked_unresolved_promotional_rights"
+                )
+                return None
+        selected_candidate=dict(rights_assessed)
         selected_candidate["path"]=str(selected)
         selected_candidate["source_file"]=str(path)
         selected_candidate["asset_sha256"]=digest
-        return _apply_nasa_scene_usage_policy(selected_candidate, scene)
+        return selected_candidate
 
     # For the known AI Infinity product-launch brief, try a shot-specific real
     # motion clip before generic image search. Previously a loosely matching
