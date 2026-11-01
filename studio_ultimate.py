@@ -900,6 +900,123 @@ def _research_source_relevant(topic: str, source: Dict[str, Any]) -> bool:
 
 
 
+
+_RESEARCH_EVIDENCE_ARCHETYPES = {
+    "foundations_and_context": r"\b(?:overview|introduction|fundamentals|background|context|framework|principles?)\b",
+    "history_and_timeline": r"\b(?:history|historical|timeline|origin|origins|evolution|early|decade|century)\b",
+    "mechanisms_and_methods": r"\b(?:mechanism|process|method|methodology|how it works|approach|algorithm|workflow|system)\b",
+    "case_studies_and_examples": r"\b(?:case study|case studies|example|examples|field study|implementation|lessons learned)\b",
+    "empirical_and_scholarly_evidence": r"\b(?:study|studies|research|experiment|experimental|trial|meta-analysis|peer.reviewed|survey|dataset)\b",
+    "quantitative_metrics": r"\b(?:measurement|metrics?|statistics?|statistical|benchmark|performance|rate|percentage|quantitative|data)\b",
+    "applications_and_implementation": r"\b(?:application|applications|practice|practical|implementation|deployment|guide|tools?|adoption)\b",
+    "impacts_and_outcomes": r"\b(?:impact|impacts|outcomes?|effects?|results?|benefits?|consequences?|assessment)\b",
+    "risks_and_limitations": r"\b(?:risk|risks|limitations?|challenges?|barriers?|failure|failures|harm|safety|uncertainty)\b",
+    "debates_and_counterpoints": r"\b(?:debate|debates|critique|critical|counterpoint|counterargument|controversy|disagreement|versus|alternative)\b",
+}
+
+
+def _canonical_research_url(value: Any) -> str:
+    try:
+        parsed = urlparse(str(value or "").strip())
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+            return ""
+        host = parsed.netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        kept_query = [
+            (key, val) for key, val in parse_qsl(parsed.query, keep_blank_values=True)
+            if not key.lower().startswith("utm_") and key.lower() not in {"fbclid", "gclid", "mc_cid", "mc_eid"}
+        ]
+        return urlunparse((
+            parsed.scheme.lower(),
+            host,
+            parsed.path.rstrip("/") or "/",
+            "",
+            urlencode(sorted(kept_query)),
+            "",
+        ))
+    except Exception:
+        return ""
+
+
+def _research_evidence_profile(sources: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Count distinct, content-bearing research records without treating metadata as evidence."""
+    unique: List[Dict[str, Any]] = []
+    seen_urls = set()
+    for row in sources or []:
+        if not isinstance(row, dict):
+            continue
+        canonical = _canonical_research_url(row.get("url"))
+        if not canonical or canonical in seen_urls:
+            continue
+        seen_urls.add(canonical)
+        unique.append(row)
+
+    substantive = []
+    metadata_only = []
+    domains = set()
+    providers = set()
+    archetypes = set()
+    for row in unique:
+        canonical = _canonical_research_url(row.get("url"))
+        try:
+            domain = (urlparse(canonical).hostname or "").lower()
+            if domain.startswith("www."):
+                domain = domain[4:]
+            if domain:
+                domains.add(domain)
+        except Exception:
+            pass
+        provider = str(row.get("source") or "").strip()
+        if provider:
+            providers.add(provider)
+        summary = re.sub(r"\s+", " ", str(
+            row.get("summary") or row.get("abstract") or row.get("description") or ""
+        )).strip()
+        placeholder = summary.lower() in {
+            "scholarly work",
+            "scholarly work; abstract index available",
+            "crossref bibliographic record",
+            "europe pmc record",
+        }
+        word_count = len(re.findall(r"\b[\w'-]+\b", summary))
+        evidence_row = {
+            "title": str(row.get("title") or ""),
+            "url": str(row.get("url") or ""),
+            "provider": provider,
+            "summary_word_count": word_count,
+            "evidence_level": "substantive_excerpt" if word_count >= 80 and not placeholder else "metadata_only",
+        }
+        text_value = " ".join([
+            str(row.get("title") or ""),
+            summary,
+        ]).lower()
+        matched = [
+            name for name, pattern in _RESEARCH_EVIDENCE_ARCHETYPES.items()
+            if re.search(pattern, text_value, re.I)
+        ]
+        archetypes.update(matched)
+        evidence_row["archetypes"] = matched
+        if evidence_row["evidence_level"] == "substantive_excerpt":
+            substantive.append(evidence_row)
+        else:
+            metadata_only.append(evidence_row)
+
+    return {
+        "unique_source_url_count": len(unique),
+        "substantive_excerpt_count": len(substantive),
+        "metadata_only_count": len(metadata_only),
+        "provider_family_count": len(providers),
+        "unique_domain_count": len(domains),
+        "archetype_count": len(archetypes),
+        "archetypes": sorted(archetypes),
+        "substantive_sources": substantive[:60],
+        "metadata_only_sources": metadata_only[:60],
+        "truthful": True,
+    }
+
+
+
 def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
     """Multi-source public research with explicit provider outcomes and truthful degradation."""
     from urllib.parse import quote_plus
@@ -933,7 +1050,10 @@ def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
             "degraded_reason": "External research access is disabled by runtime policy.",
             "truthful": True,
         }
-    per = max(1, min(int(limit or 10), 10))
+    # Longer narrated programmes need a deeper evidence pool. Provider-specific
+    # pagination is still bounded to 25 results each so an ordinary short brief
+    # cannot fan out into an unbounded research crawl.
+    per = max(1, min(int(limit or 10), 25))
     sources: List[Dict[str, Any]] = []
     providers: Dict[str, Dict[str, Any]] = {}
     seen = set()
@@ -1084,24 +1204,38 @@ def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
         elif raw_count:
             status_row["status"] = "no_relevant_results"
         status_row["truthful"] = True
-    valid = valid[:per * 2]
-    family_count = len(set(str(x.get("source") or "") for x in valid))
-    status = "READY" if valid else "DEGRADED"
+    # Deduplicate by canonical external URL across provider families. The same
+    # article found by RSS, a web engine and GDELT is one source, not three.
+    unique_valid = []
+    seen_canonical_urls = set()
+    for row in valid:
+        canonical = _canonical_research_url(row.get("url"))
+        if not canonical or canonical in seen_canonical_urls:
+            continue
+        seen_canonical_urls.add(canonical)
+        unique_valid.append(row)
+    unique_valid = unique_valid[:per * 2]
+    family_count = len(set(str(x.get("source") or "") for x in unique_valid))
+    evidence_profile = _research_evidence_profile(unique_valid)
+    status = "READY" if unique_valid else "DEGRADED"
     return {
         "topic": clean_topic,
-        "sources": valid,
-        "source_count": len(valid),
+        "sources": unique_valid,
+        "source_count": len(unique_valid),
         "provider_count": family_count,
         "providers": providers,
-        "degraded": not bool(valid),
+        "evidence_profile": evidence_profile,
+        "requested_provider_limit": per,
+        "degraded": not bool(unique_valid),
         "status": status,
         "retrieved_at": utc_iso(),
         "truthful": True,
         "relevance_policy": {
             "version": "topic-overlap-v1",
             "retrieved_sources": len(retrieved),
-            "accepted_sources": len(valid),
-            "rejected_irrelevant_sources": len(retrieved) - len(valid),
+            "accepted_sources": len(unique_valid),
+            "rejected_irrelevant_sources": len(retrieved) - len(unique_valid),
+            "duplicate_urls_removed": max(0, len(valid) - len(unique_valid)),
         },
     }
 
@@ -1339,10 +1473,17 @@ def creative_plan(req: Dict[str, Any], research: Dict[str, Any], model_fn: Optio
     )
     if timecoded_plan:
         return timecoded_plan, "explicit-timecoded-user-brief"
+    longform_research = duration >= 600
     source_digest = []
-    for s in research.get("sources", [])[:12]:
-        if s.get("title"):
-            source_digest.append(f"- {s.get('title')} | {s.get('url')} | {s.get('summary','')[:900]}")
+    source_limit = 40 if longform_research else 12
+    for source_index, source in enumerate(research.get("sources", [])[:source_limit], 1):
+        if source.get("title"):
+            summary = str(source.get("summary") or source.get("abstract") or "")[:1200]
+            source_digest.append(
+                f"[R{source_index}] {source.get('title')} | {source.get('url')} | "
+                f"provider={source.get('source') or 'unknown'} | retrieved_at={source.get('retrieved_at') or ''} "
+                f"| evidence={summary}"
+            )
     research_text = "\n".join(source_digest)
     prompt = f"""You are the senior showrunner, researcher, writer, visual director and editor for a premium creator studio. Build a complete production blueprint for this project.
 TITLE: {title}
@@ -1409,6 +1550,8 @@ The current script has {best_words} spoken words. The COMPLETE script must conta
 Return a complete revised JSON blueprint with the same chapter schema. Expand the existing story with genuinely useful, distinct narration that explains the topic in depth. Keep the intended audience, language, tone, chapter sequence, and visual direction. Add concrete mechanisms, examples, counterpoints, limitations, transitions, and actionable takeaways where supported.
 Do not repeat sentences or paragraphs, pad with generic motivation, invent research, fabricate quotations, imply that illustrative material is observed fact, or claim product capabilities that are not demonstrated. For factual statements, use only the supplied research context and retain proof_needed for anything not supported.
 Aim for approximately {required_words + max(100, int(required_words * 0.08))} spoken words so normal editing does not make the delivered narration under-length.
+RESEARCH EVIDENCE (cite only these source records; do not invent facts):
+{research_text[:24000]}
 EXISTING PLAN JSON:
 {json.dumps(clean, ensure_ascii=False)[:45000]}
 """
@@ -8148,7 +8291,23 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
 
         research_brief_topic = _research_query_from_request(req, topic)
         research_query = _research_search_topic(req, research_brief_topic)
-        research = research_topic(research_query, limit=10)
+        requested_duration_for_research = max(1, int(req.get("duration") or 300))
+        objective_for_research = str(req.get("objective") or req.get("topic") or req.get("title") or "")
+        explicit_research_required_for_brief = str(
+            os.getenv("AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE", "0")
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        semantic_research_required_for_brief = bool(re.search(
+            r"\b(research[- ]backed|fact[- ]checked|with evidence|evidence[- ]based|source[- ]backed)\b",
+            objective_for_research,
+            re.I,
+        ))
+        require_deep_research = explicit_research_required_for_brief or semantic_research_required_for_brief
+        research_limit = (
+            25 if requested_duration_for_research >= 600 and require_deep_research
+            else 15 if requested_duration_for_research >= 180 and require_deep_research
+            else 10
+        )
+        research = research_topic(research_query, limit=research_limit)
         research["brief_topic"] = research_brief_topic
         research["research_scope"] = (
             "independent creator/video-production practice sources; not independent proof of AI Infinity product claims"
@@ -8166,7 +8325,55 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             re.I,
         ))
         research_required = explicit_research_required or semantic_research_required
-        research_status = "complete" if research_count > 0 else "degraded"
+        evidence_profile = _research_evidence_profile(research.get("sources") or [])
+        research["evidence_profile"] = evidence_profile
+        research["evidence_requirement"] = {
+            "requested_sources": 40 if requested_duration_for_research >= 600 and research_required else (
+                20 if requested_duration_for_research >= 180 and research_required else 0
+            ),
+            "minimum_substantive_excerpts": 20 if requested_duration_for_research >= 600 and research_required else (
+                10 if requested_duration_for_research >= 180 and research_required else 0
+            ),
+            "minimum_provider_families": 5 if requested_duration_for_research >= 600 and research_required else (
+                3 if requested_duration_for_research >= 180 and research_required else 0
+            ),
+            "minimum_unique_domains": 8 if requested_duration_for_research >= 600 and research_required else (
+                5 if requested_duration_for_research >= 180 and research_required else 0
+            ),
+            "minimum_archetypes": 8 if requested_duration_for_research >= 600 and research_required else (
+                5 if requested_duration_for_research >= 180 and research_required else 0
+            ),
+            "truthful": True,
+        }
+        evidence_requirement = research["evidence_requirement"]
+        evidence_shortfalls = []
+        if evidence_requirement["requested_sources"] and evidence_profile["unique_source_url_count"] < evidence_requirement["requested_sources"]:
+            evidence_shortfalls.append(
+                f"{evidence_profile['unique_source_url_count']} unique source URLs; "
+                f"{evidence_requirement['requested_sources']} required"
+            )
+        if evidence_requirement["minimum_substantive_excerpts"] and evidence_profile["substantive_excerpt_count"] < evidence_requirement["minimum_substantive_excerpts"]:
+            evidence_shortfalls.append(
+                f"{evidence_profile['substantive_excerpt_count']} substantive excerpts; "
+                f"{evidence_requirement['minimum_substantive_excerpts']} required"
+            )
+        if evidence_requirement["minimum_provider_families"] and evidence_profile["provider_family_count"] < evidence_requirement["minimum_provider_families"]:
+            evidence_shortfalls.append(
+                f"{evidence_profile['provider_family_count']} provider families; "
+                f"{evidence_requirement['minimum_provider_families']} required"
+            )
+        if evidence_requirement["minimum_unique_domains"] and evidence_profile["unique_domain_count"] < evidence_requirement["minimum_unique_domains"]:
+            evidence_shortfalls.append(
+                f"{evidence_profile['unique_domain_count']} unique domains; "
+                f"{evidence_requirement['minimum_unique_domains']} required"
+            )
+        if evidence_requirement["minimum_archetypes"] and evidence_profile["archetype_count"] < evidence_requirement["minimum_archetypes"]:
+            evidence_shortfalls.append(
+                f"{evidence_profile['archetype_count']} research archetypes; "
+                f"{evidence_requirement['minimum_archetypes']} required"
+            )
+        research_sufficient = bool(research_count) and not evidence_shortfalls
+        research_status = "complete" if research_sufficient or not research_required else "degraded"
         audit_event(project_id, "research_complete" if research_count > 0 else "research_degraded", {
             "source_count": research_count,
             "reference_count": len(reference_sources),
@@ -8180,7 +8387,22 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "status": research_status,
         })
         research["status"] = research_status
-        if research_count == 0:
+        if research_required and not research_sufficient:
+            research["degraded_reason"] = (
+                "Research evidence is insufficient for the requested programme: "
+                + "; ".join(evidence_shortfalls or ["no usable source returned"])
+            )
+            if requested_duration_for_research >= 600:
+                raise RuntimeError(
+                    "Long-form research preflight blocked before writing or rendering: "
+                    + research["degraded_reason"]
+                    + ". The system will not label a small metadata-only source set as deep research."
+                )
+            if research_count == 0:
+                raise RuntimeError(
+                    "Research evidence is required by the production brief, but no usable research source was available."
+                )
+        elif research_count == 0:
             research["degraded_reason"] = "No public research source responded in the current runtime; factual claims remain review-required."
             if research_required:
                 raise RuntimeError(
