@@ -2631,7 +2631,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
     ai_infinity_cinematic_narration = {
         "Hook": f"{exact_opening_line} One creator sits alone tonight before a blank screen.",
         "Context": "One small thought becomes a question. Fragments gather, and possibility begins to take shape in the dark.",
-        "The core idea": "Research brings the first light: ideas are tested, sources checked, and uncertainty kept visible.",
+        "The core idea": "Research brings the first light: ideas are tested, sources checked carefully, and uncertainty kept visible throughout.",
         "How it works": "A story emerges from those fragments. Words, images and sound find a deliberate order.",
         "Real-world examples": "The first cut begins. Each shot earns its place; every movement carries the idea forward.",
         "What changes": "Then comes refinement: timing tightens, color settles, captions align, and the soundtrack finds its pulse.",
