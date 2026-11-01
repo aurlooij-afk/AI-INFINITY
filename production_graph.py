@@ -327,7 +327,15 @@ def select_for_editor(cid, user, project_id):
         if candidate["status"] != "ready_for_creative_review":
             raise HTTPException(409, "candidate must pass technical QA before creator selection")
         media_path = Path(candidate["asset_path"] or "")
-        if not media_path.is_file() or media_path.is_symlink():
+        if media_path.is_symlink():
+            raise HTTPException(409, "candidate media is not available for selection")
+        resolved_media = media_path.resolve()
+        allowed_root = (Path(os.getenv("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity")) / "production-jobs").resolve()
+        try:
+            resolved_media.relative_to(allowed_root)
+        except ValueError:
+            raise HTTPException(409, "candidate media is outside the production-job asset directory")
+        if not resolved_media.is_file() or resolved_media.suffix.lower() != ".mp4":
             raise HTTPException(409, "candidate media is not available for selection")
         report = {
             "selection": "creator_selected_candidate_for_editor",
@@ -523,7 +531,9 @@ def register(app):
         with LOCK,db() as c:
             row=c.execute("SELECT asset_path FROM pg_candidates WHERE candidate_id=? AND project_id=?",(cid,pid)).fetchone()
         if not row:raise HTTPException(404,"candidate not found")
-        path=Path(row["asset_path"] or "").resolve()
+        raw_path=Path(row["asset_path"] or "")
+        if raw_path.is_symlink():raise HTTPException(404,"candidate media not found")
+        path=raw_path.resolve()
         allowed=(Path(os.getenv("AI_INFINITY_DATA_DIR","/tmp/ai-infinity"))/"production-jobs").resolve()
         try:path.relative_to(allowed)
         except ValueError:raise HTTPException(404,"candidate media not found")
