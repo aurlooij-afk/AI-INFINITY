@@ -1274,6 +1274,145 @@ def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
     }
 
 
+def _expand_longform_research_evidence(
+    research: Dict[str, Any],
+    topic: str,
+    limit: int = 25,
+) -> Dict[str, Any]:
+    """Acquire targeted evidence strands when a long-form brief misses its depth gates.
+
+    This expands acquisition, never relaxes acceptance thresholds. Every added
+    record still passes the ordinary topic-relevance filter inside research_topic,
+    and the combined evidence is re-profiled from canonical source URLs.
+    """
+    base = dict(research or {})
+    initial_sources = [
+        dict(row) for row in (base.get("sources") or [])
+        if isinstance(row, dict)
+    ]
+    initial_profile = _research_evidence_profile(initial_sources)
+    requirements = {
+        "unique_source_url_count": 40,
+        "substantive_excerpt_count": 20,
+        "provider_family_count": 5,
+        "unique_domain_count": 8,
+        "archetype_count": 10,
+    }
+    shortfalls = [
+        key for key, minimum in requirements.items()
+        if int(initial_profile.get(key) or 0) < minimum
+    ]
+    if not shortfalls:
+        base["research_expansion"] = {
+            "status": "not_needed",
+            "initial_profile": initial_profile,
+            "final_profile": initial_profile,
+            "queries": [],
+            "additional_unique_source_urls": 0,
+            "truthful": True,
+        }
+        base["evidence_profile"] = initial_profile
+        return base
+
+    # Each bounded facet aims to surface different evidence archetypes without
+    # changing the subject. These are new acquisition queries, not fabricated
+    # records or synthetic expansions of existing abstracts.
+    facets = (
+        "fundamentals background history historical timeline principles framework",
+        "methods methodology workflows process mechanisms case studies examples implementation",
+        "empirical studies experiments datasets quantitative measurement metrics benchmarks outcomes impacts",
+        "applications practice adoption limitations risks failures safety debates critiques alternatives",
+    )
+    clean_topic = re.sub(r"\s+", " ", str(topic or base.get("topic") or "")).strip()[:420]
+    queries = [f"{clean_topic} {facet}".strip()[:500] for facet in facets if clean_topic]
+    expansion_limit = max(10, min(18, int(limit or 10)))
+    query_results: Dict[str, Dict[str, Any]] = {}
+    expansion_rows: List[Dict[str, Any]] = []
+    expansion_errors: List[Dict[str, str]] = []
+
+    # Two research batches at a time keep the public-source fan-out bounded on
+    # small instances while allowing slow providers to overlap.
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="studio-research-expansion") as pool:
+        futures = {pool.submit(research_topic, query, expansion_limit): query for query in queries}
+        for future in as_completed(futures):
+            query = futures[future]
+            try:
+                result = future.result() or {}
+                rows = [
+                    dict(row) for row in (result.get("sources") or [])
+                    if isinstance(row, dict)
+                ]
+                for row in rows:
+                    row["research_query"] = query
+                    row["research_pass"] = "longform_facet_expansion"
+                    expansion_rows.append(row)
+                query_results[query] = {
+                    "source_count": len(rows),
+                    "provider_count": int(result.get("provider_count") or 0),
+                    "status": str(result.get("status") or "unknown"),
+                }
+            except Exception as exc:
+                expansion_errors.append({
+                    "query": query,
+                    "error": f"{type(exc).__name__}: {str(exc)[:220]}",
+                })
+                query_results[query] = {
+                    "source_count": 0,
+                    "provider_count": 0,
+                    "status": "failed",
+                }
+
+    # Deduplicate external pages by canonical URL. Keep uploaded user material
+    # (which intentionally has no public URL) by its recorded SHA-256 identity.
+    combined: List[Dict[str, Any]] = []
+    seen_external = set()
+    seen_uploads = set()
+    for row in initial_sources + expansion_rows:
+        canonical = _canonical_research_url(row.get("url"))
+        if canonical:
+            if canonical in seen_external:
+                continue
+            seen_external.add(canonical)
+        elif str(row.get("source") or "").lower() == "user upload":
+            identity = str(row.get("sha256") or row.get("title") or "").strip()
+            if not identity or identity in seen_uploads:
+                continue
+            seen_uploads.add(identity)
+        else:
+            continue
+        combined.append(row)
+
+    final_profile = _research_evidence_profile(combined)
+    base["sources"] = combined
+    base["source_count"] = len(combined)
+    base["provider_count"] = int(final_profile.get("provider_family_count") or 0)
+    base["evidence_profile"] = final_profile
+    base["research_queries"] = [str(base.get("topic") or topic or "")] + queries
+    base["research_expansion"] = {
+        "status": "expanded" if len(seen_external) > int(initial_profile.get("unique_source_url_count") or 0) else "no_new_sources",
+        "initial_shortfalls": shortfalls,
+        "initial_profile": initial_profile,
+        "final_profile": final_profile,
+        "queries": queries,
+        "query_results": query_results,
+        "additional_unique_source_urls": max(
+            0,
+            int(final_profile.get("unique_source_url_count") or 0)
+            - int(initial_profile.get("unique_source_url_count") or 0),
+        ),
+        "errors": expansion_errors,
+        "requirements_met": all(
+            int(final_profile.get(key) or 0) >= minimum
+            for key, minimum in requirements.items()
+        ),
+        "truthful": True,
+    }
+    base["degraded"] = not bool(combined)
+    base["status"] = "READY" if combined else "DEGRADED"
+    return base
+
+
+
 # ---------------------------------------------------------------------------
 # Creative intelligence. Uses the existing AI Infinity model router when one
 # is connected; otherwise a robust deterministic creative engine still closes
@@ -8359,6 +8498,17 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             re.I,
         ))
         research_required = explicit_research_required or semantic_research_required
+        # A long-form research brief gets a bounded, multi-angle acquisition pass
+        # before it is rejected for missing domains or evidence archetypes. The
+        # 40-source / 20-excerpt / 5-provider / 8-domain / 10-archetype gates remain
+        # unchanged; missing proof still blocks writing and rendering.
+        if research_required and requested_duration_for_research >= 600:
+            research = _expand_longform_research_evidence(
+                research,
+                research_query,
+                limit=research_limit,
+            )
+            research_count = int(research.get("source_count") or 0)
         evidence_profile = _research_evidence_profile(research.get("sources") or [])
         research["evidence_profile"] = evidence_profile
         research["evidence_requirement"] = {
