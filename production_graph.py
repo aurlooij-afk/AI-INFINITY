@@ -2,6 +2,7 @@ from __future__ import annotations
 import base64,hashlib,json,mimetypes,os,re,shutil,sqlite3,subprocess,threading,time,uuid
 from pathlib import Path
 from typing import Any,Dict
+from urllib.parse import urlparse
 import requests
 try: import redis
 except Exception: redis=None
@@ -9,6 +10,10 @@ from fastapi import HTTPException,Request
 from fastapi.responses import FileResponse,HTMLResponse
 
 VERSION="TARGET-2050.4000"; BUILD="PROFESSIONAL-PRODUCTION-GRAPH"; LOCK=threading.RLock(); PATCHED=False; WORKER_STARTED=False
+WAN_PROVIDER_ID="wan2.2-ti2v-5b"
+WAN_CAP_LOCK=threading.RLock()
+WAN_CAP_CACHE={"at":0.0,"value":None}
+WAN_CAP_TTL_SECONDS=15.0
 
 def s(): import studio_ultimate; return studio_ultimate
 def dbpath(): return Path(os.getenv("AI_INFINITY_DB_PATH",str(getattr(s(),"DB_PATH","/tmp/ai-infinity/ai_infinity.db")))).resolve()
@@ -38,6 +43,11 @@ def ensure():
             c.execute("ALTER TABLE pg_candidates ADD COLUMN storage_status TEXT DEFAULT 'not_persisted'")
         if "storage_json" not in columns:
             c.execute("ALTER TABLE pg_candidates ADD COLUMN storage_json TEXT DEFAULT '{}'")
+        job_columns = {row["name"] for row in c.execute("PRAGMA table_info(pg_jobs)").fetchall()}
+        if "provider_job_id" not in job_columns:
+            c.execute("ALTER TABLE pg_jobs ADD COLUMN provider_job_id TEXT")
+        if "provider_meta_json" not in job_columns:
+            c.execute("ALTER TABLE pg_jobs ADD COLUMN provider_meta_json TEXT DEFAULT '{}'")
 def redis_client():
     u=os.getenv("REDIS_URL","").strip()
     if not u or redis is None:return None
@@ -98,6 +108,94 @@ def graph(pid):
                        "selected":sum(1 for x in cand if x["status"]=="selected_for_editor"),
                        "technical_ready":sum(1 for x in cand if x["status"]=="ready_for_creative_review"),
                        "queued":sum(1 for x in jobs if x["status"]=="queued")},"truthful":True}
+def wan_worker_configuration():
+    base = os.getenv("AI_INFINITY_WAN_WORKER_URL", "").strip().rstrip("/")
+    token = os.getenv("AI_INFINITY_WAN_WORKER_TOKEN", "").strip()
+    if not base or not token:
+        return {"configured": False, "base_url": "", "token": ""}
+    parsed = urlparse(base)
+    local = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+    if parsed.scheme != "https" and not (local and parsed.scheme == "http"):
+        return {"configured": False, "base_url": "", "token": "", "error": "worker URL must use HTTPS except loopback development"}
+    if not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        return {"configured": False, "base_url": "", "token": "", "error": "worker URL is malformed"}
+    return {"configured": True, "base_url": base, "token": token}
+
+
+def wan_worker_capabilities(force=False):
+    cfg = wan_worker_configuration()
+    if not cfg.get("configured"):
+        return {
+            "configured": False, "enabled": False, "status": "not_configured",
+            "reason": cfg.get("error") or "a private verified Wan GPU worker URL and token are not configured",
+            "pricing_class": "open_source_self_hosted", "model": "Wan2.2-TI2V-5B",
+            "truthful": True,
+        }
+    with WAN_CAP_LOCK:
+        cached = WAN_CAP_CACHE.get("value")
+        if not force and cached and now() - float(WAN_CAP_CACHE.get("at") or 0) < WAN_CAP_TTL_SECONDS:
+            return dict(cached)
+    try:
+        response = requests.get(
+            cfg["base_url"] + "/v1/capabilities",
+            headers={"Authorization": "Bearer " + cfg["token"], "Accept": "application/json"},
+            timeout=(3, 8),
+            allow_redirects=False,
+        )
+        if response.status_code != 200:
+            raise RuntimeError("worker capability endpoint returned HTTP " + str(response.status_code))
+        raw = response.json()
+        model = raw.get("model") if isinstance(raw.get("model"), dict) else {}
+        source = raw.get("source") if isinstance(raw.get("source"), dict) else {}
+        hardware = raw.get("hardware") if isinstance(raw.get("hardware"), dict) else {}
+        storage = raw.get("storage") if isinstance(raw.get("storage"), dict) else {}
+        ready = bool(
+            raw.get("execution_ready") is True
+            and raw.get("provider") == WAN_PROVIDER_ID
+            and model.get("verified") is True
+            and model.get("license_verified") is True
+            and model.get("model_id") == "Wan-AI/Wan2.2-TI2V-5B"
+            and model.get("license") == "apache-2.0"
+            and model.get("terms_acknowledged") is True
+            and source.get("verified") is True
+            and hardware.get("available") is True
+            and int(hardware.get("total_vram_mb") or 0) >= 24576
+            and storage.get("persistent") is True
+            and raw.get("ffmpeg") is True
+            and raw.get("ffprobe") is True
+        )
+        value = {
+            "configured": True,
+            "enabled": ready,
+            "status": "ready" if ready else "worker_not_ready",
+            "reason": None if ready else "; ".join(raw.get("reasons") or ["worker did not prove every required execution gate"]),
+            "pricing_class": "open_source_self_hosted",
+            "model": "Wan2.2-TI2V-5B",
+            "model_id": model.get("model_id"),
+            "model_revision": model.get("revision"),
+            "license": model.get("license"),
+            "license_verified": bool(model.get("license_verified")),
+            "gpu": hardware,
+            "persistent_storage": bool(storage.get("persistent")),
+            "worker_runtime": raw.get("runtime") if isinstance(raw.get("runtime"), dict) else {},
+            "compute_cost_state": "operator_hosted_compute_cost_not_included",
+            "truthful": True,
+        }
+    except Exception as exc:
+        value = {
+            "configured": True,
+            "enabled": False,
+            "status": "worker_unreachable",
+            "reason": f"{type(exc).__name__}: {str(exc)[:220]}",
+            "pricing_class": "open_source_self_hosted",
+            "model": "Wan2.2-TI2V-5B",
+            "truthful": True,
+        }
+    with WAN_CAP_LOCK:
+        WAN_CAP_CACHE.update({"at": now(), "value": dict(value)})
+    return value
+
+
 def providers():
     return {"version":VERSION,"providers":[
     {"id":"runway","video":True,
@@ -120,7 +218,17 @@ def providers():
     {"id":"exa","research":True,"configured":bool(os.getenv("EXA_API_KEY","").strip())},
     {"id":"brave","research":True,"configured":bool(os.getenv("BRAVE_SEARCH_API_KEY","").strip())},
     {"id":"remotion","render":True,"configured":bool(os.getenv("REMOTION_RENDER_URL","").strip())},
-    {"id":"r2","storage":True,"configured":bool(os.getenv("CLOUDFLARE_R2_BUCKET","").strip() and os.getenv("CLOUDFLARE_R2_ACCESS_KEY_ID","").strip())}],
+    {"id":"r2","storage":True,"configured":bool(os.getenv("CLOUDFLARE_R2_BUCKET","").strip() and os.getenv("CLOUDFLARE_R2_ACCESS_KEY_ID","").strip())},
+    {"id":WAN_PROVIDER_ID,"video":True,"native_generation":True,"free_model":True,
+     "configured":wan_worker_capabilities().get("configured",False),
+     "enabled":wan_worker_capabilities().get("enabled",False),
+     "status":wan_worker_capabilities().get("status","not_configured"),
+     "reason":wan_worker_capabilities().get("reason"),
+     "pricing_class":"open_source_self_hosted","paid_api":False,
+     "compute_cost_state":"operator_hosted_compute_cost_not_included",
+     "model":"Wan2.2-TI2V-5B","license":"Apache-2.0",
+     "license_verified":wan_worker_capabilities().get("license_verified",False),
+     "model_revision":wan_worker_capabilities().get("model_revision")}],
     "queue":{"backend":"redis" if redis_client() else "sqlite-fallback","redis_configured":bool(os.getenv("REDIS_URL","").strip())},"truthful":True}
 def runway_create(d):
     k=os.getenv("RUNWAYML_API_SECRET","").strip()
@@ -156,6 +264,184 @@ def enqueue(user,pid,sid,kind,provider,payload):
         try:r.rpush("aii:production:queue",jid);backend="redis"
         except Exception:pass
     return {"job_id":jid,"candidate_id":cid,"status":"queued","queue_backend":backend,"truthful":True}
+def _wan_worker_headers():
+    cfg = wan_worker_configuration()
+    if not cfg.get("configured"):
+        raise RuntimeError(cfg.get("error") or "open-source Wan GPU worker is not configured")
+    return cfg, {"Authorization": "Bearer " + cfg["token"], "Accept": "application/json"}
+
+
+def _download_verified_worker_artifact(url, headers, output, expected_sha, expected_size):
+    digest = hashlib.sha256()
+    received = 0
+    temporary = output.with_suffix(output.suffix + ".part")
+    temporary.unlink(missing_ok=True)
+    try:
+        with requests.get(url, headers=headers, stream=True, timeout=(5, 90), allow_redirects=False) as response:
+            if response.status_code != 200:
+                raise RuntimeError("GPU worker artifact endpoint returned HTTP " + str(response.status_code))
+            declared = response.headers.get("Content-Length")
+            if declared and int(declared) != int(expected_size):
+                raise RuntimeError("GPU worker artifact Content-Length does not match its persisted job record")
+            with temporary.open("wb") as stream:
+                for chunk in response.iter_content(1024 * 1024):
+                    if not chunk:
+                        continue
+                    received += len(chunk)
+                    if received > 1_000_000_000:
+                        raise RuntimeError("GPU worker artifact exceeds the 1 GB application transfer limit")
+                    digest.update(chunk)
+                    stream.write(chunk)
+        if received != int(expected_size) or digest.hexdigest() != str(expected_sha):
+            raise RuntimeError("GPU worker artifact failed independent size/SHA-256 verification")
+        temporary.replace(output)
+        return output
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _process_wan_video_job(job, payload):
+    jid = str(job["job_id"])
+    candidate_id = str(payload.get("candidate_id") or "")
+    if not re.fullmatch(r"cand_[a-f0-9]{32}", candidate_id):
+        raise RuntimeError("open-source video job is missing its registered candidate id")
+    capabilities = wan_worker_capabilities(force=True)
+    if not capabilities.get("enabled"):
+        raise RuntimeError("open-source Wan worker is not execution-ready: " + str(capabilities.get("reason") or "unavailable"))
+    try:
+        duration = float(payload.get("duration") or payload.get("duration_seconds") or 0)
+    except (TypeError, ValueError):
+        raise RuntimeError("requested Wan clip duration is invalid")
+    if not 2.0 <= duration <= 5.0:
+        raise RuntimeError("Wan2.2 TI2V-5B adapter supports native clips from 2 to 5 seconds; split or revise this scene")
+    aspect = str(payload.get("aspect_ratio") or "16:9")
+    if aspect not in {"16:9", "9:16"}:
+        aspect = "16:9"
+    cfg, headers = _wan_worker_headers()
+    worker_request = {
+        "prompt": clean(payload.get("prompt"), 4000),
+        "duration_seconds": duration,
+        "aspect_ratio": aspect,
+        "seed": int(payload.get("seed") or -1),
+        "idempotency_key": candidate_id,
+    }
+    with LOCK, db() as conn:
+        existing = conn.execute("SELECT provider_job_id FROM pg_jobs WHERE job_id=?", (jid,)).fetchone()
+    remote_id = str(existing["provider_job_id"] or "") if existing else ""
+    if not remote_id:
+        response = requests.post(
+            cfg["base_url"] + "/v1/jobs",
+            headers={**headers, "Content-Type": "application/json"},
+            json=worker_request,
+            timeout=(5, 30),
+            allow_redirects=False,
+        )
+        if response.status_code not in {200, 201}:
+            detail = response.text[:500]
+            raise RuntimeError(f"open-source GPU worker rejected job (HTTP {response.status_code}): {detail}")
+        submitted = response.json()
+        remote_id = str(submitted.get("job_id") or "")
+        if not re.fullmatch(r"wan_[a-f0-9]{32}", remote_id):
+            raise RuntimeError("open-source GPU worker returned an invalid job id")
+        with LOCK, db() as conn:
+            conn.execute(
+                "UPDATE pg_jobs SET provider_job_id=?,provider_meta_json=?,updated_at=? WHERE job_id=?",
+                (remote_id, jd({"worker_provider": WAN_PROVIDER_ID}), now(), jid),
+            )
+    deadline = now() + 2100
+    last_heartbeat = 0.0
+    remote = {}
+    while now() < deadline:
+        response = requests.get(
+            cfg["base_url"] + "/v1/jobs/" + remote_id,
+            headers=headers,
+            timeout=(5, 30),
+            allow_redirects=False,
+        )
+        if response.status_code != 200:
+            raise RuntimeError("open-source GPU worker job poll returned HTTP " + str(response.status_code))
+        remote = response.json()
+        status = str(remote.get("status") or "").lower()
+        if status == "succeeded":
+            break
+        if status in {"failed", "cancelled", "canceled"}:
+            raise RuntimeError("open-source Wan inference failed: " + str(remote.get("error") or "no error detail")[:1400])
+        if status not in {"queued", "running"}:
+            raise RuntimeError("open-source GPU worker returned an unknown job status")
+        if now() - last_heartbeat >= 8:
+            with LOCK, db() as conn:
+                conn.execute("UPDATE pg_jobs SET updated_at=? WHERE job_id=?", (now(), jid))
+            last_heartbeat = now()
+        time.sleep(4)
+    else:
+        raise TimeoutError("open-source Wan inference did not finish within the 35-minute application deadline")
+    artifact = remote.get("artifact") if isinstance(remote.get("artifact"), dict) else {}
+    expected_sha = str(artifact.get("sha256") or "")
+    expected_size = int(artifact.get("size_bytes") or 0)
+    if len(expected_sha) != 64 or expected_size <= 100_000 or expected_size > 1_000_000_000:
+        raise RuntimeError("GPU worker success record has invalid artifact hash or size")
+    root = Path(os.getenv("AI_INFINITY_DATA_DIR", "/tmp/ai-infinity")) / "production-jobs" / jid
+    root.mkdir(parents=True, exist_ok=True)
+    output = root / (candidate_id + ".mp4")
+    artifact_path = _download_verified_worker_artifact(
+        cfg["base_url"] + "/v1/jobs/" + remote_id + "/artifact",
+        headers, output, expected_sha, expected_size,
+    )
+    technical = tech(artifact_path)
+    if technical.get("decision") != "technical_pass":
+        raise RuntimeError("downloaded Wan candidate failed independent FFprobe/FFmpeg/HD validation: " + jd(technical)[:900])
+    if float((technical.get("checks") or {}).get("duration_seconds") or 0) + 0.25 < duration:
+        raise RuntimeError("Wan candidate is shorter than the requested scene duration")
+    remote_meta = remote.get("metadata") if isinstance(remote.get("metadata"), dict) else {}
+    if remote_meta.get("license_verified") is not True or remote_meta.get("license") != "apache-2.0":
+        raise RuntimeError("GPU worker artifact is missing verified Apache-2.0 model provenance")
+    if remote_meta.get("model_id") != "Wan-AI/Wan2.2-TI2V-5B":
+        raise RuntimeError("GPU worker artifact model identity does not match the approved Wan2.2 model")
+    saved = s()._save_asset(
+        job["project_id"], "candidate", artifact_path, "video/mp4",
+        {
+            "provider": WAN_PROVIDER_ID,
+            "model": "Wan2.2-TI2V-5B",
+            "candidate_id": candidate_id,
+            "remote_job_id": remote_id,
+            "source": "independently_hosted_open_source_gpu_worker",
+            "model_revision": remote_meta.get("model_revision"),
+            "license": "Apache-2.0",
+            "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+            "license_verified": True,
+            "technical_report": technical,
+            "creative_approval": "PENDING",
+            "rights_status": "REVIEW_REQUIRED",
+        },
+    )
+    durable = saved.get("durable_storage") if isinstance(saved, dict) else {}
+    durable = durable if isinstance(durable, dict) else {}
+    storage_status = str(durable.get("status") or "not_persisted")
+    with LOCK, db() as conn:
+        conn.execute(
+            "UPDATE pg_candidates SET status='ready',provider=?,model=?,asset_path=?,source_url=?,storage_status=?,storage_json=?,updated_at=? WHERE candidate_id=?",
+            (WAN_PROVIDER_ID, "Wan2.2-TI2V-5B", str(artifact_path), cfg["base_url"] + "/v1/jobs/" + remote_id + "/artifact",
+             storage_status, jd(durable), now(), candidate_id),
+        )
+    return {
+        "status": "succeeded",
+        "provider": WAN_PROVIDER_ID,
+        "model": "Wan2.2-TI2V-5B",
+        "remote_job_id": remote_id,
+        "local_path": str(artifact_path),
+        "sha256": expected_sha,
+        "size_bytes": expected_size,
+        "duration_seconds": float((technical.get("checks") or {}).get("duration_seconds") or 0),
+        "license": "Apache-2.0",
+        "license_verified": True,
+        "storage_status": storage_status,
+        "creative_approval": "PENDING",
+        "rights_status": "REVIEW_REQUIRED",
+        "truthful": True,
+    }
+
+
 def process(job):
     jid=job["job_id"]
     try:d=json.loads(job.get("payload_json") or "{}")
@@ -194,6 +480,8 @@ def process(job):
             result={"status":"succeeded","task_id":tid,"output_url":url,"local_path":str(fp),
                     "storage_status":str((storage_meta.get("durable_storage") or {}).get("status") or "not_persisted"),
                     "truthful":True}
+        elif job["kind"]=="video" and p==WAN_PROVIDER_ID:
+            result = _process_wan_video_job(job, d)
         else:raise RuntimeError("unsupported production-graph provider/job")
         with LOCK,db() as c:c.execute("UPDATE pg_jobs SET status='completed',result_json=?,updated_at=? WHERE job_id=?",(jd(result),now(),jid))
     except Exception as e:
@@ -206,13 +494,21 @@ def process(job):
 def worker():
     global WORKER_STARTED
     WORKER_STARTED=True;r=redis_client()
+    stale_seconds=max(60,min(900,int(os.getenv("AI_INFINITY_PRODUCTION_JOB_STALE_SECONDS","120"))))
     while True:
         try:
+            # Reclaim only stale running jobs. The remote worker receives the
+            # candidate id as an idempotency key, so a web-process restart does
+            # not create a second model inference for the same candidate.
+            cutoff=now()-stale_seconds
+            with LOCK,db() as c:
+                c.execute("UPDATE pg_jobs SET status='queued',updated_at=?,error=COALESCE(error,'Recovered after Creator Studio worker restart') WHERE status='running' AND updated_at<?",(now(),cutoff))
+                c.execute("UPDATE pg_candidates SET status='queued',updated_at=? WHERE candidate_id IN (SELECT json_extract(payload_json,'$.candidate_id') FROM pg_jobs WHERE status='queued' AND provider=?) AND status='failed'",(now(),WAN_PROVIDER_ID))
             row=None
             if r:
                 item=r.blpop("aii:production:queue",timeout=2)
                 if item:
-                    with LOCK,db() as c:row=c.execute("SELECT * FROM pg_jobs WHERE job_id=?",(item[1],)).fetchone()
+                    with LOCK,db() as c:row=c.execute("SELECT * FROM pg_jobs WHERE job_id=? AND status='queued'",(item[1],)).fetchone()
             if not row:
                 with LOCK,db() as c:row=c.execute("SELECT * FROM pg_jobs WHERE status='queued' ORDER BY created_at LIMIT 1").fetchone()
             if row:process(dict(row));continue
@@ -700,25 +996,47 @@ def register(app):
         return {"status":"accepted","project_id":pid,"graph":sync(pid),"truthful":True}
     @app.post("/infinity/production/project/{pid}/generate-video-batch")
     async def gb(pid:str,r:Request):
-        owned(pid,r);d=await r.json();sid=clean(d.get("shot_id"),120);n=max(1,min(4,int(d.get("count") or 2)))
+        project = owned(pid,r)
+        d=await r.json()
+        sid=clean(d.get("shot_id"),120)
         if not sid:raise HTTPException(422,"shot_id required")
-        if not os.getenv("RUNWAYML_API_SECRET","").strip():
-            return {"status":"not_configured","required_secret":"RUNWAYML_API_SECRET","truthful":True}
-        if os.getenv("AI_INFINITY_RUNWAY_PAID_USAGE_ACK","").strip().lower() not in {"1","true","yes","on"}:
-            return {"status":"paid_provider_authorization_required","provider":"runway","pricing_class":"paid_metered","api_request_sent":False,"truthful":True}
         with LOCK,db() as c:
             shot=c.execute("SELECT duration,visual_prompt FROM pg_shots WHERE shot_id=? AND project_id=?",(sid,pid)).fetchone()
         if not shot:raise HTTPException(404,"shot not found")
         try:requested_duration=float(d.get("duration") or shot["duration"] or 5)
         except (TypeError,ValueError):raise HTTPException(422,"duration must be a number")
+        wan=wan_worker_capabilities()
+        if wan.get("enabled"):
+            if not 2 <= requested_duration <= 5:
+                raise HTTPException(422,"verified Wan2.2 worker supports 2–5 second clips; split or revise this shot duration")
+            req_data=project.get("request_json") if isinstance(project.get("request_json"),dict) else {}
+            if isinstance(project.get("request_json"),str):
+                try:req_data=json.loads(project.get("request_json") or "{}")
+                except Exception:req_data={}
+            x=dict(d)
+            x["duration"]=requested_duration
+            x["aspect_ratio"]=str(d.get("aspect_ratio") or req_data.get("aspect_ratio") or "16:9")
+            x["model"]="Wan2.2-TI2V-5B"
+            x["prompt"]=clean(d.get("prompt") or shot["visual_prompt"] or "Professional cinematic shot",3800)
+            job=enqueue(uid(r),pid,sid,"video",WAN_PROVIDER_ID,x)
+            return {"status":"accepted","provider":WAN_PROVIDER_ID,"pricing_class":"open_source_self_hosted",
+                    "compute_cost_state":"operator_hosted_compute_cost_not_included","jobs":[job],
+                    "requested_clip_seconds":requested_duration,"truthful":True}
+        if not os.getenv("RUNWAYML_API_SECRET","").strip():
+            return {"status":"native_video_unavailable","open_source_worker":wan,
+                    "reason":"No verified self-hosted open-source GPU worker is available; no native video job was created.",
+                    "truthful":True}
+        if os.getenv("AI_INFINITY_RUNWAY_PAID_USAGE_ACK","").strip().lower() not in {"1","true","yes","on"}:
+            return {"status":"paid_provider_authorization_required","provider":"runway","pricing_class":"paid_metered","api_request_sent":False,"open_source_worker":wan,"truthful":True}
         if not 2 <= requested_duration <= 10:
-            raise HTTPException(422,"this Runway adapter supports native clips from 2 to 10 seconds; revise this shot duration or use another verified provider")
+            raise HTTPException(422,"Runway adapter supports native clips from 2 to 10 seconds")
+        n=max(1,min(4,int(d.get("count") or 1)))
         styles=["cinematic","documentary","editorial","commercial"];jobs=[]
         for i in range(n):
             x=dict(d);x["duration"]=requested_duration
             x["prompt"]=clean(d.get("prompt") or shot["visual_prompt"] or "Professional cinematic shot",3800)+f"; variation {i+1}: {styles[i%4]}."
             jobs.append(enqueue(uid(r),pid,sid,"video","runway",x))
-        return {"status":"accepted","jobs":jobs,"requested_clip_seconds":requested_duration,"truthful":True}
+        return {"status":"accepted","provider":"runway","jobs":jobs,"requested_clip_seconds":requested_duration,"truthful":True}
     @app.post("/infinity/production/project/{pid}/review/{cid}")
     def rv(pid:str,cid:str,r:Request):owned(pid,r);return review(cid,uid(r))
     @app.get("/infinity/production/project/{pid}/candidate/{cid}/media")
