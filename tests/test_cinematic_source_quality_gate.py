@@ -938,9 +938,10 @@ def test_commons_motion_uses_videoinfo_transcodes_and_falls_back_from_an_oversiz
         return path
 
     monkeypatch.setattr(studio, "FAST_MODE", True)
-    monkeypatch.setattr(studio, "http_json", fake_http_json)
-    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setitem(studio._commons_media.__globals__, "http_json", fake_http_json)
+    monkeypatch.setitem(studio._commons_media.__globals__, "download", fake_download)
     monkeypatch.setattr(studio, "_commercial_use_from_license", lambda _name, _url: "commercial_use_allowed_with_attribution")
+    studio.MEDIA_DEBUG_ERRORS.clear()
 
     result = studio._commons_media(
         "documentary motion about a distinct topic",
@@ -949,7 +950,7 @@ def test_commons_motion_uses_videoinfo_transcodes_and_falls_back_from_an_oversiz
         prefer_motion=True,
     )
 
-    assert len(calls) == 2
+    assert len(calls) == 2, {"calls": calls, "provider_errors": dict(studio.MEDIA_DEBUG_ERRORS)}
     assert downloads[0][0].endswith("1080p.vp9.webm")
     assert downloads[1][0].endswith("720p.vp9.webm")
     assert all(max_bytes == 24_000_000 for _url, max_bytes in downloads)
@@ -997,10 +998,11 @@ def test_commons_motion_never_substitutes_a_poster_image_for_missing_video_trans
         raise ValueError("original exceeds allowed size")
 
     monkeypatch.setattr(studio, "FAST_MODE", True)
-    monkeypatch.setattr(studio, "http_json", fake_http_json)
-    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setitem(studio._commons_media.__globals__, "http_json", fake_http_json)
+    monkeypatch.setitem(studio._commons_media.__globals__, "download", fake_download)
+    studio.MEDIA_DEBUG_ERRORS.clear()
 
     result = studio._commons_media("documentary subject", tmp_path, limit=2, prefer_motion=True)
     assert result == []
-    assert downloaded == [page["videoinfo"][0]["url"]]
+    assert downloaded == [page["videoinfo"][0]["url"]], {"downloaded": downloaded, "provider_errors": dict(studio.MEDIA_DEBUG_ERRORS)}
     assert all("thumb" not in url for url in downloaded)
