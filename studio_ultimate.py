@@ -7399,6 +7399,9 @@ def _save_asset(project_id: str, kind: str, path: Path, media_type: str, metadat
         # Editable project state must survive restart alongside its source
         # media, and portable interchange exports are user-facing deliverables.
         "timeline", "editable_timeline", "timeline_bundle", "otio", "otio_bundle",
+        # Generated native video candidates must be durably stored before they
+        # can be selected for a resumable canonical production rerender.
+        "candidate",
     }
     if kind in durable_kinds and path.exists() and path.is_file():
         try:
@@ -11437,9 +11440,19 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         user_id = _get_user_id(request); _set_session(response, request, user_id)
         p = _get_project(project_id)
         if not p or p.get("user_id") != user_id: raise HTTPException(404, "project not found")
-        if p.get("status") not in {"failed", "cancelled", "completed_with_qc_warnings"}: raise HTTPException(409, "project is not retryable")
+        selected_candidate_rerender = False
+        retryable = p.get("status") in {"failed", "cancelled", "completed_with_qc_warnings"}
+        if p.get("status") == "completed":
+            try:
+                import production_graph
+                selected_candidate_rerender = production_graph.has_selected_candidates(project_id)
+            except Exception:
+                selected_candidate_rerender = False
+        if not retryable and not selected_candidate_rerender:
+            raise HTTPException(409, "project is not retryable; completed projects can only rerender after a verified native candidate is selected")
         audit_event(project_id, "retry_requested", {
             "previous_status": p.get("status"),
+            "selected_candidate_rerender": selected_candidate_rerender,
             "next_attempt": int(p.get("attempt") or 0) + 1,
             "by": "creator",
             "truthful": True,
