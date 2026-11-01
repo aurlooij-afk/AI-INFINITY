@@ -297,3 +297,80 @@ def test_aspect_ratio_inference_requires_explicit_ratio_separator():
     for command, expected in cases:
         intent = ai_infinity_canonical.compile_intent(command, {"duration": 20})
         assert intent["constraints"]["aspect_ratio"] == expected, (command, intent["constraints"])
+
+
+
+def test_research_evidence_profile_counts_distinct_urls_substantive_excerpts_domains_and_archetypes():
+    archetype_words = [
+        "overview fundamentals context",
+        "historical timeline origin evolution",
+        "mechanism process method workflow",
+        "case study example implementation",
+        "peer reviewed research experiment study",
+        "quantitative benchmark statistics metrics",
+        "practical application deployment guide",
+        "impact outcome effect consequences",
+        "risk limitation challenge safety",
+        "debate critique counterargument alternative",
+    ]
+    sources = []
+    for index in range(40):
+        archetype = archetype_words[index % len(archetype_words)]
+        words = (
+            f"This evidence-backed source examines {archetype} in a specific real-world subject. "
+            "It describes the scope, method, context, observations, limitations, supporting material, "
+            "and implications. The excerpt is retained for source-aware writing and must not be used "
+            "to claim facts beyond what the cited page actually supports. "
+        ).split()
+        summary = " ".join(words * 12)
+        sources.append({
+            "title": f"Independent research record {index + 1}: {archetype}",
+            "url": f"https://research-{index}.example.org/record/{index + 1}?utm_source=collector",
+            "summary": summary,
+            "source": f"provider-{index % 5}",
+            "retrieved_at": "2026-11-02T00:00:00Z",
+        })
+
+    # Same canonical source under a tracking URL must not inflate the research count.
+    sources.append({
+        **sources[0],
+        "url": sources[0]["url"] + "&utm_campaign=duplicate#fragment",
+        "source": "another-provider",
+    })
+
+    profile = studio_ultimate._research_evidence_profile(sources)
+
+    assert profile["unique_source_url_count"] == 40
+    assert profile["substantive_excerpt_count"] == 40
+    assert profile["metadata_only_count"] == 0
+    assert profile["provider_family_count"] == 5
+    assert profile["unique_domain_count"] == 40
+    assert profile["archetype_count"] == 10
+    assert len(profile["archetypes"]) == 10
+    assert profile["truthful"] is True
+
+
+def test_research_evidence_profile_does_not_count_bibliographic_placeholders_as_substantive():
+    sources = [{
+        "title": "A scholarly work",
+        "url": "https://openalex.example.org/work/1",
+        "summary": "Scholarly work; abstract index available",
+        "source": "OpenAlex",
+    }, {
+        "title": "A Crossref record",
+        "url": "https://crossref.example.org/work/2",
+        "summary": "Crossref bibliographic record",
+        "source": "Crossref",
+    }, {
+        "title": "A short description",
+        "url": "https://example.org/record/3",
+        "summary": "A short metadata description.",
+        "source": "Web",
+    }]
+
+    profile = studio_ultimate._research_evidence_profile(sources)
+
+    assert profile["unique_source_url_count"] == 3
+    assert profile["substantive_excerpt_count"] == 0
+    assert profile["metadata_only_count"] == 3
+    assert profile["truthful"] is True
