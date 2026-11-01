@@ -114,11 +114,16 @@ def test_longform_narration_splitter_creates_shot_sized_units_without_losing_wor
 
 
 def test_commons_motion_first_search_keeps_real_video_extension_and_license(monkeypatch, tmp_path):
-    video_page = {
+    from urllib.parse import parse_qs, urlparse
+
+    search_page = {
         "pageid": 12345,
         "title": "File:Creative-workshop.webm",
         "canonicalurl": "https://commons.wikimedia.org/wiki/File:Creative-workshop.webm",
-        "imageinfo": [{
+    }
+    video_page = {
+        **search_page,
+        "videoinfo": [{
             "url": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Creative-workshop.webm",
             "mime": "video/webm",
             "extmetadata": {
@@ -128,27 +133,25 @@ def test_commons_motion_first_search_keeps_real_video_extension_and_license(monk
                 "ImageDescription": {"value": "A real workshop in motion"},
                 "Credit": {"value": "Example Contributor"},
             },
-        }],
-    }
-    still_page = {
-        "pageid": 67890,
-        "title": "File:Creative-workshop.jpg",
-        "canonicalurl": "https://commons.wikimedia.org/wiki/File:Creative-workshop.jpg",
-        "imageinfo": [{
-            "url": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Creative-workshop.jpg",
-            "mime": "image/jpeg",
-            "extmetadata": {
-                "LicenseShortName": {"value": "CC BY 4.0"},
-                "LicenseUrl": {"value": "https://creativecommons.org/licenses/by/4.0/"},
-                "Artist": {"value": "Example Contributor"},
-            },
+            "derivatives": [{
+                "src": "https://upload.wikimedia.org/wikipedia/commons/transcoded/a/ab/Creative-workshop.webm/Creative-workshop.720p.vp9.webm",
+                "type": "video/webm; codecs=vp9, opus",
+                "transcodekey": "720p.vp9.webm",
+                "width": 1280,
+                "height": 720,
+                "bandwidth": 1600000,
+            }],
         }],
     }
     requests = []
 
     def fake_http_json(url, *args, **kwargs):
-        requests.append(url)
-        return {"query": {"pages": {"12345": video_page, "67890": still_page}}}
+        params = parse_qs(urlparse(url).query)
+        requests.append((url, params))
+        if "generator" in params:
+            return {"query": {"pages": {"12345": search_page}}}
+        assert params.get("pageids") == ["12345"]
+        return {"query": {"pages": {"12345": video_page}}}
 
     def fake_download(url, path, headers=None, timeout=60, max_bytes=40_000_000):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -156,9 +159,10 @@ def test_commons_motion_first_search_keeps_real_video_extension_and_license(monk
         return path
 
     monkeypatch.setattr(studio, "FAST_MODE", True)
-    monkeypatch.setattr(studio, "http_json", fake_http_json)
-    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setitem(studio._commons_media.__globals__, "http_json", fake_http_json)
+    monkeypatch.setitem(studio._commons_media.__globals__, "download", fake_download)
     monkeypatch.setattr(studio, "_commercial_use_from_license", lambda license_name, license_url: "commercial_use_allowed_with_attribution")
+    studio.MEDIA_DEBUG_ERRORS.clear()
 
     results = studio._commons_media(
         "people collaborating on creative work",
@@ -167,17 +171,21 @@ def test_commons_motion_first_search_keeps_real_video_extension_and_license(monk
         prefer_motion=True,
     )
 
-    assert requests and "filetype%3Avideo" in requests[0]
+    assert len(requests) == 2, {"requests": requests, "provider_errors": dict(studio.MEDIA_DEBUG_ERRORS)}
+    assert "filetype%3Avideo" in requests[0][0]
+    assert requests[0][1].get("prop") == ["info"]
+    assert requests[1][1].get("prop") == ["info|videoinfo"]
+    assert "derivatives" in requests[1][1].get("viprop", [""])[0]
     assert len(results) == 1
     asset = results[0]
     assert asset["kind"] == "video"
     assert Path(asset["path"]).suffix == ".webm"
     assert asset["source_id"] == 12345
-    assert asset["source_url"] == video_page["canonicalurl"]
+    assert asset["source_url"] == search_page["canonicalurl"]
+    assert asset["downloaded_media_url"].endswith("720p.vp9.webm")
     assert asset["license"] == "CC BY 4.0"
     assert asset["license_url"] == "https://creativecommons.org/licenses/by/4.0/"
     assert asset["rights_status"] == "license_metadata_present"
-
 
 
 def test_scene_renderer_offsets_shared_music_to_the_scene_programme_time(monkeypatch, tmp_path):
