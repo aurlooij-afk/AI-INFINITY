@@ -30,9 +30,10 @@ def _seed_project(tmp_path: Path, monkeypatch, *, status: str = "ready") -> tupl
             ("shot-test", "project-test", 1, "Opening shot", 5.0, "Narration", "Visual", "planned", 1.0),
         )
         conn.execute(
-            "INSERT INTO pg_candidates(candidate_id,shot_id,project_id,provider,model,status,asset_path,created_at,updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?)",
-            ("candidate-test", "shot-test", "project-test", "runway", "gen4.5", status, str(media), 1.0, 1.0),
+            "INSERT INTO pg_candidates(candidate_id,shot_id,project_id,provider,model,status,asset_path,created_at,updated_at,storage_status,storage_json) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            ("candidate-test", "shot-test", "project-test", "runway", "gen4.5", status, str(media), 1.0, 1.0,
+             "primary_only", json.dumps({"status": "primary_only", "successful_providers": ["test-object-store"]})),
         )
     return db_path, media
 
@@ -129,7 +130,7 @@ def test_creator_selection_is_explicit_and_does_not_claim_timeline_insertion(
 
     assert result["status"] == "selected_for_editor"
     assert result["creative_approval"] == "PENDING"
-    assert result["editor_insertion"] == "NOT_IMPLEMENTED"
+    assert result["editor_insertion"] == "READY_FOR_CANONICAL_RERENDER"
     assert candidate["status"] == "selected_for_editor"
     assert shot["status"] == "selected_for_editor"
     assert shot["winner_candidate_id"] == "candidate-test"
@@ -212,5 +213,55 @@ def test_selected_native_candidate_rejects_media_outside_job_asset_root(
             (str(outside), "candidate-test"),
         )
 
-    with __import__("pytest").raises(RuntimeError, match="outside the production-job asset directory"):
+    with __import__("pytest").raises(RuntimeError, match="outside its verified project/job asset directory"):
         production_graph.selected_candidate_asset("project-test", 1, 5.0)
+
+
+def test_candidate_without_verified_object_storage_cannot_be_selected(
+    monkeypatch, tmp_path: Path
+):
+    _db_path, _media = _seed_project(tmp_path, monkeypatch, status="ready_for_creative_review")
+    with production_graph.db() as conn:
+        conn.execute(
+            "UPDATE pg_candidates SET storage_status=?,storage_json=? WHERE candidate_id=?",
+            ("unconfigured", json.dumps({"status": "unconfigured", "successful_providers": []}), "candidate-test"),
+        )
+
+    with __import__("pytest").raises(
+        __import__("fastapi").HTTPException,
+        match="verified object storage is required",
+    ):
+        production_graph.select_for_editor("candidate-test", "user-test", "project-test")
+
+
+def test_selected_candidate_counts_only_when_durably_stored(monkeypatch, tmp_path: Path):
+    _db_path, _media = _seed_project(tmp_path, monkeypatch, status="selected_for_editor")
+    with production_graph.db() as conn:
+        conn.execute(
+            "UPDATE pg_shots SET winner_candidate_id=?,status=? WHERE shot_id=?",
+            ("candidate-test", "selected_for_editor", "shot-test"),
+        )
+
+    assert production_graph.has_selected_candidates("project-test") is True
+
+    with production_graph.db() as conn:
+        conn.execute(
+            "UPDATE pg_candidates SET storage_status=?,storage_json=? WHERE candidate_id=?",
+            ("unconfigured", "{}", "candidate-test"),
+        )
+
+    assert production_graph.has_selected_candidates("project-test") is False
+
+
+def test_selected_candidate_rerender_signature_changes_only_for_selected_shot(
+    monkeypatch, tmp_path: Path
+):
+    _db_path, _media = _seed_project(tmp_path, monkeypatch, status="selected_for_editor")
+    with production_graph.db() as conn:
+        conn.execute(
+            "UPDATE pg_shots SET winner_candidate_id=?,status=? WHERE shot_id=?",
+            ("candidate-test", "selected_for_editor", "shot-test"),
+        )
+
+    assert production_graph.selected_candidate_id_for_scene("project-test", 1) == "candidate-test"
+    assert production_graph.selected_candidate_id_for_scene("project-test", 2) == ""
