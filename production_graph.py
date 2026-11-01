@@ -197,6 +197,7 @@ def wan_worker_capabilities(force=False):
 
 
 def providers():
+    wan_state = wan_worker_capabilities()
     return {"version":VERSION,"providers":[
     {"id":"runway","video":True,
      "configured":bool(os.getenv("RUNWAYML_API_SECRET","").strip()),
@@ -220,15 +221,17 @@ def providers():
     {"id":"remotion","render":True,"configured":bool(os.getenv("REMOTION_RENDER_URL","").strip())},
     {"id":"r2","storage":True,"configured":bool(os.getenv("CLOUDFLARE_R2_BUCKET","").strip() and os.getenv("CLOUDFLARE_R2_ACCESS_KEY_ID","").strip())},
     {"id":WAN_PROVIDER_ID,"video":True,"native_generation":True,"free_model":True,
-     "configured":wan_worker_capabilities().get("configured",False),
-     "enabled":wan_worker_capabilities().get("enabled",False),
-     "status":wan_worker_capabilities().get("status","not_configured"),
-     "reason":wan_worker_capabilities().get("reason"),
+     "configured":wan_state.get("configured",False),
+     "enabled":wan_state.get("enabled",False),
+     "status":wan_state.get("status","not_configured"),
+     "reason":wan_state.get("reason"),
      "pricing_class":"open_source_self_hosted","paid_api":False,
      "compute_cost_state":"operator_hosted_compute_cost_not_included",
      "model":"Wan2.2-TI2V-5B","license":"Apache-2.0",
-     "license_verified":wan_worker_capabilities().get("license_verified",False),
-     "model_revision":wan_worker_capabilities().get("model_revision")}],
+     "license_verified":wan_state.get("license_verified",False),
+     "model_revision":wan_state.get("model_revision"),
+     "gpu":wan_state.get("gpu"),
+     "persistent_storage":wan_state.get("persistent_storage",False)}],
     "queue":{"backend":"redis" if redis_client() else "sqlite-fallback","redis_configured":bool(os.getenv("REDIS_URL","").strip())},"truthful":True}
 def runway_create(d):
     k=os.getenv("RUNWAYML_API_SECRET","").strip()
@@ -446,7 +449,11 @@ def process(job):
     jid=job["job_id"]
     try:d=json.loads(job.get("payload_json") or "{}")
     except Exception:d={}
-    with LOCK,db() as c:c.execute("UPDATE pg_jobs SET status='running',updated_at=? WHERE job_id=?",(now(),jid))
+    with LOCK,db() as c:
+        current=c.execute("SELECT status FROM pg_jobs WHERE job_id=?",(jid,)).fetchone()
+        if not current or str(current["status"]) != "queued":
+            return
+        c.execute("UPDATE pg_jobs SET status='running',updated_at=? WHERE job_id=? AND status='queued'",(now(),jid))
     try:
         p=str(job.get("provider") or "").lower()
         if job["kind"]=="video" and p=="runway":
@@ -503,7 +510,6 @@ def worker():
             cutoff=now()-stale_seconds
             with LOCK,db() as c:
                 c.execute("UPDATE pg_jobs SET status='queued',updated_at=?,error=COALESCE(error,'Recovered after Creator Studio worker restart') WHERE status='running' AND updated_at<?",(now(),cutoff))
-                c.execute("UPDATE pg_candidates SET status='queued',updated_at=? WHERE candidate_id IN (SELECT json_extract(payload_json,'$.candidate_id') FROM pg_jobs WHERE status='queued' AND provider=?) AND status='failed'",(now(),WAN_PROVIDER_ID))
             row=None
             if r:
                 item=r.blpop("aii:production:queue",timeout=2)
@@ -906,8 +912,9 @@ def selected_candidate_asset(project_id, scene_index, requested_duration):
         "candidate_id": str(candidate["candidate_id"]),
         "generation_method": "native_ai_video_generation",
         "quality_tier": "native_ai_generated_video",
-        "license": "provider_terms_not_independently_verified",
-        "license_url": "",
+        "license": "Apache-2.0" if str(candidate["provider"] or "") == WAN_PROVIDER_ID else "provider_terms_not_independently_verified",
+        "license_url": "https://www.apache.org/licenses/LICENSE-2.0" if str(candidate["provider"] or "") == WAN_PROVIDER_ID else "",
+        "license_verified": True if str(candidate["provider"] or "") == WAN_PROVIDER_ID else False,
         "rights_status": "REVIEW_REQUIRED",
         "commercial_use_state": "UNKNOWN_REVIEW_REQUIRED",
         "attribution": "provider_terms_to_be_checked",
