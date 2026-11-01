@@ -11,6 +11,8 @@ from typing import Any, Dict, List
 from fastapi import HTTPException, Request
 from ai_infinity.timeline_interchange import (
     MAX_OTIO_BYTES,
+    MAX_SCENES,
+    SCENE_NAME,
     TimelineInterchangeError,
     export_otio_bundle,
     import_otio_timeline,
@@ -37,7 +39,7 @@ def _otio_export_allowed(project: Dict[str, Any], project_root: Path) -> bool:
     except (TypeError, ValueError):
         return False
     final = project_root / "final.mp4"
-    if expected < 1 or not final.is_file() or final.stat().st_size <= 0:
+    if expected < 1 or expected > MAX_SCENES or not final.is_file() or final.stat().st_size <= 0:
         return False
     # Scene numbering is the identity contract used by the editor/OTIO adapters.
     # A raw count can conceal a hole (for example scenes 01..08 plus scene_10).
@@ -79,7 +81,7 @@ def _review_only_filter_generated_missing_masters(
             raise HTTPException(409, "generated review timeline contains an invalid scene row")
         raw_asset = str(row.get("source_asset") or "").strip()
         asset = Path(raw_asset).name
-        if raw_asset != asset or len(asset) != 12 or not asset.startswith("scene_") or not asset[6:8].isdigit() or asset[8:] != ".mp4":
+        if raw_asset != asset or not SCENE_NAME.fullmatch(asset):
             raise HTTPException(409, "generated review timeline contains an unsafe scene reference")
         path = project_root / asset
         if path.is_file() and not path.is_symlink() and path.stat().st_size > 0:
@@ -143,25 +145,30 @@ def install(app: Any) -> None:
         rows = payload.get("scenes")
         if not isinstance(rows, list) or not rows:
             raise HTTPException(422, "timeline.scenes is required")
+        if len(rows) > MAX_SCENES:
+            raise HTTPException(413, f"timeline exceeds the {MAX_SCENES}-scene limit")
         out: List[Dict[str, Any]] = []
         seen = set()
         cursor = 0.0
-        for pos, raw in enumerate(rows[:40], 1):
+        for pos, raw in enumerate(rows, 1):
             if not isinstance(raw, dict):
                 continue
-            asset = Path(str(raw.get("source_asset") or "")).name
+            raw_asset = str(raw.get("source_asset") or "").strip()
+            asset = Path(raw_asset).name
+            if raw_asset and raw_asset != asset:
+                raise HTTPException(422, "timeline contains an unsafe scene source")
             if not asset:
                 try:
                     source_index = int(raw.get("source_index") or raw.get("index"))
+                    if source_index < 1 or source_index > 999:
+                        raise ValueError("scene index outside supported range")
                     asset = f"scene_{source_index:02d}.mp4"
                 except Exception:
-                    raise HTTPException(422, "each timeline scene needs a source_asset")
-            if not asset.startswith("scene_") or not asset.endswith(".mp4"):
+                    raise HTTPException(422, "each timeline scene needs a valid source_asset")
+            match = SCENE_NAME.fullmatch(asset)
+            if not match:
                 raise HTTPException(422, "timeline contains an invalid scene source")
-            try:
-                source_index = int(asset[6:8])
-            except Exception:
-                raise HTTPException(422, "timeline contains an invalid scene source")
+            source_index = int(match.group(1))
             if source_index in seen:
                 raise HTTPException(422, "timeline contains duplicate source scenes")
             seen.add(source_index)
