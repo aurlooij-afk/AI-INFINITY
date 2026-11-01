@@ -3252,101 +3252,293 @@ def _openverse_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str
         return []
 
 def _commons_media(query: str, outdir: Path, limit: int = 6, prefer_motion: bool = False) -> List[Dict[str, Any]]:
-    timeout = FAST_REMOTE_TIMEOUT if FAST_MODE else 20
+    """Acquire Commons media with the correct image or video metadata API.
+
+    Motion requests use TimedMediaHandler's separate videoinfo query (it cannot
+    be combined with generator=search) and prefer downloadable transcode
+    derivatives over oversized original camera files. The original file page,
+    creator and item-specific license remain attached to every downloaded
+    derivative so a transcode never loses provenance.
+    """
+    timeout = max(FAST_REMOTE_TIMEOUT, 12) if FAST_MODE and prefer_motion else (FAST_REMOTE_TIMEOUT if FAST_MODE else 20)
     image_timeout = FAST_REMOTE_TIMEOUT if FAST_MODE else 60
     try:
-        params = {
-            "action":"query","format":"json","generator":"search",
-            "gsrsearch":(str(query).strip() + (" filetype:video" if prefer_motion else "")),
-            "gsrnamespace":6,"gsrlimit":min(limit,10),"prop":"info|imageinfo","inprop":"url",
-            "iiprop":"url|mime|extmetadata","iiurlwidth":1280 if FAST_MODE else 1920,
+        search_params = {
+            "action": "query",
+            "format": "json",
+            "generator": "search",
+            "gsrsearch": str(query).strip() + (" filetype:video" if prefer_motion else ""),
+            "gsrnamespace": 6,
+            "gsrlimit": min(limit, 10),
+            "prop": "info",
+            "inprop": "url",
         }
-        data = http_json("https://commons.wikimedia.org/w/api.php?" + urlencode(params), timeout=timeout)
-        out=[]
-        for pge in (data.get("query",{}).get("pages",{}) or {}).values():
-            info=(pge.get("imageinfo") or [{}])[0]
-            original=info.get("url"); mime=str(info.get("mime") or "")
+        if not prefer_motion:
+            # ImageInfo and VideoInfo are mutually exclusive TimedMediaHandler
+            # metadata paths. Preserve the existing image acquisition behaviour.
+            search_params["prop"] = "info|imageinfo"
+            search_params["iiprop"] = "url|mime|extmetadata"
+            search_params["iiurlwidth"] = 1280 if FAST_MODE else 1920
+
+        search_data = http_json(
+            "https://commons.wikimedia.org/w/api.php?" + urlencode(search_params),
+            timeout=timeout,
+        )
+        search_pages = list((search_data.get("query", {}).get("pages", {}) or {}).values())
+        if not search_pages:
+            return []
+
+        if prefer_motion:
+            # API:videoinfo explicitly cannot be used as a generator. First
+            # search for file pages, then request their transcode derivatives
+            # together by pageids in one bounded second call.
+            page_ids = [
+                str(page.get("pageid"))
+                for page in search_pages
+                if str(page.get("pageid") or "").isdigit()
+            ]
+            if not page_ids:
+                return []
+            video_params = {
+                "action": "query",
+                "format": "json",
+                "pageids": "|".join(page_ids),
+                "prop": "info|videoinfo",
+                "inprop": "url",
+                "viprop": "url|mime|extmetadata|derivatives|size|mediatype",
+            }
+            video_data = http_json(
+                "https://commons.wikimedia.org/w/api.php?" + urlencode(video_params),
+                timeout=timeout,
+            )
+            video_pages = video_data.get("query", {}).get("pages", {}) or {}
+            media_pages = []
+            for search_page in search_pages:
+                page_id = str(search_page.get("pageid") or "")
+                media_page = video_pages.get(page_id)
+                if not isinstance(media_page, dict):
+                    continue
+                # The second result carries videoinfo; the first carries the
+                # generator result's search ordering. Keep only video records.
+                media_page = {**search_page, **media_page}
+                media_info = (media_page.get("videoinfo") or [{}])[0]
+                mime = str(media_info.get("mime") or "").lower()
+                original_url = str(media_info.get("url") or "").strip()
+                if not (mime.startswith("video/") or re.search(
+                    r"\.(webm|ogv|ogg|mp4|mov|mkv)(?:\?|$)", original_url, re.I
+                )):
+                    continue
+                media_pages.append((media_page, media_info))
+        else:
+            media_pages = []
+            for page in search_pages:
+                image_info = (page.get("imageinfo") or [{}])[0]
+                if isinstance(image_info, dict):
+                    media_pages.append((page, image_info))
+
+        out: List[Dict[str, Any]] = []
+        for page, media_info in media_pages:
+            meta = media_info.get("extmetadata") or {}
+            license_name = str((meta.get("LicenseShortName") or {}).get("value") or "").strip()
+            license_url = str((meta.get("LicenseUrl") or {}).get("value") or "").strip()
+            creator = str((meta.get("Artist") or {}).get("value") or "").strip()
+            title = str(page.get("title") or "").strip()
+            source_url = str(page.get("canonicalurl") or media_info.get("descriptionurl") or "").strip()
+            commercial_state = _commercial_use_from_license(license_name, license_url)
+            complete_rights_metadata = bool(
+                source_url and license_url and license_name and title
+                and (creator or commercial_state == "public_domain_cc0_1_0")
+                and commercial_state in {
+                    "public_domain_cc0_1_0",
+                    "commercial_use_allowed_with_attribution",
+                }
+            )
+
+            if prefer_motion:
+                original_url = str(media_info.get("url") or "").strip()
+                derivatives = media_info.get("derivatives") or []
+                max_bytes = 24_000_000 if FAST_MODE else 70_000_000
+                derivative_candidates = []
+                for derivative in derivatives:
+                    if not isinstance(derivative, dict):
+                        continue
+                    derivative_url = str(derivative.get("src") or "").strip()
+                    derivative_type = str(derivative.get("type") or "").lower()
+                    try:
+                        width = int(derivative.get("width") or 0)
+                        height = int(derivative.get("height") or 0)
+                        bandwidth = int(derivative.get("bandwidth") or 0)
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    if (
+                        not derivative_url.startswith("https://upload.wikimedia.org/")
+                        or not derivative_type.startswith("video/")
+                        or width < 640 or height < 360
+                    ):
+                        continue
+                    derivative_candidates.append({
+                        "url": derivative_url,
+                        "mime": derivative_type,
+                        "width": width,
+                        "height": height,
+                        "bandwidth": bandwidth,
+                        "transcodekey": str(derivative.get("transcodekey") or ""),
+                    })
+                derivative_candidates.sort(
+                    key=lambda row: (
+                        row["width"] >= 720,
+                        row["width"],
+                        row["bandwidth"],
+                    ),
+                    reverse=True,
+                )
+
+                attempts = derivative_candidates[:4]
+                # If Commons has no transcode derivatives yet, try the actual
+                # original once under a strict size limit. Never substitute a
+                # thumbnail or a poster image for requested motion footage.
+                if not attempts and original_url.startswith("https://upload.wikimedia.org/"):
+                    original_path = str(urlparse(original_url).path or "")
+                    original_suffix = Path(original_path).suffix.lower()
+                    if original_suffix in {".webm", ".ogv", ".ogg", ".mp4", ".mov", ".mkv"}:
+                        attempts = [{
+                            "url": original_url,
+                            "mime": str(media_info.get("mime") or ""),
+                            "width": int(media_info.get("width") or 0),
+                            "height": int(media_info.get("height") or 0),
+                            "bandwidth": 0,
+                            "transcodekey": "original",
+                        }]
+
+                downloaded = None
+                for attempt_index, derivative in enumerate(attempts, 1):
+                    media_url = derivative["url"]
+                    media_suffix = Path(str(urlparse(media_url).path or "")).suffix.lower()
+                    if media_suffix not in {".webm", ".ogv", ".ogg", ".mp4", ".mov", ".mkv"}:
+                        media_suffix = ".webm" if "webm" in derivative["mime"] else (
+                            ".ogv" if "ogg" in derivative["mime"] else ".mp4"
+                        )
+                    quality = derivative["transcodekey"] or f"{derivative['width']}x{derivative['height']}"
+                    safe_quality = re.sub(r"[^A-Za-z0-9_-]+", "_", quality)[:36] or "video"
+                    output_path = outdir / (
+                        f"commons_{page.get('pageid', 'x')}_{safe_quality}_{uuid.uuid4().hex[:8]}{media_suffix}"
+                    )
+                    try:
+                        download(
+                            media_url,
+                            output_path,
+                            timeout=(max(FAST_REMOTE_TIMEOUT, 20) if FAST_MODE else 90),
+                            max_bytes=max_bytes,
+                        )
+                        if not output_path.is_file() or output_path.stat().st_size <= 1000:
+                            output_path.unlink(missing_ok=True)
+                            raise RuntimeError("Commons transcode download was empty or too small")
+                        downloaded = (output_path, derivative, media_url)
+                        break
+                    except Exception as exc:
+                        output_path.unlink(missing_ok=True)
+                        _media_debug(
+                            "wikimedia",
+                            RuntimeError(
+                                f"transcode {derivative['transcodekey'] or derivative['width']} "
+                                f"attempt {attempt_index} unavailable: {type(exc).__name__}"
+                            ),
+                        )
+                        continue
+                if downloaded is None:
+                    continue
+
+                path, selected_derivative, downloaded_url = downloaded
+                out.append({
+                    "kind": "video",
+                    "path": str(path),
+                    "source": "Wikimedia Commons",
+                    "source_id": page.get("pageid"),
+                    "source_url": source_url or None,
+                    "source_media_url": original_url or None,
+                    "downloaded_media_url": downloaded_url,
+                    "creator": creator or None,
+                    "attribution": (meta.get("Credit") or {}).get("value"),
+                    "license": license_name or None,
+                    "license_url": license_url or None,
+                    "commercial_use_state": commercial_state,
+                    "rights_status": "license_metadata_present" if complete_rights_metadata else "REVIEW_REQUIRED",
+                    "rights_status_reason": None if complete_rights_metadata else (
+                        "Commons file is missing item-level creator, source-page or commercial license evidence."
+                    ),
+                    "title": title,
+                    "description": (
+                        (meta.get("ImageDescription") or {}).get("value")
+                        or (meta.get("ObjectName") or {}).get("value")
+                        or ""
+                    ),
+                    "license_terms": (meta.get("UsageTerms") or {}).get("value"),
+                    "media_mime_type": selected_derivative["mime"],
+                    "media_width": selected_derivative["width"],
+                    "media_height": selected_derivative["height"],
+                    "transcode_key": selected_derivative["transcodekey"],
+                    "transcoded_from_original": downloaded_url != original_url,
+                })
+                continue
+
+            # Original still-image path: preserve item-specific license and creator
+            # evidence, and normalize the downloaded thumbnail to a safe local image.
+            original = media_info.get("url")
+            mime = str(media_info.get("mime") or "")
             if not original:
                 continue
-            meta=info.get("extmetadata") or {}
-            lic=(meta.get("LicenseShortName") or {}).get("value")
-            creator=(meta.get("Artist") or {}).get("value")
-            is_video="video" in mime or re.search(r"\.(webm|ogv|ogg|mp4|mov|mkv)(\?|$)", original, re.I)
-            if prefer_motion and not is_video:
+            if not mime.startswith("image/") and not re.search(
+                r"\.(jpe?g|png|webp|avif|gif|tiff?)(?:\?|$)", str(original), re.I
+            ):
                 continue
-            if is_video:
-                # Motion-first long-form acquisition must remain available on the
-                # bounded/FAST runtime too. The old blanket FAST_MODE skip silently
-                # forced image slideshows, while the generic ".media" extension
-                # prevented independently verified Commons clips from satisfying
-                # the motion-source gate.
-                if FAST_MODE and not prefer_motion:
-                    continue
-                original_path = str(urlparse(str(original)).path or "")
-                suffix = Path(original_path).suffix.lower()
-                if suffix not in {".webm", ".ogv", ".ogg", ".mp4", ".mov", ".mkv"}:
-                    suffix = ".webm" if "webm" in mime.lower() else (".ogv" if "ogg" in mime.lower() else ".mp4")
-                p=outdir/f"commons_{pge.get('pageid','x')}{suffix}"
-                try:
-                    download(
-                        original,
-                        p,
-                        timeout=(max(FAST_REMOTE_TIMEOUT, 20) if FAST_MODE else 90),
-                        max_bytes=(24_000_000 if FAST_MODE else 70_000_000),
-                    )
-                    source_url = str(pge.get("canonicalurl") or "").strip()
-                    license_url = str((meta.get("LicenseUrl") or {}).get("value") or "").strip()
-                    license_name = str(lic or "").strip()
-                    commercial_state = _commercial_use_from_license(license_name, license_url)
-                    title = str(pge.get("title") or "").strip()
-                    complete = bool(source_url and license_url and license_name and title and (creator or commercial_state == "public_domain_cc0_1_0") and commercial_state in {"public_domain_cc0_1_0", "commercial_use_allowed_with_attribution"})
-                    out.append({
-                        "kind": "video", "path": str(p), "source": "Wikimedia Commons",
-                        "source_id": pge.get("pageid"), "source_url": source_url or None,
-                        "creator": creator, "attribution": (meta.get("Credit") or {}).get("value"),
-                        "license": license_name or None, "license_url": license_url or None,
-                        "commercial_use_state": commercial_state,
-                        "rights_status": "license_metadata_present" if complete else "REVIEW_REQUIRED",
-                        "title": title, "description": (meta.get("ImageDescription") or {}).get("value") or (meta.get("ObjectName") or {}).get("value") or "",
-                        "license_terms": (meta.get("UsageTerms") or {}).get("value"),
-                    })
-                except Exception as exc:
-                    _media_debug("wikimedia",exc)
-                continue
-            if not mime.startswith("image/") and not re.search(r"\.(jpe?g|png|webp|avif|gif|tiff?)(\?|$)", original, re.I):
-                continue
-            u=info.get("thumburl") or original
-            raw=outdir/f"commons_raw_{pge.get('pageid','x')}"
+            thumb_url = media_info.get("thumburl") or original
+            raw = outdir / f"commons_raw_{page.get('pageid', 'x')}_{uuid.uuid4().hex[:8]}"
             try:
-                download(u,raw,headers={"Accept":"image/avif,image/webp,image/apng,image/*,*/*;q=0.8"},timeout=image_timeout,max_bytes=12_000_000 if FAST_MODE else 40_000_000)
-                p=_normalize_image_file(raw,outdir,f"commons_{pge.get('pageid','x')}")
-                if not p:
+                download(
+                    thumb_url,
+                    raw,
+                    headers={"Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"},
+                    timeout=image_timeout,
+                    max_bytes=12_000_000 if FAST_MODE else 40_000_000,
+                )
+                path = _normalize_image_file(raw, outdir, f"commons_{page.get('pageid', 'x')}")
+                if not path:
                     continue
-                source_url = str(pge.get("canonicalurl") or "").strip()
-                license_url = str((meta.get("LicenseUrl") or {}).get("value") or "").strip()
-                license_name = str(lic or "").strip()
-                commercial_state = _commercial_use_from_license(license_name, license_url)
-                title = str(pge.get("title") or "").strip()
-                complete = bool(source_url and license_url and license_name and title and (creator or commercial_state == "public_domain_cc0_1_0") and commercial_state in {"public_domain_cc0_1_0", "commercial_use_allowed_with_attribution"})
-                out.append({
-                    "kind": "image", "path": str(p), "source": "Wikimedia Commons",
-                    "source_id": pge.get("pageid"), "source_url": source_url or None,
-                    "creator": creator, "attribution": (meta.get("Credit") or {}).get("value"),
-                    "license": license_name or None, "license_url": license_url or None,
-                    "commercial_use_state": commercial_state,
-                    "rights_status": "license_metadata_present" if complete else "REVIEW_REQUIRED",
-                    "title": title, "license_terms": (meta.get("UsageTerms") or {}).get("value"),
-                })
             except Exception as exc:
-                _media_debug("wikimedia",exc)
+                _media_debug("wikimedia", exc)
                 raw.unlink(missing_ok=True)
                 continue
+            out.append({
+                "kind": "image",
+                "path": str(path),
+                "source": "Wikimedia Commons",
+                "source_id": page.get("pageid"),
+                "source_url": source_url or None,
+                "downloaded_media_url": thumb_url,
+                "creator": creator or None,
+                "attribution": (meta.get("Credit") or {}).get("value"),
+                "license": license_name or None,
+                "license_url": license_url or None,
+                "commercial_use_state": commercial_state,
+                "rights_status": "license_metadata_present" if complete_rights_metadata else "REVIEW_REQUIRED",
+                "rights_status_reason": None if complete_rights_metadata else (
+                    "Commons file is missing item-level creator, source-page or commercial license evidence."
+                ),
+                "title": title,
+                "description": (
+                    (meta.get("ImageDescription") or {}).get("value")
+                    or (meta.get("ObjectName") or {}).get("value")
+                    or ""
+                ),
+                "license_terms": (meta.get("UsageTerms") or {}).get("value"),
+            })
         if out:
-            _media_success("wikimedia", {"count":len(out),"query":query})
+            _media_success("wikimedia", {"count": len(out), "query": query, "motion_first": bool(prefer_motion)})
         return out
     except Exception as exc:
-        _media_debug("wikimedia",exc)
+        _media_debug("wikimedia", exc)
         return []
+
 
 
 def _loc_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
