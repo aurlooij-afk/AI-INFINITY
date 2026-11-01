@@ -1232,11 +1232,11 @@ def _gemini_free_tier_text_model() -> Optional[Callable]:
     """
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     acknowledged = os.getenv("AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK", "").strip().lower()
-    model = os.getenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", "gemini-2.5-flash-lite").strip()
+    model = os.getenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", "gemini-3.5-flash-lite").strip()
     if not api_key or acknowledged not in {"1", "true", "yes", "on"}:
         return None
     # Do not let a model override silently route requests to a paid/unknown model.
-    if model != "gemini-2.5-flash-lite":
+    if model != "gemini-3.5-flash-lite":
         return None
 
     def call(payload: Dict[str, Any]) -> Dict[str, Any]:
