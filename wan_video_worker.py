@@ -35,6 +35,7 @@ MODEL_NAME = "Wan2.2-TI2V-5B"
 LICENSE_ID = "apache-2.0"
 MODEL_CARD_URL = "https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B"
 MODEL_CODE_URL = "https://github.com/Wan-Video/Wan2.2"
+PINNED_SOURCE_REVISION = "1ea34ff48f87168174e12956e200b1d908b1c5ff"
 LICENSE_URL = "https://www.apache.org/licenses/LICENSE-2.0"
 MANIFEST_NAME = ".ai-infinity-model-manifest.json"
 REQUIRED_MODEL_FILES = (
@@ -202,6 +203,11 @@ def _source_state() -> dict[str, Any]:
         revision_sha = (revision.stdout or "").strip()
         if revision.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40}", revision_sha):
             result["reason"] = "Wan2.2 source revision could not be identified"
+            return result
+        if revision_sha != PINNED_SOURCE_REVISION:
+            result["reason"] = "Wan2.2 source revision does not match the reviewed immutable code pin"
+            result["expected_revision"] = PINNED_SOURCE_REVISION
+            result["observed_revision"] = revision_sha
             return result
         result.update({
             "verified": True,
@@ -847,12 +853,6 @@ def capabilities(authorization: str | None = Header(default=None)) -> dict[str, 
 @app.post("/v1/jobs")
 def create_job(payload: GenerateRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _bearer(authorization)
-    capabilities = _capabilities()
-    if not capabilities.get("execution_ready"):
-        raise HTTPException(
-            status_code=503,
-            detail={"status": "unavailable", "reasons": capabilities.get("reasons") or []},
-        )
     prompt = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", payload.prompt).strip()
     if len(prompt) < 8:
         raise HTTPException(status_code=422, detail="prompt is too short after normalization")
@@ -872,6 +872,13 @@ def create_job(payload: GenerateRequest, authorization: str | None = Header(defa
             if old["request_sha256"] != request_sha:
                 raise HTTPException(status_code=409, detail="idempotency key was already used for a different request")
             return _job_public(old)
+    capabilities = _capabilities()
+    if not capabilities.get("execution_ready"):
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "unavailable", "reasons": capabilities.get("reasons") or []},
+        )
+    with _connect() as c:
         queued = int(c.execute("SELECT COUNT(*) FROM wan_jobs WHERE status='queued'").fetchone()[0])
         if queued >= MAX_QUEUED_JOBS:
             raise HTTPException(status_code=429, detail="GPU worker queue is full; retry after a job completes")
