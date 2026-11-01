@@ -804,8 +804,13 @@ def _stop_processes() -> None:
     if process is not None and process.poll() is None:
         try:
             os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=10)
         except Exception:
-            pass
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=5)
+            except Exception:
+                pass
     if WORKER_LOCK_HANDLE is not None:
         try:
             fcntl.flock(WORKER_LOCK_HANDLE, fcntl.LOCK_UN)
