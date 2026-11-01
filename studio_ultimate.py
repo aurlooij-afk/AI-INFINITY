@@ -10578,9 +10578,10 @@ function openProject(id){
   var projectUrl="/infinity/studio/project/"+encodeURIComponent(id);
   Promise.all([
     api(projectUrl),
-    api(projectUrl+"/truth").catch(function(){return null;})
+    api(projectUrl+"/truth").catch(function(){return null;}),
+    api(projectUrl+"/production-graph").catch(function(){return null;})
   ]).then(function(records){
-    var x=records[0], truth=records[1], result=x.result||{}, assets=x.assets||[];
+    var x=records[0], truth=records[1], production=records[2], result=x.result||{}, assets=x.assets||[];
     // Only the server's current production-truth gate can release the final master.
     // A completed job or a playable draft is not by itself a verified deliverable.
     var done=(String(x.status||"").toLowerCase()==="completed" && !!(truth&&truth.verified===true));
@@ -10590,12 +10591,44 @@ function openProject(id){
     var allowedPartial={"script.md":true,"captions.srt":true,"sources.json":true,"thumbnail.jpg":true,"audio_master.mp3":true};
     var visibleLinks=done?links:links.filter(function(a){return allowedPartial[a[1]] && assets.some(function(x){return String(x.name||x.path||"").split("/").pop()===a[1]});});
     var cardLinks=visibleLinks.map(function(a){return "<div class='artifact'><b>"+a[0]+"</b><a href='/infinity/studio/project/"+encodeURIComponent(id)+"/asset/"+encodeURIComponent(a[1])+"' target='_blank'>"+(done?"Open / download":"Open partial artifact")+"</a></div>"}).join("");
+    var graph=production||{}, graphShots=graph.shots||[], graphCandidates=graph.candidates||[];
+    var capabilityRows=(graph.provider_capabilities&&graph.provider_capabilities.providers)||[];
+    var runway=capabilityRows.find(function(p){return p.id==="runway"})||{};
+    var freeNative=graph.free_native_video||{status:"unavailable"};
+    var nativeStatus=freeNative.status==="available"
+      ? "A free native-video provider is enabled: "+esc(freeNative.provider||"provider")
+      : "No verified free native-video inference worker is configured. The project continues through Creator Studio's existing free-first source, voice and FFmpeg rendering path.";
+    var graphShotHtml=graphShots.map(function(sh){
+      var d=Number(sh.duration||0);
+      var canPaid=runway.enabled===true&&runway.pricing_class==="paid_metered"&&d>=2&&d<=10;
+      var action=canPaid
+        ? "<button class='btn' data-pg-generate='"+esc(sh.shot_id)+"' data-pg-prompt='"+esc(sh.visual_prompt||"")+"' data-pg-duration='"+d+"'>Generate optional paid Runway candidate</button>"
+        : "<div class='tiny'>"+(runway.enabled===true&&runway.pricing_class==="paid_metered"?"Paid native clips support 2–10 seconds per shot.":nativeStatus)+"</div>";
+      return "<div class='item'><div class='row'><b>Scene "+String(sh.seq||0).padStart(2,"0")+" · "+esc(sh.purpose||"Scene")+"</b><span class='chip'>"+d.toFixed(1)+"s</span></div><div class='tiny'>"+esc(sh.status||"planned")+" · "+esc(sh.shot_id)+"</div><div style='margin-top:8px'>"+action+"</div></div>";
+    }).join("");
+    var graphCandidateHtml=graphCandidates.map(function(c){
+      var durable=["primary_only","durable_partial","durable_multi_provider","durable_5_provider"].indexOf(String(c.storage_status||""))>=0;
+      var action=c.status==="ready"
+        ? "<button class='btn' data-pg-qa='"+esc(c.candidate_id)+"'>Run technical QA</button>"
+        : c.status==="ready_for_creative_review"&&durable
+          ? "<button class='btn' data-pg-select='"+esc(c.candidate_id)+"'>Select for canonical editor</button>"
+          : "";
+      var preview=durable
+        ? "<video controls playsinline preload='none' style='width:100%;max-width:560px;margin-top:8px' src='/infinity/production/project/"+encodeURIComponent(id)+"/candidate/"+encodeURIComponent(c.candidate_id)+"/media'></video>"
+        : "<div class='tiny'>Preview/selection remains unavailable until candidate bytes have verified object storage, SHA-256 and size evidence.</div>";
+      var state=c.status==="selected_for_editor"?"Selected for canonical rerender; creative and rights approval remain pending.":c.status==="ready_for_creative_review"?"Technical checks passed; creative approval remains pending.":"";
+      return "<div class='item'><div class='row'><b>"+esc(c.provider||"provider")+" · "+esc(c.model||"model")+"</b><span class='status'>"+esc(c.status||"queued")+"</span></div><div class='tiny mono'>"+esc(c.candidate_id)+" · storage "+esc(c.storage_status||"not_persisted")+"</div>"+preview+"<div style='margin-top:8px'>"+action+"</div><div class='tiny'>"+esc(state)+"</div></div>";
+    }).join("");
+    var graphPanel="<div class='card cardPad' style='margin-top:14px'><div class='sectionHead'><div><h3>Integrated scene production graph</h3><div class='mini'>Same Studio project ID, actual storyboard scenes, candidate records and canonical rerender path.</div></div><span class='status "+(graph.synchronization&&graph.synchronization.status==="synced"?"completed":"review-required")+"'>"+esc(graph.synchronization&&graph.synchronization.status||"unavailable")+"</span></div><div class='notice'>"+esc(nativeStatus)+"</div><div class='tiny' style='margin:8px 0'>Free-first renderer and sources remain the default. Runway is explicitly paid-metered and appears only when its paid-use authorization is configured.</div><div class='grid cols2'><div><h4>Real storyboard scenes ("+graphShots.length+")</h4><div class='list'>"+(graphShotHtml||"<div class='tiny'>The production graph will populate when the storyboard is ready.</div>")+"</div></div><div><h4>Generation candidates ("+graphCandidates.length+")</h4><div class='list'>"+(graphCandidateHtml||"<div class='tiny'>No native candidates have been generated for this project.</div>")+"</div></div></div></div>";
     $("content").innerHTML="<div class='toolbar' style='margin-bottom:12px'><button class='btn' onclick='go(\"projects\")'>← Projects</button><button class='btn' onclick='openProject(\""+esc(id)+"\")'>Refresh</button><button class='btn' onclick='verifyProject(\""+esc(id)+"\")'>Verify</button></div>"+
     "<div class='grid cols2'><div class='card cardPad'>"+
     "<div class='eyebrow'>PROJECT</div><h2 style='margin:6px 0 4px'>"+esc(x.title||id)+"</h2><div class='chips'><span class='status "+statusClass(x.status)+"'>"+esc(x.status)+"</span><span class='chip'>"+Math.round(x.progress||0)+"%</span><span class='chip'>Attempt "+esc(x.attempt||1)+"</span></div><div style='margin-top:14px'>"+stages(x)+"</div><div style='margin-top:14px' class='progress'><i style='width:"+Math.round(x.progress||0)+"%'></i></div>"+
     (done?"<div class='video' style='margin-top:14px'><video controls playsinline src='/infinity/studio/project/"+encodeURIComponent(id)+"/asset/final.mp4'></video></div>":"<div class='notice' style='margin-top:14px'>"+esc(x.status==="failed"?(x.error||"Production failed. Open retry to run again."):x.status==="completed_with_qc_warnings"?"A review-required draft exists. Final video delivery remains blocked until quality gates pass.":x.status==="completed"?(truth?"Production finished, but the current production-truth checks did not verify the master. Review the failed checks.":"Production truth could not be loaded. Final delivery stays hidden until verification succeeds."):"The workspace is producing real artifacts. Refresh is safe.")+"</div>")+
     "<div class='toolbar' style='margin-top:12px'><button class='btn warn' onclick='cancelProject(\""+esc(id)+"\")'>Cancel</button><button class='btn' onclick='retryProject(\""+esc(id)+"\")'>Retry</button></div>"+
-    "</div><div class='card cardPad'><div class='sectionHead'><h3>Production details</h3><span class='status "+statusClass(x.status)+"'>"+esc(x.stage||"")+"</span></div><div class='notice'>"+(done?"Production-truth and quality gates passed. Final artifacts are release-eligible.":x.status==="completed_with_qc_warnings"?"Quality verification did not pass; final video delivery remains blocked.":x.status==="completed"?"The job reports completion, but production truth is not verified. Final delivery is hidden.":"This status comes from the production database, not UI animation.")+"</div><div class='artifacts' style='margin-top:10px'>"+cardLinks+"</div><div id='verifyOut' style='margin-top:10px'></div></div></div>";
+    "</div><div class='card cardPad'><div class='sectionHead'><h3>Production details</h3><span class='status "+statusClass(x.status)+"'>"+esc(x.stage||"")+"</span></div><div class='notice'>"+(done?"Production-truth and quality gates passed. Final artifacts are release-eligible.":x.status==="completed_with_qc_warnings"?"Quality verification did not pass; final video delivery remains blocked.":x.status==="completed"?"The job reports completion, but production truth is not verified. Final delivery is hidden.":"This status comes from the production database, not UI animation.")+"</div><div class='artifacts' style='margin-top:10px'>"+cardLinks+"</div><div id='verifyOut' style='margin-top:10px'></div></div></div>"+graphPanel;
+    document.querySelectorAll("[data-pg-generate]").forEach(function(el){el.addEventListener("click",function(){generateStudioNativeVideo(id,el.getAttribute("data-pg-generate"),el.getAttribute("data-pg-prompt"),Number(el.getAttribute("data-pg-duration")||0))})});
+    document.querySelectorAll("[data-pg-qa]").forEach(function(el){el.addEventListener("click",function(){reviewStudioCandidate(id,el.getAttribute("data-pg-qa"))})});
+    document.querySelectorAll("[data-pg-select]").forEach(function(el){el.addEventListener("click",function(){selectStudioCandidate(id,el.getAttribute("data-pg-select"))})});
     if(pollTimer)clearInterval(pollTimer);
     if(!done && x.status!=="failed" && x.status!=="cancelled"){pollTimer=setInterval(function(){refreshProjectCard(id)},1600)}
   }).catch(function(e){$("content").innerHTML=renderError(e)});
@@ -10613,6 +10646,24 @@ async function verifyProject(id){
   try{$("verifyOut").innerHTML="<div class='notice'>Verifying artifacts…</div>";var r=await api("/infinity/studio/project/"+encodeURIComponent(id)+"/verify");$("verifyOut").innerHTML="<div class='notice "+(r.quality&&r.quality.passed?"good":"warn")+"'><b>"+(r.quality&&r.quality.passed?"Verified":"Review required")+"</b></div><pre class='mono'>"+esc(JSON.stringify(r,null,2))+"</pre>"}catch(e){$("verifyOut").innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>"}
 }
 async function cancelProject(id){try{await api("/infinity/studio/project/"+encodeURIComponent(id)+"/cancel",{method:"POST"});openProject(id)}catch(e){alert(e.message)}}
+async function generateStudioNativeVideo(projectId,shotId,prompt,duration){
+  try{
+    var r=await api("/infinity/production/project/"+encodeURIComponent(projectId)+"/generate-video-batch",{
+      method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({shot_id:shotId,prompt:prompt,duration:duration,count:1})
+    });
+    var message=r.status==="accepted"?"Native candidate job queued.":r.status==="paid_provider_authorization_required"?"Paid generation was not started; explicit authorization is required.":("Generation status: "+r.status);
+    alert(message);openProject(projectId);
+  }catch(e){alert(e.message)}
+}
+async function reviewStudioCandidate(projectId,candidateId){
+  try{var r=await api("/infinity/production/project/"+encodeURIComponent(projectId)+"/review/"+encodeURIComponent(candidateId),{method:"POST"});alert("Technical result: "+r.decision+". Creative approval remains "+r.creative_approval+".");openProject(projectId)}
+  catch(e){alert(e.message)}
+}
+async function selectStudioCandidate(projectId,candidateId){
+  try{var r=await api("/infinity/production/project/"+encodeURIComponent(projectId)+"/candidate/"+encodeURIComponent(candidateId)+"/select",{method:"POST"});alert("Selected for canonical rerender. Creative approval: "+r.creative_approval+".");openProject(projectId)}
+  catch(e){alert(e.message)}
+}
 async function retryProject(id){try{await api("/infinity/studio/project/"+encodeURIComponent(id)+"/retry",{method:"POST"});openProject(id)}catch(e){alert(e.message)}}
 async function assets(){
   var x=await api("/infinity/studio/library?limit=200"), rows=x.assets||[];
