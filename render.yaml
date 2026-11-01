@@ -60,6 +60,9 @@ services:
         value: "false"
       - key: OPENAI_API_KEY
         sync: false
+      # OpenAI Responses vision review is paid metered. Keep disabled until explicitly authorized.
+      - key: AI_INFINITY_OPENAI_VISION_PAID_USAGE_ACK
+        value: "false"
       - key: ELEVENLABS_API_KEY
         sync: false
       - key: TAVILY_API_KEY
