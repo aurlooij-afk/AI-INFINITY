@@ -55,6 +55,11 @@ DATA_DIR = Path(os.getenv("WAN_WORKER_DATA_DIR", "/data/wan-worker")).resolve()
 DB_PATH = DATA_DIR / "wan_worker.sqlite3"
 OUTPUT_DIR = DATA_DIR / "artifacts"
 LOG_DIR = DATA_DIR / "logs"
+MOUNTINFO_PATH = Path("/proc/self/mountinfo")
+STORAGE_RESTART_PROOF_NAME = ".ai-infinity-persistent-volume-proof.json"
+WORKER_BOOT_ID = uuid.uuid4().hex
+_STORAGE_PROOF_LOCK = threading.RLock()
+_STORAGE_RESTART_VERIFIED = False
 
 MIN_TOTAL_VRAM_MB = max(24576, int(os.getenv("WAN_WORKER_MIN_TOTAL_VRAM_MB", "24576")))
 MIN_FREE_VRAM_MB = max(20000, int(os.getenv("WAN_WORKER_MIN_FREE_VRAM_MB", "22000")))
@@ -381,28 +386,136 @@ def _gpu_state(force: bool = False) -> dict[str, Any]:
     return result
 
 
+def _mountinfo_unescape(value: str) -> str:
+    """Decode the octal escapes used for mount paths in /proc/self/mountinfo."""
+    return re.sub(r"\\([0-7]{3})", lambda match: chr(int(match.group(1), 8)), str(value or ""))
+
+
+def _persistent_mount_for(path: Path) -> dict[str, Any]:
+    """Find the deepest non-root, non-ephemeral filesystem mount containing path."""
+    ephemeral_types = {"overlay", "tmpfs", "ramfs", "squashfs", "proc", "sysfs", "devtmpfs"}
+    try:
+        target = Path(path).resolve()
+        rows = MOUNTINFO_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return {"mounted": False, "reason": "Linux mount table is unavailable"}
+    candidates = []
+    for row in rows:
+        left, separator, right = row.partition(" - ")
+        if not separator:
+            continue
+        left_fields = left.split()
+        right_fields = right.split()
+        if len(left_fields) < 5 or len(right_fields) < 2:
+            continue
+        mount_path = Path(_mountinfo_unescape(left_fields[4])).resolve()
+        filesystem = str(right_fields[0]).lower()
+        if mount_path == Path("/") or filesystem in ephemeral_types or filesystem.startswith("overlay"):
+            continue
+        try:
+            target.relative_to(mount_path)
+        except ValueError:
+            continue
+        candidates.append({
+            "mounted": True,
+            "mountpoint": str(mount_path),
+            "filesystem_type": filesystem,
+            "filesystem_source": _mountinfo_unescape(right_fields[1])[:160],
+        })
+    if not candidates:
+        return {
+            "mounted": False,
+            "reason": "worker data directory is not beneath a dedicated non-ephemeral filesystem mount",
+        }
+    return max(candidates, key=lambda item: len(str(item.get("mountpoint") or "")))
+
+
+def _storage_restart_proof() -> bool:
+    """Require a marker written by a different worker process on the mounted data volume."""
+    global _STORAGE_RESTART_VERIFIED
+    proof_path = DATA_DIR / STORAGE_RESTART_PROOF_NAME
+    with _STORAGE_PROOF_LOCK:
+        if _STORAGE_RESTART_VERIFIED:
+            return True
+        previous_boot_id = ""
+        try:
+            if proof_path.is_symlink():
+                raise RuntimeError("worker storage proof marker is symlinked")
+            previous = json.loads(proof_path.read_text(encoding="utf-8"))
+            previous_boot_id = str(previous.get("worker_boot_id") or "")
+        except FileNotFoundError:
+            previous_boot_id = ""
+        except Exception:
+            # A malformed, unreadable or replaced marker is not proof of recovery.
+            previous_boot_id = ""
+        if previous_boot_id and previous_boot_id != WORKER_BOOT_ID:
+            _STORAGE_RESTART_VERIFIED = True
+        if previous_boot_id != WORKER_BOOT_ID:
+            temporary = proof_path.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps({
+                    "schema": "ai-infinity-worker-volume-restart-proof-v1",
+                    "worker_boot_id": WORKER_BOOT_ID,
+                    "written_at": _now(),
+                }),
+                encoding="utf-8",
+            )
+            os.replace(temporary, proof_path)
+        return _STORAGE_RESTART_VERIFIED
+
+
 def _storage_state() -> dict[str, Any]:
     confirmed = _truthy(os.getenv("WAN_WORKER_PERSISTENT_STORAGE_CONFIRMED"))
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
+        mount = _persistent_mount_for(DATA_DIR)
         probe = DATA_DIR / (".write-probe-" + uuid.uuid4().hex)
-        probe.write_bytes(b"ai-infinity-wan-worker")
-        probe.unlink()
+        probe_payload = b"ai-infinity-wan-worker-storage-readback-v1"
+        probe.write_bytes(probe_payload)
+        writable = probe.read_bytes() == probe_payload
+        probe.unlink(missing_ok=True)
         free_bytes = shutil.disk_usage(DATA_DIR).free
-        writable = free_bytes >= 10 * 1024 * 1024 * 1024
+        enough_space = free_bytes >= 10 * 1024 * 1024 * 1024
+        restart_verified = _storage_restart_proof()
+        persistent = bool(confirmed and mount.get("mounted") and writable and enough_space and restart_verified)
+        reasons = []
+        if not confirmed:
+            reasons.append("operator has not confirmed the dedicated persistent worker volume")
+        if not mount.get("mounted"):
+            reasons.append(str(mount.get("reason") or "dedicated non-ephemeral worker volume is not mounted"))
+        if not writable:
+            reasons.append("worker storage write/read-back probe did not match")
+        if not enough_space:
+            reasons.append("worker volume requires at least 10 GiB free")
+        if not restart_verified:
+            reasons.append("restart proof is pending; restart the worker once with the same mounted volume")
         return {
-            "persistent": bool(confirmed and writable),
+            "persistent": persistent,
             "operator_confirmed": confirmed,
-            "writable": True,
+            "mounted": bool(mount.get("mounted")),
+            "mountpoint": mount.get("mountpoint"),
+            "filesystem_type": mount.get("filesystem_type"),
+            "writable": writable,
+            "readback_verified": writable,
+            "restart_verified": restart_verified,
             "free_bytes": free_bytes,
             "minimum_free_bytes": 10 * 1024 * 1024 * 1024,
             "path": str(DATA_DIR),
-            "reason": "persistent storage confirmed and at least 10 GiB free" if confirmed and writable else
-                      "mount a persistent worker volume, confirm it explicitly, and provide at least 10 GiB free",
+            "proof_file": str(DATA_DIR / STORAGE_RESTART_PROOF_NAME),
+            "reason": "dedicated non-ephemeral mount, operator confirmation, write/read-back and process-restart proof verified"
+                      if persistent else "; ".join(reasons),
+            "truthful": True,
         }
     except Exception as exc:
-        return {"persistent": False, "operator_confirmed": confirmed, "writable": False,
-                "reason": f"worker storage probe failed: {type(exc).__name__}: {str(exc)[:180]}"}
+        return {
+            "persistent": False,
+            "operator_confirmed": confirmed,
+            "mounted": False,
+            "writable": False,
+            "restart_verified": False,
+            "reason": f"worker storage probe failed: {type(exc).__name__}: {str(exc)[:180]}",
+            "truthful": True,
+        }
 
 
 def _capabilities(force: bool = False) -> dict[str, Any]:

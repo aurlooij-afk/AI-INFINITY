@@ -90,9 +90,14 @@ WAN_WORKER_MIN_FREE_VRAM_MB=22000
 WAN_WORKER_MAX_RUNTIME_SECONDS=1800
 ~~~
 
-WAN_WORKER_PERSISTENT_STORAGE_CONFIRMED=true is an operator attestation that
-WAN_WORKER_DATA_DIR is a durable mounted volume. Do not set it for /tmp, a
-container writable layer, or an ephemeral deployment disk.
+WAN_WORKER_PERSISTENT_STORAGE_CONFIRMED=true is an operator attestation, not
+proof by itself. The worker additionally inspects /proc/self/mountinfo and refuses
+root/overlay/tmpfs/ramfs storage, performs a write/read-back probe, and writes a
+volume marker containing the worker-process boot ID. On the first start after
+mounting a new volume, readiness remains unavailable. Restart the worker once
+without replacing the mounted volume; only the next process can verify that the
+marker survived and advertise persistent storage. A service that only restarts
+inside a fresh ephemeral container will remain blocked.
 
 Start one process and one Uvicorn worker only. The worker also acquires a persistent
 filesystem lock, so a second service process cannot silently start a second inference

@@ -136,6 +136,48 @@ def test_worker_job_enqueue_is_idempotent_and_persisted(tmp_path, monkeypatch):
     assert row["idempotency_key"] == "candidate-identity-0001"
 
 
+def test_worker_storage_requires_non_ephemeral_mount_and_a_different_process_boot(tmp_path, monkeypatch):
+    mounted = tmp_path / "worker-volume"
+    data_dir = mounted / "worker-data"
+    data_dir.mkdir(parents=True)
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text(
+        f"36 25 8:1 / {mounted} rw,relatime - ext4 /dev/vdb rw\\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(worker, "DATA_DIR", data_dir)
+    monkeypatch.setattr(worker, "MOUNTINFO_PATH", mountinfo)
+    monkeypatch.setattr(worker, "WORKER_BOOT_ID", "worker-boot-one")
+    monkeypatch.setattr(worker, "_STORAGE_RESTART_VERIFIED", False)
+    monkeypatch.setattr(worker.shutil, "disk_usage", lambda _path: SimpleNamespace(free=20 * 1024**3))
+    monkeypatch.setenv("WAN_WORKER_PERSISTENT_STORAGE_CONFIRMED", "true")
+
+    first = worker._storage_state()
+    assert first["mounted"] is True
+    assert first["filesystem_type"] == "ext4"
+    assert first["readback_verified"] is True
+    assert first["restart_verified"] is False
+    assert first["persistent"] is False
+
+    # A new process ID with the same volume and marker is the required restart proof.
+    monkeypatch.setattr(worker, "WORKER_BOOT_ID", "worker-boot-two")
+    monkeypatch.setattr(worker, "_STORAGE_RESTART_VERIFIED", False)
+    restarted = worker._storage_state()
+    assert restarted["restart_verified"] is True
+    assert restarted["persistent"] is True
+
+    # An operator flag cannot turn a container overlay into persistent storage.
+    mountinfo.write_text(
+        f"35 25 0:42 / {mounted} rw - overlay overlay rw\\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(worker, "WORKER_BOOT_ID", "worker-boot-three")
+    monkeypatch.setattr(worker, "_STORAGE_RESTART_VERIFIED", False)
+    overlay = worker._storage_state()
+    assert overlay["mounted"] is False
+    assert overlay["persistent"] is False
+
+
 def test_worker_capability_endpoint_fails_closed_without_process_lock(monkeypatch):
     monkeypatch.setattr(worker, "WORKER_PROCESS_LOCKED", False)
     monkeypatch.setattr(worker, "_source_state", lambda: {"verified": True, "revision": "b" * 40})
