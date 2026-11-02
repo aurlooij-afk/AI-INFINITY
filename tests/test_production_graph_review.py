@@ -282,8 +282,9 @@ def test_selected_candidate_identity_is_bound_to_the_correct_scene(
     assert production_graph.selected_candidate_id_for_scene("project-test", 2) == ""
 
 
-def test_runway_candidate_worker_records_verified_storage_and_unique_asset_name(
-    monkeypatch, tmp_path: Path
+@pytest.mark.parametrize("storage_status", ["primary_only", "unconfigured"])
+def test_runway_candidate_worker_requires_verified_storage_before_marking_ready(
+    monkeypatch, tmp_path: Path, storage_status: str
 ):
     db_path = tmp_path / "production-worker.sqlite3"
     monkeypatch.setattr(production_graph, "dbpath", lambda: db_path)
@@ -323,9 +324,12 @@ def test_runway_candidate_worker_records_verified_storage_and_unique_asset_name(
         production_graph, "runway_poll",
         lambda _task, _limit: {"status": "SUCCEEDED", "output": ["https://provider.example/generated.mp4"]},
     )
+    artifact_bytes = b"generated video candidate " * 100
+    artifact_sha = hashlib.sha256(artifact_bytes).hexdigest()
+
     def fake_download(_url, output):
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_bytes(b"generated video candidate " * 100)
+        output.write_bytes(artifact_bytes)
         return output
     monkeypatch.setattr(production_graph, "download", fake_download)
     saved = []
@@ -335,14 +339,23 @@ def test_runway_candidate_worker_records_verified_storage_and_unique_asset_name(
         lambda: SimpleNamespace(
             _save_asset=lambda pid, kind, path, media_type, metadata: (
                 saved.append((pid, kind, Path(path), media_type, metadata)) or {
-                    "durable_storage": {
-                        "status": "primary_only",
-                        "asset_id": "ast_verified",
-                        "sha256": "a" * 64,
-                        "size_bytes": Path(path).stat().st_size,
-                        "successful_providers": ["backblaze_b2"],
-                        "truthful": True,
-                    }
+                    "durable_storage": (
+                        {
+                            "status": "primary_only",
+                            "asset_id": "ast_verified",
+                            "object_key": "ai-infinity/user/ast_verified/" + Path(path).name,
+                            "sha256": artifact_sha,
+                            "size_bytes": Path(path).stat().st_size,
+                            "successful_providers": ["backblaze_b2"],
+                            "truthful": True,
+                        }
+                        if storage_status == "primary_only"
+                        else {
+                            "status": "unconfigured",
+                            "successful_providers": [],
+                            "truthful": True,
+                        }
+                    )
                 }
             )
         ),
@@ -366,12 +379,21 @@ def test_runway_candidate_worker_records_verified_storage_and_unique_asset_name(
     assert len(saved) == 1
     assert saved[0][1] == "candidate"
     assert saved[0][2].name == candidate_id + ".mp4"
-    assert candidate["status"] == "ready"
-    assert candidate["storage_status"] == "primary_only"
-    assert json.loads(candidate["storage_json"])["successful_providers"] == ["backblaze_b2"]
-    assert Path(candidate["asset_path"]).is_file()
-    assert job["status"] == "completed"
-    assert json.loads(job["result_json"])["storage_status"] == "primary_only"
+    if storage_status == "primary_only":
+        assert candidate["status"] == "ready"
+        assert candidate["storage_status"] == "primary_only"
+        stored = json.loads(candidate["storage_json"])
+        assert stored["successful_providers"] == ["backblaze_b2"]
+        assert stored["sha256"] == artifact_sha
+        assert stored["object_key"].endswith(candidate_id + ".mp4")
+        assert Path(candidate["asset_path"]).is_file()
+        assert job["status"] == "completed"
+        assert json.loads(job["result_json"])["storage_status"] == "primary_only"
+    else:
+        assert candidate["status"] == "failed"
+        assert candidate["storage_status"] == "not_persisted"
+        assert job["status"] == "failed"
+        assert "not verified a durable project copy" in str(job["error"])
 
 
 def test_install_invalidates_only_the_selected_scene_render_cache(monkeypatch, tmp_path: Path):
