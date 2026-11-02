@@ -49,6 +49,17 @@ def test_acceptance_runner_persists_a_failure_and_continues_to_the_next_scenario
     assert document["completed_scenarios"] == 2
 
 
+def test_caption_phrase_is_reconstructed_across_srt_cue_boundaries():
+    srt = (
+        "1\n00:00:00,000 --> 00:00:02,000\n"
+        "Every extraordinary world begins with something nobody else\n\n"
+        "2\n00:00:02,000 --> 00:00:03,000\ncan see.\n"
+    )
+    assert "every extraordinary world begins with something nobody else can see." in (
+        suite._normalized_srt_caption_text(srt)
+    )
+
+
 def test_blocked_acceptance_scenarios_are_not_misreported_as_pass(tmp_path, monkeypatch):
     monkeypatch.setenv("AI_INFINITY_EVIDENCE_DIR", str(tmp_path))
     suite.SCENARIO_RESULTS.clear()

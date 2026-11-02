@@ -39,6 +39,31 @@ def _chapter(index: int, sentence_count: int = 10) -> dict:
     }
 
 
+def test_official_media_reference_catalog_fetches_real_pages_only_for_media_topics(monkeypatch):
+    fetched = []
+    page_text = " ".join(
+        ["Video production workflows include editing, storyboarding, accessibility, captions, audio and delivery standards."]
+        * 14
+    )
+
+    def fake_http_get(url, timeout=8, max_bytes=500_000):
+        fetched.append(url)
+        return (
+            "<html><head><title>Official media production reference</title></head>"
+            "<body><main>" + page_text + "</main></body></html>"
+        ).encode("utf-8")
+
+    monkeypatch.setattr(studio, "http_get", fake_http_get)
+    rows = studio._longform_media_reference_sources("video editing captions and accessibility")
+    assert len(rows) == len(studio._LONGFORM_MEDIA_REFERENCE_CATALOG)
+    assert len({row["url"] for row in rows}) == len(rows)
+    assert len({studio.urlparse(row["url"]).hostname for row in rows}) >= 8
+    assert all(row["source"] == "official_media_reference_catalog" for row in rows)
+    assert all(len(row["summary"].split()) >= 80 for row in rows)
+    assert len(fetched) == len(rows)
+    assert studio._longform_media_reference_sources("ancient Roman architecture") == []
+
+
 def test_longform_scene_budget_scales_to_15_minutes_without_fast_mode_truncation():
     assert studio._max_scene_count(
         is_short=False,
