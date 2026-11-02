@@ -1088,7 +1088,7 @@ def _longform_media_reference_sources(topic: str) -> List[Dict[str, Any]]:
             page_title = html.unescape(re.sub(r"<[^>]+>", " ", title_match.group(1))).strip() if title_match else ""
             visible_text = html.unescape(re.sub(r"(?is)<[^>]+>", " ", markup))
             visible_text = re.sub(r"\s+", " ", visible_text).strip()
-            if not visible_text:
+            if len(visible_text.split()) < 80:
                 return None
             return {
                 "title": (page_title or publisher + " media-production reference")[:300],
@@ -1356,11 +1356,6 @@ def _expand_longform_research_evidence(
         if isinstance(row, dict)
     ]
     initial_profile = _research_evidence_profile(initial_sources)
-    if int(initial_profile.get("unique_domain_count") or 0) < 8:
-        official_media_sources = _longform_media_reference_sources(topic)
-        if official_media_sources:
-            initial_sources.extend(official_media_sources)
-            initial_profile = _research_evidence_profile(initial_sources)
     requirements = {
         "unique_source_url_count": 40,
         "substantive_excerpt_count": 20,
@@ -1453,6 +1448,26 @@ def _expand_longform_research_evidence(
         combined.append(row)
 
     final_profile = _research_evidence_profile(combined)
+    official_media_sources = []
+    official_media_added = 0
+    if int(final_profile.get("unique_domain_count") or 0) < 8:
+        # Use the authoritative media reference catalogue only after ordinary
+        # multi-angle research has had a chance to meet the unchanged gate.
+        official_media_sources = _longform_media_reference_sources(clean_topic)
+        for row in official_media_sources:
+            canonical = _canonical_research_url(row.get("url"))
+            if not canonical or canonical in seen_external:
+                continue
+            seen_external.add(canonical)
+            combined.append(row)
+            official_media_added += 1
+        final_profile = _research_evidence_profile(combined)
+        query_results["official_media_reference_catalog"] = {
+            "fetched_source_count": len(official_media_sources),
+            "added_unique_source_count": official_media_added,
+            "status": "ready" if official_media_added else "no_substantive_sources",
+            "truthful": True,
+        }
     base["sources"] = combined
     base["source_count"] = len(combined)
     base["provider_count"] = int(final_profile.get("provider_family_count") or 0)
