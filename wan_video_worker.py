@@ -410,8 +410,6 @@ def _persistent_mount_for(path: Path) -> dict[str, Any]:
             continue
         mount_path = Path(_mountinfo_unescape(left_fields[4])).resolve()
         filesystem = str(right_fields[0]).lower()
-        if mount_path == Path("/") or filesystem in ephemeral_types or filesystem.startswith("overlay"):
-            continue
         try:
             target.relative_to(mount_path)
         except ValueError:
@@ -425,9 +423,24 @@ def _persistent_mount_for(path: Path) -> dict[str, Any]:
     if not candidates:
         return {
             "mounted": False,
-            "reason": "worker data directory is not beneath a dedicated non-ephemeral filesystem mount",
+            "reason": "worker data directory is not beneath a dedicated filesystem mount",
         }
-    return max(candidates, key=lambda item: len(str(item.get("mountpoint") or "")))
+    # Evaluate the actual deepest mount covering the data directory. Ignoring an
+    # ephemeral nested mount would otherwise let a parent ext4 volume mask an
+    # overlay mounted over the worker's real data path.
+    actual = max(candidates, key=lambda item: len(str(item.get("mountpoint") or "")))
+    filesystem = str(actual.get("filesystem_type") or "").lower()
+    if (
+        actual.get("mountpoint") == "/"
+        or filesystem in ephemeral_types
+        or filesystem.startswith("overlay")
+    ):
+        return {
+            **actual,
+            "mounted": False,
+            "reason": "deepest filesystem covering worker data is ephemeral (" + filesystem + ")",
+        }
+    return actual
 
 
 def _storage_restart_proof() -> bool:

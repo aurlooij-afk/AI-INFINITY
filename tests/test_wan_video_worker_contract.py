@@ -167,14 +167,18 @@ def test_worker_storage_requires_non_ephemeral_mount_and_a_different_process_boo
     assert restarted["persistent"] is True
 
     # An operator flag cannot turn a container overlay into persistent storage.
+    # A nested overlay must win over its persistent ext4 parent mount.
+    nested_data = data_dir
     mountinfo.write_text(
-        f"35 25 0:42 / {mounted} rw - overlay overlay rw\\n",
+        f"36 25 8:1 / {mounted} rw,relatime - ext4 /dev/vdb rw\\n"
+        f"37 36 0:42 / {nested_data} rw - overlay overlay rw\\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(worker, "WORKER_BOOT_ID", "worker-boot-three")
     monkeypatch.setattr(worker, "_STORAGE_RESTART_VERIFIED", False)
     overlay = worker._storage_state()
     assert overlay["mounted"] is False
+    assert "overlay" in overlay.get("reason", "")
     assert overlay["persistent"] is False
 
 
