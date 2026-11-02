@@ -317,6 +317,53 @@ def test_remote_worker_is_ready_only_with_pinned_model_gpu_and_persistence_proof
 
 
 
+
+@pytest.mark.parametrize("status", ["unconfigured", "not_persisted", "failed", "uploaded_unverified"])
+def test_generated_candidate_cannot_complete_without_verified_project_storage(status):
+    sha = hashlib.sha256(b"generated artifact bytes").hexdigest()
+    saved = {
+        "durable_storage": {
+            "status": status,
+            "sha256": sha,
+            "size_bytes": len(b"generated artifact bytes"),
+            "asset_id": "asset-unverified",
+            "object_key": "ai-infinity/user/asset/file.mp4",
+            "successful_providers": [],
+        }
+    }
+    with pytest.raises(RuntimeError, match="not verified a durable project copy"):
+        production_graph._require_verified_durable_asset(
+            saved, sha, len(b"generated artifact bytes"), "test GPU worker"
+        )
+
+
+def test_generated_candidate_requires_exact_durable_object_bytes_and_identity():
+    payload = b"generated artifact bytes"
+    sha = hashlib.sha256(payload).hexdigest()
+    saved = {
+        "durable_storage": {
+            "status": "primary_only",
+            "sha256": sha,
+            "size_bytes": len(payload),
+            "asset_id": "asset-verified",
+            "object_key": "ai-infinity/user/asset/file.mp4",
+            "successful_providers": ["backblaze_b2"],
+        }
+    }
+    verified = production_graph._require_verified_durable_asset(
+        saved, sha, len(payload), "test GPU worker"
+    )
+    assert verified["status"] == "primary_only"
+    with pytest.raises(RuntimeError, match="SHA-256"):
+        production_graph._require_verified_durable_asset(
+            saved, "0" * 64, len(payload), "test GPU worker"
+        )
+    with pytest.raises(RuntimeError, match="size"):
+        production_graph._require_verified_durable_asset(
+            saved, sha, len(payload) + 1, "test GPU worker"
+        )
+
+
 def test_creator_graph_reuses_persisted_remote_worker_job_after_app_restart(tmp_path, monkeypatch):
     data_dir = tmp_path / "ai-infinity"
     db_path = tmp_path / "production.sqlite3"
@@ -417,6 +464,7 @@ def test_creator_graph_reuses_persisted_remote_worker_job_after_app_restart(tmp_
                         "size_bytes": len(artifact_bytes),
                         "successful_providers": ["test-object-store"],
                         "asset_id": "asset-wan-verified",
+                        "object_key": "ai-infinity/creator/asset-wan-verified/candidate.mp4",
                     }
                 }
             )

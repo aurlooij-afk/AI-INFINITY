@@ -330,6 +330,64 @@ def _download_verified_worker_artifact(url, headers, output, expected_sha, expec
         raise
 
 
+
+DURABLE_ASSET_STATES = frozenset({
+    "primary_only",
+    "durable_partial",
+    "durable_multi_provider",
+    "durable_5_provider",
+})
+
+
+def _require_verified_durable_asset(
+    saved: Dict[str, Any],
+    expected_sha256: str,
+    expected_size_bytes: int,
+    provider: str,
+) -> Dict[str, Any]:
+    """Refuse candidate completion unless Creator Studio's own object store read-back verified the exact bytes."""
+    durable = saved.get("durable_storage") if isinstance(saved, dict) else None
+    durable = durable if isinstance(durable, dict) else {}
+    status = str(durable.get("status") or "not_persisted").strip().lower()
+    providers = durable.get("successful_providers")
+    providers = [str(value) for value in providers if str(value).strip()] if isinstance(providers, list) else []
+    stored_sha = str(durable.get("sha256") or "").lower()
+    try:
+        stored_size = int(durable.get("size_bytes") or 0)
+    except (TypeError, ValueError):
+        stored_size = 0
+    asset_id = str(durable.get("asset_id") or "").strip()
+    object_key = str(durable.get("object_key") or "").strip()
+
+    failures = []
+    if status not in DURABLE_ASSET_STATES:
+        failures.append("project object storage status is " + status)
+    if not providers:
+        failures.append("no object-store provider completed verified read-back")
+    if len(str(expected_sha256 or "")) != 64 or stored_sha != str(expected_sha256).lower():
+        failures.append("stored object SHA-256 does not match generated artifact")
+    if int(expected_size_bytes or 0) <= 0 or stored_size != int(expected_size_bytes):
+        failures.append("stored object size does not match generated artifact")
+    if not asset_id or not object_key:
+        failures.append("durable object identity is incomplete")
+
+    if failures:
+        raise RuntimeError(
+            f"{provider} generated a media file, but Creator Studio has not verified a durable project copy: "
+            + "; ".join(failures)
+            + ". The candidate is not ready for selection or delivery."
+        )
+    return durable
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _process_wan_video_job(job, payload):
     jid = str(job["job_id"])
     candidate_id = str(payload.get("candidate_id") or "")
@@ -444,8 +502,9 @@ def _process_wan_video_job(job, payload):
             "rights_status": "REVIEW_REQUIRED",
         },
     )
-    durable = saved.get("durable_storage") if isinstance(saved, dict) else {}
-    durable = durable if isinstance(durable, dict) else {}
+    durable = _require_verified_durable_asset(
+        saved, expected_sha, expected_size, "Wan2.2 GPU worker"
+    )
     storage_status = str(durable.get("status") or "not_persisted")
     with LOCK, db() as conn:
         conn.execute(
@@ -491,6 +550,8 @@ def process(job):
             if str(done.get("status") or "").upper()!="SUCCEEDED":raise RuntimeError("Runway task failed: "+jd(done)[:1200])
             outs=done.get("output") or [];url=outs[0] if isinstance(outs,list) and outs else done.get("output_url")
             if not url:raise RuntimeError("Runway succeeded without output URL")
+            if not re.fullmatch(r"cand_[a-f0-9]{32}", str(d.get("candidate_id") or "")):
+                raise RuntimeError("Runway video job is missing its registered candidate id")
             root=Path(os.getenv("AI_INFINITY_DATA_DIR","/tmp/ai-infinity"))/"production-jobs"/jid
             root.mkdir(parents=True,exist_ok=True)
             cid=str(d.get("candidate_id") or "")
@@ -504,8 +565,9 @@ def process(job):
                         storage_meta=saved
                 except Exception as storage_exc:
                     storage_meta={"durable_storage":{"status":"not_persisted","error":f"{type(storage_exc).__name__}: {str(storage_exc)[:400]}","successful_providers":[],"truthful":True}}
-                durable=storage_meta.get("durable_storage") if isinstance(storage_meta,dict) else {}
-                durable=durable if isinstance(durable,dict) else {}
+                durable = _require_verified_durable_asset(
+                    storage_meta, _sha256_path(fp), fp.stat().st_size, "Runway"
+                )
                 storage_status=str(durable.get("status") or "not_persisted")
                 with LOCK,db() as c:c.execute(
                     "UPDATE pg_candidates SET status='ready',asset_path=?,source_url=?,model=?,storage_status=?,storage_json=?,updated_at=? WHERE candidate_id=?",
