@@ -595,3 +595,57 @@ def test_main_studio_opens_same_project_in_native_wan_candidate_graph():
     assert "limited to 2–5 seconds" in graph
     assert "requestedProjectId" in graph
     assert "Queued one open-source Wan2.2 candidate." in graph
+
+
+def test_live_wan_verifier_blocks_without_worker_or_inference_ack(tmp_path, monkeypatch):
+    import os
+    import subprocess
+    import sys
+
+    for key in (
+        "AI_INFINITY_WAN_WORKER_URL",
+        "AI_INFINITY_WAN_WORKER_TOKEN",
+        "AI_INFINITY_WAN_LIVE_INFERENCE_ACK",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "verify_live_wan_worker.py"
+    output = tmp_path / "wan-result.json"
+    completed = subprocess.run(
+        [sys.executable, str(script), "--output", str(output)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    result = json.loads(output.read_text(encoding="utf-8"))
+
+    assert completed.returncode == 3, completed.stdout + completed.stderr
+    assert result["status"] == "BLOCKED"
+    assert result["inference_request_sent"] is False
+    assert result["truthful"] is True
+
+
+def test_live_wan_verifier_requires_explicit_gpu_usage_ack_before_network(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+
+    monkeypatch.setenv("AI_INFINITY_WAN_WORKER_URL", "https://worker.example.invalid")
+    monkeypatch.setenv("AI_INFINITY_WAN_WORKER_TOKEN", "test-token-not-used")
+    monkeypatch.setenv("AI_INFINITY_WAN_LIVE_INFERENCE_ACK", "false")
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "verify_live_wan_worker.py"
+    output = tmp_path / "wan-result.json"
+    completed = subprocess.run(
+        [sys.executable, str(script), "--output", str(output)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    result = json.loads(output.read_text(encoding="utf-8"))
+
+    assert completed.returncode == 3, completed.stdout + completed.stderr
+    assert result["status"] == "BLOCKED"
+    assert result["inference_request_sent"] is False
+    assert "not authorized" in result["reason"]
