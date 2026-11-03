@@ -150,6 +150,18 @@ def _variants(studio,pid,master):
         res.append({"ratio":ratio,"asset_name":name,"duration_seconds":meta["duration_seconds"]})
     return res
 
+def _concat_manifest_text(segment_paths):
+    """Build a valid FFmpeg concat-demuxer manifest with one physical line per file."""
+    records = []
+    for segment_path in segment_paths:
+        value = str(Path(segment_path).resolve())
+        if "\\r" in value or "\\n" in value:
+            raise ValueError("concat media paths cannot contain line breaks")
+        # FFmpeg concat syntax escapes an embedded apostrophe as '\\''.
+        records.append("file '" + value.replace("'", "'\\\\''") + "'")
+    return "\\n".join(records) + "\\n"
+
+
 def _render(studio,pid,timeline):
     root=studio._project_dir(pid)
     selected=[x for x in timeline["scenes"] if x.get("enabled")]
@@ -164,7 +176,7 @@ def _render(studio,pid,timeline):
         if not out.exists() or out.stat().st_size<10000: raise RuntimeError("timeline segment render failed")
         segs.append(out); chapters.append({"heading":x["heading"],"narration":x["narration"],"duration":x["duration"],"actual_duration":x["duration"]})
     manifest=root/"timeline_concat.txt"
-    manifest.write_text("".join("file '"+str(p).replace("'","'\\''")+"'\\n" for p in segs),encoding="utf-8")
+    manifest.write_text(_concat_manifest_text(segs),encoding="utf-8")
     tmp=root/"final.timeline.tmp.mp4"; master=root/"final.mp4"
     studio.ffmpeg("-f","concat","-safe","0","-i",manifest,"-c","copy","-movflags","+faststart",tmp,timeout=1800)
     os.replace(tmp,master)
