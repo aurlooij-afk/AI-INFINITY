@@ -54,7 +54,7 @@ jobs:
           AI_INFINITY_FAST_MODE: "1"
         run: |
           set -euo pipefail
-          python -m py_compile main.py professional_creator_v2.py professional_creator_v2_timeline_patch.py professional_creator_fabric.py production_closure_3624.py studio_ultimate.py production_graph.py wan_video_worker.py scripts/prepare_wan22_model.py scripts/verify_live_project_state_storage.py tests/final_acceptance_suite.py tests/test_final_acceptance_reporting.py tests/test_wan_video_worker_contract.py tests/test_production_graph_durable_connection.py
+          python -m py_compile main.py professional_creator_v2.py professional_creator_v2_timeline_patch.py professional_creator_fabric.py production_closure_3624.py studio_ultimate.py production_graph.py wan_video_worker.py scripts/prepare_wan22_model.py scripts/verify_live_project_state_storage.py scripts/verify_live_wan_worker.py tests/final_acceptance_suite.py tests/test_final_acceptance_reporting.py tests/test_wan_video_worker_contract.py tests/test_production_graph_durable_connection.py
           python - <<'PY'
           import os
           os.environ["AI_INFINITY_DATA_DIR"] = "/tmp/ai-infinity-ci"
