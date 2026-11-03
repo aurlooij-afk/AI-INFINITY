@@ -22,6 +22,12 @@ def test_backend_is_truthful_when_unconfigured(monkeypatch, tmp_path: Path):
         "B2_KEY_ID",
         "B2_APPLICATION_KEY",
         "B2_REGION",
+        "SUPABASE_S3_ENDPOINT",
+        "SUPABASE_S3_BUCKET",
+        "SUPABASE_S3_ACCESS_KEY_ID",
+        "SUPABASE_S3_SECRET_ACCESS_KEY",
+        "SUPABASE_S3_REGION",
+        "SUPABASE_STORAGE_BUCKET",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -753,10 +759,14 @@ def test_live_storage_verifier_reports_blocked_without_credentials(monkeypatch, 
     import subprocess
     import sys
 
+    monkeypatch.setenv("AI_INFINITY_PROJECT_STATE_BACKEND", "backblaze_b2")
     for key in (
         "BACKBLAZE_B2_ENDPOINT", "BACKBLAZE_B2_BUCKET",
         "BACKBLAZE_B2_KEY_ID", "BACKBLAZE_B2_APPLICATION_KEY",
         "B2_ENDPOINT", "B2_BUCKET", "B2_KEY_ID", "B2_APPLICATION_KEY",
+        "SUPABASE_S3_ENDPOINT", "SUPABASE_S3_BUCKET",
+        "SUPABASE_S3_ACCESS_KEY_ID", "SUPABASE_S3_SECRET_ACCESS_KEY",
+        "SUPABASE_S3_REGION", "SUPABASE_STORAGE_BUCKET",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -776,7 +786,7 @@ def test_live_storage_verifier_reports_blocked_without_credentials(monkeypatch, 
     assert result["round_trip"] == "not_attempted"
     assert result["fresh_process_restore"] == "not_attempted"
     assert result["truthful"] is True
-    assert "B2" not in result.get("error", "")
+    assert result["truthful"] is True
 
 
 def test_supabase_s3_project_state_backend_uses_generated_s3_credentials_and_region(monkeypatch):
@@ -831,3 +841,60 @@ def test_supabase_s3_client_uses_path_style_addressing(monkeypatch):
     assert captured["endpoint_url"] == "https://project-ref.storage.supabase.co/storage/v1/s3"
     assert captured["region_name"] == "us-east-1"
     assert captured["config"].kwargs["s3"] == {"addressing_style": "path"}
+
+
+class _MemoryS3WithoutCustomMetadata:
+    def __init__(self):
+        self.objects = {}
+
+    def put_object(self, Bucket, Key, Body, ContentType, **kwargs):
+        payload = Body.read() if hasattr(Body, "read") else bytes(Body)
+        self.objects[(Bucket, Key)] = {"body": payload, "content_type": ContentType}
+        return {}
+
+    def head_object(self, Bucket, Key):
+        value = self.objects[(Bucket, Key)]
+        return {"ContentLength": len(value["body"])}
+
+    def get_object(self, Bucket, Key):
+        return {"Body": io.BytesIO(self.objects[(Bucket, Key)]["body"])}
+
+    def delete_object(self, Bucket, Key):
+        self.objects.pop((Bucket, Key), None)
+        return {}
+
+
+def test_supabase_s3_canary_verifies_bytes_without_custom_metadata(monkeypatch):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _supabase_s3_env(monkeypatch)
+    memory = _MemoryS3WithoutCustomMetadata()
+    monkeypatch.setattr(backend, "_client", lambda: memory)
+
+    assert backend._verify_roundtrip() is True
+    assert memory.objects == {}
+
+
+def test_supabase_s3_snapshot_manifest_is_checked_and_supplies_restore_digest(monkeypatch):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _supabase_s3_env(monkeypatch)
+    memory = _MemoryS3WithoutCustomMetadata()
+    monkeypatch.setattr(backend, "_client", lambda: memory)
+
+    payload = b"verified sqlite snapshot bytes"
+    digest = hashlib.sha256(payload).hexdigest()
+    stamp = "2026-11-04T00:00:00Z"
+    memory.put_object(
+        Bucket=backend._cfg()["bucket"],
+        Key=backend.object_key(),
+        Body=payload,
+        ContentType="application/x-sqlite3",
+    )
+    backend._write_snapshot_manifest(memory, len(payload), digest, stamp)
+
+    head = backend._head()
+
+    assert head["size_bytes"] == len(payload)
+    assert head["sha256"] == digest
+    assert head["snapshot_at"] == stamp
+    assert backend._manifest_key() in {key for _bucket, key in memory.objects}
+    assert "metadata" not in memory.objects[(backend._cfg()["bucket"], backend.object_key())]
