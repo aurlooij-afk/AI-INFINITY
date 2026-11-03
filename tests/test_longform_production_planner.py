@@ -541,12 +541,105 @@ def test_google_gemini_writer_requires_free_tier_and_data_use_acknowledgement(mo
     assert studio._gemini_free_tier_text_model() is None
 
 
+def test_creative_planner_uses_acknowledged_gemini_free_tier_for_15_minute_script(monkeypatch):
+    import json
+    from urllib.request import Request as URLRequest
+
+    monkeypatch.delenv("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS", raising=False)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGINGFACEHUB_API_TOKEN", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-free-tier-key")
+    monkeypatch.setenv("AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK", "true")
+    monkeypatch.setenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", "gemini-3.1-flash-lite")
+
+    calls = []
+
+    def plan_with_words(words_per_chapter):
+        chapters = []
+        for chapter_index in range(1, 6):
+            sentences = [
+                (
+                    f"Chapter {chapter_index} examines distinct production decision {sentence_index}. "
+                    f"It compares the constraint, the evidence, the trade-off, and the result "
+                    f"for a different part of the creative workflow."
+                )
+                for sentence_index in range(1, words_per_chapter + 1)
+            ]
+            chapters.append({
+                "heading": f"Chapter {chapter_index}",
+                "narration": " ".join(sentences),
+                "visual_query": f"distinct documentary visual for production chapter {chapter_index}",
+                "image_prompt": f"cinematic documentary shot about production chapter {chapter_index}",
+                "on_screen": f"Chapter {chapter_index}",
+                "duration": 180,
+                "proof_needed": [],
+            })
+        return {
+            "title": "A Real 15-Minute Production Workflow",
+            "premise": "A researched, chaptered production documentary.",
+            "chapters": chapters,
+        }
+
+    class FakeResponse:
+        def __init__(self, value):
+            self.value = value
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps({
+                "candidates": [{
+                    "finishReason": "STOP",
+                    "content": {"parts": [{"text": json.dumps(self.value)}]},
+                }],
+                "usageMetadata": {"promptTokenCount": 900, "candidatesTokenCount": 2400},
+            }).encode("utf-8")
+
+    def fake_urlopen(request, timeout=0):
+        assert isinstance(request, URLRequest)
+        assert "gemini-3.1-flash-lite:generateContent" in request.full_url
+        assert "test-free-tier-key" not in request.full_url
+        body = json.loads(request.data.decode("utf-8"))
+        user_text = body["contents"][0]["parts"][0]["text"]
+        calls.append(user_text)
+        value = plan_with_words(5) if len(calls) == 1 else plan_with_words(42)
+        return FakeResponse(value)
+
+    monkeypatch.setattr(studio, "urlopen", fake_urlopen)
+    plan, provider = studio.creative_plan(
+        {
+            "title": "A Real 15-Minute Production Workflow",
+            "objective": "Create a grounded 15-minute documentary about the actual production workflow.",
+            "topic": "professional production workflow",
+            "format": "long",
+            "duration": 900,
+            "speaking_rate_wpm": 125,
+            "language": "English",
+        },
+        {"sources": []},
+        None,
+    )
+
+    assert len(calls) == 2
+    assert "TARGET SPOKEN WORD COUNT" in calls[0]
+    assert "Expand the existing story" in calls[1]
+    assert provider == "google-gemini-free-tier:gemini-3.1-flash-lite"
+    assert plan["script_generation"]["status"] == "complete"
+    assert plan["script_generation"]["required_spoken_words"] == 1875
+    assert plan["script_generation"]["actual_spoken_words"] >= 1875
+    assert plan["script_generation"]["repair_passes"] == 1
+
+
 def test_google_gemini_free_tier_writer_sends_json_mode_and_keeps_key_out_of_url(monkeypatch):
     import json
 
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setenv("AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK", "true")
-    monkeypatch.setenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", "gemini-3.5-flash-lite")
+    monkeypatch.setenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", "gemini-3.1-flash-lite")
     captured = {}
 
     class FakeResponse:
@@ -582,7 +675,7 @@ def test_google_gemini_free_tier_writer_sends_json_mode_and_keeps_key_out_of_url
         ],
         "temperature": 0.4,
     })
-    assert result["provider"] == "google-gemini-free-tier:gemini-3.5-flash-lite"
+    assert result["provider"] == "google-gemini-free-tier:gemini-3.1-flash-lite"
     assert result["text"] == "{\"chapters\": []}"
     assert "test-key" not in captured["url"]
     assert captured["headers"].get("X-goog-api-key") == "test-key"
