@@ -1859,6 +1859,7 @@ EXISTING PLAN JSON:
                             clean = {**repaired_data, "chapters": repaired_chapters}
                             clean["speaking_rate_wpm"] = speaking_rate_wpm
                             best_words = repaired_words
+                            raw = repair_raw
                             provider = str(repair_raw.get("provider") or provider)
                         except Exception as repair_exc:
                             # Avoid leaking provider URLs, credentials or request bodies.
