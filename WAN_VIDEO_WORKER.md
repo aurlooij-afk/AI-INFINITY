@@ -133,6 +133,67 @@ independently hosted GPU worker is configured and passes those live checks, the
 application must report native open-source video generation as unavailable. The
 existing free-first footage/voice/FFmpeg rendering path remains separate and usable.
 
+## Reproducible self-hosted NVIDIA deployment
+
+The repository includes `Dockerfile.wan-worker` and `compose.wan-worker.yml`. They
+build the inference worker separately from the AI Infinity web app and reserve one
+NVIDIA GPU through Docker Compose. The official Wan source is pinned to
+`1ea34ff48f87168174e12956e200b1d908b1c5ff`; the image installs CUDA 12.4 PyTorch
+and the pinned upstream requirements. The image is not built or hosted by Render,
+and this repository does not provision a GPU.
+
+Operator-host prerequisites:
+- Linux x86-64 with Docker Engine, Docker Compose and NVIDIA Container Toolkit.
+- At least 24 GiB total GPU VRAM and 22 GiB free VRAM for the readiness gate.
+- At least 55 GiB free disk for the pinned model snapshot and at least 10 GiB free
+  on the worker-state volume.
+- Durable host-backed Docker volumes for `/models` and `/data/wan-worker`.
+
+Create a private environment file from `.env.wan-worker.example`. Replace the
+placeholder with a long random token. Keep both acknowledgements false until you
+have reviewed the model usage agreement and chosen storage you intend to retain:
+
+```sh
+cp .env.wan-worker.example .env.wan-worker
+# Edit .env.wan-worker locally; never commit the real token.
+docker compose --env-file .env.wan-worker -f compose.wan-worker.yml build
+```
+
+Prepare the pinned model into the named persistent model volume:
+
+```sh
+docker compose --env-file .env.wan-worker -f compose.wan-worker.yml run --rm --no-deps \
+  wan-worker python /app/scripts/prepare_wan22_model.py \
+  --model-dir /models/Wan2.2-TI2V-5B
+```
+
+Only after reviewing the complete model card and applicable usage terms, set
+`AI_INFINITY_WAN_MODEL_TERMS_ACKNOWLEDGED=true`. Only after confirming that the
+Docker volumes are backed by retained host storage, set
+`WAN_WORKER_PERSISTENT_STORAGE_CONFIRMED=true`. Then start and restart the service:
+
+```sh
+docker compose --env-file .env.wan-worker -f compose.wan-worker.yml up -d
+docker compose --env-file .env.wan-worker -f compose.wan-worker.yml restart wan-worker
+```
+
+The second process start is intentional: the worker must prove that its volume
+marker survived a process restart before it reports persistent storage as ready.
+Check authenticated `/v1/capabilities` from the trusted host or private network.
+A successful `/health` response alone is liveness, not GPU/model readiness.
+
+The service binds to loopback by default. Do not publish port 8765 to the public
+internet. A remote AI Infinity app may connect only through a private service
+network or an authenticated HTTPS reverse proxy. Configure
+`AI_INFINITY_WAN_WORKER_URL` and `AI_INFINITY_WAN_WORKER_TOKEN` on the app only
+after the worker passes every live capability check.
+
+This is a real deployment path, not a provisioned GPU. The current Wan adapter
+creates 2–5 second, 24 fps, 720p-class native shots. AI Infinity composes these
+shots, narration, captions, music and other material into a longer timeline.
+A 15-minute programme is many bounded shots plus a complete script, not one
+15-minute Wan inference.
+
 ## Job lifecycle, limits and recovery
 
 - One GPU inference at a time; bounded durable queue.

@@ -142,9 +142,10 @@ def test_worker_storage_requires_non_ephemeral_mount_and_a_different_process_boo
     data_dir.mkdir(parents=True)
     mountinfo = tmp_path / "mountinfo"
     mountinfo.write_text(
-        f"36 25 8:1 / {mounted} rw,relatime - ext4 /dev/vdb rw\\n",
+        f"36 25 8:1 / {mounted} rw,relatime - ext4 /dev/vdb rw\n",
         encoding="utf-8",
     )
+    assert len(mountinfo.read_text(encoding="utf-8").splitlines()) == 1
     monkeypatch.setattr(worker, "DATA_DIR", data_dir)
     monkeypatch.setattr(worker, "MOUNTINFO_PATH", mountinfo)
     monkeypatch.setattr(worker, "WORKER_BOOT_ID", "worker-boot-one")
@@ -170,10 +171,11 @@ def test_worker_storage_requires_non_ephemeral_mount_and_a_different_process_boo
     # A nested overlay must win over its persistent ext4 parent mount.
     nested_data = data_dir
     mountinfo.write_text(
-        f"36 25 8:1 / {mounted} rw,relatime - ext4 /dev/vdb rw\\n"
-        f"37 36 0:42 / {nested_data} rw - overlay overlay rw\\n",
+        f"36 25 8:1 / {mounted} rw,relatime - ext4 /dev/vdb rw\n"
+        f"37 36 0:42 / {nested_data} rw - overlay overlay rw\n",
         encoding="utf-8",
     )
+    assert len(mountinfo.read_text(encoding="utf-8").splitlines()) == 2
     monkeypatch.setattr(worker, "WORKER_BOOT_ID", "worker-boot-three")
     monkeypatch.setattr(worker, "_STORAGE_RESTART_VERIFIED", False)
     overlay = worker._storage_state()
@@ -555,3 +557,41 @@ def test_creator_graph_reuses_persisted_remote_worker_job_after_app_restart(tmp_
     assert candidate["provider"] == production_graph.WAN_PROVIDER_ID
     assert candidate["storage_status"] == "primary_only"
     assert json.loads(candidate["storage_json"])["successful_providers"] == ["test-object-store"]
+
+
+def test_self_hosted_gpu_worker_container_is_pinned_and_single_process():
+    root = Path(__file__).resolve().parents[1]
+    dockerfile = (root / "Dockerfile.wan-worker").read_text(encoding="utf-8")
+    compose = (root / "compose.wan-worker.yml").read_text(encoding="utf-8")
+    env_example = (root / ".env.wan-worker.example").read_text(encoding="utf-8")
+
+    assert "nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04" in dockerfile
+    assert "WAN_SOURCE_REVISION=1ea34ff48f87168174e12956e200b1d908b1c5ff" in dockerfile
+    assert "torch==2.5.1" in dockerfile and "cu124" in dockerfile
+    assert "flash-attn --no-build-isolation" in dockerfile
+    assert '"--workers", "1"' in dockerfile
+    assert "wan-worker-state:/data/wan-worker" in compose
+    assert "wan-model-snapshot:/models" in compose
+    assert "127.0.0.1:" in compose
+    assert "count: 1" in compose and "capabilities: [gpu]" in compose
+    assert "AI_INFINITY_WAN_MODEL_TERMS_ACKNOWLEDGED: ${AI_INFINITY_WAN_MODEL_TERMS_ACKNOWLEDGED:-false}" in compose
+    assert "WAN_WORKER_PERSISTENT_STORAGE_CONFIRMED: ${WAN_WORKER_PERSISTENT_STORAGE_CONFIRMED:-false}" in compose
+    assert "REPLACE_WITH_A_LONG_RANDOM_SECRET" in env_example
+    assert "AI_INFINITY_WAN_MODEL_TERMS_ACKNOWLEDGED=false" in env_example
+
+
+def test_main_studio_opens_same_project_in_native_wan_candidate_graph():
+    root = Path(__file__).resolve().parents[1]
+    studio = (root / "creator_studio_2030.html").read_text(encoding="utf-8")
+    graph = (root / "production_graph.py").read_text(encoding="utf-8")
+
+    assert '<option value="900">15 min</option>' in studio
+    assert "function openProductionGraph()" in studio
+    assert 'window.open("/production"+suffix' in studio
+    assert 'onclick="openProductionGraph()"' in studio
+    assert "wanEnabled" in graph
+    assert "x.id==='wan2.2-ti2v-5b'" in graph
+    assert "Generate open-source Wan2.2 candidate (5s)" in graph
+    assert "limited to 2–5 seconds" in graph
+    assert "requestedProjectId" in graph
+    assert "Queued one open-source Wan2.2 candidate." in graph
