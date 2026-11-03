@@ -1598,7 +1598,18 @@ def _narration_word_count(chapters: List[Dict[str, Any]]) -> int:
     )
 
 
-def _required_narration_word_count(duration_seconds: Any, speaking_rate_wpm: Any = 125) -> int:
+
+
+def _narration_sentence_uniqueness_ratio(chapters: List[Dict[str, Any]]) -> float:
+    """Measure distinct spoken sentences; repeated padding cannot satisfy long-form runtime."""
+    rows = [
+        re.sub(r"\\s+", " ", sentence).strip().casefold()
+        for chapter in (chapters or []) if isinstance(chapter, dict)
+        for sentence in re.split(r"(?<=[.!?؟。؛۔])\\s+", str(chapter.get("narration") or ""))
+        if sentence.strip()
+    ]
+    return (len(set(rows)) / len(rows)) if rows else 0.0
+\ndef _required_narration_word_count(duration_seconds: Any, speaking_rate_wpm: Any = 125) -> int:
     """Calculate the minimum narration from the requested programme length and WPM."""
     try:
         duration = max(1, int(float(duration_seconds or 1)))
@@ -1805,18 +1816,21 @@ Use 5-18 chapters. Total durations should approximately equal the target. Narrat
                 if duration >= 120:
                     required_words = _required_narration_word_count(duration, speaking_rate_wpm)
                     best_words = _narration_word_count(clean["chapters"])
+                    best_unique_sentence_ratio = _narration_sentence_uniqueness_ratio(clean["chapters"])
                     repair_passes = 0
                     last_repair_error = None
 
-                    # Three bounded attempts allow a model to expand an underwritten
-                    # outline without accepting a merely longer but still incomplete
-                    # script. This is a real content gate, not a word-count relabel.
-                    while best_words < required_words and repair_passes < 3:
+                    # Three bounded attempts require both adequate spoken length
+                    # and non-repetitive narration. A first draft that reaches the
+                    # word count through repeated sentences is still underwritten.
+                    while (
+                        best_words < required_words or best_unique_sentence_ratio < 0.85
+                    ) and repair_passes < 3:
                         repair_passes += 1
-                        missing_words = required_words - best_words
+                        missing_words = max(0, required_words - best_words)
                         repair_prompt = f"""You are the lead documentary screenwriter finishing an underwritten long-form programme.
 The target runtime is {duration} seconds at {speaking_rate_wpm} spoken words per minute.
-The current script has {best_words} spoken words. The COMPLETE script must contain at least {required_words} spoken words; {missing_words} additional words are still required.
+The current script has {best_words} spoken words and a distinct-sentence ratio of {best_unique_sentence_ratio:.3f}. The COMPLETE script must contain at least {required_words} spoken words and a distinct-sentence ratio of at least 0.85. {missing_words} additional words are required if the current script is below the word minimum.
 Return a complete revised JSON blueprint with the same chapter schema. Expand the existing story with genuinely useful, distinct narration that explains the topic in depth. Keep the intended audience, language, tone, chapter sequence, and visual direction. Add concrete mechanisms, examples, counterpoints, limitations, transitions, and actionable takeaways where supported.
 Do not repeat sentences or paragraphs, pad with generic motivation, invent research, fabricate quotations, imply that illustrative material is observed fact, or claim product capabilities that are not demonstrated. For factual statements, use only the supplied research context and retain proof_needed for anything not supported.
 Aim for approximately {required_words + max(100, int(required_words * 0.08))} spoken words so normal editing does not make the delivered narration under-length.
@@ -1841,24 +1855,27 @@ EXISTING PLAN JSON:
                                 continue
                             repaired_chapters = repaired_chapters[:18]
                             repaired_words = _narration_word_count(repaired_chapters)
-                            # Reject duplicated padding and non-improving output. An
-                            # attempt only becomes the best candidate when it adds
-                            # genuinely new spoken material.
-                            sentence_rows = [
-                                re.sub(r"\s+", " ", row).strip().casefold()
-                                for chapter in repaired_chapters
-                                for row in re.split(r"(?<=[.!?؟。])\s+", str(chapter.get("narration") or ""))
-                                if row.strip()
-                            ]
-                            unique_sentence_ratio = (
-                                len(set(sentence_rows)) / len(sentence_rows) if sentence_rows else 0.0
+                            repaired_unique_sentence_ratio = _narration_sentence_uniqueness_ratio(repaired_chapters)
+                            # Reject duplicated padding and non-improving output.
+                            # If the first draft already meets the word target but
+                            # fails distinctness, allow a same-length rewrite only
+                            # when it meets both independent requirements.
+                            rewrite_only = (
+                                best_words >= required_words
+                                and best_unique_sentence_ratio < 0.85
+                                and repaired_words >= required_words
+                                and repaired_unique_sentence_ratio >= 0.85
                             )
-                            if repaired_words <= best_words or unique_sentence_ratio < 0.85:
+                            if (
+                                (repaired_words <= best_words and not rewrite_only)
+                                or repaired_unique_sentence_ratio < 0.85
+                            ):
                                 last_repair_error = "writer_repair_did_not_add_sufficient_distinct_narration"
                                 continue
                             clean = {**repaired_data, "chapters": repaired_chapters}
                             clean["speaking_rate_wpm"] = speaking_rate_wpm
                             best_words = repaired_words
+                            best_unique_sentence_ratio = repaired_unique_sentence_ratio
                             raw = repair_raw
                             provider = str(repair_raw.get("provider") or provider)
                         except Exception as repair_exc:
@@ -1866,13 +1883,15 @@ EXISTING PLAN JSON:
                             last_repair_error = type(repair_exc).__name__
 
                     clean["script_generation"] = {
-                        "status": "complete" if best_words >= required_words else "underwritten",
+                        "status": "complete" if best_words >= required_words and best_unique_sentence_ratio >= 0.85 else "underwritten",
                         "provider": provider,
                         "model_finish_reason": raw.get("finish_reason"),
                         "usage": raw.get("usage") if isinstance(raw.get("usage"), dict) else None,
                         "speaking_rate_wpm": speaking_rate_wpm,
                         "required_spoken_words": required_words,
                         "actual_spoken_words": best_words,
+                        "unique_sentence_ratio": round(best_unique_sentence_ratio, 4),
+                        "distinctness_passed": best_unique_sentence_ratio >= 0.85,
                         "repair_passes": repair_passes,
                         "last_repair_error": last_repair_error,
                         "truthful": True,
@@ -8952,8 +8971,9 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             speaking_rate_wpm = max(90, min(180, int(req.get("speaking_rate_wpm") or plan.get("speaking_rate_wpm") or 125)))
             required_spoken_words = _required_narration_word_count(req.get("duration"), speaking_rate_wpm)
             planned_spoken_words = _narration_word_count(chapters)
+            planned_unique_sentence_ratio = _narration_sentence_uniqueness_ratio(chapters)
             script_generation = plan.get("script_generation") if isinstance(plan.get("script_generation"), dict) else {}
-            if planned_spoken_words < required_spoken_words:
+            if planned_spoken_words < required_spoken_words or planned_unique_sentence_ratio < 0.85:
                 writer_provider = str(ai_provider or script_generation.get("provider") or "not_configured")
                 if writer_provider == "builtin-creative-engine":
                     writer_diagnostic = (
@@ -8962,13 +8982,14 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                     )
                 else:
                     writer_diagnostic = (
-                        f"The configured writer path '{writer_provider}' did not return a complete "
-                        "script after bounded repair attempts."
+                        f"The configured writer path '{writer_provider}' did not return a complete, "
+                        "non-repetitive script after bounded repair attempts."
                     )
                 raise RuntimeError(
                     "Long-form script preflight blocked before media generation: "
                     f"{planned_spoken_words} spoken words for {float(req.get('duration') or 0):.0f}s "
-                    f"at {speaking_rate_wpm} WPM; at least {required_spoken_words} are required. "
+                    f"at {speaking_rate_wpm} WPM; at least {required_spoken_words} are required; "
+                    f"distinct-sentence ratio is {planned_unique_sentence_ratio:.3f} (minimum 0.850). "
                     + writer_diagnostic
                     + " The system will not pad a short script across a long timeline."
                 )
