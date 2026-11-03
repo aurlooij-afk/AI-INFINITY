@@ -56,6 +56,14 @@ services:
         value: "false"
       - key: AI_INFINITY_GEMINI_FREE_TIER_MODEL
         value: "gemini-3.1-flash-lite"
+      # Optional Hugging Face Inference Providers writer. Free accounts have a small,
+      # quota-limited allowance; never treat it as guaranteed long-form capacity.
+      - key: HF_TOKEN
+        sync: false
+      - key: AI_INFINITY_TEXT_MODEL
+        value: "Qwen/Qwen2.5-7B-Instruct-1M"
+      - key: AI_INFINITY_HF_PROVIDER
+        value: "auto"
       - key: AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK
         value: "false"
       - key: OPENAI_API_KEY
@@ -94,3 +102,24 @@ services:
       # Set BACKBLAZE_B2_REGION explicitly only when intentionally overriding it.
       - key: B2_REGION
         value: ""
+      # Optional Supabase Storage REST adapter for real media-artifact persistence.
+      # Keep the bucket private and keep the service-role key server-side only.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      # Project-state SQLite snapshots use Supabase's generated S3 credentials,
+      # not the service-role JWT above. Set AI_INFINITY_PROJECT_STATE_BACKEND=supabase_s3
+      # only after configuring this endpoint, bucket, generated S3 keys, and region.
+      - key: SUPABASE_S3_ENDPOINT
+        sync: false
+      - key: SUPABASE_S3_BUCKET
+        sync: false
+      - key: SUPABASE_S3_ACCESS_KEY_ID
+        sync: false
+      - key: SUPABASE_S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: SUPABASE_S3_REGION
+        sync: false
