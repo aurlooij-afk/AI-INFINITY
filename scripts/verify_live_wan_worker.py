@@ -79,6 +79,7 @@ def _check_capabilities(value: dict[str, Any]) -> None:
         "execution_ready": value.get("execution_ready") is True,
         "provider": value.get("provider") == PROVIDER_ID,
         "model_id": model.get("model_id") == MODEL_ID,
+        "model_revision": re.fullmatch(r"[0-9a-f]{40}", str(model.get("revision") or "")) is not None,
         "model_verified": model.get("verified") is True,
         "model_license": model.get("license") == LICENSE_ID and model.get("license_verified") is True,
         "model_terms": model.get("terms_acknowledged") is True,
@@ -234,6 +235,15 @@ def main() -> int:
             duration = float((probed.get("format") or {}).get("duration") or 0)
             if not 1.8 <= duration <= 2.6:
                 raise RuntimeError(f"Wan output duration is outside the two-second smoke tolerance: {duration:.3f}s")
+            if str(video.get("codec_name") or "").lower() != "h264":
+                raise RuntimeError("Wan smoke artifact is not H.264 video")
+            try:
+                from fractions import Fraction
+                fps = float(Fraction(str(video.get("avg_frame_rate") or "0/1")))
+            except Exception:
+                fps = 0.0
+            if abs(fps - 24.0) > 0.05:
+                raise RuntimeError(f"Wan output frame rate is not 24fps: {fps:.3f}")
             decode = subprocess.run(
                 ["ffmpeg", "-v", "error", "-xerror", "-i", str(media), "-f", "null", "-"],
                 capture_output=True, text=True, timeout=300, check=False,
@@ -254,6 +264,8 @@ def main() -> int:
             "job_id": job_id,
             "duration_seconds": duration,
             "resolution": [1280, 720],
+            "fps": 24.0,
+            "video_codec": "h264",
             "full_decode": "PASS",
             "artifact_size_bytes": expected_size,
             "artifact_sha256": expected_sha,
