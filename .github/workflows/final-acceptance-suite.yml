@@ -154,6 +154,18 @@ jobs:
           print("ACCEPTANCE_SCENARIOS_COMPLETED=" + str(result.get("completed_scenarios")))
           PY
           exit "$suite_status"
+      - name: Write candidate-bound production certificate
+        if: always()
+        run: |
+          python scripts/create_production_certificate.py \
+            --candidate-sha "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --acceptance final-acceptance-result.json \
+            --storage acceptance-evidence/b2-storage-verification.json \
+            --inference acceptance-evidence/wan-live-inference-verification.json \
+            --deployment acceptance-evidence/live-deployment-verification.json \
+            --human-approval acceptance-evidence/human-creative-approval.json \
+            --output production-certificate.json
+
       - name: Upload acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -161,6 +173,7 @@ jobs:
           name: ai-infinity-final-acceptance-evidence
           path: |
             final-acceptance-result.json
+            production-certificate.json
             acceptance-evidence/**
           if-no-files-found: warn
 
