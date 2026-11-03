@@ -506,3 +506,24 @@ def test_qc_review_filter_accepts_three_digit_scene_master_names(tmp_path: Path)
 
     assert reviewed is source
     assert reviewed["scenes"][0]["source_asset"] == "scene_100.mp4"
+
+
+def test_professional_concat_manifest_uses_physical_newlines_for_each_segment(tmp_path: Path) -> None:
+    import professional_creator_v2 as base
+
+    segments = [
+        tmp_path / "scene 01.mp4",
+        tmp_path / "scene '02'.mp4",
+    ]
+    for segment in segments:
+        segment.write_bytes(b"encoded-segment")
+
+    manifest = base._concat_manifest_text(segments)
+    lines = manifest.splitlines()
+
+    assert len(lines) == 2
+    assert all(line.startswith("file '") and line.endswith("'") for line in lines)
+    assert lines[0].endswith("scene 01.mp4'")
+    assert "scene '\\\\''02.mp4'" in lines[1]
+    assert manifest.count("\\n") == 2
+    assert "mp4nfile" not in manifest
