@@ -376,7 +376,7 @@ def test_runway_candidate_worker_requires_verified_storage_before_marking_ready(
             "SELECT status,asset_path,storage_status,storage_json FROM pg_candidates WHERE candidate_id=?",
             (candidate_id,),
         ).fetchone()
-        job = conn.execute("SELECT status,result_json FROM pg_jobs WHERE job_id=?", (job_id,)).fetchone()
+        job = conn.execute("SELECT status,result_json,error FROM pg_jobs WHERE job_id=?", (job_id,)).fetchone()
 
     assert len(saved) == 1
     assert saved[0][1] == "candidate"
