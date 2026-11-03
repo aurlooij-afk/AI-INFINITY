@@ -133,12 +133,38 @@ def _b2_env(monkeypatch):
         "BACKBLAZE_B2_KEY_ID",
         "BACKBLAZE_B2_APPLICATION_KEY",
         "BACKBLAZE_B2_REGION",
+        "SUPABASE_S3_ENDPOINT",
+        "SUPABASE_S3_BUCKET",
+        "SUPABASE_S3_ACCESS_KEY_ID",
+        "SUPABASE_S3_SECRET_ACCESS_KEY",
+        "SUPABASE_S3_REGION",
+        "SUPABASE_STORAGE_BUCKET",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("B2_BUCKET", "unit-test-bucket")
     monkeypatch.setenv("B2_ENDPOINT", "https://b2.invalid")
     monkeypatch.setenv("B2_KEY_ID", "test-key-id")
     monkeypatch.setenv("B2_APPLICATION_KEY", "test-key-secret")
+
+
+def _supabase_s3_env(monkeypatch):
+    monkeypatch.setenv("AI_INFINITY_PERSISTENCE_MODE", "durable")
+    monkeypatch.setenv("AI_INFINITY_PROJECT_STATE_DURABLE", "true")
+    monkeypatch.setenv("AI_INFINITY_PROJECT_STATE_BACKEND", "supabase_s3")
+    for key in (
+        "BACKBLAZE_B2_ENDPOINT", "BACKBLAZE_B2_BUCKET", "BACKBLAZE_B2_KEY_ID",
+        "BACKBLAZE_B2_APPLICATION_KEY", "BACKBLAZE_B2_REGION",
+        "B2_ENDPOINT", "B2_BUCKET", "B2_KEY_ID", "B2_APPLICATION_KEY", "B2_REGION",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv(
+        "SUPABASE_S3_ENDPOINT",
+        "https://project-ref.storage.supabase.co/storage/v1/s3",
+    )
+    monkeypatch.setenv("SUPABASE_S3_BUCKET", "ai-infinity-private")
+    monkeypatch.setenv("SUPABASE_S3_ACCESS_KEY_ID", "supabase-s3-access")
+    monkeypatch.setenv("SUPABASE_S3_SECRET_ACCESS_KEY", "supabase-s3-secret")
+    monkeypatch.setenv("SUPABASE_S3_REGION", "us-east-1")
 
 
 
@@ -751,3 +777,57 @@ def test_live_storage_verifier_reports_blocked_without_credentials(monkeypatch, 
     assert result["fresh_process_restore"] == "not_attempted"
     assert result["truthful"] is True
     assert "B2" not in result.get("error", "")
+
+
+def test_supabase_s3_project_state_backend_uses_generated_s3_credentials_and_region(monkeypatch):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _supabase_s3_env(monkeypatch)
+
+    cfg = backend._cfg()
+
+    assert cfg["backend"] == "supabase_s3"
+    assert cfg["endpoint"] == "https://project-ref.storage.supabase.co/storage/v1/s3"
+    assert cfg["bucket"] == "ai-infinity-private"
+    assert cfg["access"] == "supabase-s3-access"
+    assert cfg["secret"] == "supabase-s3-secret"
+    assert cfg["region"] == "us-east-1"
+    assert backend.configured() is True
+    assert backend.contract_enabled() is True
+
+
+def test_supabase_s3_project_state_requires_explicit_region(monkeypatch):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _supabase_s3_env(monkeypatch)
+    monkeypatch.delenv("SUPABASE_S3_REGION", raising=False)
+
+    assert backend._cfg()["endpoint"].endswith("/storage/v1/s3")
+    assert backend.configured() is False
+    assert backend.contract_enabled() is True
+    assert backend.ready() is False
+
+
+def test_supabase_s3_client_uses_path_style_addressing(monkeypatch):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _supabase_s3_env(monkeypatch)
+    captured = {}
+
+    class FakeConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeBoto3:
+        @staticmethod
+        def client(service, **kwargs):
+            captured["service"] = service
+            captured.update(kwargs)
+            return object()
+
+    monkeypatch.setattr(backend, "BotoConfig", FakeConfig)
+    monkeypatch.setattr(backend, "boto3", FakeBoto3)
+
+    backend._client()
+
+    assert captured["service"] == "s3"
+    assert captured["endpoint_url"] == "https://project-ref.storage.supabase.co/storage/v1/s3"
+    assert captured["region_name"] == "us-east-1"
+    assert captured["config"].kwargs["s3"] == {"addressing_style": "path"}
