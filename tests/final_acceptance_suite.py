@@ -716,11 +716,45 @@ def t4(s,b):
     assert imported.get("status")=="imported" and imported.get("truthful") is True,imported
     assert imported.get("render_required") is True and imported.get("truth_verified") is False,imported
     assert imported.get("human_review_status")=="PENDING",imported
-    assert any(row.get("enabled") is True for row in (imported.get("timeline") or {}).get("scenes") or []),imported
+    imported_timeline=imported.get("timeline") or {}
+    assert any(row.get("enabled") is True for row in imported_timeline.get("scenes") or []),imported
+
+    # Import is not the end of OTIO verification. Submit the imported editable
+    # timeline to the canonical render endpoint and independently inspect the
+    # new master. This must produce real bytes, not just a saved timeline row.
+    rerender_response=s.post(
+        b+f"/infinity/pro2/project/{quote(pid,safe='')}/timeline/render",
+        json=imported_timeline,
+        timeout=900,
+    )
+    assert rerender_response.status_code==200,(rerender_response.status_code,rerender_response.text[:3000])
+    rerender=rerender_response.json()
+    assert rerender.get("project_id")==pid and rerender.get("truthful") is True,rerender
+    assert rerender.get("status") in {"completed","completed_with_qc_review"},rerender
+    assert isinstance(rerender.get("quality"),dict),rerender
+
+    rerender_master=Path(os.environ.get("AI_INFINITY_DATA_DIR","/tmp"))/"creator_studio"/pid/"final.mp4"
+    assert rerender_master.is_file() and rerender_master.stat().st_size>10000,rerender_master
+    rerender_probe=probe(rerender_master)
+    rerender_duration=float((rerender_probe.get("format") or {}).get("duration") or 0)
+    assert 18.5<=rerender_duration<=21.5,rerender_probe
+    rerender_video=next((x for x in rerender_probe.get("streams",[]) if x.get("codec_type")=="video"),{})
+    assert (int(rerender_video.get("width") or 0),int(rerender_video.get("height") or 0))==(1280,720),rerender_probe
+    rerender_decode=subprocess.run(
+        ["ffmpeg","-v","error","-xerror","-i",str(rerender_master),"-f","null","-"],
+        capture_output=True,text=True,timeout=300,
+    )
+    assert rerender_decode.returncode==0,rerender_decode.stderr[-3000:]
+    rerender_sha256=sha(rerender_master)
     return {
         "test":4,"project_id":pid,"reference_url":PYURL,
         "otio_routes_passed":True,"otio_scene_count":export["scene_count"],
         "otio_bundle_bytes":bundle_path.stat().st_size,"otio_manifest_hashes_verified":True,
+        "otio_import_rerender_passed":True,
+        "otio_rerender_duration_seconds":rerender_duration,
+        "otio_rerender_resolution":[1280,720],
+        "otio_rerender_full_decode_passed":True,
+        "otio_rerender_sha256":rerender_sha256,
         "otio_import_requires_rerender_and_human_review":True,
     }
 def t5():
