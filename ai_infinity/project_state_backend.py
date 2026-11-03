@@ -75,12 +75,34 @@ def _flag(name: str, default: str = "false") -> bool:
     return os.getenv(name, default).strip().lower() in TRUE
 
 
+def selected_backend() -> str:
+    raw = os.getenv("AI_INFINITY_PROJECT_STATE_BACKEND", "backblaze_b2").strip().lower()
+    if raw in {"b2", "backblaze", "backblaze_b2"}:
+        return "backblaze_b2"
+    if raw in {"supabase", "supabase_s3"}:
+        return "supabase_s3"
+    return raw
+
+
 def _cfg() -> Dict[str, str]:
-    # Use the same variable precedence as ai3704_storage_fabric. Deployments
-    # commonly configure BACKBLAZE_B2_* for artifact storage and the legacy
-    # B2_* aliases for older integrations; using a different key pair here can
-    # make media durability work while project-state snapshots fail (for
-    # example, HeadObject 403 from a restricted legacy key).
+    backend = selected_backend()
+    if backend == "supabase_s3":
+        # Supabase's documented S3 endpoint requires the generated server-side
+        # S3 access-key pair, the project region, and path-style addressing.
+        # The service-role JWT used by the REST artifact adapter is not an S3 key.
+        return {
+            "backend": backend,
+            "endpoint": os.getenv("SUPABASE_S3_ENDPOINT", "").strip(),
+            "bucket": (
+                os.getenv("SUPABASE_S3_BUCKET", "").strip()
+                or os.getenv("SUPABASE_STORAGE_BUCKET", "").strip()
+            ),
+            "access": os.getenv("SUPABASE_S3_ACCESS_KEY_ID", "").strip(),
+            "secret": os.getenv("SUPABASE_S3_SECRET_ACCESS_KEY", "").strip(),
+            "region": os.getenv("SUPABASE_S3_REGION", "").strip(),
+        }
+
+    # B2 remains the default and retains its shared credential precedence.
     endpoint = (
         os.getenv("BACKBLAZE_B2_ENDPOINT", "").strip()
         or os.getenv("B2_ENDPOINT", "").strip()
@@ -91,11 +113,7 @@ def _cfg() -> Dict[str, str]:
     )
     if not endpoint and region:
         endpoint = f"https://s3.{region}.backblazeb2.com"
-    # B2 endpoints encode the bucket's S3 signing region. When an operator has
-    # configured an endpoint but omitted both region aliases, the historical
-    # us-west-004 fallback can sign requests for the wrong region (B2 may reject
-    # HEAD/GET with 403 even though credentials and bucket are otherwise valid).
-    # Explicit region configuration remains authoritative.
+    # B2 endpoints encode their signing region; infer it when omitted.
     if not region and endpoint:
         try:
             hostname = (urlsplit(endpoint).hostname or "").lower()
@@ -105,6 +123,7 @@ def _cfg() -> Dict[str, str]:
         if match:
             region = match.group(1)
     return {
+        "backend": "backblaze_b2",
         "endpoint": endpoint,
         "bucket": (
             os.getenv("BACKBLAZE_B2_BUCKET", "").strip()
@@ -124,22 +143,17 @@ def _cfg() -> Dict[str, str]:
 
 def configured() -> bool:
     cfg = _cfg()
-    return bool(
-        boto3 is not None
-        and BotoConfig is not None
-        and cfg["endpoint"]
-        and cfg["bucket"]
-        and cfg["access"]
-        and cfg["secret"]
-    )
+    required = all((cfg["endpoint"], cfg["bucket"], cfg["access"], cfg["secret"]))
+    if cfg["backend"] == "supabase_s3":
+        required = required and bool(cfg["region"])
+    return bool(boto3 is not None and BotoConfig is not None and required)
 
 
 def contract_enabled() -> bool:
     return (
         os.getenv("AI_INFINITY_PERSISTENCE_MODE", "volatile").strip().lower() == "durable"
         and _flag("AI_INFINITY_PROJECT_STATE_DURABLE")
-        and os.getenv("AI_INFINITY_PROJECT_STATE_BACKEND", "backblaze_b2").strip().lower()
-        in {"backblaze_b2", "b2"}
+        and selected_backend() in {"backblaze_b2", "supabase_s3"}
     )
 
 
@@ -169,20 +183,24 @@ def object_key() -> str:
 
 def _client():
     if not configured():
-        raise RuntimeError("Backblaze B2 project-state backend is not configured")
+        raise RuntimeError("selected project-state object-store backend is not configured")
     cfg = _cfg()
+    options = {
+        "signature_version": "s3v4",
+        "connect_timeout": 8,
+        "read_timeout": 15,
+        "retries": {"max_attempts": 3, "mode": "standard"},
+    }
+    if cfg["backend"] == "supabase_s3":
+        # Supabase documents path-style S3 endpoints for generated S3 keys.
+        options["s3"] = {"addressing_style": "path"}
     return boto3.client(
         "s3",
         endpoint_url=cfg["endpoint"],
         region_name=cfg["region"],
         aws_access_key_id=cfg["access"],
         aws_secret_access_key=cfg["secret"],
-        config=BotoConfig(
-            signature_version="s3v4",
-            connect_timeout=8,
-            read_timeout=15,
-            retries={"max_attempts": 3, "mode": "standard"},
-        ),
+        config=BotoConfig(**options),
     )
 
 
@@ -320,7 +338,7 @@ def configure(db_path: Path | str) -> Dict[str, Any]:
                 "active": bool(contract_enabled() and configured()),
                 "verified": False,
                 "snapshot_verified": False,
-                "backend": "backblaze_b2" if contract_enabled() else None,
+                "backend": selected_backend() if contract_enabled() else None,
                 "last_sync_at": None,
                 "last_sha256": None,
                 "last_error": None,
@@ -558,13 +576,13 @@ def snapshot_now() -> Dict[str, Any]:
 
             head = _head()
             if not head or int(head.get("size_bytes") or -1) != size:
-                raise RuntimeError("B2 project-state snapshot size verification failed")
+                raise RuntimeError("project-state snapshot size verification failed")
             if str(head.get("sha256") or "") != digest:
-                raise RuntimeError("B2 project-state snapshot SHA-256 metadata verification failed")
+                raise RuntimeError("project-state snapshot SHA-256 metadata verification failed")
 
             body = client.get_object(Bucket=_cfg()["bucket"], Key=object_key()).get("Body")
             if body is None:
-                raise RuntimeError("B2 project-state snapshot read-back returned no body")
+                raise RuntimeError("project-state snapshot read-back returned no body")
             remote_hash = hashlib.sha256()
             remote_size = 0
             try:
@@ -697,7 +715,7 @@ def status() -> Dict[str, Any]:
     out.update(
         {
             "snapshot_verified": bool(out.get("snapshot_verified")),
-            "backend": "backblaze_b2" if enabled else None,
+            "backend": selected_backend() if enabled else None,
             "object_key": object_key() if enabled else None,
             "contract_enabled": enabled,
             "truthful": True,
