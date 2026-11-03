@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Verify a real B2 project-state round-trip and fresh-process restore.
+"""Verify a real object-store project-state round-trip and fresh-process restore.
 
 This script uses a unique object key below the configured project-state key
 prefix. It never overwrites the live project-state snapshot. Missing credentials
@@ -29,25 +29,51 @@ def _emit(result: Dict[str, Any], output: Path | None) -> None:
     print("PROJECT_STATE_STORAGE_RESULT=" + json.dumps(result, ensure_ascii=False, sort_keys=True))
 
 
+def _selected_backend() -> str:
+    raw = os.getenv("AI_INFINITY_PROJECT_STATE_BACKEND", "backblaze_b2").strip().lower()
+    if raw in {"b2", "backblaze", "backblaze_b2"}:
+        return "backblaze_b2"
+    if raw in {"supabase", "supabase_s3"}:
+        return "supabase_s3"
+    return raw
+
+
 def _missing_credentials() -> list[str]:
-    endpoint_configured = any(
-        os.getenv(name, "").strip()
-        for name in ("BACKBLAZE_B2_ENDPOINT", "B2_ENDPOINT")
-    )
-    region_configured = any(
-        os.getenv(name, "").strip()
-        for name in ("BACKBLAZE_B2_REGION", "B2_REGION")
-    )
     missing = []
-    if not endpoint_configured and not region_configured:
-        missing.append("endpoint_or_region")
-    for names, label in (
+    backend = _selected_backend()
+    if backend == "supabase_s3":
+        required = (
+            ("SUPABASE_S3_ENDPOINT", "endpoint"),
+            ("SUPABASE_S3_BUCKET", "bucket"),
+            ("SUPABASE_S3_ACCESS_KEY_ID", "access_key_id"),
+            ("SUPABASE_S3_SECRET_ACCESS_KEY", "secret_access_key"),
+            ("SUPABASE_S3_REGION", "region"),
+        )
+        for name, label in required:
+            if not os.getenv(name, "").strip():
+                # The shared artifact bucket is an allowed fallback for the snapshot bucket.
+                if name == "SUPABASE_S3_BUCKET" and os.getenv("SUPABASE_STORAGE_BUCKET", "").strip():
+                    continue
+                missing.append(label)
+        return missing
+
+    required = (
+        (("BACKBLAZE_B2_ENDPOINT", "B2_ENDPOINT"), "endpoint"),
         (("BACKBLAZE_B2_BUCKET", "B2_BUCKET"), "bucket"),
         (("BACKBLAZE_B2_KEY_ID", "B2_KEY_ID"), "key_id"),
         (("BACKBLAZE_B2_APPLICATION_KEY", "B2_APPLICATION_KEY"), "application_key"),
-    ):
+    )
+    endpoint_or_region = any(
+        os.getenv(name, "").strip()
+        for name in ("BACKBLAZE_B2_ENDPOINT", "B2_ENDPOINT", "BACKBLAZE_B2_REGION", "B2_REGION")
+    )
+    for names, label in required:
         if not any(os.getenv(name, "").strip() for name in names):
+            if label == "endpoint" and endpoint_or_region:
+                continue
             missing.append(label)
+    if backend != "backblaze_b2":
+        missing.insert(0, "unsupported_backend")
     return missing
 
 
@@ -95,7 +121,7 @@ print(json.dumps({
     )
     if completed.returncode != 0:
         message = (completed.stderr or completed.stdout or "fresh-process restore failed")[-1600:]
-        raise RuntimeError("fresh-process restore failed: " + " ".join(message.split()))
+        raise RuntimeError(fresh-process restore failed:  + " ".join(message.split()))
     rows = [line for line in (completed.stdout or "").splitlines() if line.strip().startswith("{")]
     if not rows:
         raise RuntimeError("fresh-process restore returned no structured evidence")
@@ -114,7 +140,7 @@ def main() -> int:
     if missing:
         _emit({
             "status": "BLOCKED",
-            "reason": "required B2 credentials are not configured in this execution environment",
+            "reason": "required credentials for the selected object-store backend are not configured in this execution environment",
             "missing_configuration": missing,
             "round_trip": "not_attempted",
             "fresh_process_restore": "not_attempted",
@@ -124,7 +150,7 @@ def main() -> int:
 
     os.environ["AI_INFINITY_PERSISTENCE_MODE"] = "durable"
     os.environ["AI_INFINITY_PROJECT_STATE_DURABLE"] = "true"
-    os.environ["AI_INFINITY_PROJECT_STATE_BACKEND"] = "backblaze_b2"
+    os.environ["AI_INFINITY_PROJECT_STATE_BACKEND"] = _selected_backend()
     os.environ.setdefault("B2_REGION", "")
 
     from ai_infinity import project_state_backend as backend
@@ -152,7 +178,7 @@ def main() -> int:
         try:
             state = backend.configure(source_db)
             if state.get("active") is not True or state.get("verified") is not True:
-                raise RuntimeError("B2 canary PUT/HEAD/GET/SHA did not verify: " + str(state.get("last_error") or state.get("last_restore", {}).get("reason")))
+                raise RuntimeError(object-store canary PUT/HEAD/GET/SHA did not verify:  + str(state.get("last_error") or state.get("last_restore", {}).get("reason")))
 
             with sqlite3.connect(source_db) as con:
                 con.execute(
@@ -166,7 +192,7 @@ def main() -> int:
 
             snapshot = backend.snapshot_now()
             if snapshot.get("status") != "verified":
-                raise RuntimeError("B2 project-state snapshot PUT/HEAD/GET/SHA failed: " + str(snapshot.get("error") or snapshot.get("status")))
+                raise RuntimeError(object-store project-state snapshot PUT/HEAD/GET/SHA failed:  + str(snapshot.get("error") or snapshot.get("status")))
 
             # Independently compare the object-store body bytes, ContentLength,
             # and SHA-256 metadata to the exact snapshot produced by the adapter.
@@ -174,7 +200,7 @@ def main() -> int:
             head = client.head_object(Bucket=backend._cfg()["bucket"], Key=verification_key)
             body = client.get_object(Bucket=backend._cfg()["bucket"], Key=verification_key).get("Body")
             if body is None:
-                raise RuntimeError("B2 snapshot GET returned no body")
+                raise RuntimeError("object-store snapshot GET returned no body")
             try:
                 remote_bytes = body.read()
             finally:
@@ -188,7 +214,7 @@ def main() -> int:
                 or remote_sha256 != expected_sha256
                 or str((head.get("Metadata") or {}).get("ai-infinity-sha256") or "") != expected_sha256
             ):
-                raise RuntimeError("independent B2 snapshot read-back did not match size and SHA-256")
+                raise RuntimeError("independent object-store snapshot read-back did not match size and SHA-256")
 
             os.environ["AI_INFINITY_STORAGE_VERIFY_MARKER"] = marker
             os.environ["AI_INFINITY_STORAGE_VERIFY_PAYLOAD_SHA256"] = payload_sha256
@@ -196,7 +222,7 @@ def main() -> int:
 
             result = {
                 "status": "PASS",
-                "backend": "backblaze_b2",
+                "backend": _selected_backend(),
                 "canary": "PUT_HEAD_GET_SHA_PASS",
                 "snapshot": "PUT_HEAD_GET_SHA_PASS",
                 "fresh_process_restore": "PASS",
@@ -213,7 +239,7 @@ def main() -> int:
         except Exception as exc:
             result = {
                 "status": "FAIL",
-                "backend": "backblaze_b2",
+                "backend": _selected_backend(),
                 "error_type": type(exc).__name__,
                 "error": backend._safe_error_text(exc, 700),
                 "object_key": verification_key,
