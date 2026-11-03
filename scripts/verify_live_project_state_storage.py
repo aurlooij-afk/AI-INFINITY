@@ -209,10 +209,15 @@ def main() -> int:
                     close()
             remote_sha256 = hashlib.sha256(remote_bytes).hexdigest()
             expected_sha256 = str(snapshot.get("sha256") or "")
+            metadata_sha256 = str((head.get("Metadata") or {}).get("ai-infinity-sha256") or "")
+            metadata_mismatch = (
+                _selected_backend() != "supabase_s3"
+                and metadata_sha256 != expected_sha256
+            )
             if (
                 len(remote_bytes) != int(head.get("ContentLength") or -1)
                 or remote_sha256 != expected_sha256
-                or str((head.get("Metadata") or {}).get("ai-infinity-sha256") or "") != expected_sha256
+                or metadata_mismatch
             ):
                 raise RuntimeError("independent object-store snapshot read-back did not match size and SHA-256")
 
@@ -251,10 +256,13 @@ def main() -> int:
         finally:
             # The key is unique to this run and never aliases the live snapshot.
             try:
-                backend._client().delete_object(
-                    Bucket=backend._cfg()["bucket"],
-                    Key=verification_key,
-                )
+                client = backend._client()
+                client.delete_object(Bucket=backend._cfg()["bucket"], Key=verification_key)
+                if _selected_backend() == "supabase_s3":
+                    client.delete_object(
+                        Bucket=backend._cfg()["bucket"],
+                        Key=verification_key + ".manifest.json",
+                    )
             except Exception:
                 pass
 
