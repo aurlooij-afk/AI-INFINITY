@@ -218,11 +218,84 @@ def _is_missing_object_error(exc: BaseException) -> bool:
 
 
 
+def _manifest_key(key: Optional[str] = None) -> str:
+    return (key or object_key()) + ".manifest.json"
+
+
+def _read_snapshot_manifest(client, key: Optional[str] = None) -> Dict[str, Any]:
+    response = client.get_object(Bucket=_cfg()["bucket"], Key=_manifest_key(key))
+    body = response.get("Body")
+    if body is None:
+        raise RuntimeError("project-state snapshot manifest returned no body")
+    try:
+        raw = body.read()
+    finally:
+        close = getattr(body, "close", None)
+        if callable(close):
+            close()
+    try:
+        manifest = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError("project-state snapshot manifest is invalid JSON") from exc
+    if not isinstance(manifest, dict):
+        raise RuntimeError("project-state snapshot manifest is not an object")
+    digest = str(manifest.get("sha256") or "")
+    size = int(manifest.get("size_bytes") or 0)
+    if not re.fullmatch(r"[0-9a-f]{64}", digest) or size <= 0:
+        raise RuntimeError("project-state snapshot manifest has invalid size or SHA-256")
+    return manifest
+
+
+def _write_snapshot_manifest(client, size_bytes: int, sha256: str, snapshot_at: str) -> None:
+    payload = json.dumps(
+        {
+            "schema": "ai-infinity-project-state-snapshot-v1",
+            "object_key": object_key(),
+            "size_bytes": int(size_bytes),
+            "sha256": str(sha256),
+            "snapshot_at": str(snapshot_at),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    key = _manifest_key()
+    client.put_object(
+        Bucket=_cfg()["bucket"],
+        Key=key,
+        Body=payload,
+        ContentType="application/json",
+    )
+    response = client.get_object(Bucket=_cfg()["bucket"], Key=key)
+    body = response.get("Body")
+    if body is None:
+        raise RuntimeError("project-state snapshot manifest read-back returned no body")
+    try:
+        actual = body.read()
+    finally:
+        close = getattr(body, "close", None)
+        if callable(close):
+            close()
+    if actual != payload or hashlib.sha256(actual).hexdigest() != hashlib.sha256(payload).hexdigest():
+        raise RuntimeError("project-state snapshot manifest read-back integrity check failed")
+
+
 def _head(key: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    h = _client().head_object(Bucket=_cfg()["bucket"], Key=key or object_key())
+    cfg = _cfg()
+    target_key = key or object_key()
+    h = _client().head_object(Bucket=cfg["bucket"], Key=target_key)
+    size = int(h.get("ContentLength") or 0)
+    if cfg["backend"] == "supabase_s3":
+        manifest = _read_snapshot_manifest(_client(), target_key)
+        if int(manifest.get("size_bytes") or -1) != size:
+            raise RuntimeError("project-state snapshot manifest size does not match the object")
+        return {
+            "size_bytes": size,
+            "sha256": str(manifest["sha256"]),
+            "snapshot_at": str(manifest.get("snapshot_at") or ""),
+        }
     metadata = h.get("Metadata") or {}
     return {
-        "size_bytes": int(h.get("ContentLength") or 0),
+        "size_bytes": size,
         "sha256": str(metadata.get("ai-infinity-sha256") or ""),
         "snapshot_at": str(metadata.get("ai-infinity-snapshot-at") or ""),
     }
@@ -251,13 +324,15 @@ def _verify_roundtrip() -> bool:
     digest = hashlib.sha256(payload).hexdigest()
     client = _client()
     try:
-        client.put_object(
-            Bucket=cfg["bucket"],
-            Key=key,
-            Body=payload,
-            ContentType="text/plain",
-            Metadata={"ai-infinity-canary": "v1", "ai-infinity-sha256": digest},
-        )
+        put_args = {
+            "Bucket": cfg["bucket"],
+            "Key": key,
+            "Body": payload,
+            "ContentType": "text/plain",
+        }
+        if cfg["backend"] != "supabase_s3":
+            put_args["Metadata"] = {"ai-infinity-canary": "v1", "ai-infinity-sha256": digest}
+        client.put_object(**put_args)
         head = client.head_object(Bucket=cfg["bucket"], Key=key)
         body = client.get_object(Bucket=cfg["bucket"], Key=key).get("Body")
         if body is None:
@@ -269,11 +344,15 @@ def _verify_roundtrip() -> bool:
             if callable(close):
                 close()
         metadata = head.get("Metadata") or {}
+        metadata_matches = (
+            cfg["backend"] == "supabase_s3"
+            or str(metadata.get("ai-infinity-sha256") or "") == digest
+        )
         return bool(
             int(head.get("ContentLength") or -1) == len(payload)
             and actual == payload
             and hashlib.sha256(actual).hexdigest() == digest
-            and str(metadata.get("ai-infinity-sha256") or "") == digest
+            and metadata_matches
         )
     finally:
         try:
@@ -369,7 +448,7 @@ def configure(db_path: Path | str) -> Dict[str, Any]:
             verified = bool(_verify_roundtrip())
             if verified:
                 break
-            last_error = "B2 canary verification failed"
+            last_error = "object-store canary verification failed"
         except Exception as exc:
             last_error = _describe_storage_error(exc)
         if attempt + 1 < _MAX_CANARY_VERIFY_ATTEMPTS:
@@ -379,7 +458,7 @@ def configure(db_path: Path | str) -> Dict[str, Any]:
         _STATUS["verified"] = verified
         _STATUS["active"] = verified
         if not verified:
-            _STATUS["last_error"] = last_error or "B2 canary verification failed"
+            _STATUS["last_error"] = last_error or "object-store canary verification failed"
 
     if not verified:
         # Do not claim persistence or restore from an unverified backend.
@@ -561,24 +640,32 @@ def snapshot_now() -> Dict[str, Any]:
             digest = _sha256_path(tmp)
             stamp = str(time.time())
             client = _client()
+            put_args = {
+                "Bucket": _cfg()["bucket"],
+                "Key": object_key(),
+                "Body": None,
+                "ContentType": "application/x-sqlite3",
+            }
+            if _cfg()["backend"] != "supabase_s3":
+                put_args["Metadata"] = {
+                    "ai-infinity-sha256": digest,
+                    "ai-infinity-snapshot-at": stamp,
+                    "ai-infinity-schema": "studio-state-v1",
+                }
             with tmp.open("rb") as stream:
-                client.put_object(
-                    Bucket=_cfg()["bucket"],
-                    Key=object_key(),
-                    Body=stream,
-                    ContentType="application/x-sqlite3",
-                    Metadata={
-                        "ai-infinity-sha256": digest,
-                        "ai-infinity-snapshot-at": stamp,
-                        "ai-infinity-schema": "studio-state-v1",
-                    },
-                )
+                put_args["Body"] = stream
+                client.put_object(**put_args)
 
-            head = _head()
-            if not head or int(head.get("size_bytes") or -1) != size:
-                raise RuntimeError("project-state snapshot size verification failed")
-            if str(head.get("sha256") or "") != digest:
-                raise RuntimeError("project-state snapshot SHA-256 metadata verification failed")
+            if _cfg()["backend"] == "supabase_s3":
+                head_response = client.head_object(Bucket=_cfg()["bucket"], Key=object_key())
+                if int(head_response.get("ContentLength") or -1) != size:
+                    raise RuntimeError("project-state snapshot size verification failed")
+            else:
+                head = _head()
+                if not head or int(head.get("size_bytes") or -1) != size:
+                    raise RuntimeError("project-state snapshot size verification failed")
+                if str(head.get("sha256") or "") != digest:
+                    raise RuntimeError("project-state snapshot SHA-256 metadata verification failed")
 
             body = client.get_object(Bucket=_cfg()["bucket"], Key=object_key()).get("Body")
             if body is None:
@@ -597,7 +684,10 @@ def snapshot_now() -> Dict[str, Any]:
                 if callable(close):
                     close()
             if remote_size != size or remote_hash.hexdigest() != digest:
-                raise RuntimeError("B2 project-state snapshot read-back integrity check failed")
+                raise RuntimeError("project-state snapshot read-back integrity check failed")
+
+            if _cfg()["backend"] == "supabase_s3":
+                _write_snapshot_manifest(client, size, digest, stamp)
 
             with _LOCK:
                 if _CHANGE_GENERATION != generation:
