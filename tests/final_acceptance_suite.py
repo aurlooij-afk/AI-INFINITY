@@ -305,14 +305,16 @@ def _normalized_srt_caption_text(srt_text: str) -> str:
     return re.sub(r"\s+", " ", " ".join(cue_text)).strip().casefold()
 
 
-def integrated_lufs(p):
+def audio_delivery_metrics(p):
     x=subprocess.run(
-        ["ffmpeg","-hide_banner","-nostats","-i",str(p),"-vn","-af","ebur128=framelog=verbose","-f","null","-"],
+        ["ffmpeg","-hide_banner","-nostats","-i",str(p),"-vn","-af","ebur128=peak=true:framelog=verbose","-f","null","-"],
         capture_output=True,text=True,timeout=180,
     )
-    values=re.findall(r"\bI:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*LUFS\b",(x.stderr or "")+(x.stdout or ""))
-    assert x.returncode==0 and values, (x.returncode,x.stderr[-2000:])
-    return float(values[-1])
+    output=(x.stderr or "")+(x.stdout or "")
+    values=re.findall(r"\bI:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*LUFS\b",output)
+    peaks=re.findall(r"\bPeak:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*dBFS\b",output)
+    assert x.returncode==0 and values and peaks, (x.returncode,x.stderr[-3000:])
+    return {"integrated_lufs":float(values[-1]),"true_peak_dbfs":float(peaks[-1])}
 def pdf(path):
     # A small but real, text-extractable source brief. The acceptance test should
     # prove that upload content drives the project topic, not just that a PDF exists.
@@ -553,15 +555,25 @@ def t1(s,b):
     assert checks.get("visual_rights_evidence_present") is True, truth
     assert int(checks.get("visual_rights_unresolved_count") or 0) == 0, truth
     assert int(checks.get("visual_rights_review_required_count") or 0) == 0, truth
-    files={n:dl(s,b,pid,n) for n in reqd}; m=probe(files["final.mp4"]); dur=float((m.get("format")or{}).get("duration")or 0); assert 59<=dur<=61,m
+    files={n:dl(s,b,pid,n) for n in reqd}
+    m=probe(files["final.mp4"])
+    full_decode=subprocess.run(
+        ["ffmpeg","-v","error","-xerror","-i",str(files["final.mp4"]),"-f","null","-"],
+        capture_output=True,text=True,timeout=600,
+    )
+    assert full_decode.returncode==0,("flagship MP4 full decode failed",full_decode.stderr[-3000:])
+    dur=float((m.get("format")or{}).get("duration")or 0); assert 59<=dur<=61,m
     video=next((x for x in m.get("streams",[]) if x.get("codec_type")=="video"),{}); assert (int(video.get("width") or 0),int(video.get("height") or 0))==(1920,1080),m
     script_text=dl(s,b,pid,"script.md").read_text(encoding="utf-8"); caption_text=dl(s,b,pid,"captions.srt").read_text(encoding="utf-8"); required_line="Every extraordinary world begins with something nobody else can see."; assert required_line.casefold() in script_text.casefold(),script_text[:3000]; assert required_line.casefold() in _normalized_srt_caption_text(caption_text),caption_text[:3000]
     assert any(x.get("codec_type")=="video" for x in m.get("streams",[])); assert any(x.get("codec_type")=="audio" for x in m.get("streams",[]))
     audio_probe=probe(files["audio_master.mp3"]); audio_dur=float((audio_probe.get("format")or{}).get("duration")or 0)
     assert any(x.get("codec_type")=="audio" for x in audio_probe.get("streams",[])),audio_probe
     assert abs(audio_dur-dur)<=1.0,("programme audio master must match the final video mix",audio_dur,dur)
-    audio_lufs=integrated_lufs(files["audio_master.mp3"])
-    assert -22.0<=audio_lufs<=-12.0,("programme audio master loudness outside delivery range",audio_lufs)
+    audio_metrics=audio_delivery_metrics(files["audio_master.mp3"])
+    audio_lufs=audio_metrics["integrated_lufs"]
+    audio_peak_dbfs=audio_metrics["true_peak_dbfs"]
+    assert -23.0<=audio_lufs<=-14.0,("programme audio master loudness outside -23 to -14 LUFS delivery range",audio_lufs)
+    assert audio_peak_dbfs<=-1.0,("programme audio master true peak exceeds -1 dBFS ceiling",audio_peak_dbfs)
     voice_probe=probe(files["narration_only.mp3"])
     assert any(x.get("codec_type")=="audio" for x in voice_probe.get("streams",[])),voice_probe
     assert sha(files["audio_master.mp3"]) != sha(files["narration_only.mp3"]), "programme mix and isolated narration must remain distinct artifacts"
@@ -592,6 +604,9 @@ def t1(s,b):
         "final_media_sha256":sha(files["final.mp4"]),
         "final_media_bytes":files["final.mp4"].stat().st_size,
         "ffprobe":m,
+        "full_decode_passed":True,
+        "audio_integrated_lufs":audio_lufs,
+        "audio_true_peak_dbfs":audio_peak_dbfs,
         "resolution":[int(video.get("width") or 0),int(video.get("height") or 0)],
         "fallback_visual_count":int(checks.get("fallback_visual_count") or 0),
         "visual_rights_unresolved_count":int(checks.get("visual_rights_unresolved_count") or 0),
