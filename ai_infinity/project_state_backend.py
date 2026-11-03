@@ -243,6 +243,8 @@ def _read_snapshot_manifest(client, key: Optional[str] = None) -> Dict[str, Any]
     size = int(manifest.get("size_bytes") or 0)
     if not re.fullmatch(r"[0-9a-f]{64}", digest) or size <= 0:
         raise RuntimeError("project-state snapshot manifest has invalid size or SHA-256")
+    if str(manifest.get("object_key") or "") != (key or object_key()):
+        raise RuntimeError("project-state snapshot manifest references a different object key")
     return manifest
 
 
