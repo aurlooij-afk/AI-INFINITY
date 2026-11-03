@@ -59,8 +59,12 @@ def _valid_human_approval(value: dict[str, Any] | None, candidate_sha: str) -> b
     dimensions = value.get("dimension_scores")
     if not isinstance(dimensions, dict) or not dimensions:
         return False
+    required_roles = {"director", "cinematographer", "editor", "sound", "story", "rights"}
+    normalized_dimensions = {str(role).strip().casefold(): score for role, score in dimensions.items()}
+    if not required_roles.issubset(normalized_dimensions):
+        return False
     try:
-        all_dimensions_pass = all(float(score) >= 4.0 for score in dimensions.values())
+        all_dimensions_pass = all(float(normalized_dimensions[role]) >= 4.0 for role in required_roles)
     except (TypeError, ValueError):
         return False
     return average >= 4.5 and all_dimensions_pass and value.get("rights_approval") is True
