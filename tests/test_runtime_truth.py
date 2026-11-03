@@ -57,3 +57,16 @@ def test_external_provider_disable_forces_local_visual_fallback(monkeypatch, tmp
     assert path.is_file()
     assert path.stat().st_size > 20_000
     assert asset.get("fallback") is True
+
+
+def test_black_frame_qc_threshold_is_not_near_white():
+    from production_closure_3624 import _objective_media_qc
+    # The provider-independent QC must treat only genuinely dark pixels as black.
+    # This protects cinematic low-key frames from the previous 0.98 threshold regression.
+    import inspect
+    source=inspect.getsource(_objective_media_qc)
+    assert "pix_th=0.08" in source
+
+
+def test_runtime_state_default_is_ready():
+    assert studio._runtime_state_for_status("new-unknown-status") == "READY"
