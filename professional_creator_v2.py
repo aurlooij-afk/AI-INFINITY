@@ -155,12 +155,11 @@ def _concat_manifest_text(segment_paths):
     records = []
     for segment_path in segment_paths:
         value = str(Path(segment_path).resolve())
-        if "\\r" in value or "\\n" in value:
+        if "\r" in value or "\n" in value:
             raise ValueError("concat media paths cannot contain line breaks")
-        # FFmpeg concat syntax escapes an embedded apostrophe as '\\''.
-        records.append("file '" + value.replace("'", "'\\\\''") + "'")
-    return "\\n".join(records) + "\\n"
-
+        # FFmpeg concat syntax escapes an embedded apostrophe as '\'\''.
+        records.append("file '" + value.replace("'", "'\\''") + "'")
+    return "\n".join(records) + "\n"
 
 def _render(studio,pid,timeline):
     root=studio._project_dir(pid)
