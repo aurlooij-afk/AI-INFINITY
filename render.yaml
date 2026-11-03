@@ -55,7 +55,7 @@ services:
       - key: AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK
         value: "false"
       - key: AI_INFINITY_GEMINI_FREE_TIER_MODEL
-        value: "gemini-3.5-flash-lite"
+        value: "gemini-3.1-flash-lite"
       - key: AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK
         value: "false"
       - key: OPENAI_API_KEY
