@@ -69,6 +69,34 @@ jobs:
           fi
           echo "B2_STORAGE_GATE=PASS"
 
+      - name: Verify live authenticated Wan2.2 GPU inference (explicit owner acknowledgement)
+        id: wan_live_inference
+        continue-on-error: true
+        env:
+          AI_INFINITY_WAN_WORKER_URL: ${{ secrets.AI_INFINITY_WAN_WORKER_URL }}
+          AI_INFINITY_WAN_WORKER_TOKEN: ${{ secrets.AI_INFINITY_WAN_WORKER_TOKEN }}
+          AI_INFINITY_WAN_LIVE_INFERENCE_ACK: ${{ vars.AI_INFINITY_WAN_LIVE_INFERENCE_ACK }}
+        run: |
+          set +e
+          docker run --rm --network host \\
+            -e AI_INFINITY_WAN_WORKER_URL \\
+            -e AI_INFINITY_WAN_WORKER_TOKEN \\
+            -e AI_INFINITY_WAN_LIVE_INFERENCE_ACK \\
+            -v "${GITHUB_WORKSPACE}:/workspace:ro" \\
+            -v "${GITHUB_WORKSPACE}/acceptance-evidence:/evidence" \\
+            -w /workspace --entrypoint python ai-infinity-final-acceptance \\
+            scripts/verify_live_wan_worker.py --output /evidence/wan-live-inference-verification.json
+          inference_status=$?
+          if [ "$inference_status" -eq 3 ]; then
+            echo "WAN_GPU_INFERENCE_GATE=BLOCKED — worker not configured or explicit GPU usage acknowledgement missing."
+            exit 0
+          fi
+          if [ "$inference_status" -ne 0 ]; then
+            echo "WAN_GPU_INFERENCE_GATE=FAIL — authenticated inference or independent artifact verification failed."
+            exit "$inference_status"
+          fi
+          echo "WAN_GPU_INFERENCE_GATE=PASS"
+
       - name: Run 13-scenario real acceptance suite (20s baseline, 60s flagship, 900s long-form; 720p/1080p)
         env:
           CI: "true"
