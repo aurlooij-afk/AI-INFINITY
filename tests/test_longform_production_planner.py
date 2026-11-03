@@ -765,3 +765,95 @@ def test_narration_sentence_uniqueness_ratio_rejects_exact_repetition():
     chapters = [{"narration": " ".join([repeated] * 10)}]
     assert studio._narration_sentence_uniqueness_ratio(chapters) == 0.1
 
+
+
+def test_huggingface_free_writer_requires_explicit_data_use_acknowledgement(monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "test-hf-token")
+    monkeypatch.setenv("AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK", "false")
+
+    plan, provider = studio._hf_creator_plan("Write a creator blueprint.", "English")
+
+    assert plan is None
+    assert provider == "hf-free-tier-and-data-use-not-authorized"
+
+
+def test_creative_planner_uses_acknowledged_huggingface_free_writer_for_15_minute_script(monkeypatch):
+    import json
+    from types import SimpleNamespace
+    import huggingface_hub
+
+    monkeypatch.delenv("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK", raising=False)
+    monkeypatch.setenv("HF_TOKEN", "test-hf-token")
+    monkeypatch.setenv("AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK", "true")
+    monkeypatch.setenv("AI_INFINITY_TEXT_MODEL", "Qwen/Qwen2.5-7B-Instruct-1M")
+    calls = []
+
+    def plan_with_words(sentences_per_chapter):
+        chapters = []
+        for chapter_index in range(1, 6):
+            sentences = [
+                (
+                    f"Chapter {chapter_index} observation {sentence_index} documents a distinct decision, "
+                    "the available evidence, competing alternatives, practical constraints, measured outcome, "
+                    "limitations, and implications for a creator working responsibly."
+                )
+                for sentence_index in range(1, sentences_per_chapter + 1)
+            ]
+            chapters.append({
+                "heading": f"Chapter {chapter_index}",
+                "narration": " ".join(sentences),
+                "visual_query": f"visually distinct documentary treatment for chapter {chapter_index}",
+                "image_prompt": f"cinematic documentary frame for chapter {chapter_index}",
+                "on_screen": f"Chapter {chapter_index}",
+                "duration": 180,
+                "proof_needed": [],
+            })
+        return {
+            "title": "A Real 15-Minute Production Workflow",
+            "premise": "A complete, evidence-led documentary about a real production workflow.",
+            "chapters": chapters,
+        }
+
+    plans = [plan_with_words(4), plan_with_words(55)]
+
+    class FakeInferenceClient:
+        def __init__(self, **kwargs):
+            assert kwargs["api_key"] == "test-hf-token"
+            assert kwargs["timeout"] == 45
+
+            class Completions:
+                def create(self, **request):
+                    calls.append(request)
+                    selected = plans[min(len(calls) - 1, len(plans) - 1)]
+                    return SimpleNamespace(choices=[
+                        SimpleNamespace(message=SimpleNamespace(content=json.dumps(selected)))
+                    ])
+
+            self.chat = SimpleNamespace(completions=Completions())
+
+    monkeypatch.setattr(huggingface_hub, "InferenceClient", FakeInferenceClient)
+
+    plan, provider = studio.creative_plan(
+        {
+            "title": "A Real 15-Minute Production Workflow",
+            "objective": "Create a complete 15-minute documentary about real production methods.",
+            "topic": "professional production workflow",
+            "format": "long",
+            "duration": 900,
+            "speaking_rate_wpm": 125,
+            "language": "English",
+            "tone": "precise, cinematic, useful",
+        },
+        {"sources": []},
+        None,
+    )
+
+    assert len(calls) == 2
+    assert provider == "Hugging Face/Qwen/Qwen2.5-7B-Instruct-1M"
+    assert plan["script_generation"]["status"] == "complete"
+    assert plan["script_generation"]["required_spoken_words"] == 1875
+    assert plan["script_generation"]["actual_spoken_words"] >= 1875
+    assert plan["script_generation"]["unique_sentence_ratio"] >= 0.85
+    assert plan["script_generation"]["repair_passes"] == 1
