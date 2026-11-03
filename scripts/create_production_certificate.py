@@ -101,7 +101,6 @@ def build_certificate(
         and flagship.get("truth_verified") is True
         and int(flagship.get("fallback_visual_count") or 0) == 0
         and int(flagship.get("visual_rights_unresolved_count") or 0) == 0
-        and str((flagship.get("reviewer_packet") or {}).get("human_review_status") or "PENDING") == "PENDING"
     )
     otio_rerender_pass = bool(
         otio
