@@ -511,6 +511,8 @@ def test_creative_planner_retries_underwritten_repairs_until_the_full_rate_targe
     assert plan["script_generation"]["status"] == "complete"
     assert plan["script_generation"]["required_spoken_words"] == 1875
     assert plan["script_generation"]["speaking_rate_wpm"] == 125
+    assert plan["script_generation"]["unique_sentence_ratio"] >= 0.85
+    assert plan["script_generation"]["distinctness_passed"] is True
     assert provider == "test-writer"
 
 
@@ -631,6 +633,8 @@ def test_creative_planner_uses_acknowledged_gemini_free_tier_for_15_minute_scrip
     assert plan["script_generation"]["status"] == "complete"
     assert plan["script_generation"]["required_spoken_words"] == 1875
     assert plan["script_generation"]["actual_spoken_words"] >= 1875
+    assert plan["script_generation"]["unique_sentence_ratio"] >= 0.85
+    assert plan["script_generation"]["distinctness_passed"] is True
     assert plan["script_generation"]["repair_passes"] == 1
 
 
@@ -682,3 +686,82 @@ def test_google_gemini_free_tier_writer_sends_json_mode_and_keeps_key_out_of_url
     assert captured["body"]["generationConfig"]["responseMimeType"] == "application/json"
     assert captured["body"]["generationConfig"]["maxOutputTokens"] == 8192
     assert captured["timeout"] == 120
+
+
+def test_creative_planner_repairs_word_count_sized_but_repetitive_first_draft():
+    import json
+
+    calls = []
+
+    def plan_with_narration(chapters):
+        return {
+            "title": "A Documentary with Real Substance",
+            "premise": "A detailed, chaptered documentary.",
+            "chapters": [
+                {
+                    "heading": f"Chapter {chapter_index}",
+                    "narration": narration,
+                    "visual_query": f"visually distinct documentary subject {chapter_index}",
+                    "image_prompt": f"cinematic documentary shot {chapter_index}",
+                    "on_screen": "",
+                    "duration": 180,
+                    "proof_needed": [],
+                }
+                for chapter_index, narration in enumerate(chapters, 1)
+            ],
+        }
+
+    repeated_sentence = (
+        "The same repeated sentence cannot become a finished documentary merely "
+        "because it contains enough words to fill the requested runtime."
+    )
+    repetitive_narration = " ".join([repeated_sentence] * 45)
+    repeated_first_draft = plan_with_narration([repetitive_narration] * 5)
+
+    distinct_chapters = []
+    for chapter_index in range(1, 6):
+        distinct_chapters.append(" ".join(
+            (
+                f"Chapter {chapter_index} decision {sentence_index} examines a specific production "
+                f"constraint, supporting evidence, alternative, consequence, and practical action. "
+                f"The chapter {chapter_index} case {sentence_index} explains why this choice matters "
+                f"and how a creator can evaluate its result."
+            )
+            for sentence_index in range(1, 46)
+        ))
+    repaired_plan = plan_with_narration(distinct_chapters)
+
+    def model_fn(payload):
+        calls.append(payload)
+        selected = repeated_first_draft if len(calls) == 1 else repaired_plan
+        return {"text": json.dumps(selected), "provider": "test-writer"}
+
+    plan, provider = studio.creative_plan(
+        {
+            "title": "A Documentary with Real Substance",
+            "objective": "Create a researched 15-minute documentary with a complete narrated script.",
+            "topic": "professional documentary production",
+            "format": "long",
+            "duration": 900,
+            "speaking_rate_wpm": 125,
+            "language": "English",
+        },
+        {"sources": []},
+        model_fn,
+    )
+
+    assert len(calls) == 2
+    assert "distinct-sentence ratio" in calls[1]["messages"][0]["content"]
+    assert studio._narration_word_count(plan["chapters"]) >= 1875
+    assert plan["script_generation"]["status"] == "complete"
+    assert plan["script_generation"]["unique_sentence_ratio"] >= 0.85
+    assert plan["script_generation"]["distinctness_passed"] is True
+    assert plan["script_generation"]["repair_passes"] == 1
+    assert provider == "test-writer"
+
+
+def test_narration_sentence_uniqueness_ratio_rejects_exact_repetition():
+    repeated = "A repeated sentence should never count as new information."
+    chapters = [{"narration": " ".join([repeated] * 10)}]
+    assert studio._narration_sentence_uniqueness_ratio(chapters) == 0.1
+
