@@ -719,3 +719,35 @@ def test_restore_treats_only_explicit_missing_key_as_empty_store(monkeypatch, tm
     assert backend._is_missing_object_error(FakeProviderError("NoSuchKey", 404))
     assert not backend._is_missing_object_error(FakeProviderError("NoSuchBucket", 404))
     assert not backend._is_missing_object_error(FakeProviderError("AccessDenied", 403))
+
+
+def test_live_storage_verifier_reports_blocked_without_credentials(monkeypatch, tmp_path: Path):
+    import json
+    import os
+    import subprocess
+    import sys
+
+    for key in (
+        "BACKBLAZE_B2_ENDPOINT", "BACKBLAZE_B2_BUCKET",
+        "BACKBLAZE_B2_KEY_ID", "BACKBLAZE_B2_APPLICATION_KEY",
+        "B2_ENDPOINT", "B2_BUCKET", "B2_KEY_ID", "B2_APPLICATION_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "verify_live_project_state_storage.py"
+    output = tmp_path / "storage-result.json"
+    completed = subprocess.run(
+        [sys.executable, str(script), "--output", str(output)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert completed.returncode == 3, completed.stdout + completed.stderr
+    result = json.loads(output.read_text(encoding="utf-8"))
+    assert result["status"] == "BLOCKED"
+    assert result["round_trip"] == "not_attempted"
+    assert result["fresh_process_restore"] == "not_attempted"
+    assert result["truthful"] is True
+    assert "B2" not in result.get("error", "")
