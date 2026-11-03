@@ -650,7 +650,7 @@ def t3(s,b):
     assert script.startswith("# AI Infinity Creator Operating System"),script[:1200]
     assert "AI Infinity" in script and "captions" in script.lower() and "editing" in script.lower(),script[:2000]
     return {"test":3,"project_id":pid,"pdf_executed":True,"upload_topic_used":"AI Infinity Creator Operating System"}
-def t4(s,b):
+def t4(s,b,data_dir: Path):
     pid=create(s,b,"Create a 20-second research-backed video article package about Python's official website with evidence, captions, SEO and social copy.",duration=20,format="short",reference_urls=[PYURL]); waitp(s,b,pid,allow_review_draft=True)
     got=names(s,b,pid); assert {"final.mp4","thumbnail.jpg","captions.srt","article.md","seo.json","social_campaign.json","sources.json"}<=got,got
     src=jart(s,b,pid,"sources.json"); assert any(str(x.get("url")or"")==PYURL for x in src.get("sources",[])),src
@@ -733,7 +733,7 @@ def t4(s,b):
     assert rerender.get("status") in {"completed","completed_with_qc_review"},rerender
     assert isinstance(rerender.get("quality"),dict),rerender
 
-    rerender_master=Path(os.environ.get("AI_INFINITY_DATA_DIR","/tmp"))/"creator_studio"/pid/"final.mp4"
+    rerender_master=Path(data_dir)/"creator_studio"/pid/"final.mp4"
     assert rerender_master.is_file() and rerender_master.stat().st_size>10000,rerender_master
     rerender_probe=probe(rerender_master)
     rerender_duration=float((rerender_probe.get("format") or {}).get("duration") or 0)
@@ -1231,7 +1231,7 @@ def main():
         records.append(_record_scenario("01", descriptions["01"], lambda: t1(session, base), requested=requested["01"]))
         records.append(_record_scenario("02", descriptions["02"], lambda: t2(session, base), requested=requested["02"]))
         records.append(_record_scenario("03", descriptions["03"], lambda: t3(session, base), requested=requested["03"]))
-        records.append(_record_scenario("04", descriptions["04"], lambda: t4(session, base), requested=requested["04"]))
+        records.append(_record_scenario("04", descriptions["04"], lambda: t4(session, base, data_dir), requested=requested["04"]))
         records.append(_record_scenario("05", descriptions["05"], lambda: t5(), requested=requested["05"]))
         records.append(_record_scenario("06", descriptions["06"], lambda: t6(), requested=requested["06"]))
         records.append(_record_scenario("07", descriptions["07"], lambda: t7(), requested=requested["07"]))
