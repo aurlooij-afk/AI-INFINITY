@@ -2,7 +2,7 @@
 
 Last evidence refresh: 2026-11-04 UTC  
 Repository: `aurlooij-afk/AI-INFINITY`  
-Primary workstream: PR [#48](https://github.com/aurlooij-afk/AI-INFINITY/pull/48), branch `fix/cinematic-creative-gates-and-review-export` (current head `96180d3783d333ca1872f29196dd434b5439bfe8`), based on current `main`; PR [#37](https://github.com/aurlooij-afk/AI-INFINITY/pull/37) remains merged as `0a2f0c929f68d9a8c2dbf16a3dd49e1a1ed58ba4`.
+Primary workstream: PR [#48](https://github.com/aurlooij-afk/AI-INFINITY/pull/48), branch `fix/cinematic-creative-gates-and-review-export` (current head `b5d5717193c63e99583fa83cc7f2935b0aa5fa5c`), based on current `main`; PR [#37](https://github.com/aurlooij-afk/AI-INFINITY/pull/37) remains merged as `0a2f0c929f68d9a8c2dbf16a3dd49e1a1ed58ba4`.
 
 This file is a live release checklist, not a claim that the product is complete. A blocker is closed only by fresh evidence from the exact tested/deployed revision.
 
@@ -29,6 +29,21 @@ The current branch also adds `scripts/verify_live_project_state_storage.py`. It 
 - The imported OTIO timeline has not yet been re-rendered as part of the acceptance workflow. Human creative/rights review remains `PENDING`.
 
 The current exact-candidate CI workflows must finish before any claim about this code revision is made. A mocked writer regression, storage verifier script, successful build, or artifact upload is not proof of live Gemini generation, B2 restore, GPU inference or production deployment.
+
+
+### Additional production-gate hardening — 2026-11-04
+
+- Long-form planner completion now requires both the calculated spoken-word minimum and an 85% distinct-sentence ratio. A word-count-complete but repetitive first draft triggers a bounded rewrite; the production preflight independently recomputes both measures before media generation. The 900-second acceptance profile now records actual script-generation metadata and checks the resulting mastered audio against -23 to -14 LUFS and -1 dBFS true-peak limits.
+- Scenario 04 now submits the imported OTIO timeline to the canonical timeline-render endpoint, then probes and fully decodes the new master. Its evidence records the rerender SHA-256, duration, resolution and decode status. This exact-candidate scenario has not yet completed.
+- A candidate-bound certificate script and regression suite were added. It keeps engineering acceptance, exact-revision live deployment, durable storage, live GPU inference, OTIO re-render and six-role human approval separate. It requires Director, Cinematographer, Editor, Sound, Story and Rights scores (each >=4/5), average >=4.5/5, explicit rights approval and approval bound to the exact candidate SHA.
+- The 13-scenario acceptance workflow emits a certificate with its artifact bundle even on failure or incomplete runs. A green static workflow does not turn an absent external result into a pass.
+
+### External gate evidence — exact tested run, not extrapolated
+
+The [Final Complete Acceptance run #1039](https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/41736205595), on candidate `769d4c5673e43a703c439bc4a29fde52ac19b0de`, produced a structured evidence artifact. The B2 verifier reported `BLOCKED`: no endpoint/region, bucket, key ID or application key were configured in that workflow environment; no PUT/HEAD/GET or restore was attempted. The Wan verifier reported `BLOCKED`: no authenticated worker URL/token were configured, and no inference request was sent. The certificate correctly recorded `ENGINEERING_STATE=FAIL` because the acceptance run was cancelled with zero completed scenarios, `PRODUCTION_VERIFIED=BLOCKED`, and `CREATIVE_APPROVAL=PENDING`. Artifact ZIP digest: `e5e1767258f2ca00be9b10cbb06011819afdc48f8ba26fdadce3eadbbf7867e2`.
+
+Do not carry those external BLOCKED states onto another revision as a substitute for a fresh run, and do not treat the wrapper steps' successful exit codes as storage or GPU proof. The current candidate `b5d5717193c63e99583fa83cc7f2935b0aa5fa5c` has fresh Build Guard, Standalone Runtime, Visual Diversity and Final Acceptance workflows running; its exact final acceptance and certificate have not completed yet.
+
 
 
 
