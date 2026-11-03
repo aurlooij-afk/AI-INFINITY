@@ -121,7 +121,7 @@ print(json.dumps({
     )
     if completed.returncode != 0:
         message = (completed.stderr or completed.stdout or "fresh-process restore failed")[-1600:]
-        raise RuntimeError(fresh-process restore failed:  + " ".join(message.split()))
+        raise RuntimeError("fresh-process restore failed: " + " ".join(message.split()))
     rows = [line for line in (completed.stdout or "").splitlines() if line.strip().startswith("{")]
     if not rows:
         raise RuntimeError("fresh-process restore returned no structured evidence")
@@ -165,7 +165,7 @@ def main() -> int:
     payload = ("fresh-process-restore:" + marker).encode("utf-8")
     payload_sha256 = hashlib.sha256(payload).hexdigest()
 
-    with tempfile.TemporaryDirectory(prefix="ai-infinity-b2-verify-") as raw_dir:
+    with tempfile.TemporaryDirectory(prefix="ai-infinity-storage-verify-") as raw_dir:
         root = Path(raw_dir)
         source_db = root / "source.db"
         restored_db = root / "clean-runtime" / "restored.db"
@@ -178,7 +178,7 @@ def main() -> int:
         try:
             state = backend.configure(source_db)
             if state.get("active") is not True or state.get("verified") is not True:
-                raise RuntimeError(object-store canary PUT/HEAD/GET/SHA did not verify:  + str(state.get("last_error") or state.get("last_restore", {}).get("reason")))
+                raise RuntimeError("object-store canary PUT/HEAD/GET/SHA did not verify: " + str(state.get("last_error") or state.get("last_restore", {}).get("reason")))
 
             with sqlite3.connect(source_db) as con:
                 con.execute(
@@ -192,7 +192,7 @@ def main() -> int:
 
             snapshot = backend.snapshot_now()
             if snapshot.get("status") != "verified":
-                raise RuntimeError(object-store project-state snapshot PUT/HEAD/GET/SHA failed:  + str(snapshot.get("error") or snapshot.get("status")))
+                raise RuntimeError("object-store project-state snapshot PUT/HEAD/GET/SHA failed: " + str(snapshot.get("error") or snapshot.get("status")))
 
             # Independently compare the object-store body bytes, ContentLength,
             # and SHA-256 metadata to the exact snapshot produced by the adapter.
