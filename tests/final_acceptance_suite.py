@@ -1060,6 +1060,22 @@ def _production_profile_acceptance(label: str, duration: int, fast_mode: bool, p
             require_full_hd=(not fast_mode),
         )
         state = waitp(session, base, project_id, timeout=(3600 if duration >= 900 else 1500))
+        blueprint = state.get("blueprint") if isinstance(state.get("blueprint"), dict) else {}
+        script_generation = blueprint.get("script_generation") if isinstance(blueprint.get("script_generation"), dict) else {}
+        if duration >= 900:
+            assert script_generation.get("status") == "complete", {
+                "project_id": project_id,
+                "script_generation": script_generation,
+                "blueprint_keys": sorted(blueprint),
+            }
+            required_words = int(script_generation.get("required_spoken_words") or 0)
+            actual_words = int(script_generation.get("actual_spoken_words") or 0)
+            unique_ratio = float(script_generation.get("unique_sentence_ratio") or 0)
+            assert required_words >= 1875 and actual_words >= required_words, script_generation
+            assert unique_ratio >= 0.85 and script_generation.get("distinctness_passed") is True, script_generation
+            assert int(script_generation.get("repair_passes") or 0) <= 3, script_generation
+            script_file = dl(session, base, project_id, "script.md", min_bytes=1000)
+            assert script_file.is_file() and script_file.stat().st_size > 1000, script_file
         truth = req(
             session, base,
             f"/infinity/studio/project/{quote(project_id, safe='')}/truth",
@@ -1085,6 +1101,12 @@ def _production_profile_acceptance(label: str, duration: int, fast_mode: bool, p
         assert video.get("codec_name") == "h264", media
         assert audio.get("codec_name") == "aac", media
         assert abs(actual_duration - duration) <= 1.0, media
+        audio_file = dl(session, base, project_id, "audio_master.mp3", min_bytes=1000)
+        audio_metrics = audio_delivery_metrics(audio_file)
+        audio_lufs = audio_metrics["integrated_lufs"]
+        audio_peak_dbfs = audio_metrics["true_peak_dbfs"]
+        assert -23.0 <= audio_lufs <= -14.0, ("programme audio master outside -23 to -14 LUFS", audio_lufs)
+        assert audio_peak_dbfs <= -1.0, ("programme audio master true peak exceeds -1 dBFS", audio_peak_dbfs)
         if fast_mode:
             assert (int(video.get("width") or 0), int(video.get("height") or 0)) == (1280, 720), media
         else:
@@ -1167,6 +1189,9 @@ def _production_profile_acceptance(label: str, duration: int, fast_mode: bool, p
             "manifest_hash_verified": True,
             "provider": state.get("result", {}).get("ai_provider") if isinstance(state.get("result"), dict) else None,
             "voice_provider": state.get("result", {}).get("voice_provider") if isinstance(state.get("result"), dict) else None,
+            "audio_integrated_lufs": audio_lufs,
+            "audio_true_peak_dbfs": audio_peak_dbfs,
+            "script_generation": script_generation if duration >= 900 else None,
         }
     finally:
         stop(process, log)
