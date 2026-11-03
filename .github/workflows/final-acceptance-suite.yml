@@ -29,6 +29,46 @@ jobs:
       - name: Build authoritative Docker runtime
         run: docker build --pull -t ai-infinity-final-acceptance .
 
+      - name: Verify live B2 snapshot round-trip and fresh-process restore
+        id: b2_storage
+        continue-on-error: true
+        env:
+          B2_ENDPOINT: ${{ secrets.B2_ENDPOINT }}
+          B2_BUCKET: ${{ secrets.B2_BUCKET }}
+          B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          B2_REGION: ${{ secrets.B2_REGION }}
+          BACKBLAZE_B2_ENDPOINT: ${{ secrets.BACKBLAZE_B2_ENDPOINT }}
+          BACKBLAZE_B2_BUCKET: ${{ secrets.BACKBLAZE_B2_BUCKET }}
+          BACKBLAZE_B2_KEY_ID: ${{ secrets.BACKBLAZE_B2_KEY_ID }}
+          BACKBLAZE_B2_APPLICATION_KEY: ${{ secrets.BACKBLAZE_B2_APPLICATION_KEY }}
+          BACKBLAZE_B2_REGION: ${{ secrets.BACKBLAZE_B2_REGION }}
+        run: |
+          set +e
+          mkdir -p "${GITHUB_WORKSPACE}/acceptance-evidence"
+          chmod 0777 "${GITHUB_WORKSPACE}/acceptance-evidence"
+          docker run --rm --network host \\
+            -e B2_ENDPOINT -e B2_BUCKET -e B2_KEY_ID -e B2_APPLICATION_KEY -e B2_REGION \\
+            -e BACKBLAZE_B2_ENDPOINT -e BACKBLAZE_B2_BUCKET -e BACKBLAZE_B2_KEY_ID \\
+            -e BACKBLAZE_B2_APPLICATION_KEY -e BACKBLAZE_B2_REGION \\
+            -e AI_INFINITY_PERSISTENCE_MODE=durable \\
+            -e AI_INFINITY_PROJECT_STATE_DURABLE=true \\
+            -e AI_INFINITY_PROJECT_STATE_BACKEND=backblaze_b2 \\
+            -v "${GITHUB_WORKSPACE}:/workspace:ro" \\
+            -v "${GITHUB_WORKSPACE}/acceptance-evidence:/evidence" \\
+            -w /workspace --entrypoint python ai-infinity-final-acceptance \\
+            scripts/verify_live_project_state_storage.py --output /evidence/b2-storage-verification.json
+          storage_status=$?
+          if [ "$storage_status" -eq 3 ]; then
+            echo "B2_STORAGE_GATE=BLOCKED — no B2 secrets configured for this workflow."
+            exit 0
+          fi
+          if [ "$storage_status" -ne 0 ]; then
+            echo "B2_STORAGE_GATE=FAIL — configured B2 round-trip or fresh-process restore failed."
+            exit "$storage_status"
+          fi
+          echo "B2_STORAGE_GATE=PASS"
+
       - name: Run 13-scenario real acceptance suite (20s baseline, 60s flagship, 900s long-form; 720p/1080p)
         env:
           CI: "true"
