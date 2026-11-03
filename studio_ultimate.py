@@ -1609,7 +1609,9 @@ def _narration_sentence_uniqueness_ratio(chapters: List[Dict[str, Any]]) -> floa
         if sentence.strip()
     ]
     return (len(set(rows)) / len(rows)) if rows else 0.0
-\ndef _required_narration_word_count(duration_seconds: Any, speaking_rate_wpm: Any = 125) -> int:
+
+
+def _required_narration_word_count(duration_seconds: Any, speaking_rate_wpm: Any = 125) -> int:
     """Calculate the minimum narration from the requested programme length and WPM."""
     try:
         duration = max(1, int(float(duration_seconds or 1)))
