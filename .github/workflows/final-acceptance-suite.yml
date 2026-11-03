@@ -47,16 +47,16 @@ jobs:
           set +e
           mkdir -p "${GITHUB_WORKSPACE}/acceptance-evidence"
           chmod 0777 "${GITHUB_WORKSPACE}/acceptance-evidence"
-          docker run --rm --network host \\
-            -e B2_ENDPOINT -e B2_BUCKET -e B2_KEY_ID -e B2_APPLICATION_KEY -e B2_REGION \\
-            -e BACKBLAZE_B2_ENDPOINT -e BACKBLAZE_B2_BUCKET -e BACKBLAZE_B2_KEY_ID \\
-            -e BACKBLAZE_B2_APPLICATION_KEY -e BACKBLAZE_B2_REGION \\
-            -e AI_INFINITY_PERSISTENCE_MODE=durable \\
-            -e AI_INFINITY_PROJECT_STATE_DURABLE=true \\
-            -e AI_INFINITY_PROJECT_STATE_BACKEND=backblaze_b2 \\
-            -v "${GITHUB_WORKSPACE}:/workspace:ro" \\
-            -v "${GITHUB_WORKSPACE}/acceptance-evidence:/evidence" \\
-            -w /workspace --entrypoint python ai-infinity-final-acceptance \\
+          docker run --rm --network host \
+            -e B2_ENDPOINT -e B2_BUCKET -e B2_KEY_ID -e B2_APPLICATION_KEY -e B2_REGION \
+            -e BACKBLAZE_B2_ENDPOINT -e BACKBLAZE_B2_BUCKET -e BACKBLAZE_B2_KEY_ID \
+            -e BACKBLAZE_B2_APPLICATION_KEY -e BACKBLAZE_B2_REGION \
+            -e AI_INFINITY_PERSISTENCE_MODE=durable \
+            -e AI_INFINITY_PROJECT_STATE_DURABLE=true \
+            -e AI_INFINITY_PROJECT_STATE_BACKEND=backblaze_b2 \
+            -v "${GITHUB_WORKSPACE}:/workspace:ro" \
+            -v "${GITHUB_WORKSPACE}/acceptance-evidence:/evidence" \
+            -w /workspace --entrypoint python ai-infinity-final-acceptance \
             scripts/verify_live_project_state_storage.py --output /evidence/b2-storage-verification.json
           storage_status=$?
           if [ "$storage_status" -eq 3 ]; then
@@ -78,13 +78,13 @@ jobs:
           AI_INFINITY_WAN_LIVE_INFERENCE_ACK: ${{ vars.AI_INFINITY_WAN_LIVE_INFERENCE_ACK }}
         run: |
           set +e
-          docker run --rm --network host \\
-            -e AI_INFINITY_WAN_WORKER_URL \\
-            -e AI_INFINITY_WAN_WORKER_TOKEN \\
-            -e AI_INFINITY_WAN_LIVE_INFERENCE_ACK \\
-            -v "${GITHUB_WORKSPACE}:/workspace:ro" \\
-            -v "${GITHUB_WORKSPACE}/acceptance-evidence:/evidence" \\
-            -w /workspace --entrypoint python ai-infinity-final-acceptance \\
+          docker run --rm --network host \
+            -e AI_INFINITY_WAN_WORKER_URL \
+            -e AI_INFINITY_WAN_WORKER_TOKEN \
+            -e AI_INFINITY_WAN_LIVE_INFERENCE_ACK \
+            -v "${GITHUB_WORKSPACE}:/workspace:ro" \
+            -v "${GITHUB_WORKSPACE}/acceptance-evidence:/evidence" \
+            -w /workspace --entrypoint python ai-infinity-final-acceptance \
             scripts/verify_live_wan_worker.py --output /evidence/wan-live-inference-verification.json
           inference_status=$?
           if [ "$inference_status" -eq 3 ]; then
