@@ -2,9 +2,34 @@
 
 Last evidence refresh: 2026-11-04 UTC  
 Repository: `aurlooij-afk/AI-INFINITY`  
-Primary workstream: PR [#48](https://github.com/aurlooij-afk/AI-INFINITY/pull/48), branch `fix/cinematic-creative-gates-and-review-export` (current head `c81969a5764032f297bfa41b3bb690f9f954a0c5`), based on current `main`; PR [#37](https://github.com/aurlooij-afk/AI-INFINITY/pull/37) remains merged as `0a2f0c929f68d9a8c2dbf16a3dd49e1a1ed58ba4`.
+Primary workstream: PR [#48](https://github.com/aurlooij-afk/AI-INFINITY/pull/48), branch `fix/cinematic-creative-gates-and-review-export` (current head `96180d3783d333ca1872f29196dd434b5439bfe8`), based on current `main`; PR [#37](https://github.com/aurlooij-afk/AI-INFINITY/pull/37) remains merged as `0a2f0c929f68d9a8c2dbf16a3dd49e1a1ed58ba4`.
 
 This file is a live release checklist, not a claim that the product is complete. A blocker is closed only by fresh evidence from the exact tested/deployed revision.
+
+
+## Follow-up implementation — 2026-11-04 (PR #48 current work)
+
+The previous 900-second failure exposed a real wiring defect: the Google Free Tier Gemini writer adapter existed in `studio_ultimate.py`, but `creative_plan()` never selected it when no model function was supplied. The configured model name was also stale. The current PR branch now:
+
+- Selects the explicitly acknowledged Gemini writer when a key is configured and external providers are not disabled.
+- Pins the adapter and Render Blueprint to `gemini-3.1-flash-lite`; only that exact model is accepted by this no-cost adapter.
+- Keeps the Google Free Tier data-use acknowledgement separate and default-off. Google currently lists Gemini 3.1 Flash-Lite input and output as free on its Free Tier, while stating that Free Tier content is used to improve Google products. Do not enable the acknowledgement without accepting that data-use condition. Reference: https://ai.google.dev/gemini-api/docs/pricing
+- Retains the spoken-word minimum, bounded repairs, sentence-uniqueness check and fail-closed long-form preflight. The planner records provider, model finish reason, token usage, actual/required word counts and repair count.
+- Adds a mocked 900-second regression proving the configured Gemini adapter is selected, the initial draft is repaired, and the complete narration exceeds 1,875 words. This test proves orchestration, not live provider availability or quota.
+- Passes the GitHub repository secret `GEMINI_API_KEY` and separate repository variable `AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK` into the Final Acceptance Docker run. The variable is intentionally not set by this PR.
+
+The current branch also adds `scripts/verify_live_project_state_storage.py`. It performs a real B2 canary round-trip, a separate uniquely keyed SQLite snapshot round-trip, and a clean child-process restore check; it reports `BLOCKED` if required credentials are absent and `FAIL` if configured operations fail. Its key is a random suffix under the existing project-state key prefix; it does not overwrite the production snapshot key. The Final Acceptance workflow now runs this verifier with optional repository secrets and uploads the structured result. The storage regression suite also verifies truthful `BLOCKED` reporting with no credentials.
+
+### External execution still required
+
+- Long-form generation is **implemented but not yet live-proven**. To activate the no-cost Gemini path, the repository owner must add GitHub Actions secret `GEMINI_API_KEY` from a Google AI Studio Free Tier project and set repository variable `AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK=true` only after accepting the Free Tier data-use terms. Configure the same key and acknowledgement in Render only when an authorized deployment is being prepared. Missing key or quota must remain visibly blocked; no paid fallback is allowed.
+- B2 persistence is **not verified** until the new workflow reports `PASS` after real PUT/HEAD/GET/SHA and fresh-process restore. When running that check in GitHub Actions, provide `B2_ENDPOINT`, `B2_BUCKET`, `B2_KEY_ID`, `B2_APPLICATION_KEY` (and optional `B2_REGION`) as repository secrets, or the equivalent `BACKBLAZE_B2_*` aliases. These are not present in the workflow by default; no credentials were read or changed by this code update.
+- Actual GPU-backed Wan2.2 inference is still not demonstrated. The existing free Render Web Service is not GPU compute. Do not set the worker URL/token or report inference available until the separate authenticated worker returns its live capability proof with verified weights, license, actual NVIDIA hardware/VRAM, FFmpeg/FFprobe and persistent storage.
+- Current Render inventory still shows the AI-INFINITY web service tracking `main` on the free plan, no persistent disk, a free Postgres instance expiring `2026-11-06`, and a suspended free Key Value instance with persistence off. Live Render endpoints were not reachable through the available read interface in this refresh. No PR #48 deployment or environment/secret mutation has been performed.
+- The imported OTIO timeline has not yet been re-rendered as part of the acceptance workflow. Human creative/rights review remains `PENDING`.
+
+The current exact-candidate CI workflows must finish before any claim about this code revision is made. A mocked writer regression, storage verifier script, successful build, or artifact upload is not proof of live Gemini generation, B2 restore, GPU inference or production deployment.
+
 
 
 ## Evidence refresh — 2026-11-04 (exact PR #48 candidate)
