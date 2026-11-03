@@ -30,17 +30,25 @@ def _emit(result: Dict[str, Any], output: Path | None) -> None:
 
 
 def _missing_credentials() -> list[str]:
-    aliases = (
-        (("BACKBLAZE_B2_ENDPOINT", "B2_ENDPOINT"), "endpoint"),
+    endpoint_configured = any(
+        os.getenv(name, "").strip()
+        for name in ("BACKBLAZE_B2_ENDPOINT", "B2_ENDPOINT")
+    )
+    region_configured = any(
+        os.getenv(name, "").strip()
+        for name in ("BACKBLAZE_B2_REGION", "B2_REGION")
+    )
+    missing = []
+    if not endpoint_configured and not region_configured:
+        missing.append("endpoint_or_region")
+    for names, label in (
         (("BACKBLAZE_B2_BUCKET", "B2_BUCKET"), "bucket"),
         (("BACKBLAZE_B2_KEY_ID", "B2_KEY_ID"), "key_id"),
         (("BACKBLAZE_B2_APPLICATION_KEY", "B2_APPLICATION_KEY"), "application_key"),
-    )
-    return [
-        label
-        for names, label in aliases
-        if not any(os.getenv(name, "").strip() for name in names)
-    ]
+    ):
+        if not any(os.getenv(name, "").strip() for name in names):
+            missing.append(label)
+    return missing
 
 
 def _restore_in_clean_process(database: Path) -> Dict[str, Any]:
