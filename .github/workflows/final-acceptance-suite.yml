@@ -29,8 +29,8 @@ jobs:
       - name: Build authoritative Docker runtime
         run: docker build --pull -t ai-infinity-final-acceptance .
 
-      - name: Verify live B2 snapshot round-trip and fresh-process restore
-        id: b2_storage
+      - name: Verify live object-store snapshot round-trip and fresh-process restore
+        id: project_state_storage
         continue-on-error: true
         env:
           AI_INFINITY_PROJECT_STATE_BACKEND: ${{ vars.AI_INFINITY_PROJECT_STATE_BACKEND || 'backblaze_b2' }}
@@ -134,7 +134,7 @@ jobs:
             -e AI_INFINITY_WORKFLOW_RUN_ID \
             -e AI_INFINITY_WORKFLOW_RUN_ATTEMPT \
             -e GEMINI_API_KEY \
-                        -e AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK \
+            -e AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK \
             -e HF_TOKEN \
             -e AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK \
             -e AI_INFINITY_TEXT_MODEL \
