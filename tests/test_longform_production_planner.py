@@ -560,8 +560,8 @@ def test_creative_planner_uses_acknowledged_gemini_free_tier_for_15_minute_scrip
             sentences = [
                 (
                     f"Chapter {chapter_index} examines distinct production decision {sentence_index}. "
-                    f"It compares the constraint, the evidence, the trade-off, and the result "
-                    f"for a different part of the creative workflow."
+                    f"It compares constraint {sentence_index} in chapter {chapter_index}, "
+                    f"using distinct evidence, trade-offs, and outcomes from that chapter."
                 )
                 for sentence_index in range(1, words_per_chapter + 1)
             ]
