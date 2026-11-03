@@ -1,10 +1,55 @@
 # AI Infinity — Known Production Blockers
 
-Last evidence refresh: 2026-11-02 UTC  
+Last evidence refresh: 2026-11-04 UTC  
 Repository: `aurlooij-afk/AI-INFINITY`  
-Primary workstream: PR [#48](https://github.com/aurlooij-afk/AI-INFINITY/pull/48), branch `fix/cinematic-creative-gates-and-review-export` (current head `d5a909aa2edc37980102d61cbd944dc5f7f8adda`), based on current `main`; PR [#37](https://github.com/aurlooij-afk/AI-INFINITY/pull/37) remains merged as `0a2f0c929f68d9a8c2dbf16a3dd49e1a1ed58ba4`.
+Primary workstream: PR [#48](https://github.com/aurlooij-afk/AI-INFINITY/pull/48), branch `fix/cinematic-creative-gates-and-review-export` (current head `c81969a5764032f297bfa41b3bb690f9f954a0c5`), based on current `main`; PR [#37](https://github.com/aurlooij-afk/AI-INFINITY/pull/37) remains merged as `0a2f0c929f68d9a8c2dbf16a3dd49e1a1ed58ba4`.
 
 This file is a live release checklist, not a claim that the product is complete. A blocker is closed only by fresh evidence from the exact tested/deployed revision.
+
+
+## Evidence refresh — 2026-11-04 (exact PR #48 candidate)
+
+Inspected current PR metadata and completed GitHub Actions evidence for PR head `c81969a5764032f297bfa41b3bb690f9f954a0c5`. These results apply only to this exact tested head.
+
+- [Creator Studio Build Guard #1411](https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/41700370210) — PASS (Python syntax/runtime guards, focused contracts, and production Docker image build).
+- [Standalone Runtime Verification #1113](https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/41700370354) — PASS (professional-closure regression tests, standalone runtime, HTTP smoke, creator production smoke, and evidence assembly).
+- [Visual Diversity Truth Regression #403](https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/41700370289) — PASS.
+- [Final Complete Acceptance #1008](https://github.com/aurlooij-afk/AI-INFINITY/actions/runs/41700370414) — FAIL: 12 of 13 scenarios passed; scenario 12 (15-minute long-form production) failed its script preflight.
+
+### Current flagship evidence on this candidate
+
+Scenario 01, project `studio_b50ce7e3184143f59bd012e27450afd0`, passed the suite's flagship acceptance:
+
+- 60.082683-second final MP4; 1920×1080, 16:9, H.264 video, AAC stereo audio, and embedded English MOV-text captions.
+- The exact required narration sentence was found in both the script and normalized SRT captions.
+- Professional truth was VERIFIED; fallback visual count, unresolved-rights count, and rights-review-required count were all zero.
+- Audio master and isolated narration were both present, independently probed, distinct files, and the programme audio duration matched the video within the suite tolerance. Integrated loudness was checked against the suite's current acceptance band.
+- Final MP4 SHA-256: `9814eff6637e4ae19debbb5c51fb833408d65027b7299ad1262dd903d844303f`; size 30,288,599 bytes. The production manifest's final-media hash matched the downloaded MP4.
+- Reviewer packet and contact sheet were generated with recorded hashes. Human review remains `PENDING`; no creative approval is inferred.
+
+The acceptance test probes the final MP4 and verifies the package/manifest, but its flagship scenario does not yet record a separate standalone FFmpeg full-decode command result in the scenario payload. Keep that as an acceptance-evidence improvement rather than claiming it was independently proven by this scenario.
+
+### Long-form blocker — still open
+
+Scenario 12 submitted a real 900-second / 720p narrated production request. The planner produced 365 spoken words; the minimum at the configured 125 WPM floor was 1,875. The request correctly failed before media generation because no long-form text-generation provider was configured and the deterministic built-in output is only an outline. The system explicitly refused to stretch the short outline across a 15-minute timeline.
+
+Do not reduce the word-count floor, pad repeated narration, mark the failed job as completed, or substitute a synthetic PASS. Closure requires a genuinely executable, no-cost/authorized long-form writing path that returns a complete scene-specific script, followed by narration, 900-second rendering, synchronized captions, independent media inspection, and passing production truth.
+
+### Timeline and storage scope
+
+- Scenario 04 passed an OTIO export/import exercise for a separate 20-second project. The downloaded timeline and portable bundle hashes were verified, archive media references and per-file hashes were checked, and import correctly retained a re-render requirement and `PENDING` human-review state. This is not yet proof of re-rendering the imported flagship timeline.
+- Scenario 08 passed a process restart in the same test container while explicitly reporting persistent storage as unverified. It is not a B2 PUT → HEAD → GET → SHA or clean-instance restore proof.
+- The standalone evidence workflow assembled the 60-second review deliverables and OTIO artifacts on this candidate, but artifact upload is not equivalent to proving live external storage durability.
+
+### Remaining release gates
+
+1. Long-form text generation and real 900-second delivery — FAIL on this candidate.
+2. Separate flagship FFmpeg full-decode evidence and post-OTIO-import re-render — not yet established by the flagship acceptance record.
+3. Live exact-revision deployment and live production/artifact read-back — not established by these repository workflows.
+4. Actual Wan2.2 GPU inference on verified hardware — not established; CI contract checks are not GPU execution.
+5. B2 canary read-back and fresh-instance project-state restore — not established.
+6. Human creative/rights approval for the exact flagship version — PENDING.
+
 
 
 ## Current production evidence refresh — 2026-11-02
