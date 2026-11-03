@@ -1603,9 +1603,9 @@ def _narration_word_count(chapters: List[Dict[str, Any]]) -> int:
 def _narration_sentence_uniqueness_ratio(chapters: List[Dict[str, Any]]) -> float:
     """Measure distinct spoken sentences; repeated padding cannot satisfy long-form runtime."""
     rows = [
-        re.sub(r"\\s+", " ", sentence).strip().casefold()
+        re.sub(r"\s+", " ", sentence).strip().casefold()
         for chapter in (chapters or []) if isinstance(chapter, dict)
-        for sentence in re.split(r"(?<=[.!?؟。؛۔])\\s+", str(chapter.get("narration") or ""))
+        for sentence in re.split(r"(?<=[.!?؟。؛۔])\s+", str(chapter.get("narration") or ""))
         if sentence.strip()
     ]
     return (len(set(rows)) / len(rows)) if rows else 0.0
