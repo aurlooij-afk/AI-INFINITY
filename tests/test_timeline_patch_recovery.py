@@ -520,10 +520,11 @@ def test_professional_concat_manifest_uses_physical_newlines_for_each_segment(tm
 
     manifest = base._concat_manifest_text(segments)
     lines = manifest.splitlines()
+    expected_second = "file '" + str(segments[1].resolve()).replace("'", "'\\''") + "'"
 
     assert len(lines) == 2
-    assert all(line.startswith("file '") and line.endswith("'") for line in lines)
-    assert lines[0].endswith("scene 01.mp4'")
-    assert "scene '\\\\''02.mp4'" in lines[1]
-    assert manifest.count("\\n") == 2
+    assert lines[0] == "file '" + str(segments[0].resolve()) + "'"
+    assert lines[1] == expected_second
+    assert manifest.endswith("\n")
+    assert manifest.count("\n") == 2
     assert "mp4nfile" not in manifest
