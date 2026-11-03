@@ -1617,18 +1617,19 @@ def _required_narration_word_count(duration_seconds: Any, speaking_rate_wpm: Any
 def _gemini_free_tier_text_model() -> Optional[Callable]:
     """Return an explicitly acknowledged Google AI Studio Free Tier writer.
 
-    This deliberately uses only the documented free-tier Gemini 2.5 Flash-Lite
-    model. No paid model fallback is attempted. The owner must separately confirm
-    that the key belongs to a Free Tier AI Studio project and accept the Free Tier
-    data-use terms before this adapter makes requests.
+    This adapter uses only the documented Free Tier Gemini 3.1 Flash-Lite model.
+    No paid model fallback is attempted. The owner must separately confirm that
+    the key belongs to a Free Tier AI Studio project and accept the Free Tier
+    data-use terms before this adapter makes requests. Google may change model
+    availability and free quotas; provider errors remain visible and fail closed.
     """
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     acknowledged = os.getenv("AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK", "").strip().lower()
-    model = os.getenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", "gemini-3.5-flash-lite").strip()
+    model = os.getenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", "gemini-3.1-flash-lite").strip()
     if not api_key or acknowledged not in {"1", "true", "yes", "on"}:
         return None
-    # Do not let a model override silently route requests to a paid/unknown model.
-    if model != "gemini-3.5-flash-lite":
+    # Never let configuration route this no-cost adapter to a paid/unknown model.
+    if model != "gemini-3.1-flash-lite":
         return None
 
     def call(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1763,9 +1764,20 @@ Return ONLY JSON with:
 title, hook, premise, audience, tone, cta, language, platform_adaptations, chapters
 Each chapter must include: heading, narration, visual_query, image_prompt, on_screen, duration, proof_needed.
 Use 5-18 chapters. Total durations should approximately equal the target. Narration must be original and information-dense rather than filler. Make every visual_query materially different from the previous scene. Favor concrete locations, people, objects, processes, macro details, environmental shots, diagrams or editorial compositions that can be found or generated for this exact topic. Never put generic labels such as "Hook" or "The key idea" in image prompts. On-screen text should be a concise claim or phrase, not a duplicate section heading. Separate factual claims from creative framing. For unsupported facts, put the topic/claim in proof_needed. Avoid deceptive impersonation, fabricated citations and synthetic claims presented as observed events."""
-    if model_fn is None and (
-        os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
-    ) and os.getenv("AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK", "").strip().lower() in {"1", "true", "yes", "on"}:
+    # Select an actually configured, explicitly authorized no-cost writer. Gemini
+    # was previously implemented but never wired into this selector, so a valid
+    # Free Tier key could sit unused while long-form jobs silently fell back to the
+    # deterministic outline. Do not make external calls when the global provider
+    # kill switch is active.
+    if model_fn is None and not _external_providers_disabled():
+        model_fn = _gemini_free_tier_text_model()
+
+    if (
+        model_fn is None
+        and not _external_providers_disabled()
+        and (os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip())
+        and os.getenv("AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK", "").strip().lower() in {"1", "true", "yes", "on"}
+    ):
         def _hf_model_call(call_payload):
             messages = call_payload.get("messages") if isinstance(call_payload, dict) else []
             user_prompt = "\n\n".join(
@@ -1855,6 +1867,8 @@ EXISTING PLAN JSON:
                     clean["script_generation"] = {
                         "status": "complete" if best_words >= required_words else "underwritten",
                         "provider": provider,
+                        "model_finish_reason": raw.get("finish_reason"),
+                        "usage": raw.get("usage") if isinstance(raw.get("usage"), dict) else None,
                         "speaking_rate_wpm": speaking_rate_wpm,
                         "required_spoken_words": required_words,
                         "actual_spoken_words": best_words,
@@ -1865,7 +1879,17 @@ EXISTING PLAN JSON:
                 return clean, provider
         except Exception:
             pass
-    hf_plan, hf_provider = _hf_creator_plan(prompt, language)
+    # Only attempt the Hugging Face fallback when its explicit free-tier and
+    # data-use acknowledgement is present. This avoids a hidden second provider
+    # request after a Gemini call has already failed or exhausted its free quota.
+    hf_plan = None
+    hf_provider = "not_configured"
+    if (
+        not _external_providers_disabled()
+        and (os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip())
+        and os.getenv("AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK", "").strip().lower() in {"1", "true", "yes", "on"}
+    ):
+        hf_plan, hf_provider = _hf_creator_plan(prompt, language)
     if hf_plan:
         return hf_plan, hf_provider
     fallback_plan = _fallback_creative_plan(
