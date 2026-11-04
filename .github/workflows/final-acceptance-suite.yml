@@ -27,6 +27,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Build authoritative Docker runtime
+        id: build_runtime
         run: docker build --pull -t ai-infinity-final-acceptance .
 
       - name: Verify real Gemini Free Tier writer response
@@ -61,6 +62,7 @@ jobs:
 
       - name: Verify live object-store snapshot round-trip and fresh-process restore
         id: project_state_storage
+        if: ${{ always() && steps.build_runtime.outcome == 'success' }}
         continue-on-error: true
         env:
           AI_INFINITY_PROJECT_STATE_BACKEND: ${{ vars.AI_INFINITY_PROJECT_STATE_BACKEND || 'backblaze_b2' }}
@@ -110,6 +112,7 @@ jobs:
 
       - name: Verify live authenticated Wan2.2 GPU inference (explicit owner acknowledgement)
         id: wan_live_inference
+        if: ${{ always() && steps.build_runtime.outcome == 'success' }}
         continue-on-error: true
         env:
           AI_INFINITY_WAN_WORKER_URL: ${{ secrets.AI_INFINITY_WAN_WORKER_URL }}
@@ -137,6 +140,7 @@ jobs:
           echo "WAN_GPU_INFERENCE_GATE=PASS"
 
       - name: Run 13-scenario real acceptance suite (20s baseline, 60s flagship, 900s long-form; 720p/1080p)
+        if: ${{ always() && steps.build_runtime.outcome == 'success' }}
         env:
           CI: "true"
           AI_INFINITY_SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
