@@ -268,6 +268,7 @@ jobs:
           path: |
             final-acceptance-result.json
             production-certificate.json
+            production-readiness-report.json
             acceptance-evidence/**
           if-no-files-found: warn
 
@@ -279,18 +280,26 @@ jobs:
           import os
           from pathlib import Path
 
-          path = Path("production-certificate.json")
-          if not path.is_file():
-              raise SystemExit("Production certificate was not generated.")
-          certificate = json.loads(path.read_text(encoding="utf-8"))
-          requirements = certificate.get("production_requirements")
-          if not isinstance(requirements, dict):
-              raise SystemExit("Production certificate has no structured gate requirements.")
+          certificate_path = Path("production-certificate.json")
+          report_path = Path("production-readiness-report.json")
+          if certificate_path.is_file():
+              record = json.loads(certificate_path.read_text(encoding="utf-8"))
+              if record.get("certificate_generated") is not True:
+                  raise SystemExit("A certificate file exists without all seven gates passing.")
+          elif report_path.is_file():
+              record = json.loads(report_path.read_text(encoding="utf-8"))
+          else:
+              raise SystemExit("Neither a production certificate nor a readiness report was generated.")
 
-          print("CANDIDATE_SHA=" + str(certificate.get("candidate_commit_sha")))
-          print("ENGINEERING_STATE=" + str(certificate.get("ENGINEERING_STATE")))
-          print("PRODUCTION_VERIFIED=" + str(certificate.get("PRODUCTION_VERIFIED")))
-          print("CREATIVE_APPROVAL=" + str(certificate.get("CREATIVE_APPROVAL")))
+          requirements = record.get("production_requirements")
+          if not isinstance(requirements, dict):
+              raise SystemExit("Production evidence has no structured gate requirements.")
+
+          print("CANDIDATE_SHA=" + str(record.get("candidate_commit_sha")))
+          print("ENGINEERING_STATE=" + str(record.get("ENGINEERING_STATE")))
+          print("PRODUCTION_VERIFIED=" + str(record.get("PRODUCTION_VERIFIED")))
+          print("CREATIVE_APPROVAL=" + str(record.get("CREATIVE_APPROVAL")))
+          print("CERTIFICATE_GENERATED=" + str(record.get("certificate_generated")))
 
           pre_release_gates = (
               "engineering_acceptance",
@@ -305,7 +314,7 @@ jobs:
           if event_name == "pull_request":
               if failed_pre_release:
                   print("FAILED_PRE_RELEASE_GATES=" + json.dumps(failed_pre_release))
-                  raise SystemExit("PR acceptance requires all engineering, rights, OTIO, durable-storage and live-GPU gates to pass.")
+                  raise SystemExit("PR acceptance requires engineering, rights, OTIO, durable-storage and live-GPU gates to pass.")
               pending_release = [
                   name for name in (
                       "exact_candidate_live_deployment",
@@ -318,9 +327,9 @@ jobs:
               print("PENDING_POST_DEPLOY_GATES=" + json.dumps(pending_release))
               raise SystemExit(0)
 
-          if certificate.get("PRODUCTION_VERIFIED") != "PASS":
-              print("BLOCKED_GATES=" + json.dumps(certificate.get("remaining_blockers", [])))
-              raise SystemExit("Post-deploy production certification requires all seven candidate-bound gates to pass.")
+          if not certificate_path.is_file() or record.get("PRODUCTION_VERIFIED") != "PASS":
+              print("BLOCKED_GATES=" + json.dumps(record.get("remaining_blockers", [])))
+              raise SystemExit("A production certificate is issued only after all seven candidate-bound gates pass.")
 
           print("PRODUCTION_CERTIFICATION=PASS")
           PY
