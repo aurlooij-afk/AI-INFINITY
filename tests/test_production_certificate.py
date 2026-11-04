@@ -143,13 +143,18 @@ def test_production_certificate_rejects_approval_for_another_commit():
     assert "human_creative_and_rights_approval" in certificate["remaining_blockers"]
 
 
-def test_certificate_cli_writes_revision_bound_record_when_external_evidence_is_missing(tmp_path: Path):
+def test_certificate_cli_writes_gate_report_not_certificate_when_evidence_is_missing(tmp_path: Path):
     candidate = "f" * 40
     acceptance_path = tmp_path / "acceptance.json"
     acceptance_path.write_text(json.dumps(_passing_acceptance()), encoding="utf-8")
     output = tmp_path / "production-certificate.json"
+    report = tmp_path / "production-gate-report.json"
     gemini_path = tmp_path / "gemini-writer-verification.json"
-    gemini_path.write_text(json.dumps({"status": "PASS", "model": "gemini-3.1-flash-lite", "response_sha256": "c" * 64}), encoding="utf-8")
+    gemini_path.write_text(json.dumps({
+        "status": "PASS",
+        "model": "gemini-3.1-flash-lite",
+        "response_sha256": "c" * 64,
+    }), encoding="utf-8")
     script = Path(__file__).resolve().parents[1] / "scripts" / "create_production_certificate.py"
 
     completed = subprocess.run(
@@ -172,6 +177,83 @@ def test_certificate_cli_writes_revision_bound_record_when_external_evidence_is_
             str(tmp_path / "missing-human-approval.json"),
             "--output",
             str(output),
+            "--report",
+            str(report),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert not output.exists(), "A blocked candidate must never receive a production certificate."
+    gate_report = json.loads(report.read_text(encoding="utf-8"))
+    assert gate_report["schema"] == "ai-infinity-production-gate-report.v1"
+    assert gate_report["candidate_commit_sha"] == candidate
+    assert gate_report["ENGINEERING_STATE"] == "PASS"
+    assert gate_report["PRODUCTION_VERIFIED"] == "BLOCKED"
+    assert gate_report["CREATIVE_APPROVAL"] == "PENDING"
+    assert "certificate_sha256" not in gate_report
+
+
+def test_certificate_cli_issues_certificate_only_when_every_gate_passes(tmp_path: Path):
+    candidate = "c" * 40
+    media_sha = "a" * 64
+    acceptance_path = tmp_path / "acceptance.json"
+    acceptance_path.write_text(json.dumps(_passing_acceptance()), encoding="utf-8")
+    gemini_path = tmp_path / "gemini-writer-verification.json"
+    gemini_path.write_text(json.dumps({
+        "status": "PASS",
+        "model": "gemini-3.1-flash-lite",
+        "response_sha256": "d" * 64,
+    }), encoding="utf-8")
+    storage_path = tmp_path / "storage.json"
+    storage_path.write_text(json.dumps({"status": "PASS"}), encoding="utf-8")
+    inference_path = tmp_path / "inference.json"
+    inference_path.write_text(json.dumps({"status": "PASS"}), encoding="utf-8")
+    deployment_path = tmp_path / "deployment.json"
+    deployment_path.write_text(json.dumps({
+        "status": "PASS",
+        "deployed_commit_sha": candidate,
+    }), encoding="utf-8")
+    human_path = tmp_path / "human-approval.json"
+    human_path.write_text(json.dumps({
+        "candidate_commit_sha": candidate,
+        "reviewed_media_sha256": media_sha,
+        "reviewer": "project_owner",
+        "reviewed_at_utc": "2026-11-04T00:00:00Z",
+        "review_notes": "Reviewed the complete exact media cut and approved the creative result.",
+        "approved": True,
+        "average_score": 4.7,
+        "dimension_scores": {
+            "director": 4.8,
+            "cinematographer": 4.5,
+            "editor": 4.7,
+            "sound": 4.2,
+            "story": 4.8,
+            "rights": 4.7,
+        },
+        "rights_approval": True,
+        "rights_notes": "Reviewed source and licence records for the exact media SHA.",
+    }), encoding="utf-8")
+    output = tmp_path / "production-certificate.json"
+    report = tmp_path / "production-gate-report.json"
+    script = Path(__file__).resolve().parents[1] / "scripts" / "create_production_certificate.py"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--candidate-sha", candidate,
+            "--acceptance", str(acceptance_path),
+            "--gemini-writer", str(gemini_path),
+            "--storage", str(storage_path),
+            "--inference", str(inference_path),
+            "--deployment", str(deployment_path),
+            "--human-approval", str(human_path),
+            "--output", str(output),
+            "--report", str(report),
         ],
         capture_output=True,
         text=True,
@@ -182,10 +264,12 @@ def test_certificate_cli_writes_revision_bound_record_when_external_evidence_is_
     assert completed.returncode == 0, completed.stdout + completed.stderr
     certificate = json.loads(output.read_text(encoding="utf-8"))
     assert certificate["candidate_commit_sha"] == candidate
-    assert certificate["ENGINEERING_STATE"] == "PASS"
-    assert certificate["PRODUCTION_VERIFIED"] == "BLOCKED"
-    assert certificate["CREATIVE_APPROVAL"] == "PENDING"
+    assert certificate["PRODUCTION_VERIFIED"] == "PASS"
+    assert certificate["CREATIVE_APPROVAL"] == "PASS"
+    assert certificate["remaining_blockers"] == []
+    assert certificate["reviewed_media_sha256"] == media_sha
     assert certificate["certificate_sha256"]
+    assert not report.exists()
 
 
 
