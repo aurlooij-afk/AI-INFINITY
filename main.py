@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 from fastapi import FastAPI, Request, Response
 import ai_infinity_canonical
+import universal_command_batch
 import reality_first_3901
 import studio_ultimate
 import production_graph
@@ -72,6 +73,7 @@ production_openai_video.install()
 production_closure_3624.install()
 editorial_review_3625.install()
 ai_infinity_canonical.register(app)
+universal_command_batch.register(app)
 studio_ultimate.register(app)
 reality_first_3901.register(app)
 production_graph.register(app)
