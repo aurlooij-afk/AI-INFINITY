@@ -160,8 +160,8 @@ def test_production_certificate_keeps_external_and_human_gates_separate():
     assert certificate["ENGINEERING_STATE"] == "PASS"
     assert certificate["PRODUCTION_VERIFIED"] == "BLOCKED"
     assert certificate["CREATIVE_APPROVAL"] == "PENDING"
-    assert certificate["gates"]["durable_storage"] == "FAIL_OR_INCOMPLETE"
-    assert certificate["gates"]["live_gpu_inference"] == "FAIL_OR_INCOMPLETE"
+    assert certificate["gates"]["durable_storage"] == "BLOCKED"
+    assert certificate["gates"]["live_gpu_inference"] == "BLOCKED"
     assert certificate["gates"]["live_deployment"] == "BLOCKED"
     assert certificate["gates"]["otio_import_and_rerender"] == "PASS"
     assert certificate["certificate_sha256"]
