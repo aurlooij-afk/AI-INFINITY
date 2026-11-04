@@ -230,7 +230,13 @@ def main() -> int:
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     generated = record.get("certificate_generated") is True
-    output_path = args.output if generated else args.output.with_name("production-readiness-report.json")
+    readiness_path = args.output.with_name("production-readiness-report.json")
+    if generated:
+        readiness_path.unlink(missing_ok=True)
+        output_path = args.output
+    else:
+        args.output.unlink(missing_ok=True)
+        output_path = readiness_path
     output_path.write_text(json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     summary = {
         "candidate_commit_sha": record["candidate_commit_sha"],
