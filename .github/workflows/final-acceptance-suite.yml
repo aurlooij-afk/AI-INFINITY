@@ -26,9 +26,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Build authoritative Docker runtime
-        run: docker build --pull -t ai-infinity-final-acceptance .
-
       - name: Verify real Gemini Free Tier writer response
         id: gemini_writer
         continue-on-error: true
@@ -44,12 +41,7 @@ jobs:
           # candidate evidence with an explicit BLOCKED/FAIL reason. This also lets
           # independent B2 and GPU gates run in the same attempt.
           set +e
-          docker run --rm --network host \
-            -e GEMINI_API_KEY -e AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK -e AI_INFINITY_GEMINI_FREE_TIER_MODEL \
-            -v "${GITHUB_WORKSPACE}:/workspace:ro" \
-            -v "${GITHUB_WORKSPACE}/acceptance-evidence:/evidence" \
-            -w /workspace --entrypoint python ai-infinity-final-acceptance \
-            scripts/verify_gemini_writer.py --output /evidence/gemini-writer-verification.json
+          python scripts/verify_gemini_writer.py --output acceptance-evidence/gemini-writer-verification.json
           verify_status=$?
           set -e
           writer_status="FAIL"
@@ -67,6 +59,9 @@ jobs:
           fi
           echo "::error::Gemini writer verification failed; see the redacted verification artifact."
           exit 1
+
+      - name: Build authoritative Docker runtime
+        run: docker build --pull -t ai-infinity-final-acceptance .
 
       - name: Verify live object-store snapshot round-trip and fresh-process restore
         id: project_state_storage
