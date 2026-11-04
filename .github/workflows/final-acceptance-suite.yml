@@ -32,25 +32,25 @@ jobs:
       - name: Verify real Gemini Free Tier writer response
         id: gemini_writer
         env:
-          GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
-          AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK: \${{ vars.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK: ${{ vars.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK }}
           AI_INFINITY_GEMINI_FREE_TIER_MODEL: gemini-3.1-flash-lite
         run: |
           set -euo pipefail
-          if [[ -z "\${GEMINI_API_KEY:-}" ]]; then
+          if [[ -z "${GEMINI_API_KEY:-}" ]]; then
             echo "::error::GitHub Actions secret GEMINI_API_KEY is missing or empty."
             exit 1
           fi
-          case "\${AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK,,}" in
+          case "${AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK,,}" in
             true|1|yes|on) ;;
             *) echo "::error::Set AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK to exact true only after accepting Google's Free Tier data-use terms."; exit 1 ;;
           esac
-          mkdir -p "\${GITHUB_WORKSPACE}/acceptance-evidence"
-          chmod 0777 "\${GITHUB_WORKSPACE}/acceptance-evidence"
+          mkdir -p "${GITHUB_WORKSPACE}/acceptance-evidence"
+          chmod 0777 "${GITHUB_WORKSPACE}/acceptance-evidence"
           docker run --rm --network host \\
             -e GEMINI_API_KEY -e AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK -e AI_INFINITY_GEMINI_FREE_TIER_MODEL \\
-            -v "\${GITHUB_WORKSPACE}:/workspace:ro" \\
-            -v "\${GITHUB_WORKSPACE}/acceptance-evidence:/evidence" \\
+            -v "${GITHUB_WORKSPACE}:/workspace:ro" \\
+            -v "${GITHUB_WORKSPACE}/acceptance-evidence:/evidence" \\
             -w /workspace --entrypoint python ai-infinity-final-acceptance \\
             scripts/verify_gemini_writer.py --output /evidence/gemini-writer-verification.json
 
