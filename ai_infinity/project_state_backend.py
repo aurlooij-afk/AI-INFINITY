@@ -656,6 +656,10 @@ def snapshot_now() -> Dict[str, Any]:
             return {"status": "disabled", "truthful": True}
 
         tmp: Optional[Path] = None
+        client = None
+        backend_name = _cfg()["backend"]
+        base_object_key = object_key()
+        snapshot_object_key = base_object_key
         try:
             tmp = _snapshot_database()
             size = tmp.stat().st_size
@@ -664,10 +668,7 @@ def snapshot_now() -> Dict[str, Any]:
             digest = _sha256_path(tmp)
             stamp = str(time.time())
             client = _client()
-            backend_name = _cfg()["backend"]
-            base_object_key = object_key()
             previous_snapshot_key = None
-            snapshot_object_key = base_object_key
             if backend_name == "supabase_s3":
                 try:
                     previous_snapshot_key = str(
@@ -775,7 +776,8 @@ def snapshot_now() -> Dict[str, Any]:
             return {"status": "verified", "size_bytes": size, "sha256": digest, "snapshot_at": stamp, "object_key": snapshot_object_key, "truthful": True}
         except Exception as exc:
             if (
-                backend_name == "supabase_s3"
+                client is not None
+                and backend_name == "supabase_s3"
                 and snapshot_object_key != base_object_key
             ):
                 # If a new immutable version was uploaded but the manifest was
