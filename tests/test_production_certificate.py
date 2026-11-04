@@ -64,7 +64,10 @@ def test_production_certificate_keeps_external_and_human_gates_separate():
     assert certificate["gates"]["live_gpu_inference"] == "BLOCKED"
     assert certificate["gates"]["live_deployment"] == "BLOCKED"
     assert certificate["gates"]["otio_import_and_rerender"] == "PASS"
-    assert certificate["certificate_sha256"]
+    assert certificate["certificate_generated"] is False
+    assert certificate["artifact_type"] == "production_readiness_report"
+    assert "certificate_sha256" not in certificate
+    assert certificate["readiness_report_sha256"]
     assert certificate["truthful"] is True
 
 
@@ -98,6 +101,9 @@ def test_production_certificate_passes_only_with_every_exact_candidate_gate():
     assert certificate["PRODUCTION_VERIFIED"] == "PASS"
     assert certificate["CREATIVE_APPROVAL"] == "PASS"
     assert certificate["remaining_blockers"] == []
+    assert certificate["certificate_generated"] is True
+    assert certificate["artifact_type"] == "production_certificate"
+    assert certificate["certificate_sha256"]
 
 
 def test_production_certificate_rejects_approval_for_another_commit():
@@ -128,10 +134,12 @@ def test_production_certificate_rejects_approval_for_another_commit():
 
     assert certificate["CREATIVE_APPROVAL"] == "PENDING"
     assert certificate["PRODUCTION_VERIFIED"] == "BLOCKED"
+    assert certificate["certificate_generated"] is False
+    assert "certificate_sha256" not in certificate
     assert "human_creative_and_rights_approval" in certificate["remaining_blockers"]
 
 
-def test_certificate_cli_writes_revision_bound_record_when_external_evidence_is_missing(tmp_path: Path):
+def test_certificate_cli_writes_readiness_report_not_certificate_when_gates_are_missing(tmp_path: Path):
     candidate = "f" * 40
     acceptance_path = tmp_path / "acceptance.json"
     acceptance_path.write_text(json.dumps(_passing_acceptance(candidate)), encoding="utf-8")
@@ -168,12 +176,16 @@ def test_certificate_cli_writes_revision_bound_record_when_external_evidence_is_
     )
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    certificate = json.loads(output.read_text(encoding="utf-8"))
+    report_path = tmp_path / "production-readiness-report.json"
+    assert not output.exists(), "blocked gates must never create a production certificate"
+    assert report_path.is_file()
+    certificate = json.loads(report_path.read_text(encoding="utf-8"))
     assert certificate["candidate_commit_sha"] == candidate
     assert certificate["ENGINEERING_STATE"] == "PASS"
     assert certificate["PRODUCTION_VERIFIED"] == "BLOCKED"
     assert certificate["CREATIVE_APPROVAL"] == "PENDING"
-    assert certificate["certificate_sha256"]
+    assert certificate["certificate_generated"] is False
+    assert certificate["readiness_report_sha256"]
 
 
 def test_live_deployment_verification_requires_exact_trusted_render_revision():
