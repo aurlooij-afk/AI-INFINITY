@@ -249,6 +249,13 @@ def compile_intent(command,raw):
         (r"\b(?:static website|website package|website|web site|landing page|microsite)\b","website"),
         (r"\b(?:word document|docx|document)\b","document"),
         (r"\b(?:powerpoint|presentation|slide deck|slides)\b","presentation"),
+        (r"(?:ویڈیو|ویدیو|ویدئوی|ویډیو|فيديو|مقطع|فلم|فیلم)","video"),
+        (r"(?:پوڈکاسٹ|پادکست|پوډکاسټ|بودكاست)","podcast"),
+        (r"(?:مضمون|مقالہ|مقاله|گزارش|مقال|تقرير)","article"),
+        (r"(?:سوشل\s+(?:پوسٹ|مہم)|پست\s+اجتماعی|کمپین|ټولنیز\s+پوسټ|منشور|حملة)","social"),
+        (r"(?:ویب\s*سائٹ|وب.?سایت|ویبپاڼه|موقع\s+(?:إلكتروني|ويب)|صفحه\s+وب)","website"),
+        (r"(?:ورڈ\s*ڈاکیومنٹ|ورډ\s+سند|مستند\s+وورد|ملف\s+وورد|سند\s+ورد)","document"),
+        (r"(?:عرض\s+تقديمي|پاورپوائنٹ|پاورپوینټ|پرزینتیشن|پریزنٹیشن|ارائه\s+اسلایدی)","presentation"),
     )
     intent_matches=[]
     for pattern, inferred_type in intent_patterns:
