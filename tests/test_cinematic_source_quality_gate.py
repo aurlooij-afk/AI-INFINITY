@@ -302,11 +302,17 @@ def test_scene_concatenation_copies_rendered_video_but_reencodes_aac_audio(monke
         scene.write_bytes((f"rendered scene fixture {index + 1}".encode("utf-8") * 2000))
         scenes.append(scene)
     output = tmp_path / "master.mp4"
-    captured = {}
+    captured = {"calls": [], "manifests": []}
 
     def fake_ffmpeg(*args, timeout=240):
-        captured["args"] = list(args)
-        Path(args[-1]).write_bytes(b"assembled master fixture" * 2000)
+        args = list(args)
+        captured["calls"].append(args)
+        if "-f" in args and args[args.index("-f") + 1] == "concat":
+            manifest_path = Path(args[args.index("-i") + 1])
+            captured["manifests"].append(manifest_path.read_text(encoding="utf-8"))
+        target = args[-1]
+        if str(target) != "-" and Path(target).suffix in {".wav", ".mp4"}:
+            Path(target).write_bytes(b"normalized media fixture" * 2000)
 
     monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
     # reality_first_3901 wraps the concat function during normal app startup and
@@ -320,15 +326,17 @@ def test_scene_concatenation_copies_rendered_video_but_reencodes_aac_audio(monke
 
     studio.concat_segments(scenes, output)
 
-    args = captured["args"]
-    assert args[args.index("-c:v") + 1] == "copy"
-    assert args[args.index("-c:a") + 1] == "aac"
-    assert args[args.index("-b:a") + 1] == "192k"
-    assert args[args.index("-ar") + 1] == "48000"
-    assert args[args.index("-ac") + 1] == "2"
-    manifest_path = Path(args[args.index("-i") + 1])
-    manifest = manifest_path.read_text(encoding="utf-8")
-    assert all(str(scene) in manifest for scene in scenes)
+    final_mux = next(call for call in captured["calls"] if call[-1] == output)
+    assert final_mux[final_mux.index("-c:v") + 1] == "copy"
+    assert final_mux[final_mux.index("-c:a") + 1] == "aac"
+    assert final_mux[final_mux.index("-b:a") + 1] == "192k"
+    assert final_mux[final_mux.index("-ar") + 1] == "48000"
+    assert final_mux[final_mux.index("-ac") + 1] == "2"
+    assert final_mux[final_mux.index("-map") + 1] == "0:v:0"
+    assert final_mux[final_mux.index("-map", final_mux.index("-map") + 1) + 1] == "1:a:0"
+    assert sum(call[-1] != "-" and Path(call[-1]).suffix == ".wav" for call in captured["calls"]) >= 3
+    assert len(captured["manifests"]) == 2
+    assert all(str(scene) in captured["manifests"][1] for scene in scenes)
     assert output.is_file()
     assert output.stat().st_size > 10_000
 
