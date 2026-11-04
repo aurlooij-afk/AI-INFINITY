@@ -220,6 +220,7 @@ def main() -> int:
     parser.add_argument("--deployment", type=Path, default=Path("acceptance-evidence/live-deployment-verification.json"))
     parser.add_argument("--human-approval", type=Path, default=Path("acceptance-evidence/human-creative-approval.json"))
     parser.add_argument("--output", type=Path, default=Path("production-certificate.json"))
+    parser.add_argument("--report", type=Path, default=Path("production-gate-report.json"))
     args = parser.parse_args()
 
     if len(args.candidate_sha) != 40 or any(c not in "0123456789abcdef" for c in args.candidate_sha.lower()):
@@ -244,19 +245,48 @@ def main() -> int:
         evidence_hashes={name: file_sha256(path) for name, path in paths.items()},
         gemini_writer=values["gemini_writer"],
     )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-    print(
-        "PRODUCTION_CERTIFICATE="
-        + json.dumps({
-            "candidate_commit_sha": record["candidate_commit_sha"],
-            "ENGINEERING_STATE": record["ENGINEERING_STATE"],
-            "PRODUCTION_VERIFIED": record["PRODUCTION_VERIFIED"],
-            "CREATIVE_APPROVAL": record["CREATIVE_APPROVAL"],
-            "certificate_sha256": record["certificate_sha256"],
-            "remaining_blockers": record["remaining_blockers"],
-        }, sort_keys=True)
-    )
+    if record["PRODUCTION_VERIFIED"] == "PASS":
+        # Only a fully passing, evidence-bound release receives a certificate.
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(
+            json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        args.report.unlink(missing_ok=True)
+        print(
+            "PRODUCTION_CERTIFICATE="
+            + json.dumps({
+                "candidate_commit_sha": record["candidate_commit_sha"],
+                "ENGINEERING_STATE": record["ENGINEERING_STATE"],
+                "PRODUCTION_VERIFIED": record["PRODUCTION_VERIFIED"],
+                "CREATIVE_APPROVAL": record["CREATIVE_APPROVAL"],
+                "certificate_sha256": record["certificate_sha256"],
+                "remaining_blockers": [],
+            }, sort_keys=True)
+        )
+    else:
+        # An incomplete attempt produces a gate report, never a certificate.
+        # Remove stale output so a previous pass cannot be mistaken for this run.
+        args.output.unlink(missing_ok=True)
+        report = dict(record)
+        report.pop("certificate_sha256", None)
+        report["schema"] = "ai-infinity-production-gate-report.v1"
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(
+            json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(
+            "PRODUCTION_GATE_REPORT="
+            + json.dumps({
+                "candidate_commit_sha": report["candidate_commit_sha"],
+                "ENGINEERING_STATE": report["ENGINEERING_STATE"],
+                "PRODUCTION_VERIFIED": report["PRODUCTION_VERIFIED"],
+                "CREATIVE_APPROVAL": report["CREATIVE_APPROVAL"],
+                "remaining_blockers": report["remaining_blockers"],
+                "report_file": str(args.report),
+            }, sort_keys=True)
+        )
     return 0
 
 
