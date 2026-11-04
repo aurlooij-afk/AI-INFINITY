@@ -610,6 +610,20 @@ def t1(s,b):
         "resolution":[int(video.get("width") or 0),int(video.get("height") or 0)],
         "fallback_visual_count":int(checks.get("fallback_visual_count") or 0),
         "visual_rights_unresolved_count":int(checks.get("visual_rights_unresolved_count") or 0),
+        "quality_truth_checks":{
+            key:checks.get(key) for key in (
+                "actual_rendered_scene_count","verified_motion_source_count",
+                "minimum_motion_source_count","visual_rights_evidence_present",
+                "fallback_visual_count","visual_rights_cleared_count",
+                "visual_rights_review_required_count","visual_rights_unresolved_count",
+                "research_sources",
+            ) if key in checks
+        },
+        "source_count":int(src.get("source_count") or len(src.get("sources") or [])),
+        "rights_asset_count":len(rights.get("assets") or []),
+        "package_sha256":sha(files["package.zip"]),
+        "package_size_bytes":files["package.zip"].stat().st_size,
+        "package_round_trip_hash_verified":True,
         "artifact_inventory":{name:{"size_bytes":path.stat().st_size,"sha256":sha(path)} for name,path in sorted(files.items()) if path.is_file()},
     }
 def t2(s,b):
