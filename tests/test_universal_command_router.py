@@ -157,6 +157,8 @@ def test_primary_director_mode_command_box_uses_canonical_router_and_renders_res
     assert 'if(route==="create")' in handler
     assert "authorization_required" in handler or "supported safe execution route" in handler
     assert 'onclick="createCommand()">Run command</button>' in html
+    for content_type in ("video", "podcast", "article", "social", "website", "document", "presentation"):
+        assert f'<option value="{content_type}">' in html
 
 
 def test_script_strategy_seo_analytics_publisher_and_monetization_are_distinct_routes():
