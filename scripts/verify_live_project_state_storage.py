@@ -197,8 +197,15 @@ def main() -> int:
             # Independently compare the object-store body bytes, ContentLength,
             # and SHA-256 metadata to the exact snapshot produced by the adapter.
             client = backend._client()
-            head = client.head_object(Bucket=backend._cfg()["bucket"], Key=verification_key)
-            body = client.get_object(Bucket=backend._cfg()["bucket"], Key=verification_key).get("Body")
+            snapshot_object_key = str(snapshot.get("object_key") or verification_key)
+            head = client.head_object(
+                Bucket=backend._cfg()["bucket"],
+                Key=snapshot_object_key,
+            )
+            body = client.get_object(
+                Bucket=backend._cfg()["bucket"],
+                Key=snapshot_object_key,
+            ).get("Body")
             if body is None:
                 raise RuntimeError("object-store snapshot GET returned no body")
             try:
@@ -220,6 +227,13 @@ def main() -> int:
                 or metadata_mismatch
             ):
                 raise RuntimeError("independent object-store snapshot read-back did not match size and SHA-256")
+            if _selected_backend() == "supabase_s3":
+                published = backend._head(verification_key)
+                if (
+                    published.get("object_key") != snapshot_object_key
+                    or published.get("sha256") != expected_sha256
+                ):
+                    raise RuntimeError("Supabase snapshot manifest did not reference the verified immutable object")
 
             os.environ["AI_INFINITY_STORAGE_VERIFY_MARKER"] = marker
             os.environ["AI_INFINITY_STORAGE_VERIFY_PAYLOAD_SHA256"] = payload_sha256
@@ -231,7 +245,7 @@ def main() -> int:
                 "canary": "PUT_HEAD_GET_SHA_PASS",
                 "snapshot": "PUT_HEAD_GET_SHA_PASS",
                 "fresh_process_restore": "PASS",
-                "object_key": verification_key,
+                "object_key": snapshot_object_key if "snapshot_object_key" in locals() else verification_key,
                 "snapshot_size_bytes": len(remote_bytes),
                 "snapshot_sha256": remote_sha256,
                 "restored_project_marker": fresh_restore["project_marker"],
@@ -257,11 +271,27 @@ def main() -> int:
             # The key is unique to this run and never aliases the live snapshot.
             try:
                 client = backend._client()
-                client.delete_object(Bucket=backend._cfg()["bucket"], Key=verification_key)
                 if _selected_backend() == "supabase_s3":
+                    published_key = (
+                        snapshot_object_key
+                        if "snapshot_object_key" in locals()
+                        else ""
+                    )
+                    if published_key.startswith(verification_key + ".versions/"):
+                        client.delete_object(
+                            Bucket=backend._cfg()["bucket"],
+                            Key=published_key,
+                        )
+                    # The manifest pointer belongs exclusively to this unique
+                    # verification namespace and is removed after its version object.
                     client.delete_object(
                         Bucket=backend._cfg()["bucket"],
                         Key=verification_key + ".manifest.json",
+                    )
+                else:
+                    client.delete_object(
+                        Bucket=backend._cfg()["bucket"],
+                        Key=verification_key,
                     )
             except Exception:
                 pass
