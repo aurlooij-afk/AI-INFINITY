@@ -824,10 +824,13 @@ def classify_command(command, raw=None):
         (r"(?:پوڈکاسٹ|پادکست|پوډکاسټ|بودكاست)", "podcast"),
         (r"(?:مضمون|مقالہ|مقاله|گزارش|مقال|تقرير)", "article"),
         (r"(?:سوشل\s+(?:پوسٹ|مہم)|پست\s+اجتماعی|کمپین|ټولنیز\s+پوسټ|منشور|حملة)", "social"),
+        (r"(?:ویب\s*سائٹ|وب.?سایت|ویبپاڼه|موقع\s+(?:إلكتروني|ويب)|صفحه\s+وب)", "website"),
+        (r"(?:ورڈ\s*ڈاکیومنٹ|ورډ\s+سند|مستند\s+وورد|ملف\s+وورد|سند\s+ورد)", "document"),
+        (r"(?:عرض\s+تقديمي|پاورپوائنٹ|پاورپوینټ|پرزینتیشن|پریزنٹیشن|ارائه\s+اسلایدی)", "presentation"),
     )
     localized_content_type = next((kind for pattern, kind in localized_types if re.search(pattern, low)), "")
     localized_unsupported = bool(re.search(
-        r"(?:ویب\s*سائٹ|وب.?سایت|ویبپاڼه|موقع\s+(?:إلكتروني|ويب)|تطبيق|جدول\s+بيانات|صفحه\s+گسترده|عرض\s+تقديمي|پاورپوائنٹ|قاعدة\s+بيانات)",
+        r"(?:تطبيق|ایپلیکیشن|اپلیکیشن|جدول\s+بيانات|صفحه\s+گسترده|سپریڈ\s*شیٹ|قاعدة\s+بيانات)",
         low,
     ))
     if localized_unsupported and not localized_content_type and localized_create:
@@ -843,7 +846,7 @@ def classify_command(command, raw=None):
         return {"route": "research", "reason": "Matched a supported multilingual research request."}
     if not explicit and localized_create:
         selected_type = localized_content_type or clean(payload.get("content_type"), 30).lower()
-        if selected_type not in {"video", "podcast", "article", "social"}:
+        if selected_type not in {"video", "podcast", "article", "social", "website", "document", "presentation"}:
             return {"route": "deliverable_required", "reason": "Specify a supported output: video, podcast, article/report, social package, website, editable Word document, or PowerPoint deck."}
         return {"route": "create", "content_type": selected_type, "reason": "Matched a supported multilingual creation request."}
 
