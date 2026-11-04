@@ -153,7 +153,7 @@ def build_certificate(
 
     blockers = [name for name, passed in production_requirements.items() if not passed]
     record: dict[str, Any] = {
-        "schema": "ai-infinity-production-certificate.v1",
+        "schema": "ai-infinity-production-certificate.v1" if production_pass else "ai-infinity-production-readiness-report.v1",
         "repository": "aurlooij-afk/AI-INFINITY",
         "candidate_commit_sha": candidate_sha,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -182,9 +182,15 @@ def build_certificate(
         "human_approval_evidence_present": human_approval is not None,
         "evidence_sha256": evidence_hashes,
         "truthful": True,
+        "certificate_generated": production_pass,
+        "artifact_type": "production_certificate" if production_pass else "production_readiness_report",
     }
     canonical = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    record["certificate_sha256"] = hashlib.sha256(canonical).hexdigest()
+    digest = hashlib.sha256(canonical).hexdigest()
+    if production_pass:
+        record["certificate_sha256"] = digest
+    else:
+        record["readiness_report_sha256"] = digest
     return record
 
 
@@ -223,18 +229,24 @@ def main() -> int:
         gemini_writer=values["gemini_writer"],
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-    print(
-        "PRODUCTION_CERTIFICATE="
-        + json.dumps({
-            "candidate_commit_sha": record["candidate_commit_sha"],
-            "ENGINEERING_STATE": record["ENGINEERING_STATE"],
-            "PRODUCTION_VERIFIED": record["PRODUCTION_VERIFIED"],
-            "CREATIVE_APPROVAL": record["CREATIVE_APPROVAL"],
-            "certificate_sha256": record["certificate_sha256"],
-            "remaining_blockers": record["remaining_blockers"],
-        }, sort_keys=True)
-    )
+    generated = record.get("certificate_generated") is True
+    output_path = args.output if generated else args.output.with_name("production-readiness-report.json")
+    output_path.write_text(json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    summary = {
+        "candidate_commit_sha": record["candidate_commit_sha"],
+        "ENGINEERING_STATE": record["ENGINEERING_STATE"],
+        "PRODUCTION_VERIFIED": record["PRODUCTION_VERIFIED"],
+        "CREATIVE_APPROVAL": record["CREATIVE_APPROVAL"],
+        "certificate_generated": generated,
+        "remaining_blockers": record["remaining_blockers"],
+    }
+    if generated:
+        summary["certificate_sha256"] = record["certificate_sha256"]
+        print("PRODUCTION_CERTIFICATE=" + json.dumps(summary, sort_keys=True))
+    else:
+        summary["readiness_report_sha256"] = record["readiness_report_sha256"]
+        print("PRODUCTION_CERTIFICATE=NOT_GENERATED")
+        print("PRODUCTION_READINESS_REPORT=" + json.dumps(summary, sort_keys=True))
     return 0
 
 
