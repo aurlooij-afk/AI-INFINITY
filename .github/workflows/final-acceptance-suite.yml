@@ -160,7 +160,9 @@ jobs:
             --wait-seconds 900
 
       - name: Run 13-scenario real acceptance suite (20s baseline, 60s flagship, 900s long-form; 720p/1080p)
-        if: steps.gemini_writer.outputs.status == 'PASS'
+        # Run every independent scenario even when Gemini is blocked. The long-form
+        # scenario must fail its truthful preflight; the remaining scenarios still
+        # produce diagnostic evidence. The certificate remains gated on Gemini PASS.
         env:
           CI: "true"
           AI_INFINITY_SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
