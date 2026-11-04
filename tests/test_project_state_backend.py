@@ -786,7 +786,6 @@ def test_live_storage_verifier_reports_blocked_without_credentials(monkeypatch, 
     assert result["round_trip"] == "not_attempted"
     assert result["fresh_process_restore"] == "not_attempted"
     assert result["truthful"] is True
-    assert result["truthful"] is True
 
 
 def test_supabase_s3_project_state_backend_uses_generated_s3_credentials_and_region(monkeypatch):
