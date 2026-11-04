@@ -84,6 +84,10 @@ def build_certificate(
     scenario_statuses = [str(row.get("status") or "") for row in scenarios.values()]
     longform = scenarios.get("12", {}).get("result", {})
     longform_script = longform.get("script_generation") if isinstance(longform.get("script_generation"), dict) else {}
+    acceptance_candidate_bound = bool(
+        acceptance
+        and str(acceptance.get("source_revision") or "").lower() == candidate_sha.lower()
+    )
     longform_gemini_pass = bool(
         longform_script.get("status") == "complete"
         and str(longform_script.get("provider") or "").startswith("google-gemini-free-tier:gemini-3.1-flash-lite")
@@ -92,13 +96,15 @@ def build_certificate(
     )
     gemini_writer_pass = bool(
         isinstance(gemini_writer, dict)
+        and str(gemini_writer.get("candidate_commit_sha") or "").lower() == candidate_sha.lower()
         and gemini_writer.get("status") == "PASS"
         and gemini_writer.get("model") == "gemini-3.1-flash-lite"
         and isinstance(gemini_writer.get("response_sha256"), str)
         and len(gemini_writer.get("response_sha256")) == 64
     )
     engineering_pass = bool(
-        acceptance
+        acceptance_candidate_bound
+        and acceptance
         and acceptance.get("overall_status") == "PASS"
         and acceptance.get("passed") is True
         and int(acceptance.get("completed_scenarios") or 0) == 13
@@ -130,9 +136,9 @@ def build_certificate(
         and otio.get("otio_rerender_full_decode_passed") is True
         and bool(otio.get("otio_rerender_sha256"))
     )
-    live_deployment_pass = deployment_status == "PASS" and deployment_sha == candidate_sha
-    storage_pass = storage_status == "PASS"
-    inference_pass = inference_status == "PASS"
+    live_deployment_pass = bool(deployment_status == "PASS" and deployment_sha == candidate_sha and str((deployment or {}).get("candidate_commit_sha") or "").lower() == candidate_sha.lower())
+    storage_pass = storage_status == "PASS" and str((storage or {}).get("candidate_commit_sha") or "").lower() == candidate_sha.lower()
+    inference_pass = inference_status == "PASS" and str((inference or {}).get("candidate_commit_sha") or "").lower() == candidate_sha.lower()
 
     production_requirements = {
         "engineering_acceptance": engineering_pass,
@@ -155,16 +161,17 @@ def build_certificate(
         "PRODUCTION_VERIFIED": "PASS" if production_pass else "BLOCKED",
         "CREATIVE_APPROVAL": creative_approval,
         "gates": {
-            "final_acceptance": "PASS" if engineering_pass else str((acceptance or {}).get("overall_status") or "MISSING"),
-            "gemini_writer_preflight": "PASS" if gemini_writer_pass else "BLOCKED_OR_FAIL",
+            "final_acceptance": "PASS" if engineering_pass else ("BLOCKED_CANDIDATE_MISMATCH" if acceptance and not acceptance_candidate_bound else str((acceptance or {}).get("overall_status") or "MISSING")),
+            "gemini_writer_preflight": "PASS" if gemini_writer_pass else ("BLOCKED_CANDIDATE_MISMATCH" if isinstance(gemini_writer, dict) and gemini_writer.get("status") == "PASS" and str(gemini_writer.get("candidate_commit_sha") or "").lower() != candidate_sha.lower() else "BLOCKED_OR_FAIL"),
             "900s_gemini_narration": "PASS" if longform_gemini_pass else "FAIL_OR_MISSING",
             "flagship_technical_and_rights_evidence": "PASS" if technical_rights_pass else "FAIL_OR_MISSING",
             "otio_import_and_rerender": "PASS" if otio_rerender_pass else "BLOCKED",
-            "durable_storage": storage_status if storage_status in {"PASS", "FAIL", "BLOCKED"} else "FAIL",
-            "live_gpu_inference": inference_status if inference_status in {"PASS", "FAIL", "BLOCKED"} else "FAIL",
+            "durable_storage": "PASS" if storage_pass else ("BLOCKED_CANDIDATE_MISMATCH" if storage_status == "PASS" else storage_status if storage_status in {"FAIL", "BLOCKED"} else "FAIL"),
+            "live_gpu_inference": "PASS" if inference_pass else ("BLOCKED_CANDIDATE_MISMATCH" if inference_status == "PASS" else inference_status if inference_status in {"FAIL", "BLOCKED"} else "FAIL"),
             "live_deployment": (
                 "PASS" if live_deployment_pass else
                 "FAIL" if deployment_status == "PASS" and deployment_sha != candidate_sha else
+                "BLOCKED" if deployment_status == "PASS" and str((deployment or {}).get("candidate_commit_sha") or "").lower() != candidate_sha.lower() else
                 "BLOCKED"
             ),
             "human_creative_and_rights_approval": creative_approval,
