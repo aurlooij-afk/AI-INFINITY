@@ -857,3 +857,96 @@ def test_creative_planner_uses_acknowledged_huggingface_free_writer_for_15_minut
     assert plan["script_generation"]["actual_spoken_words"] >= 1875
     assert plan["script_generation"]["unique_sentence_ratio"] >= 0.85
     assert plan["script_generation"]["repair_passes"] == 1
+
+
+def test_openrouter_free_writer_requires_explicit_data_policy_acknowledgement(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    monkeypatch.setenv("AI_INFINITY_OPENROUTER_FREE_TIER_AND_DATA_USE_ACK", "false")
+
+    assert studio._openrouter_free_tier_text_model() is None
+
+
+def test_creative_planner_uses_privacy_filtered_openrouter_free_writer_for_15_minute_script(monkeypatch):
+    import io
+    import json
+
+    monkeypatch.delenv("AI_INFINITY_DISABLE_EXTERNAL_PROVIDERS", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK", raising=False)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGINGFACEHUB_API_TOKEN", raising=False)
+    monkeypatch.delenv("AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    monkeypatch.setenv("AI_INFINITY_OPENROUTER_FREE_TIER_AND_DATA_USE_ACK", "true")
+    monkeypatch.setenv("AI_INFINITY_OPENROUTER_FREE_MODEL", "openrouter/free")
+    captured = []
+
+    chapters = []
+    for chapter_index in range(1, 6):
+        sentences = [
+            (
+                f"Chapter {chapter_index} observation {sentence_index} explains a distinct mechanism, "
+                "the source evidence, implementation choice, measured consequence, competing option, "
+                "operational constraint, limitation, and practical implication for the production team."
+            )
+            for sentence_index in range(1, 51)
+        ]
+        chapters.append({
+            "heading": f"Chapter {chapter_index}",
+            "narration": " ".join(sentences),
+            "visual_query": f"visually distinct documentary treatment for chapter {chapter_index}",
+            "image_prompt": f"cinematic documentary frame for chapter {chapter_index}",
+            "on_screen": f"Chapter {chapter_index}",
+            "duration": 180,
+            "proof_needed": [],
+        })
+    blueprint = {
+        "title": "A Real 15-Minute Production Workflow",
+        "premise": "A complete, evidence-led documentary about a real production workflow.",
+        "chapters": chapters,
+    }
+
+    def fake_openrouter(url, data, headers, timeout):
+        request = json.loads(data.decode("utf-8"))
+        captured.append({"url": url, "request": request, "headers": headers, "timeout": timeout})
+        return io.BytesIO(json.dumps({
+            "model": "test/free-model:free",
+            "choices": [{
+                "message": {"content": json.dumps(blueprint)},
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 1200, "completion_tokens": 5200},
+        }).encode("utf-8"))
+
+    monkeypatch.setattr(studio, "_safe_open_post", fake_openrouter)
+
+    plan, provider = studio.creative_plan(
+        {
+            "title": "A Real 15-Minute Production Workflow",
+            "objective": "Create a complete 15-minute documentary about real production methods.",
+            "topic": "professional production workflow",
+            "format": "long",
+            "duration": 900,
+            "speaking_rate_wpm": 125,
+            "language": "English",
+            "tone": "precise, cinematic, useful",
+        },
+        {"sources": []},
+        None,
+    )
+
+    assert len(captured) == 1
+    request = captured[0]["request"]
+    assert captured[0]["url"] == "https://openrouter.ai/api/v1/chat/completions"
+    assert captured[0]["headers"]["Authorization"] == "Bearer test-openrouter-key"
+    assert request["model"] == "openrouter/free"
+    assert request["provider"]["data_collection"] == "deny"
+    assert request["provider"]["allow_fallbacks"] is False
+    assert request["provider"]["require_parameters"] is True
+    assert request["response_format"] == {"type": "json_object"}
+    assert request["max_tokens"] == 8192
+    assert provider.startswith("openrouter-free-tier:")
+    assert plan["script_generation"]["status"] == "complete"
+    assert plan["script_generation"]["required_spoken_words"] == 1875
+    assert plan["script_generation"]["actual_spoken_words"] >= 1875
+    assert plan["script_generation"]["unique_sentence_ratio"] >= 0.85
