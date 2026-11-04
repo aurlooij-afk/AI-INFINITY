@@ -332,8 +332,16 @@ def build_certificate(
             "900s_gemini_narration": "PASS" if longform_gemini_pass else "FAIL_OR_MISSING",
             "flagship_technical_and_rights_evidence": "PASS" if technical_rights_pass else "FAIL_OR_MISSING",
             "otio_import_and_rerender": "PASS" if otio_rerender_pass else "BLOCKED",
-            "durable_storage": storage_status if storage_status in {"PASS", "FAIL", "BLOCKED"} else "FAIL",
-            "live_gpu_inference": inference_status if inference_status in {"PASS", "FAIL", "BLOCKED"} else "FAIL",
+            "durable_storage": (
+                "PASS" if storage_pass else
+                storage_status if storage_status in {"FAIL", "BLOCKED"} else
+                "FAIL_OR_INCOMPLETE"
+            ),
+            "live_gpu_inference": (
+                "PASS" if inference_pass else
+                inference_status if inference_status in {"FAIL", "BLOCKED"} else
+                "FAIL_OR_INCOMPLETE"
+            ),
             "live_deployment": (
                 "PASS" if live_deployment_pass else
                 "FAIL" if deployment_status == "PASS" and deployment_sha != candidate_sha else
