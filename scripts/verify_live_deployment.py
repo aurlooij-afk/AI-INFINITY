@@ -199,6 +199,7 @@ def verify(base_url: str, expected_sha: str, output: Path, wait_seconds: int = 9
             quality = manifest.get("quality_truth_checks") if isinstance(manifest, dict) else {}
             quality = quality if isinstance(quality, dict) else {}
             rights_summary = {
+                "actual_rendered_scene_count": quality.get("actual_rendered_scene_count"),
                 "unresolved_count": quality.get("visual_rights_unresolved_count"),
                 "review_required_count": quality.get("visual_rights_review_required_count"),
                 "rights_cleared_count": quality.get("visual_rights_cleared_count"),
