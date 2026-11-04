@@ -47,10 +47,25 @@ def _scenario_map(acceptance: dict[str, Any] | None) -> dict[str, dict[str, Any]
     }
 
 
-def _valid_human_approval(value: dict[str, Any] | None, candidate_sha: str) -> bool:
-    if not isinstance(value, dict):
+def _valid_human_approval(
+    value: dict[str, Any] | None,
+    candidate_sha: str,
+    reviewed_media_sha256: str | None,
+) -> bool:
+    """Accept only a real review bound to both the candidate and exact reviewed bytes."""
+    if not isinstance(value, dict) or not reviewed_media_sha256:
         return False
     if value.get("candidate_commit_sha") != candidate_sha or value.get("approved") is not True:
+        return False
+    if value.get("reviewed_media_sha256") != reviewed_media_sha256:
+        return False
+    if not str(value.get("reviewer") or "").strip():
+        return False
+    if not str(value.get("reviewed_at_utc") or "").strip():
+        return False
+    if not str(value.get("review_notes") or "").strip():
+        return False
+    if value.get("rights_approval") is not True or not str(value.get("rights_notes") or "").strip():
         return False
     try:
         average = float(value.get("average_score"))
@@ -67,7 +82,7 @@ def _valid_human_approval(value: dict[str, Any] | None, candidate_sha: str) -> b
         all_dimensions_pass = all(float(normalized_dimensions[role]) >= 4.0 for role in required_roles)
     except (TypeError, ValueError):
         return False
-    return average >= 4.5 and all_dimensions_pass and value.get("rights_approval") is True
+    return average >= 4.5 and all_dimensions_pass
 
 
 def build_certificate(
@@ -93,7 +108,17 @@ def build_certificate(
 
     flagship = scenarios.get("01", {}).get("result", {})
     otio = scenarios.get("04", {}).get("result", {})
-    creative_approval = "PASS" if _valid_human_approval(human_approval, candidate_sha) else "PENDING"
+    reviewer_packet = flagship.get("reviewer_packet") if isinstance(flagship.get("reviewer_packet"), dict) else {}
+    flagship_media_sha256 = str(
+        flagship.get("final_media_sha256")
+        or reviewer_packet.get("media_sha256")
+        or ""
+    )
+    creative_approval = (
+        "PASS"
+        if _valid_human_approval(human_approval, candidate_sha, flagship_media_sha256)
+        else "PENDING"
+    )
 
     storage_status = str((storage or {}).get("status") or "BLOCKED").upper()
     inference_status = str((inference or {}).get("status") or "BLOCKED").upper()
@@ -153,6 +178,8 @@ def build_certificate(
         "remaining_blockers": blockers,
         "deployed_commit_sha": deployment_sha or None,
         "human_approval_evidence_present": human_approval is not None,
+        "reviewed_media_sha256": flagship_media_sha256 or None,
+        "human_approval_media_sha256": (human_approval or {}).get("reviewed_media_sha256"),
         "evidence_sha256": evidence_hashes,
         "truthful": True,
     }
