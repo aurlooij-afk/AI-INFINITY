@@ -66,6 +66,14 @@ services:
         value: "auto"
       - key: AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK
         value: "false"
+      # Optional OpenRouter free-model writer. The adapter pins openrouter/free,
+      # denies data-collecting providers, and disables paid fallback routing.
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: AI_INFINITY_OPENROUTER_FREE_TIER_AND_DATA_USE_ACK
+        value: "false"
+      - key: AI_INFINITY_OPENROUTER_FREE_MODEL
+        value: "openrouter/free"
       - key: OPENAI_API_KEY
         sync: false
       # OpenAI Responses vision review is paid metered. Keep disabled until explicitly authorized.
