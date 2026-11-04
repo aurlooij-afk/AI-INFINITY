@@ -315,6 +315,11 @@ jobs:
               if failed_pre_release:
                   print("FAILED_PRE_RELEASE_GATES=" + json.dumps(failed_pre_release))
                   raise SystemExit("PR acceptance requires engineering, rights, OTIO, durable-storage and live-GPU gates to pass.")
+              print("PR_ENGINEERING_ACCEPTANCE=PASS")
+              if certificate_path.is_file() and record.get("PRODUCTION_VERIFIED") == "PASS":
+                  print("PRODUCTION_CERTIFICATION=PASS")
+                  print("CERTIFICATE_SHA256=" + str(record.get("certificate_sha256")))
+                  raise SystemExit(0)
               pending_release = [
                   name for name in (
                       "exact_candidate_live_deployment",
@@ -322,7 +327,6 @@ jobs:
                   )
                   if requirements.get(name) is not True
               ]
-              print("PR_ENGINEERING_ACCEPTANCE=PASS")
               print("PRODUCTION_CERTIFICATION=NOT_ISSUED")
               print("PENDING_POST_DEPLOY_GATES=" + json.dumps(pending_release))
               raise SystemExit(0)
