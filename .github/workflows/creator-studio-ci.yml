@@ -239,13 +239,13 @@ jobs:
           from pathlib import Path
           import re
           source=Path("ai_infinity_canonical.py").read_text(encoding="utf-8")
-          match=re.search(r'OVERLAY\\s*=\\s*r"""(.*?)"""', source, flags=re.S)
+          match=re.search(r'OVERLAY\s*=\s*r"""(.*?)"""', source, flags=re.S)
           if not match:
               raise SystemExit("Canonical command overlay not found")
-          scripts=re.findall(r"<script[^>]*>([\\s\\S]*?)</script>", match.group(1), flags=re.I)
+          scripts=re.findall(r"<script[^>]*>([\s\S]*?)</script>", match.group(1), flags=re.I)
           if not scripts:
               raise SystemExit("Canonical command overlay contains no browser script")
-          Path("/tmp/ai-infinity-canonical-overlay.js").write_text("\\n".join(scripts), encoding="utf-8")
+          Path("/tmp/ai-infinity-canonical-overlay.js").write_text("\n".join(scripts), encoding="utf-8")
           print("Extracted", len(scripts), "canonical command overlay script block(s).")
           PY
           node --check /tmp/ai-infinity-canonical-overlay.js
