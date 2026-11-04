@@ -220,8 +220,8 @@ def test_production_certificate_rejects_status_only_external_evidence():
             "finish_reason": "STOP", "response_characters": 42, "response_sha256": "c" * 64,
         },
     )
-    assert certificate["gates"]["durable_storage"] == "BLOCKED"
-    assert certificate["gates"]["live_gpu_inference"] == "BLOCKED"
+    assert certificate["gates"]["durable_storage"] == "FAIL_OR_INCOMPLETE"
+    assert certificate["gates"]["live_gpu_inference"] == "FAIL_OR_INCOMPLETE"
     assert certificate["gates"]["live_deployment"] == "BLOCKED"
     assert certificate["PRODUCTION_VERIFIED"] == "BLOCKED"
 
