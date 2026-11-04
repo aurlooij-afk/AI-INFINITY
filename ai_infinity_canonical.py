@@ -577,7 +577,29 @@ var c=(document.getElementById("aiiCanonCmd").value||"").trim(),out=document.get
 if(!c){out.textContent="Describe what you want to create or change.";return}
 out.textContent="Capability check…";
 try{
+var rows=c.split(/\r?\n/).map(function(line){return line.trim()}).filter(Boolean);
+var listMode=rows.length>1 && rows.every(function(line){return /^(?:\d+[.)]|[-*])\s+/.test(line)});
 var r;
+if(listMode){
+ var commands=rows.map(function(line,index){
+  var command=line.replace(/^(?:\d+[.)]|[-*])\s+/,"").trim();
+  var from=command.match(/^\[from:([A-Za-z0-9._-]+)\]\s*/i);
+  var item={id:"step-"+(index+1),command:from?command.slice(from[0].length).trim():command};
+  if(pid)item.payload={project_id:pid};
+  if(from){item.depends_on=[from[1]];item.project_id_from=from[1]}
+  return item;
+ });
+ var key="aii-ui-"+Date.now()+"-"+Math.random().toString(36).slice(2,12);
+ r=await api("/infinity/canonical/batches",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({idempotency_key:key,commands:commands})});
+ var lastPid="";
+ (r.steps||[]).forEach(function(step){
+  var nested=step.result&&step.result.result;
+  if(nested&&nested.project_id)lastPid=nested.project_id;
+ });
+ if(lastPid){pid=lastPid;localStorage.setItem("aii_canonical_project",pid)}
+ out.textContent="Batch "+r.status+" · "+(r.completed_steps||0)+" complete · "+(r.accepted_steps||0)+" accepted · "+(r.failed_steps||0)+" failed\n"+JSON.stringify(r.steps||[],null,2);
+ return;
+}
 if(pid){r=await api("/infinity/canonical/project/"+encodeURIComponent(pid)+"/command",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({command:c})})}
 else{r=await api("/infinity/canonical/create",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({command:c})});if(r.project_id){pid=r.project_id;localStorage.setItem("aii_canonical_project",pid)}}
 out.innerHTML="<span>"+esc(r.message||r.status||"accepted")+"</span><br><br><span>"+esc(JSON.stringify({project_id:r.project_id,version_id:r.version_id,state:r.canonical_state||r.state},null,2))+"</span>";
