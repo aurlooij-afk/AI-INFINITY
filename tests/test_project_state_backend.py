@@ -954,3 +954,52 @@ def test_supabase_s3_snapshot_keeps_previous_recovery_point_when_manifest_publis
     assert current["object_key"] == previous_key
     assert current["sha256"] == previous_sha
     assert (bucket, previous_key) in memory.objects
+
+
+def test_supabase_s3_snapshot_publishes_immutable_version_then_reclaims_previous(
+    monkeypatch, tmp_path: Path
+):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _supabase_s3_env(monkeypatch)
+    memory = _MemoryS3WithoutCustomMetadata()
+    bucket = backend._cfg()["bucket"]
+    previous_key = backend.object_key() + ".versions/previous.sqlite"
+    previous_payload = b"previous-good-snapshot"
+    previous_sha = hashlib.sha256(previous_payload).hexdigest()
+    memory.put_object(
+        Bucket=bucket,
+        Key=previous_key,
+        Body=previous_payload,
+        ContentType="application/x-sqlite3",
+    )
+    backend._write_snapshot_manifest(
+        memory, len(previous_payload), previous_sha, "previous", previous_key
+    )
+
+    database = tmp_path / "state.db"
+    with sqlite3.connect(database) as con:
+        con.execute("CREATE TABLE project_state(id INTEGER PRIMARY KEY, value TEXT)")
+        con.execute("INSERT INTO project_state(value) VALUES('new snapshot content')")
+    monkeypatch.setattr(backend, "_client", lambda: memory)
+    monkeypatch.setattr(backend, "_DB_PATH", database)
+    monkeypatch.setattr(backend, "_STATUS", {
+        "configured": True,
+        "active": True,
+        "verified": True,
+        "snapshot_verified": False,
+        "backend": "supabase_s3",
+        "last_sync_at": None,
+        "last_sha256": None,
+        "last_error": None,
+    })
+    monkeypatch.setattr(backend, "_CHANGE_GENERATION", 0)
+
+    result = backend.snapshot_now()
+
+    assert result["status"] == "verified", result
+    assert result["object_key"].startswith(backend.object_key() + ".versions/")
+    current = backend._head()
+    assert current["object_key"] == result["object_key"]
+    assert current["sha256"] == result["sha256"]
+    assert (bucket, result["object_key"]) in memory.objects
+    assert (bucket, previous_key) not in memory.objects
