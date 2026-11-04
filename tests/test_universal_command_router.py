@@ -234,12 +234,13 @@ def test_primary_director_mode_displays_agent_outputs_without_faking_media_creat
     assert "no external action was performed" in handler
 
 
-def test_unsupported_primary_deliverable_does_not_fall_back_to_ui_default_video():
-    result = canonical.classify_command(
-        "Create a website for AI Infinity",
-        {"content_type": "video"},
-    )
-    assert result["route"] == "unsupported_deliverable"
+def test_explicit_website_command_overrides_stale_video_ui_default():
+    command = "Create a website for AI Infinity"
+    result = canonical.classify_command(command, {"content_type": "video"})
+    intent = canonical.compile_intent(command, {"content_type": "video"})
+    assert result["route"] == "create"
+    assert intent["constraints"]["content_type"] == "website"
+    assert "website.zip" in intent["success"]["required_artifacts"]
 
 
 def test_supported_video_about_an_unsupported_topic_still_routes_to_video_creation():
@@ -300,12 +301,15 @@ def test_multilingual_creation_routes_use_the_intended_supported_content_type():
         assert result["content_type"] == expected_type, (command, result)
 
 
-def test_multilingual_script_request_and_unsupported_website_request_are_not_video_jobs():
+def test_multilingual_script_and_website_requests_do_not_become_video_jobs():
     script = canonical.classify_command("AI Infinity کا اسکرپٹ لکھیں", {"content_type": "video"})
     website = canonical.classify_command("أنشئ موقع ويب", {"content_type": "video"})
+    website_intent = canonical.compile_intent("أنشئ موقع ويب", {"content_type": "video"})
 
     assert script["route"] == "script"
-    assert website["route"] == "unsupported_deliverable"
+    assert website["route"] == "create"
+    assert website.get("content_type") == "website"
+    assert website_intent["constraints"]["content_type"] == "website"
 
 
 def test_multilingual_consequential_actions_require_authorization():
