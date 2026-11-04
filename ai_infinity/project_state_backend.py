@@ -242,18 +242,29 @@ def _read_snapshot_manifest(client, key: Optional[str] = None) -> Dict[str, Any]
         raise RuntimeError("project-state snapshot manifest is not an object")
     digest = str(manifest.get("sha256") or "")
     size = int(manifest.get("size_bytes") or 0)
+    snapshot_key = str(manifest.get("object_key") or "")
+    expected_prefix = (key or object_key()) + ".versions/"
     if not re.fullmatch(r"[0-9a-f]{64}", digest) or size <= 0:
         raise RuntimeError("project-state snapshot manifest has invalid size or SHA-256")
-    if str(manifest.get("object_key") or "") != (key or object_key()):
-        raise RuntimeError("project-state snapshot manifest references a different object key")
+    if not snapshot_key.startswith(expected_prefix) or snapshot_key == expected_prefix:
+        raise RuntimeError("project-state snapshot manifest references an unsafe object key")
     return manifest
 
 
-def _write_snapshot_manifest(client, size_bytes: int, sha256: str, snapshot_at: str) -> None:
+def _write_snapshot_manifest(
+    client,
+    size_bytes: int,
+    sha256: str,
+    snapshot_at: str,
+    snapshot_object_key: str,
+) -> None:
+    expected_prefix = object_key() + ".versions/"
+    if not str(snapshot_object_key).startswith(expected_prefix):
+        raise ValueError("snapshot object key must be a unique key under the project-state version prefix")
     payload = json.dumps(
         {
             "schema": "ai-infinity-project-state-snapshot-v1",
-            "object_key": object_key(),
+            "object_key": str(snapshot_object_key),
             "size_bytes": int(size_bytes),
             "sha256": str(sha256),
             "snapshot_at": str(snapshot_at),
@@ -285,20 +296,29 @@ def _write_snapshot_manifest(client, size_bytes: int, sha256: str, snapshot_at: 
 def _head(key: Optional[str] = None) -> Optional[Dict[str, Any]]:
     cfg = _cfg()
     target_key = key or object_key()
-    h = _client().head_object(Bucket=cfg["bucket"], Key=target_key)
-    size = int(h.get("ContentLength") or 0)
+    client = _client()
     if cfg["backend"] == "supabase_s3":
-        manifest = _read_snapshot_manifest(_client(), target_key)
-        if int(manifest.get("size_bytes") or -1) != size:
-            raise RuntimeError("project-state snapshot manifest size does not match the object")
+        manifest = _read_snapshot_manifest(client, target_key)
+        snapshot_object_key = str(manifest["object_key"])
+        try:
+            h = client.head_object(Bucket=cfg["bucket"], Key=snapshot_object_key)
+        except Exception as exc:
+            if _is_missing_object_error(exc):
+                raise RuntimeError("snapshot manifest points to a missing versioned object") from exc
+            raise
+        size = int(h.get("ContentLength") or 0)
+        if size != int(manifest.get("size_bytes") or -1):
+            raise RuntimeError("project-state snapshot manifest size does not match the versioned object")
         return {
             "size_bytes": size,
             "sha256": str(manifest["sha256"]),
             "snapshot_at": str(manifest.get("snapshot_at") or ""),
+            "object_key": snapshot_object_key,
         }
+    h = client.head_object(Bucket=cfg["bucket"], Key=target_key)
     metadata = h.get("Metadata") or {}
     return {
-        "size_bytes": size,
+        "size_bytes": int(h.get("ContentLength") or 0),
         "sha256": str(metadata.get("ai-infinity-sha256") or ""),
         "snapshot_at": str(metadata.get("ai-infinity-snapshot-at") or ""),
     }
@@ -522,7 +542,8 @@ def restore_on_startup() -> Dict[str, Any]:
         if len(expected) != 64:
             raise RuntimeError("remote project-state snapshot has no trustworthy SHA-256 metadata")
 
-        response = _client().get_object(Bucket=_cfg()["bucket"], Key=object_key())
+        snapshot_object_key = str(head.get("object_key") or object_key())
+        response = _client().get_object(Bucket=_cfg()["bucket"], Key=snapshot_object_key)
         body = response.get("Body")
         if body is None:
             raise RuntimeError("remote project-state snapshot download returned no body")
@@ -643,9 +664,24 @@ def snapshot_now() -> Dict[str, Any]:
             digest = _sha256_path(tmp)
             stamp = str(time.time())
             client = _client()
+            backend_name = _cfg()["backend"]
+            base_object_key = object_key()
+            previous_snapshot_key = None
+            snapshot_object_key = base_object_key
+            if backend_name == "supabase_s3":
+                try:
+                    previous_snapshot_key = str(
+                        _read_snapshot_manifest(client, base_object_key).get("object_key") or ""
+                    ) or None
+                except Exception as exc:
+                    if not _is_missing_object_error(exc):
+                        raise
+                snapshot_object_key = (
+                    base_object_key + ".versions/" + uuid.uuid4().hex + ".sqlite"
+                )
             put_args = {
                 "Bucket": _cfg()["bucket"],
-                "Key": object_key(),
+                "Key": snapshot_object_key,
                 "Body": None,
                 "ContentType": "application/x-sqlite3",
             }
@@ -659,8 +695,11 @@ def snapshot_now() -> Dict[str, Any]:
                 put_args["Body"] = stream
                 client.put_object(**put_args)
 
-            if _cfg()["backend"] == "supabase_s3":
-                head_response = client.head_object(Bucket=_cfg()["bucket"], Key=object_key())
+            if backend_name == "supabase_s3":
+                head_response = client.head_object(
+                    Bucket=_cfg()["bucket"],
+                    Key=snapshot_object_key,
+                )
                 if int(head_response.get("ContentLength") or -1) != size:
                     raise RuntimeError("project-state snapshot size verification failed")
             else:
@@ -670,7 +709,10 @@ def snapshot_now() -> Dict[str, Any]:
                 if str(head.get("sha256") or "") != digest:
                     raise RuntimeError("project-state snapshot SHA-256 metadata verification failed")
 
-            body = client.get_object(Bucket=_cfg()["bucket"], Key=object_key()).get("Body")
+            body = client.get_object(
+                Bucket=_cfg()["bucket"],
+                Key=snapshot_object_key,
+            ).get("Body")
             if body is None:
                 raise RuntimeError("project-state snapshot read-back returned no body")
             remote_hash = hashlib.sha256()
@@ -689,8 +731,33 @@ def snapshot_now() -> Dict[str, Any]:
             if remote_size != size or remote_hash.hexdigest() != digest:
                 raise RuntimeError("project-state snapshot read-back integrity check failed")
 
-            if _cfg()["backend"] == "supabase_s3":
-                _write_snapshot_manifest(client, size, digest, stamp)
+            if backend_name == "supabase_s3":
+                _write_snapshot_manifest(
+                    client,
+                    size,
+                    digest,
+                    stamp,
+                    snapshot_object_key,
+                )
+                published = _head(base_object_key)
+                if (
+                    not published
+                    or published.get("object_key") != snapshot_object_key
+                    or int(published.get("size_bytes") or -1) != size
+                    or str(published.get("sha256") or "") != digest
+                ):
+                    raise RuntimeError("published project-state snapshot manifest failed independent verification")
+                if previous_snapshot_key and previous_snapshot_key != snapshot_object_key:
+                    # The new immutable object and manifest have already passed
+                    # read-back. Removing only the superseded owned key bounds
+                    # storage use; Supabase does not implement S3 versioning.
+                    try:
+                        client.delete_object(
+                            Bucket=_cfg()["bucket"],
+                            Key=previous_snapshot_key,
+                        )
+                    except Exception:
+                        pass
 
             with _LOCK:
                 if _CHANGE_GENERATION != generation:
@@ -705,7 +772,7 @@ def snapshot_now() -> Dict[str, Any]:
                 _SYNC_DIRTY = False
                 _SYNC_FAILURES = 0
 
-            return {"status": "verified", "size_bytes": size, "sha256": digest, "snapshot_at": stamp, "truthful": True}
+            return {"status": "verified", "size_bytes": size, "sha256": digest, "snapshot_at": stamp, "object_key": snapshot_object_key, "truthful": True}
         except Exception as exc:
             with _LOCK:
                 _STATUS["snapshot_verified"] = False
