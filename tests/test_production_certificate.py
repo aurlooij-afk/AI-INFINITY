@@ -201,6 +201,87 @@ def test_production_certificate_passes_only_with_every_exact_candidate_gate():
     assert certificate["remaining_blockers"] == []
 
 
+def test_production_certificate_rejects_status_only_external_evidence():
+    candidate = "7" * 40
+    certificate = build_certificate(
+        candidate_sha=candidate,
+        acceptance=_passing_acceptance(),
+        storage={"status": "PASS"},
+        inference={"status": "PASS"},
+        deployment={"status": "PASS", "deployed_commit_sha": candidate},
+        human_approval=None,
+        evidence_hashes={},
+        gemini_writer={
+            "status": "PASS", "model": "gemini-3.1-flash-lite", "http_status": 200,
+            "finish_reason": "STOP", "response_characters": 42, "response_sha256": "c" * 64,
+        },
+    )
+    assert certificate["gates"]["durable_storage"] == "BLOCKED"
+    assert certificate["gates"]["live_gpu_inference"] == "BLOCKED"
+    assert certificate["gates"]["live_deployment"] == "BLOCKED"
+    assert certificate["PRODUCTION_VERIFIED"] == "BLOCKED"
+
+
+def test_production_certificate_rejects_review_required_rights_assets():
+    candidate = "8" * 40
+    acceptance = _passing_acceptance()
+    acceptance["tests"][0]["result"]["quality_truth_checks"]["visual_rights_review_required_count"] = 1
+    certificate = build_certificate(
+        candidate_sha=candidate,
+        acceptance=acceptance,
+        storage=_passing_storage(),
+        inference=_passing_inference(),
+        deployment=_passing_deployment(candidate),
+        human_approval=None,
+        evidence_hashes={},
+        gemini_writer={
+            "status": "PASS", "model": "gemini-3.1-flash-lite", "http_status": 200,
+            "finish_reason": "STOP", "response_characters": 42, "response_sha256": "c" * 64,
+        },
+    )
+    assert certificate["gates"]["flagship_technical_and_rights_evidence"] == "FAIL_OR_MISSING"
+    assert "technical_rights_evidence" in certificate["remaining_blockers"]
+    assert certificate["PRODUCTION_VERIFIED"] == "BLOCKED"
+
+
+def test_production_certificate_recomputes_human_average_from_six_scores():
+    candidate = "9" * 40
+    human = {
+        "candidate_commit_sha": candidate,
+        "reviewed_media_sha256": "a" * 64,
+        "reviewer": "project_owner",
+        "reviewed_at_utc": "2026-11-04T00:00:00Z",
+        "review_notes": "Reviewed the exact complete media cut and recorded the actual creative assessment.",
+        "approved": True,
+        "average_score": 4.9,
+        "dimension_scores": {
+            "director": 4.5,
+            "cinematographer": 4.2,
+            "editor": 4.4,
+            "sound": 4.3,
+            "story": 4.5,
+            "rights": 4.4,
+        },
+        "rights_approval": True,
+        "rights_notes": "Reviewed the exact source and license provenance records for this media.",
+    }
+    certificate = build_certificate(
+        candidate_sha=candidate,
+        acceptance=_passing_acceptance(),
+        storage=_passing_storage(),
+        inference=_passing_inference(),
+        deployment=_passing_deployment(candidate),
+        human_approval=human,
+        evidence_hashes={},
+        gemini_writer={
+            "status": "PASS", "model": "gemini-3.1-flash-lite", "http_status": 200,
+            "finish_reason": "STOP", "response_characters": 42, "response_sha256": "c" * 64,
+        },
+    )
+    assert certificate["CREATIVE_APPROVAL"] == "PENDING"
+    assert certificate["PRODUCTION_VERIFIED"] == "BLOCKED"
+
+
 def test_production_certificate_rejects_approval_for_another_commit():
     candidate = "d" * 40
     certificate = build_certificate(
