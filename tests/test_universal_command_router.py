@@ -251,6 +251,20 @@ def test_creator_enqueue_preserves_every_implemented_native_content_type():
     # Unknown types remain safely bounded instead of being mistaken for a new engine.
     assert studio.normalize_creator_content_type("spreadsheet") == "video"
 
+def test_natural_language_primary_deliverable_overrides_video_default_for_all_formats():
+    cases = (
+        ("Create a 30-second video about accessibility", "video"),
+        ("Create a podcast about accessibility", "podcast"),
+        ("Write an article about accessibility", "article"),
+        ("Create a social campaign about accessibility", "social"),
+        ("Create a website about accessibility", "website"),
+        ("Create a Word document about accessibility", "document"),
+        ("Create a PowerPoint presentation about accessibility", "presentation"),
+    )
+    for command, expected in cases:
+        intent = canonical.compile_intent(command, {"content_type": "video"})
+        assert intent["constraints"]["content_type"] == expected, (command, intent)
+
 
 def test_supported_video_about_an_unsupported_topic_still_routes_to_video_creation():
     result = canonical.classify_command(
