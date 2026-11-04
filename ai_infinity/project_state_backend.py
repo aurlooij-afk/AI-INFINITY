@@ -774,6 +774,31 @@ def snapshot_now() -> Dict[str, Any]:
 
             return {"status": "verified", "size_bytes": size, "sha256": digest, "snapshot_at": stamp, "object_key": snapshot_object_key, "truthful": True}
         except Exception as exc:
+            if (
+                backend_name == "supabase_s3"
+                and snapshot_object_key != base_object_key
+            ):
+                # If a new immutable version was uploaded but the manifest was
+                # not published, remove only that unreferenced version. If the
+                # manifest update succeeded but its read-back failed, retain the
+                # object because it may already be the active recovery point.
+                try:
+                    active_manifest = _read_snapshot_manifest(client, base_object_key)
+                    active_object_key = str(active_manifest.get("object_key") or "")
+                except Exception as manifest_error:
+                    active_object_key = ""
+                    if not _is_missing_object_error(manifest_error):
+                        # An unreadable pointer is not authority to delete either
+                        # the new snapshot or the previous one.
+                        active_object_key = snapshot_object_key
+                if active_object_key != snapshot_object_key:
+                    try:
+                        client.delete_object(
+                            Bucket=_cfg()["bucket"],
+                            Key=snapshot_object_key,
+                        )
+                    except Exception:
+                        pass
             with _LOCK:
                 _STATUS["snapshot_verified"] = False
                 _STATUS["last_error"] = _describe_storage_error(exc)
