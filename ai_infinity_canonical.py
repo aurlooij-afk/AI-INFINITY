@@ -238,24 +238,25 @@ def compile_intent(command,raw):
     # must not silently disable the primary video's verification gates.
     allowed_types={"video","podcast","article","social","website","document","presentation"}
     requested_type=clean(raw.get("content_type"),30).lower()
-    if requested_type in allowed_types:
-        ct=requested_type
-    else:
-        intent_patterns=(
-            (r"\b(?:video|film|reel|documentary|explainer)\b","video"),
-            (r"\b(?:podcast|audio show)\b","podcast"),
-            (r"\b(?:article|blog|essay|report|guide|newsletter|white paper|research brief)\b","article"),
-            (r"\b(?:social(?:\s+media)?\s+(?:post|campaign)|linkedin post|instagram post|tweet|x post)\b","social"),
-            (r"\b(?:static website|website package|website|web site|landing page|microsite)\b","website"),
-            (r"\b(?:word document|docx|document)\b","document"),
-            (r"\b(?:powerpoint|presentation|slide deck|slides)\b","presentation"),
-        )
-        intent_matches=[]
-        for pattern, inferred_type in intent_patterns:
-            match=re.search(pattern,low)
-            if match:
-                intent_matches.append((match.start(),inferred_type))
-        ct=min(intent_matches,key=lambda item:item[0])[1] if intent_matches else "video"
+    # A concrete deliverable named in the natural-language command must override
+    # a stale UI default (commonly "video"). Otherwise "Create a website" can
+    # be silently executed as a video even though the website exporter exists.
+    intent_patterns=(
+        (r"\b(?:video|film|reel|documentary|explainer)\b","video"),
+        (r"\b(?:podcast|audio show)\b","podcast"),
+        (r"\b(?:article|blog|essay|report|guide|newsletter|white paper|research brief)\b","article"),
+        (r"\b(?:social(?:\s+media)?\s+(?:post|campaign)|linkedin post|instagram post|tweet|x post)\b","social"),
+        (r"\b(?:static website|website package|website|web site|landing page|microsite)\b","website"),
+        (r"\b(?:word document|docx|document)\b","document"),
+        (r"\b(?:powerpoint|presentation|slide deck|slides)\b","presentation"),
+    )
+    intent_matches=[]
+    for pattern, inferred_type in intent_patterns:
+        match=re.search(pattern,low)
+        if match:
+            intent_matches.append((match.start(),inferred_type))
+    command_type=min(intent_matches,key=lambda item:item[0])[1] if intent_matches else ""
+    ct=command_type or (requested_type if requested_type in allowed_types else "video")
     fmt=clean(raw.get("format"),30).lower()
     if fmt not in {"long","short","shorts","reel","tiktok"}:fmt=""
     explicit_ratio=clean(raw.get("aspect_ratio"),10)
