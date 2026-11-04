@@ -15,9 +15,28 @@ def _passing_acceptance():
     ]
     tests[0]["result"] = {
         "truth_verified": True,
+        "full_decode_passed": True,
+        "manifest_hash_verified": True,
+        "final_media_sha256": "a" * 64,
+        "final_media_bytes": 30_000_000,
         "fallback_visual_count": 0,
         "visual_rights_unresolved_count": 0,
-        "final_media_sha256": "a" * 64,
+        "source_count": 20,
+        "rights_asset_count": 5,
+        "package_sha256": "b" * 64,
+        "package_size_bytes": 8_000_000,
+        "package_round_trip_hash_verified": True,
+        "quality_truth_checks": {
+            "actual_rendered_scene_count": 5,
+            "verified_motion_source_count": 5,
+            "minimum_motion_source_count": 5,
+            "visual_rights_evidence_present": True,
+            "fallback_visual_count": 0,
+            "visual_rights_cleared_count": 5,
+            "visual_rights_review_required_count": 0,
+            "visual_rights_unresolved_count": 0,
+            "research_sources": 20,
+        },
         "reviewer_packet": {
             "human_review_status": "PENDING",
             "media_sha256": "a" * 64,
@@ -42,6 +61,81 @@ def _passing_acceptance():
         "passed": True,
         "completed_scenarios": 13,
         "tests": tests,
+    }
+
+
+def _passing_storage():
+    return {
+        "status": "PASS",
+        "backend": "backblaze_b2",
+        "canary": "PUT_HEAD_GET_SHA_PASS",
+        "snapshot": "PUT_HEAD_GET_SHA_PASS",
+        "fresh_process_restore": "PASS",
+        "object_key": "ai-infinity/project-state/certificate-test.verification-abc",
+        "snapshot_size_bytes": 4096,
+        "snapshot_sha256": "d" * 64,
+        "restored_project_marker": "ai-infinity-storage-verification-abc",
+        "restored_payload_sha256": "e" * 64,
+        "production_snapshot_overwritten": False,
+        "truthful": True,
+    }
+
+
+def _passing_inference():
+    return {
+        "status": "PASS",
+        "provider": "wan2.2-ti2v-5b",
+        "model_id": "Wan-AI/Wan2.2-TI2V-5B",
+        "model_revision": "a" * 40,
+        "source_revision": "1ea34ff48f87168174e12956e200b1d908b1c5ff",
+        "license": "apache-2.0",
+        "license_verified": True,
+        "storage_persistent": True,
+        "gpu": {"available": True, "total_vram_mb": 24576, "free_vram_mb": 23000},
+        "job_id": "wan_" + "b" * 32,
+        "inference_request_sent": True,
+        "artifact_sha256": "c" * 64,
+        "artifact_size_bytes": 1_000_000,
+        "resolution": [1280, 720],
+        "fps": 24.0,
+        "video_codec": "h264",
+        "full_decode": "PASS",
+        "truthful": True,
+    }
+
+
+def _passing_deployment(candidate):
+    return {
+        "status": "PASS",
+        "expected_commit_sha": candidate,
+        "deployed_commit_sha": candidate,
+        "project_status": "completed",
+        "project_id": "studio_live_verified",
+        "final_media_sha256": "f" * 64,
+        "final_media_bytes": 8_000_000,
+        "media_inspection": {
+            "duration_seconds": 20.0,
+            "full_decode_passed": True,
+            "video": {"codec": "h264", "width": 1280, "height": 720},
+            "audio": {"codec": "aac", "channels": 2},
+        },
+        "required_artifact_bytes": {
+            name: 1024 for name in (
+                "final.mp4", "thumbnail.jpg", "audio_master.mp3", "captions.srt",
+                "article.md", "seo.json", "social_campaign.json",
+                "production_manifest.json", "rights_manifest.json", "package.zip",
+            )
+        },
+        "package_entries_verified": True,
+        "rights_evidence": {
+            "unresolved_count": 0,
+            "review_required_count": 0,
+            "rights_cleared_count": 5,
+            "fallback_visual_count": 0,
+            "manifest_sha256": "9" * 64,
+            "manifest_parse_passed": True,
+        },
+        "truthful": True,
     }
 
 
@@ -75,9 +169,9 @@ def test_production_certificate_passes_only_with_every_exact_candidate_gate():
     certificate = build_certificate(
         candidate_sha=candidate,
         acceptance=_passing_acceptance(),
-        storage={"status": "PASS"},
-        inference={"status": "PASS"},
-        deployment={"status": "PASS", "deployed_commit_sha": candidate},
+        storage=_passing_storage(),
+        inference=_passing_inference(),
+        deployment=_passing_deployment(candidate),
         human_approval={
             "candidate_commit_sha": candidate,
             "reviewed_media_sha256": "a" * 64,
@@ -85,7 +179,7 @@ def test_production_certificate_passes_only_with_every_exact_candidate_gate():
             "reviewed_at_utc": "2026-11-04T00:00:00Z",
             "review_notes": "Reviewed the complete exact media cut and approved the creative result.",
             "approved": True,
-            "average_score": 4.7,
+            "average_score": 4.6167,
             "dimension_scores": {
                 "director": 4.8,
                 "cinematographer": 4.5,
@@ -112,9 +206,9 @@ def test_production_certificate_rejects_approval_for_another_commit():
     certificate = build_certificate(
         candidate_sha=candidate,
         acceptance=_passing_acceptance(),
-        storage={"status": "PASS"},
-        inference={"status": "PASS"},
-        deployment={"status": "PASS", "deployed_commit_sha": candidate},
+        storage=_passing_storage(),
+        inference=_passing_inference(),
+        deployment=_passing_deployment(candidate),
         human_approval={
             "candidate_commit_sha": "e" * 40,
             "reviewed_media_sha256": "a" * 64,
@@ -153,6 +247,9 @@ def test_certificate_cli_writes_gate_report_not_certificate_when_evidence_is_mis
     gemini_path.write_text(json.dumps({
         "status": "PASS",
         "model": "gemini-3.1-flash-lite",
+        "http_status": 200,
+        "finish_reason": "STOP",
+        "response_characters": 42,
         "response_sha256": "c" * 64,
     }), encoding="utf-8")
     script = Path(__file__).resolve().parents[1] / "scripts" / "create_production_certificate.py"
@@ -206,17 +303,17 @@ def test_certificate_cli_issues_certificate_only_when_every_gate_passes(tmp_path
     gemini_path.write_text(json.dumps({
         "status": "PASS",
         "model": "gemini-3.1-flash-lite",
+        "http_status": 200,
+        "finish_reason": "STOP",
+        "response_characters": 42,
         "response_sha256": "d" * 64,
     }), encoding="utf-8")
     storage_path = tmp_path / "storage.json"
-    storage_path.write_text(json.dumps({"status": "PASS"}), encoding="utf-8")
+    storage_path.write_text(json.dumps(_passing_storage()), encoding="utf-8")
     inference_path = tmp_path / "inference.json"
-    inference_path.write_text(json.dumps({"status": "PASS"}), encoding="utf-8")
+    inference_path.write_text(json.dumps(_passing_inference()), encoding="utf-8")
     deployment_path = tmp_path / "deployment.json"
-    deployment_path.write_text(json.dumps({
-        "status": "PASS",
-        "deployed_commit_sha": candidate,
-    }), encoding="utf-8")
+    deployment_path.write_text(json.dumps(_passing_deployment(candidate)), encoding="utf-8")
     human_path = tmp_path / "human-approval.json"
     human_path.write_text(json.dumps({
         "candidate_commit_sha": candidate,
@@ -225,7 +322,7 @@ def test_certificate_cli_issues_certificate_only_when_every_gate_passes(tmp_path
         "reviewed_at_utc": "2026-11-04T00:00:00Z",
         "review_notes": "Reviewed the complete exact media cut and approved the creative result.",
         "approved": True,
-        "average_score": 4.7,
+        "average_score": 4.6167,
         "dimension_scores": {
             "director": 4.8,
             "cinematographer": 4.5,
@@ -278,9 +375,9 @@ def test_production_certificate_rejects_approval_for_different_media_bytes():
     certificate = build_certificate(
         candidate_sha=candidate,
         acceptance=_passing_acceptance(),
-        storage={"status": "PASS"},
-        inference={"status": "PASS"},
-        deployment={"status": "PASS", "deployed_commit_sha": candidate},
+        storage=_passing_storage(),
+        inference=_passing_inference(),
+        deployment=_passing_deployment(candidate),
         human_approval={
             "candidate_commit_sha": candidate,
             "reviewed_media_sha256": "b" * 64,
@@ -315,9 +412,9 @@ def test_production_certificate_requires_gemini_smoke_pass():
     certificate = build_certificate(
         candidate_sha=candidate,
         acceptance=_passing_acceptance(),
-        storage={"status": "PASS"},
-        inference={"status": "PASS"},
-        deployment={"status": "PASS", "deployed_commit_sha": candidate},
+        storage=_passing_storage(),
+        inference=_passing_inference(),
+        deployment=_passing_deployment(candidate),
         human_approval=None,
         evidence_hashes={},
         gemini_writer={"status": "FAIL", "model": "gemini-3.1-flash-lite", "response_sha256": "c" * 64},
