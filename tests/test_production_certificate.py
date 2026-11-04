@@ -129,9 +129,11 @@ def _passing_deployment(candidate):
         "package_entries_verified": True,
         "rights_evidence": {
             "actual_rendered_scene_count": 5,
+            "visual_rights_evidence_present": True,
             "unresolved_count": 0,
             "review_required_count": 0,
             "rights_cleared_count": 5,
+            "rights_asset_count": 5,
             "fallback_visual_count": 0,
             "manifest_sha256": "9" * 64,
             "manifest_parse_passed": True,
