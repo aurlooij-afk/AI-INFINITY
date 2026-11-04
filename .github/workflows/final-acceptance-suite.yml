@@ -29,6 +29,31 @@ jobs:
       - name: Build authoritative Docker runtime
         run: docker build --pull -t ai-infinity-final-acceptance .
 
+      - name: Verify real Gemini Free Tier writer response
+        id: gemini_writer
+        env:
+          GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
+          AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK: \${{ vars.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK }}
+          AI_INFINITY_GEMINI_FREE_TIER_MODEL: gemini-3.1-flash-lite
+        run: |
+          set -euo pipefail
+          if [[ -z "\${GEMINI_API_KEY:-}" ]]; then
+            echo "::error::GitHub Actions secret GEMINI_API_KEY is missing or empty."
+            exit 1
+          fi
+          case "\${AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK,,}" in
+            true|1|yes|on) ;;
+            *) echo "::error::Set AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK to exact true only after accepting Google's Free Tier data-use terms."; exit 1 ;;
+          esac
+          mkdir -p "\${GITHUB_WORKSPACE}/acceptance-evidence"
+          chmod 0777 "\${GITHUB_WORKSPACE}/acceptance-evidence"
+          docker run --rm --network host \\
+            -e GEMINI_API_KEY -e AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK -e AI_INFINITY_GEMINI_FREE_TIER_MODEL \\
+            -v "\${GITHUB_WORKSPACE}:/workspace:ro" \\
+            -v "\${GITHUB_WORKSPACE}/acceptance-evidence:/evidence" \\
+            -w /workspace --entrypoint python ai-infinity-final-acceptance \\
+            scripts/verify_gemini_writer.py --output /evidence/gemini-writer-verification.json
+
       - name: Verify live object-store snapshot round-trip and fresh-process restore
         id: project_state_storage
         continue-on-error: true
@@ -189,6 +214,7 @@ jobs:
           python scripts/create_production_certificate.py \
             --candidate-sha "${{ github.event.pull_request.head.sha || github.sha }}" \
             --acceptance final-acceptance-result.json \
+            --gemini-writer acceptance-evidence/gemini-writer-verification.json \
             --storage acceptance-evidence/project-state-storage-verification.json \
             --inference acceptance-evidence/wan-live-inference-verification.json \
             --deployment acceptance-evidence/live-deployment-verification.json \
@@ -206,6 +232,21 @@ jobs:
             acceptance-evidence/**
           if-no-files-found: warn
 
+      - name: Enforce candidate-bound production certificate
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path("production-certificate.json")
+          if not path.is_file():
+              raise SystemExit("Production certificate was not generated.")
+          certificate = json.loads(path.read_text(encoding="utf-8"))
+          print("PRODUCTION_RELEASE_GATE=" + str(certificate.get("PRODUCTION_VERIFIED")))
+          if certificate.get("PRODUCTION_VERIFIED") != "PASS":
+              print("BLOCKED_GATES=" + json.dumps(certificate.get("remaining_blockers", [])))
+              raise SystemExit("Production certification requires every gate to pass.")
+          PY
       - name: Dump Docker/runtime evidence on failure
         if: failure()
         run: |
