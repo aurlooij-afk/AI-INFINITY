@@ -9687,6 +9687,33 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         except Exception as variants_exc:
             shorts = []
             audit_event(project_id, "optional_variants_failed", {"error": str(variants_exc)[:1000]})
+
+        # A website request produces an actual portable static site bundle from
+        # this project's rendered media, editorial chapters, and retrieved sources.
+        # Export is local/download-first; no deployment or publishing is attempted.
+        website_outputs: Dict[str, Any] = {}
+        content_type = str(req.get("content_type") or "video").strip().lower()
+        if content_type == "website":
+            from ai_infinity.site_package import build_static_website_package
+            website_outputs = build_static_website_package(
+                outdir,
+                project_id=project_id,
+                title=str(plan.get("title") or topic),
+                description=str(plan.get("hook") or topic),
+                chapters=chapters,
+                research=research,
+                master_video=captioned,
+                thumbnail=thumb,
+                audio_master=audio_master,
+                captions=captions,
+                article=article,
+                duration_seconds=float(probe_duration(captioned)),
+                language=str(req.get("language") or "English"),
+            )
+            if not (website_outputs.get("verification") or {}).get("status") == "PASS":
+                raise RuntimeError("static website package did not pass its integrity verification")
+            audit_event(project_id, "static_website_package_created", website_outputs["verification"])
+
         manifest = outdir / "manifest.json"
         # Canonical project manifest: derive it from the actual files now present.
         # Exclude the manifest itself so its SHA is not self-referential.
@@ -9711,6 +9738,14 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "truthful": True,
         }), encoding="utf-8")
         qc = extended_quality_check(captioned, chapters, captions, outdir, quality_assets_meta)
+        if content_type == "website":
+            website_verification = website_outputs.get("verification") or {}
+            qc.setdefault("checks", {})["website_package_integrity"] = (
+                website_verification.get("status") == "PASS"
+                and website_verification.get("archive_integrity") is True
+                and bool(website_verification.get("archive_sha256"))
+            )
+            qc["website_package"] = website_verification
 
         # Explicit professional delivery manifests required by the creator
         # contract. These are real records derived from the actual production
@@ -9731,7 +9766,11 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "actual_duration_seconds": round(float(probe_duration(captioned)), 3),
             "artifacts": [
                 {"name": p.name, "sha256": file_sha256(p), "bytes": p.stat().st_size}
-                for p in [captioned, script, captions, sources, manifest, audio_master, narration_only, article, social]
+                for p in [
+                    captioned, script, captions, sources, manifest, audio_master,
+                    narration_only, article, social, website_outputs.get("package"),
+                    website_outputs.get("manifest"), website_outputs.get("readme"),
+                ]
                 if p and Path(p).is_file()
             ],
             "research": {
@@ -9830,7 +9869,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         manifest.write_text(jdump(metadata), encoding="utf-8")
         named_package = outdir / f"{safe_name(plan.get('title') or topic)}-AI-Infinity-creator-package.zip"
         package = outdir / "package.zip"
-        bundle: List[Optional[Path]] = [captioned, script, captions, sources, manifest, production_manifest, rights_manifest, outdir / "feature_execution.json", outdir / "creator_experiments.json", shared_music, thumb if thumb and thumb.exists() else None, audio_master, narration_only, article, social, outdir / "fact_check.json"]
+        bundle: List[Optional[Path]] = [captioned, script, captions, sources, manifest, production_manifest, rights_manifest, outdir / "feature_execution.json", outdir / "creator_experiments.json", shared_music, thumb if thumb and thumb.exists() else None, audio_master, narration_only, article, social, outdir / "fact_check.json", website_outputs.get("package"), website_outputs.get("manifest"), website_outputs.get("readme")]
         bundle += [x for x in editorial.values() if x]
         bundle += [Path(x["path"]) for x in shorts if Path(x["path"]).exists()]
         bundle += [p for p in outdir.glob("narration_*.mp3") if p.exists()]
@@ -9848,6 +9887,9 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         for kind, pth, mt in [
             ("video", captioned, "video/mp4"), ("audio_master", audio_master, "audio/mpeg"), ("audio", audio_master, "audio/mpeg"), ("narration_only", narration_only, "audio/mpeg"), ("article", article, "text/markdown"), ("social_campaign", social, "application/json"), ("social_campaign_markdown", social_markdown, "text/markdown"),
             ("script", script, "text/markdown"), ("captions", captions, "application/x-subrip"),
+            ("website_bundle", website_outputs.get("package"), "application/zip"),
+            ("website_manifest", website_outputs.get("manifest"), "application/json"),
+            ("website_readme", website_outputs.get("readme"), "text/markdown"),
             ("sources", sources, "application/json"), ("manifest", manifest, "application/json"), ("production_manifest", production_manifest, "application/json"), ("rights_manifest", rights_manifest, "application/json"), ("feature_execution", outdir / "feature_execution.json", "application/json"), ("thumbnail", thumb, "image/jpeg"), ("package", package, "application/zip")
         ]:
             if pth and Path(pth).exists(): _save_asset(project_id, kind, Path(pth), mt, {"title": plan.get("title") or topic})
@@ -9870,6 +9912,9 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             (rights_manifest, "application/json"),
             (script, "text/markdown"),
             (outdir / "feature_execution.json", "application/json"),
+            (website_outputs.get("package"), "application/zip"),
+            (website_outputs.get("manifest"), "application/json"),
+            (website_outputs.get("readme"), "text/markdown"),
         ]:
             if pth and Path(pth).exists():
                 register_artifact(project_id, Path(pth), mt)
@@ -9897,7 +9942,10 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 "social_campaign": f"/infinity/studio/project/{project_id}/asset/social_campaign.json" if (outdir/"social_campaign.json").exists() else (f"/infinity/studio/project/{project_id}/asset/social_campaign.md" if social and social.exists() else None),
                 "seo": f"/infinity/studio/project/{project_id}/asset/seo.json", "accessibility": f"/infinity/studio/project/{project_id}/asset/accessibility.json",
                 "provenance": f"/infinity/studio/project/{project_id}/asset/provenance.json", "fact_check": f"/infinity/studio/project/{project_id}/asset/fact_check.json", "platform_manifest": f"/infinity/studio/project/{project_id}/asset/platform_manifest.json",
-                "podcast_rss": f"/infinity/studio/project/{project_id}/asset/podcast_rss.xml" if (outdir/"podcast_rss.xml").exists() else None
+                "podcast_rss": f"/infinity/studio/project/{project_id}/asset/podcast_rss.xml" if (outdir/"podcast_rss.xml").exists() else None,
+                "website_package": f"/infinity/studio/project/{project_id}/asset/website.zip" if (website_outputs.get("package") and Path(website_outputs["package"]).is_file()) else None,
+                "website_manifest": f"/infinity/studio/project/{project_id}/asset/website_manifest.json" if (website_outputs.get("manifest") and Path(website_outputs["manifest"]).is_file()) else None,
+                "website_readme": f"/infinity/studio/project/{project_id}/asset/website_README.md" if (website_outputs.get("readme") and Path(website_outputs["readme"]).is_file()) else None
             },
             "shorts": [{"title": x["title"], "duration": x["duration"], "download_url": f"/infinity/studio/project/{project_id}/asset/{Path(x['path']).name}"} for x in shorts],
             "publication": {
