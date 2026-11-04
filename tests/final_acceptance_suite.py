@@ -15,7 +15,7 @@ if str(REPO_ROOT) not in sys.path:
 TMP=Path("/tmp/ai-infinity-final-acceptance"); TMP.mkdir(parents=True,exist_ok=True)
 PYURL="https://www.python.org/"
 
-SCENARIO_COUNT = 13
+SCENARIO_COUNT = 19
 SCENARIO_RESULTS: list[dict] = []
 SCENARIO_STARTED_AT = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -1226,6 +1226,182 @@ def t13():
     return _production_profile_acceptance("720p-20s", 20, True, 18085, "short")
 
 
+def _content_mode_acceptance(
+    content_type: str,
+    port: int,
+    *,
+    title: str,
+) -> dict:
+    """Create one real project and verify the requested native content deliverable."""
+    data_dir = TMP / ("content-mode-" + content_type)
+    shutil.rmtree(data_dir, ignore_errors=True)
+    process, base, server_log = start(
+        data_dir,
+        port,
+        {
+            "AI_INFINITY_FAST_MODE": "1",
+            "AI_INFINITY_REQUIRE_SOURCE_VISUALS": "1",
+            "AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE": "1",
+        },
+    )
+    session = requests.Session()
+    try:
+        project_id = create(
+            session,
+            base,
+            f"Create a 20-second premium, source-backed production about accessible digital storytelling. Deliver a {content_type} as the primary content type, with structured chapters, useful explanatory copy, source references and a complete editable package.",
+            duration=20,
+            format="short",
+            aspect_ratio="16:9",
+            language="English",
+            quality_preset="balanced",
+            require_full_hd=False,
+            content_type=content_type,
+        )
+        state = waitp(session, base, project_id, timeout=1200)
+        truth = req(session, base, f"/infinity/studio/project/{quote(project_id, safe='')}/truth")
+        assert truth.get("verified") is True and truth.get("state") == "VERIFIED", truth
+        checks = truth.get("checks") or {}
+        assert checks.get("research_required_and_present") is True, truth
+        assert checks.get("visual_rights_evidence_present") is True, truth
+        assert int(checks.get("visual_rights_unresolved_count") or 0) == 0, truth
+        assert int(checks.get("fallback_visual_count") or 0) == 0, truth
+
+        source = jart(session, base, project_id, "sources.json")
+        assert int(source.get("source_count") or len(source.get("sources") or [])) >= 1, source
+        production = jart(session, base, project_id, "production_manifest.json")
+        rights = jart(session, base, project_id, "rights_manifest.json")
+        assert production.get("truthful") is True and rights.get("truthful") is True
+        assert production.get("project_id") == project_id and rights.get("project_id") == project_id
+
+        if content_type == "article":
+            article = dl(session, base, project_id, "article.md", min_bytes=300)
+            seo = jart(session, base, project_id, "seo.json")
+            fact_check = jart(session, base, project_id, "fact_check.json")
+            text_value = article.read_text(encoding="utf-8")
+            assert text_value.count("## ") >= 2 and len(text_value.split()) >= 60, text_value[:1000]
+            assert seo.get("title") and seo.get("schema_org", {}).get("@type") == "Article", seo
+            assert fact_check.get("claims") is not None or fact_check.get("review_items") is not None, fact_check
+            delivered = {"article": article.name, "seo": "seo.json", "fact_check": "fact_check.json"}
+        elif content_type == "podcast":
+            audio = dl(session, base, project_id, "audio_master.mp3", min_bytes=1000)
+            rss = dl(session, base, project_id, "podcast_rss.xml", min_bytes=100)
+            audio_probe = probe(audio)
+            assert any(row.get("codec_type") == "audio" for row in audio_probe.get("streams", [])), audio_probe
+            import xml.etree.ElementTree as ET
+            channel = ET.parse(rss).getroot().find("./channel")
+            enclosure = channel.find("./item/enclosure") if channel is not None else None
+            assert enclosure is not None and enclosure.get("url") == "audio_master.mp3", rss.read_text()[:1000]
+            assert int(enclosure.get("length") or 0) == audio.stat().st_size, enclosure.attrib
+            assert enclosure.get("type") == "audio/mpeg", enclosure.attrib
+            delivered = {"audio": audio.name, "rss": rss.name, "audio_streams": len(audio_probe.get("streams", []))}
+        elif content_type == "social":
+            campaign = jart(session, base, project_id, "social_campaign.json")
+            expected = {"TikTok", "Instagram", "YouTube", "LinkedIn", "X", "Facebook"}
+            platforms = campaign.get("platforms") if isinstance(campaign.get("platforms"), dict) else campaign
+            assert expected <= set(platforms), sorted(platforms)
+            for platform in expected:
+                payload = platforms[platform]
+                values = json.dumps(payload, ensure_ascii=False)
+                assert len(re.sub(r"[^A-Za-z0-9\u0600-\u06ff]", "", values)) >= 20, (platform, payload)
+            assert campaign.get("method") == "platform_native_copy_and_delivery_contracts", campaign
+            delivered = {"campaign": "social_campaign.json", "platform_count": len(expected)}
+        elif content_type == "website":
+            package = dl(session, base, project_id, "website.zip", min_bytes=1000)
+            manifest = jart(session, base, project_id, "website_manifest.json")
+            readme = dl(session, base, project_id, "website_README.md", min_bytes=100)
+            assert manifest.get("deployment", {}).get("status") == "NOT_PUBLISHED", manifest
+            assert manifest.get("truthful") is True and manifest.get("entrypoint") == "index.html", manifest
+            import zipfile
+            with zipfile.ZipFile(package) as archive:
+                assert archive.testzip() is None
+                names = set(archive.namelist())
+                assert "ai-infinity-site/index.html" in names
+                page = archive.read("ai-infinity-site/index.html").decode("utf-8")
+                assert "rel=\"stylesheet\"" in page and "<video controls" in page
+                assert "evidence/rights_manifest.json" in names
+                assert "evidence/fact_check.json" in names
+            assert manifest.get("export_package", {}).get("sha256") == sha(package), manifest
+            assert "not a published" in readme.read_text(encoding="utf-8").lower()
+            delivered = {"website_zip": package.name, "sha256": sha(package), "site_files": len(names)}
+        elif content_type == "document":
+            document = dl(session, base, project_id, "document.docx", min_bytes=1000)
+            manifest = jart(session, base, project_id, "document_manifest.json")
+            from docx import Document
+            reopened = Document(document)
+            extracted = "\n".join(row.text for row in reopened.paragraphs)
+            assert manifest.get("verification") == "reopened_with_python_docx", manifest
+            assert len(reopened.tables) >= 1 and len(extracted.split()) >= 40, manifest
+            assert manifest.get("sha256") == sha(document), manifest
+            delivered = {"document": document.name, "paragraphs": len(reopened.paragraphs), "tables": len(reopened.tables)}
+        elif content_type == "presentation":
+            presentation = dl(session, base, project_id, "presentation.pptx", min_bytes=1000)
+            manifest = jart(session, base, project_id, "presentation_manifest.json")
+            from pptx import Presentation
+            reopened = Presentation(presentation)
+            extracted = "\n".join(
+                shape.text for slide in reopened.slides for shape in slide.shapes
+                if getattr(shape, "has_text_frame", False)
+            )
+            assert manifest.get("verification") == "reopened_with_python_pptx", manifest
+            assert manifest.get("slide_size") == "16:9" and len(reopened.slides) >= 3, manifest
+            assert len(extracted.split()) >= 40 and manifest.get("sha256") == sha(presentation), manifest
+            delivered = {"presentation": presentation.name, "slides": len(reopened.slides)}
+        else:
+            raise AssertionError("unknown acceptance content type: " + content_type)
+
+        with zipfile.ZipFile(dl(session, base, project_id, "package.zip", min_bytes=1000)) as package_archive:
+            package_names = set(package_archive.namelist())
+        required_names = set(
+            {
+                "article": {"article.md"},
+                "podcast": {"audio_master.mp3", "podcast_rss.xml"},
+                "social": {"social_campaign.json"},
+                "website": {"website.zip", "website_manifest.json"},
+                "document": {"document.docx", "document_manifest.json"},
+                "presentation": {"presentation.pptx", "presentation_manifest.json"},
+            }[content_type]
+        )
+        assert required_names <= package_names, (content_type, required_names - package_names, sorted(package_names))
+        return {
+            "test": content_type,
+            "project_id": project_id,
+            "content_type": content_type,
+            "state": state.get("status"),
+            "truth_verified": truth.get("verified"),
+            "source_count": int(source.get("source_count") or len(source.get("sources") or [])),
+            "rights_asset_count": len(rights.get("assets") or []),
+            "deliverables": delivered,
+            "package_contains_native_output": True,
+        }
+    finally:
+        stop(process, server_log)
+
+
+def t14_article():
+    return _content_mode_acceptance("article", 18086, title="Article")
+
+
+def t15_podcast():
+    return _content_mode_acceptance("podcast", 18087, title="Podcast")
+
+
+def t16_social():
+    return _content_mode_acceptance("social", 18088, title="Social campaign")
+
+
+def t17_website():
+    return _content_mode_acceptance("website", 18089, title="Website")
+
+
+def t18_document():
+    return _content_mode_acceptance("document", 18090, title="Word document")
+
+
+def t19_presentation():
+    return _content_mode_acceptance("presentation", 18091, title="PowerPoint presentation")
+
+
 def main():
     SCENARIO_RESULTS.clear()
     _persist_acceptance_result()
@@ -1243,6 +1419,12 @@ def main():
         "11": "Independent 20-second 1080p delivery profile",
         "12": "Real 15-minute / 900-second 720p long-form production",
         "13": "Independent 20-second 720p baseline production",
+        "14": "Native research-backed article with SEO metadata and fact-check records",
+        "15": "Podcast audio master with a valid RSS enclosure bound to the real audio file",
+        "16": "Platform-native multi-network social campaign package",
+        "17": "Responsive exportable website with local video, captions and project evidence",
+        "18": "Editable Word document verified by reopening its OOXML package",
+        "19": "Editable 16:9 PowerPoint deck verified by reopening its OOXML package",
     }
     requested = {
         "01": {"duration_seconds": 60, "resolution": [1920, 1080], "aspect_ratio": "16:9", "quality_preset": "cinematic"},
@@ -1258,6 +1440,12 @@ def main():
         "11": {"duration_seconds": 20, "resolution": [1920, 1080], "aspect_ratio": "16:9"},
         "12": {"duration_seconds": 900, "resolution": [1280, 720], "aspect_ratio": "16:9"},
         "13": {"duration_seconds": 20, "resolution": [1280, 720], "aspect_ratio": "16:9"},
+        "14": {"content_type": "article", "native_format": "Markdown", "minimum_chapters": 2},
+        "15": {"content_type": "podcast", "audio_format": "MP3", "rss_enclosure_verified": True},
+        "16": {"content_type": "social", "platforms": ["TikTok", "Instagram", "YouTube", "LinkedIn", "X", "Facebook"]},
+        "17": {"content_type": "website", "native_format": "static HTML/CSS", "site_zip_hash_verified": True},
+        "18": {"content_type": "document", "native_format": "DOCX", "reopen_verified": True},
+        "19": {"content_type": "presentation", "native_format": "PPTX", "reopen_verified": True},
     }
     process = None
     server_log = None
@@ -1304,6 +1492,12 @@ def main():
     _record_scenario("11", descriptions["11"], t11, requested=requested["11"])
     _record_scenario("12", descriptions["12"], t12, requested=requested["12"])
     _record_scenario("13", descriptions["13"], t13, requested=requested["13"])
+    _record_scenario("14", descriptions["14"], t14_article, requested=requested["14"])
+    _record_scenario("15", descriptions["15"], t15_podcast, requested=requested["15"])
+    _record_scenario("16", descriptions["16"], t16_social, requested=requested["16"])
+    _record_scenario("17", descriptions["17"], t17_website, requested=requested["17"])
+    _record_scenario("18", descriptions["18"], t18_document, requested=requested["18"])
+    _record_scenario("19", descriptions["19"], t19_presentation, requested=requested["19"])
 
     document = _acceptance_result_document()
     _persist_acceptance_result()
