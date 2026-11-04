@@ -141,7 +141,7 @@ def build_static_website_package(
     evidence_dir.mkdir(parents=True, exist_ok=True)
     for evidence_name in (
         "sources.json", "provenance.json", "fact_check.json", "rights_manifest.json",
-        "production_manifest.json", "seo.json", "social_campaign.json",
+        "seo.json", "social_campaign.json",
         "accessibility.json", "platform_manifest.json",
     ):
         evidence_source = root / evidence_name
@@ -350,7 +350,7 @@ Upload the contents of this folder to a static HTTPS host that you control. Conf
 - Responsive editorial page with semantic landmarks and keyboard-visible focus.
 - Reduced-motion support and native video/audio controls.
 - Local video, poster, audio, and WebVTT captions when those source artifacts exist.
-- Research links and project provenance, fact-check, rights, and production records when available.
+- Research links and project provenance, fact-check, and rights records when available.
 - SHA-256 records for packaged pages and assets. The site manifest excludes itself to avoid a self-referential hash.
 
 ## Rights and review
@@ -419,6 +419,16 @@ Review source-notes.json, the evidence folder, media licences, and project right
     with zipfile.ZipFile(archive, "r") as bundle:
         archive_integrity = bundle.testzip() is None
         packaged_names = bundle.namelist()
+    root_manifest_payload = json.loads(root_manifest.read_text(encoding="utf-8"))
+    root_manifest_payload["export_package"] = {
+        "file": "website.zip",
+        "sha256": _sha256(archive),
+        "size_bytes": archive.stat().st_size,
+    }
+    root_manifest.write_text(
+        json.dumps(root_manifest_payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     verification = {
         "status": "PASS" if archive_integrity and "ai-infinity-site/index.html" in packaged_names and manifest_rows else "FAIL",
         "archive_sha256": _sha256(archive),
