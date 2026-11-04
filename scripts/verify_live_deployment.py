@@ -206,6 +206,7 @@ def verify(base_url: str, expected_sha: str, output: Path, wait_seconds: int = 9
             rights_assets = rights.get("assets") if isinstance(rights, dict) else None
             rights_summary = {
                 "actual_rendered_scene_count": quality.get("actual_rendered_scene_count"),
+                "verified_motion_source_count": quality.get("verified_motion_source_count"),
                 "visual_rights_evidence_present": quality.get("visual_rights_evidence_present"),
                 "unresolved_count": quality.get("visual_rights_unresolved_count"),
                 "review_required_count": quality.get("visual_rights_review_required_count"),
