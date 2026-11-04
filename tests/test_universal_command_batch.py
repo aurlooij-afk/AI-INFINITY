@@ -45,6 +45,20 @@ def test_normalize_commands_rejects_inline_secrets_and_unsafe_payload_fields():
             "id": "one", "command": "create a video",
             "payload": {"gemini_api_key": "do-not-store"},
         }])
+    # Credential fields nested inside an options object must be rejected,
+    # not silently redacted and dispatched as a partial request.
+    with pytest.raises(HTTPException):
+        normalize_commands([{
+            "id": "nested-secret",
+            "command": "create a video",
+            "payload": {"options": {"provider": {"authorization": "Bearer hidden"}}},
+        }])
+    safe = normalize_commands([{
+        "id": "nested-safe",
+        "command": "create a video",
+        "payload": {"options": {"quality": {"preset": "cinematic"}}},
+    }])
+    assert safe[0]["payload"]["options"]["quality"]["preset"] == "cinematic"
 
 
 def test_batch_dispatches_in_order_and_binds_later_project_command():
