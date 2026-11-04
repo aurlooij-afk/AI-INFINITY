@@ -18,6 +18,7 @@ Fail-closed rules:
 
 import atexit
 import hashlib
+import json
 import os
 import re
 import sqlite3
