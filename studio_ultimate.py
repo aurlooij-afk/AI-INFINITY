@@ -1671,7 +1671,8 @@ def _gemini_free_tier_text_model() -> Optional[Callable]:
             }],
             "generationConfig": {
                 "temperature": max(0.0, min(1.0, float(payload.get("temperature", 0.55) or 0.55))),
-                "maxOutputTokens": 8192,
+                # 15-minute scripts need enough headroom for complete chapter JSON and bounded repairs.
+            "maxOutputTokens": 16384,
                 "responseMimeType": "application/json",
             },
         }
@@ -1904,6 +1905,7 @@ Use 5-18 chapters. Total durations should approximately equal the target. Narrat
     if model_fn is None and not _external_providers_disabled():
         model_fn = _openrouter_free_tier_text_model()
 
+    provider_attempt_error = None
     if model_fn:
         try:
             raw = model_fn({"messages": [{"role": "user", "content": prompt}], "temperature": 0.8}) or {}
@@ -1999,8 +2001,10 @@ EXISTING PLAN JSON:
                         "truthful": True,
                     }
                 return clean, provider
-        except Exception:
-            pass
+        except Exception as provider_exc:
+            # Preserve a safe error class in the project result instead of silently
+            # making a configured provider failure indistinguishable from no key.
+            provider_attempt_error = type(provider_exc).__name__
     # Only attempt the Hugging Face fallback when its explicit free-tier and
     # data-use acknowledgement is present. This avoids a hidden second provider
     # request after a Gemini call has already failed or exhausted its free quota.
@@ -2027,6 +2031,13 @@ EXISTING PLAN JSON:
         "required_spoken_words": target_narration_words,
         "actual_spoken_words": fallback_words,
         "repair_passes": 0,
+        "provider_attempt_error": provider_attempt_error,
+        "writer_diagnostics": {
+            "gemini_api_key_present": bool(os.getenv("GEMINI_API_KEY", "").strip()),
+            "gemini_free_tier_acknowledged": os.getenv("AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK", "").strip().lower() in {"1", "true", "yes", "on"},
+            "gemini_model": os.getenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", "gemini-3.1-flash-lite").strip(),
+            "external_providers_disabled": _external_providers_disabled(),
+        },
         "truthful": True,
     }
     return fallback_plan, "builtin-creative-engine"

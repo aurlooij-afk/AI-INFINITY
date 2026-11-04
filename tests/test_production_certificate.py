@@ -19,6 +19,15 @@ def _passing_acceptance():
         "visual_rights_unresolved_count": 0,
         "reviewer_packet": {"human_review_status": "PENDING"},
     }
+    tests[11]["result"] = {
+        "script_generation": {
+            "status": "complete",
+            "provider": "google-gemini-free-tier:gemini-3.1-flash-lite",
+            "required_spoken_words": 1875,
+            "actual_spoken_words": 2000,
+            "unique_sentence_ratio": 0.95,
+        }
+    }
     tests[3]["result"] = {
         "otio_import_rerender_passed": True,
         "otio_rerender_full_decode_passed": True,
@@ -42,6 +51,7 @@ def test_production_certificate_keeps_external_and_human_gates_separate():
         deployment=None,
         human_approval=None,
         evidence_hashes={},
+        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "response_sha256": "a" * 64},
     )
 
     assert certificate["candidate_commit_sha"] == candidate
@@ -79,6 +89,7 @@ def test_production_certificate_passes_only_with_every_exact_candidate_gate():
             "rights_approval": True,
         },
         evidence_hashes={},
+        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "response_sha256": "a" * 64},
     )
 
     assert certificate["ENGINEERING_STATE"] == "PASS"
@@ -110,6 +121,7 @@ def test_production_certificate_rejects_approval_for_another_commit():
             "rights_approval": True,
         },
         evidence_hashes={},
+        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "response_sha256": "a" * 64},
     )
 
     assert certificate["CREATIVE_APPROVAL"] == "PENDING"
@@ -122,6 +134,8 @@ def test_certificate_cli_writes_revision_bound_record_when_external_evidence_is_
     acceptance_path = tmp_path / "acceptance.json"
     acceptance_path.write_text(json.dumps(_passing_acceptance()), encoding="utf-8")
     output = tmp_path / "production-certificate.json"
+    gemini_path = tmp_path / "gemini-writer-verification.json"
+    gemini_path.write_text(json.dumps({"status": "PASS", "model": "gemini-3.1-flash-lite", "response_sha256": "a" * 64}), encoding="utf-8")
     script = Path(__file__).resolve().parents[1] / "scripts" / "create_production_certificate.py"
 
     completed = subprocess.run(
@@ -132,6 +146,8 @@ def test_certificate_cli_writes_revision_bound_record_when_external_evidence_is_
             candidate,
             "--acceptance",
             str(acceptance_path),
+            "--gemini-writer",
+            str(gemini_path),
             "--storage",
             str(tmp_path / "missing-storage.json"),
             "--inference",

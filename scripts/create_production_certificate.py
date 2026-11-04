@@ -78,9 +78,25 @@ def build_certificate(
     deployment: dict[str, Any] | None,
     human_approval: dict[str, Any] | None,
     evidence_hashes: dict[str, str | None],
+    gemini_writer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     scenarios = _scenario_map(acceptance)
     scenario_statuses = [str(row.get("status") or "") for row in scenarios.values()]
+    longform = scenarios.get("12", {}).get("result", {})
+    longform_script = longform.get("script_generation") if isinstance(longform.get("script_generation"), dict) else {}
+    longform_gemini_pass = bool(
+        longform_script.get("status") == "complete"
+        and str(longform_script.get("provider") or "").startswith("google-gemini-free-tier:gemini-3.1-flash-lite")
+        and int(longform_script.get("actual_spoken_words") or 0) >= int(longform_script.get("required_spoken_words") or 1)
+        and float(longform_script.get("unique_sentence_ratio") or 0) >= 0.85
+    )
+    gemini_writer_pass = bool(
+        isinstance(gemini_writer, dict)
+        and gemini_writer.get("status") == "PASS"
+        and gemini_writer.get("model") == "gemini-3.1-flash-lite"
+        and isinstance(gemini_writer.get("response_sha256"), str)
+        and len(gemini_writer.get("response_sha256")) == 64
+    )
     engineering_pass = bool(
         acceptance
         and acceptance.get("overall_status") == "PASS"
@@ -89,6 +105,8 @@ def build_certificate(
         and len(scenarios) == 13
         and len(scenario_statuses) == 13
         and all(status == "PASS" for status in scenario_statuses)
+        and gemini_writer_pass
+        and longform_gemini_pass
     )
 
     flagship = scenarios.get("01", {}).get("result", {})
@@ -138,6 +156,8 @@ def build_certificate(
         "CREATIVE_APPROVAL": creative_approval,
         "gates": {
             "final_acceptance": "PASS" if engineering_pass else str((acceptance or {}).get("overall_status") or "MISSING"),
+            "gemini_writer_preflight": "PASS" if gemini_writer_pass else "BLOCKED_OR_FAIL",
+            "900s_gemini_narration": "PASS" if longform_gemini_pass else "FAIL_OR_MISSING",
             "flagship_technical_and_rights_evidence": "PASS" if technical_rights_pass else "FAIL_OR_MISSING",
             "otio_import_and_rerender": "PASS" if otio_rerender_pass else "BLOCKED",
             "durable_storage": storage_status if storage_status in {"PASS", "FAIL", "BLOCKED"} else "FAIL",
@@ -165,6 +185,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidate-sha", required=True)
     parser.add_argument("--acceptance", type=Path, default=Path("final-acceptance-result.json"))
+    parser.add_argument("--gemini-writer", type=Path, default=Path("acceptance-evidence/gemini-writer-verification.json"))
     parser.add_argument("--storage", type=Path, default=Path("acceptance-evidence/b2-storage-verification.json"))
     parser.add_argument("--inference", type=Path, default=Path("acceptance-evidence/wan-live-inference-verification.json"))
     parser.add_argument("--deployment", type=Path, default=Path("acceptance-evidence/live-deployment-verification.json"))
@@ -177,6 +198,7 @@ def main() -> int:
 
     paths = {
         "acceptance": args.acceptance,
+        "gemini_writer": args.gemini_writer,
         "storage": args.storage,
         "inference": args.inference,
         "deployment": args.deployment,
@@ -191,6 +213,7 @@ def main() -> int:
         deployment=values["deployment"],
         human_approval=values["human_approval"],
         evidence_hashes={name: file_sha256(path) for name, path in paths.items()},
+        gemini_writer=values["gemini_writer"],
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
