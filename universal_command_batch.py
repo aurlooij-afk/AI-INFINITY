@@ -172,6 +172,7 @@ def execute_commands(
 
         # Every create step receives a stable batch-scoped idempotency key.
         payload.setdefault("idempotency_key", f"batch-{batch_id}-{step['id']}")
+        payload.setdefault("api_anything_idempotency_key", f"batch-{batch_id}-{step['id']}")
         record = {
             "id": step["id"], "sequence": sequence, "state": "running",
             "command": step["command"], "started_at": time.time(),
