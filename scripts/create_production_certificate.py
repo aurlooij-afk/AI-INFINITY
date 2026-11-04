@@ -179,6 +179,9 @@ def build_certificate(
         except (TypeError, ValueError, OverflowError):
             return False
 
+    actual_scene_count = quality.get("actual_rendered_scene_count")
+    verified_motion_count = quality.get("verified_motion_source_count")
+    cleared_rights_count = quality.get("visual_rights_cleared_count")
     technical_rights_pass = bool(
         flagship
         and flagship.get("truth_verified") is True
@@ -186,20 +189,18 @@ def build_certificate(
         and flagship.get("manifest_hash_verified") is True
         and _int_at_least(flagship.get("final_media_bytes"), 100_000)
         and _valid_hex_digest(flagship.get("final_media_sha256"))
-        and _int_at_least(flagship.get("fallback_visual_count"), 0)
-        and int(flagship.get("fallback_visual_count") or 0) == 0
-        and _int_at_least(flagship.get("visual_rights_unresolved_count"), 0)
-        and int(flagship.get("visual_rights_unresolved_count") or 0) == 0
-        and _int_at_least(quality.get("actual_rendered_scene_count"), 1)
-        and _int_at_least(quality.get("verified_motion_source_count"), 1)
-        and _int_at_least(quality.get("visual_rights_cleared_count"), 1)
-        and _int_at_least(quality.get("visual_rights_review_required_count"), 0)
-        and int(quality.get("visual_rights_review_required_count") or 0) == 0
-        and _int_at_least(quality.get("visual_rights_unresolved_count"), 0)
-        and int(quality.get("visual_rights_unresolved_count") or 0) == 0
-        and int(quality.get("fallback_visual_count") or 0) == 0
+        and _int_equals(flagship.get("fallback_visual_count"), 0)
+        and _int_equals(flagship.get("visual_rights_unresolved_count"), 0)
+        and _int_at_least(actual_scene_count, 1)
+        and _int_at_least(verified_motion_count, 1)
+        and _int_at_least(verified_motion_count, int(quality.get("minimum_motion_source_count") or 0))
+        and _int_at_least(cleared_rights_count, int(actual_scene_count or 0))
+        and quality.get("visual_rights_evidence_present") is True
+        and _int_equals(quality.get("visual_rights_review_required_count"), 0)
+        and _int_equals(quality.get("visual_rights_unresolved_count"), 0)
+        and _int_equals(quality.get("fallback_visual_count"), 0)
         and _int_at_least(flagship.get("source_count"), 1)
-        and _int_at_least(flagship.get("rights_asset_count"), 1)
+        and _int_at_least(flagship.get("rights_asset_count"), int(actual_scene_count or 0))
         and _valid_hex_digest(flagship.get("package_sha256"))
         and _int_at_least(flagship.get("package_size_bytes"), 100_000)
         and flagship.get("package_round_trip_hash_verified") is True
