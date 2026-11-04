@@ -137,6 +137,22 @@ def build_static_website_package(
         json.dumps(source_document, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    evidence_dir = site / "evidence"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    for evidence_name in (
+        "sources.json", "provenance.json", "fact_check.json", "rights_manifest.json",
+        "production_manifest.json", "seo.json", "social_campaign.json",
+        "accessibility.json", "platform_manifest.json",
+    ):
+        evidence_source = root / evidence_name
+        if evidence_source.is_file() and evidence_source.stat().st_size > 0:
+            evidence_target = evidence_dir / evidence_name
+            shutil.copy2(evidence_source, evidence_target)
+            copied.append({
+                "path": f"evidence/{evidence_name}",
+                "size_bytes": evidence_target.stat().st_size,
+                "sha256": _sha256(evidence_target),
+            })
 
     safe_title = html.escape(str(title or "AI Infinity production")[:180], quote=True)
     safe_description = html.escape(str(description or title or "")[:500], quote=True)
@@ -320,8 +336,33 @@ footer{border-top:1px solid var(--line);padding:30px 0 54px;color:var(--muted);f
 """
     index_path = site / "index.html"
     index_path.write_text(document, encoding="utf-8")
-    generated = [index_path, site / "styles.css", site / "manifest.webmanifest", site / "source-notes.json"]
+    readme = """# AI Infinity static website export
+
+This is an exportable static website, not a published or hosted site.
+
+## Open locally
+Open index.html in a modern browser. Keep the assets and evidence folders beside it.
+
+## Deploy
+Upload the contents of this folder to a static HTTPS host that you control. Configure the domain and hosting provider there; AI Infinity has not published this package or claimed a live URL.
+
+## Included
+- Responsive editorial page with semantic landmarks and keyboard-visible focus.
+- Reduced-motion support and native video/audio controls.
+- Local video, poster, audio, and WebVTT captions when those source artifacts exist.
+- Research links and project provenance, fact-check, rights, and production records when available.
+- SHA-256 records for packaged pages and assets. The site manifest excludes itself to avoid a self-referential hash.
+
+## Rights and review
+Review source-notes.json, the evidence folder, media licences, and project rights/review records before redistribution. Attribution does not itself grant permission to reuse an asset. No external tracking scripts, remote fonts, or third-party JavaScript are included.
+"""
+    (site / "README.md").write_text(readme, encoding="utf-8")
+    generated = [
+        index_path, site / "styles.css", site / "manifest.webmanifest",
+        site / "source-notes.json", site / "README.md",
+    ]
     generated += [path for path in assets.rglob("*") if path.is_file()]
+    generated += [path for path in evidence_dir.rglob("*") if path.is_file()]
     manifest_rows = []
     for path in sorted(generated):
         manifest_rows.append({
@@ -360,27 +401,6 @@ footer{border-top:1px solid var(--line);padding:30px 0 54px;color:var(--muted);f
         json.dumps(site_manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    readme = """# AI Infinity static website export
-
-This is an exportable static website, not a published or hosted site.
-
-## Open locally
-Open index.html in a modern browser. Keep the assets folder beside it.
-
-## Deploy
-Upload the contents of this folder to a static HTTPS host that you control. Configure the domain and hosting provider there; AI Infinity has not published this package or claimed a live URL.
-
-## Included
-- Responsive editorial page with semantic landmarks and keyboard-visible focus.
-- Reduced-motion support and native video/audio controls.
-- Local video, poster, audio, and WebVTT captions when those source artifacts exist.
-- Research links and a machine-readable source record.
-- A SHA-256 manifest for every packaged file.
-
-## Rights and review
-Review source-notes.json, the media licences, and project rights/review records before redistribution. Attribution does not itself grant permission to reuse an asset. No external tracking scripts, remote fonts, or third-party JavaScript are included.
-"""
-    (site / "README.md").write_text(readme, encoding="utf-8")
     root_manifest = root / "website_manifest.json"
     root_manifest.write_text(
         json.dumps(site_manifest, ensure_ascii=False, indent=2) + "\n",
