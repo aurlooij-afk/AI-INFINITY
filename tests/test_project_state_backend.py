@@ -882,18 +882,75 @@ def test_supabase_s3_snapshot_manifest_is_checked_and_supplies_restore_digest(mo
     payload = b"verified sqlite snapshot bytes"
     digest = hashlib.sha256(payload).hexdigest()
     stamp = "2026-11-04T00:00:00Z"
+    version_key = backend.object_key() + ".versions/test-version.sqlite"
     memory.put_object(
         Bucket=backend._cfg()["bucket"],
-        Key=backend.object_key(),
+        Key=version_key,
         Body=payload,
         ContentType="application/x-sqlite3",
     )
-    backend._write_snapshot_manifest(memory, len(payload), digest, stamp)
+    backend._write_snapshot_manifest(memory, len(payload), digest, stamp, version_key)
 
     head = backend._head()
 
     assert head["size_bytes"] == len(payload)
     assert head["sha256"] == digest
     assert head["snapshot_at"] == stamp
+    assert head["object_key"] == version_key
     assert backend._manifest_key() in {key for _bucket, key in memory.objects}
-    assert "metadata" not in memory.objects[(backend._cfg()["bucket"], backend.object_key())]
+    assert "metadata" not in memory.objects[(backend._cfg()["bucket"], version_key)]
+
+
+def test_supabase_s3_snapshot_keeps_previous_recovery_point_when_manifest_publish_fails(
+    monkeypatch, tmp_path: Path
+):
+    backend = importlib.import_module("ai_infinity.project_state_backend")
+    _supabase_s3_env(monkeypatch)
+    memory = _MemoryS3WithoutCustomMetadata()
+    bucket = backend._cfg()["bucket"]
+    previous_key = backend.object_key() + ".versions/previous.sqlite"
+    previous_payload = b"previous-good-snapshot"
+    previous_sha = hashlib.sha256(previous_payload).hexdigest()
+    memory.put_object(
+        Bucket=bucket,
+        Key=previous_key,
+        Body=previous_payload,
+        ContentType="application/x-sqlite3",
+    )
+    backend._write_snapshot_manifest(
+        memory, len(previous_payload), previous_sha, "previous", previous_key
+    )
+
+    database = tmp_path / "state.db"
+    with sqlite3.connect(database) as con:
+        con.execute("CREATE TABLE project_state(id INTEGER PRIMARY KEY, value TEXT)")
+        con.execute("INSERT INTO project_state(value) VALUES('new snapshot content')")
+    original_put = memory.put_object
+
+    def fail_manifest_update(Bucket, Key, Body, ContentType, **kwargs):
+        if Key == backend._manifest_key():
+            raise RuntimeError("simulated manifest update failure")
+        return original_put(Bucket, Key, Body, ContentType, **kwargs)
+
+    monkeypatch.setattr(memory, "put_object", fail_manifest_update)
+    monkeypatch.setattr(backend, "_DB_PATH", database)
+    monkeypatch.setattr(backend, "_STATUS", {
+        "configured": True,
+        "active": True,
+        "verified": True,
+        "snapshot_verified": True,
+        "backend": "supabase_s3",
+        "last_sync_at": "previous",
+        "last_sha256": previous_sha,
+        "last_error": None,
+    })
+    monkeypatch.setattr(backend, "_CHANGE_GENERATION", 0)
+    monkeypatch.setattr(backend, "_SYNC_DIRTY", False)
+
+    result = backend.snapshot_now()
+
+    assert result["status"] == "failed", result
+    current = backend._head()
+    assert current["object_key"] == previous_key
+    assert current["sha256"] == previous_sha
+    assert (bucket, previous_key) in memory.objects
