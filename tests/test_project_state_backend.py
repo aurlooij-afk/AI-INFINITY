@@ -933,6 +933,7 @@ def test_supabase_s3_snapshot_keeps_previous_recovery_point_when_manifest_publis
         return original_put(Bucket, Key, Body, ContentType, **kwargs)
 
     monkeypatch.setattr(memory, "put_object", fail_manifest_update)
+    monkeypatch.setattr(backend, "_client", lambda: memory)
     monkeypatch.setattr(backend, "_DB_PATH", database)
     monkeypatch.setattr(backend, "_STATUS", {
         "configured": True,
