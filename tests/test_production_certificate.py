@@ -17,7 +17,11 @@ def _passing_acceptance():
         "truth_verified": True,
         "fallback_visual_count": 0,
         "visual_rights_unresolved_count": 0,
-        "reviewer_packet": {"human_review_status": "PENDING"},
+        "final_media_sha256": "a" * 64,
+        "reviewer_packet": {
+            "human_review_status": "PENDING",
+            "media_sha256": "a" * 64,
+        },
     }
     tests[3]["result"] = {
         "otio_import_rerender_passed": True,
@@ -66,6 +70,10 @@ def test_production_certificate_passes_only_with_every_exact_candidate_gate():
         deployment={"status": "PASS", "deployed_commit_sha": candidate},
         human_approval={
             "candidate_commit_sha": candidate,
+            "reviewed_media_sha256": "a" * 64,
+            "reviewer": "project_owner",
+            "reviewed_at_utc": "2026-11-04T00:00:00Z",
+            "review_notes": "Reviewed the complete exact media cut and approved the creative result.",
             "approved": True,
             "average_score": 4.7,
             "dimension_scores": {
@@ -77,6 +85,7 @@ def test_production_certificate_passes_only_with_every_exact_candidate_gate():
                 "rights": 4.7,
             },
             "rights_approval": True,
+            "rights_notes": "Reviewed source and licence records for the exact media SHA.",
         },
         evidence_hashes={},
     )
@@ -97,6 +106,10 @@ def test_production_certificate_rejects_approval_for_another_commit():
         deployment={"status": "PASS", "deployed_commit_sha": candidate},
         human_approval={
             "candidate_commit_sha": "e" * 40,
+            "reviewed_media_sha256": "a" * 64,
+            "reviewer": "project_owner",
+            "reviewed_at_utc": "2026-11-04T00:00:00Z",
+            "review_notes": "Reviewed an earlier candidate.",
             "approved": True,
             "average_score": 5.0,
             "dimension_scores": {
@@ -108,6 +121,7 @@ def test_production_certificate_rejects_approval_for_another_commit():
                 "rights": 5,
             },
             "rights_approval": True,
+            "rights_notes": "Reviewed the exact earlier media.",
         },
         evidence_hashes={},
     )
@@ -156,3 +170,40 @@ def test_certificate_cli_writes_revision_bound_record_when_external_evidence_is_
     assert certificate["PRODUCTION_VERIFIED"] == "BLOCKED"
     assert certificate["CREATIVE_APPROVAL"] == "PENDING"
     assert certificate["certificate_sha256"]
+
+
+
+def test_production_certificate_rejects_approval_for_different_media_bytes():
+    candidate = "f" * 40
+    certificate = build_certificate(
+        candidate_sha=candidate,
+        acceptance=_passing_acceptance(),
+        storage={"status": "PASS"},
+        inference={"status": "PASS"},
+        deployment={"status": "PASS", "deployed_commit_sha": candidate},
+        human_approval={
+            "candidate_commit_sha": candidate,
+            "reviewed_media_sha256": "b" * 64,
+            "reviewer": "project_owner",
+            "reviewed_at_utc": "2026-11-04T00:00:00Z",
+            "review_notes": "Reviewed and approved a different media file.",
+            "approved": True,
+            "average_score": 5.0,
+            "dimension_scores": {
+                "director": 5,
+                "cinematographer": 5,
+                "editor": 5,
+                "sound": 5,
+                "story": 5,
+                "rights": 5,
+            },
+            "rights_approval": True,
+            "rights_notes": "Reviewed the rights of the other media file.",
+        },
+        evidence_hashes={},
+    )
+
+    assert certificate["CREATIVE_APPROVAL"] == "PENDING"
+    assert certificate["PRODUCTION_VERIFIED"] == "BLOCKED"
+    assert certificate["human_approval_media_sha256"] == "b" * 64
+    assert certificate["reviewed_media_sha256"] == "a" * 64
