@@ -732,6 +732,60 @@ def test_launch_focal_scenes_choose_matching_city_or_abstract_motion_source(
     assert Path(selected["path"]).is_file()
 
 
+def test_real_campaign_tunnel_scene_uses_distinct_hd_source_after_curated_candidates_fail(monkeypatch, tmp_path):
+    """The real launch brief must not turn a tunnel shot into a repeated mountain or illustration."""
+    monkeypatch.setattr(studio, "FAST_MODE", False)
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: False)
+
+    # The earlier campaign scene has already used this mountain source. The
+    # tunnel scene must select a different, scene-relevant motion asset.
+    (tmp_path / "selected_visual_05.mp4").write_bytes(b"previously selected mountain footage" * 1200)
+    tunnel_bytes = b"verified-HD-abstract-tunnel-motion-source\n" * 2000
+
+    def fake_download(url, path, **_kwargs):
+        if "/download/video/31930508/" not in str(url):
+            raise OSError("fixture marks the older curated source unavailable")
+        Path(path).write_bytes(tunnel_bytes)
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 10.0)
+    monkeypatch.setattr(studio, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
+
+    scene = {
+        "topic": "AI Infinity — One Idea. Infinite Worlds.",
+        "heading": "Transformation in Motion",
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": (
+            "abstract glowing-line tunnel transitioning from the imagined landscape "
+            "into a crafted visual world; brief direction: the cinematic experience, "
+            "deliberate camera movement, atmospheric lighting and meaningful transitions"
+        ),
+        "visual_search_subject": "abstract tunnel with glowing lines cinematic transition",
+        "visual_query": (
+            "abstract tunnel with glowing lines cinematic transition; the cinematic "
+            "experience moves from an imagined landscape into a crafted visual world"
+        ),
+        "narration": (
+            "Each transition carries the same idea forward, changing scale and emotion "
+            "without losing the human story."
+        ),
+        "on_screen": "Possibility becomes motion",
+    }
+
+    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=6)
+
+    assert selected is not None
+    assert selected["source_id"] == 31930508
+    assert selected["kind"] == "video"
+    assert selected["validated_media"] is True
+    assert selected["quality_tier"] == "curated_free_source_motion_video"
+    assert selected["license"] == "Pexels License"
+    assert hashlib.sha256(Path(selected["path"]).read_bytes()).hexdigest() == hashlib.sha256(tunnel_bytes).hexdigest()
+
+
 def test_launch_signature_endcard_uses_real_screen_motion_source(monkeypatch, tmp_path):
     monkeypatch.setattr(studio, "FAST_MODE", False)
     monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: False)
