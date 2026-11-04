@@ -9688,31 +9688,10 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             shorts = []
             audit_event(project_id, "optional_variants_failed", {"error": str(variants_exc)[:1000]})
 
-        # A website request produces an actual portable static site bundle from
-        # this project's rendered media, editorial chapters, and retrieved sources.
-        # Export is local/download-first; no deployment or publishing is attempted.
+        # Website exports are created after the production and rights manifests exist,
+        # so the downloadable site can carry the actual evidence records.
         website_outputs: Dict[str, Any] = {}
         content_type = str(req.get("content_type") or "video").strip().lower()
-        if content_type == "website":
-            from ai_infinity.site_package import build_static_website_package
-            website_outputs = build_static_website_package(
-                outdir,
-                project_id=project_id,
-                title=str(plan.get("title") or topic),
-                description=str(plan.get("hook") or topic),
-                chapters=chapters,
-                research=research,
-                master_video=captioned,
-                thumbnail=thumb,
-                audio_master=audio_master,
-                captions=captions,
-                article=article,
-                duration_seconds=float(probe_duration(captioned)),
-                language=str(req.get("language") or "English"),
-            )
-            if not (website_outputs.get("verification") or {}).get("status") == "PASS":
-                raise RuntimeError("static website package did not pass its integrity verification")
-            audit_event(project_id, "static_website_package_created", website_outputs["verification"])
 
         manifest = outdir / "manifest.json"
         # Canonical project manifest: derive it from the actual files now present.
@@ -9826,6 +9805,47 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             ],
             "truthful": True,
         },), encoding="utf-8")
+
+        # A website request produces a real, portable static-site package. It
+        # embeds project media and the rights/provenance records generated above.
+        # Export is download-first: this code never deploys or publishes the site.
+        if content_type == "website":
+            from ai_infinity.site_package import build_static_website_package
+            website_outputs = build_static_website_package(
+                outdir,
+                project_id=project_id,
+                title=str(plan.get("title") or topic),
+                description=str(plan.get("hook") or topic),
+                chapters=chapters,
+                research=research,
+                master_video=captioned,
+                thumbnail=thumb,
+                audio_master=audio_master,
+                captions=captions,
+                article=article,
+                duration_seconds=float(probe_duration(captioned)),
+                language=str(req.get("language") or "English"),
+            )
+            if (website_outputs.get("verification") or {}).get("status") != "PASS":
+                raise RuntimeError("static website package did not pass its integrity verification")
+            # Add the generated website files to the canonical artifact hash list.
+            try:
+                manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+                known_names = {str(row.get("name") or "") for row in manifest_payload.get("files", []) if isinstance(row, dict)}
+                for website_path in website_outputs.values():
+                    if not isinstance(website_path, (str, Path)):
+                        continue
+                    website_path = Path(website_path)
+                    if website_path.is_file() and website_path.name not in known_names:
+                        manifest_payload.setdefault("files", []).append({
+                            "name": website_path.name,
+                            "size_bytes": website_path.stat().st_size,
+                            "sha256": file_sha256(website_path),
+                        })
+                manifest.write_text(jdump(manifest_payload), encoding="utf-8")
+            except Exception as manifest_exc:
+                raise RuntimeError("website package was generated but canonical manifest reconciliation failed: " + type(manifest_exc).__name__) from None
+            audit_event(project_id, "static_website_package_created", website_outputs["verification"])
 
         # The manifest artifacts themselves are part of the professional QC gate.
         try:
