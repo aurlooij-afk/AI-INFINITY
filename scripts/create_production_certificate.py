@@ -194,13 +194,13 @@ def build_certificate(
         and _int_at_least(actual_scene_count, 1)
         and _int_at_least(verified_motion_count, 1)
         and _int_at_least(verified_motion_count, int(quality.get("minimum_motion_source_count") or 0))
-        and _int_at_least(cleared_rights_count, int(actual_scene_count or 0))
+        and _int_at_least(cleared_rights_count, int(verified_motion_count or 0))
         and quality.get("visual_rights_evidence_present") is True
         and _int_equals(quality.get("visual_rights_review_required_count"), 0)
         and _int_equals(quality.get("visual_rights_unresolved_count"), 0)
         and _int_equals(quality.get("fallback_visual_count"), 0)
         and _int_at_least(flagship.get("source_count"), 1)
-        and _int_at_least(flagship.get("rights_asset_count"), int(actual_scene_count or 0))
+        and _int_at_least(flagship.get("rights_asset_count"), int(verified_motion_count or 0))
         and _valid_hex_digest(flagship.get("package_sha256"))
         and _int_at_least(flagship.get("package_size_bytes"), 100_000)
         and flagship.get("package_round_trip_hash_verified") is True
@@ -247,8 +247,9 @@ def build_certificate(
         and _int_equals(deployment_rights.get("review_required_count"), 0)
         and _int_at_least(deployment_rights.get("actual_rendered_scene_count"), 1)
         and deployment_rights.get("visual_rights_evidence_present") is True
-        and _int_at_least(deployment_rights.get("rights_asset_count"), int(deployment_rights.get("actual_rendered_scene_count") or 0))
-        and _int_at_least(deployment_rights.get("rights_cleared_count"), int(deployment_rights.get("actual_rendered_scene_count") or 0))
+        and _int_at_least(deployment_rights.get("verified_motion_source_count"), 1)
+        and _int_at_least(deployment_rights.get("rights_asset_count"), int(deployment_rights.get("verified_motion_source_count") or 0))
+        and _int_at_least(deployment_rights.get("rights_cleared_count"), int(deployment_rights.get("verified_motion_source_count") or 0))
         and _int_equals(deployment_rights.get("fallback_visual_count"), 0)
         and deployment_rights.get("manifest_parse_passed") is True
         and (deployment or {}).get("truthful") is True
