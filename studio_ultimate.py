@@ -9738,22 +9738,6 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "truthful": True,
         }), encoding="utf-8")
         qc = extended_quality_check(captioned, chapters, captions, outdir, quality_assets_meta)
-        if content_type == "website":
-            website_verification = website_outputs.get("verification") or {}
-            qc.setdefault("checks", {})["website_package_integrity"] = (
-                website_verification.get("status") == "PASS"
-                and website_verification.get("archive_integrity") is True
-                and bool(website_verification.get("archive_sha256"))
-            )
-            qc["website_package"] = website_verification
-        if content_type in {"document", "presentation"}:
-            native_verification = native_outputs.get("verification") or {}
-            qc.setdefault("checks", {})["native_office_export_integrity"] = (
-                bool(native_verification.get("sha256"))
-                and int(native_verification.get("size_bytes") or 0) > 0
-                and native_verification.get("truthful") is True
-            )
-            qc["native_content_export"] = native_verification
 
         # Explicit professional delivery manifests required by the creator
         # contract. These are real records derived from the actual production
@@ -9897,6 +9881,29 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             production_manifest.write_text(jdump(production_payload), encoding="utf-8")
             audit_event(project_id, "static_website_package_created", website_outputs["verification"])
 
+        # Content-type-specific QC is evaluated only after the real files exist.
+        if content_type == "website":
+            website_verification = website_outputs.get("verification") or {}
+            qc.setdefault("checks", {})["website_package_integrity"] = (
+                website_verification.get("status") == "PASS"
+                and website_verification.get("archive_integrity") is True
+                and bool(website_verification.get("archive_sha256"))
+            )
+            qc["website_package"] = website_verification
+        if content_type in {"document", "presentation"}:
+            native_verification = native_outputs.get("verification") or {}
+            native_path = native_outputs.get("file")
+            native_manifest_path = native_outputs.get("manifest")
+            qc.setdefault("checks", {})["native_office_export_integrity"] = (
+                bool(native_verification.get("sha256"))
+                and int(native_verification.get("size_bytes") or 0) > 0
+                and native_verification.get("truthful") is True
+                and native_path is not None and Path(native_path).is_file()
+                and native_manifest_path is not None and Path(native_manifest_path).is_file()
+                and file_sha256(Path(native_path)) == native_verification.get("sha256")
+            )
+            qc["native_content_export"] = native_verification
+
         # The manifest artifacts themselves are part of the professional QC gate.
         try:
             production_manifest_ok = json.loads(production_manifest.read_text(encoding="utf-8")).get("project_id") == project_id
@@ -9937,6 +9944,14 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "platform_packages": {
                 **{k: Path(v).name for k,v in editorial.items() if v},
                 **({"static_website": "website.zip", "website_manifest": "website_manifest.json"} if website_outputs else {}),
+                **({
+                    "native_document": "document.docx",
+                    "native_document_manifest": "document_manifest.json",
+                } if content_type == "document" and native_outputs else {}),
+                **({
+                    "native_presentation": "presentation.pptx",
+                    "native_presentation_manifest": "presentation_manifest.json",
+                } if content_type == "presentation" and native_outputs else {}),
             },
             "static_website_export": website_outputs.get("verification") if website_outputs else None,
             "native_content_export": native_outputs.get("verification") if native_outputs else None,
