@@ -54,7 +54,7 @@ jobs:
             exit 0
           fi
           if [[ "${writer_status}" == "BLOCKED" ]]; then
-            echo "::warning::Gemini writer is blocked; B2 and GPU evidence will still be collected, but the 13-scenario suite will not run."
+            echo "::warning::Gemini writer is blocked; B2 and GPU evidence will still be collected, but the 19-scenario suite will not run."
             exit 0
           fi
           echo "::error::Gemini writer verification failed; see the redacted verification artifact."
@@ -159,7 +159,7 @@ jobs:
             --output /evidence/live-deployment-verification.json \
             --wait-seconds 900
 
-      - name: Run 13-scenario real acceptance suite (20s baseline, 60s flagship, 900s long-form; 720p/1080p)
+      - name: Run 19-scenario real acceptance suite (20s baseline, 60s flagship, 900s long-form; 720p/1080p)
         # Run every independent scenario even when Gemini is blocked. The long-form
         # scenario must fail its truthful preflight; the remaining scenarios still
         # produce diagnostic evidence. The certificate remains gated on Gemini PASS.
