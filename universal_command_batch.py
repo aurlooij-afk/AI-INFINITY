@@ -29,6 +29,16 @@ SENSITIVE_VALUE = re.compile(
     r"\s*[:=]\s*['\"]?[^,\s'\"}]+"
 )
 
+def _contains_sensitive_key(value: Any) -> bool:
+    """Reject credential-like fields recursively before a batch is persisted."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if SENSITIVE_KEY.search(str(key)) or _contains_sensitive_key(item):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_sensitive_key(item) for item in value)
+    return False
+
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
@@ -67,7 +77,7 @@ def normalize_commands(raw_commands: Any) -> list[dict[str, Any]]:
         if len(command) < 3 or len(command) > MAX_COMMAND_LENGTH:
             raise HTTPException(422, f"commands[{index - 1}] command length must be 3..{MAX_COMMAND_LENGTH}.")
         payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
-        if any(SENSITIVE_KEY.search(str(key)) for key in payload):
+        if _contains_sensitive_key(payload):
             raise HTTPException(422, "Do not include credentials in command payloads; use server-side secret configuration.")
         if SENSITIVE_VALUE.search(command):
             raise HTTPException(422, "Do not put credentials in command text.")
@@ -300,13 +310,22 @@ def register(app: Any) -> None:
     async def canonical_command_batch(request: Request, response: Response):
         user_id = canonical.current_user(request, response)
         body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(422, "The command batch body must be a JSON object.")
         commands = normalize_commands(body.get("commands"))
         idempotency_key = str(body.get("idempotency_key") or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", idempotency_key):
             raise HTTPException(422, "idempotency_key is required and must be 8..128 safe characters.")
         request_hash = hashlib.sha256(_json(commands).encode("utf-8")).hexdigest()
 
+        # Serialize the idempotency lookup and insert with a SQLite write lock.
+        # The unique index remains the cross-process invariant. BEGIN IMMEDIATE
+        # prevents concurrent retries from dispatching the same side-effecting batch twice.
+        batch_id = uuid.uuid4().hex
+        now = time.time()
+        existing_id = ""
         with canonical.studio().DB_LOCK, canonical.db() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             prior = connection.execute(
                 "SELECT batch_id,request_sha256 FROM canonical_command_batches WHERE user_id=? AND idempotency_key=?",
                 (user_id, idempotency_key),
@@ -316,22 +335,17 @@ def register(app: Any) -> None:
                     raise HTTPException(409, "idempotency_key is already bound to a different command batch.")
                 existing_id = str(prior[0])
             else:
-                existing_id = ""
+                connection.execute(
+                    "INSERT INTO canonical_command_batches "
+                    "(batch_id,user_id,idempotency_key,request_sha256,commands_json,results_json,status,created_at,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?)",
+                    (batch_id, user_id, idempotency_key, request_hash, _json(commands), "[]", "running", now, now),
+                )
 
         if existing_id:
             existing = load(existing_id, user_id)
             existing["replayed"] = True
             return existing
-
-        batch_id = uuid.uuid4().hex
-        now = time.time()
-        with canonical.studio().DB_LOCK, canonical.db() as connection:
-            connection.execute(
-                "INSERT INTO canonical_command_batches "
-                "(batch_id,user_id,idempotency_key,request_sha256,commands_json,results_json,status,created_at,updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?)",
-                (batch_id, user_id, idempotency_key, request_hash, _json(commands), "[]", "running", now, now),
-            )
 
         result = execute_commands(
             commands, user_id=user_id, batch_id=batch_id,
