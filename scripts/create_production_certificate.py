@@ -61,28 +61,33 @@ def _valid_human_approval(
         return False
     if not str(value.get("reviewer") or "").strip():
         return False
-    if not str(value.get("reviewed_at_utc") or "").strip():
+    reviewed_at = str(value.get("reviewed_at_utc") or "").strip()
+    try:
+        parsed_reviewed_at = datetime.fromisoformat(reviewed_at.replace("Z", "+00:00"))
+    except ValueError:
         return False
-    if not str(value.get("review_notes") or "").strip():
+    if parsed_reviewed_at.tzinfo is None:
         return False
-    if value.get("rights_approval") is not True or not str(value.get("rights_notes") or "").strip():
+    if len(str(value.get("review_notes") or "").strip()) < 20:
+        return False
+    if value.get("rights_approval") is not True or len(str(value.get("rights_notes") or "").strip()) < 20:
         return False
     try:
         average = float(value.get("average_score"))
     except (TypeError, ValueError):
         return False
     dimensions = value.get("dimension_scores")
-    if not isinstance(dimensions, dict) or not dimensions:
-        return False
     required_roles = {"director", "cinematographer", "editor", "sound", "story", "rights"}
-    normalized_dimensions = {str(role).strip().casefold(): score for role, score in dimensions.items()}
-    if not required_roles.issubset(normalized_dimensions):
+    if not isinstance(dimensions, dict) or set(str(k).strip().casefold() for k in dimensions) != required_roles:
         return False
     try:
-        all_dimensions_pass = all(float(normalized_dimensions[role]) >= 4.0 for role in required_roles)
+        scores = {str(role).strip().casefold(): float(score) for role, score in dimensions.items()}
     except (TypeError, ValueError):
         return False
-    return average >= 4.5 and all_dimensions_pass
+    if any(score < 4.0 or score > 5.0 for score in scores.values()):
+        return False
+    measured_average = sum(scores.values()) / len(required_roles)
+    return average >= 4.5 and abs(average - measured_average) <= 0.01
 
 
 def build_certificate(
@@ -107,12 +112,16 @@ def build_certificate(
         and int(longform_script.get("actual_spoken_words") or 0) >= int(longform_script.get("required_spoken_words") or 1)
         and float(longform_script.get("unique_sentence_ratio") or 0) >= 0.85
     )
+    gemini_sha = str((gemini_writer or {}).get("response_sha256") or "")
     gemini_writer_pass = bool(
         isinstance(gemini_writer, dict)
         and gemini_writer.get("status") == "PASS"
         and gemini_writer.get("model") == "gemini-3.1-flash-lite"
-        and isinstance(gemini_writer.get("response_sha256"), str)
-        and len(gemini_writer.get("response_sha256")) == 64
+        and int(gemini_writer.get("http_status") or 0) == 200
+        and gemini_writer.get("finish_reason") == "STOP"
+        and int(gemini_writer.get("response_characters") or 0) > 0
+        and len(gemini_sha) == 64
+        and all(character in "0123456789abcdef" for character in gemini_sha.lower())
     )
     engineering_pass = bool(
         acceptance
@@ -145,21 +154,127 @@ def build_certificate(
     deployment_status = str((deployment or {}).get("status") or "BLOCKED").upper()
     deployment_sha = str((deployment or {}).get("deployed_commit_sha") or "")
 
+    quality = flagship.get("quality_truth_checks") if isinstance(flagship.get("quality_truth_checks"), dict) else {}
+    def _int_at_least(value: Any, minimum: int = 0) -> bool:
+        try:
+            return int(value) >= minimum
+        except (TypeError, ValueError, OverflowError):
+            return False
+
     technical_rights_pass = bool(
         flagship
         and flagship.get("truth_verified") is True
+        and flagship.get("full_decode_passed") is True
+        and flagship.get("manifest_hash_verified") is True
+        and _int_at_least(flagship.get("final_media_bytes"), 100_000)
+        and len(str(flagship.get("final_media_sha256") or "")) == 64
+        and _int_at_least(flagship.get("fallback_visual_count"), 0)
         and int(flagship.get("fallback_visual_count") or 0) == 0
+        and _int_at_least(flagship.get("visual_rights_unresolved_count"), 0)
         and int(flagship.get("visual_rights_unresolved_count") or 0) == 0
+        and _int_at_least(quality.get("actual_rendered_scene_count"), 1)
+        and _int_at_least(quality.get("verified_motion_source_count"), 1)
+        and _int_at_least(quality.get("visual_rights_cleared_count"), 1)
+        and _int_at_least(quality.get("visual_rights_review_required_count"), 0)
+        and int(quality.get("visual_rights_review_required_count") or 0) == 0
+        and _int_at_least(quality.get("visual_rights_unresolved_count"), 0)
+        and int(quality.get("visual_rights_unresolved_count") or 0) == 0
+        and int(quality.get("fallback_visual_count") or 0) == 0
+        and _int_at_least(flagship.get("source_count"), 1)
+        and _int_at_least(flagship.get("rights_asset_count"), 1)
+        and len(str(flagship.get("package_sha256") or "")) == 64
+        and _int_at_least(flagship.get("package_size_bytes"), 100_000)
+        and flagship.get("package_round_trip_hash_verified") is True
     )
+    otio_sha = str((otio or {}).get("otio_rerender_sha256") or "")
     otio_rerender_pass = bool(
         otio
         and otio.get("otio_import_rerender_passed") is True
         and otio.get("otio_rerender_full_decode_passed") is True
-        and bool(otio.get("otio_rerender_sha256"))
+        and len(otio_sha) == 64
+        and all(character in "0123456789abcdef" for character in otio_sha.lower())
     )
-    live_deployment_pass = deployment_status == "PASS" and deployment_sha == candidate_sha
-    storage_pass = storage_status == "PASS"
-    inference_pass = inference_status == "PASS"
+    deployment_media = (deployment or {}).get("media_inspection") if isinstance((deployment or {}).get("media_inspection"), dict) else {}
+    deployment_video = deployment_media.get("video") if isinstance(deployment_media.get("video"), dict) else {}
+    deployment_audio = deployment_media.get("audio") if isinstance(deployment_media.get("audio"), dict) else {}
+    deployment_rights = (deployment or {}).get("rights_evidence") if isinstance((deployment or {}).get("rights_evidence"), dict) else {}
+    deployment_sha256 = str((deployment or {}).get("final_media_sha256") or "")
+    deployment_manifest_sha = str(deployment_rights.get("manifest_sha256") or "")
+    deployment_artifacts = (deployment or {}).get("required_artifact_bytes") if isinstance((deployment or {}).get("required_artifact_bytes"), dict) else {}
+    required_live_artifacts = {
+        "final.mp4", "thumbnail.jpg", "audio_master.mp3", "captions.srt",
+        "article.md", "seo.json", "social_campaign.json",
+        "production_manifest.json", "rights_manifest.json", "package.zip",
+    }
+    live_deployment_pass = bool(
+        deployment_status == "PASS"
+        and deployment_sha == candidate_sha
+        and str((deployment or {}).get("expected_commit_sha") or "") == candidate_sha
+        and str((deployment or {}).get("project_status") or "").lower() == "completed"
+        and str((deployment or {}).get("project_id") or "").strip()
+        and len(deployment_sha256) == 64
+        and _int_at_least((deployment or {}).get("final_media_bytes"), 100_000)
+        and deployment_media.get("full_decode_passed") is True
+        and abs(float(deployment_media.get("duration_seconds") or 0) - 20.0) <= 1.0
+        and deployment_video.get("codec") == "h264"
+        and int(deployment_video.get("width") or 0) >= 1280
+        and int(deployment_video.get("height") or 0) >= 720
+        and deployment_audio.get("codec") in {"aac", "mp3"}
+        and (deployment or {}).get("package_entries_verified") is True
+        and required_live_artifacts.issubset(set(deployment_artifacts))
+        and all(_int_at_least(deployment_artifacts.get(name), 1) for name in required_live_artifacts)
+        and len(deployment_manifest_sha) == 64
+        and int(deployment_rights.get("unresolved_count") if deployment_rights.get("unresolved_count") is not None else -1) == 0
+        and int(deployment_rights.get("review_required_count") if deployment_rights.get("review_required_count") is not None else -1) == 0
+        and _int_at_least(deployment_rights.get("rights_cleared_count"), 1)
+        and int(deployment_rights.get("fallback_visual_count") if deployment_rights.get("fallback_visual_count") is not None else -1) == 0
+        and deployment_rights.get("manifest_parse_passed") is True
+        and (deployment or {}).get("truthful") is True
+    )
+
+    storage_snapshot_sha = str((storage or {}).get("snapshot_sha256") or "")
+    storage_payload_sha = str((storage or {}).get("restored_payload_sha256") or "")
+    storage_pass = bool(
+        storage_status == "PASS"
+        and (storage or {}).get("canary") == "PUT_HEAD_GET_SHA_PASS"
+        and (storage or {}).get("snapshot") == "PUT_HEAD_GET_SHA_PASS"
+        and (storage or {}).get("fresh_process_restore") == "PASS"
+        and str((storage or {}).get("object_key") or "").strip()
+        and _int_at_least((storage or {}).get("snapshot_size_bytes"), 1)
+        and len(storage_snapshot_sha) == 64
+        and all(character in "0123456789abcdef" for character in storage_snapshot_sha.lower())
+        and str((storage or {}).get("restored_project_marker") or "").startswith("ai-infinity-storage-verification-")
+        and len(storage_payload_sha) == 64
+        and all(character in "0123456789abcdef" for character in storage_payload_sha.lower())
+        and (storage or {}).get("production_snapshot_overwritten") is False
+        and (storage or {}).get("truthful") is True
+    )
+
+    inference_gpu = (inference or {}).get("gpu") if isinstance((inference or {}).get("gpu"), dict) else {}
+    inference_sha = str((inference or {}).get("artifact_sha256") or "")
+    inference_pass = bool(
+        inference_status == "PASS"
+        and (inference or {}).get("provider") == "wan2.2-ti2v-5b"
+        and (inference or {}).get("model_id") == "Wan-AI/Wan2.2-TI2V-5B"
+        and len(str((inference or {}).get("model_revision") or "")) == 40
+        and str((inference or {}).get("source_revision") or "") == "1ea34ff48f87168174e12956e200b1d908b1c5ff"
+        and (inference or {}).get("license") == "apache-2.0"
+        and (inference or {}).get("license_verified") is True
+        and (inference or {}).get("storage_persistent") is True
+        and inference_gpu.get("available") is True
+        and _int_at_least(inference_gpu.get("total_vram_mb"), 24576)
+        and _int_at_least(inference_gpu.get("free_vram_mb"), 22000)
+        and str((inference or {}).get("job_id") or "").startswith("wan_")
+        and (inference or {}).get("inference_request_sent") is True
+        and len(inference_sha) == 64
+        and all(character in "0123456789abcdef" for character in inference_sha.lower())
+        and _int_at_least((inference or {}).get("artifact_size_bytes"), 100_000)
+        and (inference or {}).get("resolution") == [1280, 720]
+        and abs(float((inference or {}).get("fps") or 0) - 24.0) <= 0.05
+        and (inference or {}).get("video_codec") == "h264"
+        and (inference or {}).get("full_decode") == "PASS"
+        and (inference or {}).get("truthful") is True
+    )
 
     production_requirements = {
         "engineering_acceptance": engineering_pass,
