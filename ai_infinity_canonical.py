@@ -236,7 +236,7 @@ def compile_intent(command,raw):
     # a natural-language command, infer the primary deliverable from its first
     # occurrence; collateral assets (e.g. article.md/social copy in a video pack)
     # must not silently disable the primary video's verification gates.
-    allowed_types={"video","podcast","article","social"}
+    allowed_types={"video","podcast","article","social","website"}
     requested_type=clean(raw.get("content_type"),30).lower()
     if requested_type in allowed_types:
         ct=requested_type
@@ -246,6 +246,7 @@ def compile_intent(command,raw):
             (r"\b(?:podcast|audio show)\b","podcast"),
             (r"\b(?:article|blog|essay|report|guide|newsletter|white paper|research brief)\b","article"),
             (r"\b(?:social(?:\s+media)?\s+(?:post|campaign)|linkedin post|instagram post|tweet|x post)\b","social"),
+            (r"\b(?:static website|website package|website|web site|landing page|microsite)\b","website"),
         )
         intent_matches=[]
         for pattern, inferred_type in intent_patterns:
@@ -299,7 +300,8 @@ def compile_intent(command,raw):
         "required_artifacts":(
           ["final.mp4","audio_master.mp3","captions.srt","thumbnail.jpg","script.md","manifest.json"]
           if ct in {"video","social"} else
-          (["audio_master.mp3","podcast_rss.xml"] if ct=="podcast" else ["article.md","thumbnail.jpg"])
+          (["audio_master.mp3","podcast_rss.xml"] if ct=="podcast" else
+           (["website.zip","website_manifest.json"] if ct=="website" else ["article.md","thumbnail.jpg"]))
         ),
         "creative_evaluation":"best-effort when a semantic model is configured"
       },
@@ -753,7 +755,7 @@ def classify_command(command, raw=None):
         low,
     ))
     explicit_media_output = bool(re.search(
-        r"\b(?:create|make|generate|produce|build)\s+(?:(?:a|an|the|new|short|long|cinematic|professional|vertical|horizontal|\d+[- ]second)\s+){0,5}(?:video|film|reel|documentary|explainer|podcast|article|blog|essay|report|guide|newsletter|social campaign|social post)\b",
+        r"\b(?:create|make|generate|produce|build)\s+(?:(?:a|an|the|new|short|long|cinematic|professional|vertical|horizontal|responsive|static|\d+[- ]second)\s+){0,5}(?:video|film|reel|documentary|explainer|podcast|article|blog|essay|report|guide|newsletter|social campaign|social post|website|web site|landing page|microsite)\b",
         low,
     ))
     if unsupported_primary and not explicit_media_output:
@@ -838,7 +840,7 @@ def classify_command(command, raw=None):
     if not explicit and localized_create:
         selected_type = localized_content_type or clean(payload.get("content_type"), 30).lower()
         if selected_type not in {"video", "podcast", "article", "social"}:
-            return {"route": "deliverable_required", "reason": "Specify a supported output: video, podcast, article/report, or social package."}
+            return {"route": "deliverable_required", "reason": "Specify a supported output: video, podcast, article/report, social package, or exportable static website."}
         return {"route": "create", "content_type": selected_type, "reason": "Matched a supported multilingual creation request."}
 
     if explicit in supported:
@@ -857,7 +859,7 @@ def classify_command(command, raw=None):
     else:
         creation = bool(re.search(r"\b(create|make|generate|produce|build|write|draft|develop|turn|convert|transform|repurpose)\b", low))
         media_creation = bool(re.search(
-            r"\b(?:create|make|generate|produce|build)\s+(?:(?:a|an|the|new|short|long|cinematic|professional|vertical|horizontal|\d+[- ]second)\s+){0,5}(?:video|film|reel|documentary|explainer|podcast|article|blog|essay|report|guide|newsletter|social campaign|social post)\b",
+            r"\b(?:create|make|generate|produce|build)\s+(?:(?:a|an|the|new|short|long|cinematic|professional|vertical|horizontal|responsive|static|\d+[- ]second)\s+){0,5}(?:video|film|reel|documentary|explainer|podcast|article|blog|essay|report|guide|newsletter|social campaign|social post|website|web site|landing page|microsite)\b",
             low,
         ))
         script_request = bool(
@@ -894,6 +896,7 @@ def classify_command(command, raw=None):
                 r"\b(podcast|audio show)\b",
                 r"\b(article|blog|essay|report|guide|newsletter|white paper|research brief)\b",
                 r"\b(social post|social campaign|linkedin post|instagram post|tweet|x post)\b",
+                r"\b(?:static website|website package|website|web site|landing page|microsite)\b",
             )
         ):
             return {"route": "unsupported_deliverable", "reason": "This request names a deliverable that the current runtime does not implement. It will not be silently converted into a video. Supported creation outputs are video, podcast, article/report, and social package."}
@@ -907,14 +910,15 @@ def classify_command(command, raw=None):
                 r"\b(podcast|audio show)\b",
                 r"\b(article|blog|essay|report|guide|newsletter|white paper|research brief)\b",
                 r"\b(social post|social campaign|linkedin post|instagram post|tweet|x post)\b",
+                r"\b(?:static website|website package|website|web site|landing page|microsite)\b",
             )
-            has_known_deliverable = clean(payload.get("content_type"), 30).lower() in {"video", "podcast", "article", "social"} or any(re.search(pattern, low) for pattern in types)
+            has_known_deliverable = clean(payload.get("content_type"), 30).lower() in {"video", "podcast", "article", "social", "website"} or any(re.search(pattern, low) for pattern in types)
             if creation and has_known_deliverable:
                 route = "create"
             elif research:
                 route = "research"
             elif creation:
-                return {"route": "deliverable_required", "reason": "Specify a supported deliverable: video, podcast, article/report, or social package."}
+                return {"route": "deliverable_required", "reason": "Specify a supported deliverable: video, podcast, article/report, social package, or exportable static website."}
             else:
                 return {"route": "unsupported", "reason": "No safe executable route matched this command."}
     if route in {"edit", "project_status"} and not payload.get("project_id"):
