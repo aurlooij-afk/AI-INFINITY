@@ -218,7 +218,7 @@ jobs:
           print("ACCEPTANCE_SCENARIOS_COMPLETED=" + str(result.get("completed_scenarios")))
           PY
           exit "$suite_status"
-      - name: Write candidate-bound production certificate
+      - name: Issue production certificate only after all gates pass
         if: always()
         run: |
           python scripts/create_production_certificate.py \
@@ -229,7 +229,8 @@ jobs:
             --inference acceptance-evidence/wan-live-inference-verification.json \
             --deployment acceptance-evidence/live-deployment-verification.json \
             --human-approval acceptance-evidence/human-creative-approval.json \
-            --output production-certificate.json
+            --output production-certificate.json \
+            --report production-gate-report.json
 
       - name: Upload acceptance evidence
         if: always()
@@ -239,6 +240,7 @@ jobs:
           path: |
             final-acceptance-result.json
             production-certificate.json
+            production-gate-report.json
             acceptance-evidence/**
           if-no-files-found: warn
 
@@ -250,12 +252,18 @@ jobs:
           from pathlib import Path
           path = Path("production-certificate.json")
           if not path.is_file():
-              raise SystemExit("Production certificate was not generated.")
+              report_path = Path("production-gate-report.json")
+              if report_path.is_file():
+                  report = json.loads(report_path.read_text(encoding="utf-8"))
+                  print("PRODUCTION_RELEASE_GATE=" + str(report.get("PRODUCTION_VERIFIED")))
+                  print("CANDIDATE_SHA=" + str(report.get("candidate_commit_sha")))
+                  print("BLOCKED_GATES=" + json.dumps(report.get("remaining_blockers", [])))
+                  raise SystemExit("No certificate was issued: one or more production gates remain blocked.")
+              raise SystemExit("Neither a production certificate nor a gate report was generated.")
           certificate = json.loads(path.read_text(encoding="utf-8"))
           print("PRODUCTION_RELEASE_GATE=" + str(certificate.get("PRODUCTION_VERIFIED")))
           if certificate.get("PRODUCTION_VERIFIED") != "PASS":
-              print("BLOCKED_GATES=" + json.dumps(certificate.get("remaining_blockers", [])))
-              raise SystemExit("Production certification requires every gate to pass.")
+              raise SystemExit("Certificate file violates the all-gates-pass issuance rule.")
           PY
       - name: Dump Docker/runtime evidence on failure
         if: failure()
