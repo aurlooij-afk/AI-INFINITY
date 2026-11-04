@@ -204,6 +204,8 @@ jobs:
           PY
 
       - name: Issue the final candidate-bound production certificate
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
           python scripts/create_production_certificate.py \
