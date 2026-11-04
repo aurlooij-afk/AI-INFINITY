@@ -23,7 +23,7 @@ The current branch also adds `scripts/verify_live_project_state_storage.py`. It 
 ### External execution still required
 
 - Long-form generation is **implemented but not yet live-proven**. To activate the no-cost Gemini path, the repository owner must add GitHub Actions secret `GEMINI_API_KEY` from a Google AI Studio Free Tier project and set repository variable `AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK=true` only after accepting the Free Tier data-use terms. Configure the same key and acknowledgement in Render only when an authorized deployment is being prepared. Missing key or quota must remain visibly blocked; no paid fallback is allowed.
-- B2 persistence is **not verified** until the new workflow reports `PASS` after real PUT/HEAD/GET/SHA and fresh-process restore. When running that check in GitHub Actions, provide `B2_ENDPOINT`, `B2_BUCKET`, `B2_KEY_ID`, `B2_APPLICATION_KEY` (and optional `B2_REGION`) as repository secrets, or the equivalent `BACKBLAZE_B2_*` aliases. These are not present in the workflow by default; no credentials were read or changed by this code update.
+- B2 persistence is **not verified** until the workflow reports `PASS` after real PUT/HEAD/GET/SHA and fresh-process restore. For this configured deployment, `B2_ENDPOINT` defaults to `https://s3.us-east-005.backblazeb2.com` and `B2_BUCKET` defaults to `ai-infinity-state`; confirm the endpoint against the bucket details. The private `B2_KEY_ID` and `B2_APPLICATION_KEY` must still be present as repository Actions secrets (or supplied through the `BACKBLAZE_B2_*` aliases). The verifier reports `BLOCKED` until both key values are available.
 - Actual GPU-backed Wan2.2 inference is still not demonstrated. The existing free Render Web Service is not GPU compute. Do not set the worker URL/token or report inference available until the separate authenticated worker returns its live capability proof with verified weights, license, actual NVIDIA hardware/VRAM, FFmpeg/FFprobe and persistent storage.
 - Current Render inventory still shows the AI-INFINITY web service tracking `main` on the free plan, no persistent disk, a free Postgres instance expiring `2026-11-06`, and a suspended free Key Value instance with persistence off. Live Render endpoints were not reachable through the available read interface in this refresh. No PR #48 deployment or environment/secret mutation has been performed.
 - The imported OTIO timeline has not yet been re-rendered as part of the acceptance workflow. Human creative/rights review remains `PENDING`.
@@ -36,7 +36,7 @@ The current exact-candidate CI workflows must finish before any claim about this
 - Long-form planner completion now requires both the calculated spoken-word minimum and an 85% distinct-sentence ratio. A word-count-complete but repetitive first draft triggers a bounded rewrite; the production preflight independently recomputes both measures before media generation. The 900-second acceptance profile now records actual script-generation metadata and checks the resulting mastered audio against -23 to -14 LUFS and -1 dBFS true-peak limits.
 - Scenario 04 now submits the imported OTIO timeline to the canonical timeline-render endpoint, then probes and fully decodes the new master. Its evidence records the rerender SHA-256, duration, resolution and decode status. This exact-candidate scenario has not yet completed.
 - A candidate-bound certificate script and regression suite were added. It keeps engineering acceptance, exact-revision live deployment, durable storage, live GPU inference, OTIO re-render and six-role human approval separate. It requires Director, Cinematographer, Editor, Sound, Story and Rights scores (each >=4/5), average >=4.5/5, explicit rights approval and approval bound to the exact candidate SHA.
-- The 13-scenario acceptance workflow emits a certificate with its artifact bundle even on failure or incomplete runs. A green static workflow does not turn an absent external result into a pass.
+- The 13-scenario acceptance workflow emits a gate report with its artifact bundle when any gate is incomplete or blocked. It creates `production-certificate.json` only after all seven production requirements pass; a missing or blocked gate never produces a certificate. A green wrapper step or static workflow does not turn an absent external result into a pass.
 
 ### External gate evidence — exact tested run, not extrapolated
 
@@ -188,3 +188,17 @@ Do not rewrite, regenerate or reconstruct the separately maintained `AI_Infinity
 ## Release decision rule
 
 PR #37 is merged and its merge commit appears in Render's live-deploy metadata, but the complete release is **not verified**. Follow-up code changes require their own passing focused regression/build/full acceptance checks and an authorized release. Production closure still requires live exact-revision HTTP and artifact acceptance, successful real B2 PUT/HEAD/GET/SHA/size and fresh-instance restore, plus actual human/native-language creative review. A green CI suite or `live` deploy label alone cannot close these external and human gates.
+
+
+## Active release snapshot — 2026-11-04
+
+The active candidate is PR #49, branch `feat/universal-command-batch-and-media-bound-review`, head `91f99e34c20f8bd803e6d79b5b81ada5fe1bc867`. It includes ordered multi-command execution, media-bound human approval, recursive rejection of nested credential fields, atomic batch idempotency persistence, browser-side retry-key retention, and certificate issuance that is forbidden unless every production gate passes. The latest Visual Diversity Truth Regression on this SHA passed; Build Guard, Standalone Runtime and Final Acceptance are being checked.
+
+The prior exact-candidate Final Acceptance run on SHA `636a47b771d321c08a3bb9753170f3af96abf16f` produced explicit structured evidence:
+
+- Gemini writer: `BLOCKED` because `GEMINI_API_KEY` was empty. The acknowledgement variable was also not the literal `true`; the logged value was explanatory prose. The 13-scenario suite was skipped.
+- B2: `BLOCKED`, with `key_id` and `application_key` missing from the GitHub Actions environment. No PUT/HEAD/GET or fresh-process restore was attempted.
+- Wan2.2: `BLOCKED`; worker URL/token were missing and no inference request was sent.
+- Exact-candidate deployment and human creative/rights approval remain blocked. Render still deploys `main`, not this PR head.
+
+Render's startup log previously confirmed that the Backblaze adapter was configured, active and verified. That is configuration evidence only; it is not the canary round-trip or restore proof. Do not merge or deploy PR #49 until a fresh final acceptance and independent external evidence pass.
