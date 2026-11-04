@@ -246,6 +246,8 @@ def build_certificate(
         and _int_equals(deployment_rights.get("unresolved_count"), 0)
         and _int_equals(deployment_rights.get("review_required_count"), 0)
         and _int_at_least(deployment_rights.get("actual_rendered_scene_count"), 1)
+        and deployment_rights.get("visual_rights_evidence_present") is True
+        and _int_at_least(deployment_rights.get("rights_asset_count"), int(deployment_rights.get("actual_rendered_scene_count") or 0))
         and _int_at_least(deployment_rights.get("rights_cleared_count"), int(deployment_rights.get("actual_rendered_scene_count") or 0))
         and _int_equals(deployment_rights.get("fallback_visual_count"), 0)
         and deployment_rights.get("manifest_parse_passed") is True
