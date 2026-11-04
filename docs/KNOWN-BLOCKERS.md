@@ -202,3 +202,16 @@ The prior exact-candidate Final Acceptance run on SHA `636a47b771d321c08a3bb9753
 - Exact-candidate deployment and human creative/rights approval remain blocked. Render still deploys `main`, not this PR head.
 
 Render's startup log previously confirmed that the Backblaze adapter was configured, active and verified. That is configuration evidence only; it is not the canary round-trip or restore proof. The workflow also now contains a main-push-only live deployment verifier: it waits for the exact `RENDER_GIT_COMMIT`, submits a real 20-second create request, downloads the required package and MP4, checks artifact presence, probes both streams, and full-decodes the video. PR acceptance intentionally does not run this gate because the PR head is not live. Do not merge or deploy PR #49 until the pre-deployment engineering and external gates pass. After merge, the main workflow must independently pass exact-revision live deployment verification before it can issue the certificate.
+
+
+## Final human approval and certificate issuance
+
+After a main-branch Final Complete Acceptance run has passed the six non-human gates, the owner reviews the exact flagship MP4 downloaded from that run's `ai-infinity-final-acceptance-evidence` artifact. The acceptance result records its `final_media_sha256`; the owner must review those exact bytes and the accompanying provenance/rights packet.
+
+The owner then runs **AI Infinity — Human Approval and Production Certificate** from GitHub Actions on the `main` branch. Inputs are the main-branch acceptance run ID, its exact `head_sha`, and a one-line JSON scorecard containing:
+
+```json
+{"approved":true,"rights_approval":true,"reviewed_media_sha256":"<exact final_media_sha256 from scenario 01>","review_notes":"Describe the actual story, visual, edit, sound and factual review.","rights_notes":"Describe the source and license evidence reviewed, plus any exceptions.","dimension_scores":{"director":4.8,"cinematographer":4.6,"editor":4.7,"sound":4.5,"story":4.8,"rights":4.6}}
+```
+
+The example scores are illustrative only; the real reviewer must enter their own honestly assessed scores. The workflow attributes the reviewer to the authenticated GitHub actor and stamps its UTC submission time. It refuses mismatched commit/media hashes, any non-human gate not already PASS, missing/false rights approval, incomplete notes, any dimension below 4.0, or an average below 4.5. Only then does it create and upload `production-certificate.json`. This workflow does not rerun the production suite and cannot turn a blocked acceptance run into a pass.
