@@ -371,3 +371,46 @@ def test_workspace_database_catalog_does_not_label_instance_local_sqlite_as_pers
 
     assert row["status"] == "runtime-local"
     assert "restart-safe recovery requires" in row["detail"]
+
+
+
+def test_concat_segments_decodes_scene_audio_independently_before_mux(tmp_path):
+    """Independently encoded AAC scenes must produce a fully decodable programme."""
+    import shutil
+    import subprocess
+    import pytest
+
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        pytest.skip("FFmpeg is required for the real media regression")
+
+    scenes = []
+    for index, duration in enumerate((1.7, 2.3), 1):
+        scene = tmp_path / f"scene_{index:02d}.mp4"
+        subprocess.run(
+            [
+                ffmpeg_bin, "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", f"color=c={'blue' if index == 1 else 'green'}:s=320x180:r=24:d={duration}",
+                "-f", "lavfi", "-i", f"sine=frequency={440 + index * 110}:sample_rate=48000:duration={duration}",
+                "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "96k", str(scene),
+            ],
+            check=True, capture_output=True, text=True, timeout=60,
+        )
+        scenes.append(scene)
+
+    output = tmp_path / "assembled.mp4"
+    studio.concat_segments(scenes, output)
+
+    decoded = subprocess.run(
+        [ffmpeg_bin, "-hide_banner", "-loglevel", "error", "-xerror", "-i", str(output), "-f", "null", "-"],
+        capture_output=True, text=True, timeout=90, check=False,
+    )
+    assert decoded.returncode == 0, decoded.stderr
+    assert output.is_file() and output.stat().st_size > 10_000
+    probe = studio.ffprobe_json(output)
+    streams = probe.get("streams") or []
+    assert any(row.get("codec_type") == "video" for row in streams)
+    assert any(row.get("codec_type") == "audio" for row in streams)
+    duration = float((probe.get("format") or {}).get("duration") or 0)
+    assert 3.8 <= duration <= 4.2
