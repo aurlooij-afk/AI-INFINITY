@@ -47,6 +47,25 @@ def _scenario_map(acceptance: dict[str, Any] | None) -> dict[str, dict[str, Any]
     }
 
 
+def _valid_hex_digest(value: Any, length: int = 64) -> bool:
+    text = str(value or "")
+    return len(text) == length and all(character in "0123456789abcdef" for character in text.lower())
+
+
+def _int_equals(value: Any, expected: int) -> bool:
+    try:
+        return int(value) == expected
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _float_within(value: Any, expected: float, tolerance: float) -> bool:
+    try:
+        return abs(float(value) - expected) <= tolerance
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 def _valid_human_approval(
     value: dict[str, Any] | None,
     candidate_sha: str,
@@ -120,8 +139,7 @@ def build_certificate(
         and int(gemini_writer.get("http_status") or 0) == 200
         and gemini_writer.get("finish_reason") == "STOP"
         and int(gemini_writer.get("response_characters") or 0) > 0
-        and len(gemini_sha) == 64
-        and all(character in "0123456789abcdef" for character in gemini_sha.lower())
+        and _valid_hex_digest(gemini_sha)
     )
     engineering_pass = bool(
         acceptance
@@ -167,7 +185,7 @@ def build_certificate(
         and flagship.get("full_decode_passed") is True
         and flagship.get("manifest_hash_verified") is True
         and _int_at_least(flagship.get("final_media_bytes"), 100_000)
-        and len(str(flagship.get("final_media_sha256") or "")) == 64
+        and _valid_hex_digest(flagship.get("final_media_sha256"))
         and _int_at_least(flagship.get("fallback_visual_count"), 0)
         and int(flagship.get("fallback_visual_count") or 0) == 0
         and _int_at_least(flagship.get("visual_rights_unresolved_count"), 0)
@@ -182,7 +200,7 @@ def build_certificate(
         and int(quality.get("fallback_visual_count") or 0) == 0
         and _int_at_least(flagship.get("source_count"), 1)
         and _int_at_least(flagship.get("rights_asset_count"), 1)
-        and len(str(flagship.get("package_sha256") or "")) == 64
+        and _valid_hex_digest(flagship.get("package_sha256"))
         and _int_at_least(flagship.get("package_size_bytes"), 100_000)
         and flagship.get("package_round_trip_hash_verified") is True
     )
@@ -212,10 +230,10 @@ def build_certificate(
         and str((deployment or {}).get("expected_commit_sha") or "") == candidate_sha
         and str((deployment or {}).get("project_status") or "").lower() == "completed"
         and str((deployment or {}).get("project_id") or "").strip()
-        and len(deployment_sha256) == 64
+        and _valid_hex_digest(deployment_sha256)
         and _int_at_least((deployment or {}).get("final_media_bytes"), 100_000)
         and deployment_media.get("full_decode_passed") is True
-        and abs(float(deployment_media.get("duration_seconds") or 0) - 20.0) <= 1.0
+        and _float_within(deployment_media.get("duration_seconds"), 20.0, 1.0)
         and deployment_video.get("codec") == "h264"
         and int(deployment_video.get("width") or 0) >= 1280
         and int(deployment_video.get("height") or 0) >= 720
@@ -223,11 +241,11 @@ def build_certificate(
         and (deployment or {}).get("package_entries_verified") is True
         and required_live_artifacts.issubset(set(deployment_artifacts))
         and all(_int_at_least(deployment_artifacts.get(name), 1) for name in required_live_artifacts)
-        and len(deployment_manifest_sha) == 64
-        and int(deployment_rights.get("unresolved_count") if deployment_rights.get("unresolved_count") is not None else -1) == 0
-        and int(deployment_rights.get("review_required_count") if deployment_rights.get("review_required_count") is not None else -1) == 0
+        and _valid_hex_digest(deployment_manifest_sha)
+        and _int_equals(deployment_rights.get("unresolved_count"), 0)
+        and _int_equals(deployment_rights.get("review_required_count"), 0)
         and _int_at_least(deployment_rights.get("rights_cleared_count"), 1)
-        and int(deployment_rights.get("fallback_visual_count") if deployment_rights.get("fallback_visual_count") is not None else -1) == 0
+        and _int_equals(deployment_rights.get("fallback_visual_count"), 0)
         and deployment_rights.get("manifest_parse_passed") is True
         and (deployment or {}).get("truthful") is True
     )
@@ -241,11 +259,9 @@ def build_certificate(
         and (storage or {}).get("fresh_process_restore") == "PASS"
         and str((storage or {}).get("object_key") or "").strip()
         and _int_at_least((storage or {}).get("snapshot_size_bytes"), 1)
-        and len(storage_snapshot_sha) == 64
-        and all(character in "0123456789abcdef" for character in storage_snapshot_sha.lower())
+        and _valid_hex_digest(storage_snapshot_sha)
         and str((storage or {}).get("restored_project_marker") or "").startswith("ai-infinity-storage-verification-")
-        and len(storage_payload_sha) == 64
-        and all(character in "0123456789abcdef" for character in storage_payload_sha.lower())
+        and _valid_hex_digest(storage_payload_sha)
         and (storage or {}).get("production_snapshot_overwritten") is False
         and (storage or {}).get("truthful") is True
     )
@@ -256,7 +272,7 @@ def build_certificate(
         inference_status == "PASS"
         and (inference or {}).get("provider") == "wan2.2-ti2v-5b"
         and (inference or {}).get("model_id") == "Wan-AI/Wan2.2-TI2V-5B"
-        and len(str((inference or {}).get("model_revision") or "")) == 40
+        and _valid_hex_digest((inference or {}).get("model_revision"), 40)
         and str((inference or {}).get("source_revision") or "") == "1ea34ff48f87168174e12956e200b1d908b1c5ff"
         and (inference or {}).get("license") == "apache-2.0"
         and (inference or {}).get("license_verified") is True
@@ -266,11 +282,10 @@ def build_certificate(
         and _int_at_least(inference_gpu.get("free_vram_mb"), 22000)
         and str((inference or {}).get("job_id") or "").startswith("wan_")
         and (inference or {}).get("inference_request_sent") is True
-        and len(inference_sha) == 64
-        and all(character in "0123456789abcdef" for character in inference_sha.lower())
+        and _valid_hex_digest(inference_sha)
         and _int_at_least((inference or {}).get("artifact_size_bytes"), 100_000)
         and (inference or {}).get("resolution") == [1280, 720]
-        and abs(float((inference or {}).get("fps") or 0) - 24.0) <= 0.05
+        and _float_within((inference or {}).get("fps"), 24.0, 0.05)
         and (inference or {}).get("video_codec") == "h264"
         and (inference or {}).get("full_decode") == "PASS"
         and (inference or {}).get("truthful") is True
