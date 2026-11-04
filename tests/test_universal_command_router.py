@@ -27,6 +27,30 @@ def test_supported_content_formats_route_to_creation():
     assert canonical.classify_command("Create a social campaign for a new tutorial")["route"] == "create"
 
 
+def test_native_website_word_and_powerpoint_outputs_route_to_creation():
+    commands = {
+        "Create a responsive static website about accessible design": "website",
+        "Create a Word document about climate adaptation": "document",
+        "Create a PowerPoint presentation about renewable energy": "presentation",
+    }
+    for command, expected_type in commands.items():
+        assert canonical.classify_command(command)["route"] == "create"
+        intent = canonical.compile_intent(command, {})
+        assert intent["constraints"]["content_type"] == expected_type
+        required = set(intent["success"]["required_artifacts"])
+        if expected_type == "website":
+            assert {"website.zip", "website_manifest.json"} <= required
+        elif expected_type == "document":
+            assert {"document.docx", "document_manifest.json"} <= required
+        else:
+            assert {"presentation.pptx", "presentation_manifest.json"} <= required
+
+
+def test_unimplemented_spreadsheets_and_web_apps_remain_explicitly_unsupported():
+    assert canonical.classify_command("Create a spreadsheet for expenses")["route"] == "unsupported_deliverable"
+    assert canonical.classify_command("Build a web application for task management")["route"] == "unsupported_deliverable"
+
+
 def test_unknown_task_does_not_create_a_default_video():
     result = canonical.classify_command("Calculate 123 multiplied by 456")
 
