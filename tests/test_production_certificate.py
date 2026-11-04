@@ -127,6 +127,24 @@ def _passing_deployment(candidate):
             )
         },
         "package_entries_verified": True,
+        "storage_health": {
+            "persistent": True,
+            "mode": "durable",
+            "project_state_backend_confirmed": True,
+            "project_state_backend": "backblaze_b2",
+            "truthful": True,
+            "project_state_backend_status": {
+                "backend": "backblaze_b2",
+                "contract_enabled": True,
+                "configured": True,
+                "active": True,
+                "verified": True,
+                "snapshot_verified": True,
+                "last_sha256": "a" * 64,
+                "last_sync_at": "2026-11-04T06:00:00+00:00",
+                "truthful": True,
+            },
+        },
         "rights_evidence": {
             "actual_rendered_scene_count": 5,
             "verified_motion_source_count": 5,
@@ -507,3 +525,26 @@ def test_production_certificate_requires_gemini_smoke_pass():
     assert certificate["ENGINEERING_STATE"] == "FAIL"
     assert certificate["gates"]["gemini_writer_preflight"] == "BLOCKED_OR_FAIL"
     assert certificate["gates"]["900s_gemini_narration"] == "PASS"
+
+
+
+def test_production_certificate_requires_live_render_storage_health_after_creation():
+    candidate = "b" * 40
+    deployment = _passing_deployment(candidate)
+    # CI's own object-store round-trip is not enough when the live Render
+    # process reports an ephemeral/unverified project-state backend.
+    deployment["storage_health"]["persistent"] = False
+    deployment["storage_health"]["project_state_backend_status"]["verified"] = False
+    certificate = build_certificate(
+        candidate_sha=candidate,
+        acceptance=_passing_acceptance(),
+        storage=_passing_storage(),
+        inference=_passing_inference(),
+        deployment=deployment,
+        human_approval=None,
+        evidence_hashes={},
+        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "http_status": 200, "truthful": True},
+    )
+    assert certificate["gates"]["durable_storage"] == "BLOCKED"
+    assert "durable_storage_round_trip_and_fresh_process_restore" in certificate["remaining_blockers"]
+    assert certificate["PRODUCTION_VERIFIED"] == "BLOCKED"

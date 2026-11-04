@@ -264,8 +264,34 @@ def build_certificate(
 
     storage_snapshot_sha = str((storage or {}).get("snapshot_sha256") or "")
     storage_payload_sha = str((storage or {}).get("restored_payload_sha256") or "")
+    live_storage = (deployment or {}).get("storage_health") if isinstance((deployment or {}).get("storage_health"), dict) else {}
+    live_storage_backend_status = (
+        live_storage.get("project_state_backend_status")
+        if isinstance(live_storage.get("project_state_backend_status"), dict) else {}
+    )
+    live_storage_backend = str(live_storage.get("project_state_backend") or "").strip().lower()
+    live_storage_sha = str(live_storage_backend_status.get("last_sha256") or "").lower()
+    live_storage_sha_valid = _valid_hex_digest(live_storage_sha)
+    live_storage_pass = bool(
+        live_storage.get("persistent") is True
+        and live_storage.get("mode") == "durable"
+        and live_storage.get("project_state_backend_confirmed") is True
+        and live_storage_backend in {"backblaze_b2", "supabase_s3"}
+        and live_storage_backend == str((storage or {}).get("backend") or "").strip().lower()
+        and live_storage.get("truthful") is True
+        and live_storage_backend_status.get("backend") == live_storage_backend
+        and live_storage_backend_status.get("contract_enabled") is True
+        and live_storage_backend_status.get("configured") is True
+        and live_storage_backend_status.get("active") is True
+        and live_storage_backend_status.get("verified") is True
+        and live_storage_backend_status.get("snapshot_verified") is True
+        and live_storage_sha_valid
+        and bool(live_storage_backend_status.get("last_sync_at"))
+        and live_storage_backend_status.get("truthful") is True
+    )
     storage_pass = bool(
-        storage_status == "PASS"
+        live_storage_pass
+        and storage_status == "PASS"
         and (storage or {}).get("backend") in {"backblaze_b2", "supabase_s3"}
         and (storage or {}).get("canary") == "PUT_HEAD_GET_SHA_PASS"
         and (storage or {}).get("snapshot") == "PUT_HEAD_GET_SHA_PASS"
@@ -334,7 +360,8 @@ def build_certificate(
             "otio_import_and_rerender": "PASS" if otio_rerender_pass else "BLOCKED",
             "durable_storage": (
                 "PASS" if storage_pass else
-                storage_status if storage_status in {"FAIL", "BLOCKED"} else
+                "BLOCKED" if storage_status == "BLOCKED" or not live_storage_pass else
+                storage_status if storage_status == "FAIL" else
                 "FAIL_OR_INCOMPLETE"
             ),
             "live_gpu_inference": (

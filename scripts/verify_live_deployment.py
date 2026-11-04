@@ -89,6 +89,51 @@ def _probe_media(path: Path, expected_duration: float) -> dict[str, Any]:
     }
 
 
+def _live_project_state_storage_ready(health: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    """Require the running Render process—not just CI—to prove durable project state."""
+    capabilities = health.get("capabilities") if isinstance(health.get("capabilities"), dict) else {}
+    storage = capabilities.get("storage") if isinstance(capabilities.get("storage"), dict) else {}
+    backend_status = (
+        storage.get("project_state_backend_status")
+        if isinstance(storage.get("project_state_backend_status"), dict) else {}
+    )
+    backend = str(storage.get("project_state_backend") or "").strip().lower()
+    digest = str(backend_status.get("last_sha256") or "").lower()
+    digest_valid = len(digest) == 64 and all(char in "0123456789abcdef" for char in digest)
+    ready = bool(
+        storage.get("persistent") is True
+        and storage.get("mode") == "durable"
+        and storage.get("project_state_backend_confirmed") is True
+        and backend in {"backblaze_b2", "supabase_s3"}
+        and storage.get("truthful") is True
+        and backend_status.get("backend") == backend
+        and backend_status.get("contract_enabled") is True
+        and backend_status.get("configured") is True
+        and backend_status.get("active") is True
+        and backend_status.get("verified") is True
+        and backend_status.get("snapshot_verified") is True
+        and digest_valid
+        and bool(backend_status.get("last_sync_at"))
+        and backend_status.get("truthful") is True
+    )
+    evidence = {
+        "persistent": storage.get("persistent") is True,
+        "mode": storage.get("mode"),
+        "backend": backend,
+        "contract_enabled": backend_status.get("contract_enabled") is True,
+        "configured": backend_status.get("configured") is True,
+        "active": backend_status.get("active") is True,
+        "verified": backend_status.get("verified") is True,
+        "snapshot_verified": backend_status.get("snapshot_verified") is True,
+        "last_sync_at_present": bool(backend_status.get("last_sync_at")),
+        "last_sha256_valid": digest_valid,
+        "reason": storage.get("reason"),
+        "last_error": backend_status.get("last_error"),
+        "truthful": storage.get("truthful") is True and backend_status.get("truthful") is True,
+    }
+    return ready, evidence
+
+
 def verify(base_url: str, expected_sha: str, output: Path, wait_seconds: int = 900) -> dict[str, Any]:
     base = base_url.strip().rstrip("/")
     if not base.startswith("https://"):
@@ -216,6 +261,38 @@ def verify(base_url: str, expected_sha: str, output: Path, wait_seconds: int = 9
                 "manifest_sha256": hashlib.sha256(downloaded["rights_manifest.json"]).hexdigest(),
                 "manifest_parse_passed": isinstance(rights, dict) and isinstance(rights_assets, list),
             }
+
+            # Refresh health after the live production has completed. The initial
+            # health probe predates this project and cannot prove the new project
+            # state was checkpointed to the live persistent backend.
+            storage_deadline = time.time() + 120
+            final_health: dict[str, Any] = {}
+            live_storage_evidence: dict[str, Any] = {}
+            live_storage_ready = False
+            while time.time() < storage_deadline:
+                final_health = _open_json(opener, base + "/health", timeout=30)
+                final_revision = str(final_health.get("deployment_revision") or "").lower()
+                if final_revision != expected_sha.lower():
+                    raise RuntimeError("live_render_revision_changed_during_creator_verification")
+                live_storage_ready, live_storage_evidence = _live_project_state_storage_ready(final_health)
+                if live_storage_ready:
+                    break
+                time.sleep(3)
+            if not live_storage_ready:
+                result = {
+                    "schema": "ai-infinity-live-deployment-verification.v1",
+                    "status": "BLOCKED",
+                    "reason": "live_render_project_state_storage_not_verified_after_creator_run",
+                    "expected_commit_sha": expected_sha.lower(),
+                    "deployed_commit_sha": str(final_health.get("deployment_revision") or "").lower(),
+                    "project_id": project_id,
+                    "storage_health": live_storage_evidence,
+                    "truthful": True,
+                }
+                _write(output, result)
+                return result
+
+            health = final_health
             result = {
                 "schema": "ai-infinity-live-deployment-verification.v1",
                 "status": "PASS",
@@ -234,6 +311,7 @@ def verify(base_url: str, expected_sha: str, output: Path, wait_seconds: int = 9
                     ((health.get("capabilities") or {}).get("storage") or {})
                     if isinstance(health.get("capabilities"), dict) else {}
                 ),
+                "live_project_state_storage_evidence": live_storage_evidence,
                 "truthful": True,
             }
     except Exception as exc:
