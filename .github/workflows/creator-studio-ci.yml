@@ -162,6 +162,12 @@ jobs:
               print(f"WORKFLOW_YAML_OK={path}")
           PY
 
+      - name: Verify native multi-format creator exports
+        run: |
+          set -euo pipefail
+          python -m py_compile ai_infinity/site_package.py ai_infinity/native_exports.py ai_infinity_canonical.py studio_ultimate.py tests/test_static_site_package.py tests/test_native_content_exports.py tests/final_acceptance_suite.py
+          python -m pytest -q tests/test_static_site_package.py tests/test_native_content_exports.py
+
       - name: Verify open-source Wan GPU worker contract and fail-closed readiness
         run: python -m pytest -q tests/test_wan_video_worker_contract.py tests/test_production_graph_durable_connection.py
       - name: Verify canonical 607 capability fabric
