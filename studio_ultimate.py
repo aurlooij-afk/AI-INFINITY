@@ -5268,6 +5268,36 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
             "tags": "futuristic geometric digital tunnel glowing abstract motion technology imagination portal",
             "required_concepts": {"abstract_motion"},
         },
+        35: {
+            "source_id": 31930508,
+            "source_url": "https://www.pexels.com/video/vibrant-abstract-neon-light-motion-31930508/",
+            "media_url": "https://videos.pexels.com/video-files/31930508/13601021_1920_1080_30fps.mp4",
+            "creator": "Nicola Narracci",
+            "title": "Vibrant Abstract Neon Light Motion",
+            "description": "Dynamic neon lights in a vibrant abstract tunnel create a captivating visual experience.",
+            "tags": "abstract tunnel futuristic neon light motion dynamic glowing lines luminous motion graphics technology",
+            "required_concepts": {"abstract_motion"},
+        },
+        36: {
+            "source_id": 34771310,
+            "source_url": "https://www.pexels.com/video/futuristic-neon-tunnel-with-glowing-lights-34771310/",
+            "media_url": "https://www.pexels.com/download/video/34771310/",
+            "creator": "Nicola Narracci",
+            "title": "Futuristic Neon Tunnel with Glowing Lights",
+            "description": "A spinning tunnel with vibrant neon lights in a futuristic design.",
+            "tags": "abstract tunnel spinning neon glowing lights futuristic technology digital motion graphics",
+            "required_concepts": {"abstract_motion"},
+        },
+        37: {
+            "source_id": 31401976,
+            "source_url": "https://www.pexels.com/video/futuristic-neon-tunnel-with-radiant-circles-31401976/",
+            "media_url": "https://www.pexels.com/download/video/31401976/",
+            "creator": "Nicola Narracci",
+            "title": "Futuristic Neon Tunnel with Radiant Circles",
+            "description": "Vibrant neon circles spin in an abstract digital tunnel, creating a futuristic ambience.",
+            "tags": "abstract digital tunnel neon circles glowing lights futuristic ambience technology motion graphics",
+            "required_concepts": {"abstract_motion"},
+        },
     }
     # Scene ordinals are a hint, not an asset specification: a five-scene short's
     # closing shot can mean finished playback while an eight-scene storyboard's

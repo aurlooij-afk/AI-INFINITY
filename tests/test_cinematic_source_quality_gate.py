@@ -1100,3 +1100,57 @@ def test_technology_campaign_is_promotional_and_unresolved_nasa_rights_are_not_u
     assessed = studio._apply_nasa_scene_usage_policy(nasa_candidate, scene)
     assert assessed["rights_status"] == "REVIEW_REQUIRED"
     assert assessed["commercial_use_state"] == "UNKNOWN_REVIEW_REQUIRED"
+
+
+
+def test_exact_launch_transformation_scene_uses_fresh_licensed_1080p_motion_candidates(
+    monkeypatch, tmp_path
+):
+    """A single unavailable catalog clip must not force a still fallback for the abstract transition."""
+    monkeypatch.setattr(studio, "FAST_MODE", False)
+    payload = b"verified-1080p-abstract-motion-source-31930508\n" * 1400
+
+    scene = {
+        "topic": "AI Infinity — One Idea. Infinite Worlds.",
+        "heading": "Transformation in Motion",
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": (
+            "abstract glowing-line tunnel transitioning from the imagined landscape "
+            "into a crafted visual world; brief direction: purposeful abstract motion"
+        ),
+        "visual_search_subject": "abstract tunnel with glowing lines cinematic transition",
+        "visual_query": "abstract tunnel with glowing lines cinematic transition",
+        "image_prompt": "Abstract glowing-line tunnel, premium midnight-blue and cyan light motion.",
+        "narration": "Each transition carries the same idea forward, changing scale and emotion.",
+        "on_screen": "Possibility becomes motion",
+    }
+
+    attempted = []
+
+    def fake_download(url, path, **_kwargs):
+        attempted.append(str(url))
+        # Simulate earlier catalogue items being unavailable to prove that the
+        # additional public sources are reached before the illustration fallback.
+        if "31930508" in str(url):
+            Path(path).write_bytes(payload)
+            return
+        raise TimeoutError("simulated source endpoint timeout")
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 10.0)
+    monkeypatch.setattr(studio, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
+
+    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=6)
+
+    assert selected is not None
+    assert selected["source_id"] == 31930508
+    assert selected["kind"] == "video"
+    assert selected["validated_media"] is True
+    assert selected["quality_tier"] == "curated_free_source_motion_video"
+    assert selected["license"] == "Pexels License"
+    assert selected["license_url"] == "https://www.pexels.com/license/"
+    assert any("31930508" in url for url in attempted)
+    assert hashlib.sha256(Path(selected["path"]).read_bytes()).hexdigest() == hashlib.sha256(payload).hexdigest()
