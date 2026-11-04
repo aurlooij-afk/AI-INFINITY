@@ -139,7 +139,7 @@ jobs:
       - name: Compile all runtime Python modules
         run: |
           set -euo pipefail
-          python -m py_compile main.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py api_anything_connector.py production_intelligence.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py creator_final_3800.py professional_creator_v2.py professional_creator_v2_timeline_patch.py professional_creator_fabric.py universal_command_batch.py production_closure_3624.py editorial_review_3625.py ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py overlay_final_3700.py runtime_main_3700.py
+          python -m py_compile main.py ai_infinity_canonical.py universal_command_batch.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py api_anything_connector.py production_intelligence.py infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py creator_final_3800.py professional_creator_v2.py professional_creator_v2_timeline_patch.py professional_creator_fabric.py universal_command_batch.py production_closure_3624.py editorial_review_3625.py ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric.py ai3705_closure.py ai3706_internal_closure.py overlay_final_3700.py runtime_main_3700.py
           python -m py_compile production_graph.py wan_video_worker.py scripts/prepare_wan22_model.py tests/test_wan_video_worker_contract.py tests/test_production_graph_durable_connection.py
           echo "Python syntax checks passed."
       - name: Verify open-source Wan GPU worker contract and fail-closed readiness
@@ -233,6 +233,22 @@ jobs:
               raise SystemExit("Legacy 3623 UI marker leaked into canonical UI")
           print("Canonical UI contract passed.")
           PY
+      - name: Parse canonical multi-command overlay JavaScript
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          source=Path("ai_infinity_canonical.py").read_text(encoding="utf-8")
+          match=re.search(r'OVERLAY\\s*=\\s*r"""(.*?)"""', source, flags=re.S)
+          if not match:
+              raise SystemExit("Canonical command overlay not found")
+          scripts=re.findall(r"<script[^>]*>([\\s\\S]*?)</script>", match.group(1), flags=re.I)
+          if not scripts:
+              raise SystemExit("Canonical command overlay contains no browser script")
+          Path("/tmp/ai-infinity-canonical-overlay.js").write_text("\\n".join(scripts), encoding="utf-8")
+          print("Extracted", len(scripts), "canonical command overlay script block(s).")
+          PY
+          node --check /tmp/ai-infinity-canonical-overlay.js
       - name: Parse Creator Studio browser JavaScript
         run: |
           python - <<'PY'
