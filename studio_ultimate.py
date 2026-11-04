@@ -10160,12 +10160,22 @@ def _resolve_format_intent(requested_format: str, command_text: str, effective_d
     return selected
 
 
+SUPPORTED_CREATOR_CONTENT_TYPES = frozenset({
+    "video", "podcast", "article", "social", "website", "document", "presentation",
+})
+
+
+def normalize_creator_content_type(value: Any) -> str:
+    """Keep every implemented native deliverable on its real production path."""
+    selected = str(value or "video").strip().lower()
+    return selected if selected in SUPPORTED_CREATOR_CONTENT_TYPES else "video"
+
+
 def enqueue(req: Dict[str, Any], user_id: str, model_fn: Optional[Callable]) -> Dict[str, Any]:
     title = str(req.get("title") or req.get("topic") or req.get("objective") or "AI content").strip()[:200]
     req = dict(req)
     req["title"] = title
-    req["content_type"] = str(req.get("content_type") or "video").lower()
-    if req["content_type"] not in {"video", "podcast", "article", "social"}: req["content_type"] = "video"
+    req["content_type"] = normalize_creator_content_type(req.get("content_type"))
     # One-command ergonomics: infer short-form from an explicitly vertical/short
     # brief when the generic UI default is still "long".
     requested_format = str(req.get("format") or "long").strip().lower()
