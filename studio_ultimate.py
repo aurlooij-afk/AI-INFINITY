@@ -9691,6 +9691,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         # Website exports are created after the production and rights manifests exist,
         # so the downloadable site can carry the actual evidence records.
         website_outputs: Dict[str, Any] = {}
+        native_outputs: Dict[str, Any] = {}
         content_type = str(req.get("content_type") or "video").strip().lower()
 
         manifest = outdir / "manifest.json"
@@ -9725,6 +9726,14 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 and bool(website_verification.get("archive_sha256"))
             )
             qc["website_package"] = website_verification
+        if content_type in {"document", "presentation"}:
+            native_verification = native_outputs.get("verification") or {}
+            qc.setdefault("checks", {})["native_office_export_integrity"] = (
+                bool(native_verification.get("sha256"))
+                and int(native_verification.get("size_bytes") or 0) > 0
+                and native_verification.get("truthful") is True
+            )
+            qc["native_content_export"] = native_verification
 
         # Explicit professional delivery manifests required by the creator
         # contract. These are real records derived from the actual production
@@ -9806,6 +9815,39 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "truthful": True,
         },), encoding="utf-8")
 
+        # Generate true editable Office deliverables from the same approved
+        # editorial blueprint; do not substitute a PDF/Markdown file with a
+        # misleading .docx or .pptx extension.
+        if content_type in {"document", "presentation"}:
+            from ai_infinity.native_exports import build_powerpoint_presentation, build_word_document
+            export_args = {
+                "outdir": outdir,
+                "title": str(plan.get("title") or topic),
+                "description": str(plan.get("hook") or topic),
+                "chapters": chapters,
+                "research": research,
+                "language": str(req.get("language") or "English"),
+            }
+            if content_type == "document":
+                native_outputs = build_word_document(**export_args)
+            else:
+                native_outputs = build_powerpoint_presentation(**export_args)
+            native_verification = native_outputs.get("verification") or {}
+            if not native_verification.get("sha256") or native_verification.get("size_bytes", 0) <= 0:
+                raise RuntimeError("native Office export did not produce a verified editable file")
+            production_payload = json.loads(production_manifest.read_text(encoding="utf-8"))
+            native_artifacts = production_payload.setdefault("artifacts", [])
+            existing_names = {str(row.get("name") or "") for row in native_artifacts if isinstance(row, dict)}
+            for native_path in (native_outputs.get("file"), native_outputs.get("manifest")):
+                if native_path and Path(native_path).is_file() and Path(native_path).name not in existing_names:
+                    native_artifacts.append({
+                        "name": Path(native_path).name,
+                        "sha256": file_sha256(Path(native_path)),
+                        "bytes": Path(native_path).stat().st_size,
+                    })
+            production_payload["native_content_export"] = native_verification
+            production_manifest.write_text(jdump(production_payload), encoding="utf-8")
+
         # A website request produces a real, portable static-site package. It
         # embeds project media and the rights/provenance records generated above.
         # Export is download-first: this code never deploys or publishes the site.
@@ -9877,12 +9919,13 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 **({"static_website": "website.zip", "website_manifest": "website_manifest.json"} if website_outputs else {}),
             },
             "static_website_export": website_outputs.get("verification") if website_outputs else None,
+            "native_content_export": native_outputs.get("verification") if native_outputs else None,
             "storage": {"data_dir": str(DATA_DIR), **__import__("ai_infinity.persistence_truth", fromlist=["project_state_durability"]).project_state_durability(DATA_DIR), "persistent_configured": __import__("ai_infinity.persistence_truth", fromlist=["project_state_durability"]).project_state_durability(DATA_DIR).get("persistent", False)},
         }
         manifest.write_text(jdump(metadata), encoding="utf-8")
         named_package = outdir / f"{safe_name(plan.get('title') or topic)}-AI-Infinity-creator-package.zip"
         package = outdir / "package.zip"
-        bundle: List[Optional[Path]] = [captioned, script, captions, sources, manifest, production_manifest, rights_manifest, outdir / "feature_execution.json", outdir / "creator_experiments.json", shared_music, thumb if thumb and thumb.exists() else None, audio_master, narration_only, article, social, outdir / "fact_check.json", website_outputs.get("package"), website_outputs.get("manifest"), website_outputs.get("readme")]
+        bundle: List[Optional[Path]] = [captioned, script, captions, sources, manifest, production_manifest, rights_manifest, outdir / "feature_execution.json", outdir / "creator_experiments.json", shared_music, thumb if thumb and thumb.exists() else None, audio_master, narration_only, article, social, outdir / "fact_check.json", website_outputs.get("package"), website_outputs.get("manifest"), website_outputs.get("readme"), native_outputs.get("file"), native_outputs.get("manifest")]
         bundle += [x for x in editorial.values() if x]
         bundle += [Path(x["path"]) for x in shorts if Path(x["path"]).exists()]
         bundle += [p for p in outdir.glob("narration_*.mp3") if p.exists()]
@@ -9903,6 +9946,10 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             ("website_bundle", website_outputs.get("package"), "application/zip"),
             ("website_manifest", website_outputs.get("manifest"), "application/json"),
             ("website_readme", website_outputs.get("readme"), "text/markdown"),
+            ("native_document", native_outputs.get("file") if content_type == "document" else None, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            ("document_manifest", native_outputs.get("manifest") if content_type == "document" else None, "application/json"),
+            ("native_presentation", native_outputs.get("file") if content_type == "presentation" else None, "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+            ("presentation_manifest", native_outputs.get("manifest") if content_type == "presentation" else None, "application/json"),
             ("sources", sources, "application/json"), ("manifest", manifest, "application/json"), ("production_manifest", production_manifest, "application/json"), ("rights_manifest", rights_manifest, "application/json"), ("feature_execution", outdir / "feature_execution.json", "application/json"), ("thumbnail", thumb, "image/jpeg"), ("package", package, "application/zip")
         ]:
             if pth and Path(pth).exists(): _save_asset(project_id, kind, Path(pth), mt, {"title": plan.get("title") or topic})
@@ -9928,6 +9975,10 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             (website_outputs.get("package"), "application/zip"),
             (website_outputs.get("manifest"), "application/json"),
             (website_outputs.get("readme"), "text/markdown"),
+            (native_outputs.get("file") if content_type == "document" else None, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            (native_outputs.get("manifest") if content_type == "document" else None, "application/json"),
+            (native_outputs.get("file") if content_type == "presentation" else None, "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+            (native_outputs.get("manifest") if content_type == "presentation" else None, "application/json"),
         ]:
             if pth and Path(pth).exists():
                 register_artifact(project_id, Path(pth), mt)
@@ -9958,7 +10009,11 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 "podcast_rss": f"/infinity/studio/project/{project_id}/asset/podcast_rss.xml" if (outdir/"podcast_rss.xml").exists() else None,
                 "website_package": f"/infinity/studio/project/{project_id}/asset/website.zip" if (website_outputs.get("package") and Path(website_outputs["package"]).is_file()) else None,
                 "website_manifest": f"/infinity/studio/project/{project_id}/asset/website_manifest.json" if (website_outputs.get("manifest") and Path(website_outputs["manifest"]).is_file()) else None,
-                "website_readme": f"/infinity/studio/project/{project_id}/asset/website_README.md" if (website_outputs.get("readme") and Path(website_outputs["readme"]).is_file()) else None
+                "website_readme": f"/infinity/studio/project/{project_id}/asset/website_README.md" if (website_outputs.get("readme") and Path(website_outputs["readme"]).is_file()) else None,
+                "document": f"/infinity/studio/project/{project_id}/asset/document.docx" if content_type == "document" and Path(outdir / "document.docx").is_file() else None,
+                "document_manifest": f"/infinity/studio/project/{project_id}/asset/document_manifest.json" if content_type == "document" and Path(outdir / "document_manifest.json").is_file() else None,
+                "presentation": f"/infinity/studio/project/{project_id}/asset/presentation.pptx" if content_type == "presentation" and Path(outdir / "presentation.pptx").is_file() else None,
+                "presentation_manifest": f"/infinity/studio/project/{project_id}/asset/presentation_manifest.json" if content_type == "presentation" and Path(outdir / "presentation_manifest.json").is_file() else None
             },
             "shorts": [{"title": x["title"], "duration": x["duration"], "download_url": f"/infinity/studio/project/{project_id}/asset/{Path(x['path']).name}"} for x in shorts],
             "publication": {
