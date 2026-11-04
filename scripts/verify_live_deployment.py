@@ -196,16 +196,24 @@ def verify(base_url: str, expected_sha: str, output: Path, wait_seconds: int = 9
                 raise RuntimeError("live_package_missing_required_entries")
             manifest = json.loads(downloaded["production_manifest.json"].decode("utf-8"))
             rights = json.loads(downloaded["rights_manifest.json"].decode("utf-8"))
-            quality = manifest.get("quality_truth_checks") if isinstance(manifest, dict) else {}
-            quality = quality if isinstance(quality, dict) else {}
+            # Use the app's independent project-truth route for the actual
+            # scene-level rights decision; the production manifest alone is not
+            # the authority for review-required/unresolved counts.
+            truth = _open_json(opener, project_url + "/truth", timeout=30)
+            if truth.get("verified") is not True or truth.get("state") != "VERIFIED":
+                raise RuntimeError("live_creator_project_truth_not_verified")
+            quality = truth.get("checks") if isinstance(truth.get("checks"), dict) else {}
+            rights_assets = rights.get("assets") if isinstance(rights, dict) else None
             rights_summary = {
                 "actual_rendered_scene_count": quality.get("actual_rendered_scene_count"),
+                "visual_rights_evidence_present": quality.get("visual_rights_evidence_present"),
                 "unresolved_count": quality.get("visual_rights_unresolved_count"),
                 "review_required_count": quality.get("visual_rights_review_required_count"),
                 "rights_cleared_count": quality.get("visual_rights_cleared_count"),
                 "fallback_visual_count": quality.get("fallback_visual_count"),
+                "rights_asset_count": len(rights_assets) if isinstance(rights_assets, list) else 0,
                 "manifest_sha256": hashlib.sha256(downloaded["rights_manifest.json"]).hexdigest(),
-                "manifest_parse_passed": isinstance(rights, (dict, list)),
+                "manifest_parse_passed": isinstance(rights, dict) and isinstance(rights_assets, list),
             }
             result = {
                 "schema": "ai-infinity-live-deployment-verification.v1",
