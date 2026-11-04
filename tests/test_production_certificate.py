@@ -150,7 +150,7 @@ def test_production_certificate_keeps_external_and_human_gates_separate():
         deployment=None,
         human_approval=None,
         evidence_hashes={},
-        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "response_sha256": "c" * 64},
+        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "http_status": 200, "finish_reason": "STOP", "response_characters": 42, "response_sha256": "c" * 64},
     )
 
     assert certificate["candidate_commit_sha"] == candidate
@@ -193,7 +193,7 @@ def test_production_certificate_passes_only_with_every_exact_candidate_gate():
             "rights_notes": "Reviewed source and licence records for the exact media SHA.",
         },
         evidence_hashes={},
-        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "response_sha256": "c" * 64},
+        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "http_status": 200, "finish_reason": "STOP", "response_characters": 42, "response_sha256": "c" * 64},
     )
 
     assert certificate["ENGINEERING_STATE"] == "PASS"
@@ -311,7 +311,7 @@ def test_production_certificate_rejects_approval_for_another_commit():
             "rights_notes": "Reviewed the exact earlier media.",
         },
         evidence_hashes={},
-        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "response_sha256": "c" * 64},
+        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "http_status": 200, "finish_reason": "STOP", "response_characters": 42, "response_sha256": "c" * 64},
     )
 
     assert certificate["CREATIVE_APPROVAL"] == "PENDING"
@@ -480,7 +480,7 @@ def test_production_certificate_rejects_approval_for_different_media_bytes():
             "rights_notes": "Reviewed the rights of the other media file.",
         },
         evidence_hashes={},
-        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "response_sha256": "c" * 64},
+        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "http_status": 200, "finish_reason": "STOP", "response_characters": 42, "response_sha256": "c" * 64},
     )
 
     assert certificate["CREATIVE_APPROVAL"] == "PENDING"
