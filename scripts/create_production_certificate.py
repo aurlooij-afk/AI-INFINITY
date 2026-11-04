@@ -52,6 +52,13 @@ def _valid_hex_digest(value: Any, length: int = 64) -> bool:
     return len(text) == length and all(character in "0123456789abcdef" for character in text.lower())
 
 
+def _int_value(value: Any, default: int = -1) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 def _int_equals(value: Any, expected: int) -> bool:
     try:
         return int(value) == expected
@@ -193,8 +200,8 @@ def build_certificate(
         and _int_equals(flagship.get("visual_rights_unresolved_count"), 0)
         and _int_at_least(actual_scene_count, 1)
         and _int_at_least(verified_motion_count, 1)
-        and _int_at_least(verified_motion_count, int(quality.get("minimum_motion_source_count") or 0))
-        and _int_at_least(cleared_rights_count, int(verified_motion_count or 0))
+        and _int_at_least(verified_motion_count, _int_value(quality.get("minimum_motion_source_count"), 0))
+        and _int_at_least(cleared_rights_count, _int_value(verified_motion_count, 0))
         and quality.get("visual_rights_evidence_present") is True
         and _int_equals(quality.get("visual_rights_review_required_count"), 0)
         and _int_equals(quality.get("visual_rights_unresolved_count"), 0)
@@ -236,8 +243,8 @@ def build_certificate(
         and deployment_media.get("full_decode_passed") is True
         and _float_within(deployment_media.get("duration_seconds"), 20.0, 1.0)
         and deployment_video.get("codec") == "h264"
-        and int(deployment_video.get("width") or 0) >= 1280
-        and int(deployment_video.get("height") or 0) >= 720
+        and _int_at_least(deployment_video.get("width"), 1280)
+        and _int_at_least(deployment_video.get("height"), 720)
         and deployment_audio.get("codec") in {"aac", "mp3"}
         and (deployment or {}).get("package_entries_verified") is True
         and required_live_artifacts.issubset(set(deployment_artifacts))
@@ -248,7 +255,7 @@ def build_certificate(
         and _int_at_least(deployment_rights.get("actual_rendered_scene_count"), 1)
         and deployment_rights.get("visual_rights_evidence_present") is True
         and _int_at_least(deployment_rights.get("verified_motion_source_count"), 1)
-        and _int_at_least(deployment_rights.get("rights_asset_count"), int(deployment_rights.get("verified_motion_source_count") or 0))
+        and _int_at_least(deployment_rights.get("rights_asset_count"), _int_value(deployment_rights.get("verified_motion_source_count"), 0))
         and _int_at_least(deployment_rights.get("rights_cleared_count"), int(deployment_rights.get("verified_motion_source_count") or 0))
         and _int_equals(deployment_rights.get("fallback_visual_count"), 0)
         and deployment_rights.get("manifest_parse_passed") is True
@@ -259,6 +266,7 @@ def build_certificate(
     storage_payload_sha = str((storage or {}).get("restored_payload_sha256") or "")
     storage_pass = bool(
         storage_status == "PASS"
+        and (storage or {}).get("backend") in {"backblaze_b2", "supabase_s3"}
         and (storage or {}).get("canary") == "PUT_HEAD_GET_SHA_PASS"
         and (storage or {}).get("snapshot") == "PUT_HEAD_GET_SHA_PASS"
         and (storage or {}).get("fresh_process_restore") == "PASS"
