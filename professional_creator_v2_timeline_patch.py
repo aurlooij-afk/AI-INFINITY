@@ -365,14 +365,14 @@ def install(app: Any) -> None:
         tl, timeline_storage = save(pid, payload)
         timeline_path = studio._project_dir(pid) / "timeline.json"
         try:
-            rendered = base._render(studio, pid, tl)
-            variants = base._variants(studio, pid, rendered["master"])
+            master, quality = base._render(studio, pid, tl)
+            variants = base._variants(studio, pid, master)
             package = base._package(studio, pid)
             truth = base._truth(studio, studio._get_project(pid))
             return {
                 "status": "completed" if truth.get("verified") else "completed_with_qc_review",
                 "project_id": pid,
-                "quality": rendered["quality"],
+                "quality": quality,
                 "variants": variants,
                 "package": package.name,
                 "verified": bool(truth.get("verified")),
