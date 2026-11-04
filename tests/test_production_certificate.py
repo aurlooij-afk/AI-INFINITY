@@ -144,6 +144,7 @@ def test_certificate_cli_writes_readiness_report_not_certificate_when_gates_are_
     acceptance_path = tmp_path / "acceptance.json"
     acceptance_path.write_text(json.dumps(_passing_acceptance(candidate)), encoding="utf-8")
     output = tmp_path / "production-certificate.json"
+    output.write_text('{"stale": true}', encoding="utf-8")
     gemini_path = tmp_path / "gemini-writer-verification.json"
     gemini_path.write_text(json.dumps({"status": "PASS", "model": "gemini-3.1-flash-lite", "candidate_commit_sha": candidate, "response_sha256": "a" * 64}), encoding="utf-8")
     script = Path(__file__).resolve().parents[1] / "scripts" / "create_production_certificate.py"
