@@ -684,7 +684,7 @@ def test_google_gemini_free_tier_writer_sends_json_mode_and_keeps_key_out_of_url
     assert "test-key" not in captured["url"]
     assert captured["headers"].get("X-goog-api-key") == "test-key"
     assert captured["body"]["generationConfig"]["responseMimeType"] == "application/json"
-    assert captured["body"]["generationConfig"]["maxOutputTokens"] == 8192
+    assert captured["body"]["generationConfig"]["maxOutputTokens"] == 16384
     assert captured["timeout"] == 120
 
 
