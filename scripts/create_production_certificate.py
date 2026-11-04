@@ -289,6 +289,18 @@ def build_certificate(
         and bool(live_storage_backend_status.get("last_sync_at"))
         and live_storage_backend_status.get("truthful") is True
     )
+    live_storage_explicitly_blocked = bool(
+        live_storage
+        and (
+            live_storage.get("persistent") is False
+            or (live_storage.get("mode") and live_storage.get("mode") != "durable")
+            or (live_storage_backend_status.get("contract_enabled") is False)
+            or (live_storage_backend_status.get("configured") is False)
+            or (live_storage_backend_status.get("active") is False)
+            or (live_storage_backend_status.get("verified") is False)
+            or (live_storage_backend_status.get("snapshot_verified") is False)
+        )
+    )
     storage_pass = bool(
         live_storage_pass
         and storage_status == "PASS"
@@ -360,7 +372,7 @@ def build_certificate(
             "otio_import_and_rerender": "PASS" if otio_rerender_pass else "BLOCKED",
             "durable_storage": (
                 "PASS" if storage_pass else
-                "BLOCKED" if storage_status == "BLOCKED" or not live_storage_pass else
+                "BLOCKED" if storage_status == "BLOCKED" or live_storage_explicitly_blocked else
                 storage_status if storage_status == "FAIL" else
                 "FAIL_OR_INCOMPLETE"
             ),
