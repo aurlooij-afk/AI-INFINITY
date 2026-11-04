@@ -235,3 +235,28 @@ def test_live_deployment_verification_rejects_unhealthy_exact_candidate():
 
     assert result["status"] == "FAIL"
     assert result["deployed_commit_sha"] == candidate
+
+
+
+def test_certificate_rejects_unbound_or_stale_pass_evidence():
+    candidate = "a" * 40
+    certificate = build_certificate(
+        candidate_sha=candidate,
+        acceptance=_passing_acceptance(candidate),
+        storage={"status": "PASS"},
+        inference={"status": "PASS"},
+        deployment={"status": "PASS", "deployed_commit_sha": candidate},
+        human_approval=None,
+        evidence_hashes={},
+        gemini_writer={
+            "status": "PASS",
+            "model": "gemini-3.1-flash-lite",
+            "response_sha256": "a" * 64,
+        },
+    )
+
+    assert certificate["ENGINEERING_STATE"] == "FAIL"
+    assert certificate["PRODUCTION_VERIFIED"] == "BLOCKED"
+    assert certificate["production_requirements"]["durable_storage_round_trip_and_fresh_process_restore"] is False
+    assert certificate["production_requirements"]["live_gpu_inference_and_artifact_verification"] is False
+    assert certificate["production_requirements"]["exact_candidate_live_deployment"] is False
