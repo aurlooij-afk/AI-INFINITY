@@ -9,7 +9,7 @@ from scripts.create_production_certificate import build_certificate
 from scripts.verify_live_deployment import assess_deployment_response
 
 
-def _passing_acceptance():
+def _passing_acceptance(candidate):
     tests = [
         {"scenario_id": f"{index:02d}", "status": "PASS", "result": {}}
         for index in range(1, 14)
@@ -35,6 +35,7 @@ def _passing_acceptance():
         "otio_rerender_sha256": "a" * 64,
     }
     return {
+        "source_revision": candidate,
         "overall_status": "PASS",
         "passed": True,
         "completed_scenarios": 13,
@@ -46,13 +47,13 @@ def test_production_certificate_keeps_external_and_human_gates_separate():
     candidate = "b" * 40
     certificate = build_certificate(
         candidate_sha=candidate,
-        acceptance=_passing_acceptance(),
+        acceptance=_passing_acceptance(candidate),
         storage={"status": "BLOCKED"},
         inference={"status": "BLOCKED"},
         deployment=None,
         human_approval=None,
         evidence_hashes={},
-        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "response_sha256": "a" * 64},
+        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "candidate_commit_sha": candidate, "response_sha256": "a" * 64},
     )
 
     assert certificate["candidate_commit_sha"] == candidate
@@ -71,10 +72,10 @@ def test_production_certificate_passes_only_with_every_exact_candidate_gate():
     candidate = "c" * 40
     certificate = build_certificate(
         candidate_sha=candidate,
-        acceptance=_passing_acceptance(),
-        storage={"status": "PASS"},
-        inference={"status": "PASS"},
-        deployment={"status": "PASS", "deployed_commit_sha": candidate},
+        acceptance=_passing_acceptance(candidate),
+        storage={"status": "PASS", "candidate_commit_sha": candidate},
+        inference={"status": "PASS", "candidate_commit_sha": candidate},
+        deployment={"status": "PASS", "candidate_commit_sha": candidate, "deployed_commit_sha": candidate},
         human_approval={
             "candidate_commit_sha": candidate,
             "approved": True,
@@ -90,7 +91,7 @@ def test_production_certificate_passes_only_with_every_exact_candidate_gate():
             "rights_approval": True,
         },
         evidence_hashes={},
-        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "response_sha256": "a" * 64},
+        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "candidate_commit_sha": candidate, "response_sha256": "a" * 64},
     )
 
     assert certificate["ENGINEERING_STATE"] == "PASS"
@@ -103,10 +104,10 @@ def test_production_certificate_rejects_approval_for_another_commit():
     candidate = "d" * 40
     certificate = build_certificate(
         candidate_sha=candidate,
-        acceptance=_passing_acceptance(),
-        storage={"status": "PASS"},
-        inference={"status": "PASS"},
-        deployment={"status": "PASS", "deployed_commit_sha": candidate},
+        acceptance=_passing_acceptance(candidate),
+        storage={"status": "PASS", "candidate_commit_sha": candidate},
+        inference={"status": "PASS", "candidate_commit_sha": candidate},
+        deployment={"status": "PASS", "candidate_commit_sha": candidate, "deployed_commit_sha": candidate},
         human_approval={
             "candidate_commit_sha": "e" * 40,
             "approved": True,
@@ -122,7 +123,7 @@ def test_production_certificate_rejects_approval_for_another_commit():
             "rights_approval": True,
         },
         evidence_hashes={},
-        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "response_sha256": "a" * 64},
+        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "candidate_commit_sha": candidate, "response_sha256": "a" * 64},
     )
 
     assert certificate["CREATIVE_APPROVAL"] == "PENDING"
@@ -133,10 +134,10 @@ def test_production_certificate_rejects_approval_for_another_commit():
 def test_certificate_cli_writes_revision_bound_record_when_external_evidence_is_missing(tmp_path: Path):
     candidate = "f" * 40
     acceptance_path = tmp_path / "acceptance.json"
-    acceptance_path.write_text(json.dumps(_passing_acceptance()), encoding="utf-8")
+    acceptance_path.write_text(json.dumps(_passing_acceptance(candidate)), encoding="utf-8")
     output = tmp_path / "production-certificate.json"
     gemini_path = tmp_path / "gemini-writer-verification.json"
-    gemini_path.write_text(json.dumps({"status": "PASS", "model": "gemini-3.1-flash-lite", "response_sha256": "a" * 64}), encoding="utf-8")
+    gemini_path.write_text(json.dumps({"status": "PASS", "model": "gemini-3.1-flash-lite", "candidate_commit_sha": candidate, "response_sha256": "a" * 64}), encoding="utf-8")
     script = Path(__file__).resolve().parents[1] / "scripts" / "create_production_certificate.py"
 
     completed = subprocess.run(
