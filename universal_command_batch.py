@@ -229,6 +229,9 @@ def execute_commands(
         overall = "accepted"
     else:
         overall = "completed"
+
+    # Persist a terminal checkpoint after all steps have been classified.
+    checkpoint(results, overall)
     return {
         "batch_id": batch_id, "status": overall, "step_count": len(commands),
         "completed_steps": sum(state == "completed" for state in states),
