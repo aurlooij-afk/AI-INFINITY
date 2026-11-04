@@ -1627,6 +1627,33 @@ def _required_narration_word_count(duration_seconds: Any, speaking_rate_wpm: Any
 
 
 
+def _first_nonempty_env(names: Iterable[str]) -> str:
+    """Return the first non-empty configured value without exposing it."""
+    for name in names:
+        value = os.getenv(str(name), "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _gemini_api_key() -> str:
+    """Resolve supported Gemini key names into one canonical runtime value."""
+    return _first_nonempty_env((
+        "GEMINI_API_KEY",
+        "AI_INFINITY_GEMINI_API_KEY",
+        "GOOGLE_AI_STUDIO_API_KEY",
+    ))
+
+
+def _gemini_free_tier_acknowledgement() -> str:
+    """Resolve the explicit free-tier/data-use acknowledgement consistently."""
+    return _first_nonempty_env((
+        "AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK",
+        "GEMINI_FREE_TIER_DATA_USE_ACK",
+        "GOOGLE_AI_STUDIO_FREE_TIER_ACK",
+    )).lower()
+
+
 def _gemini_free_tier_text_model() -> Optional[Callable]:
     """Return an explicitly acknowledged Google AI Studio Free Tier writer.
 
@@ -1636,8 +1663,8 @@ def _gemini_free_tier_text_model() -> Optional[Callable]:
     data-use terms before this adapter makes requests. Google may change model
     availability and free quotas; provider errors remain visible and fail closed.
     """
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    acknowledged = os.getenv("AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK", "").strip().lower()
+    api_key = _gemini_api_key()
+    acknowledged = _gemini_free_tier_acknowledgement()
     model = os.getenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", "gemini-3.1-flash-lite").strip()
     if not api_key or acknowledged not in {"1", "true", "yes", "on"}:
         return None
@@ -2030,8 +2057,8 @@ EXISTING PLAN JSON:
         "repair_passes": 0,
         "provider_attempt_error": provider_attempt_error,
         "writer_diagnostics": {
-            "gemini_api_key_present": bool(os.getenv("GEMINI_API_KEY", "").strip()),
-            "gemini_free_tier_acknowledged": os.getenv("AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK", "").strip().lower() in {"1", "true", "yes", "on"},
+            "gemini_api_key_present": bool(_gemini_api_key()),
+            "gemini_free_tier_acknowledged": _gemini_free_tier_acknowledgement() in {"1", "true", "yes", "on"},
             "gemini_model": os.getenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", "gemini-3.1-flash-lite").strip(),
             "external_providers_disabled": _external_providers_disabled(),
         },

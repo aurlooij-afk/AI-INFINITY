@@ -9,9 +9,21 @@ from urllib.request import Request, urlopen
 MODEL="gemini-3.1-flash-lite"
 ALLOWED_ACK={"1","true","yes","on"}
 
+def _first_nonempty_env(names: tuple[str, ...]) -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
 def verify_gemini_writer() -> dict[str, Any]:
-    api_key=os.getenv("GEMINI_API_KEY","").strip()
-    ack=os.getenv("AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK","").strip().lower()
+    api_key = _first_nonempty_env(("GEMINI_API_KEY", "AI_INFINITY_GEMINI_API_KEY", "GOOGLE_AI_STUDIO_API_KEY"))
+    ack = _first_nonempty_env((
+        "AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK",
+        "GEMINI_FREE_TIER_DATA_USE_ACK",
+        "GOOGLE_AI_STUDIO_FREE_TIER_ACK",
+    )).lower()
     model=os.getenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL",MODEL).strip()
     if not api_key: return {"status":"BLOCKED","reason":"GEMINI_API_KEY_missing","truthful":True}
     if ack not in ALLOWED_ACK: return {"status":"BLOCKED","reason":"Gemini_Free_Tier_data_use_acknowledgement_missing_or_invalid","truthful":True}

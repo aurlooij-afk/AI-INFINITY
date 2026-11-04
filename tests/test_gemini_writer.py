@@ -30,3 +30,11 @@ def test_gemini_writer_uses_json_mode_and_16k_output_budget(monkeypatch):
     assert result["provider"]=="google-gemini-free-tier:gemini-3.1-flash-lite"
     assert result["finish_reason"]=="STOP"
     assert result["usage"]["candidatesTokenCount"]==5
+
+
+def test_gemini_writer_accepts_supported_secret_and_ack_aliases(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK", raising=False)
+    monkeypatch.setenv("AI_INFINITY_GEMINI_API_KEY", "alias-test-key")
+    monkeypatch.setenv("GEMINI_FREE_TIER_DATA_USE_ACK", "true")
+    assert studio._gemini_free_tier_text_model() is not None
