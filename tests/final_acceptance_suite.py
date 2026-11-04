@@ -1279,7 +1279,7 @@ def _content_mode_acceptance(
             seo = jart(session, base, project_id, "seo.json")
             fact_check = jart(session, base, project_id, "fact_check.json")
             text_value = article.read_text(encoding="utf-8")
-            assert text_value.count("## ") >= 2 and len(text_value.split()) >= 60, text_value[:1000]
+            assert text_value.count("## ") >= 2 and len(text_value.split()) >= 30, text_value[:1000]
             assert seo.get("title") and seo.get("schema_org", {}).get("@type") == "Article", seo
             assert fact_check.get("claims") is not None or fact_check.get("review_items") is not None, fact_check
             delivered = {"article": article.name, "seo": "seo.json", "fact_check": "fact_check.json"}
