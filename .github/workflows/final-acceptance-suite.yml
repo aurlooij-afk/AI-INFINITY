@@ -217,6 +217,30 @@ jobs:
           print("ACCEPTANCE_SCENARIOS_COMPLETED=" + str(result.get("completed_scenarios")))
           PY
           exit "$suite_status"
+      - name: Verify exact candidate against live production health
+        id: live_deployment
+        if: ${{ always() && steps.build_runtime.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          AI_INFINITY_PRODUCTION_URL: ${{ vars.AI_INFINITY_PRODUCTION_URL || 'https://ai-infinity-ca5e.onrender.com' }}
+          AI_INFINITY_EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set +e
+          mkdir -p "${GITHUB_WORKSPACE}/acceptance-evidence"
+          chmod 0777 "${GITHUB_WORKSPACE}/acceptance-evidence"
+          python scripts/verify_live_deployment.py \
+            --candidate-sha "${AI_INFINITY_EXPECTED_COMMIT}" \
+            --output "${GITHUB_WORKSPACE}/acceptance-evidence/live-deployment-verification.json"
+          deployment_status=$?
+          if [ "$deployment_status" -eq 3 ]; then
+            echo "LIVE_DEPLOYMENT_GATE=BLOCKED — the exact candidate is not yet live and healthy."
+            exit 0
+          fi
+          if [ "$deployment_status" -ne 0 ]; then
+            echo "LIVE_DEPLOYMENT_GATE=FAIL — exact-candidate production health verification failed."
+            exit "$deployment_status"
+          fi
+          echo "LIVE_DEPLOYMENT_GATE=PASS"
       - name: Write candidate-bound production certificate
         if: always()
         run: |
