@@ -1719,6 +1719,101 @@ def _gemini_free_tier_text_model() -> Optional[Callable]:
     return call
 
 
+def _openrouter_free_tier_text_model() -> Optional[Callable]:
+    """Return an explicitly acknowledged OpenRouter free-model writer.
+
+    The model is pinned to the free router alias, provider auto-fallback is
+    disabled, and endpoint selection excludes providers that collect inputs.
+    The free account quota is limited and provider availability is not guaranteed.
+    """
+    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    acknowledged = os.getenv("AI_INFINITY_OPENROUTER_FREE_TIER_AND_DATA_USE_ACK", "").strip().lower()
+    model = os.getenv("AI_INFINITY_OPENROUTER_FREE_MODEL", "openrouter/free").strip()
+    if not api_key or acknowledged not in {"1", "true", "yes", "on"}:
+        return None
+    if model != "openrouter/free":
+        return None
+
+    def call(payload: Dict[str, Any]) -> Dict[str, Any]:
+        messages = payload.get("messages") if isinstance(payload, dict) else []
+        messages = messages if isinstance(messages, list) else []
+        normalized = []
+        for item in messages:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "user").strip().lower()
+            if role not in {"system", "developer", "user", "assistant"}:
+                role = "user"
+            text_value = str(item.get("content") or "").strip()
+            if text_value:
+                normalized.append({"role": role, "content": text_value})
+        if not any(item["role"] == "user" for item in normalized):
+            raise ValueError("OpenRouter free writer requires a non-empty user message.")
+
+        body = {
+            "model": model,
+            "messages": normalized,
+            "temperature": max(0.0, min(1.0, float(payload.get("temperature", 0.55) or 0.55))),
+            "max_tokens": 8192,
+            "response_format": {"type": "json_object"},
+            "provider": {
+                "require_parameters": True,
+                "allow_fallbacks": False,
+                "data_collection": "deny",
+            },
+        }
+        try:
+            response = _safe_open_post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                headers={
+                    "Authorization": "Bearer " + api_key,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "HTTP-Referer": "https://ai-infinity-ca5e.onrender.com",
+                    "X-OpenRouter-Title": "AI Infinity",
+                },
+                timeout=120,
+            )
+            try:
+                raw = response.read(8_000_001)
+            finally:
+                close = getattr(response, "close", None)
+                if callable(close):
+                    close()
+            if len(raw) > 8_000_000:
+                raise RuntimeError("OpenRouter response exceeded the configured response limit.")
+            result = json.loads(raw.decode("utf-8"))
+        except Exception as exc:
+            # Never persist or log the bearer key, request headers, or raw body.
+            raise RuntimeError(f"OpenRouter Free Tier request failed: {type(exc).__name__}") from None
+
+        choices = result.get("choices") if isinstance(result, dict) else None
+        choice = choices[0] if isinstance(choices, list) and choices else {}
+        message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+        content = message.get("content")
+        if isinstance(content, list):
+            text_value = "\n".join(
+                str(part.get("text") or "")
+                for part in content if isinstance(part, dict) and part.get("type") == "text"
+            ).strip()
+        else:
+            text_value = str(content or "").strip()
+        finish_reason = str(choice.get("finish_reason") or "")
+        if not text_value:
+            raise RuntimeError("OpenRouter Free Tier returned no text.")
+        if finish_reason == "length":
+            raise RuntimeError("OpenRouter Free Tier output was truncated at the token limit.")
+        actual_model = str(result.get("model") or model)
+        return {
+            "text": text_value,
+            "provider": "openrouter-free-tier:" + actual_model,
+            "finish_reason": finish_reason or None,
+            "usage": result.get("usage") if isinstance(result, dict) else None,
+        }
+
+    return call
+
 
 def creative_plan(req: Dict[str, Any], research: Dict[str, Any], model_fn: Optional[Callable]) -> Tuple[Dict[str, Any], str]:
     title = str(req.get("title") or req.get("topic") or req.get("objective") or "AI content").strip()
@@ -1803,6 +1898,11 @@ Use 5-18 chapters. Total durations should approximately equal the target. Narrat
                 "provider": hf_provider,
             }
         model_fn = _hf_model_call
+
+    # Last no-cost text path: OpenRouter's explicitly free router. The request
+    # is constrained to non-collecting providers and disables paid fallbacks.
+    if model_fn is None and not _external_providers_disabled():
+        model_fn = _openrouter_free_tier_text_model()
 
     if model_fn:
         try:
