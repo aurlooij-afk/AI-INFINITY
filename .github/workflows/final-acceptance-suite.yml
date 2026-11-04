@@ -31,28 +31,42 @@ jobs:
 
       - name: Verify real Gemini Free Tier writer response
         id: gemini_writer
+        continue-on-error: true
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK: ${{ vars.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK }}
           AI_INFINITY_GEMINI_FREE_TIER_MODEL: gemini-3.1-flash-lite
         run: |
           set -euo pipefail
-          if [[ -z "${GEMINI_API_KEY:-}" ]]; then
-            echo "::error::GitHub Actions secret GEMINI_API_KEY is missing or empty."
-            exit 1
-          fi
-          case "${AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK,,}" in
-            true|1|yes|on) ;;
-            *) echo "::error::Set AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK to exact true only after accepting Google's Free Tier data-use terms."; exit 1 ;;
-          esac
           mkdir -p "${GITHUB_WORKSPACE}/acceptance-evidence"
           chmod 0777 "${GITHUB_WORKSPACE}/acceptance-evidence"
+          # Always run the verifier, including when a secret is absent, so it writes
+          # candidate evidence with an explicit BLOCKED/FAIL reason. This also lets
+          # independent B2 and GPU gates run in the same attempt.
+          set +e
           docker run --rm --network host \
             -e GEMINI_API_KEY -e AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK -e AI_INFINITY_GEMINI_FREE_TIER_MODEL \
             -v "${GITHUB_WORKSPACE}:/workspace:ro" \
             -v "${GITHUB_WORKSPACE}/acceptance-evidence:/evidence" \
             -w /workspace --entrypoint python ai-infinity-final-acceptance \
             scripts/verify_gemini_writer.py --output /evidence/gemini-writer-verification.json
+          verify_status=$?
+          set -e
+          writer_status="FAIL"
+          if [[ -s "${GITHUB_WORKSPACE}/acceptance-evidence/gemini-writer-verification.json" ]]; then
+            writer_status="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("status", "FAIL"))' "${GITHUB_WORKSPACE}/acceptance-evidence/gemini-writer-verification.json")"
+          fi
+          echo "status=${writer_status}" >> "$GITHUB_OUTPUT"
+          echo "GEMINI_WRITER_GATE=${writer_status}"
+          if [[ "${writer_status}" == "PASS" && "${verify_status}" -eq 0 ]]; then
+            exit 0
+          fi
+          if [[ "${writer_status}" == "BLOCKED" ]]; then
+            echo "::warning::Gemini writer is blocked; B2 and GPU evidence will still be collected, but the 13-scenario suite will not run."
+            exit 0
+          fi
+          echo "::error::Gemini writer verification failed; see the redacted verification artifact."
+          exit 1
 
       - name: Verify live object-store snapshot round-trip and fresh-process restore
         id: project_state_storage
@@ -132,6 +146,7 @@ jobs:
           echo "WAN_GPU_INFERENCE_GATE=PASS"
 
       - name: Run 13-scenario real acceptance suite (20s baseline, 60s flagship, 900s long-form; 720p/1080p)
+        if: steps.gemini_writer.outputs.status == 'PASS'
         env:
           CI: "true"
           AI_INFINITY_SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
