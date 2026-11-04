@@ -589,8 +589,17 @@ if(listMode){
   if(from){item.depends_on=[from[1]];item.project_id_from=from[1]}
   return item;
  });
- var key="aii-ui-"+Date.now()+"-"+Math.random().toString(36).slice(2,12);
+ // Keep the same idempotency key if the network drops after the server
+ // accepted the batch. A retry then returns the persisted batch instead of
+ // dispatching duplicate creative work. Clear it only after a response arrives.
+ var pending=null;
+ try{pending=JSON.parse(localStorage.getItem("aii_pending_batch")||"null")}catch(e){}
+ var key=pending&&pending.command===c&&pending.key
+   ? pending.key
+   : "aii-ui-"+Date.now()+"-"+Math.random().toString(36).slice(2,12);
+ localStorage.setItem("aii_pending_batch",JSON.stringify({command:c,key:key}));
  r=await api("/infinity/canonical/batches",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({idempotency_key:key,commands:commands})});
+ localStorage.removeItem("aii_pending_batch");
  var lastPid="";
  (r.steps||[]).forEach(function(step){
   var nested=step.result&&step.result.result;
