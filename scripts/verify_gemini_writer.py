@@ -109,6 +109,9 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     result = verify_gemini_writer()
+    candidate = os.getenv("AI_INFINITY_SOURCE_REVISION", "").strip().lower()
+    if len(candidate) == 40 and all(char in "0123456789abcdef" for char in candidate):
+        result["candidate_commit_sha"] = candidate
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     print("GEMINI_WRITER_VERIFICATION=" + json.dumps(result, sort_keys=True))
