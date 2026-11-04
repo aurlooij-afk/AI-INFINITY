@@ -51,6 +51,18 @@ def test_unimplemented_spreadsheets_and_web_apps_remain_explicitly_unsupported()
     assert canonical.classify_command("Build a web application for task management")["route"] == "unsupported_deliverable"
 
 
+def test_supported_multilingual_native_content_requests_use_the_existing_creation_route():
+    examples = {
+        "ویب سائٹ بنائیں": "website",
+        "ورڈ ڈاکیومنٹ بنائیں": "document",
+        "پاورپوائنٹ پریزنٹیشن بنائیں": "presentation",
+    }
+    for command, content_type in examples.items():
+        result = canonical.classify_command(command)
+        assert result["route"] == "create"
+        assert result["content_type"] == content_type
+
+
 def test_unknown_task_does_not_create_a_default_video():
     result = canonical.classify_command("Calculate 123 multiplied by 456")
 
