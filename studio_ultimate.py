@@ -6984,27 +6984,69 @@ def _scene_mix(video: Path, voice: Path, music: Path, sfx: Path, duration: float
 
 
 def concat_segments(paths: List[Path], out: Path) -> None:
-    """Join rendered scenes without copying independently primed AAC packets.
+    """Join scene video without concatenating independently primed AAC packets.
 
-    Each scene is encoded in its own FFmpeg invocation. Copy-concatenating those
-    packets can preserve differing AAC priming/timestamp state; the final decode
-    then fails even when each scene file individually opened successfully. Keep
-    the already-rendered H.264 video bitstream, but decode/re-encode the audio into
-    one continuous AAC stream before final mastering and programme verification.
+    MP4/AAC scene files can each probe successfully yet expose invalid AAC packet
+    boundaries when the concat demuxer treats several independently encoded
+    streams as one continuous bitstream. Decode each scene's audio independently
+    to PCM, concatenate the lossless PCM streams, then mux that continuous audio
+    with the copied H.264 video. This also makes a corrupt source scene fail at
+    its own extraction step instead of poisoning the final programme silently.
     """
     if not paths:
         raise ValueError("cannot assemble an empty scene list")
-    manifest = out.with_suffix(".txt")
-    manifest.write_text("".join(f"file '{str(p).replace(chr(39), chr(39)+chr(92)+chr(39)+chr(39))}'\n" for p in paths), encoding="utf-8")
-    ffmpeg(
-        "-f", "concat", "-safe", "0", "-i", manifest,
-        "-map", "0:v:0", "-map", "0:a:0",
-        "-c:v", "copy",
-        "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
-        "-movflags", "+faststart",
-        out,
-        timeout=600,
-    )
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="ai-infinity-scene-audio-", dir=str(out.parent)) as raw_temp:
+        temp_root = Path(raw_temp)
+        video_manifest = temp_root / "video-scenes.txt"
+        audio_manifest = temp_root / "audio-scenes.txt"
+        audio_parts: List[Path] = []
+        for index, source in enumerate(paths, 1):
+            source = Path(source)
+            if not source.is_file() or source.stat().st_size <= 1024:
+                raise RuntimeError(f"scene {index} is missing or empty before programme assembly")
+            pcm = temp_root / f"scene-audio-{index:04d}.wav"
+            ffmpeg(
+                "-i", source,
+                "-map", "0:a:0", "-vn",
+                "-af", "aresample=48000:async=1:first_pts=0",
+                "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le",
+                pcm,
+                timeout=180,
+            )
+            if not pcm.is_file() or pcm.stat().st_size <= 1024:
+                raise RuntimeError(f"scene {index} audio could not be normalized to PCM")
+            # Independently decode every PCM intermediate before it enters the
+            # concatenation manifest. No corrupt AAC packet can pass this point.
+            ffmpeg("-v", "error", "-xerror", "-i", pcm, "-f", "null", "-", timeout=120)
+            audio_parts.append(pcm)
+
+        def _concat_entry(path: Path) -> str:
+            escaped = str(path).replace("'", "'\\''")
+            return f"file '{escaped}'\\n"
+
+        video_manifest.write_text("".join(_concat_entry(Path(p)) for p in paths), encoding="utf-8")
+        audio_manifest.write_text("".join(_concat_entry(p) for p in audio_parts), encoding="utf-8")
+        programme_audio = temp_root / "programme-audio.wav"
+        ffmpeg(
+            "-f", "concat", "-safe", "0", "-i", audio_manifest,
+            "-c:a", "pcm_s16le", programme_audio,
+            timeout=600,
+        )
+        ffmpeg("-v", "error", "-xerror", "-i", programme_audio, "-f", "null", "-", timeout=180)
+        ffmpeg(
+            "-f", "concat", "-safe", "0", "-i", video_manifest,
+            "-i", programme_audio,
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+            "-movflags", "+faststart",
+            out,
+            timeout=600,
+        )
+        # The final container must pass a full decode before downstream mastering.
+        ffmpeg("-v", "error", "-xerror", "-i", out, "-f", "null", "-", timeout=600)
 
 
 def make_variants(master: Path, outdir: Path, chapters: List[Dict[str, Any]], title: str) -> List[Dict[str, Any]]:
