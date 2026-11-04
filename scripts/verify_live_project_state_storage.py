@@ -22,6 +22,9 @@ from typing import Any, Dict
 
 
 def _emit(result: Dict[str, Any], output: Path | None) -> None:
+    candidate = os.getenv("AI_INFINITY_SOURCE_REVISION", "").strip().lower()
+    if len(candidate) == 40 and all(char in "0123456789abcdef" for char in candidate):
+        result["candidate_commit_sha"] = candidate
     encoded = json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2)
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)
