@@ -9828,23 +9828,11 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             )
             if (website_outputs.get("verification") or {}).get("status") != "PASS":
                 raise RuntimeError("static website package did not pass its integrity verification")
-            # Add the generated website files to the canonical artifact hash list.
-            try:
-                manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
-                known_names = {str(row.get("name") or "") for row in manifest_payload.get("files", []) if isinstance(row, dict)}
-                for website_path in website_outputs.values():
-                    if not isinstance(website_path, (str, Path)):
-                        continue
-                    website_path = Path(website_path)
-                    if website_path.is_file() and website_path.name not in known_names:
-                        manifest_payload.setdefault("files", []).append({
-                            "name": website_path.name,
-                            "size_bytes": website_path.stat().st_size,
-                            "sha256": file_sha256(website_path),
-                        })
-                manifest.write_text(jdump(manifest_payload), encoding="utf-8")
-            except Exception as manifest_exc:
-                raise RuntimeError("website package was generated but canonical manifest reconciliation failed: " + type(manifest_exc).__name__) from None
+            # The site manifest carries page and local-asset hashes; the project
+            # result manifest below binds the archive SHA/size to this exact output.
+            production_payload = json.loads(production_manifest.read_text(encoding="utf-8"))
+            production_payload["static_website_export"] = website_outputs["verification"]
+            production_manifest.write_text(jdump(production_payload), encoding="utf-8")
             audit_event(project_id, "static_website_package_created", website_outputs["verification"])
 
         # The manifest artifacts themselves are part of the professional QC gate.
@@ -9883,7 +9871,12 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "assets": assets_meta, "shorts": [{k: v for k, v in x.items() if k != "path"} for x in shorts],
             "self_upgrade": True, "truthful": True,
             "production_profile": _project_meta(project_id),
-            "generated_at": utc_iso(), "platform_packages": {k: Path(v).name for k,v in editorial.items() if v},
+            "generated_at": utc_iso(),
+            "platform_packages": {
+                **{k: Path(v).name for k,v in editorial.items() if v},
+                **({"static_website": "website.zip", "website_manifest": "website_manifest.json"} if website_outputs else {}),
+            },
+            "static_website_export": website_outputs.get("verification") if website_outputs else None,
             "storage": {"data_dir": str(DATA_DIR), **__import__("ai_infinity.persistence_truth", fromlist=["project_state_durability"]).project_state_durability(DATA_DIR), "persistent_configured": __import__("ai_infinity.persistence_truth", fromlist=["project_state_durability"]).project_state_durability(DATA_DIR).get("persistent", False)},
         }
         manifest.write_text(jdump(metadata), encoding="utf-8")
