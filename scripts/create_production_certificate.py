@@ -245,7 +245,8 @@ def build_certificate(
         and _valid_hex_digest(deployment_manifest_sha)
         and _int_equals(deployment_rights.get("unresolved_count"), 0)
         and _int_equals(deployment_rights.get("review_required_count"), 0)
-        and _int_at_least(deployment_rights.get("rights_cleared_count"), 1)
+        and _int_at_least(deployment_rights.get("actual_rendered_scene_count"), 1)
+        and _int_at_least(deployment_rights.get("rights_cleared_count"), int(deployment_rights.get("actual_rendered_scene_count") or 0))
         and _int_equals(deployment_rights.get("fallback_visual_count"), 0)
         and deployment_rights.get("manifest_parse_passed") is True
         and (deployment or {}).get("truthful") is True
@@ -282,6 +283,8 @@ def build_certificate(
         and _int_at_least(inference_gpu.get("total_vram_mb"), 24576)
         and _int_at_least(inference_gpu.get("free_vram_mb"), 22000)
         and str((inference or {}).get("job_id") or "").startswith("wan_")
+        and len(str((inference or {}).get("job_id") or "")) == 36
+        and all(character in "0123456789abcdef" for character in str((inference or {}).get("job_id") or "")[4:])
         and (inference or {}).get("inference_request_sent") is True
         and _valid_hex_digest(inference_sha)
         and _int_at_least((inference or {}).get("artifact_size_bytes"), 100_000)
