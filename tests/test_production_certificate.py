@@ -129,6 +129,7 @@ def _passing_deployment(candidate):
         "package_entries_verified": True,
         "rights_evidence": {
             "actual_rendered_scene_count": 5,
+            "verified_motion_source_count": 5,
             "visual_rights_evidence_present": True,
             "unresolved_count": 0,
             "review_required_count": 0,
