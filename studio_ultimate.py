@@ -9625,10 +9625,30 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                         "format": "9:16",
                     },
                     "TikTok": {
-                        "caption": "\n\n".join(
+                        "caption": str(plan.get("hook") or topic) + "\n\n" + "\n\n".join(
                             str(ch.get("narration") or "") for ch in chapters[:2]
                         )[:3900],
                         "format": "9:16",
+                        "cta": str(plan.get("cta") or "Follow for the next practical breakdown."),
+                    },
+                    "LinkedIn": {
+                        "post": str(plan.get("hook") or topic) + "\n\n" + "\n\n".join(
+                            str(ch.get("narration") or "") for ch in chapters
+                        )[:2600],
+                        "format": "16:9_or_1:1",
+                        "opening": "Lead with the concrete professional outcome and its evidence.",
+                    },
+                    "X": {
+                        "thread": [str(plan.get("hook") or topic)[:270]] + [
+                            str(ch.get("narration") or "")[:270] for ch in chapters[:8]
+                        ],
+                        "format": "16:9_or_9:16",
+                    },
+                    "Facebook": {
+                        "post": str(plan.get("hook") or topic) + "\n\n" + "\n\n".join(
+                            str(ch.get("narration") or "") for ch in chapters
+                        )[:5000],
+                        "format": "9:16_or_16:9",
                     },
                 },
                 "truthful": True,
