@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
-HEALTH_PATH = "/infinity/divine/health"
+HEALTH_PATH = "/infinity/studio/health"
 
 
 class _NoRedirect(HTTPRedirectHandler):

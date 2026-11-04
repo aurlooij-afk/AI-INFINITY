@@ -11388,6 +11388,7 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
 
     @app.get("/infinity/studio/health")
     def studio_health() -> Dict[str, Any]:
+        from ai_infinity.deployment_identity import render_runtime_identity
         external_enabled = not _external_providers_disabled()
         media_core = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
         voice_core = bool((shutil.which("espeak-ng") or shutil.which("espeak")) and media_core)
@@ -11415,7 +11416,10 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
             or os.getenv("RUNWAYML_API_SECRET", "").strip()
         )
         return {
-            "status": "healthy" if media_core and voice_core else "degraded", "version": VERSION, "build": BUILD,
+            "status": "healthy" if media_core and voice_core else "degraded",
+            "content_creation_ready": bool(media_core and voice_core),
+            "deployment": render_runtime_identity(),
+            "version": VERSION, "build": BUILD,
             "research": external_enabled, "internet_sources": external_enabled, "creative_engine": True,
             "ai_image_generation": bool(os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()),
             "ai_image_generation_provider_available": bool(os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()),

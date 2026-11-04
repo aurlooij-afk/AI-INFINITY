@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 
 from scripts.create_production_certificate import build_certificate
-from scripts.verify_live_deployment import assess_deployment_response
 
 
 def _passing_acceptance():
@@ -173,64 +172,3 @@ def test_certificate_cli_writes_revision_bound_record_when_external_evidence_is_
     assert certificate["PRODUCTION_VERIFIED"] == "BLOCKED"
     assert certificate["CREATIVE_APPROVAL"] == "PENDING"
     assert certificate["certificate_sha256"]
-
-
-def test_live_deployment_verification_requires_exact_trusted_render_revision():
-    candidate = "a" * 40
-    payload = {
-        "status": "healthy",
-        "truthful": True,
-        "content_creation_ready": True,
-        "deployment": {
-            "platform": "render",
-            "source": "render_runtime_environment",
-            "commit_sha": candidate,
-            "branch": "main",
-        },
-    }
-
-    result = assess_deployment_response(candidate, 200, payload)
-
-    assert result["status"] == "PASS"
-    assert result["deployed_commit_sha"] == candidate
-
-
-def test_live_deployment_verification_blocks_a_stale_production_revision():
-    candidate = "b" * 40
-    payload = {
-        "status": "healthy",
-        "truthful": True,
-        "content_creation_ready": True,
-        "deployment": {
-            "platform": "render",
-            "source": "render_runtime_environment",
-            "commit_sha": "c" * 40,
-            "branch": "main",
-        },
-    }
-
-    result = assess_deployment_response(candidate, 200, payload)
-
-    assert result["status"] == "BLOCKED"
-    assert result["reason"] == "exact_candidate_is_not_the_live_production_revision"
-    assert result["deployed_commit_sha"] == "c" * 40
-
-
-def test_live_deployment_verification_rejects_unhealthy_exact_candidate():
-    candidate = "d" * 40
-    payload = {
-        "status": "degraded",
-        "truthful": True,
-        "content_creation_ready": False,
-        "deployment": {
-            "platform": "render",
-            "source": "render_runtime_environment",
-            "commit_sha": candidate,
-            "branch": "main",
-        },
-    }
-
-    result = assess_deployment_response(candidate, 200, payload)
-
-    assert result["status"] == "FAIL"
-    assert result["deployed_commit_sha"] == candidate

@@ -186,20 +186,9 @@ def health_payload():
         "storage_writable": bool(storage["writable"]),
         "truthful": True,
     }
-    is_render = os.getenv("RENDER", "").strip().lower() == "true"
-    render_commit = os.getenv("RENDER_GIT_COMMIT", "").strip().lower()
-    if not re.fullmatch(r"[0-9a-f]{40}", render_commit):
-        render_commit = None
-    deployment = {
-        "platform": "render" if is_render else None,
-        "source": "render_runtime_environment" if is_render and render_commit else None,
-        "commit_sha": render_commit if is_render else None,
-        "branch": (os.getenv("RENDER_GIT_BRANCH", "").strip() or None) if is_render else None,
-    }
     return {
         "status":"healthy" if ready and reality.get("patched") else "degraded",
         "version":VERSION,"build":BUILD,"truthful":True,
-        "deployment":deployment,
         "content_creation_ready":bool(ready and reality.get("patched")),
         "real_media_engine":{"ffmpeg":ffmpeg,"ffprobe":ffprobe},
         "offline_voice_engine":speech,
