@@ -23,6 +23,15 @@ def _passing_acceptance():
             "media_sha256": "a" * 64,
         },
     }
+    tests[11]["result"] = {
+        "script_generation": {
+            "status": "complete",
+            "provider": "google-gemini-free-tier:gemini-3.1-flash-lite",
+            "required_spoken_words": 1875,
+            "actual_spoken_words": 2000,
+            "unique_sentence_ratio": 0.95,
+        }
+    }
     tests[3]["result"] = {
         "otio_import_rerender_passed": True,
         "otio_rerender_full_decode_passed": True,
@@ -46,6 +55,7 @@ def test_production_certificate_keeps_external_and_human_gates_separate():
         deployment=None,
         human_approval=None,
         evidence_hashes={},
+        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "response_sha256": "c" * 64},
     )
 
     assert certificate["candidate_commit_sha"] == candidate
@@ -88,6 +98,7 @@ def test_production_certificate_passes_only_with_every_exact_candidate_gate():
             "rights_notes": "Reviewed source and licence records for the exact media SHA.",
         },
         evidence_hashes={},
+        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "response_sha256": "c" * 64},
     )
 
     assert certificate["ENGINEERING_STATE"] == "PASS"
@@ -124,6 +135,7 @@ def test_production_certificate_rejects_approval_for_another_commit():
             "rights_notes": "Reviewed the exact earlier media.",
         },
         evidence_hashes={},
+        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "response_sha256": "c" * 64},
     )
 
     assert certificate["CREATIVE_APPROVAL"] == "PENDING"
@@ -136,6 +148,8 @@ def test_certificate_cli_writes_revision_bound_record_when_external_evidence_is_
     acceptance_path = tmp_path / "acceptance.json"
     acceptance_path.write_text(json.dumps(_passing_acceptance()), encoding="utf-8")
     output = tmp_path / "production-certificate.json"
+    gemini_path = tmp_path / "gemini-writer-verification.json"
+    gemini_path.write_text(json.dumps({"status": "PASS", "model": "gemini-3.1-flash-lite", "response_sha256": "c" * 64}), encoding="utf-8")
     script = Path(__file__).resolve().parents[1] / "scripts" / "create_production_certificate.py"
 
     completed = subprocess.run(
@@ -146,6 +160,8 @@ def test_certificate_cli_writes_revision_bound_record_when_external_evidence_is_
             candidate,
             "--acceptance",
             str(acceptance_path),
+            "--gemini-writer",
+            str(gemini_path),
             "--storage",
             str(tmp_path / "missing-storage.json"),
             "--inference",
@@ -201,9 +217,27 @@ def test_production_certificate_rejects_approval_for_different_media_bytes():
             "rights_notes": "Reviewed the rights of the other media file.",
         },
         evidence_hashes={},
+        gemini_writer={"status": "PASS", "model": "gemini-3.1-flash-lite", "response_sha256": "c" * 64},
     )
 
     assert certificate["CREATIVE_APPROVAL"] == "PENDING"
     assert certificate["PRODUCTION_VERIFIED"] == "BLOCKED"
     assert certificate["human_approval_media_sha256"] == "b" * 64
     assert certificate["reviewed_media_sha256"] == "a" * 64
+
+
+def test_production_certificate_requires_gemini_smoke_pass():
+    candidate = "a" * 40
+    certificate = build_certificate(
+        candidate_sha=candidate,
+        acceptance=_passing_acceptance(),
+        storage={"status": "PASS"},
+        inference={"status": "PASS"},
+        deployment={"status": "PASS", "deployed_commit_sha": candidate},
+        human_approval=None,
+        evidence_hashes={},
+        gemini_writer={"status": "FAIL", "model": "gemini-3.1-flash-lite", "response_sha256": "c" * 64},
+    )
+    assert certificate["ENGINEERING_STATE"] == "FAIL"
+    assert certificate["gates"]["gemini_writer_preflight"] == "BLOCKED_OR_FAIL"
+    assert certificate["gates"]["900s_gemini_narration"] == "PASS"
