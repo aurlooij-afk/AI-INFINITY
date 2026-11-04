@@ -242,6 +242,15 @@ def test_explicit_website_command_overrides_stale_video_ui_default():
     assert intent["constraints"]["content_type"] == "website"
     assert "website.zip" in intent["success"]["required_artifacts"]
 
+def test_creator_enqueue_preserves_every_implemented_native_content_type():
+    import studio_ultimate as studio
+
+    for content_type in ("video", "podcast", "article", "social", "website", "document", "presentation"):
+        assert studio.normalize_creator_content_type(content_type) == content_type
+
+    # Unknown types remain safely bounded instead of being mistaken for a new engine.
+    assert studio.normalize_creator_content_type("spreadsheet") == "video"
+
 
 def test_supported_video_about_an_unsupported_topic_still_routes_to_video_creation():
     result = canonical.classify_command(
