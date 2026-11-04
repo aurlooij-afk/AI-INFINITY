@@ -9877,6 +9877,15 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             # The site manifest carries page and local-asset hashes; the project
             # result manifest below binds the archive SHA/size to this exact output.
             production_payload = json.loads(production_manifest.read_text(encoding="utf-8"))
+            website_artifacts = production_payload.setdefault("artifacts", [])
+            website_names = {str(row.get("name") or "") for row in website_artifacts if isinstance(row, dict)}
+            for website_path in (website_outputs.get("package"), website_outputs.get("manifest"), website_outputs.get("readme")):
+                if website_path and Path(website_path).is_file() and Path(website_path).name not in website_names:
+                    website_artifacts.append({
+                        "name": Path(website_path).name,
+                        "sha256": file_sha256(Path(website_path)),
+                        "bytes": Path(website_path).stat().st_size,
+                    })
             production_payload["static_website_export"] = website_outputs["verification"]
             production_manifest.write_text(jdump(production_payload), encoding="utf-8")
             audit_event(project_id, "static_website_package_created", website_outputs["verification"])
@@ -9884,10 +9893,17 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         # Content-type-specific QC is evaluated only after the real files exist.
         if content_type == "website":
             website_verification = website_outputs.get("verification") or {}
+            website_package_path = website_outputs.get("package")
+            website_manifest_path = website_outputs.get("manifest")
+            website_readme_path = website_outputs.get("readme")
             qc.setdefault("checks", {})["website_package_integrity"] = (
                 website_verification.get("status") == "PASS"
                 and website_verification.get("archive_integrity") is True
                 and bool(website_verification.get("archive_sha256"))
+                and website_package_path is not None and Path(website_package_path).is_file()
+                and file_sha256(Path(website_package_path)) == website_verification.get("archive_sha256")
+                and website_manifest_path is not None and Path(website_manifest_path).is_file()
+                and website_readme_path is not None and Path(website_readme_path).is_file()
             )
             qc["website_package"] = website_verification
         if content_type in {"document", "presentation"}:
