@@ -265,20 +265,58 @@ jobs:
             acceptance-evidence/**
           if-no-files-found: warn
 
-      - name: Enforce candidate-bound production certificate
+      - name: Enforce candidate-bound acceptance and production certificate
         if: always()
         run: |
           python - <<'PY'
           import json
+          import os
           from pathlib import Path
+
           path = Path("production-certificate.json")
           if not path.is_file():
               raise SystemExit("Production certificate was not generated.")
           certificate = json.loads(path.read_text(encoding="utf-8"))
-          print("PRODUCTION_RELEASE_GATE=" + str(certificate.get("PRODUCTION_VERIFIED")))
+          requirements = certificate.get("production_requirements")
+          if not isinstance(requirements, dict):
+              raise SystemExit("Production certificate has no structured gate requirements.")
+
+          print("CANDIDATE_SHA=" + str(certificate.get("candidate_commit_sha")))
+          print("ENGINEERING_STATE=" + str(certificate.get("ENGINEERING_STATE")))
+          print("PRODUCTION_VERIFIED=" + str(certificate.get("PRODUCTION_VERIFIED")))
+          print("CREATIVE_APPROVAL=" + str(certificate.get("CREATIVE_APPROVAL")))
+
+          pre_release_gates = (
+              "engineering_acceptance",
+              "technical_rights_evidence",
+              "otio_import_rerender",
+              "durable_storage_round_trip_and_fresh_process_restore",
+              "live_gpu_inference_and_artifact_verification",
+          )
+          failed_pre_release = [name for name in pre_release_gates if requirements.get(name) is not True]
+          event_name = os.getenv("GITHUB_EVENT_NAME", "")
+
+          if event_name == "pull_request":
+              if failed_pre_release:
+                  print("FAILED_PRE_RELEASE_GATES=" + json.dumps(failed_pre_release))
+                  raise SystemExit("PR acceptance requires all engineering, rights, OTIO, durable-storage and live-GPU gates to pass.")
+              pending_release = [
+                  name for name in (
+                      "exact_candidate_live_deployment",
+                      "human_creative_and_rights_approval",
+                  )
+                  if requirements.get(name) is not True
+              ]
+              print("PR_ENGINEERING_ACCEPTANCE=PASS")
+              print("PRODUCTION_CERTIFICATION=NOT_ISSUED")
+              print("PENDING_POST_DEPLOY_GATES=" + json.dumps(pending_release))
+              raise SystemExit(0)
+
           if certificate.get("PRODUCTION_VERIFIED") != "PASS":
               print("BLOCKED_GATES=" + json.dumps(certificate.get("remaining_blockers", [])))
-              raise SystemExit("Production certification requires every gate to pass.")
+              raise SystemExit("Post-deploy production certification requires all seven candidate-bound gates to pass.")
+
+          print("PRODUCTION_CERTIFICATION=PASS")
           PY
       - name: Dump Docker/runtime evidence on failure
         if: failure()
