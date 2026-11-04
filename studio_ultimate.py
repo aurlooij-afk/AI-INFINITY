@@ -5244,6 +5244,19 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
             "tags": "futuristic geometric digital tunnel glowing abstract motion technology imagination portal",
             "required_concepts": {"abstract_motion"},
         },
+        35: {
+            "source_id": 31930508,
+            "source_url": "https://www.pexels.com/video/vibrant-abstract-neon-light-motion-31930508/",
+            # Use Pexels' own download route. Its page confirms 1920x1080, 16:9,
+            # 10 seconds and Free License; runtime still verifies bytes, decode,
+            # black frames, rights metadata and project-local uniqueness.
+            "media_url": "https://www.pexels.com/download/video/31930508/",
+            "creator": "Nicola Narracci",
+            "title": "Vibrant Abstract Neon Light Motion",
+            "description": "Dynamic neon lights in a vibrant abstract tunnel create a captivating visual experience.",
+            "tags": "abstract futuristic neon tunnel glowing lines digital motion technology light beams",
+            "required_concepts": {"abstract_motion"},
+        },
     }
     # Scene ordinals are a hint, not an asset specification: a five-scene short's
     # closing shot can mean finished playback while an eight-scene storyboard's
