@@ -10168,6 +10168,50 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             if key not in ignored_quality_checks
         )
 
+        # Verify the user's selected native deliverable independently from a
+        # companion video. A DOCX/PPTX/article/podcast/social/site may be valid
+        # even when its optional video companion remains REVIEW_REQUIRED.
+        primary_content_delivery = None
+        primary_content_delivery_path = None
+        if content_type in {"article", "podcast", "social", "website", "document", "presentation"}:
+            primary_content_delivery = _verify_primary_content_delivery(
+                project_id,
+                content_type,
+                outdir,
+                article=article,
+                audio_master=audio_master,
+                social=social,
+                website_outputs=website_outputs,
+                native_outputs=native_outputs,
+                research=research,
+                assets_meta=quality_assets_meta,
+            )
+            primary_content_delivery_path = outdir / "primary_content_delivery.json"
+            primary_content_delivery_path.write_text(
+                jdump(primary_content_delivery), encoding="utf-8"
+            )
+            qc.setdefault("checks", {})["primary_content_delivery"] = (
+                primary_content_delivery.get("status") == "PASS"
+            )
+            qc["primary_content_delivery"] = primary_content_delivery
+            if primary_content_delivery.get("status") == "PASS":
+                production_payload = json.loads(production_manifest.read_text(encoding="utf-8"))
+                production_payload["primary_content_delivery"] = {
+                    "status": "PASS",
+                    "manifest": primary_content_delivery_path.name,
+                    "sha256": file_sha256(primary_content_delivery_path),
+                    "size_bytes": primary_content_delivery_path.stat().st_size,
+                    "scope": "primary native output only; companion video is gated independently",
+                }
+                rows = production_payload.setdefault("artifacts", [])
+                if not any(str(row.get("name") or "") == primary_content_delivery_path.name for row in rows if isinstance(row, dict)):
+                    rows.append({
+                        "name": primary_content_delivery_path.name,
+                        "sha256": file_sha256(primary_content_delivery_path),
+                        "bytes": primary_content_delivery_path.stat().st_size,
+                    })
+                production_manifest.write_text(jdump(production_payload), encoding="utf-8")
+
         feature_report = _feature_execution_report(project_id, project["user_id"], [str(x) for x in (req.get("features") or [])], outdir, qc=qc, req=req)
         metadata = {
             "studio_version": VERSION, "build": BUILD, "project_id": project_id, "created_at": now(),
@@ -10201,7 +10245,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         manifest.write_text(jdump(metadata), encoding="utf-8")
         named_package = outdir / f"{safe_name(plan.get('title') or topic)}-AI-Infinity-creator-package.zip"
         package = outdir / "package.zip"
-        bundle: List[Optional[Path]] = [captioned, script, captions, sources, manifest, production_manifest, rights_manifest, outdir / "feature_execution.json", outdir / "creator_experiments.json", shared_music, thumb if thumb and thumb.exists() else None, audio_master, narration_only, article, social, outdir / "fact_check.json", website_outputs.get("package"), website_outputs.get("manifest"), website_outputs.get("readme"), native_outputs.get("file"), native_outputs.get("manifest")]
+        bundle: List[Optional[Path]] = [captioned, script, captions, sources, manifest, production_manifest, rights_manifest, primary_content_delivery_path, outdir / "feature_execution.json", outdir / "creator_experiments.json", shared_music, thumb if thumb and thumb.exists() else None, audio_master, narration_only, article, social, outdir / "fact_check.json", website_outputs.get("package"), website_outputs.get("manifest"), website_outputs.get("readme"), native_outputs.get("file"), native_outputs.get("manifest")]
         bundle += [x for x in editorial.values() if x]
         bundle += [Path(x["path"]) for x in shorts if Path(x["path"]).exists()]
         bundle += [p for p in outdir.glob("narration_*.mp3") if p.exists()]
@@ -10226,7 +10270,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             ("document_manifest", native_outputs.get("manifest") if content_type == "document" else None, "application/json"),
             ("native_presentation", native_outputs.get("file") if content_type == "presentation" else None, "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
             ("presentation_manifest", native_outputs.get("manifest") if content_type == "presentation" else None, "application/json"),
-            ("sources", sources, "application/json"), ("manifest", manifest, "application/json"), ("production_manifest", production_manifest, "application/json"), ("rights_manifest", rights_manifest, "application/json"), ("feature_execution", outdir / "feature_execution.json", "application/json"), ("thumbnail", thumb, "image/jpeg"), ("package", package, "application/zip")
+            ("sources", sources, "application/json"), ("manifest", manifest, "application/json"), ("production_manifest", production_manifest, "application/json"), ("rights_manifest", rights_manifest, "application/json"), ("primary_content_delivery", primary_content_delivery_path, "application/json"), ("feature_execution", outdir / "feature_execution.json", "application/json"), ("thumbnail", thumb, "image/jpeg"), ("package", package, "application/zip")
         ]:
             if pth and Path(pth).exists(): _save_asset(project_id, kind, Path(pth), mt, {"title": plan.get("title") or topic})
         for x in shorts:
@@ -10246,6 +10290,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             (manifest, "application/json"),
             (production_manifest, "application/json"),
             (rights_manifest, "application/json"),
+            (primary_content_delivery_path, "application/json"),
             (script, "text/markdown"),
             (outdir / "feature_execution.json", "application/json"),
             (website_outputs.get("package"), "application/zip"),
@@ -10270,12 +10315,14 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "duration_seconds": round(probe_duration(captioned), 2),
             "render_profile": "720p-fast" if FAST_MODE else "1080p-production",
             "quality": qc,
+            "primary_content_delivery": primary_content_delivery,
             "research": {"source_count": research.get("source_count", 0)},
             "downloads": {
                 "video": f"/infinity/studio/project/{project_id}/asset/final.mp4", "package": f"/infinity/studio/project/{project_id}/asset/package.zip",
                 "thumbnail": f"/infinity/studio/project/{project_id}/asset/thumbnail.jpg", "script": f"/infinity/studio/project/{project_id}/asset/script.md",
                 "captions": f"/infinity/studio/project/{project_id}/asset/captions.srt", "sources": f"/infinity/studio/project/{project_id}/asset/sources.json",
                 "manifest": f"/infinity/studio/project/{project_id}/asset/manifest.json", "production_manifest": f"/infinity/studio/project/{project_id}/asset/production_manifest.json", "rights_manifest": f"/infinity/studio/project/{project_id}/asset/rights_manifest.json", "feature_execution": f"/infinity/studio/project/{project_id}/asset/feature_execution.json",
+                "primary_content_delivery": f"/infinity/studio/project/{project_id}/asset/primary_content_delivery.json" if primary_content_delivery_path and primary_content_delivery_path.is_file() else None,
                 "audio": f"/infinity/studio/project/{project_id}/asset/audio_master.mp3" if audio_master and audio_master.exists() else None,
                 "narration_only": f"/infinity/studio/project/{project_id}/asset/narration_only.mp3" if narration_only and narration_only.exists() else None,
                 "article": f"/infinity/studio/project/{project_id}/asset/article.md" if article and article.exists() else None,
