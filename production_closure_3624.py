@@ -600,17 +600,29 @@ def _is_qualified_illustrative_fallback(row: Dict[str, Any]) -> bool:
 
 
 def _visual_difference_hash(path: Path, image_module: Any) -> Optional[str]:
-    """Hash an image or a representative frame so re-encoded duplicate shots match."""
+    """Hash a still or the midpoint frame of a rendered scene master."""
     try:
         if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}:
             with image_module.open(path) as source:
                 frame = source.convert("L")
         else:
             ffmpeg = shutil.which("ffmpeg")
-            if not ffmpeg:
+            ffprobe = shutil.which("ffprobe")
+            if not ffmpeg or not ffprobe:
                 return None
+            probe = subprocess.run(
+                [ffprobe, "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            if probe.returncode != 0:
+                return None
+            duration = float((probe.stdout or "").strip())
+            if duration <= 0:
+                return None
+            sample_time = max(0.0, duration / 2.0)
             decoded = subprocess.run(
-                [ffmpeg, "-hide_banner", "-loglevel", "error", "-ss", "0.1",
+                [ffmpeg, "-hide_banner", "-loglevel", "error", "-ss", f"{sample_time:.3f}",
                  "-i", str(path), "-frames:v", "1", "-vf", "scale=9:8",
                  "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"],
                 capture_output=True, timeout=20, check=False,
@@ -642,30 +654,41 @@ def _perceptual_hash_distance(left: str, right: str) -> int:
 
 
 def _visual_diversity_metrics(
-    visual_rows: List[Dict[str, Any]], scene_count: int
+    visual_rows: List[Dict[str, Any]],
+    scene_count: int,
+    rendered_scene_paths: Optional[List[Path]] = None,
 ) -> Dict[str, Any]:
-    """Enforce byte integrity and perceptual uniqueness at the existing 60% floor."""
+    """Keep source-byte evidence separate from perceptual QC on rendered scenes."""
     s = _studio()
     unique_visual_hashes = set()
-    perceptual_hashes = []
-    unreadable = 0
     for row in visual_rows:
         try:
             path = Path(str(row.get("path") or ""))
-            if not path.is_file():
-                unreadable += 1
-                continue
-            unique_visual_hashes.add(s.file_sha256(path))
-            perceptual_hash = _visual_difference_hash(path, getattr(s, "Image", None))
-            if perceptual_hash is None:
-                unreadable += 1
-            else:
-                perceptual_hashes.append(perceptual_hash)
+            if path.is_file():
+                unique_visual_hashes.add(s.file_sha256(path))
         except Exception:
-            unreadable += 1
+            pass
 
     rendered_scene_count = max(1, int(scene_count or 1))
     required_unique = min(rendered_scene_count, max(1, int((rendered_scene_count * 0.6) + 0.999)))
+    sample_source = "rendered_scene_masters" if rendered_scene_paths is not None else "source_media_fallback"
+    sample_paths = (
+        [Path(path) for path in rendered_scene_paths]
+        if rendered_scene_paths is not None
+        else [Path(str(row.get("path") or "")) for row in visual_rows]
+    )
+    perceptual_hashes = []
+    unreadable = 0
+    for path in sample_paths:
+        if not path.is_file():
+            unreadable += 1
+            continue
+        perceptual_hash = _visual_difference_hash(path, getattr(s, "Image", None))
+        if perceptual_hash is None:
+            unreadable += 1
+        else:
+            perceptual_hashes.append(perceptual_hash)
+
     representatives = []
     for value in perceptual_hashes:
         if not any(_perceptual_hash_distance(value, item) <= 6 for item in representatives):
@@ -679,13 +702,19 @@ def _visual_diversity_metrics(
     perceptual_unique = len(representatives)
     perceptual_ok = (
         rendered_scene_count <= 1
-        or (unreadable == 0 and len(perceptual_hashes) == len(visual_rows)
-            and perceptual_unique >= required_unique)
+        or (
+            unreadable == 0
+            and len(sample_paths) == rendered_scene_count
+            and len(perceptual_hashes) == rendered_scene_count
+            and perceptual_unique >= required_unique
+        )
     )
     return {
         "unique_visual_hashes": len(unique_visual_hashes),
         "required_unique_visual_hashes": required_unique,
         "visual_diversity_ok": len(unique_visual_hashes) >= required_unique,
+        "perceptual_sample_source": sample_source,
+        "perceptual_sample_count": len(perceptual_hashes),
         "perceptual_unique_visual_hashes": perceptual_unique,
         "required_perceptual_unique_visual_hashes": required_unique,
         "perceptual_duplicate_visual_pairs": duplicate_pairs,
@@ -1282,12 +1311,13 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     elif fallback_rows:
         warnings.append(f"{len(fallback_rows)} unverified fallback visual(s) used; professional verification remains blocked")
 
-    visual_diversity = _visual_diversity_metrics(visual_rows, effective_scene_count)
+    visual_diversity = _visual_diversity_metrics(visual_rows, effective_scene_count, scene_files)
     checks["unique_visual_hashes"] = visual_diversity["unique_visual_hashes"]
     checks["visual_diversity_required_unique_hashes"] = visual_diversity["required_unique_visual_hashes"]
     checks["visual_diversity_ok"] = visual_diversity["visual_diversity_ok"]
     for metric in (
         "perceptual_unique_visual_hashes", "required_perceptual_unique_visual_hashes",
+        "perceptual_sample_source", "perceptual_sample_count",
         "perceptual_duplicate_visual_pairs", "perceptual_unreadable_visual_count",
         "perceptual_hash_distance_threshold", "perceptual_diversity_ok",
     ):
