@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -31,6 +32,98 @@ def test_explicit_launch_preserves_all_nine_authored_story_beats():
         is_short=False, fast_mode=False, smoke=True,
         explicitly_single_scene=False, explicit_launch=True,
     ) == 1
+
+def test_production_manifest_inventory_hashes_final_package_member_bytes(tmp_path):
+    manifest = tmp_path / "manifest.json"
+    production_manifest = tmp_path / "production_manifest.json"
+    rights_manifest = tmp_path / "rights_manifest.json"
+    music = tmp_path / "music.m4a"
+    music_source = tmp_path / "music_source.json"
+
+    manifest.write_text('{"revision":"preliminary"}', encoding="utf-8")
+    rights_manifest.write_text('{"assets":[]}', encoding="utf-8")
+    music.write_bytes(b"verified-audio-master")
+    music_source.write_text(
+        json.dumps({
+            "method": "synthetic_procedural_chord_bed_fallback",
+            "rights_status": "original_procedural_audio",
+            "human_rights_review": "PENDING",
+            "output_sha256": studio.file_sha256(music),
+            "tracks": [],
+            "truthful": True,
+        }),
+        encoding="utf-8",
+    )
+    production_manifest.write_text(
+        json.dumps({
+            "project_id": "manifest-regression",
+            "truthful": True,
+            "artifacts": [{
+                "name": "manifest.json",
+                "sha256": studio.file_sha256(manifest),
+                "bytes": manifest.stat().st_size,
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    # This is the final metadata write performed after the preliminary manifest
+    # has already been recorded by the earlier production-manifest pass.
+    manifest.write_text(
+        json.dumps({"revision": "final", "quality": {"passed": True}, "details": "final"}),
+        encoding="utf-8",
+    )
+    finalized = studio._finalize_production_manifest_inventory(
+        production_manifest,
+        [manifest, production_manifest, rights_manifest, music, music_source],
+    )
+    rows = {row["name"]: row for row in finalized["artifacts"]}
+
+    assert rows["manifest.json"]["sha256"] == studio.file_sha256(manifest)
+    assert rows["manifest.json"]["bytes"] == manifest.stat().st_size
+    assert rows["rights_manifest.json"]["sha256"] == studio.file_sha256(rights_manifest)
+    assert rows["music.m4a"]["sha256"] == studio.file_sha256(music)
+    assert rows["music_source.json"]["sha256"] == studio.file_sha256(music_source)
+    assert "production_manifest.json" not in rows
+    assert finalized["artifact_inventory"]["complete"] is True
+    assert finalized["artifact_inventory"]["artifact_count"] == len(rows)
+
+
+def test_audio_rights_evidence_binds_music_master_to_source_manifest(tmp_path):
+    music = tmp_path / "music.m4a"
+    source_manifest = tmp_path / "music_source.json"
+    music.write_bytes(b"verified-audio-master")
+    source_manifest.write_text(
+        json.dumps({
+            "method": "openverse_openly_licensed_tracks_crossfaded_and_arranged",
+            "rights_status": "license_metadata_present",
+            "human_rights_review": "PENDING",
+            "output_sha256": studio.file_sha256(music),
+            "tracks": [{
+                "source": "Openverse",
+                "source_id": "track-1",
+                "source_url": "https://example.test/track-1",
+                "title": "Licensed track",
+                "creator": "Creator",
+                "license": "CC BY 4.0",
+                "license_url": "https://creativecommons.org/licenses/by/4.0/",
+                "commercial_use_state": "commercial_use_allowed_with_attribution",
+                "rights_status": "license_metadata_present",
+            }],
+            "truthful": True,
+        }),
+        encoding="utf-8",
+    )
+
+    evidence = studio._audio_rights_evidence(music, source_manifest)
+
+    assert evidence["asset_sha256"] == studio.file_sha256(music)
+    assert evidence["source_manifest_matches_audio"] is True
+    assert evidence["rights_state"] == "licensed"
+    assert evidence["human_rights_review"] == "PENDING"
+    assert evidence["tracks"][0]["creator"] == "Creator"
+    assert "path" not in evidence["tracks"][0]
+
 
 def test_closure_routes_and_truthful_readiness():
     r = client.get("/infinity/studio/production/contract")
