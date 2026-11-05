@@ -8831,6 +8831,7 @@ def _verify_primary_content_delivery(
     website_outputs: Dict[str, Any],
     native_outputs: Dict[str, Any],
     research: Dict[str, Any],
+    assets_meta: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """Verify the requested native output independently from any companion video.
 
@@ -9019,7 +9020,7 @@ def _verify_primary_content_delivery(
 
     passed = bool(checks) and all(bool(value) for value in checks.values())
     fallback_count = sum(
-        1 for row in (production.get("visual_assets") or [])
+        1 for row in (assets_meta or [])
         if isinstance(row, dict) and row.get("fallback") is True
     )
     return {
