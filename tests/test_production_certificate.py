@@ -222,7 +222,7 @@ def test_production_certificate_requires_all_19_universal_output_scenarios():
 
 def test_production_certificate_rejects_legacy_13_scenario_results():
     candidate = "1" * 40
-    acceptance = _passing_acceptance()
+    acceptance = _passing_acceptance(candidate)
     acceptance["tests"] = acceptance["tests"][:13]
     acceptance["scenario_count"] = 13
     acceptance["completed_scenarios"] = 13
@@ -428,8 +428,6 @@ def test_certificate_cli_writes_gate_report_not_certificate_when_evidence_is_mis
             candidate,
             "--acceptance",
             str(acceptance_path),
-            "--acceptance-repeat",
-            str(repeat_acceptance_path),
             "--acceptance-repeat",
             str(repeat_acceptance_path),
             "--gemini-writer",
