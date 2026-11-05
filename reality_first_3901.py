@@ -651,17 +651,34 @@ def reconcile_project(project_id: str) -> Dict[str, Any]:
     # writing its terminal result at the same moment a client polls /truth.
     # A transiently incomplete terminal snapshot must be reported as FAILED/DEGRADED
     # by this report, but it must not poison a still-finalizing project row.
-    if status == "completed" and not (required_ok and qc_passed):
+    if status == "completed" and not required_ok:
         failure_parts = [k for k, v in checks.items() if not bool(v)]
-        message = "Independent verification/QC is not yet complete; successful delivery remains blocked."
+        message = "Independent required-artifact verification failed; delivery remains blocked."
         if failure_parts:
-            message += " Failed checks: " + ", ".join(failure_parts[:24])
+            message += " Missing or invalid artifacts: " + ", ".join(failure_parts[:24])
         report["error"] = message[:1200]
         report["missing_or_invalid"] = failure_parts[:24]
         state = "FAILED"
         report["state"] = state
         report["verified"] = False
         report["qc_passed"] = False
+    elif status == "completed" and required_ok and not studio_qc["studio_qc_passed"]:
+        # Keep artifact integrity and professional QC separate. A complete,
+        # independently inspected delivery whose creative/media QC is open is
+        # DEGRADED (review required), not FAILED. The outer production-closure
+        # gate performs the stricter content-type/rights decision and may still
+        # fail the project. In particular, a valid native primary deliverable
+        # must not be erased because its independently gated video companion
+        # remains under review.
+        report["error"] = (
+            "Required artifacts passed independent inspection, but professional QC remains incomplete. "
+            "Delivery is review-required; approval and publication remain blocked."
+        )
+        report["state"] = "DEGRADED"
+        report["verified"] = False
+        report["qc_passed"] = False
+        report["missing_or_invalid"] = []
+        state = "DEGRADED"
     elif status == "completed_with_qc_warnings":
         report["error"] = "Delivery completed with QC warnings; professional verification remains degraded."
         report["state"] = "DEGRADED"
@@ -1023,12 +1040,28 @@ def _guarded_run_project(project_id: str, model_fn: Any) -> None:
             current = s._get_project(project_id) or {}
             if report.get("verified") and current.get("status") not in {"completed"}:
                 s._update_project(project_id, status="completed", stage="complete", progress=100, error=None)
+            elif (
+                not report.get("verified")
+                and str(report.get("state") or "").upper() == "DEGRADED"
+                and current.get("status") in {"completed", "completed_with_qc_warnings"}
+            ):
+                # Preserve a real, independently inspected draft for review. This
+                # is not approval: Studio status remains warning-only and the
+                # production-closure layer still enforces the native/video/rights
+                # gates before determining the final deliverable state.
+                s._update_project(
+                    project_id,
+                    status="completed_with_qc_warnings",
+                    stage="quality_review_required",
+                    error=str(report.get("error") or "Professional QC remains review-required.")[:1200],
+                    progress=min(float(current.get("progress") or 99), 99),
+                )
             elif not report.get("verified") and current.get("status") in {"completed", "completed_with_qc_warnings"}:
                 s._update_project(
                     project_id,
                     status="failed",
                     stage="quality_control",
-                    error="Independent Reality Kernel proof failed; delivery remains blocked.",
+                    error="Independent Reality Kernel required-artifact proof failed; delivery remains blocked.",
                     progress=min(float(current.get("progress") or 100), 94),
                 )
         except Exception as exc:
