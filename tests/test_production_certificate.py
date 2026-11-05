@@ -248,7 +248,7 @@ def test_production_certificate_passes_only_with_every_exact_candidate_gate():
     candidate = "c" * 40
     certificate = build_certificate(
         candidate_sha=candidate,
-        acceptance=_passing_acceptance(),
+        acceptance=_passing_acceptance(candidate),
         acceptance_repeat=_passing_repeat(candidate),
         storage=_passing_storage(),
         inference=_passing_inference(),
@@ -286,7 +286,7 @@ def test_production_certificate_rejects_status_only_external_evidence():
     candidate = "7" * 40
     certificate = build_certificate(
         candidate_sha=candidate,
-        acceptance=_passing_acceptance(),
+        acceptance=_passing_acceptance(candidate),
         acceptance_repeat=_passing_repeat(candidate),
         storage={"status": "PASS"},
         inference={"status": "PASS"},
@@ -306,7 +306,7 @@ def test_production_certificate_rejects_status_only_external_evidence():
 
 def test_production_certificate_rejects_review_required_rights_assets():
     candidate = "8" * 40
-    acceptance = _passing_acceptance()
+    acceptance = _passing_acceptance(candidate)
     acceptance["tests"][0]["result"]["quality_truth_checks"]["visual_rights_review_required_count"] = 1
     certificate = build_certificate(
         candidate_sha=candidate,
@@ -350,7 +350,7 @@ def test_production_certificate_recomputes_human_average_from_six_scores():
     }
     certificate = build_certificate(
         candidate_sha=candidate,
-        acceptance=_passing_acceptance(),
+        acceptance=_passing_acceptance(candidate),
         acceptance_repeat=_passing_repeat(candidate),
         storage=_passing_storage(),
         inference=_passing_inference(),
@@ -370,7 +370,7 @@ def test_production_certificate_rejects_approval_for_another_commit():
     candidate = "d" * 40
     certificate = build_certificate(
         candidate_sha=candidate,
-        acceptance=_passing_acceptance(),
+        acceptance=_passing_acceptance(candidate),
         acceptance_repeat=_passing_repeat(candidate),
         storage=_passing_storage(),
         inference=_passing_inference(),
@@ -406,7 +406,9 @@ def test_production_certificate_rejects_approval_for_another_commit():
 def test_certificate_cli_writes_gate_report_not_certificate_when_evidence_is_missing(tmp_path: Path):
     candidate = "f" * 40
     acceptance_path = tmp_path / "acceptance.json"
-    acceptance_path.write_text(json.dumps(_passing_acceptance()), encoding="utf-8")
+    acceptance_path.write_text(json.dumps(_passing_acceptance(candidate)), encoding="utf-8")
+    repeat_acceptance_path = tmp_path / "repeat-acceptance.json"
+    repeat_acceptance_path.write_text(json.dumps(_passing_repeat(candidate)), encoding="utf-8")
     output = tmp_path / "production-certificate.json"
     report = tmp_path / "production-gate-report.json"
     gemini_path = tmp_path / "gemini-writer-verification.json"
@@ -466,7 +468,9 @@ def test_certificate_cli_issues_certificate_only_when_every_gate_passes(tmp_path
     candidate = "c" * 40
     media_sha = "a" * 64
     acceptance_path = tmp_path / "acceptance.json"
-    acceptance_path.write_text(json.dumps(_passing_acceptance()), encoding="utf-8")
+    acceptance_path.write_text(json.dumps(_passing_acceptance(candidate)), encoding="utf-8")
+    repeat_acceptance_path = tmp_path / "repeat-acceptance.json"
+    repeat_acceptance_path.write_text(json.dumps(_passing_repeat(candidate)), encoding="utf-8")
     gemini_path = tmp_path / "gemini-writer-verification.json"
     gemini_path.write_text(json.dumps({
         "status": "PASS",
@@ -542,7 +546,7 @@ def test_production_certificate_rejects_approval_for_different_media_bytes():
     candidate = "f" * 40
     certificate = build_certificate(
         candidate_sha=candidate,
-        acceptance=_passing_acceptance(),
+        acceptance=_passing_acceptance(candidate),
         acceptance_repeat=_passing_repeat(candidate),
         storage=_passing_storage(),
         inference=_passing_inference(),
@@ -580,7 +584,7 @@ def test_production_certificate_requires_gemini_smoke_pass():
     candidate = "a" * 40
     certificate = build_certificate(
         candidate_sha=candidate,
-        acceptance=_passing_acceptance(),
+        acceptance=_passing_acceptance(candidate),
         acceptance_repeat=_passing_repeat(candidate),
         storage=_passing_storage(),
         inference=_passing_inference(),
@@ -604,7 +608,7 @@ def test_production_certificate_requires_live_render_storage_health_after_creati
     deployment["storage_health"]["project_state_backend_status"]["verified"] = False
     certificate = build_certificate(
         candidate_sha=candidate,
-        acceptance=_passing_acceptance(),
+        acceptance=_passing_acceptance(candidate),
         acceptance_repeat=_passing_repeat(candidate),
         storage=_passing_storage(),
         inference=_passing_inference(),
