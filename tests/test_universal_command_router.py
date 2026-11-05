@@ -13,6 +13,27 @@ def test_research_only_command_does_not_default_to_video_creation():
     assert result["route"] == "research"
 
 
+def test_production_subject_is_not_replaced_by_quality_adjective():
+    command = (
+        "Create a 20-second premium, source-backed production about accessible digital storytelling. "
+        "Deliver a document as the primary content type."
+    )
+    assert canonical._derive_title_from_command(command) == "accessible digital storytelling"
+    intent = canonical.compile_intent(command, {"content_type": "document"})
+    assert intent["title"] == "accessible digital storytelling"
+    assert intent["constraints"]["content_type"] == "document"
+
+
+def test_subject_extraction_handles_article_website_and_presentation_briefs():
+    cases = (
+        ("Create a premium production about accessible digital storytelling.", "accessible digital storytelling"),
+        ("Create a website about renewable energy adoption.", "renewable energy adoption"),
+        ("Create a presentation about safe drinking water.", "safe drinking water"),
+    )
+    for command, expected in cases:
+        assert canonical._derive_title_from_command(command) == expected
+
+
 def test_research_and_creation_command_uses_existing_creator_pipeline():
     result = canonical.classify_command(
         "Research competitors and create a 60-second video about AI video editing"
