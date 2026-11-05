@@ -300,8 +300,10 @@ def test_native_primary_outputs_complete_as_review_required_without_approving_co
             registry[name] = {"sha256": digest, "size_bytes": path.stat().st_size}
         monkeypatch.setattr(closure, "_artifact_registry", lambda _pid, value=registry: value)
         checks = {
-            "project_status_completed": True,
-            "qualified_illustrative_fallback": True,
+            # The native deliverable remains eligible even if its optional
+            # companion video has failed or is not professionally verified.
+            "project_status_completed": False,
+            "qualified_illustrative_fallback": False,
             "fallback_visual_count": 2,
             "visual_rights_evidence_present": True,
             "visual_rights_unknown_count": 0,
