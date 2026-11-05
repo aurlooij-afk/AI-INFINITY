@@ -80,3 +80,48 @@ def test_non_reviewable_truth_states_are_not_preserved(report):
     from reality_first_3901 import _review_state_preservable
 
     assert not _review_state_preservable(report)
+
+
+@pytest.mark.parametrize(
+    ("truth_state", "expected_status"),
+    [
+        ("REVIEW_REQUIRED", "completed_with_qc_warnings"),
+        ("DEGRADED", "completed_with_qc_warnings"),
+        ("FAILED", "failed"),
+        ("BLOCKED", "failed"),
+    ],
+)
+def test_guarded_runtime_finalizer_applies_review_state_contract(
+    monkeypatch, truth_state, expected_status
+):
+    from types import SimpleNamespace
+    import reality_first_3901 as reality
+
+    project = {"status": "completed_with_qc_warnings", "progress": 99}
+    updates = []
+    fake_studio = SimpleNamespace(
+        _get_project=lambda _project_id: dict(project),
+        _update_project=lambda _project_id, **changes: (
+            updates.append(dict(changes)),
+            project.update(changes),
+        ),
+    )
+    monkeypatch.setattr(reality, "_studio", lambda: fake_studio)
+    monkeypatch.setitem(
+        reality._ORIGINALS,
+        "run_project",
+        lambda _project_id, _model_fn: None,
+    )
+    monkeypatch.setattr(reality, "_event_once", lambda *args, **kwargs: None)
+    monkeypatch.setattr(reality, "_register_project", lambda *args, **kwargs: None)
+    monkeypatch.setattr(reality, "_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        reality,
+        "reconcile_project",
+        lambda _project_id: {"verified": False, "state": truth_state},
+    )
+
+    reality._guarded_run_project("test-native-project", lambda: None)
+
+    assert updates
+    assert updates[-1]["status"] == expected_status
