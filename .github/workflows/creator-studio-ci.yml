@@ -106,13 +106,19 @@ jobs:
         run: |
           set -euo pipefail
           if ! command -v espeak-ng >/dev/null 2>&1; then
-            apt_opts=(-o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
-            if ! sudo env DEBIAN_FRONTEND=noninteractive timeout 180s apt-get "${apt_opts[@]}" install -y --no-install-recommends espeak-ng; then
-              sudo timeout 120s apt-get "${apt_opts[@]}" update
-              sudo env DEBIAN_FRONTEND=noninteractive timeout 180s apt-get "${apt_opts[@]}" install -y --no-install-recommends espeak-ng
+            apt_opts=(-o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+            # Update package indexes before installing. The prior fallback ran
+            # apt-get update after its install timeout had interrupted dpkg.
+            sudo timeout 240s apt-get "${apt_opts[@]}" update
+            if ! sudo env DEBIAN_FRONTEND=noninteractive timeout 600s apt-get "${apt_opts[@]}" install -y --no-install-recommends espeak-ng; then
+              # Recover an interrupted package transaction before retrying once.
+              sudo timeout 120s dpkg --configure -a
+              sudo env DEBIAN_FRONTEND=noninteractive timeout 180s apt-get "${apt_opts[@]}" -f install -y
+              sudo env DEBIAN_FRONTEND=noninteractive timeout 600s apt-get "${apt_opts[@]}" install -y --no-install-recommends espeak-ng
             fi
           fi
           command -v espeak-ng
+          espeak-ng --version
 
       - name: Set up pinned MLT runtime container
         shell: bash
