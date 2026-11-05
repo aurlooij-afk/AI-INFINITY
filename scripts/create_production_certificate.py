@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+EXPECTED_ACCEPTANCE_SCENARIO_IDS = {f"{index:02d}" for index in range(1, 20)}
+
 
 def read_json(path: Path) -> dict[str, Any] | None:
     if not path.is_file():
@@ -127,6 +129,8 @@ def build_certificate(
     gemini_writer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     scenarios = _scenario_map(acceptance)
+    acceptance_tests = acceptance.get("tests") if isinstance(acceptance, dict) else None
+    acceptance_tests = acceptance_tests if isinstance(acceptance_tests, list) else []
     scenario_statuses = [str(row.get("status") or "") for row in scenarios.values()]
     longform_result = scenarios.get("12", {}).get("result", {})
     longform_script = longform_result.get("script_generation") if isinstance(longform_result.get("script_generation"), dict) else {}
@@ -152,9 +156,12 @@ def build_certificate(
         acceptance
         and acceptance.get("overall_status") == "PASS"
         and acceptance.get("passed") is True
-        and int(acceptance.get("completed_scenarios") or 0) == 13
-        and len(scenarios) == 13
-        and len(scenario_statuses) == 13
+        and int(acceptance.get("scenario_count") or 0) == len(EXPECTED_ACCEPTANCE_SCENARIO_IDS)
+        and int(acceptance.get("completed_scenarios") or 0) == len(EXPECTED_ACCEPTANCE_SCENARIO_IDS)
+        and len(acceptance_tests) == len(EXPECTED_ACCEPTANCE_SCENARIO_IDS)
+        and len(scenarios) == len(EXPECTED_ACCEPTANCE_SCENARIO_IDS)
+        and set(scenarios) == EXPECTED_ACCEPTANCE_SCENARIO_IDS
+        and len(scenario_statuses) == len(EXPECTED_ACCEPTANCE_SCENARIO_IDS)
         and all(status == "PASS" for status in scenario_statuses)
         and gemini_writer_pass
         and longform_gemini_pass

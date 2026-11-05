@@ -11,7 +11,7 @@ from scripts.create_production_certificate import build_certificate
 def _passing_acceptance():
     tests = [
         {"scenario_id": f"{index:02d}", "status": "PASS", "result": {}}
-        for index in range(1, 14)
+        for index in range(1, 20)
     ]
     tests[0]["result"] = {
         "truth_verified": True,
@@ -59,7 +59,8 @@ def _passing_acceptance():
     return {
         "overall_status": "PASS",
         "passed": True,
-        "completed_scenarios": 13,
+        "scenario_count": 19,
+        "completed_scenarios": 19,
         "tests": tests,
     }
 
@@ -184,6 +185,51 @@ def test_production_certificate_keeps_external_and_human_gates_separate():
     assert certificate["gates"]["otio_import_and_rerender"] == "PASS"
     assert certificate["certificate_sha256"]
     assert certificate["truthful"] is True
+
+
+def test_production_certificate_requires_all_19_universal_output_scenarios():
+    candidate = "a" * 40
+    acceptance = _passing_acceptance()
+    acceptance["tests"][-1]["status"] = "BLOCKED"
+    certificate = build_certificate(
+        candidate_sha=candidate,
+        acceptance=acceptance,
+        storage={"status": "BLOCKED"},
+        inference={"status": "BLOCKED"},
+        deployment=None,
+        human_approval=None,
+        evidence_hashes={},
+        gemini_writer={
+            "status": "PASS", "model": "gemini-3.1-flash-lite", "http_status": 200,
+            "finish_reason": "STOP", "response_characters": 42, "response_sha256": "c" * 64,
+        },
+    )
+    assert certificate["ENGINEERING_STATE"] == "FAIL"
+    assert certificate["PRODUCTION_VERIFIED"] == "BLOCKED"
+    assert "engineering_acceptance" in certificate["remaining_blockers"]
+
+
+def test_production_certificate_rejects_legacy_13_scenario_results():
+    candidate = "1" * 40
+    acceptance = _passing_acceptance()
+    acceptance["tests"] = acceptance["tests"][:13]
+    acceptance["scenario_count"] = 13
+    acceptance["completed_scenarios"] = 13
+    certificate = build_certificate(
+        candidate_sha=candidate,
+        acceptance=acceptance,
+        storage={"status": "BLOCKED"},
+        inference={"status": "BLOCKED"},
+        deployment=None,
+        human_approval=None,
+        evidence_hashes={},
+        gemini_writer={
+            "status": "PASS", "model": "gemini-3.1-flash-lite", "http_status": 200,
+            "finish_reason": "STOP", "response_characters": 42, "response_sha256": "c" * 64,
+        },
+    )
+    assert certificate["ENGINEERING_STATE"] == "FAIL"
+    assert "engineering_acceptance" in certificate["remaining_blockers"]
 
 
 def test_production_certificate_passes_only_with_every_exact_candidate_gate():
