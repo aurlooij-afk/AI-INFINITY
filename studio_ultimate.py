@@ -7303,6 +7303,158 @@ def register_artifact(project_id: str, path: Path, media_type: str, metadata: Op
     return info
 
 
+def _audio_rights_evidence(
+    audio_path: Optional[Path],
+    source_manifest_path: Optional[Path],
+) -> Optional[Dict[str, Any]]:
+    """Bind the delivered audio master to its exact source/license evidence."""
+    if audio_path is None:
+        return None
+    audio = Path(audio_path)
+    if not audio.is_file() or audio.stat().st_size <= 0:
+        return None
+
+    source_path = Path(source_manifest_path) if source_manifest_path else None
+    source_record: Dict[str, Any] = {}
+    if source_path is not None and source_path.is_file():
+        try:
+            loaded = json.loads(source_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                source_record = loaded
+        except Exception:
+            source_record = {}
+
+    digest = file_sha256(audio)
+    source_digest = str(source_record.get("output_sha256") or "").lower()
+    evidence_bound = bool(
+        source_record.get("truthful") is True
+        and len(source_digest) == 64
+        and source_digest == digest.lower()
+        and source_path is not None
+        and source_path.is_file()
+    )
+    tracks = []
+    allowed_track_fields = (
+        "source", "provider", "source_id", "source_url", "title", "creator",
+        "creator_url", "attribution", "license", "license_url",
+        "commercial_use_state", "rights_status", "asset_sha256", "duration_seconds",
+    )
+    for row in source_record.get("tracks") or []:
+        if isinstance(row, dict):
+            tracks.append({
+                key: row.get(key)
+                for key in allowed_track_fields
+                if row.get(key) is not None
+            })
+
+    method = str(source_record.get("method") or "")
+    declared_rights = str(source_record.get("rights_status") or "").strip()
+    rights_status = declared_rights if evidence_bound and declared_rights else "REVIEW_REQUIRED"
+    if rights_status == "original_procedural_audio":
+        rights_state = "generative"
+    elif tracks and all(
+        str(row.get("commercial_use_state") or "").lower()
+        in {"public_domain_cc0_1_0", "commercial_use_allowed_with_attribution"}
+        for row in tracks
+    ):
+        rights_state = "licensed"
+    else:
+        rights_state = "REVIEW_REQUIRED"
+
+    source_manifest = None
+    if source_path is not None and source_path.is_file():
+        source_manifest = {
+            "name": source_path.name,
+            "sha256": file_sha256(source_path),
+            "bytes": source_path.stat().st_size,
+        }
+    return {
+        "asset": audio.name,
+        "kind": "audio",
+        "asset_sha256": digest,
+        "asset_size_bytes": audio.stat().st_size,
+        "method": method or None,
+        "rights_status": rights_status,
+        "rights_state": rights_state,
+        "human_rights_review": str(source_record.get("human_rights_review") or "PENDING"),
+        "source_manifest": source_manifest,
+        "source_manifest_matches_audio": evidence_bound,
+        "tracks": tracks,
+        "truthful": evidence_bound,
+    }
+
+
+def _finalize_production_manifest_inventory(
+    production_manifest_path: Path,
+    bundle_paths: Iterable[Optional[Path]],
+) -> Dict[str, Any]:
+    """Hash the final package members after every file has reached final bytes."""
+    manifest_path = Path(production_manifest_path)
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(
+            "production manifest could not be read before package assembly: "
+            + type(exc).__name__
+        ) from None
+    if not isinstance(payload, dict):
+        raise RuntimeError("production manifest must be a JSON object before package assembly")
+
+    rows: List[Dict[str, Any]] = []
+    paths_by_name: Dict[str, Path] = {}
+    seen_names = set()
+    for raw_path in bundle_paths:
+        if raw_path is None:
+            continue
+        path = Path(raw_path)
+        if (
+            path.name == manifest_path.name
+            or path.name == "package.zip"
+            or not path.is_file()
+            or path.stat().st_size <= 0
+            or path.name in seen_names
+        ):
+            continue
+        digest = file_sha256(path)
+        rows.append({
+            "name": path.name,
+            "sha256": digest,
+            "bytes": path.stat().st_size,
+        })
+        paths_by_name[path.name] = path
+        seen_names.add(path.name)
+
+    if not rows:
+        raise RuntimeError("production manifest package inventory is empty")
+    payload["artifacts"] = rows
+    payload["artifact_inventory"] = {
+        "complete": True,
+        "scope": "all non-empty files included in package.zip except production_manifest.json itself",
+        "hash_algorithm": "sha256",
+        "artifact_count": len(rows),
+    }
+    temporary = manifest_path.with_name(manifest_path.name + ".tmp")
+    try:
+        temporary.write_text(jdump(payload), encoding="utf-8")
+        os.replace(temporary, manifest_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+    finalized = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for row in finalized.get("artifacts") or []:
+        path = paths_by_name.get(str(row.get("name") or ""))
+        if (
+            path is None
+            or path.stat().st_size != int(row.get("bytes") or 0)
+            or file_sha256(path) != str(row.get("sha256") or "")
+        ):
+            raise RuntimeError(
+                "finalized production manifest does not match packaged source bytes: "
+                + str(row.get("name") or "unknown")
+            )
+    return finalized
+
+
 def license_assessment(source: Dict[str, Any]) -> Dict[str, Any]:
     u = str(source.get("url") or "")
     name = str(source.get("source") or "").lower()
@@ -10023,12 +10175,17 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 "mime_type": asset.get("mime_type"),
                 "usable_bytes": asset.get("asset_size_bytes"),
             })
+        audio_rights = _audio_rights_evidence(
+            shared_music if shared_music and Path(shared_music).is_file() else None,
+            outdir / "music_source.json",
+        )
         rights_manifest.write_text(jdump({
             "schema": "ai-infinity-rights-manifest-v1",
             "project_id": project_id,
             "generated_at": utc_iso(),
             "policy": "Unknown or provider-specific rights are never silently treated as commercial clearance.",
             "assets": rights_items,
+            "audio_assets": [audio_rights] if audio_rights else [],
             "research_sources": [
                 {
                     "title": s.get("title"),
@@ -10244,15 +10401,59 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         manifest.write_text(jdump(metadata), encoding="utf-8")
         named_package = outdir / f"{safe_name(plan.get('title') or topic)}-AI-Infinity-creator-package.zip"
         package = outdir / "package.zip"
-        bundle: List[Optional[Path]] = [captioned, script, captions, sources, manifest, production_manifest, rights_manifest, primary_content_delivery_path, outdir / "feature_execution.json", outdir / "creator_experiments.json", shared_music, thumb if thumb and thumb.exists() else None, audio_master, narration_only, article, social, outdir / "fact_check.json", website_outputs.get("package"), website_outputs.get("manifest"), website_outputs.get("readme"), native_outputs.get("file"), native_outputs.get("manifest")]
+        bundle: List[Optional[Path]] = [
+            captioned, script, captions, sources, manifest, production_manifest,
+            rights_manifest, primary_content_delivery_path,
+            outdir / "feature_execution.json", outdir / "creator_experiments.json",
+            shared_music, outdir / "music_source.json",
+            thumb if thumb and thumb.exists() else None, audio_master, narration_only,
+            article, social, outdir / "fact_check.json",
+            website_outputs.get("package"), website_outputs.get("manifest"),
+            website_outputs.get("readme"), native_outputs.get("file"),
+            native_outputs.get("manifest"),
+        ]
         bundle += [x for x in editorial.values() if x]
         bundle += [Path(x["path"]) for x in shorts if Path(x["path"]).exists()]
         bundle += [p for p in outdir.glob("narration_*.mp3") if p.exists()]
+        finalized_production_manifest = _finalize_production_manifest_inventory(
+            production_manifest, bundle
+        )
+        expected_package_names = []
+        expected_name_set = set()
+        for item in bundle:
+            if item and Path(item).is_file() and Path(item).name not in expected_name_set:
+                expected_package_names.append(Path(item).name)
+                expected_name_set.add(Path(item).name)
         with zipfile.ZipFile(package, "w", compression=zipfile.ZIP_DEFLATED) as z:
-            seen_names=set()
-            for path in bundle:
-                if path and Path(path).exists() and Path(path).name not in seen_names:
-                    z.write(path, arcname=Path(path).name); seen_names.add(Path(path).name)
+            for item in bundle:
+                if item and Path(item).is_file() and Path(item).name not in {
+                    info.filename for info in z.infolist()
+                }:
+                    z.write(item, arcname=Path(item).name)
+        with zipfile.ZipFile(package, "r") as z:
+            if z.testzip() is not None:
+                raise RuntimeError("creator package contains a corrupt ZIP member")
+            actual_names = set(z.namelist())
+            if actual_names != expected_name_set:
+                raise RuntimeError(
+                    "creator package member inventory differs from its finalized source inventory"
+                )
+            for row in finalized_production_manifest.get("artifacts") or []:
+                try:
+                    archived = z.read(str(row["name"]))
+                except Exception:
+                    raise RuntimeError(
+                        "creator package is missing a production-manifest artifact: "
+                        + str(row.get("name") or "unknown")
+                    ) from None
+                if (
+                    len(archived) != int(row.get("bytes") or 0)
+                    or hashlib.sha256(archived).hexdigest() != str(row.get("sha256") or "")
+                ):
+                    raise RuntimeError(
+                        "creator package artifact hash does not match production manifest: "
+                        + str(row.get("name") or "unknown")
+                    )
         # Preserve a descriptive package filename as an optional convenience copy,
         # while the canonical production contract is always package.zip.
         try:
