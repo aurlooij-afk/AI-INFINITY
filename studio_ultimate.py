@@ -10354,7 +10354,54 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         }
         if not qc.get("passed"):
             failed_checks = [k for k, ok in (qc.get("checks") or {}).items() if not bool(ok)]
-            failure_message = "Professional QC failed; delivery remains blocked. Failed checks: " + ", ".join(failed_checks[:24])
+            failure_message = "Professional QC failed; final video and mixed package remain blocked. Failed checks: " + ", ".join(failed_checks[:24])
+            # A native primary deliverable may be ready even when its optional
+            # video companion fails visual QC. Preserve that usable output in an
+            # explicit review-required state; never mark the whole project VERIFIED.
+            video_companion_only_failures = {
+                "full_hd",
+                "required_source_motion_coverage",
+                "fallback_visual_budget_ok",
+            }
+            primary_native_passed = bool(
+                isinstance(primary_content_delivery, dict)
+                and primary_content_delivery.get("status") == "PASS"
+                and content_type in {"article", "podcast", "social", "website", "document", "presentation"}
+            )
+            non_video_failures = set(failed_checks) - video_companion_only_failures
+            if primary_native_passed and not non_video_failures:
+                result["status"] = "completed_with_qc_warnings"
+                result["state"] = "COMPLETED"
+                result["error"] = failure_message
+                result["failed_checks"] = failed_checks
+                result["companion_video_release"] = "REVIEW_REQUIRED"
+                result["mixed_package_release"] = "BLOCKED"
+                audit_event(project_id, "primary_content_ready_companion_video_review_required", {
+                    "content_type": content_type,
+                    "primary_content_status": "PASS",
+                    "failed_video_checks": failed_checks[:50],
+                    "final_video_and_mixed_package_blocked": True,
+                    "truthful": True,
+                })
+                checkpoint(project_id, "primary_content_ready_companion_video_review_required", {
+                    "content_type": content_type,
+                    "primary_content_manifest_sha256": file_sha256(primary_content_delivery_path),
+                    "companion_video_status": "REVIEW_REQUIRED",
+                })
+                _update_project(
+                    project_id,
+                    status="completed_with_qc_warnings",
+                    error=failure_message[:1200],
+                    result_json=jdump(result),
+                    blueprint_json=jdump({"plan": plan, "research": research}),
+                    progress=100,
+                    stage="complete_with_review_required",
+                )
+                with PROCESS_LOCK:
+                    PROCESS_REGISTRY.pop(project_id, None)
+                ACTIVE_PROJECT.project_id = None
+                return
+
             result["status"] = "failed"
             result["state"] = "FAILED"
             result["error"] = failure_message
