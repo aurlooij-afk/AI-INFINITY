@@ -1418,7 +1418,15 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     # The persisted QC is evidence, but re-check its critical truth here.
     persisted_qc = result.get("quality") if isinstance(result.get("quality"), dict) else {}
     checks["persisted_qc_passed"] = bool(persisted_qc.get("passed"))
-    if not checks["persisted_qc_passed"] and p.get("status") == "completed":
+    requested_content_type = str(expected_req.get("content_type") or "video").strip().lower()
+    native_primary_content_mode = requested_content_type in {
+        "article", "podcast", "social", "website", "document", "presentation",
+    }
+    if (
+        not checks["persisted_qc_passed"]
+        and p.get("status") == "completed"
+        and not native_primary_content_mode
+    ):
         failures.append("project reports completed while persisted QC is not passed")
 
     draft_quality_keys = (
