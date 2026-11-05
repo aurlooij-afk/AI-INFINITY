@@ -55,6 +55,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m py_compile main.py professional_creator_v2.py professional_creator_v2_timeline_patch.py professional_creator_fabric.py production_closure_3624.py studio_ultimate.py production_graph.py wan_video_worker.py scripts/prepare_wan22_model.py scripts/verify_live_project_state_storage.py scripts/verify_live_wan_worker.py scripts/create_production_certificate.py tests/final_acceptance_suite.py tests/test_production_certificate.py tests/test_final_acceptance_reporting.py tests/test_wan_video_worker_contract.py tests/test_production_graph_durable_connection.py reality_first_3901.py tests/test_runtime_truth.py
+          python -m py_compile self_maintenance.py tests/test_self_maintenance.py
           python - <<'PY'
           import os
           os.environ["AI_INFINITY_DATA_DIR"] = "/tmp/ai-infinity-ci"
@@ -97,7 +98,7 @@ jobs:
       - name: Verify professional closure regression tests
         run: |
           set -o pipefail
-          python -m pytest -q --tb=short tests/test_production_closure.py tests/test_production_fallback.py tests/test_professional_creator_system.py tests/test_project_state_backend.py tests/test_cinematic_source_quality_gate.py tests/test_longform_production_planner.py tests/test_video_provider_availability.py tests/test_final_acceptance_reporting.py tests/test_timeline_patch_recovery.py tests/test_timeline_interchange.py tests/test_production_graph_review.py tests/test_production_intelligence_vision_truth.py tests/test_wan_video_worker_contract.py tests/test_production_graph_durable_connection.py tests/test_production_certificate.py tests/test_runtime_truth.py 2>&1 | tee /tmp/ai-infinity-professional-closure-regression.log
+          python -m pytest -q --tb=short tests/test_production_closure.py tests/test_production_fallback.py tests/test_professional_creator_system.py tests/test_project_state_backend.py tests/test_cinematic_source_quality_gate.py tests/test_longform_production_planner.py tests/test_video_provider_availability.py tests/test_final_acceptance_reporting.py tests/test_timeline_patch_recovery.py tests/test_timeline_interchange.py tests/test_production_graph_review.py tests/test_production_intelligence_vision_truth.py tests/test_wan_video_worker_contract.py tests/test_production_graph_durable_connection.py tests/test_production_certificate.py tests/test_runtime_truth.py tests/test_self_maintenance.py 2>&1 | tee /tmp/ai-infinity-professional-closure-regression.log
 
       - name: Upload professional closure regression diagnostics
         if: always()
