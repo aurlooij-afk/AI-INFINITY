@@ -16,6 +16,7 @@ import professional_creator_v2_timeline_patch
 import professional_creator_v2
 import professional_creator_fabric
 import editorial_review_3625
+import self_maintenance
 
 # Render invokes "uvicorn main:app"; preserve that stable entrypoint.
 app = FastAPI(
@@ -82,6 +83,7 @@ free_api_fabric.register(app)
 production_openai_video.register(app)
 production_closure_3624.register(app)
 editorial_review_3625.register(app)
+self_maintenance.register(app)
 professional_creator_v2.install(app)
 professional_creator_v2_timeline_patch.install(app)
 professional_creator_fabric.register(app)
