@@ -516,6 +516,7 @@ def test_certificate_cli_issues_certificate_only_when_every_gate_passes(tmp_path
             str(script),
             "--candidate-sha", candidate,
             "--acceptance", str(acceptance_path),
+            "--acceptance-repeat", str(repeat_acceptance_path),
             "--gemini-writer", str(gemini_path),
             "--storage", str(storage_path),
             "--inference", str(inference_path),
@@ -620,3 +621,48 @@ def test_production_certificate_requires_live_render_storage_health_after_creati
     assert certificate["gates"]["durable_storage"] == "BLOCKED"
     assert "durable_storage_round_trip_and_fresh_process_restore" in certificate["remaining_blockers"]
     assert certificate["PRODUCTION_VERIFIED"] == "BLOCKED"
+
+
+
+def test_production_certificate_rejects_repeated_acceptance_from_another_sha():
+    candidate = "a" * 40
+    certificate = build_certificate(
+        candidate_sha=candidate,
+        acceptance=_passing_acceptance(candidate),
+        acceptance_repeat=_passing_repeat("b" * 40),
+        storage=_passing_storage(),
+        inference=_passing_inference(),
+        deployment=_passing_deployment(candidate),
+        human_approval=None,
+        evidence_hashes={},
+        gemini_writer={
+            "status": "PASS", "model": "gemini-3.1-flash-lite", "http_status": 200,
+            "finish_reason": "STOP", "response_characters": 42, "response_sha256": "c" * 64,
+        },
+    )
+    assert certificate["ENGINEERING_STATE"] == "FAIL"
+    assert certificate["gates"]["repeat_same_sha_acceptance"] == "BLOCKED_OR_FAIL"
+    assert certificate["PRODUCTION_VERIFIED"] == "BLOCKED"
+
+
+def test_production_certificate_rejects_reusing_one_acceptance_run_twice():
+    candidate = "a" * 40
+    first = _passing_acceptance(candidate, run_id="123456")
+    repeated = _passing_acceptance(candidate, run_id="123456")
+    certificate = build_certificate(
+        candidate_sha=candidate,
+        acceptance=first,
+        acceptance_repeat=repeated,
+        storage=_passing_storage(),
+        inference=_passing_inference(),
+        deployment=_passing_deployment(candidate),
+        human_approval=None,
+        evidence_hashes={},
+        gemini_writer={
+            "status": "PASS", "model": "gemini-3.1-flash-lite", "http_status": 200,
+            "finish_reason": "STOP", "response_characters": 42, "response_sha256": "c" * 64,
+        },
+    )
+    assert certificate["ENGINEERING_STATE"] == "FAIL"
+    assert certificate["gates"]["repeat_same_sha_acceptance"] == "BLOCKED_OR_FAIL"
+    assert certificate["acceptance_evidence_runs"]["same_candidate_sha"] is False
