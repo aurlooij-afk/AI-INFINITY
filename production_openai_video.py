@@ -46,18 +46,23 @@ def ensure():
         """)
 
 def status():
+    # The Sora API was discontinued on 2026-09-24. An OpenAI API key does not
+    # make this legacy endpoint available; never advertise it as a working video
+    # provider or queue generation against it.
     return {
       "id":"openai_video",
-      "configured":bool(os.getenv("OPENAI_API_KEY","").strip()),
+      "configured":False,
+      "enabled":False,
+      "status":"deprecated",
       "model":os.getenv("AI_INFINITY_OPENAI_VIDEO_MODEL","sora-2-pro"),
       "endpoint":"POST /v1/videos",
-      "async":True,
+      "disabled_reason":"The Sora API was discontinued on 2026-09-24.",
       "truthful":True
     }
 
 def create_remote(payload):
-    key=os.getenv("OPENAI_API_KEY","").strip()
-    if not key:raise RuntimeError("OPENAI_API_KEY not configured")
+    raise RuntimeError("Sora API discontinued on 2026-09-24; this legacy video adapter is disabled. Configure an available video backend instead.")
+
     seconds=str(payload.get("seconds") or os.getenv("AI_INFINITY_OPENAI_VIDEO_SECONDS","8"))
     if seconds not in {"4","8","12"}:seconds="8"
     size=str(payload.get("size") or os.getenv("AI_INFINITY_OPENAI_VIDEO_SIZE","1280x720"))

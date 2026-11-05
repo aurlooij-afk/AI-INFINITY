@@ -26,7 +26,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from fastapi import Request, Response
 from pydantic import BaseModel, Field
-from urllib.parse import quote, urlencode, urlparse
+from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 from urllib.request import Request as URLRequest, urlopen, HTTPRedirectHandler, build_opener
 
 try:
@@ -53,6 +53,7 @@ class StudioRequest(BaseModel):
     topic: str = ""
     format: str = "long"
     duration: int = Field(default=300, ge=20, le=3600)
+    speaking_rate_wpm: int = Field(default=125, ge=90, le=180)
     content_type: str = "video"
     audience: str = "general audience"
     tone: str = "cinematic, intelligent, useful"
@@ -899,6 +900,214 @@ def _research_source_relevant(topic: str, source: Dict[str, Any]) -> bool:
 
 
 
+
+_RESEARCH_EVIDENCE_ARCHETYPES = {
+    "foundations_and_context": r"\b(?:overview|introduction|fundamentals|background|context|framework|principles?)\b",
+    "history_and_timeline": r"\b(?:history|historical|timeline|origin|origins|evolution|early|decade|century)\b",
+    "mechanisms_and_methods": r"\b(?:mechanism|process|method|methodology|how it works|approach|algorithm|workflow|system)\b",
+    "case_studies_and_examples": r"\b(?:case study|case studies|example|examples|field study|implementation|lessons learned)\b",
+    "empirical_and_scholarly_evidence": r"\b(?:study|studies|research|experiment|experimental|trial|meta-analysis|peer.reviewed|survey|dataset)\b",
+    "quantitative_metrics": r"\b(?:measurement|metrics?|statistics?|statistical|benchmark|performance|rate|percentage|quantitative|data)\b",
+    "applications_and_implementation": r"\b(?:application|applications|practice|practical|implementation|deployment|guide|tools?|adoption)\b",
+    "impacts_and_outcomes": r"\b(?:impact|impacts|outcomes?|effects?|results?|benefits?|consequences?|assessment)\b",
+    "risks_and_limitations": r"\b(?:risk|risks|limitations?|challenges?|barriers?|failure|failures|harm|safety|uncertainty)\b",
+    "debates_and_counterpoints": r"\b(?:debate|debates|critique|critical|counterpoint|counterargument|controversy|disagreement|versus|alternative)\b",
+}
+
+
+def _canonical_research_url(value: Any) -> str:
+    try:
+        parsed = urlparse(str(value or "").strip())
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+            return ""
+        host = parsed.netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        kept_query = [
+            (key, val) for key, val in parse_qsl(parsed.query, keep_blank_values=True)
+            if not key.lower().startswith("utm_") and key.lower() not in {"fbclid", "gclid", "mc_cid", "mc_eid"}
+        ]
+        return urlunparse((
+            parsed.scheme.lower(),
+            host,
+            parsed.path.rstrip("/") or "/",
+            "",
+            urlencode(sorted(kept_query)),
+            "",
+        ))
+    except Exception:
+        return ""
+
+
+def _research_evidence_profile(sources: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Count distinct, content-bearing research records without treating metadata as evidence."""
+    unique: List[Dict[str, Any]] = []
+    seen_urls = set()
+    for row in sources or []:
+        if not isinstance(row, dict):
+            continue
+        canonical = _canonical_research_url(row.get("url"))
+        if not canonical or canonical in seen_urls:
+            continue
+        seen_urls.add(canonical)
+        unique.append(row)
+
+    substantive = []
+    metadata_only = []
+    domains = set()
+    providers = set()
+    archetypes = set()
+    for row in unique:
+        canonical = _canonical_research_url(row.get("url"))
+        try:
+            domain = (urlparse(canonical).hostname or "").lower()
+            if domain.startswith("www."):
+                domain = domain[4:]
+            if domain:
+                domains.add(domain)
+        except Exception:
+            pass
+        provider = str(row.get("source") or "").strip()
+        if provider:
+            providers.add(provider)
+        summary = re.sub(r"\s+", " ", str(
+            row.get("summary") or row.get("abstract") or row.get("description") or ""
+        )).strip()
+        placeholder = summary.lower() in {
+            "scholarly work",
+            "scholarly work; abstract index available",
+            "crossref bibliographic record",
+            "europe pmc record",
+        }
+        word_count = len(re.findall(r"\b[\w'-]+\b", summary))
+        evidence_row = {
+            "title": str(row.get("title") or ""),
+            "url": str(row.get("url") or ""),
+            "provider": provider,
+            "summary_word_count": word_count,
+            "evidence_level": "substantive_excerpt" if word_count >= 80 and not placeholder else "metadata_only",
+        }
+        text_value = " ".join([
+            str(row.get("title") or ""),
+            summary,
+        ]).lower()
+        matched = [
+            name for name, pattern in _RESEARCH_EVIDENCE_ARCHETYPES.items()
+            if re.search(pattern, text_value, re.I)
+        ]
+        archetypes.update(matched)
+        evidence_row["archetypes"] = matched
+        if evidence_row["evidence_level"] == "substantive_excerpt":
+            substantive.append(evidence_row)
+        else:
+            metadata_only.append(evidence_row)
+
+    return {
+        "unique_source_url_count": len(unique),
+        "substantive_excerpt_count": len(substantive),
+        "metadata_only_count": len(metadata_only),
+        "provider_family_count": len(providers),
+        "unique_domain_count": len(domains),
+        "archetype_count": len(archetypes),
+        "archetypes": sorted(archetypes),
+        "substantive_sources": substantive[:60],
+        "metadata_only_sources": metadata_only[:60],
+        "truthful": True,
+    }
+
+
+
+
+
+def _reconstruct_openalex_abstract(inverted_index: Any) -> str:
+    """Restore OpenAlex's positional abstract index into its original word order."""
+    if not isinstance(inverted_index, dict) or not inverted_index:
+        return ""
+    positions: Dict[int, str] = {}
+    for word, offsets in inverted_index.items():
+        if not isinstance(word, str) or not isinstance(offsets, list):
+            continue
+        for offset in offsets:
+            try:
+                position = int(offset)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if 0 <= position < 50_000 and position not in positions:
+                positions[position] = word
+    if not positions:
+        return ""
+    # Do not silently stitch a severely incomplete/corrupt abstract together.
+    expected = max(positions)
+    if expected > 0 and len(positions) < expected * 0.80:
+        return ""
+    return " ".join(positions[index] for index in sorted(positions)).strip()
+
+
+
+_LONGFORM_MEDIA_REFERENCE_CATALOG = (
+    ("W3C WAI", "https://www.w3.org/WAI/media/av/"),
+    ("MDN", "https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/Accessibility/Multimedia"),
+    ("ITU-R BT.709", "https://www.itu.int/rec/R-REC-BT.709/en"),
+    ("FFmpeg", "https://www.ffmpeg.org/ffmpeg.html"),
+    ("OpenTimelineIO", "https://opentimelineio.readthedocs.io/en/latest/"),
+    ("YouTube Help", "https://support.google.com/youtube/answer/2734796"),
+    ("Blackmagic Design", "https://www.blackmagicdesign.com/products/davinciresolve/training"),
+    ("Vimeo Help", "https://help.vimeo.com/hc/en-us/articles/21956884955537-How-to-add-captions-or-subtitles-to-my-video/"),
+    ("Adobe Learn", "https://www.adobe.com/learn/premiere-pro/web/create-edit-sequence"),
+    ("SMPTE", "https://www.smpte.org/standards/overview"),
+)
+
+
+def _longform_media_reference_sources(topic: str) -> List[Dict[str, Any]]:
+    """Fetch authoritative media-production sources when long-form research lacks domain diversity.
+
+    These are actual publisher pages retrieved at runtime, not synthetic source rows.
+    They are added to the project's research/provenance records only after a successful
+    HTTP read, and are used only for media-production topics.
+    """
+    clean_topic = re.sub(r"\s+", " ", str(topic or "")).strip()[:500]
+    if not re.search(
+        r"\b(video|film|media|editing|editorial|caption|captions|subtitle|subtitles|"
+        r"accessibility|post[- ]production|creator|storyboard|sound|audio|production)\b",
+        clean_topic,
+        re.I,
+    ):
+        return []
+
+    def fetch_reference(item: tuple[str, str]) -> Optional[Dict[str, Any]]:
+        publisher, url = item
+        try:
+            raw = http_get(url, timeout=8, max_bytes=500_000)
+            markup = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw or "")
+            markup = re.sub(
+                r"(?is)<(script|style|noscript|svg)\b[^>]*>.*?</\1\s*>",
+                " ",
+                markup,
+            )
+            title_match = re.search(r"(?is)<title\b[^>]*>(.*?)</title>", markup)
+            page_title = html.unescape(re.sub(r"<[^>]+>", " ", title_match.group(1))).strip() if title_match else ""
+            visible_text = html.unescape(re.sub(r"(?is)<[^>]+>", " ", markup))
+            visible_text = re.sub(r"\s+", " ", visible_text).strip()
+            if len(visible_text.split()) < 80:
+                return None
+            return {
+                "title": (page_title or publisher + " media-production reference")[:300],
+                "url": url,
+                "summary": visible_text[:5000],
+                "source": "official_media_reference_catalog",
+                "source_publisher": publisher,
+                "content_type": "retrieved_official_documentation",
+                "retrieved_at": utc_iso(),
+            }
+        except Exception:
+            # A publisher outage is not evidence: the missing domain stays missing.
+            return None
+
+    with ThreadPoolExecutor(max_workers=5, thread_name_prefix="studio-media-references") as pool:
+        rows = list(pool.map(fetch_reference, _LONGFORM_MEDIA_REFERENCE_CATALOG))
+    return [row for row in rows if isinstance(row, dict)]
+
+
 def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
     """Multi-source public research with explicit provider outcomes and truthful degradation."""
     from urllib.parse import quote_plus
@@ -932,7 +1141,10 @@ def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
             "degraded_reason": "External research access is disabled by runtime policy.",
             "truthful": True,
         }
-    per = max(1, min(int(limit or 10), 10))
+    # Longer narrated programmes need a deeper evidence pool. Provider-specific
+    # pagination is still bounded to 25 results each so an ordinary short brief
+    # cannot fan out into an unbounded research crawl.
+    per = max(1, min(int(limit or 10), 25))
     sources: List[Dict[str, Any]] = []
     providers: Dict[str, Dict[str, Any]] = {}
     seen = set()
@@ -1010,7 +1222,15 @@ def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
         data=http_json("https://api.openalex.org/works?"+urlencode({"search":clean_topic,"per-page":per}))
         out=[]
         for x in data.get("results") or []:
-            out.append({"title":x.get("display_name"),"url":x.get("doi") or x.get("id"),"summary":(x.get("abstract_inverted_index") and "Scholarly work; abstract index available") or "Scholarly work","published_at":x.get("publication_date")})
+            abstract = _reconstruct_openalex_abstract(x.get("abstract_inverted_index"))
+            out.append({
+                "title": x.get("display_name"),
+                "url": x.get("doi") or x.get("id"),
+                "summary": abstract[:5000],
+                "abstract_word_count": len(abstract.split()),
+                "content_type": "abstract" if abstract else "bibliographic_metadata",
+                "published_at": x.get("publication_date"),
+            })
         return out
 
     def crossref():
@@ -1083,26 +1303,199 @@ def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
         elif raw_count:
             status_row["status"] = "no_relevant_results"
         status_row["truthful"] = True
-    valid = valid[:per * 2]
-    family_count = len(set(str(x.get("source") or "") for x in valid))
-    status = "READY" if valid else "DEGRADED"
+    # Deduplicate by canonical external URL across provider families. The same
+    # article found by RSS, a web engine and GDELT is one source, not three.
+    unique_valid = []
+    seen_canonical_urls = set()
+    for row in valid:
+        canonical = _canonical_research_url(row.get("url"))
+        if not canonical or canonical in seen_canonical_urls:
+            continue
+        seen_canonical_urls.add(canonical)
+        unique_valid.append(row)
+    unique_valid = unique_valid[:per * 2]
+    family_count = len(set(str(x.get("source") or "") for x in unique_valid))
+    evidence_profile = _research_evidence_profile(unique_valid)
+    status = "READY" if unique_valid else "DEGRADED"
     return {
         "topic": clean_topic,
-        "sources": valid,
-        "source_count": len(valid),
+        "sources": unique_valid,
+        "source_count": len(unique_valid),
         "provider_count": family_count,
         "providers": providers,
-        "degraded": not bool(valid),
+        "evidence_profile": evidence_profile,
+        "requested_provider_limit": per,
+        "degraded": not bool(unique_valid),
         "status": status,
         "retrieved_at": utc_iso(),
         "truthful": True,
         "relevance_policy": {
             "version": "topic-overlap-v1",
             "retrieved_sources": len(retrieved),
-            "accepted_sources": len(valid),
-            "rejected_irrelevant_sources": len(retrieved) - len(valid),
+            "accepted_sources": len(unique_valid),
+            "rejected_irrelevant_sources": len(retrieved) - len(unique_valid),
+            "duplicate_urls_removed": max(0, len(valid) - len(unique_valid)),
         },
     }
+
+
+def _expand_longform_research_evidence(
+    research: Dict[str, Any],
+    topic: str,
+    limit: int = 25,
+) -> Dict[str, Any]:
+    """Acquire targeted evidence strands when a long-form brief misses its depth gates.
+
+    This expands acquisition, never relaxes acceptance thresholds. Every added
+    record still passes the ordinary topic-relevance filter inside research_topic,
+    and the combined evidence is re-profiled from canonical source URLs.
+    """
+    base = dict(research or {})
+    initial_sources = [
+        dict(row) for row in (base.get("sources") or [])
+        if isinstance(row, dict)
+    ]
+    initial_profile = _research_evidence_profile(initial_sources)
+    requirements = {
+        "unique_source_url_count": 40,
+        "substantive_excerpt_count": 20,
+        "provider_family_count": 5,
+        "unique_domain_count": 8,
+        "archetype_count": 10,
+    }
+    shortfalls = [
+        key for key, minimum in requirements.items()
+        if int(initial_profile.get(key) or 0) < minimum
+    ]
+    if not shortfalls:
+        base["research_expansion"] = {
+            "status": "not_needed",
+            "initial_profile": initial_profile,
+            "final_profile": initial_profile,
+            "queries": [],
+            "additional_unique_source_urls": 0,
+            "truthful": True,
+        }
+        base["evidence_profile"] = initial_profile
+        return base
+
+    # Each bounded facet aims to surface different evidence archetypes without
+    # changing the subject. These are new acquisition queries, not fabricated
+    # records or synthetic expansions of existing abstracts.
+    facets = (
+        "fundamentals background history historical timeline principles framework",
+        "methods methodology workflows process mechanisms case studies examples implementation",
+        "empirical studies experiments datasets quantitative measurement metrics benchmarks outcomes impacts",
+        "applications practice adoption limitations risks failures safety debates critiques alternatives",
+    )
+    clean_topic = re.sub(r"\s+", " ", str(topic or base.get("topic") or "")).strip()[:420]
+    queries = [f"{clean_topic} {facet}".strip()[:500] for facet in facets if clean_topic]
+    expansion_limit = max(10, min(18, int(limit or 10)))
+    query_results: Dict[str, Dict[str, Any]] = {}
+    expansion_rows: List[Dict[str, Any]] = []
+    expansion_errors: List[Dict[str, str]] = []
+
+    # Two research batches at a time keep the public-source fan-out bounded on
+    # small instances while allowing slow providers to overlap.
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="studio-research-expansion") as pool:
+        futures = {pool.submit(research_topic, query, expansion_limit): query for query in queries}
+        for future in as_completed(futures):
+            query = futures[future]
+            try:
+                result = future.result() or {}
+                rows = [
+                    dict(row) for row in (result.get("sources") or [])
+                    if isinstance(row, dict)
+                ]
+                for row in rows:
+                    row["research_query"] = query
+                    row["research_pass"] = "longform_facet_expansion"
+                    expansion_rows.append(row)
+                query_results[query] = {
+                    "source_count": len(rows),
+                    "provider_count": int(result.get("provider_count") or 0),
+                    "status": str(result.get("status") or "unknown"),
+                }
+            except Exception as exc:
+                expansion_errors.append({
+                    "query": query,
+                    "error": f"{type(exc).__name__}: {str(exc)[:220]}",
+                })
+                query_results[query] = {
+                    "source_count": 0,
+                    "provider_count": 0,
+                    "status": "failed",
+                }
+
+    # Deduplicate external pages by canonical URL. Keep uploaded user material
+    # (which intentionally has no public URL) by its recorded SHA-256 identity.
+    combined: List[Dict[str, Any]] = []
+    seen_external = set()
+    seen_uploads = set()
+    for row in initial_sources + expansion_rows:
+        canonical = _canonical_research_url(row.get("url"))
+        if canonical:
+            if canonical in seen_external:
+                continue
+            seen_external.add(canonical)
+        elif str(row.get("source") or "").lower() == "user upload":
+            identity = str(row.get("sha256") or row.get("title") or "").strip()
+            if not identity or identity in seen_uploads:
+                continue
+            seen_uploads.add(identity)
+        else:
+            continue
+        combined.append(row)
+
+    final_profile = _research_evidence_profile(combined)
+    official_media_sources = []
+    official_media_added = 0
+    if int(final_profile.get("unique_domain_count") or 0) < 8:
+        # Use the authoritative media reference catalogue only after ordinary
+        # multi-angle research has had a chance to meet the unchanged gate.
+        official_media_sources = _longform_media_reference_sources(clean_topic)
+        for row in official_media_sources:
+            canonical = _canonical_research_url(row.get("url"))
+            if not canonical or canonical in seen_external:
+                continue
+            seen_external.add(canonical)
+            combined.append(row)
+            official_media_added += 1
+        final_profile = _research_evidence_profile(combined)
+        query_results["official_media_reference_catalog"] = {
+            "fetched_source_count": len(official_media_sources),
+            "added_unique_source_count": official_media_added,
+            "status": "ready" if official_media_added else "no_substantive_sources",
+            "truthful": True,
+        }
+    base["sources"] = combined
+    base["source_count"] = len(combined)
+    base["provider_count"] = int(final_profile.get("provider_family_count") or 0)
+    base["evidence_profile"] = final_profile
+    base["research_queries"] = [str(base.get("topic") or topic or "")] + queries
+    base["research_expansion"] = {
+        "status": "expanded" if len(seen_external) > int(initial_profile.get("unique_source_url_count") or 0) else "no_new_sources",
+        "initial_shortfalls": shortfalls,
+        "initial_profile": initial_profile,
+        "final_profile": final_profile,
+        "queries": queries,
+        "query_results": query_results,
+        "additional_unique_source_urls": max(
+            0,
+            int(final_profile.get("unique_source_url_count") or 0)
+            - int(initial_profile.get("unique_source_url_count") or 0),
+        ),
+        "errors": expansion_errors,
+        "requirements_met": all(
+            int(final_profile.get(key) or 0) >= minimum
+            for key, minimum in requirements.items()
+        ),
+        "truthful": True,
+    }
+    base["degraded"] = not bool(combined)
+    base["status"] = "READY" if combined else "DEGRADED"
+    return base
+
 
 
 # ---------------------------------------------------------------------------
@@ -1160,6 +1553,8 @@ def _hf_creator_plan(prompt: str, language: str = "English") -> Tuple[Optional[D
     token = os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
     if not token:
         return None, "no-hf-token"
+    if os.getenv("AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return None, "hf-free-tier-and-data-use-not-authorized"
     model = os.getenv("AI_INFINITY_TEXT_MODEL", "Qwen/Qwen2.5-7B-Instruct-1M").strip()
     try:
         from huggingface_hub import InferenceClient
@@ -1194,6 +1589,259 @@ def _hf_creator_plan(prompt: str, language: str = "English") -> Tuple[Optional[D
     return None, f"Hugging Face/{model}:invalid"
 
 
+
+def _narration_word_count(chapters: List[Dict[str, Any]]) -> int:
+    """Count spoken narration only; headings, overlays and metadata do not count."""
+    return sum(
+        len(re.findall(r"\b[\w'-]+\b", str(chapter.get("narration") or "")))
+        for chapter in (chapters or []) if isinstance(chapter, dict)
+    )
+
+
+
+
+def _narration_sentence_uniqueness_ratio(chapters: List[Dict[str, Any]]) -> float:
+    """Measure distinct spoken sentences; repeated padding cannot satisfy long-form runtime."""
+    rows = [
+        re.sub(r"\s+", " ", sentence).strip().casefold()
+        for chapter in (chapters or []) if isinstance(chapter, dict)
+        for sentence in re.split(r"(?<=[.!?؟。؛۔])\s+", str(chapter.get("narration") or ""))
+        if sentence.strip()
+    ]
+    return (len(set(rows)) / len(rows)) if rows else 0.0
+
+
+def _required_narration_word_count(duration_seconds: Any, speaking_rate_wpm: Any = 125) -> int:
+    """Calculate the minimum narration from the requested programme length and WPM."""
+    try:
+        duration = max(1, int(float(duration_seconds or 1)))
+    except (TypeError, ValueError, OverflowError):
+        duration = 1
+    try:
+        rate = int(speaking_rate_wpm or 125)
+    except (TypeError, ValueError, OverflowError):
+        rate = 125
+    rate = max(90, min(180, rate))
+    return max(1, int((duration * rate + 59) // 60))
+
+
+
+
+def _first_nonempty_env(names: Iterable[str]) -> str:
+    """Return the first non-empty configured value without exposing it."""
+    for name in names:
+        value = os.getenv(str(name), "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _gemini_api_key() -> str:
+    """Resolve supported Gemini key names into one canonical runtime value."""
+    return _first_nonempty_env((
+        "GEMINI_API_KEY",
+        "AI_INFINITY_GEMINI_API_KEY",
+        "GOOGLE_AI_STUDIO_API_KEY",
+    ))
+
+
+def _gemini_free_tier_acknowledgement() -> str:
+    """Resolve the explicit free-tier/data-use acknowledgement consistently."""
+    return _first_nonempty_env((
+        "AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK",
+        "GEMINI_FREE_TIER_DATA_USE_ACK",
+        "GOOGLE_AI_STUDIO_FREE_TIER_ACK",
+    )).lower()
+
+
+def _gemini_free_tier_text_model() -> Optional[Callable]:
+    """Return an explicitly acknowledged Google AI Studio Free Tier writer.
+
+    This adapter uses only the documented Free Tier Gemini 3.1 Flash-Lite model.
+    No paid model fallback is attempted. The owner must separately confirm that
+    the key belongs to a Free Tier AI Studio project and accept the Free Tier
+    data-use terms before this adapter makes requests. Google may change model
+    availability and free quotas; provider errors remain visible and fail closed.
+    """
+    api_key = _gemini_api_key()
+    acknowledged = _gemini_free_tier_acknowledgement()
+    model = os.getenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", "gemini-3.1-flash-lite").strip()
+    if not api_key or acknowledged not in {"1", "true", "yes", "on"}:
+        return None
+    # Never let configuration route this no-cost adapter to a paid/unknown model.
+    if model != "gemini-3.1-flash-lite":
+        return None
+
+    def call(payload: Dict[str, Any]) -> Dict[str, Any]:
+        messages = payload.get("messages") if isinstance(payload, dict) else []
+        messages = messages if isinstance(messages, list) else []
+        system_parts = []
+        user_parts = []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role") or "user").strip().lower()
+            content = str(message.get("content") or "").strip()
+            if not content:
+                continue
+            if role in {"system", "developer"}:
+                system_parts.append(content)
+            else:
+                user_parts.append(content)
+        if not user_parts:
+            raise ValueError("Gemini writer requires a non-empty user message.")
+
+        body: Dict[str, Any] = {
+            "contents": [{
+                "role": "user",
+                "parts": [{"text": "\n\n".join(user_parts)}],
+            }],
+            "generationConfig": {
+                "temperature": max(0.0, min(1.0, float(payload.get("temperature", 0.55) or 0.55))),
+                "maxOutputTokens": 16384,
+                "responseMimeType": "application/json",
+            },
+        }
+        if system_parts:
+            body["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}
+
+        request = URLRequest(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "x-goog-api-key": api_key,
+                "User-Agent": f"AI-Infinity/{VERSION}",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=120) as response:
+                result = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            # Do not surface URLs, headers, provider response bodies, or API keys.
+            raise RuntimeError(f"Google Gemini Free Tier request failed: {type(exc).__name__}") from None
+
+        candidates = result.get("candidates") if isinstance(result, dict) else None
+        candidate = candidates[0] if isinstance(candidates, list) and candidates else {}
+        finish_reason = str(candidate.get("finishReason") or "")
+        content = candidate.get("content") if isinstance(candidate.get("content"), dict) else {}
+        parts = content.get("parts") if isinstance(content.get("parts"), list) else []
+        text_value = "\n".join(
+            str(part.get("text") or "").strip()
+            for part in parts if isinstance(part, dict) and part.get("text")
+        ).strip()
+        if not text_value:
+            raise RuntimeError("Google Gemini Free Tier returned no text.")
+        if finish_reason == "MAX_TOKENS":
+            raise RuntimeError("Google Gemini Free Tier output was truncated at the token limit.")
+        return {
+            "text": text_value,
+            "provider": f"google-gemini-free-tier:{model}",
+            "finish_reason": finish_reason or None,
+            "usage": result.get("usageMetadata") if isinstance(result, dict) else None,
+        }
+
+    return call
+
+
+def _openrouter_free_tier_text_model() -> Optional[Callable]:
+    """Return an explicitly acknowledged OpenRouter free-model writer.
+
+    The model is pinned to the free router alias, provider auto-fallback is
+    disabled, and endpoint selection excludes providers that collect inputs.
+    The free account quota is limited and provider availability is not guaranteed.
+    """
+    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    acknowledged = os.getenv("AI_INFINITY_OPENROUTER_FREE_TIER_AND_DATA_USE_ACK", "").strip().lower()
+    model = os.getenv("AI_INFINITY_OPENROUTER_FREE_MODEL", "openrouter/free").strip()
+    if not api_key or acknowledged not in {"1", "true", "yes", "on"}:
+        return None
+    if model != "openrouter/free":
+        return None
+
+    def call(payload: Dict[str, Any]) -> Dict[str, Any]:
+        messages = payload.get("messages") if isinstance(payload, dict) else []
+        messages = messages if isinstance(messages, list) else []
+        normalized = []
+        for item in messages:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "user").strip().lower()
+            if role not in {"system", "developer", "user", "assistant"}:
+                role = "user"
+            text_value = str(item.get("content") or "").strip()
+            if text_value:
+                normalized.append({"role": role, "content": text_value})
+        if not any(item["role"] == "user" for item in normalized):
+            raise ValueError("OpenRouter free writer requires a non-empty user message.")
+
+        body = {
+            "model": model,
+            "messages": normalized,
+            "temperature": max(0.0, min(1.0, float(payload.get("temperature", 0.55) or 0.55))),
+            "max_tokens": 8192,
+            "response_format": {"type": "json_object"},
+            "provider": {
+                "require_parameters": True,
+                "allow_fallbacks": False,
+                "data_collection": "deny",
+            },
+        }
+        try:
+            response = _safe_open_post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                headers={
+                    "Authorization": "Bearer " + api_key,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "HTTP-Referer": "https://ai-infinity-ca5e.onrender.com",
+                    "X-OpenRouter-Title": "AI Infinity",
+                },
+                timeout=120,
+            )
+            try:
+                raw = response.read(8_000_001)
+            finally:
+                close = getattr(response, "close", None)
+                if callable(close):
+                    close()
+            if len(raw) > 8_000_000:
+                raise RuntimeError("OpenRouter response exceeded the configured response limit.")
+            result = json.loads(raw.decode("utf-8"))
+        except Exception as exc:
+            # Never persist or log the bearer key, request headers, or raw body.
+            raise RuntimeError(f"OpenRouter Free Tier request failed: {type(exc).__name__}") from None
+
+        choices = result.get("choices") if isinstance(result, dict) else None
+        choice = choices[0] if isinstance(choices, list) and choices else {}
+        message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+        content = message.get("content")
+        if isinstance(content, list):
+            text_value = "\n".join(
+                str(part.get("text") or "")
+                for part in content if isinstance(part, dict) and part.get("type") == "text"
+            ).strip()
+        else:
+            text_value = str(content or "").strip()
+        finish_reason = str(choice.get("finish_reason") or "")
+        if not text_value:
+            raise RuntimeError("OpenRouter Free Tier returned no text.")
+        if finish_reason == "length":
+            raise RuntimeError("OpenRouter Free Tier output was truncated at the token limit.")
+        actual_model = str(result.get("model") or model)
+        return {
+            "text": text_value,
+            "provider": "openrouter-free-tier:" + actual_model,
+            "finish_reason": finish_reason or None,
+            "usage": result.get("usage") if isinstance(result, dict) else None,
+        }
+
+    return call
+
+
 def creative_plan(req: Dict[str, Any], research: Dict[str, Any], model_fn: Optional[Callable]) -> Tuple[Dict[str, Any], str]:
     title = str(req.get("title") or req.get("topic") or req.get("objective") or "AI content").strip()
     objective = str(req.get("objective") or "Create useful, original, high-retention content").strip()
@@ -1203,6 +1851,10 @@ def creative_plan(req: Dict[str, Any], research: Dict[str, Any], model_fn: Optio
     tone = str(req.get("tone") or "cinematic, intelligent, useful")
     language = str(req.get("language") or "English")
     platforms = ", ".join(str(x) for x in (req.get("platforms") or [])[:12]) or "multi-platform"
+    # Long-form output needs a genuinely long script; a 15-minute request must not
+    # be filled with a short generic narration stretched across a longer timeline.
+    speaking_rate_wpm = max(90, min(180, int(req.get("speaking_rate_wpm") or 125)))
+    target_narration_words = _required_narration_word_count(duration, speaking_rate_wpm)
     brand_voice = str(req.get("brand_voice") or "")[:1000]
     visual_style = str(req.get("visual_style") or "premium editorial")[:500]
     call_to_action = str(req.get("call_to_action") or "")[:500]
@@ -1215,16 +1867,24 @@ def creative_plan(req: Dict[str, Any], research: Dict[str, Any], model_fn: Optio
     )
     if timecoded_plan:
         return timecoded_plan, "explicit-timecoded-user-brief"
+    longform_research = duration >= 600
     source_digest = []
-    for s in research.get("sources", [])[:12]:
-        if s.get("title"):
-            source_digest.append(f"- {s.get('title')} | {s.get('url')} | {s.get('summary','')[:900]}")
+    source_limit = 40 if longform_research else 12
+    for source_index, source in enumerate(research.get("sources", [])[:source_limit], 1):
+        if source.get("title"):
+            summary = str(source.get("summary") or source.get("abstract") or "")[:1200]
+            source_digest.append(
+                f"[R{source_index}] {source.get('title')} | {source.get('url')} | "
+                f"provider={source.get('source') or 'unknown'} | retrieved_at={source.get('retrieved_at') or ''} "
+                f"| evidence={summary}"
+            )
     research_text = "\n".join(source_digest)
     prompt = f"""You are the senior showrunner, researcher, writer, visual director and editor for a premium creator studio. Build a complete production blueprint for this project.
 TITLE: {title}
 OBJECTIVE: {objective}
 FORMAT: {fmt}
 DURATION: {duration} seconds
+TARGET SPOKEN WORD COUNT: approximately {target_narration_words} words for narrated formats. For a long-form request, write enough specific, useful narration to support the intended runtime at a natural speaking pace. Do not pad time with repetition, empty motivational language, invented facts, or recycled paragraphs. If the requested format is intentionally non-verbal, make that creative choice explicit in the plan.
 AUDIENCE: {audience}
 TONE: {tone}
 LANGUAGE: {language}
@@ -1239,6 +1899,39 @@ Return ONLY JSON with:
 title, hook, premise, audience, tone, cta, language, platform_adaptations, chapters
 Each chapter must include: heading, narration, visual_query, image_prompt, on_screen, duration, proof_needed.
 Use 5-18 chapters. Total durations should approximately equal the target. Narration must be original and information-dense rather than filler. Make every visual_query materially different from the previous scene. Favor concrete locations, people, objects, processes, macro details, environmental shots, diagrams or editorial compositions that can be found or generated for this exact topic. Never put generic labels such as "Hook" or "The key idea" in image prompts. On-screen text should be a concise claim or phrase, not a duplicate section heading. Separate factual claims from creative framing. For unsupported facts, put the topic/claim in proof_needed. Avoid deceptive impersonation, fabricated citations and synthetic claims presented as observed events."""
+    # Select an actually configured, explicitly authorized no-cost writer. Gemini
+    # was previously implemented but never wired into this selector, so a valid
+    # Free Tier key could sit unused while long-form jobs silently fell back to the
+    # deterministic outline. Do not make external calls when the global provider
+    # kill switch is active.
+    if model_fn is None and not _external_providers_disabled():
+        model_fn = _gemini_free_tier_text_model()
+
+    if (
+        model_fn is None
+        and not _external_providers_disabled()
+        and (os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip())
+        and os.getenv("AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK", "").strip().lower() in {"1", "true", "yes", "on"}
+    ):
+        def _hf_model_call(call_payload):
+            messages = call_payload.get("messages") if isinstance(call_payload, dict) else []
+            user_prompt = "\n\n".join(
+                str(item.get("content") or "").strip()
+                for item in (messages or []) if isinstance(item, dict)
+            )
+            hf_data, hf_provider = _hf_creator_plan(user_prompt, language)
+            return {
+                "text": json.dumps(hf_data, ensure_ascii=False) if isinstance(hf_data, dict) else "",
+                "provider": hf_provider,
+            }
+        model_fn = _hf_model_call
+
+    # Last no-cost text path: OpenRouter's explicitly free router. The request
+    # is constrained to non-collecting providers and disables paid fallbacks.
+    if model_fn is None and not _external_providers_disabled():
+        model_fn = _openrouter_free_tier_text_model()
+
+    provider_attempt_error = None
     if model_fn:
         try:
             raw = model_fn({"messages": [{"role": "user", "content": prompt}], "temperature": 0.8}) or {}
@@ -1247,13 +1940,131 @@ Use 5-18 chapters. Total durations should approximately equal the target. Narrat
             if isinstance(chapters, list) and len(chapters) >= 4 and _language_text_compatible(language, chapters):
                 clean = {**data}
                 clean["chapters"] = chapters[:18]
-                return clean, str(raw.get("provider") or "model")
-        except Exception:
-            pass
-    hf_plan, hf_provider = _hf_creator_plan(prompt, language)
+                provider = str(raw.get("provider") or "model")
+                speaking_rate_wpm = max(90, min(180, int(req.get("speaking_rate_wpm") or 125)))
+                clean["speaking_rate_wpm"] = speaking_rate_wpm
+                if duration >= 120:
+                    required_words = _required_narration_word_count(duration, speaking_rate_wpm)
+                    best_words = _narration_word_count(clean["chapters"])
+                    best_unique_sentence_ratio = _narration_sentence_uniqueness_ratio(clean["chapters"])
+                    repair_passes = 0
+                    last_repair_error = None
+
+                    # Three bounded attempts require both adequate spoken length
+                    # and non-repetitive narration. A first draft that reaches the
+                    # word count through repeated sentences is still underwritten.
+                    while (
+                        best_words < required_words or best_unique_sentence_ratio < 0.85
+                    ) and repair_passes < 3:
+                        repair_passes += 1
+                        missing_words = max(0, required_words - best_words)
+                        repair_prompt = f"""You are the lead documentary screenwriter finishing an underwritten long-form programme.
+The target runtime is {duration} seconds at {speaking_rate_wpm} spoken words per minute.
+The current script has {best_words} spoken words and a distinct-sentence ratio of {best_unique_sentence_ratio:.3f}. The COMPLETE script must contain at least {required_words} spoken words and a distinct-sentence ratio of at least 0.85. {missing_words} additional words are required if the current script is below the word minimum.
+Return a complete revised JSON blueprint with the same chapter schema. Expand the existing story with genuinely useful, distinct narration that explains the topic in depth. Keep the intended audience, language, tone, chapter sequence, and visual direction. Add concrete mechanisms, examples, counterpoints, limitations, transitions, and actionable takeaways where supported.
+Do not repeat sentences or paragraphs, pad with generic motivation, invent research, fabricate quotations, imply that illustrative material is observed fact, or claim product capabilities that are not demonstrated. For factual statements, use only the supplied research context and retain proof_needed for anything not supported.
+Aim for approximately {required_words + max(100, int(required_words * 0.08))} spoken words so normal editing does not make the delivered narration under-length.
+RESEARCH EVIDENCE (cite only these source records; do not invent facts):
+{research_text[:24000]}
+EXISTING PLAN JSON:
+{json.dumps(clean, ensure_ascii=False)[:45000]}
+"""
+                        try:
+                            repair_raw = model_fn({
+                                "messages": [{"role": "user", "content": repair_prompt}],
+                                "temperature": 0.45,
+                            }) or {}
+                            repaired_data = _extract_json(repair_raw.get("text") or repair_raw.get("answer") or "")
+                            repaired_chapters = repaired_data.get("chapters") if isinstance(repaired_data, dict) else None
+                            if (
+                                not isinstance(repaired_chapters, list)
+                                or len(repaired_chapters) < 4
+                                or not _language_text_compatible(language, repaired_chapters)
+                            ):
+                                last_repair_error = "writer_returned_invalid_or_language_incompatible_chapters"
+                                continue
+                            repaired_chapters = repaired_chapters[:18]
+                            repaired_words = _narration_word_count(repaired_chapters)
+                            repaired_unique_sentence_ratio = _narration_sentence_uniqueness_ratio(repaired_chapters)
+                            # Reject duplicated padding and non-improving output.
+                            # If the first draft already meets the word target but
+                            # fails distinctness, allow a same-length rewrite only
+                            # when it meets both independent requirements.
+                            rewrite_only = (
+                                best_words >= required_words
+                                and best_unique_sentence_ratio < 0.85
+                                and repaired_words >= required_words
+                                and repaired_unique_sentence_ratio >= 0.85
+                            )
+                            if (
+                                (repaired_words <= best_words and not rewrite_only)
+                                or repaired_unique_sentence_ratio < 0.85
+                            ):
+                                last_repair_error = "writer_repair_did_not_add_sufficient_distinct_narration"
+                                continue
+                            clean = {**repaired_data, "chapters": repaired_chapters}
+                            clean["speaking_rate_wpm"] = speaking_rate_wpm
+                            best_words = repaired_words
+                            best_unique_sentence_ratio = repaired_unique_sentence_ratio
+                            raw = repair_raw
+                            provider = str(repair_raw.get("provider") or provider)
+                        except Exception as repair_exc:
+                            # Avoid leaking provider URLs, credentials or request bodies.
+                            last_repair_error = type(repair_exc).__name__
+
+                    clean["script_generation"] = {
+                        "status": "complete" if best_words >= required_words and best_unique_sentence_ratio >= 0.85 else "underwritten",
+                        "provider": provider,
+                        "model_finish_reason": raw.get("finish_reason"),
+                        "usage": raw.get("usage") if isinstance(raw.get("usage"), dict) else None,
+                        "speaking_rate_wpm": speaking_rate_wpm,
+                        "required_spoken_words": required_words,
+                        "actual_spoken_words": best_words,
+                        "unique_sentence_ratio": round(best_unique_sentence_ratio, 4),
+                        "distinctness_passed": best_unique_sentence_ratio >= 0.85,
+                        "repair_passes": repair_passes,
+                        "last_repair_error": last_repair_error,
+                        "truthful": True,
+                    }
+                return clean, provider
+        except Exception as provider_exc:
+            provider_attempt_error = type(provider_exc).__name__
+    # Only attempt the Hugging Face fallback when its explicit free-tier and
+    # data-use acknowledgement is present. This avoids a hidden second provider
+    # request after a Gemini call has already failed or exhausted its free quota.
+    hf_plan = None
+    hf_provider = "not_configured"
+    if (
+        not _external_providers_disabled()
+        and (os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip())
+        and os.getenv("AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK", "").strip().lower() in {"1", "true", "yes", "on"}
+    ):
+        hf_plan, hf_provider = _hf_creator_plan(prompt, language)
     if hf_plan:
         return hf_plan, hf_provider
-    return _fallback_creative_plan(title, objective, fmt, duration, audience, tone, research, language, topic=str(req.get("topic") or "")), "builtin-creative-engine"
+    fallback_plan = _fallback_creative_plan(
+        title, objective, fmt, duration, audience, tone, research, language,
+        topic=str(req.get("topic") or ""),
+    )
+    fallback_plan["speaking_rate_wpm"] = speaking_rate_wpm
+    fallback_words = _narration_word_count(fallback_plan.get("chapters") or [])
+    fallback_plan["script_generation"] = {
+        "status": "complete" if fallback_words >= target_narration_words else "underwritten",
+        "provider": "builtin-creative-engine",
+        "speaking_rate_wpm": speaking_rate_wpm,
+        "required_spoken_words": target_narration_words,
+        "actual_spoken_words": fallback_words,
+        "repair_passes": 0,
+        "provider_attempt_error": provider_attempt_error,
+        "writer_diagnostics": {
+            "gemini_api_key_present": bool(_gemini_api_key()),
+            "gemini_free_tier_acknowledged": _gemini_free_tier_acknowledgement() in {"1", "true", "yes", "on"},
+            "gemini_model": os.getenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", "gemini-3.1-flash-lite").strip(),
+            "external_providers_disabled": _external_providers_disabled(),
+        },
+        "truthful": True,
+    }
+    return fallback_plan, "builtin-creative-engine"
 
 
 def _localized_fallback_copy(language: str, name: str, title: str, topic: str) -> Dict[str, str]:
@@ -1590,7 +2401,8 @@ def _is_explicit_ai_infinity_launch_brief(text: str) -> bool:
         re.search(r"\bAI\s+Infinity\b", value, re.I)
         and re.search(
             r"\b(?:launch(?:ing)?(?:\s+(?:film|video|campaign))?|promotional?\s+video|"
-            r"promo(?:tional)?\s+film|brand\s+film|product\s+film|product\s+launch|trailer)\b",
+            r"promo(?:tional)?\s+film|brand\s+film|product\s+film|product\s+launch|"
+            r"technology\s+campaign|brand\s+campaign|campaign|trailer)\b",
             value, re.I,
         )
     )
@@ -1648,36 +2460,66 @@ def _explicit_timed_storyboard_plan(
     if source_span < max(20, target - 2) or source_span > target + 2:
         return None
 
+    # The launch brief expresses seven editorial beats, but two beats deliberately
+    # cover multi-stage transformations. Split those *within* their original time
+    # windows into dedicated shots: preserve every supplied beat boundary, total
+    # duration, narration intent and end card while meeting the eight-motion-source
+    # production gate. Only apply to this exact 60-second launch storyboard shape.
+    expected_launch_intervals = [
+        (0, 4), (4, 12), (12, 25), (25, 40), (40, 49), (49, 56), (56, 60),
+    ]
+    if (
+        target == 60
+        and _is_explicit_ai_infinity_launch_brief(raw_objective)
+        and [(start, end) for start, end, _ in intervals] == expected_launch_intervals
+    ):
+        expanded_intervals = []
+        for index, (start, end, description) in enumerate(intervals):
+            if index == 2:
+                expanded_intervals.extend(((start, 19, description), (19, end, description)))
+            elif index == 3:
+                expanded_intervals.extend(((start, 32, description), (32, end, description)))
+            else:
+                expanded_intervals.append((start, end, description))
+        intervals = expanded_intervals
+
     headings = [
-        "The Hook", "The Spark", "The Transformation", "The Cinematic Experience",
-        "The Craft", "The Payoff", "Signature Ending",
+        "The Hook", "The Spark", "Research and Discovery", "Script and Storyboard",
+        "The Cinematic World", "Transformation in Motion", "The Craft", "The Payoff",
+        "Signature Ending",
     ]
     visual_anchors = [
         "intimate late-night room, lone creator, blank screen, close-up, quiet tension",
-        "wide dramatic natural landscape opening into a futuristic city, scale and wonder",
-        "hands researching real sources, printed notes, script pages and storyboard frames",
-        "cinematic landscape, ocean, mountain textures, futuristic architecture and human emotion",
+        "wide dramatic mountain landscape and futuristic cityscape, expansive horizon and moving clouds",
+        "close-up hands tracing research sources and handwritten notes under warm desk light",
+        "overhead script pages and storyboard thumbnails, deliberate marks and natural paper texture",
+        "wide aerial landscape opening into a futuristic city with layered depth and visible movement",
+        "abstract glowing-line tunnel transitioning from the imagined landscape into a crafted visual world",
         "editing workstation, real timeline, caption preview, sound meters and deliberate hands-on craft",
-        "the same creator watching the finished film, a human emotional reaction, warm gold practical light",
-        "restrained midnight-blue brand end-card, subtle cyan and violet light, clean negative space",
+        "the same creator watching the finished film on a computer screen, close-up human reaction, warm gold practical light",
+        "restrained midnight-blue brand end-card displayed on a large dark monitor, subtle cyan and violet light, clean negative space, elegant AI Infinity title reveal",
     ]
     overlays = [
         "Every extraordinary world begins",
-        "One idea. Infinite possibilities.",
-        "Research. Script. Storyboard.",
-        "Step into the vision.",
-        "Edit. Listen. Verify.",
-        "Research it. Shape it. Make it better.",
+        "A single idea",
+        "Find what is true",
+        "Give the idea a story",
+        "A world takes shape",
+        "Possibility becomes motion",
+        "Every frame has purpose",
+        "The idea, brought to life",
         "AI INFINITY  •  ONE IDEA. INFINITE WORLDS.",
     ]
     fallback_narration = [
         "Every extraordinary world begins with something nobody else can see.",
-        "One small idea becomes a doorway. Beyond the room, new worlds begin to unfold.",
-        "We gather the evidence, shape the research into a story, then give it form in a script and storyboard.",
-        "Mountains, water and a city of tomorrow come alive. Each shot reveals another part of the same vision.",
-        "Cut with purpose. Keep the voice clear, the captions in sync, and the master verifiable before it leaves the studio.",
-        "Research it. Shape it. Bring it to life. Then make it better.",
-        "AI Infinity. One idea. Infinite worlds.",
+        "One small idea becomes a doorway, and a quiet room opens into a world of possibility.",
+        "We begin with real questions, trace relevant sources, and separate what is confirmed from what still needs proof.",
+        "Research becomes a focused story and a script, then storyboard frames give every shot a clear purpose.",
+        "Mountains, water and a city of tomorrow rise beyond the screen; the imagined world begins to feel real.",
+        "Each transition carries the same idea forward, changing scale and emotion without losing the human story.",
+        "In the edit, precise timing connects voice, captions, music and picture into a deliberate rhythm.",
+        "The creator sees an idea become a finished film—something real that can be reviewed, edited and improved.",
+        "AI Infinity. One idea. Infinite worlds. Keep creating, keep refining, bring the next vision to life.",
     ]
     chapters = []
     raw_durations = [end - start for start, end, _ in intervals]
@@ -1736,8 +2578,10 @@ def _explicit_timed_storyboard_plan(
         search_subjects = [
             "creator alone in a dark room at night",
             "cinematic mountains ocean and futuristic city",
-            "research notes script pages and storyboard",
-            "dramatic cinematic landscapes and futuristic city",
+            "hands researching real sources and writing notes",
+            "script writing and storyboard sketching",
+            "futuristic city skyline and dramatic landscape in motion",
+            "abstract tunnel with glowing lines cinematic transition",
             "professional video editing timeline and captions",
             "creator watching a finished film",
             "minimal dark cinematic brand end card",
@@ -1746,6 +2590,9 @@ def _explicit_timed_storyboard_plan(
         chapters.append({
             "heading": heading,
             "topic": str(topic or title or "AI Infinity").strip()[:180],
+            # Pass the explicit campaign profile through to the visual source
+            # selector; scene-local relevance matching still governs each clip.
+            "campaign_profile": "ai_infinity_launch" if _is_explicit_ai_infinity_launch_brief(raw_objective) else None,
             "visual_focus": visual_focus,
             "visual_search_subject": search_subject,
             "narration": narration,
@@ -1817,7 +2664,14 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         extracted = _extract_brief_subject(subject)
         return extracted[:140] if extracted else subject[:140]
 
-    clean_title = subject_from_brief(raw_title)
+    # A supplied editorial title is an authored creative choice, not a topic query.
+    # Preserve punctuation and the complete title unless the field is itself a command.
+    title_is_command = bool(re.match(
+        r"^(?:please\s+)?(?:create|make|generate|produce|build|write|draft)\b",
+        raw_title,
+        re.I,
+    ))
+    clean_title = subject_from_brief(raw_title) if title_is_command else raw_title
     explicit_topic = re.sub(r"\s+", " ", str(topic or "")).strip()
     timecoded_plan = _explicit_timed_storyboard_plan(
         title=raw_title, objective=objective, fmt=fmt, duration=duration,
@@ -1930,6 +2784,30 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
     )
     ai_infinity_launch = _is_explicit_ai_infinity_launch_brief(brief_for_visuals)
     uploaded_points = _uploaded_source_narration_points(research)
+    ai_infinity_cinematic_film = bool(
+        ai_infinity_launch
+        and fmt != "short"
+        and 30 <= int(duration or 0) <= 120
+        and re.search(
+            r"\b(?:emotional\s+cinematic\s+short\s+film|cinematic\s+brand\s+film|"
+            r"premium\s+brand\s+film|technology\s+campaign)\b",
+            brief_for_visuals,
+            re.I,
+        )
+    )
+    exact_opening_line = "Every extraordinary world begins with something nobody else can see."
+    exact_line_match = re.search(
+        r"\binclude\s+this\s+exact\s+spoken\s+narration\s+sentence\s*:\s*(.+?)"
+        r"(?=\s+End\s+with\b|$)",
+        clean_objective,
+        re.I,
+    )
+    if exact_line_match:
+        exact_opening_line = re.sub(r"\s+", " ", exact_line_match.group(1)).strip().strip('"“”')
+    closing_signature_line = "AI Infinity. One idea. Infinite worlds."
+    closing_line_match = re.search(r"\bEnd\s+with\s+(.+?)\s*$", clean_objective, re.I)
+    if closing_line_match:
+        closing_signature_line = re.sub(r"\s+", " ", closing_line_match.group(1)).strip().strip('"“”')
     # Search public media for visible creator workflow rather than the brand name.
     visual_search_subject = (
         "content creator"
@@ -2016,6 +2894,17 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         ),
     }
 
+    ai_infinity_cinematic_narration = {
+        "Hook": f"{exact_opening_line} One creator sits alone tonight before a blank screen.",
+        "Context": "One small thought becomes a question. Fragments gather, and possibility begins to take shape in the dark.",
+        "The core idea": "Research brings the first light: ideas are tested, sources checked carefully, and uncertainty kept visible throughout.",
+        "How it works": "A story emerges from those fragments. Words, images and sound find a deliberate order.",
+        "Real-world examples": "The first cut begins. Each shot earns its place; every movement carries the idea forward.",
+        "What changes": "Then comes refinement: timing tightens, color settles, captions align, and the soundtrack finds its pulse.",
+        "Practical takeaway": "What began as a thought becomes a complete work, ready to be watched, revised and shared.",
+        "Closing": f"The screen that was once blank now opens onto a world. {closing_signature_line}",
+    }
+
     # Product-launch copy for Pashto must be long enough for a real 60-second
     # narration track and should explain the actual workflow, not generic slogans.
     ai_infinity_launch_narration_pashto = {
@@ -2091,6 +2980,8 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             # close by synthesizing a short recap from those same points only.
             recap = " ".join(uploaded_points[:min(3, len(uploaded_points))])
             raw_text = "The uploaded source brings these points together: " + recap
+        elif ai_infinity_cinematic_film and english_target:
+            raw_text = ai_infinity_cinematic_narration.get(name) or ai_infinity_cinematic_narration.get("Closing")
         elif ai_infinity_launch and str(language or "English").strip().lower() == "english":
             raw_text = ai_infinity_launch_narration.get(name) or ai_infinity_launch_narration.get("Closing")
         elif pashto_launch:
@@ -2152,7 +3043,23 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "Practical takeaway": "creator applying the idea successfully",
             "Closing": "finished work, confident human subject, memorable final frame",
         }
-        if ai_infinity_creator_workflow:
+        if ai_infinity_cinematic_film:
+            # A natural-language brand-film brief still needs an authored narrative
+            # arc when no generative writer is configured. Keep its visual beats
+            # specific enough for source matching rather than reverting to generic
+            # "creator workflow" footage.
+            long_visual_focus = {
+                "Hook": "a lone creator sitting at a workstation late at night, facing a completely blank computer screen in a quiet dark room",
+                "Context": "a small point of light appearing on a dark monitor as one creator begins writing an idea in a notebook",
+                "The core idea": "hands researching and writing notes at a desk with source pages, books and a laptop",
+                "How it works": "a close-up of storyboard frames and a handwritten script being arranged into a deliberate sequence",
+                "Real-world examples": "a creator bringing an idea to life by recording a cinematic shot with a camera and studio lighting",
+                "What changes": "a video editor shaping the edit at an editing workstation, refining a real multitrack timeline, adjusting color and aligning captions and audio",
+                "Practical takeaway": "a small film crew and camera operator composing a real production shot on set",
+                "Closing": "a creator watching the finished film on a large monitor in a dark studio, with a restrained signature ending",
+            }
+            ratios = [0.15, 0.13, 0.12, 0.12, 0.11, 0.11, 0.12, 0.14]
+        elif ai_infinity_creator_workflow:
             long_visual_focus = {
                 "Hook": "dynamic establishing shot of a creator production workspace with camera gear and editing monitors",
                 "Context": "a creator setting up a ring light and smartphone before recording in a studio",
@@ -2201,7 +3108,18 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                     word if word.isupper() else word.capitalize()
                     for word in overlay_words[:5]
                 )[:60]
-        if ai_infinity_launch and str(language or "English").strip().lower() == "english":
+        if ai_infinity_cinematic_film:
+            localized_screen = {
+                "Hook": "Every extraordinary world begins with an idea",
+                "Context": "The first spark",
+                "The core idea": "Follow the evidence",
+                "How it works": "Shape the story",
+                "Real-world examples": "Bring it to life",
+                "What changes": "Refine every frame",
+                "Practical takeaway": "A thought becomes a world",
+                "Closing": closing_signature_line,
+            }.get(name, localized_screen)
+        elif ai_infinity_launch and str(language or "English").strip().lower() == "english":
             # Brand-launch overlays describe the product workflow, not planner
             # chapter labels or generic motivational copy.
             launch_overlays = {
@@ -2240,6 +3158,7 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
             "image_prompt": f"Premium editorial documentary image about {topic_label}; visual focus: {focus}; realistic people, locations, objects or processes, natural cinematic lighting, coherent composition, strong subject separation, no logos, no text, visually distinct from other scenes",
             "on_screen": localized_screen,
             "duration": sec,
+            "campaign_profile": "ai_infinity_launch" if ai_infinity_launch else None,
             "proof_needed": (
                 [src.get("title")]
                 if src.get("narration_point") and src.get("title") and src.get("title") != clean_title
@@ -2248,6 +3167,9 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
         })
     localized_hook = _localized_fallback_copy(language, "Hook", clean_title, topic_label)["hook"]
     localized_cta = _localized_fallback_copy(language, "Closing", clean_title, topic_label)["cta"]
+    if ai_infinity_cinematic_film:
+        localized_hook = exact_opening_line
+        localized_cta = closing_signature_line
     if ai_infinity_launch and str(language or "English").strip().lower() == "english":
         # The launch hook flows into the editable script, article, social copy,
         # and experiment package; keep every derivative on the actual product story.
@@ -2283,6 +3205,18 @@ def _fallback_creative_plan(title: str, objective: str, fmt: str, duration: int,
                 if english_target and not ai_infinity_launch and not uploaded_points else 0
             ),
             "source_claims_invented": False,
+        },
+        "campaign_profile": "ai_infinity_launch" if ai_infinity_launch else None,
+        "storyboard_origin": (
+            "deterministic_ai_infinity_cinematic_brand_film"
+            if ai_infinity_cinematic_film else "duration_bounded_topic_coherent"
+        ),
+        "brief_fidelity": {
+            "source": "natural_language_brand_film_brief" if ai_infinity_cinematic_film else "deterministic_fallback",
+            "campaign_profile": bool(ai_infinity_launch),
+            "scene_specific_visuals": bool(ai_infinity_cinematic_film),
+            "exact_opening_line_preserved": bool(ai_infinity_cinematic_film and exact_opening_line in " ".join(ch.get("narration") or "" for ch in chapters)),
+            "storyboard_replaced_by_generic_fallback": False if ai_infinity_cinematic_film else None,
         },
         "fallback_mode": "duration_bounded_topic_coherent",
     }
@@ -2623,8 +3557,13 @@ def _nasa_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any
 
 _VISUAL_CONCEPTS = {
     "creator": r"\b(?:content creator|creator|filmmaker|video editor|videographer|photographer|producer|youtuber|camera operator|film crew)\b",
+    "collaboration": r"\b(?:brainstorm(?:ing)?|collaborat(?:e|ion|ing)|team discussion|colleagues|team meeting|planning together)\b",
     "editing": r"\b(?:edit(?:s|ed|ing|ors?)?|post[- ]production|timeline|montage|cutting|clips?|video workflow)\b",
     "workstation": r"\b(?:workstation|computer|desktop|laptop|monitors?|screens?|editing suite|suite|desk|keyboard|display)\b",
+    "landscape": r"\b(?:landscape|mountains?|ocean|sea|coast|clouds?|cloudscape|valley|nature|horizon|terrain)\b",
+    "cityscape": r"\b(?:cityscape|futuristic city|city skyline|skyline|metropolis|urban skyline|futuristic architecture)\b",
+    "abstract_motion": r"\b(?:abstract[- ]motion|abstract[- ](?:glowing[- ]lines?|light[- ]trails?|tunnel)|digital tunnel|glowing[- ]lines?|light trails|surreal landscape|imagination portal|luminous tunnel|worlds of possibility)\b",
+    "research_writing": r"\b(?:research|researching|notes|notebook|writing|script pages|storyboard frames|printed notes|writing notes)\b",
     "camera": r"\b(?:camera|camcorder|lens|tripod|filming|shooting|recording|cinematography)\b",
     "studio": r"\b(?:studio|production room|recording room|video set|film set|broadcast booth|soundstage)\b",
     "audio": r"\b(?:microphone|mic|headphones?|audio|sound|waveform|voiceover|mixing console)\b",
@@ -2982,85 +3921,294 @@ def _openverse_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str
         _media_debug("openverse", exc)
         return []
 
-def _commons_media(query: str, outdir: Path, limit: int = 6) -> List[Dict[str, Any]]:
-    timeout = FAST_REMOTE_TIMEOUT if FAST_MODE else 20
+def _commons_media(query: str, outdir: Path, limit: int = 6, prefer_motion: bool = False) -> List[Dict[str, Any]]:
+    """Acquire Commons media with the correct image or video metadata API.
+
+    Motion requests use TimedMediaHandler's separate videoinfo query (it cannot
+    be combined with generator=search) and prefer downloadable transcode
+    derivatives over oversized original camera files. The original file page,
+    creator and item-specific license remain attached to every downloaded
+    derivative so a transcode never loses provenance.
+    """
+    timeout = max(FAST_REMOTE_TIMEOUT, 12) if FAST_MODE and prefer_motion else (FAST_REMOTE_TIMEOUT if FAST_MODE else 20)
     image_timeout = FAST_REMOTE_TIMEOUT if FAST_MODE else 60
     try:
-        params = {
-            "action":"query","format":"json","generator":"search","gsrsearch":query,
-            "gsrnamespace":6,"gsrlimit":min(limit,10),"prop":"imageinfo",
-            "iiprop":"url|mime|extmetadata","iiurlwidth":1280 if FAST_MODE else 1920,
+        search_params = {
+            "action": "query",
+            "format": "json",
+            "generator": "search",
+            "gsrsearch": str(query).strip() + (" filetype:video" if prefer_motion else ""),
+            "gsrnamespace": 6,
+            "gsrlimit": min(limit, 10),
+            "prop": "info",
+            "inprop": "url",
         }
-        data = http_json("https://commons.wikimedia.org/w/api.php?" + urlencode(params), timeout=timeout)
-        out=[]
-        for pge in (data.get("query",{}).get("pages",{}) or {}).values():
-            info=(pge.get("imageinfo") or [{}])[0]
-            original=info.get("url"); mime=str(info.get("mime") or "")
+        if not prefer_motion:
+            # ImageInfo and VideoInfo are mutually exclusive TimedMediaHandler
+            # metadata paths. Preserve the existing image acquisition behaviour.
+            search_params["prop"] = "info|imageinfo"
+            search_params["iiprop"] = "url|mime|extmetadata"
+            search_params["iiurlwidth"] = 1280 if FAST_MODE else 1920
+
+        search_data = http_json(
+            "https://commons.wikimedia.org/w/api.php?" + urlencode(search_params),
+            timeout=timeout,
+        )
+        search_pages = list((search_data.get("query", {}).get("pages", {}) or {}).values())
+        if not search_pages:
+            return []
+
+        if prefer_motion:
+            # API:videoinfo explicitly cannot be used as a generator. First
+            # search for file pages, then request their transcode derivatives
+            # together by pageids in one bounded second call.
+            page_ids = [
+                str(page.get("pageid"))
+                for page in search_pages
+                if str(page.get("pageid") or "").isdigit()
+            ]
+            if not page_ids:
+                return []
+            video_params = {
+                "action": "query",
+                "format": "json",
+                "pageids": "|".join(page_ids),
+                "prop": "info|videoinfo",
+                "inprop": "url",
+                "viprop": "url|mime|extmetadata|derivatives|size|mediatype",
+            }
+            video_data = http_json(
+                "https://commons.wikimedia.org/w/api.php?" + urlencode(video_params),
+                timeout=timeout,
+            )
+            video_pages = video_data.get("query", {}).get("pages", {}) or {}
+            media_pages = []
+            for search_page in search_pages:
+                page_id = str(search_page.get("pageid") or "")
+                media_page = video_pages.get(page_id)
+                if not isinstance(media_page, dict):
+                    continue
+                # The second result carries videoinfo; the first carries the
+                # generator result's search ordering. Keep only video records.
+                media_page = {**search_page, **media_page}
+                media_info = (media_page.get("videoinfo") or [{}])[0]
+                mime = str(media_info.get("mime") or "").lower()
+                original_url = str(media_info.get("url") or "").strip()
+                if not (mime.startswith("video/") or re.search(
+                    r"\.(webm|ogv|ogg|mp4|mov|mkv)(?:\?|$)", original_url, re.I
+                )):
+                    continue
+                media_pages.append((media_page, media_info))
+        else:
+            media_pages = []
+            for page in search_pages:
+                image_info = (page.get("imageinfo") or [{}])[0]
+                if isinstance(image_info, dict):
+                    media_pages.append((page, image_info))
+
+        out: List[Dict[str, Any]] = []
+        for page, media_info in media_pages:
+            meta = media_info.get("extmetadata") or {}
+            license_name = str((meta.get("LicenseShortName") or {}).get("value") or "").strip()
+            license_url = str((meta.get("LicenseUrl") or {}).get("value") or "").strip()
+            creator = str((meta.get("Artist") or {}).get("value") or "").strip()
+            title = str(page.get("title") or "").strip()
+            source_url = str(page.get("canonicalurl") or media_info.get("descriptionurl") or "").strip()
+            commercial_state = _commercial_use_from_license(license_name, license_url)
+            complete_rights_metadata = bool(
+                source_url and license_url and license_name and title
+                and (creator or commercial_state == "public_domain_cc0_1_0")
+                and commercial_state in {
+                    "public_domain_cc0_1_0",
+                    "commercial_use_allowed_with_attribution",
+                }
+            )
+
+            if prefer_motion:
+                original_url = str(media_info.get("url") or "").strip()
+                derivatives = media_info.get("derivatives") or []
+                max_bytes = 24_000_000 if FAST_MODE else 70_000_000
+                derivative_candidates = []
+                for derivative in derivatives:
+                    if not isinstance(derivative, dict):
+                        continue
+                    derivative_url = str(derivative.get("src") or "").strip()
+                    derivative_type = str(derivative.get("type") or "").lower()
+                    try:
+                        width = int(derivative.get("width") or 0)
+                        height = int(derivative.get("height") or 0)
+                        bandwidth = int(derivative.get("bandwidth") or 0)
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    if (
+                        not derivative_url.startswith("https://upload.wikimedia.org/")
+                        or not derivative_type.startswith("video/")
+                        or width < 640 or height < 360
+                    ):
+                        continue
+                    derivative_candidates.append({
+                        "url": derivative_url,
+                        "mime": derivative_type,
+                        "width": width,
+                        "height": height,
+                        "bandwidth": bandwidth,
+                        "transcodekey": str(derivative.get("transcodekey") or ""),
+                    })
+                derivative_candidates.sort(
+                    key=lambda row: (
+                        row["width"] >= 720,
+                        row["width"],
+                        row["bandwidth"],
+                    ),
+                    reverse=True,
+                )
+
+                attempts = derivative_candidates[:4]
+                # If Commons has no transcode derivatives yet, try the actual
+                # original once under a strict size limit. Never substitute a
+                # thumbnail or a poster image for requested motion footage.
+                if not attempts and original_url.startswith("https://upload.wikimedia.org/"):
+                    original_path = str(urlparse(original_url).path or "")
+                    original_suffix = Path(original_path).suffix.lower()
+                    if original_suffix in {".webm", ".ogv", ".ogg", ".mp4", ".mov", ".mkv"}:
+                        attempts = [{
+                            "url": original_url,
+                            "mime": str(media_info.get("mime") or ""),
+                            "width": int(media_info.get("width") or 0),
+                            "height": int(media_info.get("height") or 0),
+                            "bandwidth": 0,
+                            "transcodekey": "original",
+                        }]
+
+                downloaded = None
+                for attempt_index, derivative in enumerate(attempts, 1):
+                    media_url = derivative["url"]
+                    media_suffix = Path(str(urlparse(media_url).path or "")).suffix.lower()
+                    if media_suffix not in {".webm", ".ogv", ".ogg", ".mp4", ".mov", ".mkv"}:
+                        media_suffix = ".webm" if "webm" in derivative["mime"] else (
+                            ".ogv" if "ogg" in derivative["mime"] else ".mp4"
+                        )
+                    quality = derivative["transcodekey"] or f"{derivative['width']}x{derivative['height']}"
+                    safe_quality = re.sub(r"[^A-Za-z0-9_-]+", "_", quality)[:36] or "video"
+                    output_path = outdir / (
+                        f"commons_{page.get('pageid', 'x')}_{safe_quality}_{uuid.uuid4().hex[:8]}{media_suffix}"
+                    )
+                    try:
+                        download(
+                            media_url,
+                            output_path,
+                            timeout=(max(FAST_REMOTE_TIMEOUT, 20) if FAST_MODE else 90),
+                            max_bytes=max_bytes,
+                        )
+                        if not output_path.is_file() or output_path.stat().st_size <= 1000:
+                            output_path.unlink(missing_ok=True)
+                            raise RuntimeError("Commons transcode download was empty or too small")
+                        downloaded = (output_path, derivative, media_url)
+                        break
+                    except Exception as exc:
+                        output_path.unlink(missing_ok=True)
+                        _media_debug(
+                            "wikimedia",
+                            RuntimeError(
+                                f"transcode {derivative['transcodekey'] or derivative['width']} "
+                                f"attempt {attempt_index} unavailable: {type(exc).__name__}"
+                            ),
+                        )
+                        continue
+                if downloaded is None:
+                    continue
+
+                path, selected_derivative, downloaded_url = downloaded
+                out.append({
+                    "kind": "video",
+                    "path": str(path),
+                    "source": "Wikimedia Commons",
+                    "source_id": page.get("pageid"),
+                    "source_url": source_url or None,
+                    "source_media_url": original_url or None,
+                    "downloaded_media_url": downloaded_url,
+                    "creator": creator or None,
+                    "attribution": (meta.get("Credit") or {}).get("value"),
+                    "license": license_name or None,
+                    "license_url": license_url or None,
+                    "commercial_use_state": commercial_state,
+                    "rights_status": "license_metadata_present" if complete_rights_metadata else "REVIEW_REQUIRED",
+                    "rights_status_reason": None if complete_rights_metadata else (
+                        "Commons file is missing item-level creator, source-page or commercial license evidence."
+                    ),
+                    "title": title,
+                    "description": (
+                        (meta.get("ImageDescription") or {}).get("value")
+                        or (meta.get("ObjectName") or {}).get("value")
+                        or ""
+                    ),
+                    "license_terms": (meta.get("UsageTerms") or {}).get("value"),
+                    "media_mime_type": selected_derivative["mime"],
+                    "media_width": selected_derivative["width"],
+                    "media_height": selected_derivative["height"],
+                    "transcode_key": selected_derivative["transcodekey"],
+                    "transcoded_from_original": downloaded_url != original_url,
+                })
+                continue
+
+            # Original still-image path: preserve item-specific license and creator
+            # evidence, and normalize the downloaded thumbnail to a safe local image.
+            original = media_info.get("url")
+            mime = str(media_info.get("mime") or "")
             if not original:
                 continue
-            meta=info.get("extmetadata") or {}
-            lic=(meta.get("LicenseShortName") or {}).get("value")
-            creator=(meta.get("Artist") or {}).get("value")
-            is_video="video" in mime or re.search(r"\.(webm|ogv|mp4)(\?|$)", original, re.I)
-            if is_video:
-                if FAST_MODE:
-                    continue
-                p=outdir/f"commons_{pge.get('pageid','x')}.media"
-                try:
-                    download(original,p,timeout=90)
-                    source_url = str(pge.get("canonicalurl") or "").strip()
-                    license_url = str((meta.get("LicenseUrl") or {}).get("value") or "").strip()
-                    license_name = str(lic or "").strip()
-                    commercial_state = _commercial_use_from_license(license_name, license_url)
-                    title = str(pge.get("title") or "").strip()
-                    complete = bool(source_url and license_url and license_name and title and (creator or commercial_state == "public_domain_cc0_1_0") and commercial_state in {"public_domain_cc0_1_0", "commercial_use_allowed_with_attribution"})
-                    out.append({
-                        "kind": "video", "path": str(p), "source": "Wikimedia Commons",
-                        "source_id": pge.get("pageid"), "source_url": source_url or None,
-                        "creator": creator, "attribution": (meta.get("Credit") or {}).get("value"),
-                        "license": license_name or None, "license_url": license_url or None,
-                        "commercial_use_state": commercial_state,
-                        "rights_status": "license_metadata_present" if complete else "REVIEW_REQUIRED",
-                        "title": title, "description": (meta.get("ImageDescription") or {}).get("value") or (meta.get("ObjectName") or {}).get("value") or "",
-                        "license_terms": (meta.get("UsageTerms") or {}).get("value"),
-                    })
-                except Exception as exc:
-                    _media_debug("wikimedia",exc)
+            if not mime.startswith("image/") and not re.search(
+                r"\.(jpe?g|png|webp|avif|gif|tiff?)(?:\?|$)", str(original), re.I
+            ):
                 continue
-            if not mime.startswith("image/") and not re.search(r"\.(jpe?g|png|webp|avif|gif|tiff?)(\?|$)", original, re.I):
-                continue
-            u=info.get("thumburl") or original
-            raw=outdir/f"commons_raw_{pge.get('pageid','x')}"
+            thumb_url = media_info.get("thumburl") or original
+            raw = outdir / f"commons_raw_{page.get('pageid', 'x')}_{uuid.uuid4().hex[:8]}"
             try:
-                download(u,raw,headers={"Accept":"image/avif,image/webp,image/apng,image/*,*/*;q=0.8"},timeout=image_timeout,max_bytes=12_000_000 if FAST_MODE else 40_000_000)
-                p=_normalize_image_file(raw,outdir,f"commons_{pge.get('pageid','x')}")
-                if not p:
+                download(
+                    thumb_url,
+                    raw,
+                    headers={"Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"},
+                    timeout=image_timeout,
+                    max_bytes=12_000_000 if FAST_MODE else 40_000_000,
+                )
+                path = _normalize_image_file(raw, outdir, f"commons_{page.get('pageid', 'x')}")
+                if not path:
                     continue
-                source_url = str(pge.get("canonicalurl") or "").strip()
-                license_url = str((meta.get("LicenseUrl") or {}).get("value") or "").strip()
-                license_name = str(lic or "").strip()
-                commercial_state = _commercial_use_from_license(license_name, license_url)
-                title = str(pge.get("title") or "").strip()
-                complete = bool(source_url and license_url and license_name and title and (creator or commercial_state == "public_domain_cc0_1_0") and commercial_state in {"public_domain_cc0_1_0", "commercial_use_allowed_with_attribution"})
-                out.append({
-                    "kind": "image", "path": str(p), "source": "Wikimedia Commons",
-                    "source_id": pge.get("pageid"), "source_url": source_url or None,
-                    "creator": creator, "attribution": (meta.get("Credit") or {}).get("value"),
-                    "license": license_name or None, "license_url": license_url or None,
-                    "commercial_use_state": commercial_state,
-                    "rights_status": "license_metadata_present" if complete else "REVIEW_REQUIRED",
-                    "title": title, "license_terms": (meta.get("UsageTerms") or {}).get("value"),
-                })
             except Exception as exc:
-                _media_debug("wikimedia",exc)
+                _media_debug("wikimedia", exc)
                 raw.unlink(missing_ok=True)
                 continue
+            out.append({
+                "kind": "image",
+                "path": str(path),
+                "source": "Wikimedia Commons",
+                "source_id": page.get("pageid"),
+                "source_url": source_url or None,
+                "downloaded_media_url": thumb_url,
+                "creator": creator or None,
+                "attribution": (meta.get("Credit") or {}).get("value"),
+                "license": license_name or None,
+                "license_url": license_url or None,
+                "commercial_use_state": commercial_state,
+                "rights_status": "license_metadata_present" if complete_rights_metadata else "REVIEW_REQUIRED",
+                "rights_status_reason": None if complete_rights_metadata else (
+                    "Commons file is missing item-level creator, source-page or commercial license evidence."
+                ),
+                "title": title,
+                "description": (
+                    (meta.get("ImageDescription") or {}).get("value")
+                    or (meta.get("ObjectName") or {}).get("value")
+                    or ""
+                ),
+                "license_terms": (meta.get("UsageTerms") or {}).get("value"),
+            })
         if out:
-            _media_success("wikimedia", {"count":len(out),"query":query})
+            _media_success("wikimedia", {"count": len(out), "query": query, "motion_first": bool(prefer_motion)})
         return out
     except Exception as exc:
-        _media_debug("wikimedia",exc)
+        _media_debug("wikimedia", exc)
         return []
+
 
 
 def _loc_images(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
@@ -3221,16 +4369,21 @@ def _procedural_image(prompt: str, outdir: Path, index: int, width: int = 1600, 
         return None
     outdir.mkdir(parents=True, exist_ok=True)
     raw = re.sub(r"\s+", " ", str(prompt or "")).strip()
-    subject_match = re.search(r"\babout\\s+(.+?)(?:;|\\.\\s|$)", raw, re.I)
+    subject_match = re.search(r"\babout\s+(.+?)(?:;|\.\s|$)", raw, re.I)
     subject = subject_match.group(1).strip(" .;,:") if subject_match else raw
     subject = re.split(
-        r"\b(?:visual focus|visual emphasis|composition|photorealistic|professional editorial)\b",
+        r"\b(?:overall visual direction|visual focus|visual emphasis|composition|photorealistic|professional editorial)\b",
         subject, maxsplit=1, flags=re.I
     )[0].strip(" .;,:")
-    subject = re.sub(r"^(?:premium|original|cinematic|editorial|documentary|image|visuals?)\\s+", "", subject, flags=re.I)
+    # Rendering instructions must not leak into visible artwork titles.
+    subject = re.sub(
+        r"^(?:premium\s+)?cinematic\s+live[- ]action\s+film\s+still\s*:\s*",
+        "", subject, flags=re.I
+    )
+    subject = re.sub(r"^(?:premium|original|cinematic|editorial|documentary|image|visuals?)\s+", "", subject, flags=re.I)
     subject = re.sub(r"\s+", " ", subject).strip()[:100] or "Ideas into real creative work"
 
-    focus_match = re.search(r"\bvisual focus\\s*:\\s*(.+?)(?:;|\\.\\s|$)", raw, re.I)
+    focus_match = re.search(r"\bvisual focus\s*:\s*(.+?)(?:;|\.\s|$)", raw, re.I)
     focus = focus_match.group(1).strip(" .;,:") if focus_match else ""
     focus = re.sub(r"\s+", " ", focus)[:115]
     seed = int(hashlib.sha256(f"{subject}|{focus}|{index}".encode("utf-8")).hexdigest()[:12], 16)
@@ -3686,6 +4839,82 @@ def _curated_pexels_editorial_photo(scene: Dict[str, Any], outdir: Path, index: 
     }
 
 
+def _curated_launch_visual_candidate_relevant(
+    candidate: Dict[str, Any],
+    required_concepts: Iterable[str],
+    scene_concepts: Iterable[str],
+    explicit_launch_profile: bool,
+    search_subject: str,
+    focus: str,
+) -> bool:
+    """Match a curated launch clip to its focal subject, not every element in a composite brief.
+
+    The campaign storyboard intentionally moves from a landscape to a city to a
+    research desk. Requiring any one stock shot's metadata to describe every noun
+    in a multi-concept scene rejected even directly relevant footage. The fallback
+    below is limited to the explicit AI Infinity launch profile and requires both
+    (a) the candidate's declared focal concept to be present in the scene brief and
+    (b) the actual item title/description/tags to match that same concept. General
+    public-provider relevance remains strict; unrelated clips still fail closed.
+    """
+    if _visual_candidate_relevant(candidate, search_subject, focus):
+        return True
+    if not explicit_launch_profile or not isinstance(candidate, dict):
+        return False
+    required = {str(value) for value in (required_concepts or ())}
+    visible = {str(value) for value in (scene_concepts or ())}
+    if not required or not (required & visible):
+        return False
+    text = " ".join(
+        str(candidate.get(key) or "")
+        for key in ("title", "description", "alt", "caption", "tags", "category")
+    ).lower()
+    metadata_concepts = {
+        key for key, pattern in _VISUAL_CONCEPTS.items()
+        if re.search(pattern, text, re.I)
+    }
+    return bool(required & metadata_concepts)
+
+
+def _source_has_prolonged_black_frames(path: Path, threshold_seconds: float = 0.75) -> bool:
+    """Fail closed on public motion clips containing a sustained near-black interval.
+
+    This inexpensive decode preflight avoids selecting a source whose footage can
+    inject a long black hole into an otherwise valid rendered scene. The renderer's
+    final-program black-frame QC remains authoritative; this is only a source gate.
+    """
+    ffmpeg_path = shutil.which("ffmpeg")
+    try:
+        threshold = max(0.25, min(5.0, float(threshold_seconds)))
+    except (TypeError, ValueError):
+        threshold = 0.75
+    if not ffmpeg_path or not Path(path).is_file():
+        return True
+    try:
+        result = subprocess.run(
+            [
+                ffmpeg_path, "-hide_banner", "-nostats", "-i", str(path),
+                "-vf", f"blackdetect=d={threshold:.3f}:pix_th=0.10:pic_th=0.98",
+                "-an", "-f", "null", "-",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=45,
+            check=False,
+        )
+    except Exception:
+        return True
+    if result.returncode != 0:
+        return True
+    for raw_duration in re.findall(r"black_duration:([0-9]+(?:\.[0-9]+)?)", result.stderr or ""):
+        try:
+            if float(raw_duration) >= threshold:
+                return True
+        except (TypeError, ValueError):
+            return True
+    return False
+
+
 def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int) -> Optional[Dict[str, Any]]:
     """Keyless, item-attributed Pexels motion footage for the eight-shot AI Infinity launch profile.
 
@@ -3776,6 +5005,299 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
             "tags": "video production studio team setup equipment camera film shooting raw footage for editing practice cinematography production crew",
             "required_concepts": {"studio"},
         },
+        9: {
+            "source_id": 5040711,
+            "source_url": "https://www.pexels.com/video/clouds-formation-in-the-sky-above-the-mountains-5040711/",
+            "media_url": "https://videos.pexels.com/video-files/5040711/5040711-hd_1920_1080_30fps.mp4",
+            "creator": "Joshua Woroniecki",
+            "title": "Clouds formation in the sky above the mountains",
+            "description": "Dynamic clouds move over peaceful mountain peaks during sunset.",
+            "tags": "cinematic mountains landscape clouds moving clouds panoramic horizon nature sunset dramatic terrain",
+            "required_concepts": {"landscape"},
+        },
+        10: {
+            "source_id": 34719182,
+            "source_url": "https://www.pexels.com/video/futuristic-neon-cityscape-at-night-34719182/",
+            "media_url": "https://videos.pexels.com/video-files/34719182/14717093_1920_1080_30fps.mp4",
+            "creator": "Nicola Narracci",
+            "title": "Futuristic neon cityscape at night",
+            "description": "A vibrant, neon-lit digital cityscape at night, evoking futuristic themes.",
+            "tags": "futuristic cityscape skyline metropolis night architecture digital neon glowing urban technology cinematic future city",
+            "required_concepts": {"cityscape"},
+        },
+        11: {
+            "source_id": 29109378,
+            "source_url": "https://www.pexels.com/video/futuristic-abstract-tunnel-with-glowing-lines-29109378/",
+            "media_url": "https://videos.pexels.com/video-files/29109378/12575278_3840_2160_30fps.mp4",
+            "creator": "Chandresh Uike",
+            "title": "Futuristic abstract tunnel with glowing lines",
+            "description": "Dynamic digital tunnel effect with glowing lines for technology themes.",
+            "tags": "abstract motion digital tunnel glowing lines luminous tunnel universe virtual sci fi future moving light cinematic transformation",
+            "required_concepts": {"abstract_motion"},
+        },
+        12: {
+            "source_id": 7239491,
+            "source_url": "https://www.pexels.com/video/a-person-watching-video-on-a-laptop-7239491/",
+            "media_url": "https://videos.pexels.com/video-files/7239491/7239491-hd_1920_1080_30fps.mp4",
+            "creator": "Max Medyk",
+            "title": "A person watching video on a laptop",
+            "description": "A person watches an online influencer's video on a laptop at home.",
+            "tags": "creator finished video laptop screen watching video playback home office content creator final film review",
+            "required_concepts": {"creator", "workstation"},
+        },
+        13: {
+            "source_id": 6550131,
+            "source_url": "https://www.pexels.com/video/man-writing-down-in-a-notebook-6550131/",
+            "media_url": "https://videos.pexels.com/video-files/6550131/6550131-uhd_3840_2160_25fps.mp4",
+            "creator": "Tima Miroshnichenko",
+            "title": "Man writing down in a notebook",
+            "description": "A focused view of a person writing notes in a notebook using a pen.",
+            "tags": "research writing notes notebook script pages handwriting planning storyboard thinking creative process",
+            "required_concepts": {"research_writing"},
+        },
+        14: {
+            "source_id": 35331907,
+            "source_url": "https://www.pexels.com/video/focused-man-in-modern-home-office-at-night-35331907/",
+            "media_url": "https://videos.pexels.com/video-files/35331907/14970170_3840_2160_25fps.mp4",
+            "creator": "Artem Shutkin",
+            "title": "Focused man in modern home office at night",
+            "description": "Man working on a laptop in a modern home office setting at night.",
+            "tags": "creator home office laptop screen warm practical lighting night workstation finished film review",
+            "required_concepts": {"creator", "workstation"},
+        },
+        15: {
+            "source_id": 28946305,
+            "source_url": "https://www.pexels.com/video/clouds-over-mountain-landscape-timelapse-28946305/",
+            "media_url": "https://videos.pexels.com/video-files/28946305/12525373_1920_1080_30fps.mp4",
+            "creator": "Karthick",
+            "title": "Clouds Over Mountain Landscape Timelapse",
+            "description": "Dynamic cloud movement over a mountain backdrop captured in a timelapse.",
+            "tags": "mountains landscape clouds timelapse moving clouds nature horizon terrain cinematic",
+            "required_concepts": {"landscape"},
+        },
+        16: {
+            "source_id": 8086204,
+            "source_url": "https://www.pexels.com/video/close-up-of-a-script-8086204/",
+            "media_url": "https://videos.pexels.com/video-files/8086204/8086204-uhd_4096_2160_25fps.mp4",
+            "creator": "Ron Lach",
+            "title": "Close up of a Script",
+            "description": "Detailed view of the scriptwriting process with focus on pen and script.",
+            "tags": "scriptwriting storyboard writing research pages paper pen handwriting planning creative process screenplay manuscript",
+            "required_concepts": {"storyboard"},
+        },
+
+        17: {
+            "source_id": 8478102,
+            "source_url": "https://www.pexels.com/video/close-up-video-of-a-person-writing-8478102/",
+            "media_url": "https://videos.pexels.com/video-files/8478102/8478102-uhd_4096_2160_25fps.mp4",
+            "creator": "ArtHouse Studio",
+            "title": "Close Up video of a Person Writing",
+            "description": "Close-up of a person writing notes in a notebook surrounded by books.",
+            "tags": "writing notes notebook books creative process script research",
+            "required_concepts": {"research_writing"},
+        },
+        18: {
+            "source_id": 6798789,
+            "source_url": "https://www.pexels.com/video/close-up-video-of-a-person-writing-on-a-notebook-6798789/",
+            "media_url": "https://videos.pexels.com/video-files/6798789/6798789-hd_1920_1080_24fps.mp4",
+            "creator": "RDNE Stock project",
+            "title": "Close Up Video of a Person Writing on a Notebook",
+            "description": "Close-up of a person writing notes in a notebook under warm light.",
+            "tags": "writing notebook warm light notes writing process close up",
+            "required_concepts": {"research_writing"},
+        },
+        19: {
+            "source_id": 8069596,
+            "source_url": "https://www.pexels.com/video/close-up-footage-of-a-person-writing-on-a-notebook-8069596/",
+            "media_url": "https://videos.pexels.com/video-files/8069596/8069596-hd_1920_1080_30fps.mp4",
+            "creator": "RDNE Stock project",
+            "title": "Close-up Footage of a Person Writing on a Notebook",
+            "description": "Close-up of hands writing in a business meeting with laptops and documents.",
+            "tags": "hands writing business meeting laptops documents notes planning research",
+            "required_concepts": {"research_writing"},
+        },
+        20: {
+            "source_id": 6928979,
+            "source_url": "https://www.pexels.com/video/close-up-view-of-a-person-writing-notes-on-her-notebook-6928979/",
+            "media_url": "https://videos.pexels.com/video-files/6928979/6928979-hd_1920_1080_25fps.mp4",
+            "creator": "Polina Tankilevitch",
+            "title": "Close-Up View of a Person Writing Notes on Her Notebook",
+            "description": "Two people writing and discussing notes in a study setting.",
+            "tags": "writing discussing notes notebook study people collaboration",
+            "required_concepts": {"research_writing"},
+        },
+        21: {
+            "source_id": 33350918,
+            "source_url": "https://www.pexels.com/video/person-writing-in-notebook-at-desk-33350918/",
+            "media_url": "https://videos.pexels.com/video-files/33350918/14201076_2160_3840_24fps.mp4",
+            "creator": "8 K",
+            "title": "Person Writing in Notebook at Desk",
+            "description": "Close-up of a person writing in a notebook with a pen indoors.",
+            "tags": "person writing notebook pen desk notes creative planning handwriting",
+            "required_concepts": {"research_writing"},
+        },
+        22: {
+            "source_id": 8478097,
+            "source_url": "https://www.pexels.com/video/person-writing-on-a-notebook-8478097/",
+            "media_url": "https://videos.pexels.com/video-files/8478097/8478097-hd_1080_1920_25fps.mp4",
+            "creator": "ArtHouse Studio",
+            "title": "Person Writing on a Notebook",
+            "description": "Close-up of a student writing notes in a notebook during a study session.",
+            "tags": "student writing notes notebook study session script research handwriting",
+            "required_concepts": {"research_writing"},
+        },
+        23: {
+            "source_id": 7504395,
+            "source_url": "https://www.pexels.com/video/a-team-discussing-and-brainstorming-ideas-7504395/",
+            "media_url": "https://videos.pexels.com/video-files/7504395/7504395-uhd_3840_2160_25fps.mp4",
+            "creator": "Moe Magners",
+            "title": "A Team Discussing and Brainstorming Ideas",
+            "description": "A diverse group of colleagues collaborate and brainstorm in a modern office setting.",
+            "tags": "team colleagues collaborate brainstorming ideas modern office meeting discussion",
+            "required_concepts": {"collaboration"},
+        },
+        24: {
+            "source_id": 8125940,
+            "source_url": "https://www.pexels.com/video/people-brainstorming-at-a-meeting-8125940/",
+            "media_url": "https://videos.pexels.com/video-files/8125940/8125940-hd_1920_1080_25fps.mp4",
+            "creator": "Ivan S",
+            "title": "People Brainstorming at a Meeting",
+            "description": "A diverse team collaborating in a modern office setting.",
+            "tags": "people brainstorming meeting diverse team collaboration modern office colleagues",
+            "required_concepts": {"collaboration"},
+        },
+        25: {
+            "source_id": 3256770,
+            "source_url": "https://www.pexels.com/video/people-brainstorming-3256770/",
+            "media_url": "https://videos.pexels.com/video-files/3256770/3256770-uhd_2160_3840_25fps.mp4",
+            "creator": "fauxels",
+            "title": "People Brainstorming",
+            "description": "A diverse group of colleagues brainstorming in a modern conference room.",
+            "tags": "people colleagues brainstorming modern conference room teamwork ideas discussion",
+            "required_concepts": {"collaboration"},
+        },
+        26: {
+            "source_id": 34707439,
+            "source_url": "https://www.pexels.com/video/futuristic-abstract-light-tunnel-animation-34707439/",
+            "media_url": "https://videos.pexels.com/video-files/34707439/14711213_1920_1080_30fps.mp4",
+            "creator": "Nicola Narracci",
+            "title": "Futuristic Abstract Light Tunnel Animation",
+            "description": "Dynamic view through a futuristic light tunnel with vibrant glowing effects.",
+            "tags": "futuristic abstract light tunnel glowing effects digital animation motion graphics technology",
+            "required_concepts": {"abstract_motion"},
+        },
+        27: {
+            "source_id": 35668127,
+            "source_url": "https://www.pexels.com/video/mesmerizing-abstract-light-tunnel-in-motion-35668127/",
+            "media_url": "https://videos.pexels.com/video-files/35668127/15115047_1920_1080_30fps.mp4",
+            "creator": "Nicola Narracci",
+            "title": "Mesmerizing Abstract Light Tunnel in Motion",
+            "description": "Hypnotic geometric light tunnel animation with a spinning effect.",
+            "tags": "abstract light tunnel geometric motion spinning technology neon animation",
+            "required_concepts": {"abstract_motion"},
+        },
+        28: {
+            "source_id": 34688250,
+            "source_url": "https://www.pexels.com/video/futuristic-tunnel-with-abstract-light-patterns-34688250/",
+            "media_url": "https://videos.pexels.com/video-files/34688250/14703012_3840_2160_60fps.mp4",
+            "creator": "Colors Motion Graphics",
+            "title": "Futuristic Tunnel with Abstract Light Patterns",
+            "description": "Mesmerizing abstract tunnel with teal and black patterns for a futuristic vibe.",
+            "tags": "futuristic tunnel abstract light patterns teal black motion graphics animation",
+            "required_concepts": {"abstract_motion"},
+        },
+        29: {
+            "source_id": 36036735,
+            "source_url": "https://www.pexels.com/video/video-editing-process-on-laptop-screen-36036735/",
+            "media_url": "https://videos.pexels.com/video-files/36036735/15283027_1920_1080_60fps.mp4",
+            "creator": "Nothing Ahead",
+            "title": "Video Editing Process on Laptop Screen",
+            "description": "A person editing video on a laptop in a dark room, focusing on details.",
+            "tags": "video editing laptop screen dark room creative process editing software timeline production",
+            "required_concepts": {"editing", "workstation"},
+        },
+        30: {
+            "source_id": 40304886,
+            "source_url": "https://www.pexels.com/video/young-man-video-editing-at-home-desk-40304886/",
+            "media_url": "https://videos.pexels.com/video-files/40304886/17217439_1920_1080_60fps.mp4",
+            "creator": "Nothing Ahead",
+            "title": "Young Man Video Editing at Home Desk",
+            "description": "A young man editing video on a laptop at a home desk during the daytime.",
+            "tags": "young man video editing laptop home desk editor workstation post production",
+            "required_concepts": {"editing", "workstation"},
+        },
+        31: {
+            "source_id": 40304903,
+            "source_url": "https://www.pexels.com/video/video-editing-software-on-monitor-display-40304903/",
+            "media_url": "https://videos.pexels.com/video-files/40304903/17217542_1920_1080_60fps.mp4",
+            "creator": "Nothing Ahead",
+            "title": "Video Editing Software on Monitor Display",
+            "description": "Close-up of a video editing software interface on a monitor.",
+            "tags": "video editing software interface monitor display editing timeline post production",
+            "required_concepts": {"editing", "workstation"},
+        },
+        32: {
+            "source_id": 36036747,
+            "source_url": "https://www.pexels.com/es-es/video/edicion-de-video-dinamica-en-software-profesional-36036747/",
+            "media_url": "https://videos.pexels.com/video-files/36036747/15283259_1920_1080_60fps.mp4",
+            "creator": "Nothing Ahead",
+            "title": "Dynamic Video Editing in Professional Software",
+            "description": "Close-up of video editing in progress on a computer screen.",
+            "tags": "video editing computer screen professional software timeline editing workflow",
+            "required_concepts": {"editing", "workstation"},
+        },
+        33: {
+            "source_id": 34663551,
+            "source_url": "https://www.pexels.com/video/futuristic-neon-light-tunnel-animation-34663551/",
+            # Follow the item's own public download redirect instead of guessing
+            # a CDN filename. download() follows only bounded, public HTTPS redirects.
+            "media_url": "https://www.pexels.com/download/video/34663551/",
+            "creator": "Colors Motion Graphics",
+            "title": "Futuristic Neon Light Tunnel Animation",
+            "description": "Dynamic green neon lights create a tunnel illusion in this animated video.",
+            "tags": "futuristic neon light tunnel animation glowing lines abstract motion graphics technology",
+            "required_concepts": {"abstract_motion"},
+        },
+        34: {
+            "source_id": 36999006,
+            "source_url": "https://www.pexels.com/video/futuristic-geometric-digital-tunnel-36999006/",
+            "media_url": "https://www.pexels.com/download/video/36999006/",
+            "creator": "Chandresh Uike",
+            "title": "Futuristic Geometric Digital Tunnel",
+            "description": "A dynamic, glowing geometric tunnel in a modern digital style.",
+            "tags": "futuristic geometric digital tunnel glowing abstract motion technology imagination portal",
+            "required_concepts": {"abstract_motion"},
+        },
+        35: {
+            "source_id": 31930508,
+            "source_url": "https://www.pexels.com/video/vibrant-abstract-neon-light-motion-31930508/",
+            "media_url": "https://videos.pexels.com/video-files/31930508/13601021_1920_1080_30fps.mp4",
+            "creator": "Nicola Narracci",
+            "title": "Vibrant Abstract Neon Light Motion",
+            "description": "Dynamic neon lights in a vibrant abstract tunnel create a captivating visual experience.",
+            "tags": "abstract tunnel futuristic neon light motion dynamic glowing lines luminous motion graphics technology",
+            "required_concepts": {"abstract_motion"},
+        },
+        36: {
+            "source_id": 34771310,
+            "source_url": "https://www.pexels.com/video/futuristic-neon-tunnel-with-glowing-lights-34771310/",
+            "media_url": "https://www.pexels.com/download/video/34771310/",
+            "creator": "Nicola Narracci",
+            "title": "Futuristic Neon Tunnel with Glowing Lights",
+            "description": "A spinning tunnel with vibrant neon lights in a futuristic design.",
+            "tags": "abstract tunnel spinning neon glowing lights futuristic technology digital motion graphics",
+            "required_concepts": {"abstract_motion"},
+        },
+        37: {
+            "source_id": 31401976,
+            "source_url": "https://www.pexels.com/video/futuristic-neon-tunnel-with-radiant-circles-31401976/",
+            "media_url": "https://www.pexels.com/download/video/31401976/",
+            "creator": "Nicola Narracci",
+            "title": "Futuristic Neon Tunnel with Radiant Circles",
+            "description": "Vibrant neon circles spin in an abstract digital tunnel, creating a futuristic ambience.",
+            "tags": "abstract digital tunnel neon circles glowing lights futuristic ambience technology motion graphics",
+            "required_concepts": {"abstract_motion"},
+        },
     }
     # Scene ordinals are a hint, not an asset specification: a five-scene short's
     # closing shot can mean finished playback while an eight-scene storyboard's
@@ -3783,7 +5305,13 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
     if not isinstance(scene, dict):
         return None
     profile_text = " ".join(str(scene.get(key) or "") for key in ("topic", "title", "heading", "visual_focus", "visual_query"))
-    if not (
+    explicit_launch_profile = str(scene.get("campaign_profile") or "").strip().lower() == "ai_infinity_launch"
+    # An explicit launch-profile marker is project-level intent. Scene-local
+    # topics intentionally describe the shot (for example, "mountain landscape")
+    # and need not repeat the brand name. Requiring the literal brand in every
+    # scene rejected valid launch-profile shots before concept matching even ran.
+    # Ordinary projects still need both the brand and a creator/production term.
+    if not explicit_launch_profile and not (
         re.search(r"\bAI\s+Infinity\b", profile_text, re.I)
         and re.search(r"\b(?:launch|creator|studio|production|editing|software)\b", profile_text, re.I)
     ):
@@ -3791,9 +5319,17 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
 
     focus = re.sub(r"\s+", " ", str(scene.get("visual_focus") or scene.get("heading") or "")).strip()
     heading = str(scene.get("heading") or "")
+    # A timed campaign scene can describe its visible subject in the search
+    # brief or narration even when its short heading/focus is metaphorical.
+    # Include scene-local fields for concept matching, while still requiring the
+    # candidate's own title/description/tags to prove the same focal concept.
+    scene_concept_text = " ".join(
+        str(scene.get(key) or "")
+        for key in ("topic", "title", "heading", "visual_focus", "visual_search_subject", "visual_query", "narration", "on_screen")
+    ).lower()
     scene_concepts = {
         key for key, pattern in _VISUAL_CONCEPTS.items()
-        if re.search(pattern, (focus + " " + heading).lower())
+        if re.search(pattern, scene_concept_text)
     }
     preferred_index = int(index) if str(index).isdigit() else None
     search_subject = str(scene.get("visual_search_subject") or scene.get("topic") or "content creator")
@@ -3811,15 +5347,44 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
     for source_index, candidate in sources.items():
         required = set(candidate.get("required_concepts") or ())
         direct_match = bool(required) and required.issubset(scene_concepts)
-        # A display/finished-playback brief can legitimately use a clip showing
-        # an editing workstation. This bridge is narrowly scoped to that explicit
-        # final-video intent; unrelated camera/studio clips still fail closed.
+        scene_visual_text = " ".join(
+            str(scene.get(key) or "")
+            for key in ("heading", "visual_focus", "visual_search_subject", "visual_query", "narration", "on_screen")
+        )
+        # The launch storyboard contains deliberate focal transitions: landscape
+        # -> futuristic city -> abstract tunnel -> editing craft. These narrow
+        # bridges give the matching catalog category priority only when the user's
+        # actual scene describes that visual. Source metadata, media decode,
+        # black-frame rejection, byte uniqueness and rights gates still apply.
+        primary_focal_text = " ".join(
+            str(scene.get(key) or "")
+            for key in ("heading", "visual_focus", "visual_search_subject")
+        )
+        cityscape_focal = (
+            explicit_launch_profile
+            and required == {"cityscape"}
+            and bool(re.search(r"\b(?:futuristic city|cityscape|city skyline|metropolis|urban skyline)\b", primary_focal_text, re.I))
+        )
+        abstract_transition_focal = (
+            explicit_launch_profile
+            and required == {"abstract_motion"}
+            and bool(re.search(r"\b(?:abstract|digital tunnel|glowing[- ]lines?|light trails|transformation in motion|possibility becomes motion)\b", primary_focal_text, re.I))
+        )
         final_screen_bridge = (
             "finished_video" in scene_concepts
             and "workstation" in scene_concepts
             and required == {"editing", "workstation"}
         )
-        if not (direct_match or final_screen_bridge):
+        # The signature end-card can be composited as legible title treatment
+        # over real computer-screen motion footage. This is a scene-local bridge,
+        # not a substitution of stills or an unrestricted category bypass.
+        signature_screen_bridge = (
+            explicit_launch_profile
+            and required == {"editing", "workstation"}
+            and bool(re.search(r"\b(?:signature ending|brand end[ -]card|logo reveal|end card)\b", scene_visual_text, re.I))
+            and bool(re.search(r"\b(?:screen|monitor|display)\b", scene_visual_text, re.I))
+        )
+        if not (direct_match or final_screen_bridge or cityscape_focal or abstract_transition_focal or signature_screen_bridge):
             continue
 
         metadata_text = " ".join((
@@ -3832,7 +5397,17 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
             "description": candidate.get("description"),
             "tags": candidate.get("tags"),
         }
-        if not _visual_candidate_relevant(metadata_record, search_subject, focus):
+        relevance_concepts = set(scene_concepts)
+        if signature_screen_bridge:
+            # The explicit end-card-on-screen composition means a screen clip is
+            # a truthful visual medium for the brand reveal; metadata still has to
+            # independently match editing/workstation and identify a real screen.
+            if not re.search(r"\b(?:screen|monitor|display|computer)\b", metadata_text, re.I):
+                continue
+            relevance_concepts.update({"editing", "workstation"})
+        if not _curated_launch_visual_candidate_relevant(
+            metadata_record, required, relevance_concepts, explicit_launch_profile, search_subject, focus
+        ):
             continue
         metadata_terms = set(re.findall(r"[a-z0-9]{4,}", metadata_text.lower()))
         lexical_overlap = len(focus_terms & metadata_terms)
@@ -3854,7 +5429,12 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
         # Preserve an ordinal asset only when it independently passed the semantic
         # matcher. A true exact-scene clip beats a merely cheaper generic alternative.
         preferred_bonus = 12 if direct_match and source_index == preferred_index else 0
-        score = len(required & scene_concepts) * 10 + lexical_overlap + screen_bonus + preferred_bonus - resolution_penalty
+        focal_bonus = (
+            28 if abstract_transition_focal
+            else 24 if cityscape_focal or signature_screen_bridge
+            else 0
+        )
+        score = len(required & scene_concepts) * 10 + lexical_overlap + screen_bonus + preferred_bonus + focal_bonus - resolution_penalty
         ranked.append((score, source_index, candidate))
 
     ranked.sort(key=lambda row: (-row[0], row[1]))
@@ -3913,6 +5493,13 @@ def _curated_pexels_launch_video(scene: Dict[str, Any], outdir: Path, index: int
             if not video_stream or min(width, height) < 720 or seconds < 2.0 or media_path.stat().st_size <= 20_000:
                 media_path.unlink(missing_ok=True)
                 last_error = f"source_{source_id}_failed_media_validation"
+                continue
+
+            # Source metadata, resolution and decode success are not sufficient:
+            # reject clips with a sustained black segment before they enter the edit.
+            if _source_has_prolonged_black_frames(media_path):
+                media_path.unlink(missing_ok=True)
+                last_error = f"source_{source_id}_has_prolonged_black_frames"
                 continue
 
             media_hash = file_sha256(media_path)
@@ -4004,6 +5591,8 @@ def _parse_scene_visual_intent(
 
 
 _MEDIA_PROVIDER_COOLDOWN_LOCK = threading.RLock()
+# Serialize per-project distinct-asset reservation across concurrent scene workers.
+_SCENE_VISUAL_SELECTION_LOCK = threading.RLock()
 _MEDIA_PROVIDER_COOLDOWNS: Dict[str, Dict[str, Any]] = {}
 
 
@@ -4023,12 +5612,19 @@ def _scene_is_explicitly_promotional(scene: Dict[str, Any]) -> bool:
             if value:
                 values.append(str(value))
     text = " ".join(values).lower()
-    return bool(re.search(
-        r"\b(?:advertisement|advertising|promotional|promotion|marketing campaign|sales campaign|"
-        r"commercial campaign|product launch|brand launch|launch film|launch video|brand film|"
-        r"brand awareness|sponsored content|commercial)\b",
-        text,
-    ))
+    explicit_brand_campaign = bool(
+        re.search(r"\bAI\s+Infinity\b", text, re.I)
+        and re.search(r"\b(?:campaign|brand film)\b", text, re.I)
+    )
+    return bool(
+        explicit_brand_campaign
+        or re.search(
+            r"\b(?:advertisement|advertising|promotional|promotion|marketing campaign|sales campaign|"
+            r"commercial campaign|product launch|brand launch|launch film|launch video|brand film|"
+            r"brand awareness|sponsored content|commercial)\b",
+            text,
+        )
+    )
 
 
 def _apply_nasa_scene_usage_policy(candidate: Dict[str, Any], scene: Dict[str, Any]) -> Dict[str, Any]:
@@ -4121,12 +5717,23 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
         MEDIA_DEBUG_ERRORS["external-visual-providers"] = "disabled_by_policy"
     if os.getenv("AI_INFINITY_FORCE_PRIMARY_VISUAL_FAILURE","0").strip().lower() in {"1","true","yes","on"}:
         MEDIA_DEBUG_ERRORS["primary-visual-provider"]="forced_failure"
+    requested_ai_video_scenes = max(0, min(12, int(os.getenv("AI_INFINITY_AI_VIDEO_SCENES", "2"))))
+    allow_heavy_fast = os.getenv("AI_INFINITY_ALLOW_HEAVY_VIDEO_FAST", "0").strip().lower() in {"1", "true", "yes", "on"}
+    ai_video_scene_budget = (
+        min(requested_ai_video_scenes, 1 if allow_heavy_fast else 0)
+        if FAST_MODE else min(requested_ai_video_scenes, 4)
+    )
+    allow_metered_video = os.getenv("AI_INFINITY_ALLOW_METERED_VIDEO_API", "0").strip().lower() in {"1", "true", "yes", "on"}
     if (not external_disabled
             and prefer_motion
+            and index <= ai_video_scene_budget
+            and allow_metered_video
             and os.getenv("AI_INFINITY_FORCE_PRIMARY_VISUAL_FAILURE","0").strip().lower() not in {"1","true","yes","on"}):
         motion=_hf_video(ai_prompt,outdir,index,duration)
         if motion:
             return motion
+    elif prefer_motion and index <= ai_video_scene_budget and not allow_metered_video:
+        MEDIA_DEBUG_ERRORS["huggingface-video"] = "skipped: video inference can incur provider charges; set AI_INFINITY_ALLOW_METERED_VIDEO_API=1 only when intentionally authorized"
 
     ai = None
     if not external_disabled and os.getenv("AI_INFINITY_FORCE_PRIMARY_VISUAL_FAILURE","0").strip().lower() not in {"1","true","yes","on"}:
@@ -4142,7 +5749,14 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     )
 
     source_failures=[]
-    getters=() if external_disabled else (_nasa_images,_openverse_images,_commons_media,_pexels,_pixabay,_pexels_photos,_pixabay_images,_loc_images)
+    if external_disabled:
+        getters = ()
+    elif prefer_motion:
+        # Long-form/cinematic scenes search real motion first. Images remain an
+        # explicit fallback if the relevant licensed footage cannot be found.
+        getters = (_commons_media, _pexels, _pixabay, _nasa_images, _openverse_images, _pexels_photos, _pixabay_images, _loc_images)
+    else:
+        getters = (_nasa_images, _openverse_images, _commons_media, _pexels, _pixabay, _pexels_photos, _pixabay_images, _loc_images)
 
     # Never reuse identical visual bytes for multiple scene source records when
     # another real candidate is available. This keeps visual provenance aligned
@@ -4157,8 +5771,18 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             pass
 
     def candidate_is_relevant(candidate: Dict[str, Any]) -> bool:
-        # Use the storyboard's scene focus; provider query matches are provenance,
-        # not a replacement for substantive metadata evidence.
+        # Curated launch clips have already passed the stricter launch-specific
+        # focal-concept + item-metadata check in _curated_pexels_launch_video.
+        # Do not reject them a second time with the generic multi-concept matcher:
+        # that double validation was dropping correctly matched mountain/tunnel shots.
+        if (
+            isinstance(candidate, dict)
+            and candidate.get("quality_tier") == "curated_free_source_motion_video"
+            and candidate.get("selection_reason") == "scene_concepts_and_source_metadata_match"
+            and candidate.get("validated_media") is True
+        ):
+            return True
+        # For every other source, provider query text remains provenance—not proof.
         return _visual_candidate_relevant(candidate, search_subject or topic, focus or heading)
 
     def candidate_media_is_usable(candidate: Dict[str, Any]) -> bool:
@@ -4191,20 +5815,43 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             digest=file_sha256(path)
         except Exception:
             return None
-        if digest in used_visual_hashes:
-            return None
-        suffix=path.suffix.lower() or ".bin"
-        selected=outdir / f"selected_visual_{index:02d}{suffix}"
-        try:
-            shutil.copy2(path, selected)
-        except Exception:
-            return None
-        used_visual_hashes.add(digest)
-        selected_candidate=dict(candidate)
+        # Other scene workers share this project directory. Re-read committed
+        # selections while holding one lock, otherwise two workers can both observe
+        # an unused hash and save the same source clip for different scenes.
+        with _SCENE_VISUAL_SELECTION_LOCK:
+            current_hashes = set(used_visual_hashes)
+            for previous in outdir.glob("selected_visual_*"):
+                try:
+                    if previous.is_file():
+                        current_hashes.add(file_sha256(previous))
+                except Exception:
+                    continue
+            if digest in current_hashes:
+                return None
+            suffix=path.suffix.lower() or ".bin"
+            selected=outdir / f"selected_visual_{index:02d}{suffix}"
+            try:
+                shutil.copy2(path, selected)
+            except Exception:
+                return None
+            used_visual_hashes.add(digest)
+        rights_assessed = _apply_nasa_scene_usage_policy(candidate, scene)
+        if _scene_is_explicitly_promotional(scene):
+            rights_status = str(rights_assessed.get("rights_status") or "").strip().lower()
+            commercial_state = str(rights_assessed.get("commercial_use_state") or "").strip().lower()
+            if (
+                rights_status in {"review_required", "unknown", "not_verified", "unknown_review_required"}
+                or commercial_state in {"review_required", "unknown", "not_verified", "unknown_review_required"}
+            ):
+                source_failures.append(
+                    f"{rights_assessed.get('source') or 'visual source'}:blocked_unresolved_promotional_rights"
+                )
+                return None
+        selected_candidate=dict(rights_assessed)
         selected_candidate["path"]=str(selected)
         selected_candidate["source_file"]=str(path)
         selected_candidate["asset_sha256"]=digest
-        return _apply_nasa_scene_usage_policy(selected_candidate, scene)
+        return selected_candidate
 
     # For the known AI Infinity product-launch brief, try a shot-specific real
     # motion clip before generic image search. Previously a loosely matching
@@ -4212,8 +5859,14 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
     # "editing" and "workstation". The ordinary provider ladder is unchanged
     # for every other brief and remains the fallback when this source fails.
     try:
-        launch_motion = _curated_pexels_launch_video(scene, outdir, index)
-        if launch_motion:
+        # Retry up to three curated candidates if another worker has just committed
+        # the same bytes for a different scene. The helper re-scans selected files
+        # on every call, so a retry chooses the next distinct relevant clip instead
+        # of unnecessarily degrading the scene to an illustration.
+        for launch_attempt in range(3):
+            launch_motion = _curated_pexels_launch_video(scene, outdir, index)
+            if not launch_motion:
+                break
             source_path = Path(str(launch_motion.get("path") or ""))
             if source_path.is_file():
                 MEDIA_SOURCE_METADATA_BY_PATH[str(source_path.resolve())] = dict(launch_motion)
@@ -4226,9 +5879,12 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
                     "source_id": launch_motion.get("source_id"),
                     "duration_seconds": launch_motion.get("duration_seconds"),
                     "sha256": selected_motion.get("asset_sha256"),
+                    "selection_attempt": launch_attempt + 1,
                 })
                 return selected_motion
-            source_failures.append("_pexels-curated-launch-video:duplicate-or-not-relevant")
+            source_failures.append(
+                f"_pexels-curated-launch-video:duplicate-or-unusable:attempt-{launch_attempt + 1}"
+            )
     except Exception as exc:
         source_failures.append("_pexels-curated-launch-video:" + type(exc).__name__ + ":" + str(exc)[:160])
 
@@ -4255,7 +5911,19 @@ def acquire_scene_asset(scene: Dict[str, Any], outdir: Path, index: int, prefer_
             # provider response that simply returned no relevant results.
             MEDIA_DEBUG_ERRORS.pop(debug_key, None)
             try:
-                items=getter(q,outdir,limit=_scene_asset_search_limit(index,getter.__name__))
+                search_limit = _scene_asset_search_limit(index,getter.__name__)
+                if getter is _commons_media:
+                    try:
+                        items = getter(q, outdir, limit=search_limit, prefer_motion=prefer_motion)
+                    except TypeError as signature_error:
+                        # Older third-party/test adapters may implement the
+                        # pre-motion-aware signature. Keep the compatibility
+                        # path explicit; do not retry unrelated runtime TypeErrors.
+                        if "prefer_motion" not in str(signature_error):
+                            raise
+                        items = getter(q, outdir, limit=search_limit)
+                else:
+                    items = getter(q, outdir, limit=search_limit)
             except Exception as exc:
                 reason = f"{type(exc).__name__}: {str(exc)[:180]}"
                 source_failures.append(f"{getter.__name__}:{reason}")
@@ -4439,6 +6107,52 @@ def ffmpeg(*args: Any, timeout: int = 240) -> None:
                     PROCESS_REGISTRY.pop(project_id, None)
     if p.returncode:
         raise RuntimeError((stderr or stdout or "ffmpeg failed")[-4000:])
+
+
+def _make_silent_voice(outdir: Path, index: int, duration: float) -> Path:
+    """Create a measured silent audio track for visual-render recovery only.
+
+    This is a renderer safety fallback, never narration. A project that needed
+    it must still fail narration/professional truth checks unless genuine speech
+    is independently present and verified.
+    """
+    try:
+        requested = float(duration)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("silent voice duration must be a finite positive number") from exc
+    if not (requested > 0.0 and requested < float("inf")):
+        raise ValueError("silent voice duration must be a finite positive number")
+    target = min(3600.0, max(0.1, requested))
+
+    root = Path(outdir)
+    root.mkdir(parents=True, exist_ok=True)
+    output = root / f"silent_voice_{int(index):02d}_{uuid.uuid4().hex[:10]}.m4a"
+    ffmpeg(
+        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+        "-t", f"{target:.3f}",
+        "-vn", "-c:a", "aac", "-b:a", "96k", "-ar", "48000", "-ac", "2",
+        "-movflags", "+faststart", output,
+        timeout=max(30, min(120, int(target * 2) + 10)),
+    )
+
+    metadata = ffprobe_json(output)
+    audio_streams = [
+        stream for stream in (metadata.get("streams") or [])
+        if isinstance(stream, dict) and stream.get("codec_type") == "audio"
+    ]
+    try:
+        actual = float((metadata.get("format") or {}).get("duration") or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        actual = 0.0
+    if not output.is_file() or output.stat().st_size < 128 or not audio_streams:
+        output.unlink(missing_ok=True)
+        raise RuntimeError("silent voice recovery produced no valid audio stream")
+    if actual <= 0.0 or abs(actual - target) > max(0.25, target * 0.02):
+        output.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"silent voice recovery duration mismatch: expected {target:.3f}s, got {actual:.3f}s"
+        )
+    return output
 
 
 def ffprobe_json(path: Path) -> Dict[str, Any]:
@@ -4742,10 +6456,186 @@ def _fit_audio_duration(source: Path, target_seconds: float, out: Path) -> Tuple
         raise RuntimeError(f"retimed narration is {fitted:.2f}s, expected {target:.2f}s")
     return out, fitted
 
-def make_music(outdir: Path, seconds: float) -> Path:
+def _openverse_music_tracks(query: str, outdir: Path, limit: int = 3) -> List[Dict[str, Any]]:
+    """Fetch a small set of openly licensed, downloadable music tracks with item-level provenance."""
+    out: List[Dict[str, Any]] = []
+    try:
+        params = _openverse_search_params(
+            str(query or "cinematic ambient instrumental music no vocals")[:240],
+            limit=max(1, min(8, int(limit) * 2)),
+        )
+        response = http_json(
+            "https://api.openverse.org/v1/audio/?" + urlencode(params),
+            timeout=(FAST_REMOTE_TIMEOUT if FAST_MODE else 25),
+        )
+        results = response.get("results", []) if isinstance(response, dict) else []
+    except Exception as exc:
+        _media_debug("openverse-audio", exc)
+        return out
+
+    seen_ids = set()
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        source_id = str(item.get("id") or "").strip()
+        direct_url = str(item.get("url") or "").strip()
+        landing_url = str(item.get("foreign_landing_url") or "").strip()
+        title = str(item.get("title") or "").strip()
+        creator = str(item.get("creator") or "").strip()
+        license_id = str(item.get("license") or "").strip().lower()
+        license_version = str(item.get("license_version") or "").strip()
+        license_labels = {
+            "cc0": "CC0", "by": "CC BY", "by-sa": "CC BY-SA",
+            "by-nc": "CC BY-NC", "by-nd": "CC BY-ND",
+            "by-nc-sa": "CC BY-NC-SA", "by-nc-nd": "CC BY-NC-ND",
+            "pdm": "Public Domain Mark",
+        }
+        license_name = str(item.get("license_name") or license_labels.get(license_id, license_id)).strip()
+        if license_version and license_name and license_version.lower() not in license_name.lower():
+            license_name = f"{license_name} {license_version}"
+        license_url = str(item.get("license_url") or "").strip()
+        commercial_state = _commercial_use_from_license(license_name, license_url)
+        complete = bool(
+            source_id and direct_url.startswith("https://") and landing_url.startswith("https://")
+            and title and license_name and license_url.startswith("https://")
+            and (creator or commercial_state == "public_domain_cc0_1_0")
+            and commercial_state in {"public_domain_cc0_1_0", "commercial_use_allowed_with_attribution"}
+        )
+        if not complete or source_id in seen_ids:
+            continue
+        seen_ids.add(source_id)
+
+        suffix = Path(str(urlparse(direct_url).path or "")).suffix.lower()
+        if suffix not in {".mp3", ".m4a", ".aac", ".wav", ".ogg", ".oga", ".opus", ".flac", ".webm"}:
+            kind = str(item.get("filetype") or "").lower()
+            suffix = ".mp3" if "mpeg" in kind or kind == "mp3" else (".ogg" if "ogg" in kind else ".audio")
+        safe_id = re.sub(r"[^A-Za-z0-9_-]+", "", source_id)[:32] or hashlib.sha256(direct_url.encode()).hexdigest()[:16]
+        path = outdir / f"openverse_music_{safe_id}{suffix}"
+        try:
+            if not path.is_file() or path.stat().st_size < 20_000:
+                download(
+                    direct_url,
+                    path,
+                    timeout=(max(FAST_REMOTE_TIMEOUT, 20) if FAST_MODE else 75),
+                    max_bytes=(24_000_000 if FAST_MODE else 90_000_000),
+                )
+            probe = ffprobe_json(path)
+            streams = probe.get("streams") or []
+            audio = next((stream for stream in streams if stream.get("codec_type") == "audio"), None)
+            duration = float((probe.get("format") or {}).get("duration") or 0.0)
+            if not audio or duration < 30.0 or path.stat().st_size < 20_000:
+                path.unlink(missing_ok=True)
+                continue
+            # Fully decode selected source bytes before using the track. This does
+            # not claim the license metadata itself has been independently audited.
+            ffmpeg("-v", "error", "-i", path, "-f", "null", "-", timeout=max(60, min(240, int(duration + 30))))
+            record = {
+                "kind": "audio",
+                "source": "Openverse",
+                "provider": str(item.get("provider") or item.get("source") or "Openverse"),
+                "source_id": source_id,
+                "source_url": landing_url,
+                "downloaded_media_url": direct_url,
+                "title": title,
+                "creator": creator or None,
+                "creator_url": item.get("creator_url"),
+                "attribution": str(item.get("attribution") or "").strip() or None,
+                "license": license_name,
+                "license_url": license_url,
+                "commercial_use_state": commercial_state,
+                "rights_status": "license_metadata_present",
+                "rights_notice": "Openverse aggregates item-level license metadata; source terms and attribution stay attached to this production.",
+                "duration_seconds": round(duration, 3),
+                "bit_rate": item.get("bit_rate"),
+                "asset_sha256": file_sha256(path),
+                "path": str(path),
+            }
+            MEDIA_SOURCE_METADATA_BY_PATH[str(path.resolve())] = dict(record)
+            out.append(record)
+            if len(out) >= max(1, min(3, int(limit))):
+                break
+        except Exception as exc:
+            _media_debug("openverse-audio-download", exc)
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            continue
+    if out:
+        _media_success("openverse-audio", {"count": len(out), "query": str(query)[:180]})
+    return out
+
+
+def make_music(outdir: Path, seconds: float, query: str = "cinematic ambient instrumental soundtrack no vocals") -> Path:
     """Create an original, restrained cinematic underscore without external music dependency."""
     out = outdir / "music.m4a"
     s = max(1.0, float(seconds))
+    music_manifest_path = outdir / "music_source.json"
+    # Prefer a real, openly licensed instrumental master over a synthetic tone bed.
+    # One anonymous Openverse query is made per project; selected files are
+    # downloaded, probed and fully decoded before they are used.
+    tracks = _openverse_music_tracks(query, outdir, limit=3)
+    if tracks:
+        try:
+            input_args: List[Any] = []
+            filters: List[str] = []
+            track_labels: List[str] = []
+            segment_lengths: List[float] = []
+            for idx, track in enumerate(tracks):
+                input_args += ["-i", str(track["path"])]
+                seg = max(30.0, min(180.0, float(track["duration_seconds"]), s / max(1, len(tracks))))
+                segment_lengths.append(seg)
+                label = f"ov{idx}"
+                filters.append(
+                    f"[{idx}:a]atrim=duration={seg:.3f},asetpts=PTS-STARTPTS,"
+                    f"aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                    f"loudnorm=I=-25:TP=-5:LRA=10,"
+                    f"afade=t=in:st=0:d=1,"
+                    f"afade=t=out:st={max(0.0, seg - 1.0):.3f}:d=1[{label}]"
+                )
+                track_labels.append(f"[{label}]")
+            combined = track_labels[0]
+            combined_duration = segment_lengths[0]
+            for idx in range(1, len(track_labels)):
+                next_label = f"mix{idx}"
+                filters.append(f"{combined}{track_labels[idx]}acrossfade=d=2:c1=tri:c2=tri[{next_label}]")
+                combined = f"[{next_label}]"
+                combined_duration += segment_lengths[idx] - 2.0
+            loop_samples = max(1, int(combined_duration * 48000))
+            filters.append(
+                f"{combined}aloop=loop=-1:size={loop_samples},atrim=duration={s:.3f},"
+                f"asetpts=PTS-STARTPTS,afade=t=in:st=0:d=1,alimiter=limit=0.80[m]"
+            )
+            ffmpeg(
+                *input_args, "-filter_complex", ";".join(filters), "-map", "[m]",
+                "-t", f"{s:.3f}", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+                "-movflags", "+faststart", out, timeout=max(120, int(45 + s * 3)),
+            )
+            actual_duration = probe_duration(out)
+            if actual_duration < s - 0.75:
+                raise RuntimeError(f"licensed soundtrack shorter than requested: {actual_duration:.3f}/{s:.3f}s")
+            music_manifest = {
+                "schema": "ai-infinity-music-source.v1",
+                "method": "openverse_openly_licensed_tracks_crossfaded_and_arranged",
+                "query": str(query)[:240],
+                "requested_duration_seconds": s,
+                "actual_duration_seconds": round(actual_duration, 3),
+                "tracks": [{k: v for k, v in track.items() if k != "path"} for track in tracks],
+                "output_sha256": file_sha256(out),
+                "rights_status": "license_metadata_present",
+                "human_rights_review": "PENDING",
+                "truthful": True,
+            }
+            music_manifest_path.write_text(jdump(music_manifest), encoding="utf-8")
+            return out
+        except Exception as exc:
+            audit_event("", "openverse_music_render_fallback", {
+                "error": str(exc)[:600],
+                "candidate_track_count": len(tracks),
+                "truthful": True,
+            })
+    # Last resort: a disclosed synthetic underscore. It can keep preview work
+    # moving, but must not be described as a professionally composed score.
     # Four-bar style chord movement. The score is deliberately quiet beneath narration.
     seg = max(1.5, min(3.0, s / 6.0))
     chords = [
@@ -4787,7 +6677,106 @@ def make_music(outdir: Path, seconds: float) -> Path:
             "-af", "volume=0.025,lowpass=f=1800,afade=t=in:st=0:d=0.5,afade=t=out:st=" + str(max(0.5, s - 0.5)) + ":d=0.5",
             "-c:a", "aac", "-b:a", "128k", out, timeout=max(60, int(12 + s * 2))
         )
+    fallback_manifest = {
+        "schema": "ai-infinity-music-source.v1",
+        "method": "synthetic_procedural_chord_bed_fallback",
+        "query": str(query)[:240],
+        "requested_duration_seconds": s,
+        "actual_duration_seconds": round(probe_duration(out), 3) if out.is_file() else None,
+        "tracks": [],
+        "rights_status": "original_procedural_audio",
+        "quality_notice": "Synthetic chord-bed fallback; not a substitute for a professionally composed soundtrack.",
+        "reason": "No fully decodable, eligible, openly licensed Openverse soundtrack could be assembled.",
+        "output_sha256": file_sha256(out) if out.is_file() else None,
+        "human_rights_review": "PENDING",
+        "truthful": True,
+    }
+    music_manifest_path.write_text(jdump(fallback_manifest), encoding="utf-8")
     return out
+
+
+
+def _emergency_music_fallback(outdir: Path, seconds: float, reason: str) -> Path:
+    """Write an honest, low-quality emergency audio bed if normal music generation raises.
+
+    This is a continuity fallback, not a professionally composed soundtrack. Its
+    manifest intentionally records that limitation so downstream review cannot
+    mistake a technical audio file for a cleared creative score.
+    """
+    outdir.mkdir(parents=True, exist_ok=True)
+    duration = max(1.0, float(seconds))
+    out = outdir / "music.m4a"
+    fade_out_start = max(0.5, duration - 0.5)
+    ffmpeg(
+        "-f", "lavfi", "-i",
+        f"sine=frequency=196:sample_rate=48000:duration={duration:.3f}",
+        "-af",
+        "volume=0.025,lowpass=f=1800,"
+        f"afade=t=in:st=0:d=0.5,afade=t=out:st={fade_out_start:.3f}:d=0.5",
+        "-t", f"{duration:.3f}",
+        "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+        "-movflags", "+faststart", out,
+        timeout=max(60, int(12 + duration * 2)),
+    )
+    if not out.is_file() or out.stat().st_size <= 1024:
+        raise RuntimeError("Emergency procedural music fallback produced no valid-sized audio file.")
+    actual_duration = float(probe_duration(out))
+    duration_tolerance = max(0.75, min(3.0, duration * 0.002))
+    if actual_duration < duration - duration_tolerance:
+        raise RuntimeError(
+            "Emergency procedural music fallback is truncated: "
+            f"{actual_duration:.3f}s for {duration:.3f}s requested."
+        )
+    manifest = {
+        "schema": "ai-infinity-music-source.v1",
+        "method": "emergency_procedural_tone_bed_after_music_generation_failure",
+        "requested_duration_seconds": duration,
+        "actual_duration_seconds": round(actual_duration, 3),
+        "tracks": [],
+        "rights_status": "original_procedural_audio",
+        "quality_notice": (
+            "Emergency synthetic tone fallback; not a professionally composed soundtrack. "
+            "Human creative review is required and professional soundtrack quality is not verified."
+        ),
+        "reason": str(reason or "normal music generation failed")[:800],
+        "output_sha256": file_sha256(out),
+        "human_rights_review": "PENDING",
+        "fallback": True,
+        "truthful": True,
+    }
+    (outdir / "music_source.json").write_text(jdump(manifest), encoding="utf-8")
+    return out
+
+
+def _resolve_music_bed(outdir: Path, seconds: float, query: str, project_id: str) -> Path:
+    """Generate the normal programme music, with a bounded and explicitly degraded fallback."""
+    try:
+        result = Path(make_music(outdir, seconds, query=query))
+        if not result.is_file() or result.stat().st_size <= 1024:
+            raise RuntimeError("music generator returned a missing or empty soundtrack")
+        return result
+    except Exception as music_exc:
+        reason = str(music_exc)[:800] or type(music_exc).__name__
+        audit_event(project_id, "music_fallback_failed", {
+            "error": reason,
+            "requested_duration_seconds": float(seconds),
+            "truthful": True,
+        })
+        try:
+            fallback = _emergency_music_fallback(outdir, seconds, reason)
+        except Exception as fallback_exc:
+            raise RuntimeError(
+                "Music generation failed and the emergency procedural audio fallback "
+                f"could not be verified: {fallback_exc}"
+            ) from fallback_exc
+        audit_event(project_id, "music_fallback", {
+            "method": "emergency_procedural_tone_bed_after_music_generation_failure",
+            "quality_state": "DEGRADED",
+            "professional_score_verified": False,
+            "manifest": "music_source.json",
+            "truthful": True,
+        })
+        return fallback
 
 
 def make_sfx(outdir: Path, duration: float, index: int) -> Path:
@@ -4883,21 +6872,35 @@ def _video_scene(asset: Dict[str, Any], duration: float, out: Path, title: str) 
         src = asset["path"]
         escaped = str(out).replace("'", "'\\''")
         # Real motion video path: loop source, crop to 16:9, add subtle title label.
-        vf = "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,eq=contrast=1.02:saturation=1.03,drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='" + title.replace("'", "\\'")[:70] + "':x=75:y=915:fontsize=42:fontcolor=white"
+        vf = "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,eq=contrast=1.02:saturation=1.03,drawbox=x=45:y=865:w=1820:h=150:color={overlay_color}:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='" + title.replace("'", "\\'")[:70] + "':x=75:y=915:fontsize=42:fontcolor=white"
         ffmpeg("-stream_loop", "-1", "-i", src, "-t", duration, "-vf", vf, "-an", "-r", "30", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", out, timeout=240)
         return
     # Still/AI visual: generate true motion via zoom/pan rather than a static slide.
     src = asset["path"]
     frames = max(1, int(round(duration * 30)))
     title_escaped = title.replace("'", "\\'")[:70]
-    vf = f"scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,zoompan=z='min(zoom+0.0008,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s=1920x1080:fps=30,drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':x=75:y=915:fontsize=42:fontcolor=white"
+    vf = f"scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,zoompan=z='min(zoom+0.0008,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s=1920x1080:fps=30,drawbox=x=45:y=865:w=1820:h=150:color={overlay_color}:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':x=75:y=915:fontsize=42:fontcolor=white"
     ffmpeg("-loop", "1", "-i", src, "-t", duration, "-vf", vf, "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", out, timeout=240)
 
 
-def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, duration: float, out: Path, title: str, aspect_ratio: str = "16:9") -> None:
+def _render_scene(
+    asset: Dict[str, Any],
+    voice: Path,
+    music: Path,
+    sfx: Path,
+    duration: float,
+    out: Path,
+    title: str,
+    aspect_ratio: str = "16:9",
+    music_offset_seconds: float = 0.0,
+) -> None:
     """Render one moving scene with a predictable CPU cost on the free worker."""
     duration = max(0.5, float(duration))
-    title_escaped = str(title).replace("\\", "\\\\").replace("'", "\\'")[:70]
+    title_escaped = str(title or "").strip().replace("\\", "\\\\").replace("'", "\\'")[:70]
+    # Generic chapter headings are not titles. The caller passes only explicit
+    # on-screen copy; without it, keep the image clean and let the synchronized
+    # caption track carry narration. This avoids a permanent title bar on every shot.
+    overlay_color = "black@0.40" if title_escaped else "black@0.0"
     if FAST_MODE:
         ratio_dims = {
             "16:9": (1280, 720),
@@ -4932,7 +6935,7 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
             vf = (
                 f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
                 f"eq=contrast=1.02:saturation=1.04,scale={width}:{height}:flags=lanczos,fps=24,"
-                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color=black@0.48:t=fill,"
+                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color={overlay_color}:t=fill,"
                 f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
                 f"x={text_x}:y={text_y}:fontsize={font}:fontcolor=white"
             )
@@ -4948,7 +6951,7 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
                 f"crop={work_w}:{work_h}:x='(in_w-out_w)*(0.5-0.5*cos(PI*t/{duration}))':"
                 f"y='(in_h-out_h)*(0.5+0.5*sin(PI*t/{duration}))',"
                 f"scale={width}:{height}:flags=lanczos,eq=contrast=1.02:saturation=1.04,"
-                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color=black@0.38:t=fill,"
+                f"drawbox=x={box_x}:y={box_y}:w={box_w}:h={box_h}:color={overlay_color}:t=fill,"
                 f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
                 f"x={text_x}:y={text_y}:fontsize={font}:fontcolor=white"
             )
@@ -4973,7 +6976,7 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
             vf = (
                 f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
                 f"eq=contrast=1.02:saturation=1.03,scale={width}:{height}:flags=lanczos,fps={fps},"
-                f"drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,"
+                f"drawbox=x=45:y=865:w=1820:h=150:color={overlay_color}:t=fill,"
                 f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
                 f"x=75:y=915:fontsize={font}:fontcolor=white"
             )
@@ -4984,7 +6987,7 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
                 f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
                 f"zoompan=z='min(zoom+0.0008,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
                 f"d={frames}:s={work_w}x{work_h}:fps={fps},scale={width}:{height}:flags=lanczos,fps={fps},"
-                f"drawbox=x=45:y=865:w=1820:h=150:color=black@0.33:t=fill,"
+                f"drawbox=x=45:y=865:w=1820:h=150:color={overlay_color}:t=fill,"
                 f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{title_escaped}':"
                 f"x=75:y=915:fontsize={font}:fontcolor=white"
             )
@@ -4993,7 +6996,17 @@ def _render_scene(asset: Dict[str, Any], voice: Path, music: Path, sfx: Path, du
         # Keep encoder buffering bounded on the free tier without changing the
         # actual 1080p output dimensions or codecs.
         preset, crf, ab = os.getenv("AI_INFINITY_VIDEO_PRESET", "veryfast"), "18", "192k"
-    args: List[Any] = visual_args + ["-i", voice, "-stream_loop", "-1", "-i", music, "-i", sfx,
+    try:
+        music_offset = max(0.0, float(music_offset_seconds))
+    except (TypeError, ValueError, OverflowError):
+        music_offset = 0.0
+    # Every scene must start the shared soundtrack at its actual programme
+    # offset. Starting music from zero on every scene creates obvious resets at
+    # every cut and is especially damaging in long-form documentaries.
+    args: List[Any] = visual_args + ["-i", voice, "-stream_loop", "-1"]
+    if music_offset > 0.0:
+        args += ["-ss", f"{music_offset:.3f}"]
+    args += ["-i", music, "-i", sfx,
         "-filter_complex", audio_filter, "-map", "0:v:0", "-map", "[a]", "-vf", vf, "-t", duration,
         "-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p",
         "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
@@ -5012,9 +7025,27 @@ def _scene_mix(video: Path, voice: Path, music: Path, sfx: Path, duration: float
 
 
 def concat_segments(paths: List[Path], out: Path) -> None:
+    """Join rendered scenes without copying independently primed AAC packets.
+
+    Each scene is encoded in its own FFmpeg invocation. Copy-concatenating those
+    packets can preserve differing AAC priming/timestamp state; the final decode
+    then fails even when each scene file individually opened successfully. Keep
+    the already-rendered H.264 video bitstream, but decode/re-encode the audio into
+    one continuous AAC stream before final mastering and programme verification.
+    """
+    if not paths:
+        raise ValueError("cannot assemble an empty scene list")
     manifest = out.with_suffix(".txt")
     manifest.write_text("".join(f"file '{str(p).replace(chr(39), chr(39)+chr(92)+chr(39)+chr(39))}'\n" for p in paths), encoding="utf-8")
-    ffmpeg("-f", "concat", "-safe", "0", "-i", manifest, "-c", "copy", "-movflags", "+faststart", out, timeout=600)
+    ffmpeg(
+        "-f", "concat", "-safe", "0", "-i", manifest,
+        "-map", "0:v:0", "-map", "0:a:0",
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+        "-movflags", "+faststart",
+        out,
+        timeout=600,
+    )
 
 
 def make_variants(master: Path, outdir: Path, chapters: List[Dict[str, Any]], title: str) -> List[Dict[str, Any]]:
@@ -5115,6 +7146,57 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
     # Short captions are intentionally split into multiple cues per scene. Validate
     # their timing/readability contract rather than requiring one cue per scene.
     expected_caption_cues = max(1, int((max(0.0, expected_voice) + 5.749) // 5.75))
+    # Source-motion requirements are explicit and auditable. A general render
+    # may still use labelled artwork, but the cinematic acceptance workflow sets
+    # this flag and must not mistake those illustrations for live-action footage.
+    require_source_visuals = (
+        str(os.getenv("AI_INFINITY_REQUIRE_SOURCE_VISUALS", "")).strip().lower() in {"1", "true", "yes"}
+    )
+    motion_source_keys = set()
+    for asset in (assets or []):
+        path_value = Path(str(asset.get("path") or ""))
+        source_url = str(asset.get("source_url") or "").strip()
+        license_name = str(asset.get("license") or "").strip()
+        license_url = str(asset.get("license_url") or asset.get("license_deed_url") or "").strip()
+        rights_state = str(asset.get("rights_status") or "").strip().lower()
+        if path_value.suffix.lower() not in {".mp4", ".mov", ".mkv", ".webm"}:
+            continue
+        if bool(asset.get("fallback")) or not source_url.startswith("https://"):
+            continue
+        # Footage counts towards the professional source gate only when its
+        # provider attribution and explicit licence evidence are present.
+        if not license_name or not license_url.startswith("https://"):
+            continue
+        if license_name.lower() in {"unknown", "not verified", "not_verified", "none"}:
+            continue
+        if rights_state in {"unknown", "review_required", "not_verified", "not_verified_review_required"}:
+            continue
+        # A source URL alone is not proof that the downloaded shot exists.
+        # Probe the actual file, then recompute its bytes' digest rather than
+        # trusting metadata supplied by the acquisition layer.
+        try:
+            if not path_value.is_file() or path_value.stat().st_size <= 20_000:
+                continue
+            source_probe = ffprobe_json(path_value)
+            source_streams = source_probe.get("streams") or []
+            source_video = next((row for row in source_streams if row.get("codec_type") == "video"), {})
+            source_width = int(source_video.get("width") or 0)
+            source_height = int(source_video.get("height") or 0)
+            source_seconds = float((source_probe.get("format") or {}).get("duration") or 0)
+            if not source_video or min(source_width, source_height) < 720 or source_seconds < 2.0:
+                continue
+            actual_digest = file_sha256(path_value).lower()
+            recorded_digest = str(asset.get("asset_sha256") or asset.get("sha256") or "").strip().lower()
+            if recorded_digest and recorded_digest != actual_digest:
+                continue
+            if len(actual_digest) != 64 or not re.fullmatch(r"[0-9a-f]{64}", actual_digest):
+                continue
+        except Exception:
+            continue
+        motion_source_keys.add(actual_digest)
+    fallback_visual_count = sum(bool(asset.get("fallback")) for asset in (assets or []))
+    minimum_motion_sources = max(3, int(len(chapters) * 0.70 + 0.9999))
+    maximum_fallback_visuals = max(1, int(len(chapters) * 0.15))
     checks = {
         "file_present": master.exists() and master.stat().st_size > 10000,
         "duration_nonzero": duration > 2,
@@ -5149,6 +7231,8 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
         "scene_count": len(chapters) >= (1 if SMOKE else (3 if FAST_MODE else 4)),
         "visual_assets_present": len(assets) >= len(chapters),
         "fallback_visual_used": any(bool(x.get("fallback")) for x in (assets or [])),
+        "required_source_motion_coverage": (not require_source_visuals) or len(motion_source_keys) >= minimum_motion_sources,
+        "fallback_visual_budget_ok": (not require_source_visuals) or fallback_visual_count <= maximum_fallback_visuals,
         "fallback_visual_policy_passed": all(
             (not bool(x.get("fallback"))) or (
                 isinstance(x.get("fallback_record"), dict)
@@ -5164,7 +7248,23 @@ def quality_check(master: Path, chapters: List[Dict[str, Any]], assets: List[Dic
         "no_fake_slideshow_flag": True,
     }
     passed = all(bool(x) for k, x in checks.items() if k != "full_hd" or not FAST_MODE)
-    return {"passed": passed, "checks": checks, "duration_seconds": round(duration, 2), "resolution": [int(v.get("width") or 0), int(v.get("height") or 0)], "video_codec": v.get("codec_name"), "audio_codec": a.get("codec_name"), "file_size_bytes": master.stat().st_size if master.exists() else 0}
+    return {
+        "passed": passed,
+        "checks": checks,
+        "duration_seconds": round(duration, 2),
+        "resolution": [int(v.get("width") or 0), int(v.get("height") or 0)],
+        "video_codec": v.get("codec_name"),
+        "audio_codec": a.get("codec_name"),
+        "file_size_bytes": master.stat().st_size if master.exists() else 0,
+        "visual_source_coverage": {
+            "required": require_source_visuals,
+            "scene_count": len(chapters),
+            "distinct_verified_motion_sources": len(motion_source_keys),
+            "minimum_motion_sources": minimum_motion_sources,
+            "fallback_visual_count": fallback_visual_count,
+            "maximum_fallback_visuals": maximum_fallback_visuals,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -5201,6 +7301,158 @@ def register_artifact(project_id: str, path: Path, media_type: str, metadata: Op
     with DB_LOCK, _connect() as c:
         c.execute("INSERT OR REPLACE INTO studio_artifacts_3614(project_id,asset_name,sha256,size_bytes,media_type,metadata_json,created_at) VALUES(?,?,?,?,?,?,?)", (project_id,path.name,info["sha256"],info["size_bytes"],media_type,jdump(info["metadata"]),now()))
     return info
+
+
+def _audio_rights_evidence(
+    audio_path: Optional[Path],
+    source_manifest_path: Optional[Path],
+) -> Optional[Dict[str, Any]]:
+    """Bind the delivered audio master to its exact source/license evidence."""
+    if audio_path is None:
+        return None
+    audio = Path(audio_path)
+    if not audio.is_file() or audio.stat().st_size <= 0:
+        return None
+
+    source_path = Path(source_manifest_path) if source_manifest_path else None
+    source_record: Dict[str, Any] = {}
+    if source_path is not None and source_path.is_file():
+        try:
+            loaded = json.loads(source_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                source_record = loaded
+        except Exception:
+            source_record = {}
+
+    digest = file_sha256(audio)
+    source_digest = str(source_record.get("output_sha256") or "").lower()
+    evidence_bound = bool(
+        source_record.get("truthful") is True
+        and len(source_digest) == 64
+        and source_digest == digest.lower()
+        and source_path is not None
+        and source_path.is_file()
+    )
+    tracks = []
+    allowed_track_fields = (
+        "source", "provider", "source_id", "source_url", "title", "creator",
+        "creator_url", "attribution", "license", "license_url",
+        "commercial_use_state", "rights_status", "asset_sha256", "duration_seconds",
+    )
+    for row in source_record.get("tracks") or []:
+        if isinstance(row, dict):
+            tracks.append({
+                key: row.get(key)
+                for key in allowed_track_fields
+                if row.get(key) is not None
+            })
+
+    method = str(source_record.get("method") or "")
+    declared_rights = str(source_record.get("rights_status") or "").strip()
+    rights_status = declared_rights if evidence_bound and declared_rights else "REVIEW_REQUIRED"
+    if rights_status == "original_procedural_audio":
+        rights_state = "generative"
+    elif tracks and all(
+        str(row.get("commercial_use_state") or "").lower()
+        in {"public_domain_cc0_1_0", "commercial_use_allowed_with_attribution"}
+        for row in tracks
+    ):
+        rights_state = "licensed"
+    else:
+        rights_state = "REVIEW_REQUIRED"
+
+    source_manifest = None
+    if source_path is not None and source_path.is_file():
+        source_manifest = {
+            "name": source_path.name,
+            "sha256": file_sha256(source_path),
+            "bytes": source_path.stat().st_size,
+        }
+    return {
+        "asset": audio.name,
+        "kind": "audio",
+        "asset_sha256": digest,
+        "asset_size_bytes": audio.stat().st_size,
+        "method": method or None,
+        "rights_status": rights_status,
+        "rights_state": rights_state,
+        "human_rights_review": str(source_record.get("human_rights_review") or "PENDING"),
+        "source_manifest": source_manifest,
+        "source_manifest_matches_audio": evidence_bound,
+        "tracks": tracks,
+        "truthful": evidence_bound,
+    }
+
+
+def _finalize_production_manifest_inventory(
+    production_manifest_path: Path,
+    bundle_paths: Iterable[Optional[Path]],
+) -> Dict[str, Any]:
+    """Hash the final package members after every file has reached final bytes."""
+    manifest_path = Path(production_manifest_path)
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(
+            "production manifest could not be read before package assembly: "
+            + type(exc).__name__
+        ) from None
+    if not isinstance(payload, dict):
+        raise RuntimeError("production manifest must be a JSON object before package assembly")
+
+    rows: List[Dict[str, Any]] = []
+    paths_by_name: Dict[str, Path] = {}
+    seen_names = set()
+    for raw_path in bundle_paths:
+        if raw_path is None:
+            continue
+        path = Path(raw_path)
+        if (
+            path.name == manifest_path.name
+            or path.name == "package.zip"
+            or not path.is_file()
+            or path.stat().st_size <= 0
+            or path.name in seen_names
+        ):
+            continue
+        digest = file_sha256(path)
+        rows.append({
+            "name": path.name,
+            "sha256": digest,
+            "bytes": path.stat().st_size,
+        })
+        paths_by_name[path.name] = path
+        seen_names.add(path.name)
+
+    if not rows:
+        raise RuntimeError("production manifest package inventory is empty")
+    payload["artifacts"] = rows
+    payload["artifact_inventory"] = {
+        "complete": True,
+        "scope": "all non-empty files included in package.zip except production_manifest.json itself",
+        "hash_algorithm": "sha256",
+        "artifact_count": len(rows),
+    }
+    temporary = manifest_path.with_name(manifest_path.name + ".tmp")
+    try:
+        temporary.write_text(jdump(payload), encoding="utf-8")
+        os.replace(temporary, manifest_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+    finalized = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for row in finalized.get("artifacts") or []:
+        path = paths_by_name.get(str(row.get("name") or ""))
+        if (
+            path is None
+            or path.stat().st_size != int(row.get("bytes") or 0)
+            or file_sha256(path) != str(row.get("sha256") or "")
+        ):
+            raise RuntimeError(
+                "finalized production manifest does not match packaged source bytes: "
+                + str(row.get("name") or "unknown")
+            )
+    return finalized
 
 
 def license_assessment(source: Dict[str, Any]) -> Dict[str, Any]:
@@ -5595,6 +7847,9 @@ def _save_asset(project_id: str, kind: str, path: Path, media_type: str, metadat
         # Editable project state must survive restart alongside its source
         # media, and portable interchange exports are user-facing deliverables.
         "timeline", "editable_timeline", "timeline_bundle", "otio", "otio_bundle",
+        # Generated native video candidates must be durably stored before they
+        # can be selected for a resumable canonical production rerender.
+        "candidate",
     }
     if kind in durable_kinds and path.exists() and path.is_file():
         try:
@@ -6168,7 +8423,12 @@ def _ensure_delivery_subtitle_track(source: Path, captions: Path, out: Path) -> 
     return out
 
 
-def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = False) -> Dict[str, Any]:
+def _normalize_delivery_loudness(
+    source: Path,
+    out: Path,
+    fast_mode: bool = False,
+    target_duration_seconds: Optional[float] = None,
+) -> Dict[str, Any]:
     """Master the actual delivered programme to a measurable dialogue-safe target.
 
     Scene-level normalization alone is insufficient: concatenation, duration
@@ -6196,10 +8456,30 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
     source_duration = float(probe_duration(source))
     if source_duration <= 0:
         raise RuntimeError("final loudness mastering cannot determine the programme duration")
+    try:
+        requested_duration = (
+            source_duration if target_duration_seconds is None else float(target_duration_seconds)
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("final delivery duration must be a finite positive number") from exc
+    if requested_duration <= 0 or requested_duration != requested_duration or requested_duration == float("inf"):
+        raise ValueError("final delivery duration must be a finite positive number")
+    # Later profile/subtitle muxes may add trailing packets even after the earlier
+    # duration-fitter passed. The requested programme duration remains authoritative
+    # at the very last mastering step, including audio padding/trimming.
     audio_filter = (
-        f"atrim=duration={source_duration:.3f},"
-        f"apad=whole_dur={source_duration:.3f},"
-        f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}"
+        # Scene concatenation can leave timestamp gaps or reordered AAC frames.
+        # asetpts=PTS-STARTPTS only shifts the clock; it preserves those gaps and
+        # can leave the mastered stream ~1 second shorter than the copied video.
+        # Resample with bounded async timestamp correction, then rebuild monotonic
+        # sample-based PTS before padding/trimming, loudness normalization and limiting.
+        "aresample=48000:async=1:first_pts=0,"
+        "asetpts=N/SR/TB,"
+        f"atrim=duration={requested_duration:.3f},"
+        f"apad=whole_dur={requested_duration:.3f},"
+        f"atrim=duration={requested_duration:.3f},"
+        f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra},"
+        "alimiter=limit=0.80:attack=5:release=50:level=false"
     )
     rate = "96k" if fast_mode else "192k"
     ffmpeg(
@@ -6217,6 +8497,10 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
         "-metadata:s:s:0", "language=eng",
         "-disposition:s:0", "default",
         "-movflags", "+faststart",
+        # Subtitle timestamps and AAC priming can extend format duration beyond
+        # the video programme. Cap the muxed deliverable at the measured source
+        # duration; we independently verify audio/video alignment below.
+        "-t", f"{requested_duration:.3f}",
         out,
         timeout=max(120, int(probe_duration(source) * (4 if fast_mode else 6))),
     )
@@ -6237,9 +8521,11 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
         int(output_video.get("width") or 0), int(output_video.get("height") or 0)
     ):
         raise RuntimeError("final loudness mastering unexpectedly changed video dimensions")
-    if abs(output_duration - source_duration) > 0.5:
+    if abs(output_duration - requested_duration) > 0.5:
         raise RuntimeError(
-            f"final loudness mastering changed duration from {source_duration:.3f}s to {output_duration:.3f}s"
+            "final loudness mastering violated the requested duration: "
+            f"{output_duration:.3f}s output vs {requested_duration:.3f}s target "
+            f"(input was {source_duration:.3f}s)"
         )
     output_audio_duration = float(output_audio.get("duration") or 0)
     if not output_audio_duration:
@@ -6262,6 +8548,7 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
         "target_true_peak_dbtp": target_tp,
         "target_loudness_range_lu": target_lra,
         "source_duration_seconds": round(source_duration, 3),
+        "requested_duration_seconds": round(requested_duration, 3),
         "output_duration_seconds": round(output_duration, 3),
         "audio_duration_seconds": round(output_audio_duration, 3),
         "audio_video_duration_match": True,
@@ -6272,13 +8559,266 @@ def _normalize_delivery_loudness(source: Path, out: Path, fast_mode: bool = Fals
     }
 
 
-def _max_scene_count(is_short: bool, fast_mode: bool, smoke: bool, explicitly_single_scene: bool) -> int:
-    """Bound rendering without reducing normal work to four long scene holds."""
+def _export_programme_audio_master(
+    source: Path,
+    out: Path,
+    target_duration_seconds: float,
+    fast_mode: bool = False,
+) -> Dict[str, Any]:
+    """Export the full programme mix with zero-based timestamps and exact runtime.
+
+    Some MP4s carry an audio start timestamp later than the video start. Extracting
+    the stream without resetting PTS can silently shorten the separate MP3 master.
+    Reset PTS, pad the actual mixed programme to the video runtime, and verify the
+    exported file that is included in the creator package.
+    """
+    source = Path(source)
+    out = Path(out)
+    try:
+        target = float(target_duration_seconds)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("programme audio target duration must be finite and positive") from exc
+    if target <= 0 or target != target or target == float("inf"):
+        raise ValueError("programme audio target duration must be finite and positive")
+    if not source.is_file() or source.stat().st_size <= 10_000:
+        raise RuntimeError("programme audio export requires a real completed programme video")
+
+    source_duration = float(probe_duration(source))
+    if source_duration <= 0:
+        raise RuntimeError("programme audio export cannot determine the video runtime")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.unlink(missing_ok=True)
+    # Reset stream timestamps, resample with gap correction, and build the
+    # programme duration on the audio stream itself. A silence-bed amix can
+    # report the shorter input duration on some mux/decoder combinations even
+    # when the container is 60s; apad after timestamp normalization is explicit.
+    # Loudness-normalize this separate downloadable master as well as the MP4.
+    target_i = float(os.getenv("AI_INFINITY_DELIVERY_TARGET_LUFS", "-16"))
+    target_tp = float(os.getenv("AI_INFINITY_DELIVERY_TRUE_PEAK_DBTP", "-1.5"))
+    target_lra = float(os.getenv("AI_INFINITY_DELIVERY_LRA", "11"))
+    if not (-20.0 <= target_i <= -14.0) or not (-3.0 <= target_tp <= -1.0) or not (5.0 <= target_lra <= 20.0):
+        raise ValueError("programme audio master loudness targets are outside safe delivery bounds")
+    audio_filter = (
+        "aresample=48000:async=1:first_pts=0,"
+        "asetpts=N/SR/TB,"
+        f"apad=whole_dur={target:.3f},"
+        f"atrim=duration={target:.3f},"
+        f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}"
+    )
+    ffmpeg(
+        "-i", source,
+        "-map", "0:a:0",
+        "-af", audio_filter,
+        "-vn",
+        "-t", f"{target:.3f}",
+        "-c:a", "libmp3lame",
+        "-q:a", "2",
+        "-ar", "48000",
+        "-ac", "2",
+        out,
+        timeout=max(120, int(max(source_duration, target) * (3 if fast_mode else 4))),
+    )
+    if not _valid_audio_file(out, minimum_peak_db=-45.0):
+        raise RuntimeError("programme audio master is invalid or effectively silent")
+    output_duration = float(probe_duration(out))
+    if abs(output_duration - target) > 1.0:
+        raise RuntimeError(
+            "programme audio master duration mismatch after timestamp reset and padding: "
+            f"{output_duration:.3f}s vs video {target:.3f}s"
+        )
+    return {
+        "status": "verified",
+        "source_duration_seconds": round(source_duration, 3),
+        "requested_duration_seconds": round(target, 3),
+        "output_duration_seconds": round(output_duration, 3),
+        "audio_filter": audio_filter,
+        "sha256": file_sha256(out),
+        "size_bytes": out.stat().st_size,
+        "truthful": True,
+    }
+
+
+def _max_scene_count(
+    is_short: bool,
+    fast_mode: bool,
+    smoke: bool,
+    explicitly_single_scene: bool,
+    explicit_launch: bool = False,
+    requested_duration_seconds: Optional[float] = None,
+) -> int:
+    """Select an editorial coverage budget from the requested programme duration.
+
+    A long-form programme must not be reduced to the 8- or 9-scene budget meant
+    for a short. FAST_MODE may change encoder settings, but it must never silently
+    shorten the user's requested runtime or the narrative coverage plan.
+    """
     if smoke or explicitly_single_scene:
         return 1
-    # Normal shorts have five planned beats; ordinary landscape work has eight.
-    # FAST_MODE changes encoder cost, not the narrative coverage requirement.
+    try:
+        duration = max(0.0, float(requested_duration_seconds or 0.0))
+    except (TypeError, ValueError, OverflowError):
+        duration = 0.0
+    if duration >= 120.0:
+        # Documentary/editorial coverage starts at about one shot per ten seconds.
+        # Bound the plan so a malformed request cannot create unbounded work.
+        return min(180, max(12, int((duration + 9.999) // 10.0)))
+    if explicit_launch and not is_short:
+        # Preserve all authored beats in the canonical short launch-film profile.
+        return 9
     return 5 if is_short else 8
+
+
+_LONGFORM_SHOT_TYPES = (
+    "wide establishing view",
+    "medium observational action",
+    "close detail with tactile texture",
+    "human reaction or point-of-view",
+    "moving environmental cutaway",
+    "process or hands-at-work insert",
+    "overhead or geometric composition",
+    "slow tracking or lateral movement",
+    "foreground-to-background depth shot",
+    "quiet transition image",
+)
+
+
+def _longform_narration_units(value: Any) -> List[str]:
+    """Split authored narration into ordered, non-invented, shot-sized units.
+
+    Preserve every source word and its order. Natural sentence boundaries are
+    preferred, but unusually long sentences are split near a clause boundary or
+    at a bounded word boundary so long-form output does not become a handful of
+    90-second shots. The writer, not this splitter, remains responsible for prose.
+    """
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return []
+    sentences = [x.strip() for x in re.split(r"(?<=[.!?؟。])\s+", text) if x.strip()]
+    if not sentences:
+        sentences = [text]
+    units: List[str] = []
+    for sentence in sentences:
+        words = sentence.split()
+        while len(words) > 24:
+            # Prefer a natural clause boundary between 15 and 24 words. If the
+            # sentence has none, split at 21 words and preserve token punctuation.
+            boundary = next(
+                (i + 1 for i in range(min(24, len(words)) - 1, 14, -1)
+                 if re.search(r"[,;:—]$", words[i])),
+                min(21, len(words) - 1),
+            )
+            boundary = max(1, min(boundary, len(words) - 1))
+            units.append(" ".join(words[:boundary]).strip())
+            words = words[boundary:]
+        if words:
+            units.append(" ".join(words).strip())
+    return [unit for unit in units if unit]
+
+
+
+def _pack_narration_units(units: List[str], count: int) -> List[str]:
+    """Pack neighbouring text units into balanced contiguous chunks without rewriting."""
+    values = [str(x).strip() for x in (units or []) if str(x).strip()]
+    if not values:
+        return []
+    groups = min(max(1, int(count)), len(values))
+    chunks: List[str] = []
+    cursor = 0
+    for slot in range(groups):
+        remaining_groups = groups - slot
+        remaining_units = len(values) - cursor
+        take = max(1, int((remaining_units + remaining_groups - 1) // remaining_groups))
+        chunks.append(" ".join(values[cursor:cursor + take]).strip())
+        cursor += take
+    return chunks
+
+
+def _expand_longform_chapters(
+    chapters: List[Dict[str, Any]],
+    target_seconds: float,
+    target_shot_count: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Expand narrative sections into distinct shot-level scenes for long-form work.
+
+    This preserves the authored narration in order, gives each shot a distinct
+    visual/camera intention, and does not invent new narration to fill runtime.
+    If a section does not contain enough meaningful narration units, it receives
+    fewer cuts instead of duplicating lines or creating empty TTS requests.
+    """
+    source = [dict(ch) for ch in (chapters or []) if isinstance(ch, dict)]
+    if not source:
+        return []
+    try:
+        target = max(0.0, float(target_seconds))
+    except (TypeError, ValueError, OverflowError):
+        target = 0.0
+    if target < 120.0:
+        return source
+    try:
+        shot_budget = int(target_shot_count or _max_scene_count(False, False, False, False, requested_duration_seconds=target))
+    except (TypeError, ValueError, OverflowError):
+        shot_budget = min(180, max(12, int((target + 9.999) // 10.0)))
+    shot_budget = min(180, max(len(source), shot_budget))
+    if len(source) >= shot_budget:
+        return _select_scene_coverage(source, shot_budget)
+
+    units_by_chapter = [_longform_narration_units(ch.get("narration")) for ch in source]
+    capacities = [max(1, len(units)) for units in units_by_chapter]
+    maximum_feasible = sum(capacities)
+    shot_budget = min(shot_budget, maximum_feasible)
+    if shot_budget <= len(source):
+        return source
+
+    weights: List[float] = []
+    for ch, units in zip(source, units_by_chapter):
+        try:
+            duration_weight = max(1.0, float(ch.get("duration") or ch.get("actual_duration") or 1.0))
+        except (TypeError, ValueError, OverflowError):
+            duration_weight = 1.0
+        word_weight = sum(len(re.findall(r"\b[\w’'-]+\b", part, flags=re.UNICODE)) for part in units) / 12.0
+        weights.append(max(duration_weight, word_weight, 1.0))
+
+    allocations = [1] * len(source)
+    while sum(allocations) < shot_budget:
+        eligible = [i for i in range(len(source)) if allocations[i] < capacities[i]]
+        if not eligible:
+            break
+        selected = max(eligible, key=lambda i: weights[i] / allocations[i])
+        allocations[selected] += 1
+
+    expanded: List[Dict[str, Any]] = []
+    for chapter_index, (chapter, units, count) in enumerate(zip(source, units_by_chapter, allocations), 1):
+        narration_chunks = _pack_narration_units(units, count)
+        if not narration_chunks:
+            narration_chunks = [str(chapter.get("narration") or "").strip()]
+        count = len(narration_chunks)
+        if count < 1:
+            continue
+        try:
+            chapter_duration = max(1.0, float(chapter.get("duration") or chapter.get("actual_duration") or target / len(source)))
+        except (TypeError, ValueError, OverflowError):
+            chapter_duration = target / len(source)
+        base_heading = str(chapter.get("heading") or chapter.get("title") or f"Section {chapter_index}").strip()
+        base_query = str(chapter.get("visual_query") or chapter.get("visual_search_subject") or base_heading).strip()
+        base_prompt = str(chapter.get("image_prompt") or base_query).strip()
+        base_overlay = str(chapter.get("on_screen") or "").strip()
+        for shot_index, narration in enumerate(narration_chunks, 1):
+            shot_type = _LONGFORM_SHOT_TYPES[(shot_index - 1) % len(_LONGFORM_SHOT_TYPES)]
+            shot = dict(chapter)
+            shot["heading"] = f"{base_heading} — {shot_type}"
+            shot["parent_chapter_heading"] = base_heading
+            shot["chapter_index"] = chapter_index
+            shot["shot_index_within_chapter"] = shot_index
+            shot["editorial_shot_type"] = shot_type
+            shot["narration"] = narration
+            shot["duration"] = chapter_duration / count
+            shot["visual_search_subject"] = base_query
+            shot["visual_query"] = f"{base_query}; {shot_type}; distinct composition, purposeful camera movement, story-relevant action"
+            shot["image_prompt"] = f"{base_prompt}; {shot_type}; cinematic composition, motivated movement, consistent visual identity, no repeated framing"
+            shot["on_screen"] = base_overlay if shot_index == 1 else ""
+            shot["longform_expansion"] = True
+            expanded.append(shot)
+    return expanded[:shot_budget]
 
 
 def _allocate_scene_durations(
@@ -6404,6 +8944,258 @@ def _select_scene_coverage(chapters: List[Dict[str, Any]], max_scenes: int) -> L
     return [dict(scenes[index]) for index in indexes]
 
 
+def _sync_production_graph(project_id: str) -> Dict[str, Any]:
+    """Synchronize the canonical Creator Studio storyboard into its production graph.
+
+    The graph is a project-scoped execution/review view over the existing Studio
+    project, not a second project queue or a parallel project identity.
+    """
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise RuntimeError("production graph synchronization requires a project id")
+    import production_graph
+
+    snapshot = production_graph.sync(pid)
+    graph_project = snapshot.get("project") if isinstance(snapshot, dict) else None
+    if not isinstance(graph_project, dict) or str(graph_project.get("project_id") or "") != pid:
+        raise RuntimeError("production graph did not reconcile to the canonical Creator Studio project")
+    summary = snapshot.get("summary") if isinstance(snapshot.get("summary"), dict) else {}
+    state = {
+        "status": "synced",
+        "project_id": pid,
+        "graph_version": snapshot.get("version"),
+        "shot_count": int(summary.get("shots") or 0),
+        "candidate_count": int(summary.get("candidates") or 0),
+        "truthful": True,
+    }
+    audit_event(pid, "production_graph_synchronized", state)
+    return state
+
+
+def _verify_primary_content_delivery(
+    project_id: str,
+    content_type: str,
+    outdir: Path,
+    *,
+    article: Optional[Path],
+    audio_master: Optional[Path],
+    social: Optional[Path],
+    website_outputs: Dict[str, Any],
+    native_outputs: Dict[str, Any],
+    research: Dict[str, Any],
+    assets_meta: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Verify the requested native output independently from any companion video.
+
+    A project may contain a video companion whose visual QC is REVIEW_REQUIRED.
+    That must not erase a valid DOCX, PPTX, article, podcast, social campaign, or
+    exportable site. This record proves only the selected primary deliverable;
+    it never marks the companion video, facts, rights, or human review as approved.
+    """
+    import xml.etree.ElementTree as ET
+
+    kind = str(content_type or "video").strip().lower()
+    root = Path(outdir)
+    checks: Dict[str, bool] = {}
+    artifacts: List[Dict[str, Any]] = []
+
+    def add_artifact(label: str, path_value: Any, media_type: str) -> Optional[Path]:
+        if path_value is None:
+            return None
+        path = Path(path_value)
+        exists = path.is_file() and path.stat().st_size > 0
+        checks[f"{label}_exists"] = bool(exists)
+        if not exists:
+            return None
+        artifacts.append({
+            "name": path.name,
+            "role": label,
+            "media_type": media_type,
+            "size_bytes": path.stat().st_size,
+            "sha256": file_sha256(path),
+        })
+        return path
+
+    def json_file(path: Path) -> Dict[str, Any]:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else {}
+        except Exception:
+            return {}
+
+    sources_path = root / "sources.json"
+    rights_path = root / "rights_manifest.json"
+    production_path = root / "production_manifest.json"
+    sources = json_file(sources_path)
+    rights = json_file(rights_path)
+    production = json_file(production_path)
+    source_count = int(sources.get("source_count") or len(sources.get("sources") or []))
+    checks["research_sources_present"] = source_count > 0
+    checks["rights_manifest_bound_to_project"] = (
+        rights.get("project_id") == project_id and rights.get("truthful") is True
+    )
+    checks["production_manifest_bound_to_project"] = (
+        production.get("project_id") == project_id and production.get("truthful") is True
+    )
+    add_artifact("sources", sources_path, "application/json")
+    add_artifact("rights_manifest", rights_path, "application/json")
+
+    if kind == "article":
+        article_path = add_artifact("article", article or (root / "article.md"), "text/markdown")
+        seo_path = add_artifact("seo", root / "seo.json", "application/json")
+        fact_path = add_artifact("fact_check", root / "fact_check.json", "application/json")
+        article_text = article_path.read_text(encoding="utf-8") if article_path else ""
+        checks["article_has_multiple_sections"] = article_text.count("## ") >= 2
+        checks["article_has_substantive_copy"] = len(article_text.split()) >= 30
+        seo = json_file(seo_path) if seo_path else {}
+        facts = json_file(fact_path) if fact_path else {}
+        checks["seo_metadata_present"] = bool(seo.get("title"))
+        checks["fact_check_record_present"] = bool(
+            facts.get("claims") is not None or facts.get("review_items") is not None
+        )
+
+    elif kind == "podcast":
+        audio_path = add_artifact("audio_master", audio_master or (root / "audio_master.mp3"), "audio/mpeg")
+        rss_path = add_artifact("podcast_rss", root / "podcast_rss.xml", "application/xml")
+        audio_valid = False
+        if audio_path:
+            try:
+                audio_valid = bool(_valid_audio_file(audio_path, minimum_peak_db=-45.0))
+            except Exception:
+                audio_valid = False
+        checks["programme_audio_valid"] = audio_valid
+        rss_valid = False
+        if rss_path and audio_path:
+            try:
+                channel = ET.parse(rss_path).getroot().find("./channel")
+                enclosure = channel.find("./item/enclosure") if channel is not None else None
+                rss_valid = bool(
+                    enclosure is not None
+                    and enclosure.get("url") == audio_path.name
+                    and int(enclosure.get("length") or 0) == audio_path.stat().st_size
+                    and enclosure.get("type") == "audio/mpeg"
+                )
+            except Exception:
+                rss_valid = False
+        checks["rss_enclosure_matches_audio"] = rss_valid
+
+    elif kind == "social":
+        social_path = add_artifact(
+            "social_campaign",
+            social or (root / "social_campaign.json"),
+            "application/json",
+        )
+        campaign = json_file(social_path) if social_path else {}
+        platforms = campaign.get("platforms") if isinstance(campaign.get("platforms"), dict) else {}
+        expected = {"TikTok", "Instagram", "YouTube", "LinkedIn", "X", "Facebook"}
+        checks["all_six_platforms_present"] = expected.issubset(set(platforms))
+        checks["campaign_method_declared"] = (
+            campaign.get("method") == "platform_native_copy_and_delivery_contracts"
+        )
+        checks["platform_copy_substantive"] = all(
+            len(re.sub(r"[^A-Za-z0-9\u0600-\u06ff]", "", json.dumps(platforms.get(name) or {}, ensure_ascii=False))) >= 20
+            for name in expected
+        )
+
+    elif kind == "website":
+        verification = website_outputs.get("verification") or {}
+        package_path = add_artifact("website_package", website_outputs.get("package"), "application/zip")
+        manifest_path = add_artifact("website_manifest", website_outputs.get("manifest"), "application/json")
+        readme_path = add_artifact("website_readme", website_outputs.get("readme"), "text/markdown")
+        manifest = json_file(manifest_path) if manifest_path else {}
+        package_integrity = False
+        if package_path:
+            try:
+                import zipfile
+                with zipfile.ZipFile(package_path) as archive:
+                    package_integrity = (
+                        archive.testzip() is None
+                        and "ai-infinity-site/index.html" in archive.namelist()
+                        and file_sha256(package_path) == verification.get("archive_sha256")
+                    )
+            except Exception:
+                package_integrity = False
+        checks["website_archive_integrity"] = bool(
+            verification.get("status") == "PASS"
+            and verification.get("archive_integrity") is True
+            and package_integrity
+        )
+        checks["website_manifest_truthful"] = (
+            manifest.get("truthful") is True
+            and manifest.get("entrypoint") == "index.html"
+            and manifest.get("deployment", {}).get("status") == "NOT_PUBLISHED"
+        )
+        checks["website_readme_present"] = readme_path is not None
+
+    elif kind in {"document", "presentation"}:
+        native_path = add_artifact(
+            "native_document" if kind == "document" else "native_presentation",
+            native_outputs.get("file"),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            if kind == "document"
+            else "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        )
+        manifest_path = add_artifact(
+            "native_manifest",
+            native_outputs.get("manifest"),
+            "application/json",
+        )
+        verification = native_outputs.get("verification") or {}
+        manifest = json_file(manifest_path) if manifest_path else {}
+        checks["native_export_reopened"] = (
+            verification.get("verification") == (
+                "reopened_with_python_docx" if kind == "document" else "reopened_with_python_pptx"
+            )
+            and verification.get("truthful") is True
+        )
+        checks["native_export_hash_matches"] = bool(
+            native_path
+            and verification.get("sha256")
+            and file_sha256(native_path) == verification.get("sha256")
+            and manifest.get("sha256") == verification.get("sha256")
+        )
+        checks["native_export_structure_present"] = (
+            int(verification.get("verified_paragraph_count") or 0) >= 8
+            if kind == "document"
+            else int(verification.get("verified_slide_count") or 0) >= 3
+        )
+
+    else:
+        return {
+            "schema": "ai-infinity-primary-content-delivery.v1",
+            "project_id": project_id,
+            "content_type": kind,
+            "status": "NOT_APPLICABLE",
+            "truthful": True,
+        }
+
+    passed = bool(checks) and all(bool(value) for value in checks.values())
+    fallback_count = sum(
+        1 for row in (assets_meta or [])
+        if isinstance(row, dict) and row.get("fallback") is True
+    )
+    return {
+        "schema": "ai-infinity-primary-content-delivery.v1",
+        "project_id": project_id,
+        "content_type": kind,
+        "status": "PASS" if passed else "FAIL",
+        "primary_delivery_verified": passed,
+        "primary_scope_only": True,
+        "checks": checks,
+        "artifacts": artifacts,
+        "research_source_count": source_count,
+        "companion_video": {
+            "status": "REVIEW_REQUIRED" if fallback_count else "NOT_ASSESSED_BY_PRIMARY_GATE",
+            "fallback_visual_count": fallback_count,
+            "note": "A primary-output PASS does not approve or release the companion video or mixed creator package.",
+        },
+        "human_review_status": "PENDING",
+        "rights_review_status": "PENDING",
+        "external_publication_status": "NOT_PUBLISHED",
+        "truthful": True,
+    }
+
+
 def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
     ACTIVE_PROJECT.project_id = project_id
     project = _get_project(project_id)
@@ -6482,7 +9274,23 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
 
         research_brief_topic = _research_query_from_request(req, topic)
         research_query = _research_search_topic(req, research_brief_topic)
-        research = research_topic(research_query, limit=10)
+        requested_duration_for_research = max(1, int(req.get("duration") or 300))
+        objective_for_research = str(req.get("objective") or req.get("topic") or req.get("title") or "")
+        explicit_research_required_for_brief = str(
+            os.getenv("AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE", "0")
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        semantic_research_required_for_brief = bool(re.search(
+            r"\b(research[- ]backed|fact[- ]checked|with evidence|evidence[- ]based|source[- ]backed)\b",
+            objective_for_research,
+            re.I,
+        ))
+        require_deep_research = explicit_research_required_for_brief or semantic_research_required_for_brief
+        research_limit = (
+            25 if requested_duration_for_research >= 600 and require_deep_research
+            else 15 if requested_duration_for_research >= 180 and require_deep_research
+            else 10
+        )
+        research = research_topic(research_query, limit=research_limit)
         research["brief_topic"] = research_brief_topic
         research["research_scope"] = (
             "independent creator/video-production practice sources; not independent proof of AI Infinity product claims"
@@ -6500,7 +9308,66 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             re.I,
         ))
         research_required = explicit_research_required or semantic_research_required
-        research_status = "complete" if research_count > 0 else "degraded"
+        # A long-form research brief gets a bounded, multi-angle acquisition pass
+        # before it is rejected for missing domains or evidence archetypes. The
+        # 40-source / 20-excerpt / 5-provider / 8-domain / 10-archetype gates remain
+        # unchanged; missing proof still blocks writing and rendering.
+        if research_required and requested_duration_for_research >= 600:
+            research = _expand_longform_research_evidence(
+                research,
+                research_query,
+                limit=research_limit,
+            )
+            research_count = int(research.get("source_count") or 0)
+        evidence_profile = _research_evidence_profile(research.get("sources") or [])
+        research["evidence_profile"] = evidence_profile
+        research["evidence_requirement"] = {
+            "requested_sources": 40 if requested_duration_for_research >= 600 and research_required else (
+                20 if requested_duration_for_research >= 180 and research_required else 0
+            ),
+            "minimum_substantive_excerpts": 20 if requested_duration_for_research >= 600 and research_required else (
+                10 if requested_duration_for_research >= 180 and research_required else 0
+            ),
+            "minimum_provider_families": 5 if requested_duration_for_research >= 600 and research_required else (
+                3 if requested_duration_for_research >= 180 and research_required else 0
+            ),
+            "minimum_unique_domains": 8 if requested_duration_for_research >= 600 and research_required else (
+                5 if requested_duration_for_research >= 180 and research_required else 0
+            ),
+            "minimum_archetypes": 10 if requested_duration_for_research >= 600 and research_required else (
+                5 if requested_duration_for_research >= 180 and research_required else 0
+            ),
+            "truthful": True,
+        }
+        evidence_requirement = research["evidence_requirement"]
+        evidence_shortfalls = []
+        if evidence_requirement["requested_sources"] and evidence_profile["unique_source_url_count"] < evidence_requirement["requested_sources"]:
+            evidence_shortfalls.append(
+                f"{evidence_profile['unique_source_url_count']} unique source URLs; "
+                f"{evidence_requirement['requested_sources']} required"
+            )
+        if evidence_requirement["minimum_substantive_excerpts"] and evidence_profile["substantive_excerpt_count"] < evidence_requirement["minimum_substantive_excerpts"]:
+            evidence_shortfalls.append(
+                f"{evidence_profile['substantive_excerpt_count']} substantive excerpts; "
+                f"{evidence_requirement['minimum_substantive_excerpts']} required"
+            )
+        if evidence_requirement["minimum_provider_families"] and evidence_profile["provider_family_count"] < evidence_requirement["minimum_provider_families"]:
+            evidence_shortfalls.append(
+                f"{evidence_profile['provider_family_count']} provider families; "
+                f"{evidence_requirement['minimum_provider_families']} required"
+            )
+        if evidence_requirement["minimum_unique_domains"] and evidence_profile["unique_domain_count"] < evidence_requirement["minimum_unique_domains"]:
+            evidence_shortfalls.append(
+                f"{evidence_profile['unique_domain_count']} unique domains; "
+                f"{evidence_requirement['minimum_unique_domains']} required"
+            )
+        if evidence_requirement["minimum_archetypes"] and evidence_profile["archetype_count"] < evidence_requirement["minimum_archetypes"]:
+            evidence_shortfalls.append(
+                f"{evidence_profile['archetype_count']} research archetypes; "
+                f"{evidence_requirement['minimum_archetypes']} required"
+            )
+        research_sufficient = bool(research_count) and not evidence_shortfalls
+        research_status = "complete" if research_count > 0 and (not research_required or research_sufficient) else "degraded"
         audit_event(project_id, "research_complete" if research_count > 0 else "research_degraded", {
             "source_count": research_count,
             "reference_count": len(reference_sources),
@@ -6514,7 +9381,22 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "status": research_status,
         })
         research["status"] = research_status
-        if research_count == 0:
+        if research_required and not research_sufficient:
+            research["degraded_reason"] = (
+                "Research evidence is insufficient for the requested programme: "
+                + "; ".join(evidence_shortfalls or ["no usable source returned"])
+            )
+            if requested_duration_for_research >= 600:
+                raise RuntimeError(
+                    "Long-form research preflight blocked before writing or rendering: "
+                    + research["degraded_reason"]
+                    + ". The system will not label a small metadata-only source set as deep research."
+                )
+            if research_count == 0:
+                raise RuntimeError(
+                    "Research evidence is required by the production brief, but no usable research source was available."
+                )
+        elif research_count == 0:
             research["degraded_reason"] = "No public research source responded in the current runtime; factual claims remain review-required."
             if research_required:
                 raise RuntimeError(
@@ -6534,8 +9416,10 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         override = req.get("storyboard_override") if isinstance(req.get("storyboard_override"), dict) else {}
         override_scenes = override.get("scenes") if isinstance(override.get("scenes"), list) else []
         if override_scenes:
+            if len(override_scenes) > 360:
+                raise RuntimeError("Storyboard override exceeds the 360-scene production limit.")
             normalized=[]
-            for raw in override_scenes[:40]:
+            for raw in override_scenes:
                 if not isinstance(raw, dict):
                     continue
                 try:
@@ -6611,6 +9495,48 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 "truthful": True,
             })
 
+        # Reject underwritten long-form scripts before downloading assets or
+        # spending time on scene renders. The independent delivery gate requires
+        # at least 120 spoken words per minute; the planner aims above that floor.
+        nonverbal_request = (
+            req.get("narration_required") is False
+            or req.get("non_verbal") is True
+            or bool(re.search(
+                r"\b(?:no narration|without narration|music[- ]only|non[- ]verbal|silent film|no voice[- ]?over)\b",
+                str(req.get("objective") or req.get("topic") or req.get("title") or ""),
+                re.I,
+            ))
+        )
+        narrated_video = str(req.get("content_type") or "video").strip().lower() in {
+            "video", "short", "reel", "film", "documentary"
+        }
+        if float(req.get("duration") or 0) >= 120 and narrated_video and not nonverbal_request and not SMOKE:
+            speaking_rate_wpm = max(90, min(180, int(req.get("speaking_rate_wpm") or plan.get("speaking_rate_wpm") or 125)))
+            required_spoken_words = _required_narration_word_count(req.get("duration"), speaking_rate_wpm)
+            planned_spoken_words = _narration_word_count(chapters)
+            planned_unique_sentence_ratio = _narration_sentence_uniqueness_ratio(chapters)
+            script_generation = plan.get("script_generation") if isinstance(plan.get("script_generation"), dict) else {}
+            if planned_spoken_words < required_spoken_words or planned_unique_sentence_ratio < 0.85:
+                writer_provider = str(ai_provider or script_generation.get("provider") or "not_configured")
+                if writer_provider == "builtin-creative-engine":
+                    writer_diagnostic = (
+                        "No long-form text-generation provider is configured; the deterministic "
+                        "fallback is only an outline and is not a finished narrated script."
+                    )
+                else:
+                    writer_diagnostic = (
+                        f"The configured writer path '{writer_provider}' did not return a complete, "
+                        "non-repetitive script after bounded repair attempts."
+                    )
+                raise RuntimeError(
+                    "Long-form script preflight blocked before media generation: "
+                    f"{planned_spoken_words} spoken words for {float(req.get('duration') or 0):.0f}s "
+                    f"at {speaking_rate_wpm} WPM; at least {required_spoken_words} are required; "
+                    f"distinct-sentence ratio is {planned_unique_sentence_ratio:.3f} (minimum 0.850). "
+                    + writer_diagnostic
+                    + " The system will not pad a short script across a long timeline."
+                )
+
         # Avoid burning generic planner labels such as "Hook" into the media.
         # Use the selected language's concise editorial overlay instead.
         generic_labels = {
@@ -6646,33 +9572,83 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             r"\b(single[- ]scene|single[- ]shot|one[- ]shot|one continuous shot|static shot|still[- ]image video|looping background)\b",
             brief_for_scene_policy, re.I
         ))
+        explicit_launch_profile = _is_explicit_ai_infinity_launch_brief(
+            str(req.get("objective") or req.get("topic") or req.get("title") or "")
+        )
+        original_chapter_count = len(chapters)
         max_chapters = _max_scene_count(
             is_short=is_short,
             fast_mode=FAST_MODE,
             smoke=SMOKE,
             explicitly_single_scene=explicitly_single_scene,
+            explicit_launch=explicit_launch_profile,
+            requested_duration_seconds=target,
         )
-        if FAST_MODE and not SMOKE:
-            target = min(target, 180 if is_short else 900)
-        chapters = _select_scene_coverage(chapters, max_chapters)
+        longform_expansion_applied = False
+        if target >= 120 and not SMOKE and not explicitly_single_scene:
+            # Preserve the complete narrative arc before expanding sections into
+            # shot-level coverage. Never silently truncate a long request to 8/9
+            # scenes or to a 15-minute ceiling in FAST_MODE.
+            chapters = _select_scene_coverage(chapters, min(len(chapters), max_chapters))
+            chapters = _expand_longform_chapters(chapters, float(target), max_chapters)
+            longform_expansion_applied = len(chapters) > original_chapter_count
+            max_chapters = max(1, len(chapters))
+        else:
+            chapters = _select_scene_coverage(chapters, max_chapters)
         # Allocate the runtime before rendering. Scene-level clamping after the
         # fact caused short jobs to render longer than requested, then trim the
         # video without trimming the captions to the same timeline.
         chapters = _allocate_scene_durations(chapters, float(target))
+        # Keep the persisted blueprint aligned with the storyboard actually sent
+        # to the renderer. Otherwise OTIO can load the original nine-scene plan
+        # after an eight-scene render and reference a nonexistent scene_09.mp4.
+        # Record selection explicitly rather than pretending any omitted beats
+        # were rendered; explicit launch storyboards are preserved at nine scenes.
+        plan["chapters"] = [dict(chapter) for chapter in chapters]
+        brief_fidelity = plan.get("brief_fidelity")
+        if isinstance(brief_fidelity, dict):
+            brief_fidelity["rendered_timecoded_scenes"] = len(chapters)
+            brief_fidelity["rendered_scene_selection_applied"] = len(chapters) < original_chapter_count
+            brief_fidelity["rendered_scene_expansion_applied"] = longform_expansion_applied
+            brief_fidelity["rendered_scene_selection_policy"] = (
+                "duration_aware_longform_shot_expansion"
+                if longform_expansion_applied
+                else "all_explicit_launch_beats_preserved"
+                if explicit_launch_profile and len(chapters) == original_chapter_count
+                else "bounded_evenly_spaced_narrative_coverage"
+            )
+            brief_fidelity["rendered_scene_durations_seconds"] = [
+                float(chapter["duration"]) for chapter in chapters
+            ]
+        _update_project(project_id, blueprint_json=jdump(plan))
+        # The canonical Creator Studio storyboard is now finalized. Synchronize
+        # its real scenes before media acquisition so candidate generation,
+        # technical review and creator selection address the same project/scenes
+        # that the existing FFmpeg renderer will consume.
+        graph_sync = _sync_production_graph(project_id)
+        checkpoint(project_id, "production_graph_ready", graph_sync)
         _stage(project_id, "production_ready", 22, total_scenes=len(chapters), current_scene=0)
 
         assets_meta: List[Dict[str, Any]] = []
+        # Keep local file paths in this internal-only list for media inspection.
+        # The exportable asset/provenance manifests intentionally omit host paths.
+        quality_assets_meta: List[Dict[str, Any]] = []
         scene_paths: List[Path] = []
         voice_provider = None
         voice_providers_by_scene: List[Dict[str, Any]] = []
         actual_total = 0.0
         # Shared music bed avoids repeatedly generating the same soundtrack.
-        music_seconds = max(12.0, min(600.0, float(target) + 12.0))
-        try:
-            shared_music = make_music(outdir, music_seconds)
-        except Exception as music_exc:
-            audit_event(project_id, "music_fallback_failed", {"error": str(music_exc)[:800]})
-            shared_music = _make_silent_voice(outdir, 9901, music_seconds)[0]
+        music_seconds = max(12.0, min(3600.0, float(target) + 12.0))
+        music_query = " ".join(
+            str(value)
+            for value in (
+                req.get("music_direction") or plan.get("music_direction") or plan.get("tone") or "",
+                plan.get("title") or topic,
+                "instrumental cinematic background music no vocals",
+            )
+            if str(value).strip()
+        )[:240]
+        shared_music = _resolve_music_bed(outdir, music_seconds, music_query, project_id)
         ai_video_enabled = os.getenv("AI_INFINITY_AI_VIDEO", "1").strip().lower() in {"1","true","yes","auto"}
         requested_ai_video_scenes = max(0, int(os.getenv("AI_INFINITY_AI_VIDEO_SCENES", "2")))
         # The free Render tier cannot safely host text-to-video model memory in the
@@ -6709,7 +9685,21 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 and abs(cached_scene_duration - expected_scene_duration) <= 0.35
             ):
                 if cached.get("duration"): ch["actual_duration"] = float(cached["duration"])
-                if cached.get("asset"): assets_meta.append(redact(cached["asset"]))
+                if isinstance(cached.get("asset"), dict):
+                    cached_asset = dict(cached["asset"])
+                    assets_meta.append(redact(cached_asset))
+                    candidates = sorted(
+                        candidate for candidate in outdir.glob(f"selected_visual_{i:02d}.*")
+                        if candidate.is_file()
+                    )
+                    fallback_path = outdir / f"procedural_visual_{i:02d}.png"
+                    cached_path = candidates[0] if candidates else (
+                        fallback_path if fallback_path.is_file() else None
+                    )
+                    quality_assets_meta.append({
+                        **cached_asset,
+                        "path": str(cached_path.resolve()) if cached_path else "",
+                    })
                 cached_voice_provider = str(cached.get("voice_provider") or "unknown")
                 voice_provider = voice_provider or cached_voice_provider
                 voice_providers_by_scene.append({"scene": i, "provider": cached_voice_provider, "resumed": True})
@@ -6760,7 +9750,20 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 fixture_id = str(req.get("_acceptance_fixture_id") or "")
                 if fixture_id == "cc0-recovery-illustration-v1":
                     scene_for_acquisition["_acceptance_fixture_id"] = fixture_id
-                asset = acquire_scene_asset(scene_for_acquisition, outdir, i, prefer_motion=(i <= max_ai_video_scenes), duration=scene_duration)
+                asset = acquire_scene_asset(
+                    scene_for_acquisition,
+                    outdir,
+                    i,
+                    # For long-form work, choose real moving footage ahead of stills
+                    # across the whole shot list. AI video generation remains bounded
+                    # by max_ai_video_scenes inside the acquisition adapter.
+                    prefer_motion=(
+                        i <= max_ai_video_scenes
+                        or explicit_launch_profile
+                        or (target >= 120 and not explicitly_single_scene and not SMOKE)
+                    ),
+                    duration=scene_duration,
+                )
             except Exception as asset_exc:
                 audit_event(project_id, "visual_source_unavailable", {"scene": i, "error": str(asset_exc)[:500]})
                 raise RuntimeError(f"scene {i}: professional visual source unavailable: {str(asset_exc)[:1600]}") from asset_exc
@@ -6772,6 +9775,12 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 asset_record["asset_sha256"] = None
                 asset_record["asset_size_bytes"] = 0
             assets_meta.append(redact(asset_record))
+            # Quality evaluation needs the exact media bytes, while the public
+            # asset metadata above stays free of host-local absolute paths.
+            quality_assets_meta.append({
+                **asset_record,
+                "path": str(Path(str(asset.get("path") or "")).resolve()),
+            })
             _save_asset(project_id, "visual", Path(asset["path"]), "video/mp4" if asset.get("kind") == "video" else "image/png", asset_record)
             try:
                 sfx = shared_sfx if FAST_MODE else make_sfx(outdir, ch["actual_duration"], i)
@@ -6779,7 +9788,12 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 audit_event(project_id, "sfx_fallback_failed", {"scene": i, "error": str(sfx_exc)[:600]})
                 sfx = shared_sfx
             mixed = outdir / f"scene_{i:02d}.mp4"
-            _render_scene(asset, voice, shared_music, sfx, ch["actual_duration"], mixed, str(ch.get("on_screen") or ch.get("heading") or topic), str(req.get("aspect_ratio") or "16:9"))
+            _render_scene(
+                asset, voice, shared_music, sfx, ch["actual_duration"], mixed,
+                str(ch.get("on_screen") or ""),
+                str(req.get("aspect_ratio") or "16:9"),
+                music_offset_seconds=max(0.0, actual_total - float(ch["actual_duration"])),
+            )
             scene_paths.append(mixed)
             checkpoint(project_id, f"scene_{i:04d}", {"scene":i,"path":str(mixed),"sha256":file_sha256(mixed) if mixed.exists() else None,"duration":ch.get("actual_duration"),"scene_signature":scene_signature,"voice_provider":provider,"asset":redact({k:v for k,v in asset.items() if k != "path"})})
             audit_event(project_id, "scene_completed", {"scene": i, "duration": ch.get("actual_duration"), "asset_source": asset.get("source"), "asset_kind": asset.get("kind")})
@@ -6887,7 +9901,9 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         # and exact-duration fitting. Preserve the video bitstream, so this adds no
         # extra video generation loss, and then verify the finished mix separately.
         mastered_final = outdir / "final_loudness_mastered.mp4"
-        loudness_master = _normalize_delivery_loudness(captioned, mastered_final, FAST_MODE)
+        loudness_master = _normalize_delivery_loudness(
+            captioned, mastered_final, FAST_MODE, target_duration_seconds=float(target)
+        )
         os.replace(mastered_final, captioned)
         final_duration_after_loudness = probe_duration(captioned)
         if abs(float(final_duration_after_loudness) - float(target)) > 1.0:
@@ -6927,19 +9943,14 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 raise RuntimeError("narration-only track is invalid or effectively silent")
 
             audio_master = outdir / "audio_master.mp3"
-            ffmpeg(
-                "-i", captioned, "-map", "0:a:0", "-vn",
-                "-c:a", "libmp3lame", "-q:a", "2", "-ar", "48000", "-ac", "2",
-                audio_master, timeout=max(120, int(probe_duration(captioned) * 4)),
-            )
-            if not _valid_audio_file(audio_master, minimum_peak_db=-45.0):
-                raise RuntimeError("programme audio master is invalid or effectively silent")
             video_seconds = float(probe_duration(captioned))
-            audio_seconds = float(probe_duration(audio_master))
-            if abs(audio_seconds - video_seconds) > 1.0:
-                raise RuntimeError(
-                    f"programme audio master duration mismatch: {audio_seconds:.3f}s vs video {video_seconds:.3f}s"
-                )
+            audio_master_export_report = _export_programme_audio_master(
+                captioned, audio_master, video_seconds, FAST_MODE
+            )
+            checkpoint(project_id, "programme_audio_master_verified", {
+                **audio_master_export_report,
+                "source_video_sha256": file_sha256(captioned),
+            })
         if True:
             article = outdir / "article.md"
             article_lines = [f"# {plan.get('title') or topic}", "", str(plan.get('hook') or ""), ""]
@@ -6990,10 +10001,30 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                         "format": "9:16",
                     },
                     "TikTok": {
-                        "caption": "\n\n".join(
+                        "caption": str(plan.get("hook") or topic) + "\n\n" + "\n\n".join(
                             str(ch.get("narration") or "") for ch in chapters[:2]
                         )[:3900],
                         "format": "9:16",
+                        "cta": str(plan.get("cta") or "Follow for the next practical breakdown."),
+                    },
+                    "LinkedIn": {
+                        "post": str(plan.get("hook") or topic) + "\n\n" + "\n\n".join(
+                            str(ch.get("narration") or "") for ch in chapters
+                        )[:2600],
+                        "format": "16:9_or_1:1",
+                        "opening": "Lead with the concrete professional outcome and its evidence.",
+                    },
+                    "X": {
+                        "thread": [str(plan.get("hook") or topic)[:270]] + [
+                            str(ch.get("narration") or "")[:270] for ch in chapters[:8]
+                        ],
+                        "format": "16:9_or_9:16",
+                    },
+                    "Facebook": {
+                        "post": str(plan.get("hook") or topic) + "\n\n" + "\n\n".join(
+                            str(ch.get("narration") or "") for ch in chapters
+                        )[:5000],
+                        "format": "9:16_or_16:9",
                     },
                 },
                 "truthful": True,
@@ -7052,6 +10083,13 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         except Exception as variants_exc:
             shorts = []
             audit_event(project_id, "optional_variants_failed", {"error": str(variants_exc)[:1000]})
+
+        # Website exports are created after the production and rights manifests exist,
+        # so the downloadable site can carry the actual evidence records.
+        website_outputs: Dict[str, Any] = {}
+        native_outputs: Dict[str, Any] = {}
+        content_type = str(req.get("content_type") or "video").strip().lower()
+
         manifest = outdir / "manifest.json"
         # Canonical project manifest: derive it from the actual files now present.
         # Exclude the manifest itself so its SHA is not self-referential.
@@ -7075,7 +10113,7 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "generated_at": utc_iso(),
             "truthful": True,
         }), encoding="utf-8")
-        qc = extended_quality_check(captioned, chapters, captions, outdir, assets_meta)
+        qc = extended_quality_check(captioned, chapters, captions, outdir, quality_assets_meta)
 
         # Explicit professional delivery manifests required by the creator
         # contract. These are real records derived from the actual production
@@ -7096,7 +10134,11 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "actual_duration_seconds": round(float(probe_duration(captioned)), 3),
             "artifacts": [
                 {"name": p.name, "sha256": file_sha256(p), "bytes": p.stat().st_size}
-                for p in [captioned, script, captions, sources, manifest, audio_master, narration_only, article, social]
+                for p in [
+                    captioned, script, captions, sources, manifest, audio_master,
+                    narration_only, article, social, website_outputs.get("package"),
+                    website_outputs.get("manifest"), website_outputs.get("readme"),
+                ]
                 if p and Path(p).is_file()
             ],
             "research": {
@@ -7133,12 +10175,17 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 "mime_type": asset.get("mime_type"),
                 "usable_bytes": asset.get("asset_size_bytes"),
             })
+        audio_rights = _audio_rights_evidence(
+            shared_music if shared_music and Path(shared_music).is_file() else None,
+            outdir / "music_source.json",
+        )
         rights_manifest.write_text(jdump({
             "schema": "ai-infinity-rights-manifest-v1",
             "project_id": project_id,
             "generated_at": utc_iso(),
             "policy": "Unknown or provider-specific rights are never silently treated as commercial clearance.",
             "assets": rights_items,
+            "audio_assets": [audio_rights] if audio_rights else [],
             "research_sources": [
                 {
                     "title": s.get("title"),
@@ -7152,6 +10199,107 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             ],
             "truthful": True,
         },), encoding="utf-8")
+
+        # Generate true editable Office deliverables from the same approved
+        # editorial blueprint; do not substitute a PDF/Markdown file with a
+        # misleading .docx or .pptx extension.
+        if content_type in {"document", "presentation"}:
+            from ai_infinity.native_exports import build_powerpoint_presentation, build_word_document
+            export_args = {
+                "outdir": outdir,
+                "title": str(plan.get("title") or topic),
+                "description": str(plan.get("hook") or topic),
+                "chapters": chapters,
+                "research": research,
+                "language": str(req.get("language") or "English"),
+            }
+            if content_type == "document":
+                native_outputs = build_word_document(**export_args)
+            else:
+                native_outputs = build_powerpoint_presentation(**export_args)
+            native_verification = native_outputs.get("verification") or {}
+            if not native_verification.get("sha256") or native_verification.get("size_bytes", 0) <= 0:
+                raise RuntimeError("native Office export did not produce a verified editable file")
+            production_payload = json.loads(production_manifest.read_text(encoding="utf-8"))
+            native_artifacts = production_payload.setdefault("artifacts", [])
+            existing_names = {str(row.get("name") or "") for row in native_artifacts if isinstance(row, dict)}
+            for native_path in (native_outputs.get("file"), native_outputs.get("manifest")):
+                if native_path and Path(native_path).is_file() and Path(native_path).name not in existing_names:
+                    native_artifacts.append({
+                        "name": Path(native_path).name,
+                        "sha256": file_sha256(Path(native_path)),
+                        "bytes": Path(native_path).stat().st_size,
+                    })
+            production_payload["native_content_export"] = native_verification
+            production_manifest.write_text(jdump(production_payload), encoding="utf-8")
+
+        # A website request produces a real, portable static-site package. It
+        # embeds project media and the rights/provenance records generated above.
+        # Export is download-first: this code never deploys or publishes the site.
+        if content_type == "website":
+            from ai_infinity.site_package import build_static_website_package
+            website_outputs = build_static_website_package(
+                outdir,
+                project_id=project_id,
+                title=str(plan.get("title") or topic),
+                description=str(plan.get("hook") or topic),
+                chapters=chapters,
+                research=research,
+                master_video=captioned,
+                thumbnail=thumb,
+                audio_master=audio_master,
+                captions=captions,
+                article=article,
+                duration_seconds=float(probe_duration(captioned)),
+                language=str(req.get("language") or "English"),
+            )
+            if (website_outputs.get("verification") or {}).get("status") != "PASS":
+                raise RuntimeError("static website package did not pass its integrity verification")
+            # The site manifest carries page and local-asset hashes; the project
+            # result manifest below binds the archive SHA/size to this exact output.
+            production_payload = json.loads(production_manifest.read_text(encoding="utf-8"))
+            website_artifacts = production_payload.setdefault("artifacts", [])
+            website_names = {str(row.get("name") or "") for row in website_artifacts if isinstance(row, dict)}
+            for website_path in (website_outputs.get("package"), website_outputs.get("manifest"), website_outputs.get("readme")):
+                if website_path and Path(website_path).is_file() and Path(website_path).name not in website_names:
+                    website_artifacts.append({
+                        "name": Path(website_path).name,
+                        "sha256": file_sha256(Path(website_path)),
+                        "bytes": Path(website_path).stat().st_size,
+                    })
+            production_payload["static_website_export"] = website_outputs["verification"]
+            production_manifest.write_text(jdump(production_payload), encoding="utf-8")
+            audit_event(project_id, "static_website_package_created", website_outputs["verification"])
+
+        # Content-type-specific QC is evaluated only after the real files exist.
+        if content_type == "website":
+            website_verification = website_outputs.get("verification") or {}
+            website_package_path = website_outputs.get("package")
+            website_manifest_path = website_outputs.get("manifest")
+            website_readme_path = website_outputs.get("readme")
+            qc.setdefault("checks", {})["website_package_integrity"] = (
+                website_verification.get("status") == "PASS"
+                and website_verification.get("archive_integrity") is True
+                and bool(website_verification.get("archive_sha256"))
+                and website_package_path is not None and Path(website_package_path).is_file()
+                and file_sha256(Path(website_package_path)) == website_verification.get("archive_sha256")
+                and website_manifest_path is not None and Path(website_manifest_path).is_file()
+                and website_readme_path is not None and Path(website_readme_path).is_file()
+            )
+            qc["website_package"] = website_verification
+        if content_type in {"document", "presentation"}:
+            native_verification = native_outputs.get("verification") or {}
+            native_path = native_outputs.get("file")
+            native_manifest_path = native_outputs.get("manifest")
+            qc.setdefault("checks", {})["native_office_export_integrity"] = (
+                bool(native_verification.get("sha256"))
+                and int(native_verification.get("size_bytes") or 0) > 0
+                and native_verification.get("truthful") is True
+                and native_path is not None and Path(native_path).is_file()
+                and native_manifest_path is not None and Path(native_manifest_path).is_file()
+                and file_sha256(Path(native_path)) == native_verification.get("sha256")
+            )
+            qc["native_content_export"] = native_verification
 
         # The manifest artifacts themselves are part of the professional QC gate.
         try:
@@ -7176,6 +10324,50 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             if key not in ignored_quality_checks
         )
 
+        # Verify the user's selected native deliverable independently from a
+        # companion video. A DOCX/PPTX/article/podcast/social/site may be valid
+        # even when its optional video companion remains REVIEW_REQUIRED.
+        primary_content_delivery = None
+        primary_content_delivery_path = None
+        if content_type in {"article", "podcast", "social", "website", "document", "presentation"}:
+            primary_content_delivery = _verify_primary_content_delivery(
+                project_id,
+                content_type,
+                outdir,
+                article=article,
+                audio_master=audio_master,
+                social=social,
+                website_outputs=website_outputs,
+                native_outputs=native_outputs,
+                research=research,
+                assets_meta=quality_assets_meta,
+            )
+            primary_content_delivery_path = outdir / "primary_content_delivery.json"
+            primary_content_delivery_path.write_text(
+                jdump(primary_content_delivery), encoding="utf-8"
+            )
+            qc.setdefault("checks", {})["primary_content_delivery"] = (
+                primary_content_delivery.get("status") == "PASS"
+            )
+            qc["primary_content_delivery"] = primary_content_delivery
+            if primary_content_delivery.get("status") == "PASS":
+                production_payload = json.loads(production_manifest.read_text(encoding="utf-8"))
+                production_payload["primary_content_delivery"] = {
+                    "status": "PASS",
+                    "manifest": primary_content_delivery_path.name,
+                    "sha256": file_sha256(primary_content_delivery_path),
+                    "size_bytes": primary_content_delivery_path.stat().st_size,
+                    "scope": "primary native output only; companion video is gated independently",
+                }
+                rows = production_payload.setdefault("artifacts", [])
+                if not any(str(row.get("name") or "") == primary_content_delivery_path.name for row in rows if isinstance(row, dict)):
+                    rows.append({
+                        "name": primary_content_delivery_path.name,
+                        "sha256": file_sha256(primary_content_delivery_path),
+                        "bytes": primary_content_delivery_path.stat().st_size,
+                    })
+                production_manifest.write_text(jdump(production_payload), encoding="utf-8")
+
         feature_report = _feature_execution_report(project_id, project["user_id"], [str(x) for x in (req.get("features") or [])], outdir, qc=qc, req=req)
         metadata = {
             "studio_version": VERSION, "build": BUILD, "project_id": project_id, "created_at": now(),
@@ -7185,25 +10377,83 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "visual_policy": "connected-ai-or-real-public-media-only; no-placeholder-video",
             "ai_provider": ai_provider, "voice_provider": voice_provider,
             "voice_providers_by_scene": voice_providers_by_scene,
-            "research": research, "quality": qc,
+            "research": research, "quality": qc, "audio_master_export": audio_master_export_report,
             "assets": assets_meta, "shorts": [{k: v for k, v in x.items() if k != "path"} for x in shorts],
             "self_upgrade": True, "truthful": True,
             "production_profile": _project_meta(project_id),
-            "generated_at": utc_iso(), "platform_packages": {k: Path(v).name for k,v in editorial.items() if v},
+            "generated_at": utc_iso(),
+            "platform_packages": {
+                **{k: Path(v).name for k,v in editorial.items() if v},
+                **({"static_website": "website.zip", "website_manifest": "website_manifest.json"} if website_outputs else {}),
+                **({
+                    "native_document": "document.docx",
+                    "native_document_manifest": "document_manifest.json",
+                } if content_type == "document" and native_outputs else {}),
+                **({
+                    "native_presentation": "presentation.pptx",
+                    "native_presentation_manifest": "presentation_manifest.json",
+                } if content_type == "presentation" and native_outputs else {}),
+            },
+            "static_website_export": website_outputs.get("verification") if website_outputs else None,
+            "native_content_export": native_outputs.get("verification") if native_outputs else None,
             "storage": {"data_dir": str(DATA_DIR), **__import__("ai_infinity.persistence_truth", fromlist=["project_state_durability"]).project_state_durability(DATA_DIR), "persistent_configured": __import__("ai_infinity.persistence_truth", fromlist=["project_state_durability"]).project_state_durability(DATA_DIR).get("persistent", False)},
         }
         manifest.write_text(jdump(metadata), encoding="utf-8")
         named_package = outdir / f"{safe_name(plan.get('title') or topic)}-AI-Infinity-creator-package.zip"
         package = outdir / "package.zip"
-        bundle: List[Optional[Path]] = [captioned, script, captions, sources, manifest, production_manifest, rights_manifest, outdir / "feature_execution.json", outdir / "creator_experiments.json", shared_music, thumb if thumb and thumb.exists() else None, audio_master, narration_only, article, social, outdir / "fact_check.json"]
+        bundle: List[Optional[Path]] = [
+            captioned, script, captions, sources, manifest, production_manifest,
+            rights_manifest, primary_content_delivery_path,
+            outdir / "feature_execution.json", outdir / "creator_experiments.json",
+            shared_music, outdir / "music_source.json",
+            thumb if thumb and thumb.exists() else None, audio_master, narration_only,
+            article, social, outdir / "fact_check.json",
+            website_outputs.get("package"), website_outputs.get("manifest"),
+            website_outputs.get("readme"), native_outputs.get("file"),
+            native_outputs.get("manifest"),
+        ]
         bundle += [x for x in editorial.values() if x]
         bundle += [Path(x["path"]) for x in shorts if Path(x["path"]).exists()]
         bundle += [p for p in outdir.glob("narration_*.mp3") if p.exists()]
+        finalized_production_manifest = _finalize_production_manifest_inventory(
+            production_manifest, bundle
+        )
+        expected_package_names = []
+        expected_name_set = set()
+        for item in bundle:
+            if item and Path(item).is_file() and Path(item).name not in expected_name_set:
+                expected_package_names.append(Path(item).name)
+                expected_name_set.add(Path(item).name)
         with zipfile.ZipFile(package, "w", compression=zipfile.ZIP_DEFLATED) as z:
-            seen_names=set()
-            for path in bundle:
-                if path and Path(path).exists() and Path(path).name not in seen_names:
-                    z.write(path, arcname=Path(path).name); seen_names.add(Path(path).name)
+            for item in bundle:
+                if item and Path(item).is_file() and Path(item).name not in {
+                    info.filename for info in z.infolist()
+                }:
+                    z.write(item, arcname=Path(item).name)
+        with zipfile.ZipFile(package, "r") as z:
+            if z.testzip() is not None:
+                raise RuntimeError("creator package contains a corrupt ZIP member")
+            actual_names = set(z.namelist())
+            if actual_names != expected_name_set:
+                raise RuntimeError(
+                    "creator package member inventory differs from its finalized source inventory"
+                )
+            for row in finalized_production_manifest.get("artifacts") or []:
+                try:
+                    archived = z.read(str(row["name"]))
+                except Exception:
+                    raise RuntimeError(
+                        "creator package is missing a production-manifest artifact: "
+                        + str(row.get("name") or "unknown")
+                    ) from None
+                if (
+                    len(archived) != int(row.get("bytes") or 0)
+                    or hashlib.sha256(archived).hexdigest() != str(row.get("sha256") or "")
+                ):
+                    raise RuntimeError(
+                        "creator package artifact hash does not match production manifest: "
+                        + str(row.get("name") or "unknown")
+                    )
         # Preserve a descriptive package filename as an optional convenience copy,
         # while the canonical production contract is always package.zip.
         try:
@@ -7213,7 +10463,14 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         for kind, pth, mt in [
             ("video", captioned, "video/mp4"), ("audio_master", audio_master, "audio/mpeg"), ("audio", audio_master, "audio/mpeg"), ("narration_only", narration_only, "audio/mpeg"), ("article", article, "text/markdown"), ("social_campaign", social, "application/json"), ("social_campaign_markdown", social_markdown, "text/markdown"),
             ("script", script, "text/markdown"), ("captions", captions, "application/x-subrip"),
-            ("sources", sources, "application/json"), ("manifest", manifest, "application/json"), ("production_manifest", production_manifest, "application/json"), ("rights_manifest", rights_manifest, "application/json"), ("feature_execution", outdir / "feature_execution.json", "application/json"), ("thumbnail", thumb, "image/jpeg"), ("package", package, "application/zip")
+            ("website_bundle", website_outputs.get("package"), "application/zip"),
+            ("website_manifest", website_outputs.get("manifest"), "application/json"),
+            ("website_readme", website_outputs.get("readme"), "text/markdown"),
+            ("native_document", native_outputs.get("file") if content_type == "document" else None, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            ("document_manifest", native_outputs.get("manifest") if content_type == "document" else None, "application/json"),
+            ("native_presentation", native_outputs.get("file") if content_type == "presentation" else None, "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+            ("presentation_manifest", native_outputs.get("manifest") if content_type == "presentation" else None, "application/json"),
+            ("sources", sources, "application/json"), ("manifest", manifest, "application/json"), ("production_manifest", production_manifest, "application/json"), ("rights_manifest", rights_manifest, "application/json"), ("primary_content_delivery", primary_content_delivery_path, "application/json"), ("feature_execution", outdir / "feature_execution.json", "application/json"), ("thumbnail", thumb, "image/jpeg"), ("package", package, "application/zip")
         ]:
             if pth and Path(pth).exists(): _save_asset(project_id, kind, Path(pth), mt, {"title": plan.get("title") or topic})
         for x in shorts:
@@ -7233,8 +10490,16 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             (manifest, "application/json"),
             (production_manifest, "application/json"),
             (rights_manifest, "application/json"),
+            (primary_content_delivery_path, "application/json"),
             (script, "text/markdown"),
             (outdir / "feature_execution.json", "application/json"),
+            (website_outputs.get("package"), "application/zip"),
+            (website_outputs.get("manifest"), "application/json"),
+            (website_outputs.get("readme"), "text/markdown"),
+            (native_outputs.get("file") if content_type == "document" else None, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            (native_outputs.get("manifest") if content_type == "document" else None, "application/json"),
+            (native_outputs.get("file") if content_type == "presentation" else None, "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+            (native_outputs.get("manifest") if content_type == "presentation" else None, "application/json"),
         ]:
             if pth and Path(pth).exists():
                 register_artifact(project_id, Path(pth), mt)
@@ -7250,19 +10515,28 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
             "duration_seconds": round(probe_duration(captioned), 2),
             "render_profile": "720p-fast" if FAST_MODE else "1080p-production",
             "quality": qc,
+            "primary_content_delivery": primary_content_delivery,
             "research": {"source_count": research.get("source_count", 0)},
             "downloads": {
                 "video": f"/infinity/studio/project/{project_id}/asset/final.mp4", "package": f"/infinity/studio/project/{project_id}/asset/package.zip",
                 "thumbnail": f"/infinity/studio/project/{project_id}/asset/thumbnail.jpg", "script": f"/infinity/studio/project/{project_id}/asset/script.md",
                 "captions": f"/infinity/studio/project/{project_id}/asset/captions.srt", "sources": f"/infinity/studio/project/{project_id}/asset/sources.json",
                 "manifest": f"/infinity/studio/project/{project_id}/asset/manifest.json", "production_manifest": f"/infinity/studio/project/{project_id}/asset/production_manifest.json", "rights_manifest": f"/infinity/studio/project/{project_id}/asset/rights_manifest.json", "feature_execution": f"/infinity/studio/project/{project_id}/asset/feature_execution.json",
+                "primary_content_delivery": f"/infinity/studio/project/{project_id}/asset/primary_content_delivery.json" if primary_content_delivery_path and primary_content_delivery_path.is_file() else None,
                 "audio": f"/infinity/studio/project/{project_id}/asset/audio_master.mp3" if audio_master and audio_master.exists() else None,
                 "narration_only": f"/infinity/studio/project/{project_id}/asset/narration_only.mp3" if narration_only and narration_only.exists() else None,
                 "article": f"/infinity/studio/project/{project_id}/asset/article.md" if article and article.exists() else None,
                 "social_campaign": f"/infinity/studio/project/{project_id}/asset/social_campaign.json" if (outdir/"social_campaign.json").exists() else (f"/infinity/studio/project/{project_id}/asset/social_campaign.md" if social and social.exists() else None),
                 "seo": f"/infinity/studio/project/{project_id}/asset/seo.json", "accessibility": f"/infinity/studio/project/{project_id}/asset/accessibility.json",
                 "provenance": f"/infinity/studio/project/{project_id}/asset/provenance.json", "fact_check": f"/infinity/studio/project/{project_id}/asset/fact_check.json", "platform_manifest": f"/infinity/studio/project/{project_id}/asset/platform_manifest.json",
-                "podcast_rss": f"/infinity/studio/project/{project_id}/asset/podcast_rss.xml" if (outdir/"podcast_rss.xml").exists() else None
+                "podcast_rss": f"/infinity/studio/project/{project_id}/asset/podcast_rss.xml" if (outdir/"podcast_rss.xml").exists() else None,
+                "website_package": f"/infinity/studio/project/{project_id}/asset/website.zip" if (website_outputs.get("package") and Path(website_outputs["package"]).is_file()) else None,
+                "website_manifest": f"/infinity/studio/project/{project_id}/asset/website_manifest.json" if (website_outputs.get("manifest") and Path(website_outputs["manifest"]).is_file()) else None,
+                "website_readme": f"/infinity/studio/project/{project_id}/asset/website_README.md" if (website_outputs.get("readme") and Path(website_outputs["readme"]).is_file()) else None,
+                "document": f"/infinity/studio/project/{project_id}/asset/document.docx" if content_type == "document" and Path(outdir / "document.docx").is_file() else None,
+                "document_manifest": f"/infinity/studio/project/{project_id}/asset/document_manifest.json" if content_type == "document" and Path(outdir / "document_manifest.json").is_file() else None,
+                "presentation": f"/infinity/studio/project/{project_id}/asset/presentation.pptx" if content_type == "presentation" and Path(outdir / "presentation.pptx").is_file() else None,
+                "presentation_manifest": f"/infinity/studio/project/{project_id}/asset/presentation_manifest.json" if content_type == "presentation" and Path(outdir / "presentation_manifest.json").is_file() else None
             },
             "shorts": [{"title": x["title"], "duration": x["duration"], "download_url": f"/infinity/studio/project/{project_id}/asset/{Path(x['path']).name}"} for x in shorts],
             "publication": {
@@ -7280,7 +10554,54 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
         }
         if not qc.get("passed"):
             failed_checks = [k for k, ok in (qc.get("checks") or {}).items() if not bool(ok)]
-            failure_message = "Professional QC failed; delivery remains blocked. Failed checks: " + ", ".join(failed_checks[:24])
+            failure_message = "Professional QC failed; final video and mixed package remain blocked. Failed checks: " + ", ".join(failed_checks[:24])
+            # A native primary deliverable may be ready even when its optional
+            # video companion fails visual QC. Preserve that usable output in an
+            # explicit review-required state; never mark the whole project VERIFIED.
+            video_companion_only_failures = {
+                "full_hd",
+                "required_source_motion_coverage",
+                "fallback_visual_budget_ok",
+            }
+            primary_native_passed = bool(
+                isinstance(primary_content_delivery, dict)
+                and primary_content_delivery.get("status") == "PASS"
+                and content_type in {"article", "podcast", "social", "website", "document", "presentation"}
+            )
+            non_video_failures = set(failed_checks) - video_companion_only_failures
+            if primary_native_passed and not non_video_failures:
+                result["status"] = "completed_with_qc_warnings"
+                result["state"] = "COMPLETED"
+                result["error"] = failure_message
+                result["failed_checks"] = failed_checks
+                result["companion_video_release"] = "REVIEW_REQUIRED"
+                result["mixed_package_release"] = "BLOCKED"
+                audit_event(project_id, "primary_content_ready_companion_video_review_required", {
+                    "content_type": content_type,
+                    "primary_content_status": "PASS",
+                    "failed_video_checks": failed_checks[:50],
+                    "final_video_and_mixed_package_blocked": True,
+                    "truthful": True,
+                })
+                checkpoint(project_id, "primary_content_ready_companion_video_review_required", {
+                    "content_type": content_type,
+                    "primary_content_manifest_sha256": file_sha256(primary_content_delivery_path),
+                    "companion_video_status": "REVIEW_REQUIRED",
+                })
+                _update_project(
+                    project_id,
+                    status="completed_with_qc_warnings",
+                    error=failure_message[:1200],
+                    result_json=jdump(result),
+                    blueprint_json=jdump({"plan": plan, "research": research}),
+                    progress=100,
+                    stage="complete_with_review_required",
+                )
+                with PROCESS_LOCK:
+                    PROCESS_REGISTRY.pop(project_id, None)
+                ACTIVE_PROJECT.project_id = None
+                return
+
             result["status"] = "failed"
             result["state"] = "FAILED"
             result["error"] = failure_message
@@ -7358,12 +10679,22 @@ def _resolve_format_intent(requested_format: str, command_text: str, effective_d
     return selected
 
 
+SUPPORTED_CREATOR_CONTENT_TYPES = frozenset({
+    "video", "podcast", "article", "social", "website", "document", "presentation",
+})
+
+
+def normalize_creator_content_type(value: Any) -> str:
+    """Keep every implemented native deliverable on its real production path."""
+    selected = str(value or "video").strip().lower()
+    return selected if selected in SUPPORTED_CREATOR_CONTENT_TYPES else "video"
+
+
 def enqueue(req: Dict[str, Any], user_id: str, model_fn: Optional[Callable]) -> Dict[str, Any]:
     title = str(req.get("title") or req.get("topic") or req.get("objective") or "AI content").strip()[:200]
     req = dict(req)
     req["title"] = title
-    req["content_type"] = str(req.get("content_type") or "video").lower()
-    if req["content_type"] not in {"video", "podcast", "article", "social"}: req["content_type"] = "video"
+    req["content_type"] = normalize_creator_content_type(req.get("content_type"))
     # One-command ergonomics: infer short-form from an explicitly vertical/short
     # brief when the generic UI default is still "long".
     requested_format = str(req.get("format") or "long").strip().lower()
@@ -8241,9 +11572,10 @@ function openProject(id){
   var projectUrl="/infinity/studio/project/"+encodeURIComponent(id);
   Promise.all([
     api(projectUrl),
-    api(projectUrl+"/truth").catch(function(){return null;})
+    api(projectUrl+"/truth").catch(function(){return null;}),
+    api(projectUrl+"/production-graph").catch(function(){return null;})
   ]).then(function(records){
-    var x=records[0], truth=records[1], result=x.result||{}, assets=x.assets||[];
+    var x=records[0], truth=records[1], production=records[2], result=x.result||{}, assets=x.assets||[];
     // Only the server's current production-truth gate can release the final master.
     // A completed job or a playable draft is not by itself a verified deliverable.
     var done=(String(x.status||"").toLowerCase()==="completed" && !!(truth&&truth.verified===true));
@@ -8253,12 +11585,50 @@ function openProject(id){
     var allowedPartial={"script.md":true,"captions.srt":true,"sources.json":true,"thumbnail.jpg":true,"audio_master.mp3":true};
     var visibleLinks=done?links:links.filter(function(a){return allowedPartial[a[1]] && assets.some(function(x){return String(x.name||x.path||"").split("/").pop()===a[1]});});
     var cardLinks=visibleLinks.map(function(a){return "<div class='artifact'><b>"+a[0]+"</b><a href='/infinity/studio/project/"+encodeURIComponent(id)+"/asset/"+encodeURIComponent(a[1])+"' target='_blank'>"+(done?"Open / download":"Open partial artifact")+"</a></div>"}).join("");
+    var graph=production||{}, graphShots=graph.shots||[], graphCandidates=graph.candidates||[];
+    var capabilityRows=(graph.provider_capabilities&&graph.provider_capabilities.providers)||[];
+    var runway=capabilityRows.find(function(p){return p.id==="runway"})||{};
+    var wan=capabilityRows.find(function(p){return p.id==="wan2.2-ti2v-5b"})||{};
+    var freeNative=graph.free_native_video||{status:"unavailable"};
+    var nativeStatus=freeNative.status==="available"
+      ? (freeNative.provider==="wan2.2-ti2v-5b"
+          ? "Open-source Wan2.2 TI2V-5B is verified on a separate GPU worker. No metered model API is used; GPU hosting and durable storage are provided by the operator."
+          : "A verified native-video provider is enabled: "+esc(freeNative.provider||"provider"))
+      : "Native AI video is unavailable until a verified GPU worker is configured. The existing free-first Creator Studio source, voice and FFmpeg renderer remain available.";
+    var graphShotHtml=graphShots.map(function(sh){
+      var d=Number(sh.duration||0);
+      var canWan=wan.enabled===true&&d>=2&&d<=5;
+      var canPaid=runway.enabled===true&&runway.pricing_class==="paid_metered"&&d>=2&&d<=10;
+      var action=canWan
+        ? "<button class='btn' data-pg-generate='"+esc(sh.shot_id)+"' data-pg-prompt='"+esc(sh.visual_prompt||"")+"' data-pg-duration='"+d+"'>Generate open-source Wan2.2 shot</button>"
+        : canPaid
+          ? "<button class='btn' data-pg-generate='"+esc(sh.shot_id)+"' data-pg-prompt='"+esc(sh.visual_prompt||"")+"' data-pg-duration='"+d+"'>Generate optional paid Runway candidate</button>"
+          : "<div class='tiny'>"+(wan.enabled===true?"Wan2.2 supports 2–5 second native shots; split this scene to use it.":runway.enabled===true&&runway.pricing_class==="paid_metered"?"Paid Runway clips support 2–10 seconds per shot.":nativeStatus)+(wan.reason?" Worker: "+esc(wan.reason):"")+"</div>";
+      return "<div class='item'><div class='row'><b>Scene "+String(sh.seq||0).padStart(2,"0")+" · "+esc(sh.purpose||"Scene")+"</b><span class='chip'>"+d.toFixed(1)+"s</span></div><div class='tiny'>"+esc(sh.status||"planned")+" · "+esc(sh.shot_id)+"</div><div style='margin-top:8px'>"+action+"</div></div>";
+    }).join("");
+    var graphCandidateHtml=graphCandidates.map(function(c){
+      var durable=["primary_only","durable_partial","durable_multi_provider","durable_5_provider"].indexOf(String(c.storage_status||""))>=0;
+      var action=c.status==="ready"
+        ? "<button class='btn' data-pg-qa='"+esc(c.candidate_id)+"'>Run technical QA</button>"
+        : c.status==="ready_for_creative_review"&&durable
+          ? "<button class='btn' data-pg-select='"+esc(c.candidate_id)+"'>Select for canonical editor</button>"
+          : "";
+      var preview=durable
+        ? "<video controls playsinline preload='none' style='width:100%;max-width:560px;margin-top:8px' src='/infinity/production/project/"+encodeURIComponent(id)+"/candidate/"+encodeURIComponent(c.candidate_id)+"/media'></video>"
+        : "<div class='tiny'>Preview/selection remains unavailable until candidate bytes have verified object storage, SHA-256 and size evidence.</div>";
+      var state=c.status==="selected_for_editor"?"Selected for canonical rerender; creative and rights approval remain pending.":c.status==="ready_for_creative_review"?"Technical checks passed; creative approval remains pending.":"";
+      return "<div class='item'><div class='row'><b>"+esc(c.provider||"provider")+" · "+esc(c.model||"model")+"</b><span class='status'>"+esc(c.status||"queued")+"</span></div><div class='tiny mono'>"+esc(c.candidate_id)+" · storage "+esc(c.storage_status||"not_persisted")+"</div>"+preview+"<div style='margin-top:8px'>"+action+"</div><div class='tiny'>"+esc(state)+"</div></div>";
+    }).join("");
+    var graphPanel="<div class='card cardPad' style='margin-top:14px'><div class='sectionHead'><div><h3>Integrated scene production graph</h3><div class='mini'>Same Studio project ID, actual storyboard scenes, candidate records and canonical rerender path.</div></div><span class='status "+(graph.synchronization&&graph.synchronization.status==="synced"?"completed":"review-required")+"'>"+esc(graph.synchronization&&graph.synchronization.status||"unavailable")+"</span></div><div class='notice'>"+esc(nativeStatus)+"</div><div class='tiny' style='margin:8px 0'>Free-first renderer and sources remain the default. Runway is explicitly paid-metered and appears only when its paid-use authorization is configured.</div><div class='grid cols2'><div><h4>Real storyboard scenes ("+graphShots.length+")</h4><div class='list'>"+(graphShotHtml||"<div class='tiny'>The production graph will populate when the storyboard is ready.</div>")+"</div></div><div><h4>Generation candidates ("+graphCandidates.length+")</h4><div class='list'>"+(graphCandidateHtml||"<div class='tiny'>No native candidates have been generated for this project.</div>")+"</div></div></div></div>";
     $("content").innerHTML="<div class='toolbar' style='margin-bottom:12px'><button class='btn' onclick='go(\"projects\")'>← Projects</button><button class='btn' onclick='openProject(\""+esc(id)+"\")'>Refresh</button><button class='btn' onclick='verifyProject(\""+esc(id)+"\")'>Verify</button></div>"+
     "<div class='grid cols2'><div class='card cardPad'>"+
     "<div class='eyebrow'>PROJECT</div><h2 style='margin:6px 0 4px'>"+esc(x.title||id)+"</h2><div class='chips'><span class='status "+statusClass(x.status)+"'>"+esc(x.status)+"</span><span class='chip'>"+Math.round(x.progress||0)+"%</span><span class='chip'>Attempt "+esc(x.attempt||1)+"</span></div><div style='margin-top:14px'>"+stages(x)+"</div><div style='margin-top:14px' class='progress'><i style='width:"+Math.round(x.progress||0)+"%'></i></div>"+
     (done?"<div class='video' style='margin-top:14px'><video controls playsinline src='/infinity/studio/project/"+encodeURIComponent(id)+"/asset/final.mp4'></video></div>":"<div class='notice' style='margin-top:14px'>"+esc(x.status==="failed"?(x.error||"Production failed. Open retry to run again."):x.status==="completed_with_qc_warnings"?"A review-required draft exists. Final video delivery remains blocked until quality gates pass.":x.status==="completed"?(truth?"Production finished, but the current production-truth checks did not verify the master. Review the failed checks.":"Production truth could not be loaded. Final delivery stays hidden until verification succeeds."):"The workspace is producing real artifacts. Refresh is safe.")+"</div>")+
     "<div class='toolbar' style='margin-top:12px'><button class='btn warn' onclick='cancelProject(\""+esc(id)+"\")'>Cancel</button><button class='btn' onclick='retryProject(\""+esc(id)+"\")'>Retry</button></div>"+
-    "</div><div class='card cardPad'><div class='sectionHead'><h3>Production details</h3><span class='status "+statusClass(x.status)+"'>"+esc(x.stage||"")+"</span></div><div class='notice'>"+(done?"Production-truth and quality gates passed. Final artifacts are release-eligible.":x.status==="completed_with_qc_warnings"?"Quality verification did not pass; final video delivery remains blocked.":x.status==="completed"?"The job reports completion, but production truth is not verified. Final delivery is hidden.":"This status comes from the production database, not UI animation.")+"</div><div class='artifacts' style='margin-top:10px'>"+cardLinks+"</div><div id='verifyOut' style='margin-top:10px'></div></div></div>";
+    "</div><div class='card cardPad'><div class='sectionHead'><h3>Production details</h3><span class='status "+statusClass(x.status)+"'>"+esc(x.stage||"")+"</span></div><div class='notice'>"+(done?"Production-truth and quality gates passed. Final artifacts are release-eligible.":x.status==="completed_with_qc_warnings"?"Quality verification did not pass; final video delivery remains blocked.":x.status==="completed"?"The job reports completion, but production truth is not verified. Final delivery is hidden.":"This status comes from the production database, not UI animation.")+"</div><div class='artifacts' style='margin-top:10px'>"+cardLinks+"</div><div id='verifyOut' style='margin-top:10px'></div></div></div>"+graphPanel;
+    document.querySelectorAll("[data-pg-generate]").forEach(function(el){el.addEventListener("click",function(){generateStudioNativeVideo(id,el.getAttribute("data-pg-generate"),el.getAttribute("data-pg-prompt"),Number(el.getAttribute("data-pg-duration")||0))})});
+    document.querySelectorAll("[data-pg-qa]").forEach(function(el){el.addEventListener("click",function(){reviewStudioCandidate(id,el.getAttribute("data-pg-qa"))})});
+    document.querySelectorAll("[data-pg-select]").forEach(function(el){el.addEventListener("click",function(){selectStudioCandidate(id,el.getAttribute("data-pg-select"))})});
     if(pollTimer)clearInterval(pollTimer);
     if(!done && x.status!=="failed" && x.status!=="cancelled"){pollTimer=setInterval(function(){refreshProjectCard(id)},1600)}
   }).catch(function(e){$("content").innerHTML=renderError(e)});
@@ -8276,6 +11646,24 @@ async function verifyProject(id){
   try{$("verifyOut").innerHTML="<div class='notice'>Verifying artifacts…</div>";var r=await api("/infinity/studio/project/"+encodeURIComponent(id)+"/verify");$("verifyOut").innerHTML="<div class='notice "+(r.quality&&r.quality.passed?"good":"warn")+"'><b>"+(r.quality&&r.quality.passed?"Verified":"Review required")+"</b></div><pre class='mono'>"+esc(JSON.stringify(r,null,2))+"</pre>"}catch(e){$("verifyOut").innerHTML="<div class='notice bad'>"+esc(e.message)+"</div>"}
 }
 async function cancelProject(id){try{await api("/infinity/studio/project/"+encodeURIComponent(id)+"/cancel",{method:"POST"});openProject(id)}catch(e){alert(e.message)}}
+async function generateStudioNativeVideo(projectId,shotId,prompt,duration){
+  try{
+    var r=await api("/infinity/production/project/"+encodeURIComponent(projectId)+"/generate-video-batch",{
+      method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({shot_id:shotId,prompt:prompt,duration:duration,count:1})
+    });
+    var message=r.status==="accepted"?"Native candidate job queued.":r.status==="paid_provider_authorization_required"?"Paid generation was not started; explicit authorization is required.":("Generation status: "+r.status);
+    alert(message);openProject(projectId);
+  }catch(e){alert(e.message)}
+}
+async function reviewStudioCandidate(projectId,candidateId){
+  try{var r=await api("/infinity/production/project/"+encodeURIComponent(projectId)+"/review/"+encodeURIComponent(candidateId),{method:"POST"});alert("Technical result: "+r.decision+". Creative approval remains "+r.creative_approval+".");openProject(projectId)}
+  catch(e){alert(e.message)}
+}
+async function selectStudioCandidate(projectId,candidateId){
+  try{var r=await api("/infinity/production/project/"+encodeURIComponent(projectId)+"/candidate/"+encodeURIComponent(candidateId)+"/select",{method:"POST"});alert("Selected for canonical rerender. Creative approval: "+r.creative_approval+".");openProject(projectId)}
+  catch(e){alert(e.message)}
+}
 async function retryProject(id){try{await api("/infinity/studio/project/"+encodeURIComponent(id)+"/retry",{method:"POST"});openProject(id)}catch(e){alert(e.message)}}
 async function assets(){
   var x=await api("/infinity/studio/library?limit=200"), rows=x.assets||[];
@@ -8507,7 +11895,7 @@ CLOUD_INFRASTRUCTURE_3621 = [
     {"id":"local-compute","name":"Local production compute","status":"ready","detail":"FFmpeg + local media generation run inside the service container."},
     {"id":"free-forever-routing","name":"Free-forever resource routing","status":"ready","detail":"Local, built-in and genuinely free/public providers are used; paid providers are never required by the application."},
     {"id":"https-edge","name":"HTTPS service edge","status":"ready","detail":"The web application is designed for HTTPS deployment and secure sessions."},
-    {"id":"persistent-sqlite","name":"Workspace database","status":"ready","detail":"SQLite-backed workspace state is available on the active instance."},
+    {"id":"persistent-sqlite","name":"Workspace SQLite database","status":"runtime-local","detail":"SQLite workspace state is available on this instance; restart-safe recovery requires a verified persistent mount or verified remote state snapshot."},
     {"id":"durable-object-storage","name":"Durable object storage","status":"adapter-dependent","detail":"Configure an external durable storage adapter for restart-safe media retention."},
     {"id":"distributed-workers","name":"Distributed worker fabric","status":"adapter-dependent","detail":"Current free deployment uses the in-process worker; distributed queues require an external worker/queue service."},
     {"id":"cdn-delivery","name":"CDN / global delivery","status":"adapter-dependent","detail":"Attach a real object-storage/CDN publisher for global edge delivery."},
@@ -8734,6 +12122,8 @@ def _media_provider_probe() -> Dict[str, Any]:
 
 
 def register(app: Any, model_fn: Optional[Callable] = None) -> None:
+    if model_fn is None:
+        model_fn = _gemini_free_tier_text_model()
     # Mount the real Creator Pro layer: editable storyboard, transcript-first clipping,
     # advanced FFmpeg controls, image lab, interactive export, variant matrix and
     # local/open-source provider probes. These are backend capabilities, not mock UI.
@@ -8756,37 +12146,49 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
             durability = __import__("ai_infinity.persistence_truth", fromlist=["project_state_durability"]).project_state_durability(DATA_DIR)
         except Exception:
             durability = {"persistent": False, "reason": "durability_probe_failed", "truthful": True}
+        native_video = {}
+        try:
+            import production_graph
+            native_video = production_graph.wan_worker_capabilities()
+        except Exception as exc:
+            native_video = {
+                "enabled": False,
+                "status": "probe_failed",
+                "reason": f"{type(exc).__name__}: {str(exc)[:180]}",
+                "truthful": True,
+            }
+        native_video_ready = bool(native_video.get("enabled") is True)
+        video_credentials_present = bool(
+            os.getenv("HF_TOKEN", "").strip()
+            or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
+            or os.getenv("OPENAI_API_KEY", "").strip()
+            or os.getenv("RUNWAYML_API_SECRET", "").strip()
+        )
         return {
             "status": "healthy" if media_core and voice_core else "degraded", "version": VERSION, "build": BUILD,
             "research": external_enabled, "internet_sources": external_enabled, "creative_engine": True,
             "ai_image_generation": bool(os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()),
             "ai_image_generation_provider_available": bool(os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()),
-            "ai_video_generation": bool(
-                os.getenv("HF_TOKEN", "").strip()
-                or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
-                or os.getenv("OPENAI_API_KEY", "").strip()
-                or os.getenv("RUNWAYML_API_SECRET", "").strip()
-            ),
-            "ai_video_generation_provider_available": bool(
-                os.getenv("HF_TOKEN", "").strip()
-                or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
-                or os.getenv("OPENAI_API_KEY", "").strip()
-                or os.getenv("RUNWAYML_API_SECRET", "").strip()
-            ),
-            "real_motion_video": bool(
-                os.getenv("AI_INFINITY_AI_VIDEO", "1").strip().lower() in {"1","true","yes","auto"}
-                and bool(os.getenv("HF_TOKEN","").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN","").strip()
-                         or os.getenv("OPENAI_API_KEY","").strip() or os.getenv("RUNWAYML_API_SECRET","").strip())
-            ),
+            # A credential is configuration, not proof that inference is
+            # reachable. Only a live worker that passes its pinned model, GPU,
+            # licence and persistent-volume capability check is reported as
+            # available native video generation.
+            "ai_video_generation": native_video_ready,
+            "ai_video_generation_provider_available": native_video_ready,
+            "ai_video_generation_configured": video_credentials_present,
+            "native_video_generation": native_video,
+            "real_motion_video": native_video_ready,
             "motion_design_fallback": bool(Image is not None and media_core),
             "voice": voice_core, "music": media_core, "captions": media_core,
             "long_form": media_core and voice_core, "short_form": media_core and voice_core,
             "thumbnail": bool(Image is not None and media_core), "creator_package": media_core and voice_core,
             "persistent_jobs": bool(durability.get("persistent")),
+            "persistent_queue": bool(durability.get("persistent")),
             "adaptive_learning": True,
             "persistence": durability,
             "download_without_publishing": True, "youtube_publishing": True, "webhook_publishing": True,
-            "persistent_projects": bool(durability.get("persistent")), "queued_workers": True, "progress_tracking": True, "cancel_retry": True, "resumable_scene_checkpoints": True, "cancellable_ffmpeg": True, "artifact_sha256": True, "audit_trail": True, "signed_share_links": True,
+            "persistent_projects": bool(durability.get("persistent")),
+            "queued_workers": bool(getattr(__import__(__name__), "WORKER_STARTED", False)), "progress_tracking": True, "cancel_retry": True, "resumable_scene_checkpoints": True, "cancellable_ffmpeg": True, "artifact_sha256": True, "audit_trail": True, "signed_share_links": True,
             "truthful": True,
             "one_command_creation": True, "optional_publishing": True, "download_first": True, "one_time_connections": True,
             "universal_creator_workspace": True, "creator_profile": True, "multi_platform_workflows": True, "platform_deliverable_packages": True, "seo_package": True, "accessibility_package": True, "provenance_package": True, "podcast_rss": True,
@@ -9015,6 +12417,41 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
             raise HTTPException(404, "project not found")
         return _project_public(p)
 
+    @app.get("/infinity/studio/project/{project_id}/production-graph")
+    def studio_project_production_graph(project_id: str, request: Request, response: Response):
+        """Expose the real scene/candidate graph inside the canonical Studio project."""
+        user_id = _get_user_id(request); _set_session(response, request, user_id)
+        p = _get_project(project_id)
+        if not p or p.get("user_id") != user_id:
+            raise HTTPException(404, "project not found")
+        import production_graph
+
+        synchronization = _sync_production_graph(project_id)
+        snapshot = production_graph.graph(project_id)
+        provider_state = production_graph.providers()
+        provider_rows = provider_state.get("providers") if isinstance(provider_state, dict) else []
+        free_video = next((
+            row for row in provider_rows
+            if isinstance(row, dict) and row.get("video") is True
+            and row.get("enabled") is True
+            and (row.get("free_model") is True or str(row.get("pricing_class") or "").lower() == "free")
+        ), None)
+        return {
+            **snapshot,
+            "synchronization": synchronization,
+            "provider_capabilities": provider_state,
+            "free_native_video": {
+                "status": "available" if free_video else "unavailable",
+                "provider": free_video.get("id") if free_video else None,
+                "reason": (
+                    "An open-source native-video model is live on a separately hosted GPU worker; model inference has no paid API charge, but GPU hosting, power and persistent storage are operator-provided."
+                    if free_video and free_video.get("id") == "wan2.2-ti2v-5b"
+                    else None if free_video else "No verified native-video inference worker is configured. The existing free-first Creator Studio source-and-render workflow remains the default."
+                ),
+            },
+            "truthful": True,
+        }
+
     @app.get("/infinity/studio/project/{project_id}/asset/{asset_name:path}")
     def project_asset(project_id: str, asset_name: str, request: Request, response: Response):
         user_id = _get_user_id(request); _set_session(response, request, user_id)
@@ -9060,7 +12497,10 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         mapping = {
             "final.mp4": ("final.mp4", "video/mp4"), "package.zip": (next((q["path"] for q in _asset_rows(project_id) if q["kind"] == "package"), "package.zip"), "application/zip"),
             "thumbnail.jpg": ("thumbnail.jpg", "image/jpeg"), "script.md": ("script.md", "text/markdown"), "captions.srt": ("captions.srt", "application/x-subrip"), "sources.json": ("sources.json", "application/json"), "manifest.json": ("manifest.json", "application/json"),
-            "feature_execution.json": ("feature_execution.json", "application/json"), "production_manifest.json": ("production_manifest.json", "application/json"), "rights_manifest.json": ("rights_manifest.json", "application/json"), "fact_check.json": ("fact_check.json", "application/json"), "creator_experiments.json": ("creator_experiments.json", "application/json"), "seo.json": ("seo.json", "application/json"), "social_campaign.json": ("social_campaign.json", "application/json"), "accessibility.json": ("accessibility.json", "application/json"), "provenance.json": ("provenance.json", "application/json"), "visual_rights.json": ("visual_rights.json", "application/json"), "timeline.json": ("timeline.json", "application/json"), "asset_registry.json": ("asset_registry.json", "application/json"), "production_truth.json": ("production_truth.json", "application/json"), "platform_manifest.json": ("platform_manifest.json", "application/json"), "podcast_rss.xml": ("podcast_rss.xml", "application/xml")
+            "feature_execution.json": ("feature_execution.json", "application/json"), "production_manifest.json": ("production_manifest.json", "application/json"), "rights_manifest.json": ("rights_manifest.json", "application/json"), "primary_content_delivery.json": ("primary_content_delivery.json", "application/json"),
+            "website.zip": ("website.zip", "application/zip"), "website_manifest.json": ("website_manifest.json", "application/json"), "website_README.md": ("website_README.md", "text/markdown"),
+            "document.docx": ("document.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"), "document_manifest.json": ("document_manifest.json", "application/json"),
+            "presentation.pptx": ("presentation.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"), "presentation_manifest.json": ("presentation_manifest.json", "application/json"), "fact_check.json": ("fact_check.json", "application/json"), "creator_experiments.json": ("creator_experiments.json", "application/json"), "seo.json": ("seo.json", "application/json"), "social_campaign.json": ("social_campaign.json", "application/json"), "accessibility.json": ("accessibility.json", "application/json"), "provenance.json": ("provenance.json", "application/json"), "visual_rights.json": ("visual_rights.json", "application/json"), "timeline.json": ("timeline.json", "application/json"), "asset_registry.json": ("asset_registry.json", "application/json"), "production_truth.json": ("production_truth.json", "application/json"), "platform_manifest.json": ("platform_manifest.json", "application/json"), "podcast_rss.xml": ("podcast_rss.xml", "application/xml")
         }
         path_name, media_type = mapping.get(name, (name, None))
         path = _project_dir(project_id) / Path(path_name).name
@@ -9135,9 +12575,19 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
         user_id = _get_user_id(request); _set_session(response, request, user_id)
         p = _get_project(project_id)
         if not p or p.get("user_id") != user_id: raise HTTPException(404, "project not found")
-        if p.get("status") not in {"failed", "cancelled", "completed_with_qc_warnings"}: raise HTTPException(409, "project is not retryable")
+        selected_candidate_rerender = False
+        retryable = p.get("status") in {"failed", "cancelled", "completed_with_qc_warnings"}
+        if p.get("status") == "completed":
+            try:
+                import production_graph
+                selected_candidate_rerender = production_graph.has_selected_candidates(project_id)
+            except Exception:
+                selected_candidate_rerender = False
+        if not retryable and not selected_candidate_rerender:
+            raise HTTPException(409, "project is not retryable; completed projects can only rerender after a verified native candidate is selected")
         audit_event(project_id, "retry_requested", {
             "previous_status": p.get("status"),
+            "selected_candidate_rerender": selected_candidate_rerender,
             "next_attempt": int(p.get("attempt") or 0) + 1,
             "by": "creator",
             "truthful": True,

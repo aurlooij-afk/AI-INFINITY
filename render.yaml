@@ -44,8 +44,41 @@ services:
       # Optional external production connectors. Leave empty until authorized.
       - key: RUNWAYML_API_SECRET
         sync: false
+      # Runway is a paid metered generation API. Keep it disabled until the owner
+      # explicitly authorizes billable provider usage; key presence alone is not consent.
+      - key: AI_INFINITY_RUNWAY_PAID_USAGE_ACK
+        value: "false"
+      # Optional Google AI Studio Free Tier writer. No billing is enabled by this Blueprint;
+      # the owner must provide a Free Tier key and explicitly acknowledge data-use terms.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK
+        value: "false"
+      - key: AI_INFINITY_GEMINI_FREE_TIER_MODEL
+        value: "gemini-3.1-flash-lite"
+      # Optional Hugging Face Inference Providers writer. Free accounts have a small,
+      # quota-limited allowance; never treat it as guaranteed long-form capacity.
+      - key: HF_TOKEN
+        sync: false
+      - key: AI_INFINITY_TEXT_MODEL
+        value: "Qwen/Qwen2.5-7B-Instruct-1M"
+      - key: AI_INFINITY_HF_PROVIDER
+        value: "auto"
+      - key: AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK
+        value: "false"
+      # Optional OpenRouter free-model writer. The adapter pins openrouter/free,
+      # denies data-collecting providers, and disables paid fallback routing.
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: AI_INFINITY_OPENROUTER_FREE_TIER_AND_DATA_USE_ACK
+        value: "false"
+      - key: AI_INFINITY_OPENROUTER_FREE_MODEL
+        value: "openrouter/free"
       - key: OPENAI_API_KEY
         sync: false
+      # OpenAI Responses vision review is paid metered. Keep disabled until explicitly authorized.
+      - key: AI_INFINITY_OPENAI_VISION_PAID_USAGE_ACK
+        value: "false"
       - key: ELEVENLABS_API_KEY
         sync: false
       - key: TAVILY_API_KEY
@@ -57,6 +90,13 @@ services:
       - key: REDIS_URL
         sync: false
       - key: REMOTION_RENDER_URL
+        sync: false
+      # Optional separately hosted open-source Wan2.2 GPU worker.
+      # No GPU is provisioned by this web service; only set these after a private,
+      # authenticated worker is independently deployed and verified.
+      - key: AI_INFINITY_WAN_WORKER_URL
+        sync: false
+      - key: AI_INFINITY_WAN_WORKER_TOKEN
         sync: false
       - key: B2_ENDPOINT
         sync: false
@@ -70,3 +110,24 @@ services:
       # Set BACKBLAZE_B2_REGION explicitly only when intentionally overriding it.
       - key: B2_REGION
         value: ""
+      # Optional Supabase Storage REST adapter for real media-artifact persistence.
+      # Keep the bucket private and keep the service-role key server-side only.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      # Project-state SQLite snapshots use Supabase's generated S3 credentials,
+      # not the service-role JWT above. Set AI_INFINITY_PROJECT_STATE_BACKEND=supabase_s3
+      # only after configuring this endpoint, bucket, generated S3 keys, and region.
+      - key: SUPABASE_S3_ENDPOINT
+        sync: false
+      - key: SUPABASE_S3_BUCKET
+        sync: false
+      - key: SUPABASE_S3_ACCESS_KEY_ID
+        sync: false
+      - key: SUPABASE_S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: SUPABASE_S3_REGION
+        sync: false

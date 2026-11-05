@@ -13,6 +13,27 @@ def test_research_only_command_does_not_default_to_video_creation():
     assert result["route"] == "research"
 
 
+def test_production_subject_is_not_replaced_by_quality_adjective():
+    command = (
+        "Create a 20-second premium, source-backed production about accessible digital storytelling. "
+        "Deliver a document as the primary content type."
+    )
+    assert canonical._derive_title_from_command(command) == "accessible digital storytelling"
+    intent = canonical.compile_intent(command, {"content_type": "document"})
+    assert intent["title"] == "accessible digital storytelling"
+    assert intent["constraints"]["content_type"] == "document"
+
+
+def test_subject_extraction_handles_article_website_and_presentation_briefs():
+    cases = (
+        ("Create a premium production about accessible digital storytelling.", "accessible digital storytelling"),
+        ("Create a website about renewable energy adoption.", "renewable energy adoption"),
+        ("Create a presentation about safe drinking water.", "safe drinking water"),
+    )
+    for command, expected in cases:
+        assert canonical._derive_title_from_command(command) == expected
+
+
 def test_research_and_creation_command_uses_existing_creator_pipeline():
     result = canonical.classify_command(
         "Research competitors and create a 60-second video about AI video editing"
@@ -25,6 +46,42 @@ def test_supported_content_formats_route_to_creation():
     assert canonical.classify_command("Create a podcast about accessible design")["route"] == "create"
     assert canonical.classify_command("Write an article about open source video tools")["route"] == "create"
     assert canonical.classify_command("Create a social campaign for a new tutorial")["route"] == "create"
+
+
+def test_native_website_word_and_powerpoint_outputs_route_to_creation():
+    commands = {
+        "Create a responsive static website about accessible design": "website",
+        "Create a Word document about climate adaptation": "document",
+        "Create a PowerPoint presentation about renewable energy": "presentation",
+    }
+    for command, expected_type in commands.items():
+        assert canonical.classify_command(command)["route"] == "create"
+        intent = canonical.compile_intent(command, {})
+        assert intent["constraints"]["content_type"] == expected_type
+        required = set(intent["success"]["required_artifacts"])
+        if expected_type == "website":
+            assert {"website.zip", "website_manifest.json"} <= required
+        elif expected_type == "document":
+            assert {"document.docx", "document_manifest.json"} <= required
+        else:
+            assert {"presentation.pptx", "presentation_manifest.json"} <= required
+
+
+def test_unimplemented_spreadsheets_and_web_apps_remain_explicitly_unsupported():
+    assert canonical.classify_command("Create a spreadsheet for expenses")["route"] == "unsupported_deliverable"
+    assert canonical.classify_command("Build a web application for task management")["route"] == "unsupported_deliverable"
+
+
+def test_supported_multilingual_native_content_requests_use_the_existing_creation_route():
+    examples = {
+        "ویب سائٹ بنائیں": "website",
+        "ورڈ ڈاکیومنٹ بنائیں": "document",
+        "پاورپوائنٹ پریزنٹیشن بنائیں": "presentation",
+    }
+    for command, content_type in examples.items():
+        result = canonical.classify_command(command)
+        assert result["route"] == "create"
+        assert result["content_type"] == content_type
 
 
 def test_unknown_task_does_not_create_a_default_video():
@@ -133,6 +190,8 @@ def test_primary_director_mode_command_box_uses_canonical_router_and_renders_res
     assert 'if(route==="create")' in handler
     assert "authorization_required" in handler or "supported safe execution route" in handler
     assert 'onclick="createCommand()">Run command</button>' in html
+    for content_type in ("video", "podcast", "article", "social", "website", "document", "presentation"):
+        assert f'<option value="{content_type}">' in html
 
 
 def test_script_strategy_seo_analytics_publisher_and_monetization_are_distinct_routes():
@@ -196,12 +255,36 @@ def test_primary_director_mode_displays_agent_outputs_without_faking_media_creat
     assert "no external action was performed" in handler
 
 
-def test_unsupported_primary_deliverable_does_not_fall_back_to_ui_default_video():
-    result = canonical.classify_command(
-        "Create a website for AI Infinity",
-        {"content_type": "video"},
+def test_explicit_website_command_overrides_stale_video_ui_default():
+    command = "Create a website for AI Infinity"
+    result = canonical.classify_command(command, {"content_type": "video"})
+    intent = canonical.compile_intent(command, {"content_type": "video"})
+    assert result["route"] == "create"
+    assert intent["constraints"]["content_type"] == "website"
+    assert "website.zip" in intent["success"]["required_artifacts"]
+
+def test_creator_enqueue_preserves_every_implemented_native_content_type():
+    import studio_ultimate as studio
+
+    for content_type in ("video", "podcast", "article", "social", "website", "document", "presentation"):
+        assert studio.normalize_creator_content_type(content_type) == content_type
+
+    # Unknown types remain safely bounded instead of being mistaken for a new engine.
+    assert studio.normalize_creator_content_type("spreadsheet") == "video"
+
+def test_natural_language_primary_deliverable_overrides_video_default_for_all_formats():
+    cases = (
+        ("Create a 30-second video about accessibility", "video"),
+        ("Create a podcast about accessibility", "podcast"),
+        ("Write an article about accessibility", "article"),
+        ("Create a social campaign about accessibility", "social"),
+        ("Create a website about accessibility", "website"),
+        ("Create a Word document about accessibility", "document"),
+        ("Create a PowerPoint presentation about accessibility", "presentation"),
     )
-    assert result["route"] == "unsupported_deliverable"
+    for command, expected in cases:
+        intent = canonical.compile_intent(command, {"content_type": "video"})
+        assert intent["constraints"]["content_type"] == expected, (command, intent)
 
 
 def test_supported_video_about_an_unsupported_topic_still_routes_to_video_creation():
@@ -262,12 +345,15 @@ def test_multilingual_creation_routes_use_the_intended_supported_content_type():
         assert result["content_type"] == expected_type, (command, result)
 
 
-def test_multilingual_script_request_and_unsupported_website_request_are_not_video_jobs():
+def test_multilingual_script_and_website_requests_do_not_become_video_jobs():
     script = canonical.classify_command("AI Infinity کا اسکرپٹ لکھیں", {"content_type": "video"})
     website = canonical.classify_command("أنشئ موقع ويب", {"content_type": "video"})
+    website_intent = canonical.compile_intent("أنشئ موقع ويب", {"content_type": "video"})
 
     assert script["route"] == "script"
-    assert website["route"] == "unsupported_deliverable"
+    assert website["route"] == "create"
+    assert website.get("content_type") == "website"
+    assert website_intent["constraints"]["content_type"] == "website"
 
 
 def test_multilingual_consequential_actions_require_authorization():
