@@ -8820,6 +8820,230 @@ def _sync_production_graph(project_id: str) -> Dict[str, Any]:
     return state
 
 
+def _verify_primary_content_delivery(
+    project_id: str,
+    content_type: str,
+    outdir: Path,
+    *,
+    article: Optional[Path],
+    audio_master: Optional[Path],
+    social: Optional[Path],
+    website_outputs: Dict[str, Any],
+    native_outputs: Dict[str, Any],
+    research: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Verify the requested native output independently from any companion video.
+
+    A project may contain a video companion whose visual QC is REVIEW_REQUIRED.
+    That must not erase a valid DOCX, PPTX, article, podcast, social campaign, or
+    exportable site. This record proves only the selected primary deliverable;
+    it never marks the companion video, facts, rights, or human review as approved.
+    """
+    import xml.etree.ElementTree as ET
+
+    kind = str(content_type or "video").strip().lower()
+    root = Path(outdir)
+    checks: Dict[str, bool] = {}
+    artifacts: List[Dict[str, Any]] = []
+
+    def add_artifact(label: str, path_value: Any, media_type: str) -> Optional[Path]:
+        if path_value is None:
+            return None
+        path = Path(path_value)
+        exists = path.is_file() and path.stat().st_size > 0
+        checks[f"{label}_exists"] = bool(exists)
+        if not exists:
+            return None
+        artifacts.append({
+            "name": path.name,
+            "role": label,
+            "media_type": media_type,
+            "size_bytes": path.stat().st_size,
+            "sha256": file_sha256(path),
+        })
+        return path
+
+    def json_file(path: Path) -> Dict[str, Any]:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else {}
+        except Exception:
+            return {}
+
+    sources_path = root / "sources.json"
+    rights_path = root / "rights_manifest.json"
+    production_path = root / "production_manifest.json"
+    sources = json_file(sources_path)
+    rights = json_file(rights_path)
+    production = json_file(production_path)
+    source_count = int(sources.get("source_count") or len(sources.get("sources") or []))
+    checks["research_sources_present"] = source_count > 0
+    checks["rights_manifest_bound_to_project"] = (
+        rights.get("project_id") == project_id and rights.get("truthful") is True
+    )
+    checks["production_manifest_bound_to_project"] = (
+        production.get("project_id") == project_id and production.get("truthful") is True
+    )
+    add_artifact("sources", sources_path, "application/json")
+    add_artifact("rights_manifest", rights_path, "application/json")
+    add_artifact("production_manifest", production_path, "application/json")
+
+    if kind == "article":
+        article_path = add_artifact("article", article or (root / "article.md"), "text/markdown")
+        seo_path = add_artifact("seo", root / "seo.json", "application/json")
+        fact_path = add_artifact("fact_check", root / "fact_check.json", "application/json")
+        article_text = article_path.read_text(encoding="utf-8") if article_path else ""
+        checks["article_has_multiple_sections"] = article_text.count("## ") >= 2
+        checks["article_has_substantive_copy"] = len(article_text.split()) >= 30
+        seo = json_file(seo_path) if seo_path else {}
+        facts = json_file(fact_path) if fact_path else {}
+        checks["seo_metadata_present"] = bool(seo.get("title"))
+        checks["fact_check_record_present"] = bool(
+            facts.get("claims") is not None or facts.get("review_items") is not None
+        )
+
+    elif kind == "podcast":
+        audio_path = add_artifact("audio_master", audio_master or (root / "audio_master.mp3"), "audio/mpeg")
+        rss_path = add_artifact("podcast_rss", root / "podcast_rss.xml", "application/xml")
+        audio_valid = False
+        if audio_path:
+            try:
+                audio_valid = bool(_valid_audio_file(audio_path, minimum_peak_db=-45.0))
+            except Exception:
+                audio_valid = False
+        checks["programme_audio_valid"] = audio_valid
+        rss_valid = False
+        if rss_path and audio_path:
+            try:
+                channel = ET.parse(rss_path).getroot().find("./channel")
+                enclosure = channel.find("./item/enclosure") if channel is not None else None
+                rss_valid = bool(
+                    enclosure is not None
+                    and enclosure.get("url") == audio_path.name
+                    and int(enclosure.get("length") or 0) == audio_path.stat().st_size
+                    and enclosure.get("type") == "audio/mpeg"
+                )
+            except Exception:
+                rss_valid = False
+        checks["rss_enclosure_matches_audio"] = rss_valid
+
+    elif kind == "social":
+        social_path = add_artifact(
+            "social_campaign",
+            social or (root / "social_campaign.json"),
+            "application/json",
+        )
+        campaign = json_file(social_path) if social_path else {}
+        platforms = campaign.get("platforms") if isinstance(campaign.get("platforms"), dict) else {}
+        expected = {"TikTok", "Instagram", "YouTube", "LinkedIn", "X", "Facebook"}
+        checks["all_six_platforms_present"] = expected.issubset(set(platforms))
+        checks["campaign_method_declared"] = (
+            campaign.get("method") == "platform_native_copy_and_delivery_contracts"
+        )
+        checks["platform_copy_substantive"] = all(
+            len(re.sub(r"[^A-Za-z0-9\u0600-\u06ff]", "", json.dumps(platforms.get(name) or {}, ensure_ascii=False))) >= 20
+            for name in expected
+        )
+
+    elif kind == "website":
+        verification = website_outputs.get("verification") or {}
+        package_path = add_artifact("website_package", website_outputs.get("package"), "application/zip")
+        manifest_path = add_artifact("website_manifest", website_outputs.get("manifest"), "application/json")
+        readme_path = add_artifact("website_readme", website_outputs.get("readme"), "text/markdown")
+        manifest = json_file(manifest_path) if manifest_path else {}
+        package_integrity = False
+        if package_path:
+            try:
+                import zipfile
+                with zipfile.ZipFile(package_path) as archive:
+                    package_integrity = (
+                        archive.testzip() is None
+                        and "ai-infinity-site/index.html" in archive.namelist()
+                        and file_sha256(package_path) == verification.get("archive_sha256")
+                    )
+            except Exception:
+                package_integrity = False
+        checks["website_archive_integrity"] = bool(
+            verification.get("status") == "PASS"
+            and verification.get("archive_integrity") is True
+            and package_integrity
+        )
+        checks["website_manifest_truthful"] = (
+            manifest.get("truthful") is True
+            and manifest.get("entrypoint") == "index.html"
+            and manifest.get("deployment", {}).get("status") == "NOT_PUBLISHED"
+        )
+        checks["website_readme_present"] = readme_path is not None
+
+    elif kind in {"document", "presentation"}:
+        native_path = add_artifact(
+            "native_document" if kind == "document" else "native_presentation",
+            native_outputs.get("file"),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            if kind == "document"
+            else "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        )
+        manifest_path = add_artifact(
+            "native_manifest",
+            native_outputs.get("manifest"),
+            "application/json",
+        )
+        verification = native_outputs.get("verification") or {}
+        manifest = json_file(manifest_path) if manifest_path else {}
+        checks["native_export_reopened"] = (
+            verification.get("verification") == (
+                "reopened_with_python_docx" if kind == "document" else "reopened_with_python_pptx"
+            )
+            and verification.get("truthful") is True
+        )
+        checks["native_export_hash_matches"] = bool(
+            native_path
+            and verification.get("sha256")
+            and file_sha256(native_path) == verification.get("sha256")
+            and manifest.get("sha256") == verification.get("sha256")
+        )
+        checks["native_export_structure_present"] = (
+            int(verification.get("verified_paragraph_count") or 0) >= 8
+            if kind == "document"
+            else int(verification.get("verified_slide_count") or 0) >= 3
+        )
+
+    else:
+        return {
+            "schema": "ai-infinity-primary-content-delivery.v1",
+            "project_id": project_id,
+            "content_type": kind,
+            "status": "NOT_APPLICABLE",
+            "truthful": True,
+        }
+
+    passed = bool(checks) and all(bool(value) for value in checks.values())
+    fallback_count = sum(
+        1 for row in (production.get("visual_assets") or [])
+        if isinstance(row, dict) and row.get("fallback") is True
+    )
+    return {
+        "schema": "ai-infinity-primary-content-delivery.v1",
+        "project_id": project_id,
+        "content_type": kind,
+        "status": "PASS" if passed else "FAIL",
+        "primary_delivery_verified": passed,
+        "primary_scope_only": True,
+        "checks": checks,
+        "artifacts": artifacts,
+        "research_source_count": source_count,
+        "companion_video": {
+            "status": "REVIEW_REQUIRED" if fallback_count else "NOT_ASSESSED_BY_PRIMARY_GATE",
+            "fallback_visual_count": fallback_count,
+            "note": "A primary-output PASS does not approve or release the companion video or mixed creator package.",
+        },
+        "human_review_status": "PENDING",
+        "rights_review_status": "PENDING",
+        "external_publication_status": "NOT_PUBLISHED",
+        "truthful": True,
+    }
+
+
 def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
     ACTIVE_PROJECT.project_id = project_id
     project = _get_project(project_id)
