@@ -49,6 +49,30 @@ def _scenario_map(acceptance: dict[str, Any] | None) -> dict[str, dict[str, Any]
     }
 
 
+
+
+def _acceptance_run_passes(value: dict[str, Any] | None, candidate_sha: str) -> bool:
+    """Require a complete 19-scenario PASS bound to this SHA and a real run ID."""
+    if not isinstance(value, dict):
+        return False
+    rows = value.get("tests")
+    scenarios = _scenario_map(value)
+    run_id = str(value.get("workflow_run_id") or "").strip()
+    return bool(
+        value.get("overall_status") == "PASS"
+        and value.get("passed") is True
+        and str(value.get("source_revision") or "").lower() == candidate_sha.lower()
+        and run_id.isdigit()
+        and int(value.get("scenario_count") or 0) == len(EXPECTED_ACCEPTANCE_SCENARIO_IDS)
+        and int(value.get("completed_scenarios") or 0) == len(EXPECTED_ACCEPTANCE_SCENARIO_IDS)
+        and isinstance(rows, list)
+        and len(rows) == len(EXPECTED_ACCEPTANCE_SCENARIO_IDS)
+        and len(scenarios) == len(EXPECTED_ACCEPTANCE_SCENARIO_IDS)
+        and set(scenarios) == EXPECTED_ACCEPTANCE_SCENARIO_IDS
+        and all(str(row.get("status") or "") == "PASS" for row in scenarios.values())
+    )
+
+
 def _valid_hex_digest(value: Any, length: int = 64) -> bool:
     text = str(value or "")
     return len(text) == length and all(character in "0123456789abcdef" for character in text.lower())
@@ -127,6 +151,7 @@ def build_certificate(
     human_approval: dict[str, Any] | None,
     evidence_hashes: dict[str, str | None],
     gemini_writer: dict[str, Any] | None = None,
+    acceptance_repeat: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     scenarios = _scenario_map(acceptance)
     acceptance_tests = acceptance.get("tests") if isinstance(acceptance, dict) else None
@@ -142,6 +167,23 @@ def build_certificate(
         and int(longform_script.get("actual_spoken_words") or 0) >= int(longform_script.get("required_spoken_words") or 1)
         and float(longform_script.get("unique_sentence_ratio") or 0) >= 0.85
     )
+    repeat_scenarios = _scenario_map(acceptance_repeat)
+    repeat_longform_result = repeat_scenarios.get("12", {}).get("result", {})
+    repeat_longform_script = repeat_longform_result.get("script_generation") if isinstance(repeat_longform_result.get("script_generation"), dict) else {}
+    repeat_longform_pass = bool(
+        repeat_longform_script.get("status") == "complete"
+        and str(repeat_longform_script.get("provider") or "").startswith("google-gemini-free-tier:gemini-3.1-flash-lite")
+        and int(repeat_longform_script.get("required_spoken_words") or 0) >= 1875
+        and int(repeat_longform_script.get("actual_spoken_words") or 0) >= 1875
+        and int(repeat_longform_script.get("actual_spoken_words") or 0) >= int(repeat_longform_script.get("required_spoken_words") or 1)
+        and float(repeat_longform_script.get("unique_sentence_ratio") or 0) >= 0.85
+    )
+    acceptance_run_pass = _acceptance_run_passes(acceptance, candidate_sha)
+    repeat_acceptance_run_pass = _acceptance_run_passes(acceptance_repeat, candidate_sha)
+    acceptance_run_ids_distinct = bool(
+        acceptance_run_pass and repeat_acceptance_run_pass
+        and str(acceptance.get("workflow_run_id")) != str((acceptance_repeat or {}).get("workflow_run_id"))
+    )
     gemini_sha = str((gemini_writer or {}).get("response_sha256") or "")
     gemini_writer_pass = bool(
         isinstance(gemini_writer, dict)
@@ -153,18 +195,12 @@ def build_certificate(
         and _valid_hex_digest(gemini_sha)
     )
     engineering_pass = bool(
-        acceptance
-        and acceptance.get("overall_status") == "PASS"
-        and acceptance.get("passed") is True
-        and int(acceptance.get("scenario_count") or 0) == len(EXPECTED_ACCEPTANCE_SCENARIO_IDS)
-        and int(acceptance.get("completed_scenarios") or 0) == len(EXPECTED_ACCEPTANCE_SCENARIO_IDS)
-        and len(acceptance_tests) == len(EXPECTED_ACCEPTANCE_SCENARIO_IDS)
-        and len(scenarios) == len(EXPECTED_ACCEPTANCE_SCENARIO_IDS)
-        and set(scenarios) == EXPECTED_ACCEPTANCE_SCENARIO_IDS
-        and len(scenario_statuses) == len(EXPECTED_ACCEPTANCE_SCENARIO_IDS)
-        and all(status == "PASS" for status in scenario_statuses)
+        acceptance_run_pass
+        and repeat_acceptance_run_pass
+        and acceptance_run_ids_distinct
         and gemini_writer_pass
         and longform_gemini_pass
+        and repeat_longform_pass
     )
 
     flagship = scenarios.get("01", {}).get("result", {})
@@ -373,6 +409,9 @@ def build_certificate(
         "CREATIVE_APPROVAL": creative_approval,
         "gates": {
             "final_acceptance": "PASS" if engineering_pass else str((acceptance or {}).get("overall_status") or "MISSING"),
+            "repeat_same_sha_acceptance": (
+                "PASS" if acceptance_run_ids_distinct and repeat_longform_pass else "BLOCKED_OR_FAIL"
+            ),
             "gemini_writer_preflight": "PASS" if gemini_writer_pass else "BLOCKED_OR_FAIL",
             "900s_gemini_narration": "PASS" if longform_gemini_pass else "FAIL_OR_MISSING",
             "flagship_technical_and_rights_evidence": "PASS" if technical_rights_pass else "FAIL_OR_MISSING",
@@ -398,6 +437,19 @@ def build_certificate(
         "production_requirements": production_requirements,
         "remaining_blockers": blockers,
         "deployed_commit_sha": deployment_sha or None,
+        "acceptance_evidence_runs": {
+            "first": {
+                "workflow_run_id": (acceptance or {}).get("workflow_run_id"),
+                "source_revision": (acceptance or {}).get("source_revision"),
+                "status": (acceptance or {}).get("overall_status"),
+            },
+            "repeat": {
+                "workflow_run_id": (acceptance_repeat or {}).get("workflow_run_id"),
+                "source_revision": (acceptance_repeat or {}).get("source_revision"),
+                "status": (acceptance_repeat or {}).get("overall_status"),
+            },
+            "same_candidate_sha": acceptance_run_ids_distinct,
+        },
         "human_approval_evidence_present": human_approval is not None,
         "reviewed_media_sha256": flagship_media_sha256 or None,
         "human_approval_media_sha256": (human_approval or {}).get("reviewed_media_sha256"),
@@ -413,6 +465,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidate-sha", required=True)
     parser.add_argument("--acceptance", type=Path, default=Path("final-acceptance-result.json"))
+    parser.add_argument("--acceptance-repeat", type=Path, default=Path("acceptance-evidence/repeat-final-acceptance-result.json"))
     parser.add_argument("--gemini-writer", type=Path, default=Path("acceptance-evidence/gemini-writer-verification.json"))
     parser.add_argument("--storage", type=Path, default=Path("acceptance-evidence/b2-storage-verification.json"))
     parser.add_argument("--inference", type=Path, default=Path("acceptance-evidence/wan-live-inference-verification.json"))
@@ -427,6 +480,7 @@ def main() -> int:
 
     paths = {
         "acceptance": args.acceptance,
+        "acceptance_repeat": args.acceptance_repeat,
         "gemini_writer": args.gemini_writer,
         "storage": args.storage,
         "inference": args.inference,
@@ -443,6 +497,7 @@ def main() -> int:
         human_approval=values["human_approval"],
         evidence_hashes={name: file_sha256(path) for name, path in paths.items()},
         gemini_writer=values["gemini_writer"],
+        acceptance_repeat=values["acceptance_repeat"],
     )
     if record["PRODUCTION_VERIFIED"] == "PASS":
         # Only a fully passing, evidence-bound release receives a certificate.
