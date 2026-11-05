@@ -49,6 +49,29 @@ def test_acceptance_runner_persists_a_failure_and_continues_to_the_next_scenario
     assert document["completed_scenarios"] == 2
 
 
+def test_human_review_scorecard_matches_the_candidate_bound_approval_thresholds():
+    policy = suite.HUMAN_REVIEW_POLICY
+    assert policy["average_minimum"] == 4.5
+    assert policy["dimension_minimum"] == 4.0
+    assert policy["critical_dimension_minimum"] == 4.0
+    assert policy["role_score_minimum"] == 4.0
+    assert policy["required_approval_roles"] == [
+        "director", "cinematographer", "editor", "sound", "story", "rights",
+    ]
+    assert policy["explicit_rights_approval_required"] is True
+    assert policy["critical_fact_or_rights_failure_allowed"] is False
+
+
+def test_human_approval_workflow_requires_each_of_the_19_scenarios_exactly_once():
+    workflow_path = SUITE_PATH.parents[1] / ".github" / "workflows" / "human-approval-certificate.yml"
+    workflow = workflow_path.read_text(encoding="utf-8")
+    assert "range(1, 20)" in workflow
+    assert 'acceptance.get("scenario_count")' in workflow
+    assert 'acceptance.get("completed_scenarios")' in workflow
+    assert "set(scenario_map) != expected_scenario_ids" in workflow
+    assert "Every one of the 19 acceptance scenarios must pass." in workflow
+
+
 def test_caption_phrase_is_reconstructed_across_srt_cue_boundaries():
     srt = (
         "1\n00:00:00,000 --> 00:00:02,000\n"

@@ -16,6 +16,18 @@ TMP=Path("/tmp/ai-infinity-final-acceptance"); TMP.mkdir(parents=True,exist_ok=T
 PYURL="https://www.python.org/"
 
 SCENARIO_COUNT = 19
+HUMAN_REVIEW_POLICY = {
+    "average_minimum": 4.5,
+    "average_scope": "six required approval roles",
+    "dimension_minimum": 4.0,
+    "critical_dimension_minimum": 4.0,
+    "required_approval_roles": [
+        "director", "cinematographer", "editor", "sound", "story", "rights",
+    ],
+    "role_score_minimum": 4.0,
+    "explicit_rights_approval_required": True,
+    "critical_fact_or_rights_failure_allowed": False,
+}
 SCENARIO_RESULTS: list[dict] = []
 SCENARIO_STARTED_AT = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -397,7 +409,7 @@ def create_review_packet(project_id, files, truth, production, rights, media_pro
                 ("language_and_cultural_fit",True),("editability_and_project_recovery",False),
             ]
         ],
-        "internal_release_policy":{"average_minimum":4.0,"critical_dimension_minimum":3,"critical_fact_or_rights_failure_allowed":False},
+        "internal_release_policy":HUMAN_REVIEW_POLICY,
         "policy_note":"Internal review policy; not an external industry certification.",
     }
     metadata={

@@ -106,11 +106,21 @@ jobs:
               raise SystemExit("The candidate already contains an unexpected human approval state.")
           if acceptance.get("overall_status") != "PASS" or acceptance.get("passed") is not True:
               raise SystemExit("Full engineering acceptance is not PASS.")
-          if int(acceptance.get("completed_scenarios") or 0) != 13:
-              raise SystemExit("All 13 acceptance scenarios are required.")
+          expected_scenario_ids = {f"{index:02d}" for index in range(1, 20)}
+          if int(acceptance.get("scenario_count") or 0) != len(expected_scenario_ids):
+              raise SystemExit("The acceptance result must declare all 19 required scenarios.")
+          if int(acceptance.get("completed_scenarios") or 0) != len(expected_scenario_ids):
+              raise SystemExit("All 19 acceptance scenarios must be completed.")
           tests = acceptance.get("tests") or []
-          if len(tests) != 13 or any(row.get("status") != "PASS" for row in tests if isinstance(row, dict)):
-              raise SystemExit("Every recorded acceptance scenario must pass.")
+          scenario_map = {
+              str(row.get("scenario_id") or "").zfill(2): row
+              for row in tests
+              if isinstance(row, dict) and row.get("scenario_id") is not None
+          }
+          if len(tests) != 19 or set(scenario_map) != expected_scenario_ids:
+              raise SystemExit("The acceptance result must contain each scenario ID 01 through 19 exactly once.")
+          if any(row.get("status") != "PASS" for row in scenario_map.values()):
+              raise SystemExit("Every one of the 19 acceptance scenarios must pass.")
           evidence = {
               "gemini-writer-verification.json": "PASS",
               "project-state-storage-verification.json": "PASS",
