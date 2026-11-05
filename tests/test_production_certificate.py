@@ -199,7 +199,7 @@ def test_production_certificate_keeps_external_and_human_gates_separate():
 
 def test_production_certificate_requires_all_19_universal_output_scenarios():
     candidate = "a" * 40
-    acceptance = _passing_acceptance()
+    acceptance = _passing_acceptance(candidate)
     acceptance["tests"][-1]["status"] = "BLOCKED"
     certificate = build_certificate(
         candidate_sha=candidate,
@@ -229,6 +229,7 @@ def test_production_certificate_rejects_legacy_13_scenario_results():
     certificate = build_certificate(
         candidate_sha=candidate,
         acceptance=acceptance,
+        acceptance_repeat=_passing_repeat(candidate),
         storage={"status": "BLOCKED"},
         inference={"status": "BLOCKED"},
         deployment=None,
@@ -248,6 +249,7 @@ def test_production_certificate_passes_only_with_every_exact_candidate_gate():
     certificate = build_certificate(
         candidate_sha=candidate,
         acceptance=_passing_acceptance(),
+        acceptance_repeat=_passing_repeat(candidate),
         storage=_passing_storage(),
         inference=_passing_inference(),
         deployment=_passing_deployment(candidate),
@@ -285,6 +287,7 @@ def test_production_certificate_rejects_status_only_external_evidence():
     certificate = build_certificate(
         candidate_sha=candidate,
         acceptance=_passing_acceptance(),
+        acceptance_repeat=_passing_repeat(candidate),
         storage={"status": "PASS"},
         inference={"status": "PASS"},
         deployment={"status": "PASS", "deployed_commit_sha": candidate},
@@ -308,6 +311,7 @@ def test_production_certificate_rejects_review_required_rights_assets():
     certificate = build_certificate(
         candidate_sha=candidate,
         acceptance=acceptance,
+        acceptance_repeat=_passing_repeat(candidate),
         storage=_passing_storage(),
         inference=_passing_inference(),
         deployment=_passing_deployment(candidate),
@@ -347,6 +351,7 @@ def test_production_certificate_recomputes_human_average_from_six_scores():
     certificate = build_certificate(
         candidate_sha=candidate,
         acceptance=_passing_acceptance(),
+        acceptance_repeat=_passing_repeat(candidate),
         storage=_passing_storage(),
         inference=_passing_inference(),
         deployment=_passing_deployment(candidate),
@@ -366,6 +371,7 @@ def test_production_certificate_rejects_approval_for_another_commit():
     certificate = build_certificate(
         candidate_sha=candidate,
         acceptance=_passing_acceptance(),
+        acceptance_repeat=_passing_repeat(candidate),
         storage=_passing_storage(),
         inference=_passing_inference(),
         deployment=_passing_deployment(candidate),
@@ -422,6 +428,8 @@ def test_certificate_cli_writes_gate_report_not_certificate_when_evidence_is_mis
             candidate,
             "--acceptance",
             str(acceptance_path),
+            "--acceptance-repeat",
+            str(repeat_acceptance_path),
             "--acceptance-repeat",
             str(repeat_acceptance_path),
             "--gemini-writer",
@@ -537,6 +545,7 @@ def test_production_certificate_rejects_approval_for_different_media_bytes():
     certificate = build_certificate(
         candidate_sha=candidate,
         acceptance=_passing_acceptance(),
+        acceptance_repeat=_passing_repeat(candidate),
         storage=_passing_storage(),
         inference=_passing_inference(),
         deployment=_passing_deployment(candidate),
@@ -574,6 +583,7 @@ def test_production_certificate_requires_gemini_smoke_pass():
     certificate = build_certificate(
         candidate_sha=candidate,
         acceptance=_passing_acceptance(),
+        acceptance_repeat=_passing_repeat(candidate),
         storage=_passing_storage(),
         inference=_passing_inference(),
         deployment=_passing_deployment(candidate),
@@ -597,6 +607,7 @@ def test_production_certificate_requires_live_render_storage_health_after_creati
     certificate = build_certificate(
         candidate_sha=candidate,
         acceptance=_passing_acceptance(),
+        acceptance_repeat=_passing_repeat(candidate),
         storage=_passing_storage(),
         inference=_passing_inference(),
         deployment=deployment,
