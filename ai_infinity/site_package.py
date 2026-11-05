@@ -157,7 +157,7 @@ def build_static_website_package(
         }
         rights_source = evidence_dir / "rights_manifest.json"
         rights_source.write_text(
-            json.dumps(rights_fallback, ensure_ascii=False, indent=2) + "\\n",
+            json.dumps(rights_fallback, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
     for evidence_name in (
