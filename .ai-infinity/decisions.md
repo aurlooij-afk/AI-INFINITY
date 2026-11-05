@@ -27,3 +27,14 @@
 ## 2026-11-05 — No certificate on incomplete gates
 
 **Decision:** No Release Verification Certificate until all seven gates have evidence bound to the exact candidate, including durable recovery, authenticated GPU inference, exact-candidate live deployment, and independent human creative/rights approval.
+
+
+## 2026-11-06 — Replace compressed-file-size proxy with decoded image assertions
+
+**Observed failure:** Standalone runtime run `42112816687`, job `127546388400`: 214 passed, one failed because a valid local PNG was 19,927 bytes while the test required more than 20,000 bytes.
+
+**Root cause:** The test used compressed byte length as a proxy for visual validity. PNG compression varies with image content and encoder behavior; a 73-byte shortfall does not establish a visual defect. The generated asset existed and the failure was solely the arbitrary size threshold.
+
+**Correction:** Assert the actual file decodes as PNG, has at least 640×360 dimensions, and has non-trivial channel spread after downsampling. Preserve the explicit fallback assertion. This tests file integrity and visible raster content rather than weakening a quality threshold.
+
+**Evidence:** Runtime run `42112816687`, job `127546388400`; regression test change follows.
