@@ -137,12 +137,6 @@ def _native_primary_fixture(tmp_path, kind):
     names = sorted(required | {"sources.json", "rights_manifest.json"})
     files = {}
     rows = []
-    for name in names:
-        path = tmp_path / name
-        path.write_bytes(("verified primary artifact:" + name).encode("utf-8"))
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        files[name] = path
-        rows.append({"name": name, "role": name, "size_bytes": path.stat().st_size, "sha256": digest})
     metadata = {
         "sources.json": {"truthful": True, "source_count": 2, "sources": [{"url": "https://example.org/source"}]},
         "rights_manifest.json": {"project_id": project_id, "truthful": True, "assets": [{"rights_state": "cleared"}]},
@@ -150,10 +144,19 @@ def _native_primary_fixture(tmp_path, kind):
         "fact_check.json": {"claims": [{"status": "supported_candidate"}]},
         "provenance.json": {"truthful": True, "sources": [{"id": "source-1"}]},
     }
+    # Write final metadata bytes before hashing artifacts; the manifest must
+    # never carry a digest for pre-metadata placeholder bytes.
     for name, value in metadata.items():
         path = tmp_path / name
         path.write_text(json.dumps(value), encoding="utf-8")
         files[name] = path
+    for name in names:
+        path = files.get(name) or (tmp_path / name)
+        if name not in files:
+            path.write_bytes(("verified primary artifact:" + name).encode("utf-8"))
+            files[name] = path
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        rows.append({"name": name, "role": name, "size_bytes": path.stat().st_size, "sha256": digest})
     primary = {
         "schema": "ai-infinity-primary-content-delivery.v1",
         "project_id": project_id,
