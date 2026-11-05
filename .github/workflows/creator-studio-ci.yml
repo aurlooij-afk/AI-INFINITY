@@ -77,7 +77,7 @@ on:
       - ".github/workflows/creator-studio-ci.yml"
 concurrency:
   group: ai-infinity-creator-studio-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
