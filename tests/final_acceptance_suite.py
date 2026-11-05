@@ -1253,7 +1253,8 @@ def _content_mode_acceptance(
         project_id = create(
             session,
             base,
-            f"Create a 20-second premium, source-backed production about accessible digital storytelling. Deliver a {content_type} as the primary content type, with structured chapters, useful explanatory copy, source references and a complete editable package.",
+            f"Create a premium 20-second {content_type} about accessible digital storytelling. Use relevant evidence and produce structured chapters, useful explanatory copy, source references and an editable package.",
+            title="Accessible Digital Storytelling",
             duration=20,
             format="short",
             aspect_ratio="16:9",
@@ -1262,14 +1263,23 @@ def _content_mode_acceptance(
             require_full_hd=False,
             content_type=content_type,
         )
-        state = waitp(session, base, project_id, timeout=1200)
+        state = waitp(
+            session, base, project_id, timeout=1200, allow_review_required=True
+        )
+        assert state.get("status") == "completed_with_qc_warnings", state
         truth = req(session, base, f"/infinity/studio/project/{quote(project_id, safe='')}/truth")
-        assert truth.get("verified") is True and truth.get("state") == "VERIFIED", truth
+        # The primary native deliverable can be independently verified while
+        # the separate video companion remains REVIEW_REQUIRED and unpublishable.
+        assert truth.get("verified") is False and truth.get("state") == "REVIEW_REQUIRED", truth
+        assert truth.get("publish_allowed_by_quality_gate") is False, truth
         checks = truth.get("checks") or {}
         assert checks.get("research_required_and_present") is True, truth
-        assert checks.get("visual_rights_evidence_present") is True, truth
         assert int(checks.get("visual_rights_unresolved_count") or 0) == 0, truth
-        assert int(checks.get("fallback_visual_count") or 0) == 0, truth
+        primary = jart(session, base, project_id, "primary_content_delivery.json")
+        assert primary.get("status") == "PASS", primary
+        assert primary.get("primary_scope_only") is True, primary
+        assert primary.get("human_review_status") == "PENDING", primary
+        assert primary.get("companion_video", {}).get("status") == "REVIEW_REQUIRED", primary
 
         source = jart(session, base, project_id, "sources.json")
         assert int(source.get("source_count") or len(source.get("sources") or [])) >= 1, source
@@ -1354,11 +1364,14 @@ def _content_mode_acceptance(
         else:
             raise AssertionError("unknown acceptance content type: " + content_type)
 
-        with zipfile.ZipFile(dl(session, base, project_id, "package.zip", min_bytes=1000)) as package_archive:
-            package_names = set(package_archive.namelist())
+        primary_artifacts = {
+            str(row.get("name") or ""): row
+            for row in (primary.get("artifacts") or [])
+            if isinstance(row, dict)
+        }
         required_names = set(
             {
-                "article": {"article.md"},
+                "article": {"article.md", "seo.json", "fact_check.json"},
                 "podcast": {"audio_master.mp3", "podcast_rss.xml"},
                 "social": {"social_campaign.json"},
                 "website": {"website.zip", "website_manifest.json"},
@@ -1366,17 +1379,29 @@ def _content_mode_acceptance(
                 "presentation": {"presentation.pptx", "presentation_manifest.json"},
             }[content_type]
         )
-        assert required_names <= package_names, (content_type, required_names - package_names, sorted(package_names))
+        assert required_names <= set(primary_artifacts), (
+            content_type, required_names - set(primary_artifacts), sorted(primary_artifacts)
+        )
+        # Download and verify the primary deliverable directly. The mixed
+        # package.zip and final.mp4 remain blocked until their video gate passes.
+        for name, row in primary_artifacts.items():
+            if name in required_names:
+                downloaded = dl(session, base, project_id, name, min_bytes=1)
+                assert sha(downloaded) == row.get("sha256"), (name, row)
+        assert primary.get("companion_video", {}).get("status") == "REVIEW_REQUIRED"
+        assert primary.get("external_publication_status") == "NOT_PUBLISHED"
         return {
             "test": content_type,
             "project_id": project_id,
             "content_type": content_type,
             "state": state.get("status"),
-            "truth_verified": truth.get("verified"),
+            "primary_delivery_status": primary.get("status"),
+            "companion_video_truth": truth.get("state"),
             "source_count": int(source.get("source_count") or len(source.get("sources") or [])),
             "rights_asset_count": len(rights.get("assets") or []),
             "deliverables": delivered,
-            "package_contains_native_output": True,
+            "primary_artifact_hashes_verified": True,
+            "mixed_video_package_remains_blocked": True,
         }
     finally:
         stop(process, server_log)
