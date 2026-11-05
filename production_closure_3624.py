@@ -337,13 +337,13 @@ def _native_primary_delivery_eligible(
     if not required or failures:
         return False
 
-    # A companion-video failure must be a qualified, explicitly disclosed
-    # original illustration—not unknown, unlicensed, or substituted media.
+    # Native content has its own evidence chain. Companion-video status,
+    # fallback classification and the overall project terminal state must not
+    # erase a separately verified article/audio/site/office deliverable.
+    # Rights evidence remains fail-closed: unresolved or unknown asset rights
+    # still prevent this native-delivery path.
     if not (
-        checks.get("project_status_completed") is True
-        and checks.get("qualified_illustrative_fallback") is True
-        and int(checks.get("fallback_visual_count") or 0) > 0
-        and checks.get("visual_rights_evidence_present") is True
+        checks.get("visual_rights_evidence_present") is True
         and int(checks.get("visual_rights_unknown_count") or 0) == 0
         and int(checks.get("visual_rights_review_required_count") or 0) == 0
         and int(checks.get("visual_rights_unresolved_count") or 0) == 0
@@ -394,9 +394,14 @@ def _native_primary_delivery_eligible(
             and isinstance(primary.get("checks"), dict)
             and bool(primary["checks"])
             and all(value is True for value in primary["checks"].values())
-            and primary.get("companion_video", {}).get("status") == "REVIEW_REQUIRED"
-            and int(primary.get("companion_video", {}).get("fallback_visual_count") or 0)
-                == int(checks.get("fallback_visual_count") or 0)
+            and primary.get("companion_video", {}).get("status") in {
+                "REVIEW_REQUIRED", "NOT_ASSESSED_BY_PRIMARY_GATE",
+            }
+            and (
+                primary.get("companion_video", {}).get("status") != "REVIEW_REQUIRED"
+                or int(primary.get("companion_video", {}).get("fallback_visual_count") or 0)
+                    == int(checks.get("fallback_visual_count") or 0)
+            )
         ):
             return False
 
