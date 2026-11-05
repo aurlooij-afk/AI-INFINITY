@@ -79,3 +79,43 @@ They were not recreated, renamed or edited. Byte-for-byte verification cannot be
 8. Verify exact-candidate live deployment only after approval and rollback preconditions.
 
 No claim of production readiness, certification or universal capability is made by this baseline.
+
+
+## 7. Exact PR #49 acceptance scenario results
+
+Artifact source: workflow run 42097558730, artifact 13448334179, file final-acceptance-result.json. The JSON binds the complete run to source revision 37525df17b81dcfce08a6de562cd1e0ba9276980. Overall result FAIL; 19/19 scenarios completed; 12 PASS and 7 FAIL.
+
+| ID | Scenario | Result | Evidence summary |
+|---|---|---|---|
+| 01 | 60-second 1080p flagship film | VERIFIED_CI | PASS; 60.08s; 1920×1080; full decode passed; package round-trip hash verified; 20 research sources; 8 motion sources; human review pending |
+| 02 | Pashto narration, captions and voice | VERIFIED_CI | PASS; Pashto text and neural voice output verified |
+| 03 | PDF upload-to-creation | VERIFIED_CI | PASS; PDF extraction and topic influence verified |
+| 04 | Research-grounded OTIO export/import | VERIFIED_CI | PASS; scenario reports successful OTIO and media-bundle flow |
+| 05 | Three short-form variants | VERIFIED_CI | PASS; three distinct variants |
+| 06 | Provider failure and fallback transparency | VERIFIED_CI | PASS; fallback and review truth verified |
+| 07 | Degraded research blocks delivery | VERIFIED_CI | PASS; REVIEW_REQUIRED behavior verified |
+| 08 | Process restart without durable-storage claim | VERIFIED_CI | PASS; ephemeral restart behavior only |
+| 09 | Four concurrent projects | VERIFIED_CI | PASS; four isolated projects |
+| 10 | Corrupt intermediate retry and isolation | VERIFIED_CI | PASS; retry and cross-project isolation verified |
+| 11 | 20-second 1080p profile | VERIFIED_CI | PASS |
+| 12 | 900-second 720p long-form | FAILED | Only 365 meaningful spoken words versus 1,875 required; no authorized/configured writer was available; correctly failed before rendering |
+| 13 | 20-second 720p baseline | VERIFIED_CI | PASS |
+| 14 | Native article | FAILED | Primary-native delivery was not preserved because the optional video companion's source-visual gate caused the project to be treated as failed |
+| 15 | Podcast + RSS | FAILED | Same native/companion-video coupling |
+| 16 | Social campaign | FAILED | Same native/companion-video coupling |
+| 17 | Website ZIP | FAILED | Same native/companion-video coupling |
+| 18 | DOCX | FAILED | Same native/companion-video coupling |
+| 19 | PPTX | FAILED | Same native/companion-video coupling |
+
+### Important qualifications
+
+- Scenario 01's flagship video passed its technical and recorded source/rights checks, but its human creative/rights review remained PENDING. It is not approved.
+- Scenario 04's OTIO test passed in the candidate CI run; it does not by itself prove durable storage or exact-candidate live deployment.
+- Scenario 08 intentionally tested ephemeral process restart and explicitly did not claim durable persistence. It is not the required durable storage recovery gate.
+- Scenario 12 is a genuine product blocker, not a flaky test: the system correctly refused to pad an underwritten script.
+- Scenarios 14–19 shared a truth failure caused by the primary-native eligibility guard requiring the optional companion video to pass its own visual policy. The 2026-11-06 fix and regression test in PR #50 remove that coupling while retaining independent rights, source, fact-check, provenance, artifact-hash and registry checks. Current CI must verify this correction.
+- Gemini preflight artifact status: BLOCKED because GEMINI_API_KEY was absent in that acceptance environment.
+- Durable object-store artifact status: BLOCKED because B2 key ID and application key were absent; round-trip and fresh-process restore were not attempted.
+- Wan2.2 GPU inference artifact status: BLOCKED because worker URL and token were absent; no inference request was sent.
+
+The 12/19 result is therefore not a universal-content pass. It is a mixed candidate-bound run with 12 passing scenarios and seven explicit failures.
