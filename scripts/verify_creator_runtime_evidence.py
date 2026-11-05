@@ -25,6 +25,17 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
+def _remaining_release_gate_notes() -> list[str]:
+    """Describe release gates without inferring live state from CI or stale service history."""
+    return [
+        "- Exact-candidate live Render deployment and production verification require the separate candidate-bound deployment gate; this standalone CI run is not production deployment evidence.",
+        "- The complete 19-scenario acceptance suite, including the 900-second long-form scenario, must pass twice on the same candidate SHA.",
+        "- Durable object storage requires independently verified PUT→HEAD→GET→SHA and fresh-process recovery evidence for the target runtime.",
+        "- Live authenticated Wan2.2 GPU inference requires a successful worker request and independently verified output bytes.",
+        "- Human/native-language creative review and rights acceptance remain pending until an authorized reviewer approves the exact candidate and media hashes.",
+    ]
+
+
 def main():
     root = Path("/tmp/ai-infinity-brand-film-review")
     media = root / "final.mp4"
@@ -356,9 +367,7 @@ def main():
         "integrity_manifest.json lists only files actually collected, with SHA-256 hashes, sizes and stream metadata.",
         "",
         "## Remaining release gates",
-        "- Live Render deployment remains blocked while the configured service is suspended.",
-        "- Durable object storage PUT→HEAD→GET→SHA and restart/fresh-instance recovery must be verified separately.",
-        "- Human/native-language creative review and rights acceptance remain open until an authorized reviewer completes them.",
+        *_remaining_release_gate_notes(),
     ]
     (root / "human_review_packet.md").write_text("\n".join(notes) + "\n", encoding="utf-8")
     print(json.dumps({
