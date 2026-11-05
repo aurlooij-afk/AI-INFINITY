@@ -472,10 +472,14 @@ def capture_failed_project_evidence(s, b, project_id, status_payload):
     evidence["ffprobe"] = media_probe
     files = {"final.mp4": final}
     artifact_names = (
-        "thumbnail.jpg", "audio_master.mp3", "captions.srt", "script.md", "sources.json",
-        "manifest.json", "production_manifest.json", "rights_manifest.json", "provenance.json",
-        "fact_check.json", "visual_rights.json", "article.md", "seo.json",
-        "social_campaign.json", "accessibility.json",
+        "thumbnail.jpg", "audio_master.mp3", "narration_only.mp3", "podcast_rss.xml",
+        "captions.srt", "script.md", "sources.json", "manifest.json",
+        "production_manifest.json", "rights_manifest.json", "primary_content_delivery.json",
+        "provenance.json", "fact_check.json", "visual_rights.json", "article.md",
+        "seo.json", "social_campaign.json", "social_campaign.md", "accessibility.json",
+        "website.zip", "website_manifest.json", "website_README.md",
+        "document.docx", "document_manifest.json",
+        "presentation.pptx", "presentation_manifest.json",
     )
     for name in artifact_names:
         path = project_dir / name
