@@ -2054,10 +2054,13 @@ def test_perceptual_diversity_rejects_near_duplicate_visuals_with_different_file
     result = closure._visual_diversity_metrics(
         [{"path": str(path)} for path in (first, near_first, second, near_second)],
         scene_count=4,
+        rendered_scene_paths=[first, near_first, second, near_second],
     )
 
     assert result["unique_visual_hashes"] == 4
     assert result["visual_diversity_ok"] is True
+    assert result["perceptual_sample_source"] == "rendered_scene_masters"
+    assert result["perceptual_sample_count"] == 4
     assert result["perceptual_unique_visual_hashes"] == 2
     assert result["required_perceptual_unique_visual_hashes"] == 3
     assert result["perceptual_duplicate_visual_pairs"] >= 2
@@ -2073,6 +2076,7 @@ def test_perceptual_diversity_fails_closed_on_unreadable_multi_scene_media(monke
     result = closure._visual_diversity_metrics(
         [{"path": str(valid)}, {"path": str(invalid)}],
         scene_count=2,
+        rendered_scene_paths=[valid, invalid],
     )
 
     assert result["perceptual_unreadable_visual_count"] == 1
