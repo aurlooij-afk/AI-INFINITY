@@ -121,6 +121,125 @@ def test_strict_visual_gate_keeps_qualified_illustrative_fallback_review_require
     assert result.get("fallback_record", {}).get("truthful") is True
     assert closure._is_qualified_illustrative_fallback(result) is True
 
+def _native_primary_fixture(tmp_path, kind):
+    import hashlib
+    import json
+
+    project_id = "native-primary-" + kind
+    required = {
+        "article": {"article.md", "seo.json", "fact_check.json"},
+        "podcast": {"audio_master.mp3", "podcast_rss.xml"},
+        "social": {"social_campaign.json"},
+        "website": {"website.zip", "website_manifest.json", "website_README.md"},
+        "document": {"document.docx", "document_manifest.json"},
+        "presentation": {"presentation.pptx", "presentation_manifest.json"},
+    }[kind]
+    names = sorted(required | {"sources.json", "rights_manifest.json"})
+    files = {}
+    rows = []
+    for name in names:
+        path = tmp_path / name
+        path.write_bytes(("verified primary artifact:" + name).encode("utf-8"))
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        files[name] = path
+        rows.append({"name": name, "role": name, "size_bytes": path.stat().st_size, "sha256": digest})
+    metadata = {
+        "sources.json": {"truthful": True, "source_count": 2, "sources": [{"url": "https://example.org/source"}]},
+        "rights_manifest.json": {"project_id": project_id, "truthful": True, "assets": [{"rights_state": "cleared"}]},
+        "visual_rights.json": {"project_id": project_id, "truthful": True, "assets": [{"rights_state": "original_generated"}]},
+        "fact_check.json": {"claims": [{"status": "supported_candidate"}]},
+        "provenance.json": {"truthful": True, "sources": [{"id": "source-1"}]},
+    }
+    for name, value in metadata.items():
+        path = tmp_path / name
+        path.write_text(json.dumps(value), encoding="utf-8")
+        files[name] = path
+    primary = {
+        "schema": "ai-infinity-primary-content-delivery.v1",
+        "project_id": project_id,
+        "content_type": kind,
+        "status": "PASS",
+        "primary_delivery_verified": True,
+        "primary_scope_only": True,
+        "truthful": True,
+        "checks": {"native_artifact_verified": True, "source_and_rights_bound": True},
+        "artifacts": rows,
+        "research_source_count": 2,
+        "companion_video": {"status": "REVIEW_REQUIRED", "fallback_visual_count": 2},
+        "human_review_status": "PENDING",
+        "rights_review_status": "PENDING",
+        "external_publication_status": "NOT_PUBLISHED",
+    }
+    primary_path = tmp_path / "primary_content_delivery.json"
+    primary_path.write_text(json.dumps(primary), encoding="utf-8")
+    files[primary_path.name] = primary_path
+    primary_sha = hashlib.sha256(primary_path.read_bytes()).hexdigest()
+    production_path = tmp_path / "production_manifest.json"
+    production_path.write_text(json.dumps({
+        "project_id": project_id,
+        "truthful": True,
+        "primary_content_delivery": {
+            "status": "PASS",
+            "manifest": "primary_content_delivery.json",
+            "sha256": primary_sha,
+            "size_bytes": primary_path.stat().st_size,
+            "scope": "primary native output only; companion video is gated independently",
+        },
+    }), encoding="utf-8")
+    files[production_path.name] = production_path
+    return project_id, files, rows
+
+
+def test_native_primary_outputs_complete_as_review_required_without_approving_companion_video(monkeypatch, tmp_path):
+    import hashlib
+    import pytest
+
+    for kind in ("article", "podcast", "social", "website", "document", "presentation"):
+        root = tmp_path / kind
+        root.mkdir()
+        project_id, files, rows = _native_primary_fixture(root, kind)
+        registry = {}
+        for name, path in files.items():
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            registry[name] = {"sha256": digest, "size_bytes": path.stat().st_size}
+        monkeypatch.setattr(closure, "_artifact_registry", lambda _pid, value=registry: value)
+        checks = {
+            "project_status_completed": True,
+            "qualified_illustrative_fallback": True,
+            "fallback_visual_count": 2,
+            "visual_rights_evidence_present": True,
+            "visual_rights_unknown_count": 0,
+            "visual_rights_review_required_count": 0,
+            "visual_rights_unresolved_count": 0,
+            "research_required_and_present": True,
+            "fresh_evidence_ok": True,
+            "fact_check_present": True,
+            "provenance_present": True,
+            "required_artifacts_present": True,
+            "artifact_registry_consistent": True,
+        }
+        assert closure._native_primary_delivery_eligible(
+            project_id, {"content_type": kind}, files, checks, []
+        ) is True, kind
+
+        # A changed primary artifact or unresolved rights must fail closed.
+        first_required = next(iter(sorted({row["name"] for row in rows} - {"sources.json", "rights_manifest.json"})))
+        files[first_required].write_bytes(b"tampered after primary verification")
+        assert closure._native_primary_delivery_eligible(
+            project_id, {"content_type": kind}, files, checks, []
+        ) is False, kind + " accepted tampered bytes"
+        files[first_required].write_bytes(("verified primary artifact:" + first_required).encode("utf-8"))
+        checks["visual_rights_unresolved_count"] = 1
+        assert closure._native_primary_delivery_eligible(
+            project_id, {"content_type": kind}, files, checks, []
+        ) is False, kind + " accepted unresolved rights"
+        checks["visual_rights_unresolved_count"] = 0
+        checks["research_required_and_present"] = False
+        assert closure._native_primary_delivery_eligible(
+            project_id, {"content_type": kind}, files, checks, []
+        ) is False, kind + " accepted missing research"
+
+
 def test_final_audio_master_pads_early_ended_audio_stream_to_video_duration(tmp_path):
     """A 4s video with 2s audio must be mastered with aligned audio, not delivered short."""
     import shutil
