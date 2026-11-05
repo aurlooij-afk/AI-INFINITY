@@ -13,7 +13,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ai-infinity-final-acceptance-${{ github.ref }}
+  # Serialize retries of one immutable candidate, not different commits on the same PR.
+  group: ai-infinity-final-acceptance-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: false
 
 jobs:
