@@ -108,6 +108,14 @@ def test_blocked_acceptance_scenarios_are_not_misreported_as_pass(tmp_path, monk
     assert document["tests"][0]["status"] == "BLOCKED"
 
 
+def test_acceptance_concurrency_is_bound_to_exact_candidate_sha():
+    workflow_path = SUITE_PATH.parents[1] / ".github" / "workflows" / "final-acceptance-suite.yml"
+    workflow = workflow_path.read_text(encoding="utf-8")
+    assert "ai-infinity-final-acceptance-${{ github.event.pull_request.head.sha || github.sha }}" in workflow
+    assert "cancel-in-progress: false" in workflow
+    assert "different commits on the same PR" in workflow
+
+
 def test_runtime_review_packet_reports_candidate_gates_without_stale_suspension_claims():
     notes = creator_evidence._remaining_release_gate_notes()
     text = "\n".join(notes).lower()
