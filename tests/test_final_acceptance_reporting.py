@@ -5,6 +5,13 @@ import json
 from pathlib import Path
 
 
+EVIDENCE_SCRIPT_PATH = Path(__file__).parents[1] / "scripts" / "verify_creator_runtime_evidence.py"
+EVIDENCE_SPEC = importlib.util.spec_from_file_location("ai_infinity_creator_runtime_evidence_under_test", EVIDENCE_SCRIPT_PATH)
+assert EVIDENCE_SPEC is not None and EVIDENCE_SPEC.loader is not None
+creator_evidence = importlib.util.module_from_spec(EVIDENCE_SPEC)
+EVIDENCE_SPEC.loader.exec_module(creator_evidence)
+
+
 SUITE_PATH = Path(__file__).with_name("final_acceptance_suite.py")
 SPEC = importlib.util.spec_from_file_location("ai_infinity_acceptance_suite_under_test", SUITE_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -99,3 +106,15 @@ def test_blocked_acceptance_scenarios_are_not_misreported_as_pass(tmp_path, monk
     assert blocked["failure"]["reason"] == "concurrency did not produce an isolated project"
     assert document["passed"] is False
     assert document["tests"][0]["status"] == "BLOCKED"
+
+
+def test_runtime_review_packet_reports_candidate_gates_without_stale_suspension_claims():
+    notes = creator_evidence._remaining_release_gate_notes()
+    text = "\n".join(notes).lower()
+    assert "exact-candidate live render deployment" in text
+    assert "standalone ci run is not production deployment evidence" in text
+    assert "19-scenario" in text and "900-second" in text
+    assert "fresh-process recovery" in text
+    assert "authenticated wan2.2 gpu inference" in text
+    assert "authorized reviewer" in text
+    assert "service is suspended" not in text
