@@ -132,3 +132,28 @@ def test_static_site_export_rejects_empty_editorial_content(tmp_path):
         assert "at least one non-empty editorial chapter" in str(exc)
     else:
         raise AssertionError("an empty website was incorrectly packaged")
+
+def test_static_site_export_records_missing_rights_as_review_required(tmp_path):
+    result = build_static_website_package(
+        tmp_path,
+        project_id="studio_missing_rights",
+        title="Evidence-aware export",
+        description="A package without upstream rights evidence.",
+        chapters=[{"heading": "Chapter", "narration": "A factual editorial section."}],
+        research={"sources": [{"title": "Reference", "url": "https://example.org/"}]},
+        master_video=None,
+        thumbnail=None,
+        audio_master=None,
+        captions=None,
+        article=None,
+        duration_seconds=0,
+    )
+    with zipfile.ZipFile(result["package"]) as package:
+        rights = json.loads(package.read("ai-infinity-site/evidence/rights_manifest.json"))
+    assert rights["status"] == "REVIEW_REQUIRED"
+    assert rights["rights_status"] == "REVIEW_REQUIRED"
+    assert rights["human_review_required"] is True
+    assert rights["redistribution_authorized"] is False
+    assert rights["assets"] == []
+    assert rights["truthful"] is True
+
