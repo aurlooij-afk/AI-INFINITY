@@ -139,6 +139,27 @@ def build_static_website_package(
     )
     evidence_dir = site / "evidence"
     evidence_dir.mkdir(parents=True, exist_ok=True)
+    # Every export carries an explicit rights record. Missing upstream evidence is
+    # represented as REVIEW_REQUIRED; never infer clearance from the absence of a file.
+    rights_source = root / "rights_manifest.json"
+    if not rights_source.is_file() or rights_source.stat().st_size <= 0:
+        rights_fallback = {
+            "schema": "ai-infinity.rights-manifest.v1",
+            "project_id": str(project_id),
+            "status": "REVIEW_REQUIRED",
+            "rights_status": "REVIEW_REQUIRED",
+            "assets": [],
+            "source_record_count": len(source_rows),
+            "reason": "No project rights manifest was available when this static site export was created.",
+            "human_review_required": True,
+            "redistribution_authorized": False,
+            "truthful": True,
+        }
+        rights_source = evidence_dir / "rights_manifest.json"
+        rights_source.write_text(
+            json.dumps(rights_fallback, ensure_ascii=False, indent=2) + "\\n",
+            encoding="utf-8",
+        )
     for evidence_name in (
         "sources.json", "provenance.json", "fact_check.json", "rights_manifest.json",
         "seo.json", "social_campaign.json",
