@@ -991,6 +991,16 @@ def _emergency_finalize(project_id: str) -> bool:
     return True
 
 
+def _review_state_preservable(report: Dict[str, Any]) -> bool:
+    """Keep independently inspected drafts available for review without approval."""
+    if not isinstance(report, dict) or report.get("verified"):
+        return False
+    return str(report.get("state") or "").strip().upper() in {
+        "DEGRADED",
+        "REVIEW_REQUIRED",
+    }
+
+
 def _guarded_run_project(project_id: str, model_fn: Any) -> None:
     s = _studio()
     original = _ORIGINALS.get("run_project")
@@ -1041,8 +1051,7 @@ def _guarded_run_project(project_id: str, model_fn: Any) -> None:
             if report.get("verified") and current.get("status") not in {"completed"}:
                 s._update_project(project_id, status="completed", stage="complete", progress=100, error=None)
             elif (
-                not report.get("verified")
-                and str(report.get("state") or "").upper() == "DEGRADED"
+                _review_state_preservable(report)
                 and current.get("status") in {"completed", "completed_with_qc_warnings"}
             ):
                 # Preserve a real, independently inspected draft for review. This
