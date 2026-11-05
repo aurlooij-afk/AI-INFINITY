@@ -450,7 +450,7 @@ def _native_primary_delivery_eligible(
                 return False
             digest = str(row.get("sha256") or "").lower()
             size = int(row.get("size_bytes") or 0)
-            if not _valid_sha256_digest(digest):
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
                 return False
             if size <= 0 or path.stat().st_size != size or _studio().file_sha256(path) != digest:
                 return False
