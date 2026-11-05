@@ -57,3 +57,26 @@ def test_external_provider_disable_forces_local_visual_fallback(monkeypatch, tmp
     assert path.is_file()
     assert path.stat().st_size > 20_000
     assert asset.get("fallback") is True
+
+
+def test_review_required_truth_preserves_native_draft_without_approval():
+    from reality_first_3901 import _review_state_preservable
+
+    assert _review_state_preservable({"verified": False, "state": "REVIEW_REQUIRED"})
+    assert _review_state_preservable({"verified": False, "state": "DEGRADED"})
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        {"verified": True, "state": "REVIEW_REQUIRED"},
+        {"verified": False, "state": "FAILED"},
+        {"verified": False, "state": "BLOCKED"},
+        {"verified": False, "state": None},
+        None,
+    ],
+)
+def test_non_reviewable_truth_states_are_not_preserved(report):
+    from reality_first_3901 import _review_state_preservable
+
+    assert not _review_state_preservable(report)
