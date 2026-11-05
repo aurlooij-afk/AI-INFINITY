@@ -18,6 +18,7 @@ creator runtime without replacing the existing creator engine:
 - evidence-first UI banner
 """
 import json
+import io
 import os
 import shutil
 import sqlite3
@@ -598,35 +599,99 @@ def _is_qualified_illustrative_fallback(row: Dict[str, Any]) -> bool:
     )
 
 
+def _visual_difference_hash(path: Path, image_module: Any) -> Optional[str]:
+    """Hash an image or a representative frame so re-encoded duplicate shots match."""
+    try:
+        if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}:
+            with image_module.open(path) as source:
+                frame = source.convert("L")
+        else:
+            ffmpeg = shutil.which("ffmpeg")
+            if not ffmpeg:
+                return None
+            decoded = subprocess.run(
+                [ffmpeg, "-hide_banner", "-loglevel", "error", "-ss", "0.1",
+                 "-i", str(path), "-frames:v", "1", "-vf", "scale=9:8",
+                 "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"],
+                capture_output=True, timeout=20, check=False,
+            )
+            if decoded.returncode != 0 or not decoded.stdout:
+                return None
+            with image_module.open(io.BytesIO(decoded.stdout)) as source:
+                frame = source.convert("L")
+        resampling = getattr(image_module, "Resampling", image_module)
+        lanczos = getattr(resampling, "LANCZOS", getattr(image_module, "LANCZOS", 1))
+        pixels = list(frame.resize((9, 8), resample=lanczos).getdata())
+        bits = 0
+        bit_index = 0
+        for row in range(8):
+            for column in range(8):
+                if pixels[row * 9 + column] > pixels[row * 9 + column + 1]:
+                    bits |= 1 << bit_index
+                bit_index += 1
+        return f"{bits:016x}"
+    except Exception:
+        return None
+
+
+def _perceptual_hash_distance(left: str, right: str) -> int:
+    try:
+        return (int(left, 16) ^ int(right, 16)).bit_count()
+    except (TypeError, ValueError):
+        return 64
+
+
 def _visual_diversity_metrics(
     visual_rows: List[Dict[str, Any]], scene_count: int
 ) -> Dict[str, Any]:
-    """Measure visual diversity against rendered scenes, not asset-row count.
-
-    A single rendered scene has no cross-scene diversity requirement. Duplicate
-    database rows must not manufacture an extra required visual. For multi-scene
-    edits, retain the existing 60% distinct-visual threshold, bounded by the
-    number of scene masters actually rendered.
-    """
+    """Enforce byte integrity and perceptual uniqueness at the existing 60% floor."""
     s = _studio()
     unique_visual_hashes = set()
+    perceptual_hashes = []
+    unreadable = 0
     for row in visual_rows:
         try:
             path = Path(str(row.get("path") or ""))
-            if path.is_file():
-                unique_visual_hashes.add(s.file_sha256(path))
+            if not path.is_file():
+                unreadable += 1
+                continue
+            unique_visual_hashes.add(s.file_sha256(path))
+            perceptual_hash = _visual_difference_hash(path, getattr(s, "Image", None))
+            if perceptual_hash is None:
+                unreadable += 1
+            else:
+                perceptual_hashes.append(perceptual_hash)
         except Exception:
-            pass
+            unreadable += 1
 
     rendered_scene_count = max(1, int(scene_count or 1))
-    required_unique = min(
-        rendered_scene_count,
-        max(1, int((rendered_scene_count * 0.6) + 0.999)),
+    required_unique = min(rendered_scene_count, max(1, int((rendered_scene_count * 0.6) + 0.999)))
+    representatives = []
+    for value in perceptual_hashes:
+        if not any(_perceptual_hash_distance(value, item) <= 6 for item in representatives):
+            representatives.append(value)
+    duplicate_pairs = sum(
+        1
+        for index, left in enumerate(perceptual_hashes)
+        for right in perceptual_hashes[index + 1:]
+        if _perceptual_hash_distance(left, right) <= 6
+    )
+    perceptual_unique = len(representatives)
+    perceptual_ok = (
+        rendered_scene_count <= 1
+        or (unreadable == 0 and len(perceptual_hashes) == len(visual_rows)
+            and perceptual_unique >= required_unique)
     )
     return {
         "unique_visual_hashes": len(unique_visual_hashes),
         "required_unique_visual_hashes": required_unique,
         "visual_diversity_ok": len(unique_visual_hashes) >= required_unique,
+        "perceptual_unique_visual_hashes": perceptual_unique,
+        "required_perceptual_unique_visual_hashes": required_unique,
+        "perceptual_duplicate_visual_pairs": duplicate_pairs,
+        "perceptual_unreadable_visual_count": unreadable,
+        "perceptual_hash_distance_threshold": 6,
+        "perceptual_diversity_ok": perceptual_ok,
     }
 
 
@@ -1221,12 +1286,19 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     checks["unique_visual_hashes"] = visual_diversity["unique_visual_hashes"]
     checks["visual_diversity_required_unique_hashes"] = visual_diversity["required_unique_visual_hashes"]
     checks["visual_diversity_ok"] = visual_diversity["visual_diversity_ok"]
+    for metric in (
+        "perceptual_unique_visual_hashes", "required_perceptual_unique_visual_hashes",
+        "perceptual_duplicate_visual_pairs", "perceptual_unreadable_visual_count",
+        "perceptual_hash_distance_threshold", "perceptual_diversity_ok",
+    ):
+        checks[metric] = visual_diversity[metric]
     required_professional_unique = min(minimum_scene_count, actual_rendered_scene_count) if actual_rendered_scene_count else minimum_scene_count
     checks["professional_unique_visuals_required"] = required_professional_unique
     checks["professional_visual_diversity_passed"] = (
         not video_quality_gate_required or (
             actual_rendered_scene_count >= minimum_scene_count
             and int(visual_diversity.get("unique_visual_hashes") or 0) >= required_professional_unique
+            and visual_diversity.get("perceptual_diversity_ok") is True
         )
     )
     if actual_rendered_scene_count > 1 and not checks["visual_diversity_ok"]:
@@ -1235,6 +1307,14 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         failures.append(
             f"professional visual diversity failed: {visual_diversity.get('unique_visual_hashes', 0)} unique "
             f"visual(s), {required_professional_unique} required across the rendered scenes"
+        )
+    if video_quality_gate_required and not visual_diversity.get("perceptual_diversity_ok", False):
+        failures.append(
+            "perceptual visual diversity failed: "
+            f"{visual_diversity.get('perceptual_unique_visual_hashes', 0)} perceptually distinct frame(s), "
+            f"{visual_diversity.get('required_perceptual_unique_visual_hashes', required_professional_unique)} required; "
+            f"{visual_diversity.get('perceptual_duplicate_visual_pairs', 0)} near-duplicate pair(s), "
+            f"{visual_diversity.get('perceptual_unreadable_visual_count', 0)} unreadable source(s)"
         )
 
     # The branded launch profile must contain actual source-motion footage,
