@@ -195,10 +195,13 @@ def _derive_title_from_command(command):
     # official website". Without the intermediate deliverable nouns, the old
     # parser could promote "research-backed" or another modifier to the title.
     about = re.search(
-        r"\b(?:video|film|short|reel|documentary|explainer|podcast|article|blog|post)\b"
-        r"(?:\s+(?:article|package|campaign|content|clip|episode|show|story|series|video)){0,4}"
+        r"\b(?:video|film|short|reel|documentary|explainer|podcast|article|blog|post|"
+        r"production|creation|content|package|deliverable|website|web\s+site|landing\s+page|"
+        r"document|presentation|report|guide|newsletter|campaign|social)\b"
+        r"(?:\s+(?:article|package|campaign|content|clip|episode|show|story|series|video|"
+        r"production|deliverable)){0,4}"
         r"\s+(?:about|on|for|covering|exploring)\s+(.+?)"
-        r"(?=,|;|\.|$|\s+(?:with|in|for|using|including|featuring)\s+)",
+        r"(?=,|;|\.|$|\s+(?:with|in|for|using|including|featuring|deliver|output|as\s+the\s+primary)\s+)",
         text, re.I,
     )
     if about:
