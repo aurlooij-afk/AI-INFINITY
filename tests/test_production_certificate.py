@@ -8,7 +8,7 @@ from pathlib import Path
 from scripts.create_production_certificate import build_certificate
 
 
-def _passing_acceptance():
+def _passing_acceptance(candidate_sha: str = "b" * 40, run_id: str = "1001"):
     tests = [
         {"scenario_id": f"{index:02d}", "status": "PASS", "result": {}}
         for index in range(1, 20)
@@ -57,12 +57,21 @@ def _passing_acceptance():
         "otio_rerender_sha256": "a" * 64,
     }
     return {
+        "source_revision": candidate_sha,
+        "workflow_run_id": run_id,
+        "run_attempt": "1",
         "overall_status": "PASS",
         "passed": True,
         "scenario_count": 19,
         "completed_scenarios": 19,
         "tests": tests,
     }
+
+
+
+
+def _passing_repeat(candidate_sha: str):
+    return _passing_acceptance(candidate_sha, run_id="1002")
 
 
 def _passing_storage():
@@ -166,7 +175,8 @@ def test_production_certificate_keeps_external_and_human_gates_separate():
     candidate = "b" * 40
     certificate = build_certificate(
         candidate_sha=candidate,
-        acceptance=_passing_acceptance(),
+        acceptance=_passing_acceptance(candidate),
+        acceptance_repeat=_passing_repeat(candidate),
         storage={"status": "BLOCKED"},
         inference={"status": "BLOCKED"},
         deployment=None,
@@ -194,6 +204,7 @@ def test_production_certificate_requires_all_19_universal_output_scenarios():
     certificate = build_certificate(
         candidate_sha=candidate,
         acceptance=acceptance,
+        acceptance_repeat=_passing_repeat(candidate),
         storage={"status": "BLOCKED"},
         inference={"status": "BLOCKED"},
         deployment=None,
@@ -411,6 +422,8 @@ def test_certificate_cli_writes_gate_report_not_certificate_when_evidence_is_mis
             candidate,
             "--acceptance",
             str(acceptance_path),
+            "--acceptance-repeat",
+            str(repeat_acceptance_path),
             "--gemini-writer",
             str(gemini_path),
             "--storage",
