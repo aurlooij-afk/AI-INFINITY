@@ -55,7 +55,18 @@ def test_external_provider_disable_forces_local_visual_fallback(monkeypatch, tmp
     )
     path = tmp_path / str(asset["path"]).split("/")[-1]
     assert path.is_file()
-    assert path.stat().st_size > 20_000
+    # File size is a compression-dependent proxy, not evidence of visual validity.
+    # Decode the actual image and assert a meaningful raster with non-trivial detail.
+    with studio.Image.open(path) as generated:
+        assert generated.format == "PNG"
+        assert generated.width >= 640
+        assert generated.height >= 360
+        pixels = generated.convert("RGB")
+        channel_spread = max(
+            max(channel) - min(channel)
+            for channel in zip(*pixels.resize((64, 36)).getdata())
+        )
+        assert channel_spread >= 20
     assert asset.get("fallback") is True
 
 
