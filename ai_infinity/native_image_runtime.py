@@ -166,17 +166,36 @@ def run_native_image_project(
     }
     _json(rights_path, rights)
 
-    storage_result: dict[str, Any] = {
-        "status": "not_configured",
-        "truthful": True,
-    }
-    if storage_persist is None:
+    # Register/persist the primary image through the canonical asset store exactly
+    # once. The asset-store adapter is the source of truth for durable-storage
+    # status; local file existence is never represented as durable recovery.
+    storage_result: dict[str, Any] = {"status": "not_configured", "truthful": True}
+    save_asset = getattr(studio, "_save_asset", None)
+    image_saved_through_asset_store = False
+    if callable(save_asset):
         try:
-            import ai3704_storage_fabric
-            storage_persist = ai3704_storage_fabric._persist_path
-        except Exception:
-            storage_persist = None
-    if callable(storage_persist) and user_id:
+            saved = save_asset(
+                project_id,
+                "image",
+                image_path,
+                "image/png",
+                {
+                    "content_type": "image",
+                    "sha256": image_hash,
+                    "rights_status": "REVIEW_REQUIRED",
+                    "primary_delivery_status": "PASS",
+                },
+            )
+            image_saved_through_asset_store = True
+            if isinstance(saved, dict) and isinstance(saved.get("durable_storage"), dict):
+                storage_result = dict(saved["durable_storage"])
+        except Exception as exc:
+            storage_result = {
+                "status": "not_persisted",
+                "error_type": type(exc).__name__,
+                "truthful": True,
+            }
+    elif callable(storage_persist) and user_id:
         try:
             candidate = storage_persist(
                 image_path,
@@ -196,13 +215,6 @@ def run_native_image_project(
                 "truthful": True,
             }
 
-    record["storage"] = {
-        "status": storage_result.get("status") or "unknown",
-        "asset_id": storage_result.get("asset_id"),
-        "object_key": storage_result.get("object_key"),
-        "sha256": storage_result.get("sha256"),
-        "truthful": True,
-    }
     _json(manifest_path, record)
     manifest_hash = _sha256(manifest_path)
 
@@ -276,7 +288,9 @@ def run_native_image_project(
         }
         if path == image_path:
             metadata["durable_storage"] = storage_result
-        if callable(getattr(studio, "_save_asset", None)):
+        if callable(getattr(studio, "_save_asset", None)) and not (
+            path == image_path and image_saved_through_asset_store
+        ):
             studio._save_asset(project_id, kind, path, media_type, metadata)
         if callable(getattr(studio, "register_artifact", None)):
             studio.register_artifact(project_id, path, media_type, metadata)
