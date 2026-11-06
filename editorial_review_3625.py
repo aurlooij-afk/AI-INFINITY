@@ -1031,6 +1031,9 @@ def _persist_scorecard(project: Dict[str, Any], scorecard: Dict[str, Any], revie
         "state": review_state.get("state") or "pending",
         "required": bool(review_state.get("required", True)),
         "publish_ready": bool(review_state.get("publish_ready", False)),
+        "review_complete": bool(review_state.get("review_complete", False)),
+        "rights_approved_for_exact_asset": bool(review_state.get("rights_approved_for_exact_asset", False)),
+        "image_role_scores": review_state.get("image_role_scores"),
         "latest_review": review_state.get("latest_review"),
     }
     encoded = json.dumps(scorecard, ensure_ascii=False, sort_keys=True, indent=2, default=str)
@@ -1125,12 +1128,12 @@ def install() -> None:
       var rows=dims.map(function(d){
         return '<div class="aiiDim"><b>'+escHtml(d.dimension)+(d.applicable?'':' <span class="aiiSmall">(N/A)</span>')+'</b><span class="aiiScore">'+(d.applicable?escHtml(d.score)+'/5':'—')+'</span><div class="aiiEvidence"><div class="aiiSmall">'+escHtml((d.evidence||[]).join(' · '))+'</div><div class="aiiSmall">'+escHtml(d.method||'')+'</div></div></div>';
       }).join('');
-      var status=gate.eligible_for_human_approval?'Eligible for human review':'Repair required before approval';
-      var approveDisabled=!(gate.eligible_for_human_approval);
+      var status=review.state==='approved'?'Human review complete':(gate.eligible_for_human_approval?'Eligible for human review':'Repair required before approval');
+      var approveDisabled=!(gate.eligible_for_human_approval) || (q.content_type==='image' && review.state==='approved');
       var panel=document.getElementById('aiiEditorialPanel');
       if(!panel){panel=document.createElement('section');panel.id='aiiEditorialPanel';findHost().appendChild(panel);}
       panel.innerHTML='<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><b>Editorial scorecard '+escHtml(q.version||'')+'</b><span>'+escHtml(review.state||'pending')+'</span></div>'+
-        '<p class="aiiSmall">Automated evidence review only. It does not guarantee human-level taste. Publication requires explicit human approval tied to this exact artifact fingerprint.</p>'+
+        '<p class="aiiSmall">'+(q.content_type==='image'?'Image bytes and manifests are verified independently. Image approval requires six human role scores and an explicit rights attestation for this exact fingerprint. The rights manifest remains REVIEW_REQUIRED; this panel does not publish images.':'Automated evidence review only. It does not guarantee human-level taste. Publication requires explicit human approval tied to this exact artifact fingerprint.')+'</p>'+
         '<div class="aiiSmall">Automated average: '+escHtml(gate.average_score)+'/5 · minimum dimension: '+escHtml(gate.minimum_dimension_score)+'/5 · critical failures: '+escHtml(gate.critical_failure_count)+'</div>'+
         '<div class="aiiSmall">'+escHtml(status)+'</div>'+
         rows+
