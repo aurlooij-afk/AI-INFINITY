@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-EXPECTED_ACCEPTANCE_SCENARIO_IDS = {f"{index:02d}" for index in range(1, 20)}
+EXPECTED_ACCEPTANCE_SCENARIO_IDS = {f"{index:02d}" for index in range(1, 21)}
 
 
 def read_json(path: Path) -> dict[str, Any] | None:
@@ -52,7 +52,7 @@ def _scenario_map(acceptance: dict[str, Any] | None) -> dict[str, dict[str, Any]
 
 
 def _acceptance_run_passes(value: dict[str, Any] | None, candidate_sha: str) -> bool:
-    """Require a complete 19-scenario PASS bound to this SHA and a real run ID."""
+    """Require a complete 20-scenario PASS bound to this SHA and a real run ID."""
     if not isinstance(value, dict):
         return False
     rows = value.get("tests")
