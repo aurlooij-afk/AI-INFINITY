@@ -94,6 +94,33 @@ def test_register_exposes_explicit_maintenance_routes():
     assert "/infinity/studio/self-maintenance/inspect" in paths
     assert "/infinity/studio/self-maintenance/improve" in paths
 
+def test_repository_discovery_ranks_relevant_python_modules_and_excludes_unsafe_paths():
+    candidates = maintenance.rank_source_candidates(
+        [
+            {"path": "studio_ultimate.py", "size": 790000, "sha": "a" * 40},
+            {"path": "tests/test_longform_production_planner.py", "size": 12000, "sha": "b" * 40},
+            {"path": "scripts/verify_live_deployment.py", "size": 8000, "sha": "c" * 40},
+            {"path": ".github/workflows/final-acceptance-suite.yml", "size": 5000, "sha": "d" * 40},
+            {"path": "requirements.txt", "size": 1000, "sha": "e" * 40},
+        ],
+        "repair long-form narration script preflight and add regression tests",
+        limit=10,
+    )
+    paths = [row["path"] for row in candidates]
+    assert "tests/test_longform_production_planner.py" in paths
+    assert "scripts/verify_live_deployment.py" in paths
+    assert "studio_ultimate.py" in paths
+    assert ".github/workflows/final-acceptance-suite.yml" not in paths
+    assert "requirements.txt" not in paths
+    assert candidates[0]["match_score"] >= candidates[-1]["match_score"]
+
+
+def test_repository_discovery_route_is_registered():
+    app = FastAPI()
+    maintenance.register(app)
+    paths = {route.path for route in app.routes}
+    assert "/infinity/studio/self-maintenance/discover" in paths
+
 def test_production_docker_image_copies_and_compiles_self_maintenance_module():
     root = Path(__file__).resolve().parents[1]
     docker_lines = (root / "Dockerfile").read_text(encoding="utf-8").splitlines()
