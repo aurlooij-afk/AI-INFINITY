@@ -948,6 +948,16 @@ def classify_command(command, raw=None):
                 return {"route": "unsupported", "reason": "No safe executable route matched this command."}
     if route in {"edit", "project_status"} and not payload.get("project_id"):
         return {"route": "project_id_required", "reason": "This action requires an existing project ID."}
+    if route == "create":
+        # Return the same authoritative primary-output type that compile_intent
+        # will execute. This keeps the command preview and dispatched project
+        # aligned when a stale UI default conflicts with the user's image/video/etc.
+        inferred_type = compile_intent(cmd, payload)["constraints"]["content_type"]
+        return {
+            "route": "create",
+            "content_type": inferred_type,
+            "reason": "Matched a supported natural-language production request.",
+        }
     return {"route": route, "reason": "Matched an implemented AI Infinity capability."}
 
 
@@ -1392,7 +1402,7 @@ def dispatch_command(command, user_id, raw=None):
     if route == "create":
         effective_payload = dict(payload)
         inferred_type = clean(decision.get("content_type"), 30).lower()
-        if inferred_type in {"video", "podcast", "article", "social"}:
+        if inferred_type in {"image", "video", "podcast", "article", "social", "website", "document", "presentation"}:
             effective_payload["content_type"] = inferred_type
         result = create_from_command(cmd, user_id, effective_payload)
         return {"status": result.get("status", "queued"), "route": route, "result": result, "executed": True, "truthful": True}
