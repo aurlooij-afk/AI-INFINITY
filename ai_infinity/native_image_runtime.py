@@ -398,8 +398,7 @@ def install(studio_module) -> None:
         project = studio_module._get_project(project_id)
         request = _request(project or {})
         if normalize_content_type(request.get("content_type")) == "image":
-            run_native_image_project(project_id, studio_module=studio_module)
-            return
+            return run_native_image_project(project_id, studio_module=studio_module)
         return original_runner(project_id, model_fn)
 
     existing = set(getattr(studio_module, "SUPPORTED_CREATOR_CONTENT_TYPES", ()))
