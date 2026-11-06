@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 from fastapi import FastAPI, HTTPException
 
 import self_maintenance as maintenance
@@ -91,3 +92,13 @@ def test_register_exposes_explicit_maintenance_routes():
     assert "/infinity/studio/self-maintenance/status" in paths
     assert "/infinity/studio/self-maintenance/inspect" in paths
     assert "/infinity/studio/self-maintenance/improve" in paths
+
+def test_production_docker_image_copies_and_compiles_self_maintenance_module():
+    root = Path(__file__).resolve().parents[1]
+    docker_lines = (root / "Dockerfile").read_text(encoding="utf-8").splitlines()
+    copy_lines = [line for line in docker_lines if line.startswith("COPY ")]
+    compile_start = next(i for i, line in enumerate(docker_lines) if line.strip() == "RUN python -m py_compile \\")
+    compile_block = "\\n".join(docker_lines[compile_start:compile_start + 10])
+    assert any("self_maintenance.py" in line and line.rstrip().endswith("./") for line in copy_lines)
+    assert "self_maintenance.py" in compile_block
+\n
