@@ -175,4 +175,15 @@ def test_3702_capabilities_never_claim_ready_from_registry_presence_alone(monkey
     assert response["local_ready"] == 0
     assert response["route_available_count"] == 3
     assert response["unavailable_count"] == len(local) - 3
+    assert namespace["health"]()["status"] == "degraded"
+
+    for path in (
+        "/infinity/storage/v1/status",
+        "/infinity/3705/readiness",
+        "/infinity/3706/internal-100",
+    ):
+        app.add_api_route(path, lambda: {}, methods=["GET"])
+    healthy = namespace["health"]()
+    assert healthy["status"] == "healthy"
+    assert all(item["available"] for item in healthy["required_route_checks"])
 
