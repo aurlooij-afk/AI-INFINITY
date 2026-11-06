@@ -44,14 +44,24 @@ BLOCKED_FILES = {
 SECRET_ASSIGNMENT = re.compile(
     r"""(?im)^\s*(?:(?:export|const|let|var)\s+)?"""
     r"""(?:[A-Z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?KEY|APPLICATION[_-]?KEY|"""
-    r"""SERVICE[_-]?ROLE[_-]?KEY|PRIVATE[_-]?KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*)"""
+    r"""SERVICE[_-]?ROLE[_-]?KEY|PRIVATE[_-]?KEY)[A-Z0-9_]*)"""
     r"""\s*[:=]\s*(['"])([^'"\r\n]{16,})\1"""
+)
+GENERIC_CREDENTIAL_ASSIGNMENT = re.compile(
+    r"""(?im)^\s*(?:(?:export|const|let|var)\s+)?"""
+    r"""(?:[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|CREDENTIAL)[A-Z0-9_]*)"""
+    r"""\s*[:=]\s*(['"])([^'"\r\n]{28,})\1"""
 )
 SECRET_ENV_ASSIGNMENT = re.compile(
     r"""(?im)(?:os\.)?environ\s*\[\s*['"]"""
     r"""[A-Z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?KEY|APPLICATION[_-]?KEY|"""
-    r"""SERVICE[_-]?ROLE[_-]?KEY|PRIVATE[_-]?KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*"""
+    r"""SERVICE[_-]?ROLE[_-]?KEY|PRIVATE[_-]?KEY)[A-Z0-9_]*"""
     r"""['"]\s*\]\s*=\s*(['"])([^'"\r\n]{16,})\1"""
+)
+GENERIC_ENV_CREDENTIAL_ASSIGNMENT = re.compile(
+    r"""(?im)(?:os\.)?environ\s*\[\s*['"]"""
+    r"""[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|CREDENTIAL)[A-Z0-9_]*"""
+    r"""['"]\s*\]\s*=\s*(['"])([^'"\r\n]{28,})\1"""
 )
 KNOWN_TOKEN_FORMAT = re.compile(
     r"""(?i)(?:\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b"""
@@ -69,7 +79,9 @@ def contains_embedded_secret(content: str) -> bool:
     text = str(content or "")
     return bool(
         SECRET_ASSIGNMENT.search(text)
+        or GENERIC_CREDENTIAL_ASSIGNMENT.search(text)
         or SECRET_ENV_ASSIGNMENT.search(text)
+        or GENERIC_ENV_CREDENTIAL_ASSIGNMENT.search(text)
         or KNOWN_TOKEN_FORMAT.search(text)
     )
 
