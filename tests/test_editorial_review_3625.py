@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -277,6 +278,31 @@ def _image_review_fixture(tmp_path):
         path.write_text(json.dumps(value), encoding="utf-8")
         paths[name] = path
     paths["image.png"] = image_path
+    package_readme = tmp_path / "image_package_README.md"
+    package_readme.write_text("Review the exact image, its source method and rights before redistribution.", encoding="utf-8")
+    package_manifest = {
+        "project_id": project_id,
+        "entrypoint": "image.png",
+        "files": [{"path": "image.png", "sha256": digest}],
+        "rights_status": "REVIEW_REQUIRED",
+        "redistribution_authorized": False,
+        "publication_status": "NOT_PUBLISHED",
+    }
+    package_manifest_path = tmp_path / "image_package_manifest.json"
+    package_manifest_path.write_text(json.dumps(package_manifest), encoding="utf-8")
+    package_path = tmp_path / "image_package.zip"
+    with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        for source in [image_path, *paths.values(), package_readme, package_manifest_path]:
+            if source.is_file():
+                bundle.write(source, arcname="ai-infinity-image/" + source.name)
+    primary["artifacts"].append({
+        "name": "image_package.zip",
+        "sha256": hashlib.sha256(package_path.read_bytes()).hexdigest(),
+    })
+    paths["primary_content_delivery.json"].write_text(json.dumps(primary), encoding="utf-8")
+    paths["image_package_README.md"] = package_readme
+    paths["image_package_manifest.json"] = package_manifest_path
+    paths["image_package.zip"] = package_path
     return project_id, digest, paths
 
 
