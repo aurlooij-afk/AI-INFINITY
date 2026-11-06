@@ -98,3 +98,16 @@ def test_existing_creator_queue_dispatches_standalone_image_without_video_side_e
     assert primary["human_review_status"] == "PENDING"
     assert any(Path(row[2]).name == "image.png" for row in saved_assets)
     assert any(Path(row[1]).name == "image.png" for row in registered)
+
+def test_image_provider_respects_global_external_provider_kill_switch(monkeypatch):
+    from ai_infinity.native_image_runtime import _zero_cost_image_provider_allowed
+
+    monkeypatch.setenv("AI_INFINITY_HF_IMAGE_ZERO_COST_CONFIRMED", "true")
+    monkeypatch.setenv("AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK", "true")
+    monkeypatch.setenv("HF_TOKEN", "test-token")
+    disabled = SimpleNamespace(_external_providers_disabled=lambda: True)
+    assert _zero_cost_image_provider_allowed(disabled) is False
+
+    broken_policy = SimpleNamespace(_external_providers_disabled=lambda: (_ for _ in ()).throw(RuntimeError("policy unavailable")))
+    assert _zero_cost_image_provider_allowed(broken_policy) is False
+
