@@ -292,7 +292,12 @@ def _image_review_fixture(tmp_path):
     package_manifest_path.write_text(json.dumps(package_manifest), encoding="utf-8")
     package_path = tmp_path / "image_package.zip"
     with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-        for source in [image_path, *paths.values(), package_readme, package_manifest_path]:
+        for source in [
+            image_path,
+            *(path for name, path in paths.items() if name != "primary_content_delivery.json"),
+            package_readme,
+            package_manifest_path,
+        ]:
             if source.is_file():
                 bundle.write(source, arcname="ai-infinity-image/" + source.name)
     primary["artifacts"].append({
