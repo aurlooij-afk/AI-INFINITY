@@ -392,6 +392,10 @@ def test_runtime_report_is_useful_and_redacts_sensitive_health_and_storage_field
     result = maintenance.build_runtime_report(
         python_version="3.11.9 (main, test build)",
         platform_name="Linux-6.8.0-x86_64",
+        application_version="2050.3624",
+        application_build="test-build",
+        deployed_revision="a" * 40,
+        route_paths=["/", "/infinity/studio/bootstrap", "/infinity/studio/health", "/infinity/studio/self-maintenance/runtime"],
         executables={"ffmpeg": "/usr/bin/ffmpeg", "ffprobe": "/usr/bin/ffprobe", "espeak-ng": None},
         studio_health={
             "status": "healthy",
@@ -427,6 +431,10 @@ def test_runtime_report_is_useful_and_redacts_sensitive_health_and_storage_field
     encoded = json.dumps(result)
     assert result["creator_studio"]["status"] == "healthy"
     assert result["runtime"]["executables"]["ffmpeg"] is True
+    assert result["runtime"]["deployed_revision"] == "a" * 40
+    assert result["application"]["version"] == "2050.3624"
+    assert result["application"]["required_routes"]["/infinity/studio/health"] is True
+    assert result["application"]["required_routes"]["/infinity/storage/v1/status"] is False
     assert result["project_state"]["active"] is False
     assert result["asset_storage"]["configured_providers"] == ["backblaze_b2", "supabase"]
     assert result["asset_storage"]["durability_claimed"] is False
@@ -443,6 +451,10 @@ def test_runtime_inspection_does_not_report_object_storage_configuration_as_dura
     report = maintenance.build_runtime_report(
         python_version="3.11",
         platform_name="test",
+        application_version="test",
+        application_build="test-build",
+        deployed_revision=None,
+        route_paths=["/"],
         executables={},
         studio_health={"status": "healthy", "media_core": True},
         project_state={"active": True, "verified": True, "snapshot_verified": True},
@@ -452,6 +464,9 @@ def test_runtime_inspection_does_not_report_object_storage_configuration_as_dura
         writer_ready=True,
     )
     assert report["project_state"]["verified"] is True
+    assert report["runtime"]["deployed_revision"] is None
+    assert report["application"]["route_count"] == 1
+    assert report["application"]["required_routes"]["/infinity/studio/bootstrap"] is False
     assert report["asset_storage"]["configured_providers"] == ["backblaze_b2"]
     assert report["asset_storage"]["durability_claimed"] is False
     assert "successful asset writes or read-back" in report["asset_storage"]["note"]
