@@ -36,7 +36,7 @@ ROOT_MODULES = {
     "production_closure_3624.py", "reality_first_3901.py",
     "professional_creator_v2.py", "professional_creator_v2_timeline_patch.py",
     "professional_creator_fabric.py", "universal_command_batch.py",
-    "wan_video_worker.py", "self_maintenance.py",
+    "wan_video_worker.py", "self_maintenance.py", "editorial_review_3625.py",
 }
 ROOT_TEXT_FILES = {"creator_studio_2030.html", "ui_3800.html"}
 BLOCKED_FILES = {
