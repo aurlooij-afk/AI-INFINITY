@@ -41,9 +41,37 @@ BLOCKED_FILES = {
     "AI_Infinity_Creator_Benchmark_and_Reuse_Plan.md",
     "AI_Infinity_10_Method_Deep_Research_and_Master_Command.md",
 }
-SECRET_LITERAL = re.compile(
-    r"(?im)^\s*(?:GEMINI_API_KEY|OPENAI_API_KEY|API_KEY|ACCESS_TOKEN|APP_TOKEN|GITHUB_TOKEN|PASSWORD|SECRET)\s*=\s*['\"][^'\"]{20,}['\"]"
+SECRET_ASSIGNMENT = re.compile(
+    r"""(?im)^\s*(?:(?:export|const|let|var)\s+)?"""
+    r"""(?:[A-Z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?KEY|APPLICATION[_-]?KEY|"""
+    r"""SERVICE[_-]?ROLE[_-]?KEY|PRIVATE[_-]?KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*)"""
+    r"""\s*[:=]\s*(['"])([^'"\r\n]{16,})\1"""
 )
+SECRET_ENV_ASSIGNMENT = re.compile(
+    r"""(?im)(?:os\.)?environ\s*\[\s*['"]"""
+    r"""[A-Z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?KEY|APPLICATION[_-]?KEY|"""
+    r"""SERVICE[_-]?ROLE[_-]?KEY|PRIVATE[_-]?KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*"""
+    r"""['"]\s*\]\s*=\s*(['"])([^'"\r\n]{16,})\1"""
+)
+KNOWN_TOKEN_FORMAT = re.compile(
+    r"""(?i)(?:\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b"""
+    r"""|\bgh[pousr]_[A-Za-z0-9]{20,}\b"""
+    r"""|\bgithub_pat_[A-Za-z0-9_]{20,}\b"""
+    r"""|\bhf_[A-Za-z0-9]{20,}\b"""
+    r"""|\bxox[baprs]-[A-Za-z0-9-]{20,}\b"""
+    r"""|\bAKIA[0-9A-Z]{16}\b"""
+    r"""|\bAIza[0-9A-Za-z_-]{30,}\b)"""
+)
+
+
+def contains_embedded_secret(content: str) -> bool:
+    """Reject likely hard-coded credentials by assignment name or known token shape."""
+    text = str(content or "")
+    return bool(
+        SECRET_ASSIGNMENT.search(text)
+        or SECRET_ENV_ASSIGNMENT.search(text)
+        or KNOWN_TOKEN_FORMAT.search(text)
+    )
 
 
 def _enabled(name: str) -> bool:
@@ -447,7 +475,7 @@ def apply_window_edits(changes: list, originals: dict, inspected_files: list) ->
                 raise HTTPException(409, f"Source range for {path} changed after inspection.")
             if not isinstance(replacement, str) or len(replacement.encode("utf-8")) > MAX_CHANGE_BYTES:
                 raise HTTPException(413, f"Replacement block for {path} is invalid or too large.")
-            if SECRET_LITERAL.search(replacement):
+            if contains_embedded_secret(replacement):
                 raise HTTPException(422, f"Potential hard-coded secret detected in {path}.")
             total_replacement_bytes += len(replacement.encode("utf-8"))
             normalized.append((first, last, replacement))
@@ -479,7 +507,7 @@ def validate_changes(changes: list, requested_paths: set[str]) -> list:
         content_limit = MAX_FILE_BYTES if row.get("_bounded_edit") is True else MAX_CHANGE_BYTES
         if not isinstance(content, str) or len(content.encode("utf-8")) > content_limit:
             raise HTTPException(413, f"Proposed content for {path} is invalid or too large.")
-        if SECRET_LITERAL.search(content):
+        if contains_embedded_secret(content):
             raise HTTPException(422, f"Potential hard-coded secret detected in {path}.")
         if path.endswith(".py"):
             try:
