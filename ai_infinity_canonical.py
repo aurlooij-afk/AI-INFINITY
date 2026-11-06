@@ -954,7 +954,7 @@ def classify_command(command, raw=None):
         # Return the same authoritative primary-output type that compile_intent
         # will execute. This keeps the command preview and dispatched project
         # aligned when a stale UI default conflicts with the user's image/video/etc.
-        inferred_type = compile_intent(cmd, payload)["constraints"]["content_type"]
+        inferred_type = compile_intent(text, payload)["constraints"]["content_type"]
         return {
             "route": "create",
             "content_type": inferred_type,
