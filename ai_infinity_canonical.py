@@ -1099,7 +1099,6 @@ def dispatch_command(command, user_id, raw=None):
             write_allowance = (
                 payload.get("api_anything_allow_writes") is True
                 or bool(re.search(r"(?:^|\s)--allow-writes(?:\s|$)", cmd, re.I))
-                or (bool(operation_name) and hasattr(connector, "execute_api_anything_operation"))
             )
             dry_run = payload.get("api_anything_dry_run") is True or bool(
                 re.search(r"(?:^|\s)--dry(?:\s|$)", cmd, re.I)
@@ -1125,8 +1124,8 @@ def dispatch_command(command, user_id, raw=None):
                 if hasattr(connector, "execute_api_anything_operation"):
                     result = connector.execute_api_anything_operation(
                         site_name, operation_name, params, user_id=user_id,
-                        allow_writes=False, max_tier=max_tier, dry_run=dry_run,
-                        idempotency_key=idempotency_key, again=again, auto_preflight=True,
+                        allow_writes=write_allowance, max_tier=max_tier, dry_run=dry_run,
+                        idempotency_key=idempotency_key, again=again, auto_preflight=False,
                     )
                 elif hasattr(connector, "execute_bundled_operation"):
                     result = connector.execute_bundled_operation(
