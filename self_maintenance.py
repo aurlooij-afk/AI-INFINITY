@@ -151,12 +151,17 @@ def discover_sources(cfg: dict, goal: str, limit: int = 20) -> dict:
         goal,
         limit,
     )
+    try:
+        suggested_paths = select_autonomous_sources(candidates)
+    except HTTPException:
+        suggested_paths = []
     return {
         "repository": cfg["repository"],
         "base_branch": cfg["base_branch"],
         "goal": goal,
         "matches": candidates,
         "matched_count": len(candidates),
+        "suggested_paths": suggested_paths,
         "tree_truncated": response.get("truncated") is True,
         "truthful": True,
     }
