@@ -82,6 +82,16 @@ def test_existing_creator_queue_dispatches_standalone_image_without_video_side_e
 
     image = tmp_path / "image.png"
     image_manifest = json.loads((tmp_path / "image_manifest.json").read_text(encoding="utf-8"))
+    image_package_manifest = json.loads((tmp_path / "image_package_manifest.json").read_text(encoding="utf-8"))
+    import zipfile
+    with zipfile.ZipFile(tmp_path / "image_package.zip") as bundle:
+        assert bundle.testzip() is None
+        assert "ai-infinity-image/image.png" in bundle.namelist()
+        packaged_rights = json.loads(bundle.read("ai-infinity-image/rights_manifest.json"))
+        assert packaged_rights["rights_status"] == "REVIEW_REQUIRED"
+    assert image_package_manifest["entrypoint"] == "image.png"
+    assert image_package_manifest["redistribution_authorized"] is False
+    assert any(row["path"] == "image.png" and row["sha256"] == result["image"]["sha256"] for row in image_package_manifest["files"])
     rights = json.loads((tmp_path / "rights_manifest.json").read_text(encoding="utf-8"))
     production = json.loads((tmp_path / "production_manifest.json").read_text(encoding="utf-8"))
     primary = json.loads((tmp_path / "primary_content_delivery.json").read_text(encoding="utf-8"))
@@ -97,6 +107,7 @@ def test_existing_creator_queue_dispatches_standalone_image_without_video_side_e
     assert primary["status"] == "PASS"
     assert primary["human_review_status"] == "PENDING"
     assert any(Path(row[2]).name == "image.png" for row in saved_assets)
+    assert any(Path(row[2]).name == "image_package.zip" for row in saved_assets)
     assert any(Path(row[1]).name == "image.png" for row in registered)
 
 def test_image_provider_respects_global_external_provider_kill_switch(monkeypatch):
