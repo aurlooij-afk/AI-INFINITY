@@ -27,7 +27,7 @@ ROOT_MODULES = {
     "production_closure_3624.py", "reality_first_3901.py",
     "professional_creator_v2.py", "professional_creator_v2_timeline_patch.py",
     "professional_creator_fabric.py", "universal_command_batch.py",
-    "wan_video_worker.py",
+    "wan_video_worker.py", "self_maintenance.py",
 }
 BLOCKED_FILES = {
     ".env", ".env.local", ".env.production", ".session-key",
