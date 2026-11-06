@@ -239,7 +239,7 @@ def compile_intent(command,raw):
     # a natural-language command, infer the primary deliverable from its first
     # occurrence; collateral assets (e.g. article.md/social copy in a video pack)
     # must not silently disable the primary video's verification gates.
-    allowed_types={"video","podcast","article","social","website","document","presentation"}
+    allowed_types={"video","podcast","article","social","website","document","presentation","image"}
     requested_type=clean(raw.get("content_type"),30).lower()
     # A concrete deliverable named in the natural-language command must override
     # a stale UI default (commonly "video"). Otherwise "Create a website" can
@@ -252,6 +252,7 @@ def compile_intent(command,raw):
         (r"\b(?:static website|website package|website|web site|landing page|microsite)\b","website"),
         (r"\b(?:word document|docx|document)\b","document"),
         (r"\b(?:powerpoint|presentation|slide deck|slides)\b","presentation"),
+        (r"\b(?:image|picture|illustration|poster|cover art|key art|graphic)\b","image"),
         (r"(?:ویڈیو|ویدیو|ویدئوی|ویډیو|فيديو|مقطع|فلم|فیلم)","video"),
         (r"(?:پوڈکاسٹ|پادکست|پوډکاسټ|بودكاست)","podcast"),
         (r"(?:مضمون|مقالہ|مقاله|گزارش|مقال|تقرير)","article"),
@@ -312,11 +313,12 @@ def compile_intent(command,raw):
         "technical_qc_required":True,"duration_tolerance_seconds":1.0,"aspect_tolerance":0.02,
         "required_artifacts":(
           ["final.mp4","audio_master.mp3","captions.srt","thumbnail.jpg","script.md","manifest.json"]
-          if ct in {"video","social"} else
-          (["audio_master.mp3","podcast_rss.xml"] if ct=="podcast" else
-           (["website.zip","website_manifest.json"] if ct=="website" else
-            (["document.docx","document_manifest.json"] if ct=="document" else
-             (["presentation.pptx","presentation_manifest.json"] if ct=="presentation" else ["article.md","thumbnail.jpg"]))))
+          (["image.png","image_manifest.json","rights_manifest.json","production_manifest.json"] if ct=="image" else
+           (["final.mp4","audio_master.mp3","captions.srt","thumbnail.jpg","script.md","manifest.json"] if ct in {"video","social"} else
+            (["audio_master.mp3","podcast_rss.xml"] if ct=="podcast" else
+             (["website.zip","website_manifest.json"] if ct=="website" else
+              (["document.docx","document_manifest.json"] if ct=="document" else
+               (["presentation.pptx","presentation_manifest.json"] if ct=="presentation" else ["article.md","thumbnail.jpg"])))))
         ),
         "creative_evaluation":"best-effort when a semantic model is configured"
       },
@@ -770,7 +772,7 @@ def classify_command(command, raw=None):
         low,
     ))
     explicit_media_output = bool(re.search(
-        r"\b(?:create|make|generate|produce|build)\s+(?:(?:a|an|the|new|short|long|cinematic|professional|vertical|horizontal|responsive|static|\d+[- ]second)\s+){0,5}(?:video|film|reel|documentary|explainer|podcast|article|blog|essay|report|guide|newsletter|social campaign|social post|website|web site|landing page|microsite|word document|docx|document|powerpoint|presentation|slide deck|slides)\b",
+        r"\b(?:create|make|generate|produce|build)\s+(?:(?:a|an|the|new|short|long|cinematic|professional|vertical|horizontal|responsive|static|\d+[- ]second)\s+){0,5}(?:image|picture|illustration|poster|cover art|key art|graphic|video|film|reel|documentary|explainer|podcast|article|blog|essay|report|guide|newsletter|social campaign|social post|website|web site|landing page|microsite|word document|docx|document|powerpoint|presentation|slide deck|slides)\b",
         low,
     ))
     if unsupported_primary and not explicit_media_output:
@@ -831,6 +833,7 @@ def classify_command(command, raw=None):
         low,
     ))
     localized_types = (
+        (r"(?:تصویر|عکس|تصوير|صورة|صوّر|أنشئ صورة|انځور|انځورونه)", "image"),
         (r"(?:ویڈیو|ویدیو|ویدئوی|ویډیو|فيديو|مقطع|فلم|فیلم)", "video"),
         (r"(?:پوڈکاسٹ|پادکست|پوډکاسټ|بودكاست)", "podcast"),
         (r"(?:مضمون|مقالہ|مقاله|گزارش|مقال|تقرير)", "article"),
@@ -857,8 +860,8 @@ def classify_command(command, raw=None):
         return {"route": "research", "reason": "Matched a supported multilingual research request."}
     if not explicit and localized_create:
         selected_type = localized_content_type or clean(payload.get("content_type"), 30).lower()
-        if selected_type not in {"video", "podcast", "article", "social", "website", "document", "presentation"}:
-            return {"route": "deliverable_required", "reason": "Specify a supported output: video, podcast, article/report, social package, website, editable Word document, or PowerPoint deck."}
+        if selected_type not in {"video", "podcast", "article", "social", "website", "document", "presentation", "image"}:
+            return {"route": "deliverable_required", "reason": "Specify a supported output: image, video, podcast, article/report, social package, website, editable Word document, or PowerPoint deck."}
         return {"route": "create", "content_type": selected_type, "reason": "Matched a supported multilingual creation request."}
 
     if explicit in supported:
@@ -910,7 +913,7 @@ def classify_command(command, raw=None):
             route = "strategy"
         elif re.search(r"\b(website|web\s+site|web\s+app|web\s+application|mobile\s+app|mobile\s+application|spreadsheet|slide\s+deck|presentation|powerpoint|database|api\s+endpoint|codebase|code\s+project|computer\s+program|ios\s+app|android\s+app)\b", low) and not any(
             re.search(pattern, low) for pattern in (
-                r"\b(video|film|reel|documentary|explainer|launch film|shorts?)\b",
+                r"\b(image|picture|illustration|poster|cover art|key art|graphic|video|film|reel|documentary|explainer|launch film|shorts?)\b",
                 r"\b(podcast|audio show)\b",
                 r"\b(article|blog|essay|report|guide|newsletter|white paper|research brief)\b",
                 r"\b(social post|social campaign|linkedin post|instagram post|tweet|x post)\b",
@@ -934,7 +937,7 @@ def classify_command(command, raw=None):
         r"\b(?:word document|docx|document)\b",
         r"\b(?:powerpoint|presentation|slide deck|slides)\b",
             )
-            has_known_deliverable = clean(payload.get("content_type"), 30).lower() in {"video", "podcast", "article", "social", "website", "document", "presentation"} or any(re.search(pattern, low) for pattern in types)
+            has_known_deliverable = clean(payload.get("content_type"), 30).lower() in {"video", "podcast", "article", "social", "website", "document", "presentation", "image"} or any(re.search(pattern, low) for pattern in types)
             if creation and has_known_deliverable:
                 route = "create"
             elif research:
