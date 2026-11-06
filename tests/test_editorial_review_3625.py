@@ -412,3 +412,34 @@ def test_image_review_state_is_exact_fingerprint_bound_and_not_publish_ready():
     assert incomplete["state"] == "incomplete"
     assert incomplete["publish_ready"] is False
 
+def test_review_table_migrates_existing_databases_for_image_roles_and_rights(monkeypatch, tmp_path):
+    import sqlite3
+    import threading
+
+    database = tmp_path / "editorial-reviews.sqlite3"
+
+    class FakeStudio:
+        DB_LOCK = threading.RLock()
+
+        @staticmethod
+        def _connect():
+            connection = sqlite3.connect(database)
+            connection.row_factory = sqlite3.Row
+            return connection
+
+    monkeypatch.setattr(editorial, "_studio", lambda: FakeStudio())
+    # Simulate a database created by the older video-only review schema.
+    with FakeStudio._connect() as db:
+        db.execute(
+            """CREATE TABLE aii_editorial_reviews (
+                review_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id TEXT NOT NULL,
+                content_fingerprint TEXT NOT NULL, decision TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '', scorecard_version TEXT NOT NULL, created_at REAL NOT NULL
+            )"""
+        )
+    editorial._ensure_review_table()
+    editorial._ensure_review_table()
+    with FakeStudio._connect() as db:
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(aii_editorial_reviews)")}
+    assert {"dimension_scores_json", "rights_approval", "rights_notes"} <= columns
+
