@@ -213,6 +213,7 @@ def _fingerprint(project: Dict[str, Any], files: Dict[str, Path]) -> str:
         "visual_rights.json", "manifest.json", "production_manifest.json",
         "rights_manifest.json", "seo.json", "social_campaign.json", "package.zip",
         "accessibility.json", "timeline.json", "image.png", "image_manifest.json",
+        "image_package.zip", "image_package_manifest.json", "image_package_README.md",
         "primary_content_delivery.json",
     }
     artifacts = []
@@ -282,8 +283,27 @@ def _build_image_scorecard(
     pid = str(project.get("project_id") or "")
     image_path = files.get("image.png")
     image_manifest = _read_json(files.get("image_manifest.json"))
+    image_package_manifest = _read_json(files.get("image_package_manifest.json"))
     primary = _read_json(files.get("primary_content_delivery.json"))
     production = _read_json(files.get("production_manifest.json"))
+    package_path = files.get("image_package.zip")
+    package_sha = ""
+    package_integrity = False
+    package_names = set()
+    packaged_manifest_sha = ""
+    try:
+        if package_path and package_path.is_file():
+            import zipfile
+            package_sha = _studio().file_sha256(package_path)
+            with zipfile.ZipFile(package_path, "r") as bundle:
+                package_integrity = bundle.testzip() is None
+                package_names = set(bundle.namelist())
+                manifest_member = "ai-infinity-image/image_package_manifest.json"
+                if manifest_member in package_names:
+                    packaged_manifest_sha = hashlib.sha256(bundle.read(manifest_member)).hexdigest()
+    except Exception:
+        package_integrity = False
+        package_names = set()
     rights = _read_json(files.get("rights_manifest.json"))
     prompt = str(req.get("image_prompt") or req.get("prompt") or req.get("objective") or req.get("topic") or "").strip()
     title = str(req.get("title") or project.get("title") or "").strip()
@@ -327,6 +347,32 @@ def _build_image_scorecard(
         and str(row.get("name") or "") == "image.png"
         and str(row.get("sha256") or "") == image_sha
     ), {})
+    primary_package = next((
+        row for row in primary_artifacts
+        if isinstance(row, dict)
+        and str(row.get("name") or "") == "image_package.zip"
+        and str(row.get("sha256") or "") == package_sha
+    ), {})
+    package_manifest_image = next((
+        row for row in (image_package_manifest.get("files") if isinstance(image_package_manifest.get("files"), list) else [])
+        if isinstance(row, dict)
+        and str(row.get("path") or "") == "image.png"
+        and str(row.get("sha256") or "") == image_sha
+    ), {})
+    package_manifest_rights = (
+        image_package_manifest.get("rights_status") == "REVIEW_REQUIRED"
+        and image_package_manifest.get("redistribution_authorized") is False
+        and image_package_manifest.get("publication_status") == "NOT_PUBLISHED"
+    )
+    required_package_names = {
+        "ai-infinity-image/image.png",
+        "ai-infinity-image/image_manifest.json",
+        "ai-infinity-image/sources.json",
+        "ai-infinity-image/rights_manifest.json",
+        "ai-infinity-image/production_manifest.json",
+        "ai-infinity-image/image_package_manifest.json",
+        "ai-infinity-image/image_package_README.md",
+    }
     integrity_checks = {
         "image_opens_and_decodes": image_opened,
         "png_format": image.get("format") == "PNG",
@@ -336,6 +382,21 @@ def _build_image_scorecard(
         "primary_delivery_project_binding": primary.get("project_id") == pid,
         "primary_delivery_status_pass": primary.get("status") == "PASS" and primary.get("primary_delivery_verified") is True,
         "primary_delivery_artifact_sha_matches": bool(primary_image),
+        "image_package_project_binding": image_package_manifest.get("project_id") == pid,
+        "image_package_archive_integrity_passed": (
+            bool(package_path and package_path.is_file())
+            and package_integrity
+            and required_package_names.issubset(package_names)
+        ),
+        "image_package_manifest_sha_matches_archive": (
+            bool(packaged_manifest_sha)
+            and packaged_manifest_sha == _studio().file_sha256(files["image_package_manifest.json"])
+            if files.get("image_package_manifest.json") and files["image_package_manifest.json"].is_file()
+            else False
+        ),
+        "image_package_manifest_image_sha_matches": bool(package_manifest_image),
+        "primary_delivery_package_sha_matches": bool(primary_package),
+        "image_package_rights_remain_review_required": package_manifest_rights,
         "rights_manifest_project_binding": rights.get("project_id") == pid,
         "rights_manifest_asset_sha_matches": bool(matching_right),
         "production_manifest_project_binding": production.get("project_id") == pid,
@@ -429,6 +490,8 @@ def _build_image_scorecard(
             "image_png_present": bool(image_path and image_path.is_file()),
             "image_size_bytes": image_size,
             "image_sha256": image_sha or None,
+            "image_package_sha256": package_sha or None,
+            "image_package_size_bytes": package_path.stat().st_size if package_path and package_path.is_file() else 0,
             "width": image.get("width"), "height": image.get("height"),
             "format": image.get("format"), "generation_mode": generation.get("mode"),
             "fallback_used": generation.get("fallback_used") is True,
