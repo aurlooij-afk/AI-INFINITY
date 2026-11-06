@@ -1,4 +1,5 @@
 name: AI Infinity — Final Complete Acceptance Suite
+run-name: AI Infinity acceptance (${{ inputs.acceptance_role || 'primary' }}) — ${{ github.ref_name }}
 
 on:
   push:
@@ -8,19 +9,29 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      acceptance_role:
+        description: Primary certification run or its independent repeat
+        type: choice
+        required: true
+        default: primary
+        options:
+          - primary
+          - repeat
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   # Serialize retries of one immutable candidate, not different commits on the same PR.
-  group: ai-infinity-final-acceptance-${{ github.event.pull_request.head.sha || github.sha }}
+  group: ai-infinity-final-acceptance-${{ github.event.pull_request.head.sha || github.sha }}-${{ inputs.acceptance_role || 'primary' }}
   cancel-in-progress: false
 
 jobs:
   final-acceptance:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 300
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
