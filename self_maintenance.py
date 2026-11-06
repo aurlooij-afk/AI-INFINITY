@@ -121,7 +121,13 @@ def rank_source_candidates(paths: list[str], goal: str, limit: int = 20) -> list
                 "match_score": score,
             })
     ranked.sort(key=lambda row: (-row["match_score"], row["path"]))
-    return ranked[:max(1, min(int(limit or 20), 40))]
+    try:
+        requested_limit = int(limit or 20)
+    except (TypeError, ValueError):
+        raise HTTPException(422, "Discovery limit must be an integer between 1 and 40.") from None
+    if requested_limit < 1 or requested_limit > 40:
+        raise HTTPException(422, "Discovery limit must be between 1 and 40.")
+    return ranked[:requested_limit]
 
 
 def discover_sources(cfg: dict, goal: str, limit: int = 20) -> dict:
