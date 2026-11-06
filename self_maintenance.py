@@ -595,7 +595,12 @@ def inspect_ci(cfg: dict, commit_sha: str | None = None, limit: int = 10) -> dic
         raise HTTPException(422, "CI run limit must be an integer between 1 and 20.") from None
     if not 1 <= requested_limit <= 20:
         raise HTTPException(422, "CI run limit must be between 1 and 20.")
-    query = f"/repos/{cfg['repository']}/actions/runs?branch={quote(cfg['base_branch'], safe='')}&per_page={requested_limit}"
+    selector = (
+        f"head_sha={quote(commit_sha, safe='')}"
+        if commit_sha
+        else f"branch={quote(cfg['base_branch'], safe='')}"
+    )
+    query = f"/repos/{cfg['repository']}/actions/runs?{selector}&per_page={requested_limit}"
     response = github_request(cfg, "GET", query)
     runs = response.get("workflow_runs") if isinstance(response.get("workflow_runs"), list) else []
     jobs_by_run = {}
