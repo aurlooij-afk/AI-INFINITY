@@ -99,7 +99,7 @@ COPY ai3701_features.py ai3702_platform.py ai3703_patch.py ai3704_storage_fabric
 COPY ai_infinity/ ./ai_infinity/
 
 RUN python -m py_compile \
-    sitecustomize.py main.py universal_command_batch.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py \ self_maintenance.py
+    sitecustomize.py main.py universal_command_batch.py studio_ultimate.py studio_os.py content_factory.py free_api_fabric.py \
     infinity_empire.py creator_os_3624.py ai_infinity_bridge.py creator_entrypoint.py creator_pro_os.py \
     overlay_final_3700.py runtime_main_3700.py production_graph.py production_intelligence.py api_anything_connector.py \
     production_hardening.py creator_final_3800.py production_closure_3624.py professional_creator_v2.py professional_creator_v2_timeline_patch.py professional_creator_fabric.py editorial_review_3625.py \
