@@ -13,6 +13,7 @@ def test_source_allowlist_permits_application_and_test_files():
     assert maintenance.validate_path("ai_infinity/native_exports.py") == "ai_infinity/native_exports.py"
     assert maintenance.validate_path("tests/test_runtime_truth.py") == "tests/test_runtime_truth.py"
     assert maintenance.validate_path("self_maintenance.py") == "self_maintenance.py"
+    assert maintenance.validate_path("editorial_review_3625.py") == "editorial_review_3625.py"
     assert maintenance.validate_path("scripts/verify_live_deployment.py") == "scripts/verify_live_deployment.py"
     assert maintenance.validate_path("new_root_runtime_module.py") == "new_root_runtime_module.py"
     assert maintenance.validate_path("creator_studio_2030.html") == "creator_studio_2030.html"
