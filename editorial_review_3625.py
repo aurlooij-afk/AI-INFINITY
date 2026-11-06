@@ -1140,16 +1140,41 @@ def install() -> None:
           '<a class="btn" target="_blank" rel="noopener" href="/infinity/studio/project/'+encodeURIComponent(activeId)+'/asset/editorial_scorecard.json">Open scorecard JSON</a>'+
         '</div><div class="aiiSmall" style="margin-top:8px">Fingerprint: '+escHtml(q.content_fingerprint||'')+'</div>'+
         '<div id="aiiEditorialActionResult" class="aiiSmall" style="margin-top:8px"></div>';
-      document.getElementById('aiiEditorialApprove').onclick=function(){submit('approve',q.content_fingerprint);};
-      document.getElementById('aiiEditorialReject').onclick=function(){submit('reject',q.content_fingerprint);};
+      document.getElementById('aiiEditorialApprove').onclick=function(){submit('approve',q.content_fingerprint,q);};
+      document.getElementById('aiiEditorialReject').onclick=function(){submit('reject',q.content_fingerprint,q);};
     }catch(e){}
   }
-  async function submit(decision,fingerprint){
+  async function submit(decision,fingerprint,scorecard){
     if(!activeId)return;
     var note='';
-    try{note=window.prompt(decision==='approve'?'Optional human review note (what was checked)':'Describe required repairs or rejection reason','')||'';}catch(e){}
+    var payload={decision:decision,expected_fingerprint:fingerprint};
     try{
-      var result=await api('/infinity/studio/project/'+encodeURIComponent(activeId)+'/editorial-review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({decision:decision,note:note,expected_fingerprint:fingerprint})});
+      note=window.prompt(decision==='approve'?'Describe what you personally inspected in this exact image version (minimum 20 characters).':'Describe required repairs or rejection reason','');
+      if(note===null)return;
+      payload.note=note;
+      if(decision==='approve' && scorecard && scorecard.content_type==='image'){
+        var roles=['art_direction','visual_design','composition','color','accessibility','rights'];
+        var scores={};
+        for(var i=0;i<roles.length;i++){
+          var value=window.prompt('Enter your '+roles[i].replace(/_/g,' ')+' review score for this exact image (1–5). Approval requires at least 4 in every role and 4.5 average.','');
+          if(value===null)return;
+          if(String(value).trim()==='' || !Number.isFinite(Number(value))){throw new Error('A numeric score is required for every image-review role.');}
+          scores[roles[i]]=Number(value);
+        }
+        if(!window.confirm('Have you personally reviewed the source, generation method, license and redistribution rights for this exact image, and do you explicitly approve those rights? This does not publish the image.'))return;
+        var rightsNotes=window.prompt('Describe the source, generation method and rights/provenance basis for this exact image (minimum 20 characters).','');
+        if(rightsNotes===null)return;
+        payload.dimension_scores=scores;
+        payload.rights_approval=true;
+        payload.rights_notes=rightsNotes;
+      }
+    }catch(e){
+      var validationBox=document.getElementById('aiiEditorialActionResult');
+      if(validationBox)validationBox.textContent=String(e.message||e);
+      return;
+    }
+    try{
+      var result=await api('/infinity/studio/project/'+encodeURIComponent(activeId)+'/editorial-review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
       var box=document.getElementById('aiiEditorialActionResult');
       if(box)box.textContent='Saved review: '+String((result.review||{}).decision||decision)+'. Reloading evidence…';
       await load(activeId);
