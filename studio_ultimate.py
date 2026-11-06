@@ -1450,9 +1450,17 @@ def _expand_longform_research_evidence(
     final_profile = _research_evidence_profile(combined)
     official_media_sources = []
     official_media_added = 0
-    if int(final_profile.get("unique_domain_count") or 0) < 8:
-        # Use the authoritative media reference catalogue only after ordinary
-        # multi-angle research has had a chance to meet the unchanged gate.
+    facet_shortfalls = [
+        key for key, minimum in requirements.items()
+        if int(final_profile.get(key) or 0) < minimum
+    ]
+    if facet_shortfalls:
+        # A source-count or substantive-excerpt shortfall can remain even after
+        # ordinary research has adequate domain coverage. Do not gate this real,
+        # bounded publisher-source acquisition solely on domain_count: fetch the
+        # topic-qualified reference catalogue whenever any evidence requirement
+        # remains open. The catalogue itself rejects non-media topics and only
+        # adds pages that were actually retrieved with substantive text.
         official_media_sources = _longform_media_reference_sources(clean_topic)
         for row in official_media_sources:
             canonical = _canonical_research_url(row.get("url"))
