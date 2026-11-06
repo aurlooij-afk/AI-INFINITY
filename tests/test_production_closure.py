@@ -332,6 +332,7 @@ def test_native_primary_outputs_complete_as_review_required_without_approving_co
             project_id, {"content_type": kind}, files, checks, []
         ) is True, kind
 
+        primary = json.loads(files["primary_content_delivery.json"].read_text(encoding="utf-8"))
         assert checks["visual_rights_evidence_present"] is False
         assert primary["rights_review_status"] == "PENDING"
         assert primary["human_review_status"] == "PENDING"
