@@ -319,7 +319,6 @@ def compile_intent(command,raw):
           ["document.docx", "document_manifest.json"] if ct == "document" else
           ["presentation.pptx", "presentation_manifest.json"] if ct == "presentation" else
           ["article.md", "thumbnail.jpg"]
-        )
         ),
         "creative_evaluation":"best-effort when a semantic model is configured"
       },
