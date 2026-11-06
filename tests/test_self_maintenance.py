@@ -101,4 +101,3 @@ def test_production_docker_image_copies_and_compiles_self_maintenance_module():
     compile_block = " ".join(docker_lines[compile_start:compile_start + 10])
     assert any("self_maintenance.py" in line and line.rstrip().endswith("./") for line in copy_lines)
     assert "self_maintenance.py" in compile_block
-\n
