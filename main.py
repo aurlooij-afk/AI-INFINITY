@@ -73,6 +73,9 @@ production_graph.install()
 production_openai_video.install()
 production_closure_3624.install()
 editorial_review_3625.install()
+from ai_infinity.native_image_runtime import install as _install_native_image_runtime
+_install_native_image_runtime(studio_ultimate)
+del _install_native_image_runtime
 ai_infinity_canonical.register(app)
 universal_command_batch.register(app)
 studio_ultimate.register(app)
