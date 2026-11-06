@@ -438,3 +438,77 @@ def test_longform_research_expansion_targets_missing_evidence_without_weakening_
     assert profile["archetype_count"] == 10
     assert result["research_expansion"]["requirements_met"] is True
     assert result["research_expansion"]["truthful"] is True
+
+
+def test_longform_research_fetches_publisher_sources_for_url_shortfall_after_domain_gate_passes(monkeypatch):
+    """Domain coverage must not suppress a real source-count top-up."""
+    archetype_evidence = (
+        "overview fundamentals context historical timeline origin evolution "
+        "mechanism process methodology workflow case studies implementation "
+        "peer-reviewed research experiments datasets quantitative measurement "
+        "benchmarks applications practice adoption impacts outcomes limitations "
+        "risks challenges failures safety debates critiques alternatives"
+    )
+    substantive_summary = (
+        "This independently retrieved source documents " + archetype_evidence
+        + " for evidence-based production. It includes scope, methods, examples, "
+        "observations, supporting material, uncertainty, practical implications, "
+        "and limitations for source-aware writing. "
+    ) * 5
+    initial_sources = [
+        {
+            "title": f"Independent research record {index + 1}: {archetype_evidence}",
+            "url": f"https://research-{index % 8}.example.org/record/{index + 1}",
+            "summary": substantive_summary,
+            "source": f"provider-{index % 5}",
+            "retrieved_at": "2026-11-07T00:00:00Z",
+        }
+        for index in range(39)
+    ]
+    initial_profile = studio_ultimate._research_evidence_profile(initial_sources)
+    assert initial_profile["unique_source_url_count"] == 39
+    assert initial_profile["substantive_excerpt_count"] == 39
+    assert initial_profile["provider_family_count"] == 5
+    assert initial_profile["unique_domain_count"] == 8
+    assert initial_profile["archetype_count"] == 10
+
+    facet_calls = []
+    def empty_facet_search(query, limit=10):
+        facet_calls.append((query, limit))
+        return {"sources": [], "source_count": 0, "provider_count": 0, "status": "DEGRADED"}
+
+    catalogue_calls = []
+    def retrieved_publisher_sources(topic):
+        catalogue_calls.append(topic)
+        return [{
+            "title": "W3C WAI: Audio and Video Media Accessibility Guidance",
+            "url": "https://www.w3.org/WAI/media/av/",
+            "summary": substantive_summary,
+            "source": "official_media_reference_catalog",
+            "source_publisher": "W3C WAI",
+            "content_type": "retrieved_official_documentation",
+            "retrieved_at": "2026-11-07T00:00:00Z",
+        }]
+
+    monkeypatch.setattr(studio_ultimate, "research_topic", empty_facet_search)
+    monkeypatch.setattr(studio_ultimate, "_longform_media_reference_sources", retrieved_publisher_sources)
+
+    topic = "video editing workflow content creation captions subtitles accessibility creator software production"
+    result = studio_ultimate._expand_longform_research_evidence(
+        {"topic": topic, "sources": initial_sources, "source_count": 39},
+        topic,
+        limit=25,
+    )
+
+    profile = result["evidence_profile"]
+    assert len(facet_calls) == 4
+    assert all(limit == 18 for _, limit in facet_calls)
+    assert catalogue_calls == [topic]
+    assert profile["unique_source_url_count"] == 40
+    assert profile["substantive_excerpt_count"] == 40
+    assert profile["provider_family_count"] == 6
+    assert profile["unique_domain_count"] == 9
+    assert profile["archetype_count"] == 10
+    assert result["research_expansion"]["requirements_met"] is True
+    assert result["research_expansion"]["additional_unique_source_urls"] == 1
+    assert any(row.get("source") == "official_media_reference_catalog" for row in result["sources"])
