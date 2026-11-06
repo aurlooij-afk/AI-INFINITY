@@ -29,7 +29,7 @@ def _remaining_release_gate_notes() -> list[str]:
     """Describe release gates without inferring live state from CI or stale service history."""
     return [
         "- Exact-candidate live Render deployment and production verification require the separate candidate-bound deployment gate; this standalone CI run is not production deployment evidence.",
-        "- The complete 19-scenario acceptance suite, including the 900-second long-form scenario, must pass twice on the same candidate SHA.",
+        "- The complete 20-scenario acceptance suite, including the 900-second long-form scenario, must pass twice on the same candidate SHA.",
         "- Durable object storage requires independently verified PUT→HEAD→GET→SHA and fresh-process recovery evidence for the target runtime.",
         "- Live authenticated Wan2.2 GPU inference requires a successful worker request and independently verified output bytes.",
         "- Human/native-language creative review and rights acceptance remain pending until an authorized reviewer approves the exact candidate and media hashes.",
