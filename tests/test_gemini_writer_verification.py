@@ -50,3 +50,23 @@ def test_preflight_accepts_supported_key_and_ack_aliases(monkeypatch):
     result = verify.verify_gemini_writer()
     assert result["status"] == "PASS"
     assert "alias-test-key" not in json.dumps(result)
+
+def test_preflight_accepts_google_api_key_alias(monkeypatch):
+    for name in ("GEMINI_API_KEY", "AI_INFINITY_GEMINI_API_KEY", "GOOGLE_AI_STUDIO_API_KEY", "GEMINI_KEY", "AI_STUDIO_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-alias-test-key")
+    monkeypatch.setenv("AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK", "true")
+    monkeypatch.setenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", verify.MODEL)
+    def fake_urlopen(request, timeout=0):
+        assert request.get_header("X-goog-api-key") == "google-alias-test-key"
+        return BytesIO(json.dumps({
+            "candidates": [{
+                "finishReason": "STOP",
+                "content": {"parts": [{"text": '{"status":"ok","provider":"google-gemini"}'}]},
+            }]
+        }).encode("utf-8"))
+    monkeypatch.setattr(verify, "urlopen", fake_urlopen)
+    result = verify.verify_gemini_writer()
+    assert result["status"] == "PASS"
+    assert "google-alias-test-key" not in json.dumps(result)
+
