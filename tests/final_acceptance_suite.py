@@ -1286,12 +1286,24 @@ def _content_mode_acceptance(
         assert truth.get("publish_allowed_by_quality_gate") is False, truth
         checks = truth.get("checks") or {}
         assert checks.get("research_required_and_present") is True, truth
-        assert int(checks.get("visual_rights_unresolved_count") or 0) == 0, truth
+        assert checks.get("primary_native_delivery_eligible") is True, truth
         primary = jart(session, base, project_id, "primary_content_delivery.json")
         assert primary.get("status") == "PASS", primary
         assert primary.get("primary_scope_only") is True, primary
         assert primary.get("human_review_status") == "PENDING", primary
+        assert primary.get("rights_review_status") == "PENDING", primary
+        assert primary.get("external_publication_status") == "NOT_PUBLISHED", primary
         assert primary.get("companion_video", {}).get("status") == "REVIEW_REQUIRED", primary
+
+        visual_rights = jart(session, base, project_id, "visual_rights.json")
+        visual_rows = visual_rights.get("assets") if isinstance(visual_rights.get("assets"), list) else []
+        known_rights_states = {"cleared", "original_generated", "review_required", "blocked_fallback", "unknown"}
+        assert visual_rights.get("project_id") == project_id and visual_rights.get("truthful") is True
+        assert visual_rows and all(
+            isinstance(row, dict) and row.get("truthful") is True
+            and row.get("asset") and row.get("rights_state") in known_rights_states
+            for row in visual_rows
+        ), visual_rights
 
         source = jart(session, base, project_id, "sources.json")
         assert int(source.get("source_count") or len(source.get("sources") or [])) >= 1, source
