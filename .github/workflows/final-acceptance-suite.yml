@@ -337,8 +337,8 @@ jobs:
             acceptance-evidence/**
           if-no-files-found: warn
 
-      - name: Enforce candidate-bound production certificate
-        if: always() && inputs.acceptance_role != 'repeat'
+      - name: Enforce candidate-bound production certificate after main deployment
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.acceptance_role != 'repeat'
         run: |
           python - <<'PY'
           import json
@@ -357,6 +357,41 @@ jobs:
           print("PRODUCTION_RELEASE_GATE=" + str(certificate.get("PRODUCTION_VERIFIED")))
           if certificate.get("PRODUCTION_VERIFIED") != "PASS":
               raise SystemExit("Certificate file violates the all-gates-pass issuance rule.")
+          PY
+      - name: Enforce repeatable engineering readiness on pull requests
+        if: always() && github.event_name == 'pull_request'
+        env:
+          AI_INFINITY_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report_path = Path("production-gate-report.json")
+          if not report_path.is_file():
+              raise SystemExit("No candidate-bound production gate report was generated.")
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          if report.get("candidate_commit_sha") != os.environ["AI_INFINITY_CANDIDATE_SHA"]:
+              raise SystemExit("Engineering readiness report belongs to a different commit.")
+          required = (
+              "engineering_acceptance",
+              "technical_rights_evidence",
+              "otio_import_rerender",
+              "durable_storage_round_trip_and_fresh_process_restore",
+              "live_gpu_inference_and_artifact_verification",
+          )
+          blockers = [
+              name for name in required
+              if report.get("production_requirements", {}).get(name) is not True
+          ]
+          if report.get("ENGINEERING_STATE") != "PASS" or blockers:
+              raise SystemExit("Candidate is not merge-ready: " + ", ".join(blockers or ["engineering_acceptance"]))
+          if report.get("gates", {}).get("repeat_same_sha_acceptance") != "PASS":
+              raise SystemExit("Independent same-commit acceptance evidence did not pass.")
+          print("ENGINEERING_CANDIDATE_READY=PASS")
+          print("PRODUCTION_CERTIFICATION=BLOCKED_PENDING_POST_MERGE_DEPLOYMENT_AND_OWNER_APPROVAL")
+          print("CANDIDATE_SHA=" + os.environ["AI_INFINITY_CANDIDATE_SHA"])
           PY
       - name: Dump Docker/runtime evidence on failure
         if: failure()
