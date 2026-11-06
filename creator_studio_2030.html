@@ -37,6 +37,7 @@
   <nav class="nav">
     <button class="navBtn" data-target="quality"><i class="navIcon">✓</i><span>Quality & Gaps</span></button>
     <button class="navBtn" data-target="system"><i class="navIcon">⚙</i><span>System</span></button>
+    <button class="navBtn" data-target="maintenance"><i class="navIcon">⟳</i><span>Self-maintenance</span></button>
   </nav>
   <div class="sideBottom"><div class="healthSmall"><i class="dot"></i><span id="sideHealth">Connecting to live workspace…</span></div></div>
 </aside>
@@ -126,6 +127,35 @@
 <div class="card cardPad" style="margin-top:10px"><div class="cardTitle"><h3>Security & infrastructure</h3><span>live posture</span></div><div class="grid4" id="opsSecurity"></div></div>
 </section>
 <section id="quality" class="section"><div class="sectionHead"><div><h2>Quality, truth & gap control</h2><p>1,200 acceptance controls across the creator system, plus live Creator Pro execution checks.</p></div><button class="btn primary small" onclick="runGapAudit()">Run live gap audit</button></div><div class="grid4" id="gapStats"></div><div class="card cardPad" style="margin-top:10px"><div class="cardTitle"><h3>Open controls</h3><span id="gapMethod">—</span></div><div class="tableWrap"><table class="table"><thead><tr><th>Control</th><th>Domain</th><th>Status</th><th>Note</th></tr></thead><tbody id="gapRows"></tbody></table></div></div></section>
+<section id="maintenance" class="section">
+<div class="sectionHead"><div><h2>Self-maintenance</h2><p>Discover → inspect → improve → verify · isolated draft-PR workflow</p></div></div>
+<div class="grid2">
+  <div class="card cardPad">
+    <div class="notice warn">Operator-only controls. The password token is held only in this page and sent to the same-origin API over HTTPS. It is never saved to browser storage or returned by the backend. Use a trusted device and network.</div>
+    <div style="margin-top:10px"><div class="hint" style="margin-bottom:4px">Maintenance admin token</div><input id="maintenanceToken2030" class="field" type="password" autocomplete="off" spellcheck="false" placeholder="Server-configured operator token"></div>
+    <div style="margin-top:9px"><div class="hint" style="margin-bottom:4px">Engineering objective</div><textarea id="maintenanceGoal2030" class="field" style="min-height:90px;padding:10px;resize:vertical">Inspect the current universal production system, identify the highest-impact verified capability gap, and prepare the smallest safe code repair with regression tests.</textarea></div>
+    <div class="actionRow">
+      <button class="btn" onclick="maintenanceStatus2030()">Check readiness</button>
+      <button class="btn" onclick="maintenanceDiscover2030()">Discover sources</button>
+      <button class="btn" onclick="maintenanceInspect2030()">Inspect bounded source</button>
+      <button class="btn primary" onclick="maintenanceImprove2030()">Prepare improvement PR</button>
+    </div>
+    <div style="margin-top:9px"><div class="hint" style="margin-bottom:4px">Optional exact commit SHA for CI inspection</div><input id="maintenanceCommit2030" class="field" placeholder="40-character SHA"></div>
+    <div class="actionRow"><button class="btn" onclick="maintenanceCI2030()">Inspect candidate CI</button></div>
+  </div>
+  <div class="card cardPad">
+    <div class="cardTitle"><h3>Controlled self-improvement</h3><span>real repository operations</span></div>
+    <div class="list">
+      <div class="item"><div class="itemTitle">Repository discovery</div><div class="itemSub">Ranks source and regression-test candidates from the live Git tree.</div></div>
+      <div class="item"><div class="itemTitle">Bounded inspection</div><div class="itemSub">Large modules are inspected through exact line-numbered function windows with SHA-256 hashes.</div></div>
+      <div class="item"><div class="itemTitle">Self-modification</div><div class="itemSub">Small files may be replaced whole; large files use hash-pinned source-range patches.</div></div>
+      <div class="item"><div class="itemTitle">Candidate verification</div><div class="itemSub">Every improvement includes regression tests and goes through exact-head GitHub Actions.</div></div>
+      <div class="item"><div class="itemTitle">Release safety</div><div class="itemSub">Draft PR only. No direct main write, merge, deployment, publishing, or rights approval.</div></div>
+    </div>
+  </div>
+</div>
+<div id="maintenanceOut2030" class="card cardPad" style="margin-top:12px"><div class="empty">Enter the operator token and choose a live repository operation.</div></div>
+</section>
 <section id="system" class="section"><div class="sectionHead"><div><h2>System & provider fabric</h2><p>Local/free-first capabilities remain usable; premium/third-party capabilities are never faked.</p></div></div><div class="grid2"><div class="card cardPad"><div class="cardTitle"><h3>Capability matrix</h3><span id="featureTotal">—</span></div><div class="list" id="capabilityList"></div></div><div class="card cardPad"><div class="cardTitle"><h3>Workspace backup</h3><span>durability</span></div><div class="notice warn">Render's free ephemeral filesystem can lose local project/media state after a restart. Export is always available; optional GitHub backup can keep workspace metadata durable when configured.</div><div class="actionRow"><button class="btn" onclick="exportWorkspace()">Download workspace snapshot</button><button class="btn" onclick="backupWorkspace()">Run GitHub backup</button></div><div id="backupOut" style="margin-top:8px"></div><div class="cardTitle" style="margin-top:18px"><h3>Benchmark references</h3><span>official product material</span></div><div id="sourceRefs" class="sourceList"></div></div></div></section>
 <div class="footer">AI Infinity · unified creator workspace · evidence-backed signals · provider states shown truthfully · free-first runtime</div>
 </main></section></div>
@@ -152,6 +182,16 @@ function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,x=>({"&":"&amp;",
 function fmtDate(ts){if(ts==null||ts==="")return"—";try{let d;if(typeof ts==="number"){d=new Date(ts<100000000000?ts*1000:ts)}else{const s=String(ts).trim();d=/^\d+(\.\d+)?$/.test(s)?new Date(Number(s)<100000000000?Number(s)*1000:Number(s)):new Date(s)};if(Number.isNaN(d.getTime()))return"—";return d.toLocaleString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}catch{return"—"}}
 function toast(msg){$("toast").textContent=msg;$("toast").style.display="block";clearTimeout(toast.t);toast.t=setTimeout(()=>{$("toast").style.display="none"},3800)}
 async function api(url,opts={}){const res=await fetch(url,Object.assign({credentials:"same-origin",headers:{}},opts));let data;try{data=await res.json()}catch{data={detail:await res.text()}}if(!res.ok)throw new Error(typeof data.detail==="string"?data.detail:(data.message||("HTTP "+res.status)));return data}
+let maintenanceCandidates2030=null;
+function maintenanceHeaders2030(){const token=$("maintenanceToken2030").value.trim();if(!token)throw new Error("Enter the server-configured maintenance admin token.");if(window.location.protocol!=="https:"&&window.location.hostname!=="localhost"&&window.location.hostname!=="127.0.0.1")throw new Error("Maintenance credentials may only be sent over HTTPS.");return {"X-AI-Infinity-Maintenance-Token":token}}
+function maintenanceGoal2030(){const goal=$("maintenanceGoal2030").value.trim();if(goal.length<12)throw new Error("Enter a specific engineering objective (at least 12 characters).");return goal}
+function maintenanceShow2030(data){$("maintenanceOut2030").innerHTML='<div class="cardTitle"><h3>Live maintenance result</h3><span>backend response</span></div><pre class="mono">'+esc(JSON.stringify(data,null,2))+'</pre>'}
+async function maintenanceCall2030(action,payload){const opts={headers:maintenanceHeaders2030()};if(payload!==undefined){opts.method="POST";opts.headers["Content-Type"]="application/json";opts.body=JSON.stringify(payload)}return api("/infinity/studio/self-maintenance/"+action,opts)}
+async function maintenanceStatus2030(){try{const r=await maintenanceCall2030("status");maintenanceShow2030(r);toast(r.ready?"Self-maintenance ready":"Self-maintenance is not configured")}catch(e){maintenanceShow2030({status:"unavailable",reason:e.message,truthful:true});toast(e.message)}}
+async function maintenanceDiscover2030(){try{const r=await maintenanceCall2030("discover",{goal:maintenanceGoal2030(),limit:40});maintenanceCandidates2030=r;maintenanceShow2030(r);toast("Repository discovery completed")}catch(e){maintenanceCandidates2030=null;maintenanceShow2030({status:"discovery_failed",reason:e.message,truthful:true});toast(e.message)}}
+async function maintenanceInspect2030(){try{if(!maintenanceCandidates2030)await maintenanceDiscover2030();const paths=maintenanceCandidates2030&&maintenanceCandidates2030.suggested_paths||[];if(!paths.length)throw new Error("Discovery found no source/test pair. Refine the goal or use explicit API paths.");const r=await maintenanceCall2030("inspect",{goal:maintenanceGoal2030(),paths});maintenanceShow2030({selected_paths:paths,inspection:r,truthful:true});toast("Bounded source inspected")}catch(e){maintenanceShow2030({status:"inspection_failed",reason:e.message,truthful:true});toast(e.message)}}
+async function maintenanceImprove2030(){try{const r=await maintenanceCall2030("improve",{goal:maintenanceGoal2030()});maintenanceShow2030(r);if(r.pull_request&&r.pull_request.pull_request_url){let parsed=null;try{parsed=new URL(String(r.pull_request.pull_request_url))}catch(e){}if(parsed&&parsed.protocol==="https:"&&parsed.hostname==="github.com")$("maintenanceOut2030").insertAdjacentHTML("afterbegin",'<div class="notice good">Draft PR created: <a href="'+esc(parsed.href)+'" target="_blank" rel="noopener noreferrer">Review exact source changes and CI</a>. Merge and deployment remain separate decisions.</div>')}toast("Draft improvement PR created")}catch(e){maintenanceShow2030({status:"improvement_failed",reason:e.message,truthful:true});toast(e.message)}}
+async function maintenanceCI2030(){try{const commit=$("maintenanceCommit2030").value.trim();const payload={limit:10};if(commit)payload.commit_sha=commit;const r=await maintenanceCall2030("ci",payload);maintenanceShow2030(r);toast("CI evidence inspected")}catch(e){maintenanceShow2030({status:"ci_inspection_failed",reason:e.message,truthful:true});toast(e.message)}}
 function fillCmd(x){$("cmd").value=x;$("cmd").focus()}function focusCommand(){$("cmd").focus();window.scrollTo({top:0,behavior:"smooth"})}
 function preset(type){const map={short:"Create a 45-second vertical short for [topic] with a 2-second hook, fast pacing, captions, voiceover, thumbnail and 3 alternate hooks.",long:"Create a professional long-form video about [topic] with research, fact-checking, story architecture, narration, visuals, music, captions, thumbnail, SEO and social cutdowns.",podcast:"Turn [topic] into a polished podcast episode with research, two-part structure, narration, show notes, transcript, chapters, artwork metadata and RSS-ready package.",campaign:"Build a complete launch campaign for [product/topic]: one hero video, short-form variants, platform copy, SEO, thumbnail concepts, publishing checklist and analytics hypotheses."};fillCmd(map[type]||map.long);if(type==="short"){$("format").value="short";$("ratio").value="9:16";$("duration").value="45"}if(type==="podcast")$("contentType").value="podcast"}
 async function session(){try{const d=await api("/infinity/studio/session");state.user=d.user_id}catch(e){console.warn(e)}}
