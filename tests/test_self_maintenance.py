@@ -12,6 +12,7 @@ def test_source_allowlist_permits_application_and_test_files():
     assert maintenance.validate_path("ai_infinity/native_exports.py") == "ai_infinity/native_exports.py"
     assert maintenance.validate_path("tests/test_runtime_truth.py") == "tests/test_runtime_truth.py"
     assert maintenance.validate_path("self_maintenance.py") == "self_maintenance.py"
+    assert maintenance.validate_path("scripts/verify_live_deployment.py") == "scripts/verify_live_deployment.py"
 
 
 @pytest.mark.parametrize("path", [
@@ -153,7 +154,9 @@ def test_large_core_module_edit_replaces_only_the_inspected_hash_pinned_range():
         [{
             "path": "studio_ultimate.py",
             "edits": [{
-                **ranges[0],
+                "start_line": ranges[0]["start_line"],
+                "end_line": ranges[0]["end_line"],
+                "expected_sha256": ranges[0]["sha256"],
                 "replacement_text": (
                     "def generate_longform_narration():\n"
                     "    return 'revised, evidence-aware narration planner'"
