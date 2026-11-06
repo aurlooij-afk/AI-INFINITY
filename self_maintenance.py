@@ -18,9 +18,15 @@ from urllib.request import Request, urlopen
 from fastapi import FastAPI, HTTPException, Request as FastAPIRequest
 
 MAX_FILES = 8
-MAX_FILE_BYTES = 40_000
-MAX_TOTAL_BYTES = 120_000
+# GitHub's Contents API supports source files up to 1 MB. Large modules are read
+# internally but only bounded, hash-addressed function windows enter model context.
+MAX_FILE_BYTES = 1_000_000
+MAX_TOTAL_BYTES = 2_000_000
+MAX_CONTEXT_FILE_BYTES = 28_000
+MAX_TOTAL_CONTEXT_BYTES = 80_000
 MAX_CHANGE_BYTES = 60_000
+MAX_WINDOW_LINES = 240
+MAX_WINDOW_COUNT = 10
 ROOT_MODULES = {
     "main.py", "studio_ultimate.py", "ai_infinity_canonical.py",
     "production_graph.py", "production_intelligence.py",
@@ -128,7 +134,7 @@ def read_source(cfg: dict, path: str) -> dict:
     except Exception:
         raise HTTPException(422, f"{path} is not UTF-8 text.") from None
     if len(raw) > MAX_FILE_BYTES:
-        raise HTTPException(413, f"{path} exceeds the source-size limit.")
+        raise HTTPException(413, f"{path} exceeds the {MAX_FILE_BYTES}-byte source limit.")
     return {
         "path": path, "sha": str(result.get("sha") or ""),
         "size_bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
@@ -136,19 +142,141 @@ def read_source(cfg: dict, path: str) -> dict:
     }
 
 
-def inspect_sources(cfg: dict, paths: list) -> dict:
+def _range_digest(lines: list[str], start_line: int, end_line: int) -> str:
+    block = "\n".join(lines[start_line - 1:end_line]) + "\n"
+    return hashlib.sha256(block.encode("utf-8")).hexdigest()
+
+
+def _bounded_source_context(content: str, goal: str, path: str) -> tuple[str, list[dict], str]:
+    lines = content.splitlines()
+    if not lines:
+        raise HTTPException(422, f"{path} is empty and cannot be safely revised.")
+    if len(content.encode("utf-8")) <= MAX_CONTEXT_FILE_BYTES:
+        editable = [{
+            "start_line": 1,
+            "end_line": len(lines),
+            "sha256": _range_digest(lines, 1, len(lines)),
+        }]
+        return content, editable, "full_file"
+
+    terms = list(dict.fromkeys(
+        token.casefold()
+        for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]{3,}", str(goal or ""))
+        if len(token) >= 4
+    ))
+    if not terms:
+        raise HTTPException(422, f"{path} is larger than the direct-inspection limit; supply a specific inspection goal.")
+
+    hits = []
+    for number, line in enumerate(lines, 1):
+        lowered = line.casefold()
+        score = sum(1 for term in terms if term in lowered)
+        if score:
+            hits.append((score, number))
+    if not hits:
+        raise HTTPException(422, f"No source window in {path} matched the requested engineering goal.")
+
+    enclosing_nodes = []
+    try:
+        tree = ast.parse(content, filename=path)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and getattr(node, "end_lineno", None):
+                enclosing_nodes.append((int(node.lineno), int(node.end_lineno), node))
+    except SyntaxError:
+        # A currently broken file can still be inspected; subsequent complete-file
+        # syntax validation will prevent a proposed repair from making it worse.
+        enclosing_nodes = []
+
+    candidates = []
+    for score, number in sorted(hits, key=lambda row: (-row[0], row[1])):
+        containers = [row for row in enclosing_nodes if row[0] <= number <= row[1]]
+        if containers:
+            chosen = min(containers, key=lambda row: row[1] - row[0])
+            first, last = chosen[0], chosen[1]
+        else:
+            first = max(1, number - 18)
+            last = min(len(lines), number + 18)
+        if last - first + 1 > MAX_WINDOW_LINES:
+            first = max(1, number - MAX_WINDOW_LINES // 2)
+            last = min(len(lines), first + MAX_WINDOW_LINES - 1)
+        candidates.append((score, first, last))
+
+    selected = []
+    seen = set()
+    for score, first, last in candidates:
+        key = (first, last)
+        if key in seen:
+            continue
+        seen.add(key)
+        if any(not (last < old_first or first > old_last) for old_first, old_last in selected):
+            continue
+        block_bytes = len("\n".join(lines[first - 1:last]).encode("utf-8"))
+        if block_bytes > 18_000:
+            continue
+        selected.append((first, last))
+        if len(selected) >= MAX_WINDOW_COUNT:
+            break
+
+    # Imports and module-level constants are read-only context; edits are restricted
+    # to the exact, hash-pinned function/class blocks listed below.
+    sections = ["REFERENCE CONTEXT (read-only; do not replace these lines):"]
+    for number, line in enumerate(lines[:min(45, len(lines))], 1):
+        sections.append(f"{number:06d}: {line}")
+    editable_ranges = []
+    for index, (first, last) in enumerate(sorted(selected), 1):
+        digest = _range_digest(lines, first, last)
+        editable_ranges.append({
+            "start_line": first,
+            "end_line": last,
+            "sha256": digest,
+        })
+        sections.append(
+            f"\n--- EDITABLE RANGE {index}: lines {first}-{last}; sha256={digest} ---"
+        )
+        sections.extend(f"{number:06d}: {lines[number - 1]}" for number in range(first, last + 1))
+        sections.append(f"--- END EDITABLE RANGE {index} ---")
+    context = "\n".join(sections)
+    if not editable_ranges or len(context.encode("utf-8")) > MAX_TOTAL_CONTEXT_BYTES:
+        raise HTTPException(413, f"Relevant source windows for {path} exceed the bounded inspection budget.")
+    return context, editable_ranges, "line_ranges"
+
+
+def inspect_sources(cfg: dict, paths: list, goal: str = "") -> dict:
     if not isinstance(paths, list) or not 1 <= len(paths) <= MAX_FILES:
         raise HTTPException(422, f"Specify between one and {MAX_FILES} source paths.")
     selected = [validate_path(path) for path in paths]
     if len(selected) != len(set(selected)):
         raise HTTPException(422, "Source paths must be unique.")
-    files = [read_source(cfg, path) for path in selected]
-    total = sum(row["size_bytes"] for row in files)
-    if total > MAX_TOTAL_BYTES:
-        raise HTTPException(413, "Source set exceeds the aggregate size limit.")
+    files = []
+    total_source_bytes = 0
+    total_context_bytes = 0
+    for path in selected:
+        source = read_source(cfg, path)
+        total_source_bytes += source["size_bytes"]
+        context, editable_ranges, content_mode = _bounded_source_context(
+            source["content"], goal, path
+        )
+        total_context_bytes += len(context.encode("utf-8"))
+        files.append({
+            "path": path,
+            "sha": source["sha"],
+            "sha256": source["sha256"],
+            "size_bytes": source["size_bytes"],
+            "line_count": len(source["content"].splitlines()),
+            "content_mode": content_mode,
+            "editable_ranges": editable_ranges,
+            "content": context,
+        })
+    if total_source_bytes > MAX_TOTAL_BYTES:
+        raise HTTPException(413, "Source set exceeds the aggregate source-size limit.")
+    if total_context_bytes > MAX_TOTAL_CONTEXT_BYTES:
+        raise HTTPException(413, "Source set exceeds the aggregate model-context limit.")
     return {
         "repository": cfg["repository"], "base_branch": cfg["base_branch"],
-        "files": files, "total_source_bytes": total, "truthful": True,
+        "files": files,
+        "total_source_bytes": total_source_bytes,
+        "total_context_bytes": total_context_bytes,
+        "truthful": True,
     }
 
 
@@ -170,11 +298,15 @@ def free_tier_writer():
 def generate_changes(goal: str, files: list, model_fn) -> dict:
     prompt = (
         "Act as the principal engineer for AI Infinity. Implement the requested goal with the smallest safe code change. "
-        "Return only valid JSON with keys summary and changes. Each change must have path and complete replacement content. "
-        "Only change supplied paths and include at least one regression test. Preserve unrelated behavior. Do not add secrets, "
-        "paid dependencies, hidden network calls, arbitrary shell execution, rights/security/human-review bypasses, main writes, "
-        "merges, or deployments. If unsafe, return an empty changes list and explain why. INPUT: "
-        + json.dumps({"goal": goal, "files": [{"path": row["path"], "content": row["content"]} for row in files]}, ensure_ascii=False)
+        "Return only valid JSON with keys summary and changes. Include at least one regression-test change. "
+        "For a file whose content_mode is full_file, return {path, content} with the complete replacement file. "
+        "For a file whose content_mode is line_ranges, return {path, edits:[{start_line,end_line,expected_sha256,replacement_text}]}. "
+        "A line_ranges edit MUST replace one entire listed editable range, using its exact start_line, end_line and sha256. "
+        "Never edit reference-only lines, invent line numbers, or change a range whose hash was not supplied. "
+        "Only change supplied paths. Preserve unrelated behavior. Do not add secrets, paid dependencies, hidden network calls, "
+        "arbitrary shell execution, rights/security/human-review bypasses, main writes, merges, or deployments. "
+        "Keep each replacement block under 60 KB. If unsafe or the evidence is insufficient, return an empty changes list. INPUT: "
+        + json.dumps({"goal": goal, "files": files}, ensure_ascii=False)
     )
     try:
         raw = model_fn({"messages": [{"role": "user", "content": prompt}], "temperature": 0.2}) or {}
@@ -190,6 +322,70 @@ def generate_changes(goal: str, files: list, model_fn) -> dict:
     return result
 
 
+def apply_window_edits(changes: list, originals: dict, inspected_files: list) -> list:
+    """Expand hash-pinned range edits into complete source files without regenerating whole modules."""
+    inspected = {row["path"]: row for row in inspected_files}
+    if not isinstance(changes, list):
+        raise HTTPException(422, "Malformed self-maintenance change set.")
+    output = []
+    total_replacement_bytes = 0
+    for change in changes:
+        if not isinstance(change, dict):
+            raise HTTPException(422, "Malformed proposed file change.")
+        path = validate_path(change.get("path"))
+        if path not in inspected or path not in originals:
+            raise HTTPException(403, "Writer attempted to modify a file that was not inspected.")
+        if "content" in change:
+            output.append({"path": path, "content": change.get("content")})
+            continue
+        edits = change.get("edits")
+        if not isinstance(edits, list) or not edits or len(edits) > MAX_WINDOW_COUNT:
+            raise HTTPException(422, f"{path} requires one or more bounded line-range edits.")
+        source = originals[path]["content"]
+        source_lines = source.splitlines()
+        newline = "\r\n" if "\r\n" in source else "\n"
+        final_newline = source.endswith(("\n", "\r"))
+        allowed = {
+            (int(row["start_line"]), int(row["end_line"])): str(row["sha256"])
+            for row in inspected[path].get("editable_ranges", [])
+        }
+        normalized = []
+        for edit in edits:
+            if not isinstance(edit, dict):
+                raise HTTPException(422, f"Malformed range edit for {path}.")
+            try:
+                first = int(edit.get("start_line"))
+                last = int(edit.get("end_line"))
+            except (TypeError, ValueError):
+                raise HTTPException(422, f"Invalid line range for {path}.") from None
+            digest = str(edit.get("expected_sha256") or "")
+            replacement = edit.get("replacement_text")
+            if (first, last) not in allowed or allowed[(first, last)] != digest:
+                raise HTTPException(409, f"Edit for {path} is outside inspected, hash-pinned source ranges.")
+            if not 1 <= first <= last <= len(source_lines):
+                raise HTTPException(422, f"Edit for {path} contains an invalid line range.")
+            if _range_digest(source_lines, first, last) != digest:
+                raise HTTPException(409, f"Source range for {path} changed after inspection.")
+            if not isinstance(replacement, str) or len(replacement.encode("utf-8")) > MAX_CHANGE_BYTES:
+                raise HTTPException(413, f"Replacement block for {path} is invalid or too large.")
+            if SECRET_LITERAL.search(replacement):
+                raise HTTPException(422, f"Potential hard-coded secret detected in {path}.")
+            total_replacement_bytes += len(replacement.encode("utf-8"))
+            normalized.append((first, last, replacement))
+        if total_replacement_bytes > MAX_CHANGE_BYTES:
+            raise HTTPException(413, "Aggregate source-window replacement exceeds the change-size limit.")
+        ordered = sorted(normalized, key=lambda item: item[0])
+        for previous, current in zip(ordered, ordered[1:]):
+            if current[0] <= previous[1]:
+                raise HTTPException(422, f"Overlapping source-window edits are not allowed for {path}.")
+        updated_lines = list(source_lines)
+        for first, last, replacement in sorted(normalized, key=lambda item: item[0], reverse=True):
+            updated_lines[first - 1:last] = replacement.splitlines()
+        updated = newline.join(updated_lines) + (newline if final_newline else "")
+        output.append({"path": path, "content": updated, "_bounded_edit": True})
+    return output
+
+
 def validate_changes(changes: list, requested_paths: set[str]) -> list:
     if not isinstance(changes, list) or not 1 <= len(changes) <= MAX_FILES:
         raise HTTPException(422, "Proposed change set is empty or exceeds the file limit.")
@@ -201,7 +397,8 @@ def validate_changes(changes: list, requested_paths: set[str]) -> list:
         if path not in requested_paths:
             raise HTTPException(403, "Writer attempted to change an uninspected file.")
         content = row.get("content")
-        if not isinstance(content, str) or len(content.encode("utf-8")) > MAX_CHANGE_BYTES:
+        content_limit = MAX_FILE_BYTES if row.get("_bounded_edit") is True else MAX_CHANGE_BYTES
+        if not isinstance(content, str) or len(content.encode("utf-8")) > content_limit:
             raise HTTPException(413, f"Proposed content for {path} is invalid or too large.")
         if SECRET_LITERAL.search(content):
             raise HTTPException(422, f"Potential hard-coded secret detected in {path}.")
@@ -259,10 +456,16 @@ def improve_repository(cfg: dict, goal: str, paths: list, model_fn) -> dict:
     goal = re.sub(r"\s+", " ", str(goal or "")).strip()
     if not 12 <= len(goal) <= 2000:
         raise HTTPException(422, "Provide a specific engineering goal between 12 and 2,000 characters.")
-    inspected = inspect_sources(cfg, paths)
-    originals = {row["path"]: row for row in inspected["files"]}
+    inspected = inspect_sources(cfg, paths, goal=goal)
+    originals = {}
+    for row in inspected["files"]:
+        original = read_source(cfg, row["path"])
+        if original["sha"] != row["sha"] or original["sha256"] != row["sha256"]:
+            raise HTTPException(409, f"{row['path']} changed during inspection; restart from a fresh source snapshot.")
+        originals[row["path"]] = original
     generated = generate_changes(goal, inspected["files"], model_fn)
-    changes = validate_changes(generated.get("changes"), set(originals))
+    expanded = apply_window_edits(generated.get("changes"), originals, inspected["files"])
+    changes = validate_changes(expanded, set(originals))
     pr = create_draft_pr(cfg, changes, originals, goal, str(generated.get("summary") or "Automated code proposal."))
     return {
         "status": "draft_pr_created", "goal": goal,
@@ -298,7 +501,11 @@ def register(app: FastAPI) -> None:
         cfg = load_settings()
         authorize(request, cfg)
         payload = await request.json()
-        return inspect_sources(cfg, payload.get("paths") if isinstance(payload, dict) else None)
+        return inspect_sources(
+            cfg,
+            payload.get("paths") if isinstance(payload, dict) else None,
+            goal=payload.get("goal", "") if isinstance(payload, dict) else "",
+        )
 
     @app.post("/infinity/studio/self-maintenance/improve")
     async def maintenance_improve(request: FastAPIRequest):
