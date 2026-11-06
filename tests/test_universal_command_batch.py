@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import pytest
+from threading import Barrier
 from fastapi import HTTPException
 
 from universal_command_batch import execute_commands, normalize_commands
 
 
-def test_normalize_commands_requires_unique_ids_and_earlier_dependencies():
+def test_normalize_commands_requires_unique_ids_and_valid_acyclic_dependencies():
     commands = normalize_commands([
         {"id": "research", "command": "research this topic"},
         {
@@ -30,10 +31,20 @@ def test_normalize_commands_requires_unique_ids_and_earlier_dependencies():
             {"id": "same", "command": "duplicate id"},
         ])
 
+    forward = normalize_commands([
+        {"id": "consumer", "command": "consume prepared result", "depends_on": ["producer"]},
+        {"id": "producer", "command": "produce a result"},
+    ])
+    assert [item["id"] for item in forward] == ["consumer", "producer"]
+
     with pytest.raises(HTTPException):
         normalize_commands([
-            {"id": "first", "command": "first valid step", "depends_on": ["later"]},
-            {"id": "later", "command": "second valid step"},
+            {"id": "unknown", "command": "first valid step", "depends_on": ["missing"]},
+        ])
+    with pytest.raises(HTTPException):
+        normalize_commands([
+            {"id": "first", "command": "first valid step", "depends_on": ["second"]},
+            {"id": "second", "command": "second valid step", "depends_on": ["first"]},
         ])
 
 
@@ -173,3 +184,120 @@ def test_batch_can_continue_only_when_step_explicitly_allows_it():
     assert len(calls) == 2
     assert result["steps"][0]["state"] == "failed"
     assert result["steps"][1]["state"] == "completed"
+
+
+
+def test_forward_dependency_executes_in_graph_order_and_binds_project_id():
+    commands = normalize_commands([
+        {
+            "id": "inspect",
+            "command": "inspect the created project",
+            "depends_on": ["create"],
+            "project_id_from": "create",
+        },
+        {"id": "create", "command": "create a 20 second video"},
+    ])
+    calls = []
+
+    def dispatch(command, user_id, payload):
+        calls.append((command, dict(payload)))
+        if command.startswith("create"):
+            return {
+                "status": "queued",
+                "executed": True,
+                "result": {"project_id": "studio_forward_project"},
+            }
+        assert payload["project_id"] == "studio_forward_project"
+        return {"status": "completed", "executed": True, "result": {"ok": True}}
+
+    result = execute_commands(
+        commands,
+        user_id="owner-1",
+        batch_id="batch-forward-1",
+        dispatch=dispatch,
+        checkpoint=lambda rows, status: None,
+    )
+
+    assert [call[0] for call in calls] == [
+        "create a 20 second video",
+        "inspect the created project",
+    ]
+    assert result["steps"][0]["id"] == "inspect"
+    assert result["steps"][0]["state"] == "completed"
+    assert result["steps"][1]["state"] == "accepted"
+
+
+def test_independent_ready_tasks_execute_concurrently_with_a_bounded_pool():
+    barrier = Barrier(2)
+    started = []
+
+    def dispatch(command, user_id, payload):
+        started.append(command)
+        barrier.wait(timeout=3)
+        return {"status": "completed", "executed": True, "result": {"command": command}}
+
+    commands = normalize_commands([
+        {"id": "research", "command": "research accessible captions"},
+        {"id": "analyze", "command": "analyze caption timing"},
+    ])
+    result = execute_commands(
+        commands,
+        user_id="owner-1",
+        batch_id="batch-parallel-1",
+        dispatch=dispatch,
+        checkpoint=lambda rows, status: None,
+        max_concurrency=2,
+    )
+
+    assert len(started) == 2
+    assert result["max_concurrency"] == 2
+    assert result["completed_steps"] == 2
+    assert all(step["state"] == "completed" for step in result["steps"])
+
+
+def test_failure_blocks_only_descendants_when_failure_isolation_is_explicit():
+    calls = []
+
+    def dispatch(command, user_id, payload):
+        calls.append(command)
+        if command.startswith("fail"):
+            return {"status": "failed", "executed": False}
+        return {"status": "completed", "executed": True, "result": {"ok": True}}
+
+    commands = normalize_commands([
+        {"id": "failing", "command": "fail this optional branch", "continue_on_error": True},
+        {"id": "dependent", "command": "use failed branch output", "depends_on": ["failing"]},
+        {"id": "independent", "command": "complete independent analysis"},
+    ])
+    result = execute_commands(
+        commands,
+        user_id="owner-1",
+        batch_id="batch-isolation-1",
+        dispatch=dispatch,
+        checkpoint=lambda rows, status: None,
+        max_concurrency=1,
+    )
+
+    assert calls == [
+        "fail this optional branch",
+        "complete independent analysis",
+    ]
+    assert [step["state"] for step in result["steps"]] == [
+        "failed",
+        "dependency_blocked",
+        "completed",
+    ]
+    assert result["status"] == "partial"
+
+
+def test_concurrency_limit_is_validated():
+    commands = normalize_commands([{"id": "one", "command": "inspect capabilities"}])
+    with pytest.raises(HTTPException):
+        execute_commands(
+            commands,
+            user_id="owner-1",
+            batch_id="batch-invalid-concurrency",
+            dispatch=lambda *args: {"status": "completed", "executed": True},
+            checkpoint=lambda *args: None,
+            max_concurrency=5,
+        )
