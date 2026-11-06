@@ -335,7 +335,7 @@ def _native_primary_delivery_eligible(
         "presentation": {"presentation.pptx", "presentation_manifest.json"},
     }
     required = required_by_kind.get(kind)
-    if not required or failures:
+    if not required:
         return False
 
     # This predicate means "the primary draft is intact and can be reviewed by
