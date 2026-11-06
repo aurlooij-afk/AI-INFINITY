@@ -13,6 +13,9 @@ def test_source_allowlist_permits_application_and_test_files():
     assert maintenance.validate_path("tests/test_runtime_truth.py") == "tests/test_runtime_truth.py"
     assert maintenance.validate_path("self_maintenance.py") == "self_maintenance.py"
     assert maintenance.validate_path("scripts/verify_live_deployment.py") == "scripts/verify_live_deployment.py"
+    assert maintenance.validate_path("new_root_runtime_module.py") == "new_root_runtime_module.py"
+    assert maintenance.validate_path("creator_studio_2030.html") == "creator_studio_2030.html"
+    assert maintenance.validate_path("ui_3800.html") == "ui_3800.html"
 
 
 @pytest.mark.parametrize("path", [
@@ -227,4 +230,20 @@ def test_large_core_module_edit_rejects_stale_or_uninspected_range_hash():
             {"studio_ultimate.py": original},
             inspected,
         )
+
+def test_self_maintenance_validates_allowlisted_ui_html_and_requires_python_regression_test():
+    requested = {"creator_studio_2030.html", "tests/test_ui_revision.py"}
+    changes = [
+        {
+            "path": "creator_studio_2030.html",
+            "content": "<!doctype html>\n<html><head><title>AI Infinity</title></head><body><main>Creator Studio</main></body></html>\n",
+        },
+        {
+            "path": "tests/test_ui_revision.py",
+            "content": "def test_creator_studio_revision():\n    assert 'Creator Studio' in 'Creator Studio'\n",
+        },
+    ]
+    assert maintenance.validate_changes(changes, requested) == changes
+    with pytest.raises(HTTPException, match="regression-test"):
+        maintenance.validate_changes([changes[0]], {"creator_studio_2030.html"})
 
