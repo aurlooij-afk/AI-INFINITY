@@ -82,7 +82,12 @@ def validate_path(value: object) -> str:
         raise HTTPException(422, "Invalid repository path.")
     if any(part.startswith(".") for part in parts) or parts[-1] in BLOCKED_FILES or parts[-1].lower().startswith(".env"):
         raise HTTPException(403, "Hidden, protected, and secret-bearing files are excluded.")
-    allowed = path in ROOT_MODULES or path.startswith("ai_infinity/") or path.startswith("tests/")
+    allowed = (
+        path in ROOT_MODULES
+        or path.startswith("ai_infinity/")
+        or path.startswith("tests/")
+        or path.startswith("scripts/")
+    )
     if not allowed or not path.endswith(".py"):
         raise HTTPException(403, "Only allowlisted Python source and test files are available.")
     return path
