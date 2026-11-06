@@ -93,6 +93,63 @@ def validate_path(value: object) -> str:
     return path
 
 
+def rank_source_candidates(paths: list[str], goal: str, limit: int = 20) -> list[dict]:
+    """Rank allowlisted Python source paths using goal terms without reading file bodies."""
+    tokens = list(dict.fromkeys(
+        token.casefold()
+        for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", str(goal or ""))
+        if len(token) >= 3
+    ))
+    ranked = []
+    for row in paths:
+        path = str(row.get("path") or "")
+        try:
+            validate_path(path)
+        except HTTPException:
+            continue
+        lowered = path.casefold()
+        score = sum(4 for token in tokens if token in lowered)
+        if path in ROOT_MODULES:
+            score += 1
+        if path.startswith("tests/") and any(term in " ".join(tokens) for term in ("test", "regression", "acceptance")):
+            score += 2
+        if score:
+            ranked.append({
+                "path": path,
+                "size_bytes": int(row.get("size") or 0),
+                "sha": str(row.get("sha") or ""),
+                "match_score": score,
+            })
+    ranked.sort(key=lambda row: (-row["match_score"], row["path"]))
+    return ranked[:max(1, min(int(limit or 20), 40))]
+
+
+def discover_sources(cfg: dict, goal: str, limit: int = 20) -> dict:
+    goal = re.sub(r"\s+", " ", str(goal or "")).strip()
+    if not 12 <= len(goal) <= 2000:
+        raise HTTPException(422, "Provide a specific source-discovery goal between 12 and 2,000 characters.")
+    tree_ref = quote(cfg["base_branch"], safe="")
+    response = github_request(
+        cfg, "GET",
+        f"/repos/{cfg['repository']}/git/trees/{tree_ref}?recursive=1",
+    )
+    entries = response.get("tree") if isinstance(response.get("tree"), list) else []
+    candidates = rank_source_candidates(
+        [row for row in entries if isinstance(row, dict) and row.get("type") == "blob"],
+        goal,
+        limit,
+    )
+    return {
+        "repository": cfg["repository"],
+        "base_branch": cfg["base_branch"],
+        "goal": goal,
+        "matches": candidates,
+        "matched_count": len(candidates),
+        "tree_truncated": response.get("truncated") is True,
+        "truthful": True,
+    }
+
+
 def github_request(cfg: dict, method: str, path: str, payload: dict | None = None) -> dict:
     if not path.startswith("/repos/"):
         raise ValueError("Unsupported GitHub API path.")
@@ -506,6 +563,15 @@ def register(app: FastAPI) -> None:
             "direct_main_writes": False, "arbitrary_shell_execution": False,
             "automatic_merge": False, "automatic_deploy": False, "truthful": True,
         }
+
+    @app.post("/infinity/studio/self-maintenance/discover")
+    async def maintenance_discover(request: FastAPIRequest):
+        cfg = load_settings()
+        authorize(request, cfg)
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(422, "A JSON object is required.")
+        return discover_sources(cfg, payload.get("goal"), payload.get("limit", 20))
 
     @app.post("/infinity/studio/self-maintenance/inspect")
     async def maintenance_inspect(request: FastAPIRequest):
