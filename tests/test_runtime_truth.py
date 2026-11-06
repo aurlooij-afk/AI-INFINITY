@@ -187,3 +187,10 @@ def test_3702_capabilities_never_claim_ready_from_registry_presence_alone(monkey
     assert healthy["status"] == "healthy"
     assert all(item["available"] for item in healthy["required_route_checks"])
 
+    registry = namespace["_registry_summary"]()
+    assert registry["status"] == "inventory_only"
+    assert registry["entry_count"] == registry["declared_count"] == 607
+    assert registry["readiness_claimed"] is False
+    assert registry["integration_state_counts"]["IMPLEMENTED_LOCAL"] == 24
+    assert registry["integration_state_counts"]["IMPLEMENTED_REMOTE"] == 26
+
