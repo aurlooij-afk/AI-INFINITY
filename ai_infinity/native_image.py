@@ -119,6 +119,12 @@ def build_native_image(
             "size_bytes": size_bytes,
             "sha256": sha256,
         },
+        "accessibility": {
+            "alt_text_draft": str(prompt or title or "Generated image")[:500],
+            "language": str(language or "English")[:80],
+            "status": "DRAFT_REVIEW_REQUIRED",
+            "human_review_required": True,
+        },
         "generation": {
             "mode": generation_mode,
             "provider_or_method": provider_source,
