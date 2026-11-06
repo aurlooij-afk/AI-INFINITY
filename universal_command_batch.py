@@ -13,6 +13,7 @@ import json
 import re
 import time
 import uuid
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import Any, Callable
 
 from fastapi import HTTPException, Request, Response
@@ -22,6 +23,8 @@ import ai_infinity_canonical as canonical
 
 MAX_COMMANDS = 20
 MAX_COMMAND_LENGTH = 4000
+MAX_CONCURRENCY = 4
+DEFAULT_CONCURRENCY = 3
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SENSITIVE_KEY = re.compile(r"(?:api[_-]?key|application[_-]?key|secret|token|password|authorization)", re.I)
 SENSITIVE_VALUE = re.compile(
@@ -58,20 +61,20 @@ def _safe(value: Any) -> Any:
 
 
 def normalize_commands(raw_commands: Any) -> list[dict[str, Any]]:
+    """Validate a dependency-aware DAG while preserving request/display order."""
     if not isinstance(raw_commands, list) or not raw_commands:
-        raise HTTPException(422, "commands must be a non-empty ordered array.")
+        raise HTTPException(422, "commands must be a non-empty task array.")
     if len(raw_commands) > MAX_COMMANDS:
-        raise HTTPException(422, f"A command batch is limited to {MAX_COMMANDS} steps.")
+        raise HTTPException(422, f"A command batch is limited to {MAX_COMMANDS} tasks.")
 
     normalized: list[dict[str, Any]] = []
     seen: set[str] = set()
     total_chars = 0
-
     for index, raw in enumerate(raw_commands, 1):
         if not isinstance(raw, dict):
             raise HTTPException(422, f"commands[{index - 1}] must be an object.")
-        step_id = str(raw.get("id") or f"step-{index}").strip()
-        if not SAFE_ID.fullmatch(step_id) or step_id in seen:
+        task_id = str(raw.get("id") or f"step-{index}").strip()
+        if not SAFE_ID.fullmatch(task_id) or task_id in seen:
             raise HTTPException(422, f"commands[{index - 1}] has an invalid or duplicate id.")
         command = str(raw.get("command") or raw.get("instruction") or "").strip()
         if len(command) < 3 or len(command) > MAX_COMMAND_LENGTH:
@@ -82,29 +85,47 @@ def normalize_commands(raw_commands: Any) -> list[dict[str, Any]]:
         if SENSITIVE_VALUE.search(command):
             raise HTTPException(422, "Do not put credentials in command text.")
         depends = raw.get("depends_on") or []
-        if not isinstance(depends, list) or any(not isinstance(item, str) for item in depends):
-            raise HTTPException(422, f"commands[{index - 1}].depends_on must be an array of step ids.")
-        # Earlier-only dependencies make the order deterministic and prevent cycles.
-        if any(item not in seen for item in depends):
-            raise HTTPException(422, f"commands[{index - 1}] may depend only on earlier steps.")
-        project_id_from = raw.get("project_id_from")
-        if project_id_from is not None:
-            project_id_from = str(project_id_from).strip()
-            if project_id_from not in depends:
+        if not isinstance(depends, list) or any(not isinstance(x, str) for x in depends):
+            raise HTTPException(422, f"commands[{index - 1}].depends_on must be an array of task ids.")
+        depends = list(dict.fromkeys(x.strip() for x in depends))
+        source_id = raw.get("project_id_from")
+        if source_id is not None:
+            source_id = str(source_id).strip()
+            if source_id not in depends:
                 raise HTTPException(422, f"commands[{index - 1}].project_id_from must also appear in depends_on.")
         total_chars += len(command) + len(_json(payload))
         if total_chars > 24000:
-            raise HTTPException(422, "The combined command batch exceeds the 24,000-character safety limit.")
-
+            raise HTTPException(422, "The combined command graph exceeds the 24,000-character safety limit.")
         normalized.append({
-            "id": step_id,
-            "command": command,
-            "payload": _safe(payload),
-            "depends_on": list(dict.fromkeys(depends)),
-            "project_id_from": project_id_from,
+            "id": task_id, "command": command, "payload": _safe(payload),
+            "depends_on": depends, "project_id_from": source_id,
             "continue_on_error": raw.get("continue_on_error") is True,
         })
-        seen.add(step_id)
+        seen.add(task_id)
+
+    by_id = {item["id"]: item for item in normalized}
+    order = {item["id"]: n for n, item in enumerate(normalized)}
+    children = {item["id"]: [] for item in normalized}
+    indegree = {}
+    for item in normalized:
+        task_id = item["id"]
+        for dep in item["depends_on"]:
+            if dep not in by_id or dep == task_id:
+                raise HTTPException(422, f"Task {task_id!r} has an unknown or self-referencing dependency.")
+            children[dep].append(task_id)
+        indegree[task_id] = len(item["depends_on"])
+    ready = sorted((key for key, degree in indegree.items() if degree == 0), key=order.get)
+    visited = 0
+    while ready:
+        node = ready.pop(0)
+        visited += 1
+        for child in sorted(children[node], key=order.get):
+            indegree[child] -= 1
+            if indegree[child] == 0:
+                ready.append(child)
+                ready.sort(key=order.get)
+    if visited != len(normalized):
+        raise HTTPException(422, "command dependencies contain a cycle; task graphs must be acyclic.")
     return normalized
 
 
@@ -131,72 +152,76 @@ def _find_project_id(value: Any) -> str:
 
 
 def execute_commands(
-    commands: list[dict[str, Any]],
-    *,
-    user_id: str,
-    batch_id: str,
+    commands: list[dict[str, Any]], *, user_id: str, batch_id: str,
     dispatch: Callable[[str, str, dict[str, Any]], dict[str, Any]],
     checkpoint: Callable[[list[dict[str, Any]], str], None],
+    max_concurrency: int = 1,
 ) -> dict[str, Any]:
-    results: list[dict[str, Any]] = []
-    by_id: dict[str, dict[str, Any]] = {}
-    halted = False
+    """Run ready DAG nodes through the canonical dispatcher; never auto-replay."""
+    if isinstance(max_concurrency, bool) or not isinstance(max_concurrency, int):
+        raise HTTPException(422, "max_concurrency must be an integer.")
+    if not 1 <= max_concurrency <= MAX_CONCURRENCY:
+        raise HTTPException(422, f"max_concurrency must be between 1 and {MAX_CONCURRENCY}.")
 
-    for sequence, step in enumerate(commands, 1):
-        dependency_failures = [
-            dependency for dependency in step["depends_on"]
-            if by_id.get(dependency, {}).get("state") not in {"completed", "accepted"}
-        ]
-        if halted or dependency_failures:
-            record = {
-                "id": step["id"], "sequence": sequence,
-                "state": "dependency_blocked" if dependency_failures else "not_run",
-                "reason": (
-                    "A required earlier command did not complete."
-                    if dependency_failures else
-                    "Batch stopped after an earlier command failed or required authorization."
-                ),
-                "blocked_by": dependency_failures,
-                "executed": False,
-            }
-            results.append(record)
-            by_id[step["id"]] = record
-            checkpoint(results, "running")
-            continue
-
-        payload = dict(step["payload"])
-        if step.get("project_id_from"):
-            source = by_id.get(step["project_id_from"], {})
-            project_id = _find_project_id(source.get("result"))
-            if not project_id:
-                record = {
-                    "id": step["id"], "sequence": sequence, "state": "dependency_blocked",
-                    "reason": "The dependency did not return a project_id.", "executed": False,
-                }
-                results.append(record)
-                by_id[step["id"]] = record
-                checkpoint(results, "running")
-                halted = not step["continue_on_error"]
-                continue
-            payload["project_id"] = project_id
-
-        # Every create step receives a stable batch-scoped idempotency key.
-        payload.setdefault("idempotency_key", f"batch-{batch_id}-{step['id']}")
-        payload.setdefault("api_anything_idempotency_key", f"batch-{batch_id}-{step['id']}")
-        record = {
-            "id": step["id"], "sequence": sequence, "state": "running",
-            "command": step["command"], "started_at": time.time(),
-            "executed": False,
+    steps = {step["id"]: step for step in commands}
+    order = {step["id"]: n for n, step in enumerate(commands, 1)}
+    success = {"completed", "accepted"}
+    failed_terminal = {"failed", "authorization_required", "dependency_blocked", "not_run"}
+    records = {}
+    results = []
+    for step in commands:
+        key = f"batch-{batch_id}-{step['id']}"
+        row = {
+            "id": step["id"], "task_id": f"{batch_id}:{step['id']}",
+            "sequence": order[step["id"]], "objective": step["command"],
+            "dependencies": list(step["depends_on"]), "state": "created",
+            "progress": 0, "attempt": 1, "idempotency_key": key,
+            "execution_config": {"max_concurrency": max_concurrency, "automatic_retry": False},
+            "verification": {"status": "not_performed_by_batch_coordinator"},
+            "evidence_refs": [], "executed": False,
         }
-        results.append(record)
-        by_id[step["id"]] = record
-        checkpoint(results, "running")
+        records[step["id"]] = row
+        results.append(row)
 
+    pending = set(steps)
+    running = {}
+    halt = [False]
+    checkpoint(results, "running")
+
+    def block_failed_dependencies():
+        changed = False
+        for task_id in sorted(tuple(pending), key=order.get):
+            bad = [dep for dep in steps[task_id]["depends_on"] if records[dep]["state"] in failed_terminal]
+            if bad:
+                records[task_id].update({
+                    "state": "dependency_blocked", "blocked_by": bad,
+                    "reason": "A required dependency did not complete successfully.",
+                    "executed": False, "completed_at": time.time(),
+                })
+                pending.remove(task_id)
+                changed = True
+        if changed:
+            checkpoint(results, "running")
+
+    def make_payload(step):
+        payload = dict(step["payload"])
+        source_id = step.get("project_id_from")
+        if source_id:
+            project_id = _find_project_id(records[source_id].get("result"))
+            if not project_id:
+                return None, "The dependency did not return a project_id."
+            payload["project_id"] = project_id
+        key = f"batch-{batch_id}-{step['id']}"
+        payload.setdefault("idempotency_key", key)
+        payload.setdefault("api_anything_idempotency_key", key)
+        return payload, None
+
+    def settle(future, task_id):
+        row, step = records[task_id], steps[task_id]
         try:
-            dispatched = dispatch(step["command"], user_id, payload)
-            dispatched = _safe(dispatched if isinstance(dispatched, dict) else {"value": dispatched})
-            status = str(dispatched.get("status") or "").strip().lower()
-            executed = dispatched.get("executed") is True
+            data = future.result()
+            data = _safe(data if isinstance(data, dict) else {"value": data})
+            status = str(data.get("status") or "").strip().lower()
             if status in {"authorization_required", "write_confirmation_required", "dry_run_required"}:
                 state = "authorization_required"
             elif status in {"unsupported_or_incomplete", "unsupported", "degraded", "failed", "error",
@@ -208,42 +233,95 @@ def execute_commands(
                 state = "completed"
             else:
                 state = "failed"
-            record.update({
-                "state": state, "status": status or "unknown",
-                "result": dispatched, "executed": executed,
-                "completed_at": time.time(),
+            row.update({
+                "state": state, "progress": 100 if state in success else row.get("progress", 0),
+                "status": status or "unknown", "result": data,
+                "executed": data.get("executed") is True, "completed_at": time.time(),
             })
+            if state == "failed":
+                row["error"] = data.get("error") or data.get("message") or status or "command_failed"
         except HTTPException as exc:
-            record.update({
-                "state": "failed", "http_status": int(exc.status_code),
-                "error": _safe(exc.detail), "completed_at": time.time(),
-                "executed": False,
-            })
+            row.update({"state": "failed", "http_status": int(exc.status_code),
+                        "error": _safe(exc.detail), "completed_at": time.time(), "executed": False})
         except Exception as exc:
-            record.update({
-                "state": "failed", "error_type": type(exc).__name__,
-                "error": "Command dispatch raised an unhandled error; inspect server logs.",
-                "completed_at": time.time(), "executed": False,
-            })
-
+            row.update({"state": "failed", "error_type": type(exc).__name__,
+                        "error": "Command dispatch raised an unhandled error; inspect server logs.",
+                        "completed_at": time.time(), "executed": False})
+        if row["state"] in {"failed", "authorization_required"} and not step["continue_on_error"]:
+            halt[0] = True
         checkpoint(results, "running")
-        if record["state"] in {"failed", "authorization_required"} and not step["continue_on_error"]:
-            halted = True
 
-    states = [row.get("state") for row in results]
-    if any(state == "failed" for state in states):
-        overall = "partial" if any(state in {"completed", "accepted"} for state in states) else "failed"
+    with ThreadPoolExecutor(max_workers=max_concurrency, thread_name_prefix="aii-task") as pool:
+        while pending or running:
+            block_failed_dependencies()
+            if halt[0]:
+                for task_id in sorted(tuple(pending), key=order.get):
+                    records[task_id].update({
+                        "state": "not_run",
+                        "reason": "Execution halted after an earlier task failed or required authorization.",
+                        "executed": False, "completed_at": time.time(),
+                    })
+                    pending.remove(task_id)
+                if pending:
+                    checkpoint(results, "running")
+            else:
+                ready = []
+                for task_id in sorted(pending, key=order.get):
+                    deps = steps[task_id]["depends_on"]
+                    if all(records[dep]["state"] in success for dep in deps):
+                        ready.append(task_id)
+                    elif records[task_id]["state"] == "created":
+                        records[task_id]["state"] = "waiting"
+                slots = max_concurrency - len(running)
+                for task_id in ready[:max(0, slots)]:
+                    step, row = steps[task_id], records[task_id]
+                    payload, error = make_payload(step)
+                    if error:
+                        row.update({"state": "dependency_blocked", "reason": error,
+                                    "executed": False, "completed_at": time.time()})
+                        pending.remove(task_id)
+                        checkpoint(results, "running")
+                        if not step["continue_on_error"]:
+                            halt[0] = True
+                        continue
+                    row.update({"state": "ready", "progress": 1, "inputs": _safe(payload),
+                                "project_id": payload.get("project_id")})
+                    checkpoint(results, "running")
+                    row.update({"state": "running", "progress": 5, "started_at": time.time()})
+                    checkpoint(results, "running")
+                    pending.remove(task_id)
+                    running[pool.submit(dispatch, step["command"], user_id, payload)] = task_id
+
+                if pending and not running and not ready:
+                    # Validation rejects cycles; this protects against mutated inputs.
+                    for task_id in sorted(tuple(pending), key=order.get):
+                        records[task_id].update({"state": "dependency_blocked",
+                            "reason": "Task graph could not resolve its dependencies.",
+                            "executed": False, "completed_at": time.time()})
+                        pending.remove(task_id)
+                    checkpoint(results, "running")
+
+            if running:
+                done, _ = wait(tuple(running), return_when=FIRST_COMPLETED)
+                for future in done:
+                    settle(future, running.pop(future))
+            elif not pending:
+                break
+
+    states = [row["state"] for row in results]
+    completed_or_accepted = sum(state in success for state in states)
+    if "failed" in states:
+        overall = "partial" if completed_or_accepted else "failed"
     elif any(state in {"authorization_required", "dependency_blocked", "not_run"} for state in states):
-        overall = "blocked"
-    elif any(state == "accepted" for state in states):
+        overall = "partial" if completed_or_accepted else "blocked"
+    elif "accepted" in states:
         overall = "accepted"
     else:
         overall = "completed"
-
-    # Persist a terminal checkpoint after all steps have been classified.
     checkpoint(results, overall)
     return {
         "batch_id": batch_id, "status": overall, "step_count": len(commands),
+        "max_concurrency": max_concurrency,
         "completed_steps": sum(state == "completed" for state in states),
         "accepted_steps": sum(state == "accepted" for state in states),
         "failed_steps": sum(state == "failed" for state in states),
@@ -267,10 +345,14 @@ def register(app: Any) -> None:
                 results_json TEXT NOT NULL,
                 status TEXT NOT NULL,
                 created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
+                updated_at REAL NOT NULL,
+                max_concurrency INTEGER NOT NULL DEFAULT 1
             )
             """
         )
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(canonical_command_batches)").fetchall()}
+        if "max_concurrency" not in columns:
+            connection.execute("ALTER TABLE canonical_command_batches ADD COLUMN max_concurrency INTEGER NOT NULL DEFAULT 1")
         connection.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_canonical_command_batches_idempotency
@@ -289,7 +371,7 @@ def register(app: Any) -> None:
     def load(batch_id: str, user_id: str) -> dict[str, Any]:
         with canonical.studio().DB_LOCK, canonical.db() as connection:
             row = connection.execute(
-                "SELECT batch_id,user_id,request_sha256,commands_json,results_json,status,created_at,updated_at "
+                "SELECT batch_id,user_id,request_sha256,commands_json,results_json,status,created_at,updated_at,max_concurrency "
                 "FROM canonical_command_batches WHERE batch_id=? AND user_id=?",
                 (batch_id, user_id),
             ).fetchone()
@@ -303,6 +385,8 @@ def register(app: Any) -> None:
         return {
             "batch_id": row[0], "status": row[5], "commands": commands,
             "steps": results, "created_at": row[6], "updated_at": row[7],
+            "max_concurrency": int(row[8] or 1),
+            "reconciliation_required": bool(row[5] == "running" and any(item.get("state") == "running" for item in results if isinstance(item, dict))),
             "truthful": True,
         }
 
@@ -313,6 +397,15 @@ def register(app: Any) -> None:
         if not isinstance(body, dict):
             raise HTTPException(422, "The command batch body must be a JSON object.")
         commands = normalize_commands(body.get("commands"))
+        raw_concurrency = body.get("max_concurrency", DEFAULT_CONCURRENCY)
+        if isinstance(raw_concurrency, bool):
+            raise HTTPException(422, "max_concurrency must be an integer.")
+        try:
+            max_concurrency = int(raw_concurrency)
+        except (TypeError, ValueError, OverflowError):
+            raise HTTPException(422, "max_concurrency must be an integer.")
+        if not 1 <= max_concurrency <= MAX_CONCURRENCY:
+            raise HTTPException(422, f"max_concurrency must be between 1 and {MAX_CONCURRENCY}.")
         idempotency_key = str(body.get("idempotency_key") or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", idempotency_key):
             raise HTTPException(422, "idempotency_key is required and must be 8..128 safe characters.")
@@ -337,9 +430,9 @@ def register(app: Any) -> None:
             else:
                 connection.execute(
                     "INSERT INTO canonical_command_batches "
-                    "(batch_id,user_id,idempotency_key,request_sha256,commands_json,results_json,status,created_at,updated_at) "
-                    "VALUES(?,?,?,?,?,?,?,?,?)",
-                    (batch_id, user_id, idempotency_key, request_hash, _json(commands), "[]", "running", now, now),
+                    "(batch_id,user_id,idempotency_key,request_sha256,commands_json,results_json,status,created_at,updated_at,max_concurrency) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (batch_id, user_id, idempotency_key, request_hash, _json(commands), "[]", "running", now, now, max_concurrency),
                 )
 
         if existing_id:
@@ -351,6 +444,7 @@ def register(app: Any) -> None:
             commands, user_id=user_id, batch_id=batch_id,
             dispatch=canonical.dispatch_command,
             checkpoint=lambda rows, state: save(batch_id, rows, state),
+            max_concurrency=max_concurrency,
         )
         save(batch_id, result["steps"], result["status"])
         result["replayed"] = False
