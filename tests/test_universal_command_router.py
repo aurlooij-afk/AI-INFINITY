@@ -266,7 +266,10 @@ def test_explicit_website_command_overrides_stale_video_ui_default():
 def test_creator_enqueue_preserves_every_implemented_native_content_type():
     import studio_ultimate as studio
 
-    for content_type in ("video", "podcast", "article", "social", "website", "document", "presentation"):
+    from ai_infinity.native_image_runtime import install as install_native_image_runtime
+    install_native_image_runtime(studio)
+
+    for content_type in ("video", "podcast", "article", "social", "website", "document", "presentation", "image"):
         assert studio.normalize_creator_content_type(content_type) == content_type
 
     # Unknown types remain safely bounded instead of being mistaken for a new engine.
@@ -759,3 +762,25 @@ def test_api_anything_catalog_includes_read_and_write_ops_by_default(monkeypatch
     assert result["status"] == "completed"
     assert [op["operation"] for op in result["operations"]] == ["search", "updateRecord"]
     assert calls == [{"site_name": "", "limit": 200, "user_id": "user-catalog-5", "include_writes": True}]
+
+def test_natural_language_standalone_image_request_routes_to_real_image_deliverable():
+    command = "Create a standalone cinematic editorial image of a solar research station in the desert"
+    decision = canonical.classify_command(command, {"content_type": "video"})
+    intent = canonical.compile_intent(command, {"content_type": "video"})
+    assert decision["route"] == "create"
+    assert decision["content_type"] == "image"
+    assert intent["constraints"]["content_type"] == "image"
+    assert intent["success"]["required_artifacts"] == [
+        "image.png", "image_manifest.json", "rights_manifest.json", "production_manifest.json"
+    ]
+
+
+def test_creator_image_aliases_normalize_without_affecting_video_default():
+    import studio_ultimate as studio
+    from ai_infinity.native_image_runtime import install as install_native_image_runtime
+
+    install_native_image_runtime(studio)
+    for alias in ("image", "picture", "illustration", "poster", "cover_art"):
+        assert studio.normalize_creator_content_type(alias) == "image"
+    assert studio.normalize_creator_content_type("spreadsheet") == "video"
+
