@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -289,6 +290,7 @@ def test_image_scorecard_uses_actual_png_hash_and_keeps_rights_review_open(monke
 
     monkeypatch.setattr(editorial, "_studio", lambda: FakeStudio())
     monkeypatch.setattr(editorial, "_canonical_current_version_id", lambda _pid: "image-version-1")
+    monkeypatch.setattr(editorial, "_project_files", lambda _pid: paths)
     project = {
         "project_id": project_id,
         "title": "Solar research station",
@@ -334,6 +336,7 @@ def test_image_scorecard_blocks_manifest_or_asset_hash_mismatch(monkeypatch, tmp
 
     monkeypatch.setattr(editorial, "_studio", lambda: FakeStudio())
     monkeypatch.setattr(editorial, "_canonical_current_version_id", lambda _pid: "image-version-1")
+    monkeypatch.setattr(editorial, "_project_files", lambda _pid: paths)
     project = {
         "project_id": project_id,
         "title": "Solar research station",
