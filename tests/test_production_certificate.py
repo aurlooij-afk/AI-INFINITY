@@ -11,7 +11,7 @@ from scripts.create_production_certificate import build_certificate
 def _passing_acceptance(candidate_sha: str = "b" * 40, run_id: str = "1001"):
     tests = [
         {"scenario_id": f"{index:02d}", "status": "PASS", "result": {}}
-        for index in range(1, 20)
+        for index in range(1, 21)
     ]
     tests[0]["result"] = {
         "truth_verified": True,
@@ -62,8 +62,8 @@ def _passing_acceptance(candidate_sha: str = "b" * 40, run_id: str = "1001"):
         "run_attempt": "1",
         "overall_status": "PASS",
         "passed": True,
-        "scenario_count": 19,
-        "completed_scenarios": 19,
+        "scenario_count": 20,
+        "completed_scenarios": 20,
         "tests": tests,
     }
 
@@ -197,7 +197,7 @@ def test_production_certificate_keeps_external_and_human_gates_separate():
     assert certificate["truthful"] is True
 
 
-def test_production_certificate_requires_all_19_universal_output_scenarios():
+def test_production_certificate_requires_all_20_universal_output_scenarios():
     candidate = "a" * 40
     acceptance = _passing_acceptance(candidate)
     acceptance["tests"][-1]["status"] = "BLOCKED"
