@@ -136,3 +136,42 @@ def test_guarded_runtime_finalizer_applies_review_state_contract(
 
     assert updates
     assert updates[-1]["status"] == expected_status
+
+def test_3702_capabilities_never_claim_ready_from_registry_presence_alone(monkeypatch):
+    import runpy
+    import threading
+    import time
+    import types
+    from fastapi import FastAPI
+
+    studio_stub = types.ModuleType("studio_ultimate")
+    studio_stub._get_user_id = lambda request: "test-user"
+    studio_stub._connect = lambda: None
+    monkeypatch.setitem(sys.modules, "studio_ultimate", studio_stub)
+
+    app = FastAPI()
+    app.add_api_route("/infinity/canonical/execute", lambda: {}, methods=["POST"])
+    app.add_api_route("/infinity/studio/project", lambda: {}, methods=["POST"])
+    app.add_api_route("/infinity/3701/knowledge/query", lambda: {}, methods=["POST"])
+    namespace = runpy.run_path(
+        "ai3702_platform.py",
+        init_globals={
+            "app": app,
+            "db": lambda: None,
+            "_db_lock": threading.RLock(),
+            "now": time.time,
+        },
+    )
+    local = namespace["_local_capabilities"]()
+    by_id = {item["id"]: item for item in local}
+
+    assert by_id["command"]["status"] == "route_available"
+    assert by_id["creator"]["status"] == "route_available"
+    assert by_id["research"]["status"] == "route_available"
+    assert by_id["storyboard"]["status"] == "unavailable"
+    assert all(item["status"] != "ready" for item in local)
+    response = namespace["capabilities"](None)
+    assert response["local_ready"] == 0
+    assert response["route_available_count"] == 3
+    assert response["unavailable_count"] == len(local) - 3
+
