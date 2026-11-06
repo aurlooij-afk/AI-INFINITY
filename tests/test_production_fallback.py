@@ -269,6 +269,10 @@ def test_boot_music_recovery_preserves_query_aware_canonical_generator(monkeypat
         return output
 
     monkeypatch.setattr(studio, "make_music", canonical_music)
+    # Keep this test scoped to the music adapter; _apply also wraps media
+    # assembly and SFX during normal boot, which must not leak into later tests.
+    monkeypatch.setattr(studio, "make_sfx", None)
+    monkeypatch.setattr(studio, "concat_segments", None)
     sitecustomize._apply()
 
     result = studio._resolve_music_bed(
