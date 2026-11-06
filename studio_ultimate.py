@@ -7853,6 +7853,7 @@ def _save_asset(project_id: str, kind: str, path: Path, media_type: str, metadat
         # Generated native video candidates must be durably stored before they
         # can be selected for a resumable canonical production rerender.
         "candidate", "image", "image_manifest", "primary_content_delivery",
+        "image_package", "image_package_manifest", "image_package_readme",
     }
     if kind in durable_kinds and path.exists() and path.is_file():
         try:
