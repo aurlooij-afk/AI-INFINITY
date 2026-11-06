@@ -8,6 +8,9 @@ import hashlib
 import hmac
 import json
 import os
+import platform
+import shutil
+import sys
 import re
 import uuid
 from datetime import datetime, timezone
@@ -735,6 +738,133 @@ def improve_repository(cfg: dict, goal: str, paths: list | None, model_fn) -> di
     }
 
 
+def build_runtime_report(
+    *,
+    python_version: str,
+    platform_name: str,
+    executables: dict,
+    studio_health: dict,
+    project_state: dict,
+    asset_storage: dict,
+    app_state: dict,
+    maintenance_ready: bool,
+    writer_ready: bool,
+) -> dict:
+    """Return a deliberately redacted live-runtime snapshot; never return secrets or raw errors."""
+    health_keys = (
+        "status", "media_core", "ffmpeg", "ffprobe", "offline_tts",
+        "queue_online", "queue_persistent", "real_motion_video",
+        "ai_video_generation_provider_available",
+    )
+    health = {
+        key: studio_health.get(key)
+        for key in health_keys
+        if key in studio_health and isinstance(studio_health.get(key), (str, bool, int, float, type(None)))
+    }
+    project_keys = (
+        "enabled", "contract_enabled", "active", "verified",
+        "snapshot_verified", "last_snapshot_status", "last_restore_status",
+    )
+    persistence = {
+        key: project_state.get(key)
+        for key in project_keys
+        if key in project_state and isinstance(project_state.get(key), (str, bool, int, float, type(None)))
+    }
+    configured = asset_storage.get("configured_providers")
+    if not isinstance(configured, list):
+        configured = []
+    provider_names = sorted({
+        str(name) for name in configured
+        if str(name) in {"cloudflare_r2", "oracle_object_storage", "backblaze_b2", "tigris", "supabase"}
+    })
+    return {
+        "schema": "ai-infinity-runtime-inspection.v1",
+        "runtime": {
+            "python_version": str(python_version).split()[0][:40],
+            "platform": str(platform_name)[:120],
+            "executables": {
+                name: bool(executables.get(name))
+                for name in ("ffmpeg", "ffprobe", "espeak", "espeak-ng")
+            },
+        },
+        "creator_studio": health,
+        "project_state": persistence,
+        "asset_storage": {
+            "configured_provider_count": len(provider_names),
+            "configured_providers": provider_names,
+            "primary_provider": (
+                str(asset_storage.get("primary_provider"))
+                if str(asset_storage.get("primary_provider")) in provider_names else None
+            ),
+            "durability_claimed": False,
+            "note": "Configuration is not proof of successful asset writes or read-back.",
+        },
+        "application": {
+            "storage_routes_registered": app_state.get("ai_infinity_storage_routes_registered") is True,
+            "creator_3800_layer_loaded": app_state.get("ai_infinity_3800") is True,
+            "production_hardening_applied": bool(app_state.get("production_hardening")),
+        },
+        "self_maintenance": {
+            "configured_and_ready": bool(maintenance_ready),
+            "free_tier_writer_ready": bool(writer_ready),
+            "repository_discovery": True,
+            "bounded_source_edits": True,
+            "commit_bound_ci_inspection": True,
+        },
+        "secrets_returned": False,
+        "raw_logs_returned": False,
+        "truthful": True,
+    }
+
+
+def inspect_runtime(cfg: dict, app: FastAPI) -> dict:
+    try:
+        import studio_ultimate as studio
+        health = studio.studio_health()
+        if not isinstance(health, dict):
+            health = {}
+    except Exception:
+        health = {"status": "unavailable"}
+    try:
+        from ai_infinity import project_state_backend
+        persistence = project_state_backend.status()
+        if not isinstance(persistence, dict):
+            persistence = {}
+    except Exception:
+        persistence = {"enabled": False, "active": False, "verified": False}
+    try:
+        storage_module = __import__("sys").modules.get("ai3704_storage_fabric")
+        configured = (
+            storage_module._configured_provider_names()
+            if storage_module and callable(getattr(storage_module, "_configured_provider_names", None))
+            else []
+        )
+        primary = getattr(storage_module, "PRIMARY", None) if storage_module else None
+        asset_storage = {"configured_providers": configured, "primary_provider": primary}
+    except Exception:
+        asset_storage = {"configured_providers": []}
+    state = getattr(app, "state", None)
+    app_state = {
+        "ai_infinity_storage_routes_registered": bool(getattr(state, "ai_infinity_storage_routes_registered", False)),
+        "ai_infinity_3800": bool(getattr(state, "ai_infinity_3800", False)),
+        "production_hardening": getattr(state, "production_hardening", None),
+    }
+    return build_runtime_report(
+        python_version=sys.version,
+        platform_name=platform.platform(),
+        executables={
+            name: shutil.which(name)
+            for name in ("ffmpeg", "ffprobe", "espeak", "espeak-ng")
+        },
+        studio_health=health,
+        project_state=persistence,
+        asset_storage=asset_storage,
+        app_state=app_state,
+        maintenance_ready=bool(cfg.get("ready")),
+        writer_ready=callable(free_tier_writer()) if cfg.get("ready") else False,
+    )
+
+
 def register(app: FastAPI) -> None:
     @app.get("/infinity/studio/self-maintenance/status")
     def maintenance_status(request: FastAPIRequest):
@@ -761,6 +891,12 @@ def register(app: FastAPI) -> None:
             "direct_main_writes": False, "arbitrary_shell_execution": False,
             "automatic_merge": False, "automatic_deploy": False, "truthful": True,
         }
+
+    @app.get("/infinity/studio/self-maintenance/runtime")
+    def maintenance_runtime(request: FastAPIRequest):
+        cfg = load_settings()
+        authorize(request, cfg)
+        return inspect_runtime(cfg, app)
 
     @app.post("/infinity/studio/self-maintenance/discover")
     async def maintenance_discover(request: FastAPIRequest):
