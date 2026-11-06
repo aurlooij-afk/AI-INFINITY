@@ -38,3 +38,11 @@ def test_gemini_writer_accepts_supported_secret_and_ack_aliases(monkeypatch):
     monkeypatch.setenv("AI_INFINITY_GEMINI_API_KEY", "alias-test-key")
     monkeypatch.setenv("GEMINI_FREE_TIER_DATA_USE_ACK", "true")
     assert studio._gemini_free_tier_text_model() is not None
+
+
+def test_gemini_writer_accepts_google_api_key_alias(monkeypatch):
+    for name in ("GEMINI_API_KEY", "AI_INFINITY_GEMINI_API_KEY", "GOOGLE_AI_STUDIO_API_KEY", "GEMINI_KEY", "AI_STUDIO_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-alias-test-key")
+    monkeypatch.setenv("AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK", "true")
+    assert studio._gemini_free_tier_text_model() is not None
