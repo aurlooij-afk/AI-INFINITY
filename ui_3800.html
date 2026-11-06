@@ -54,6 +54,7 @@ button,input,textarea,select{font:inherit}button{cursor:pointer}a{color:inherit;
   <div class="kicker">Truth</div>
   <nav class="nav">
     <button data-target="system"><i>✓</i><span>System</span></button>
+    <button data-target="maintenance"><i>⟳</i><span>Self-maintenance</span></button>
   </nav>
 </aside>
 <section class="main">
@@ -186,6 +187,36 @@ button,input,textarea,select{font:inherit}button{cursor:pointer}a{color:inherit;
   <div class="card pad"><div class="header"><div><h2>Quality</h2><p>regression + readiness evidence</p></div></div><button class="btn primary" onclick="powerQuality()">Run quality surfaces</button></div>
 </div>
 <div id="powerOut" class="card pad" style="margin-top:12px"><div class="empty">Choose any capability above. Its live backend response appears here.</div></div>
+</section>
+
+<section id="maintenance" class="section">
+<div class="header"><div><h2>Self-maintenance</h2><p>discover → inspect → improve → verify · protected draft-PR workflow</p></div></div>
+<div class="grid2">
+  <div class="card pad">
+    <div class="notice warn">Operator-only controls. The maintenance token is kept only in this page's memory and sent over HTTPS in a request header. It is never written to browser storage or returned by the API. Do not use a shared or untrusted device.</div>
+    <div style="margin-top:10px"><label class="label">Maintenance admin token</label><input id="maintenanceToken" class="field" type="password" autocomplete="off" spellcheck="false" placeholder="Enter the server-configured operator token"></div>
+    <div style="margin-top:9px"><label class="label">Engineering objective</label><textarea id="maintenanceGoal" class="field area">Inspect the current universal production system, identify the highest-impact verified capability gap, and prepare the smallest safe code repair with regression tests.</textarea></div>
+    <div class="actions">
+      <button class="btn" onclick="maintenanceStatus()">Check readiness</button>
+      <button class="btn" onclick="maintenanceDiscover()">Discover sources</button>
+      <button class="btn" onclick="maintenanceInspect()">Inspect selected source windows</button>
+      <button class="btn primary" onclick="maintenanceImprove()">Prepare tested improvement PR</button>
+    </div>
+    <div style="margin-top:9px"><label class="label">Optional exact candidate commit SHA for CI inspection</label><input id="maintenanceCommit" class="field" placeholder="40-character commit SHA"></div>
+    <div class="actions"><button class="btn" onclick="maintenanceCI()">Inspect CI evidence</button></div>
+  </div>
+  <div class="card pad">
+    <div class="header"><div><h2>Execution boundaries</h2><p>actual repository operations, not simulated status</p></div></div>
+    <div class="list">
+      <div class="item"><b>Repository discovery</b><div class="sub">Ranks allowlisted source and regression-test files from the live Git tree.</div></div>
+      <div class="item"><b>Bounded inspection</b><div class="sub">Large modules use function windows with line numbers and SHA-256 checks.</div></div>
+      <div class="item"><b>Code revision</b><div class="sub">Whole-file replacement for small modules; exact-range patches for large modules.</div></div>
+      <div class="item"><b>Verification</b><div class="sub">Requires regression tests and candidate-bound GitHub Actions evidence.</div></div>
+      <div class="item"><b>Release protection</b><div class="sub">Draft PR only. No direct main write, merge, deployment, publishing or rights approval.</div></div>
+    </div>
+  </div>
+</div>
+<div id="maintenanceOut" class="card pad" style="margin-top:12px"><div class="empty">Enter the operator token and choose a real repository operation.</div></div>
 </section>
 
 <section id="system" class="section">
