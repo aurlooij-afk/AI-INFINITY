@@ -94,6 +94,7 @@ def test_register_exposes_explicit_maintenance_routes():
     maintenance.register(app)
     paths = {route.path for route in app.routes}
     assert "/infinity/studio/self-maintenance/status" in paths
+    assert "/infinity/studio/self-maintenance/runtime" in paths
     assert "/infinity/studio/self-maintenance/inspect" in paths
     assert "/infinity/studio/self-maintenance/improve" in paths
 
@@ -386,4 +387,72 @@ def test_change_validation_rejects_generic_token_variable_and_provider_token_pre
                 {"path": "studio_ultimate.py", "content": source},
                 {"path": "tests/test_example.py", "content": "def test_ok(): pass\n"},
             ], requested)
+
+def test_runtime_report_is_useful_and_redacts_sensitive_health_and_storage_fields():
+    result = maintenance.build_runtime_report(
+        python_version="3.11.9 (main, test build)",
+        platform_name="Linux-6.8.0-x86_64",
+        executables={"ffmpeg": "/usr/bin/ffmpeg", "ffprobe": "/usr/bin/ffprobe", "espeak-ng": None},
+        studio_health={
+            "status": "healthy",
+            "media_core": True,
+            "ffmpeg": True,
+            "ffprobe": True,
+            "offline_tts": False,
+            "api_key": "do-not-return-this",
+            "last_error": "credential-bearing raw provider exception",
+        },
+        project_state={
+            "enabled": True,
+            "contract_enabled": True,
+            "active": False,
+            "verified": False,
+            "snapshot_verified": False,
+            "object_key": "private/internal/path",
+            "last_error": "private database error",
+        },
+        asset_storage={
+            "configured_providers": ["backblaze_b2", "supabase", "unknown_provider"],
+            "primary_provider": "backblaze_b2",
+            "access_key": "never-return-this",
+        },
+        app_state={
+            "ai_infinity_storage_routes_registered": True,
+            "ai_infinity_3800": False,
+            "production_hardening": {"status": "applied", "secret": "no"},
+        },
+        maintenance_ready=True,
+        writer_ready=False,
+    )
+    encoded = json.dumps(result)
+    assert result["creator_studio"]["status"] == "healthy"
+    assert result["runtime"]["executables"]["ffmpeg"] is True
+    assert result["project_state"]["active"] is False
+    assert result["asset_storage"]["configured_providers"] == ["backblaze_b2", "supabase"]
+    assert result["asset_storage"]["durability_claimed"] is False
+    assert result["application"]["storage_routes_registered"] is True
+    assert result["self_maintenance"]["configured_and_ready"] is True
+    assert result["self_maintenance"]["free_tier_writer_ready"] is False
+    for sensitive in ("do-not-return-this", "credential-bearing raw provider exception",
+                      "private/internal/path", "private database error",
+                      "never-return-this", "access_key", "api_key", "last_error"):
+        assert sensitive not in encoded
+
+
+def test_runtime_inspection_does_not_report_object_storage_configuration_as_durability(monkeypatch):
+    report = maintenance.build_runtime_report(
+        python_version="3.11",
+        platform_name="test",
+        executables={},
+        studio_health={"status": "healthy", "media_core": True},
+        project_state={"active": True, "verified": True, "snapshot_verified": True},
+        asset_storage={"configured_providers": ["backblaze_b2"], "primary_provider": "backblaze_b2"},
+        app_state={},
+        maintenance_ready=True,
+        writer_ready=True,
+    )
+    assert report["project_state"]["verified"] is True
+    assert report["asset_storage"]["configured_providers"] == ["backblaze_b2"]
+    assert report["asset_storage"]["durability_claimed"] is False
+    assert "successful asset writes or read-back" in report["asset_storage"]["note"]
 
