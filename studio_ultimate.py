@@ -1642,6 +1642,9 @@ def _gemini_api_key() -> str:
         "GEMINI_API_KEY",
         "AI_INFINITY_GEMINI_API_KEY",
         "GOOGLE_AI_STUDIO_API_KEY",
+        "GOOGLE_API_KEY",
+        "GEMINI_KEY",
+        "AI_STUDIO_API_KEY",
     ))
 
 
