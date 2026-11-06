@@ -256,8 +256,9 @@ def test_earth_from_space_fallback_does_not_read_unrelated_search_hits_as_script
 
 
 
-def test_boot_music_recovery_preserves_query_aware_canonical_generator(monkeypatch, tmp_path):
-    import sitecustomize
+
+def test_music_recovery_wrapper_preserves_query_aware_canonical_generator(monkeypatch, tmp_path):
+    from ai_infinity.music_recovery import wrap_music_generator
 
     calls = []
 
@@ -268,18 +269,21 @@ def test_boot_music_recovery_preserves_query_aware_canonical_generator(monkeypat
         output.write_bytes(b"verified-test-audio" * 200)
         return output
 
-    monkeypatch.setattr(studio, "make_music", canonical_music)
-    # Keep this test scoped to the music adapter; _apply also wraps media
-    # assembly and SFX during normal boot, which must not leak into later tests.
-    monkeypatch.setattr(studio, "make_sfx", None)
-    monkeypatch.setattr(studio, "concat_segments", None)
-    sitecustomize._apply()
+    def valid_music_file(path):
+        candidate = Path(path)
+        return candidate.is_file() and candidate.stat().st_size >= 1000
+
+    monkeypatch.setattr(
+        studio,
+        "make_music",
+        wrap_music_generator(canonical_music, valid_music_file),
+    )
 
     result = studio._resolve_music_bed(
         tmp_path,
         12.0,
         query="quiet cinematic ambient with a measured climax",
-        project_id="sitecustomize_music_query_regression",
+        project_id="music_query_wrapper_regression",
     )
 
     assert calls == [{

@@ -33,23 +33,12 @@ def _apply() -> None:
     original_concat = getattr(studio, "concat_segments", None)
 
     if callable(original_music) and not getattr(original_music, "_aiinfinity_recovery", False):
-        def make_music_safe(
-            outdir,
-            seconds,
-            query="cinematic ambient instrumental soundtrack no vocals",
-        ):
-            # Keep the canonical provenance-aware generator in the execution path.
-            # It selects and verifies openly licensed tracks when available, and
-            # writes its own truthful manifest when it must use its procedural
-            # fallback. The caller (_resolve_music_bed) owns the final degraded
-            # emergency fallback if this generator raises.
-            result = original_music(outdir, seconds, query=query)
-            if not _valid(result):
-                raise RuntimeError("canonical music generator produced no valid audio file")
-            return Path(result)
-
-        make_music_safe._aiinfinity_recovery = True
-        studio.make_music = make_music_safe
+        try:
+            from ai_infinity.music_recovery import wrap_music_generator
+            studio.make_music = wrap_music_generator(original_music, _valid)
+        except Exception:
+            # The canonical generator remains usable without the optional guard.
+            pass
 
     if callable(original_sfx) and not getattr(original_sfx, "_aiinfinity_recovery", False):
         def make_sfx_safe(outdir, duration, index):
