@@ -1357,8 +1357,8 @@ def _content_mode_acceptance(
                 assert "ai-infinity-site/index.html" in names
                 page = archive.read("ai-infinity-site/index.html").decode("utf-8")
                 assert "rel=\"stylesheet\"" in page and "<video controls" in page
-                assert "evidence/rights_manifest.json" in names
-                assert "evidence/fact_check.json" in names
+                assert "ai-infinity-site/evidence/rights_manifest.json" in names
+                assert "ai-infinity-site/evidence/fact_check.json" in names
             assert manifest.get("export_package", {}).get("sha256") == sha(package), manifest
             assert "not a published" in readme.read_text(encoding="utf-8").lower()
             delivered = {"website_zip": package.name, "sha256": sha(package), "site_files": len(names)}
