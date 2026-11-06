@@ -1135,7 +1135,7 @@ def dispatch_command(command, user_id, raw=None):
                     result = connector.execute_bundled_read_only(site_name, operation_name, params)
                 result_status = result.get("status")
                 executed = result.get("executed") is True
-                if result_status in {"write_confirmation_required", "dry_run_required", "preview_receipt_persist_failed"}:
+                if result_status in {"write_confirmation_required", "dry_run_required", "preview_receipt_persist_failed", "write_approval_expired", "write_approval_invalid"}:
                     status = result_status
                 elif result_status == "dry_run_ready":
                     status = "dry_run_ready"
