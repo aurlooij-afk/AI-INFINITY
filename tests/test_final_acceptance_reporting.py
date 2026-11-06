@@ -69,14 +69,14 @@ def test_human_review_scorecard_matches_the_candidate_bound_approval_thresholds(
     assert policy["critical_fact_or_rights_failure_allowed"] is False
 
 
-def test_human_approval_workflow_requires_each_of_the_19_scenarios_exactly_once():
+def test_human_approval_workflow_requires_each_of_the_20_scenarios_exactly_once():
     workflow_path = SUITE_PATH.parents[1] / ".github" / "workflows" / "human-approval-certificate.yml"
     workflow = workflow_path.read_text(encoding="utf-8")
-    assert "range(1, 20)" in workflow
+    assert "range(1, 21)" in workflow
     assert 'acceptance.get("scenario_count")' in workflow
     assert 'acceptance.get("completed_scenarios")' in workflow
     assert "set(scenario_map) != expected_scenario_ids" in workflow
-    assert "Every one of the 19 acceptance scenarios must pass." in workflow
+    assert "Every one of the 20 acceptance scenarios must pass." in workflow
 
 
 def test_caption_phrase_is_reconstructed_across_srt_cue_boundaries():
@@ -121,7 +121,7 @@ def test_runtime_review_packet_reports_candidate_gates_without_stale_suspension_
     text = "\n".join(notes).lower()
     assert "exact-candidate live render deployment" in text
     assert "standalone ci run is not production deployment evidence" in text
-    assert "19-scenario" in text and "900-second" in text
+    assert "20-scenario" in text and "900-second" in text
     assert "fresh-process recovery" in text
     assert "authenticated wan2.2 gpu inference" in text
     assert "authorized reviewer" in text
