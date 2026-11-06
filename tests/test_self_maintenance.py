@@ -98,6 +98,8 @@ def test_production_docker_image_copies_and_compiles_self_maintenance_module():
     docker_lines = (root / "Dockerfile").read_text(encoding="utf-8").splitlines()
     copy_lines = [line for line in docker_lines if line.startswith("COPY ")]
     compile_start = next(i for i, line in enumerate(docker_lines) if line.strip().startswith("RUN python -m py_compile"))
-    compile_block = " ".join(docker_lines[compile_start:compile_start + 10])
+    compile_lines = docker_lines[compile_start:compile_start + 7]
     assert any("self_maintenance.py" in line and line.rstrip().endswith("./") for line in copy_lines)
-    assert "self_maintenance.py" in compile_block
+    assert compile_lines[-1].strip().endswith("self_maintenance.py")
+    assert "self_maintenance.py" not in " ".join(compile_lines[1:-1])
+    assert all(line.endswith(chr(92)) for line in compile_lines[:-1])
