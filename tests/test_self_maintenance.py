@@ -10,6 +10,7 @@ def test_source_allowlist_permits_application_and_test_files():
     assert maintenance.validate_path("studio_ultimate.py") == "studio_ultimate.py"
     assert maintenance.validate_path("ai_infinity/native_exports.py") == "ai_infinity/native_exports.py"
     assert maintenance.validate_path("tests/test_runtime_truth.py") == "tests/test_runtime_truth.py"
+    assert maintenance.validate_path("self_maintenance.py") == "self_maintenance.py"
 
 
 @pytest.mark.parametrize("path", [
