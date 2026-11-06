@@ -820,7 +820,14 @@ def build_runtime_report(
 def inspect_runtime(cfg: dict, app: FastAPI) -> dict:
     try:
         import studio_ultimate as studio
-        health = studio.studio_health()
+        health_endpoint = getattr(studio, "studio_health", None)
+        if not callable(health_endpoint):
+            route = next(
+                (row for row in app.routes if str(getattr(row, "path", "")) == "/infinity/studio/health"),
+                None,
+            )
+            health_endpoint = getattr(route, "endpoint", None) if route else None
+        health = health_endpoint() if callable(health_endpoint) else {"status": "route_unavailable"}
         if not isinstance(health, dict):
             health = {}
     except Exception:
@@ -849,6 +856,10 @@ def inspect_runtime(cfg: dict, app: FastAPI) -> dict:
         "ai_infinity_3800": bool(getattr(state, "ai_infinity_3800", False)),
         "production_hardening": getattr(state, "production_hardening", None),
     }
+    try:
+        writer_ready = callable(free_tier_writer()) if cfg.get("ready") else False
+    except Exception:
+        writer_ready = False
     return build_runtime_report(
         python_version=sys.version,
         platform_name=platform.platform(),
@@ -861,7 +872,7 @@ def inspect_runtime(cfg: dict, app: FastAPI) -> dict:
         asset_storage=asset_storage,
         app_state=app_state,
         maintenance_ready=bool(cfg.get("ready")),
-        writer_ready=callable(free_tier_writer()) if cfg.get("ready") else False,
+        writer_ready=writer_ready,
     )
 
 
