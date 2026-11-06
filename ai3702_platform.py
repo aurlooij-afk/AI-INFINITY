@@ -12,6 +12,7 @@ creator production to Studio rather than duplicating them.
 import json
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import Request
@@ -76,6 +77,39 @@ def _local_capabilities() -> list[dict[str, Any]]:
         })
     return output
 
+def _registry_summary() -> dict[str, Any]:
+    """Expose inventory counts without presenting registrations as executable tools."""
+    path = Path(__file__).resolve().parent / "capability_registry.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        entries = payload.get("entries") if isinstance(payload, dict) else None
+        if not isinstance(entries, list):
+            raise ValueError("registry_entries_missing")
+        counts: dict[str, int] = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            state = str(entry.get("integration_state") or "UNCLASSIFIED")
+            counts[state] = counts.get(state, 0) + 1
+        return {
+            "status": "inventory_only",
+            "entry_count": len(entries),
+            "declared_count": payload.get("count"),
+            "integration_state_counts": counts,
+            "readiness_claimed": False,
+            "policy": str(payload.get("truthfulness_policy") or ""),
+            "truthful": True,
+        }
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "entry_count": 0,
+            "readiness_claimed": False,
+            "error_type": type(exc).__name__,
+            "truthful": True,
+        }
+
+
 def _gated_capabilities() -> list[dict[str, Any]]:
     return [
         {"id":"durable_external_storage","name":"External durable storage credentials","status":"connection-gated"},
@@ -119,6 +153,7 @@ def capabilities(request: Request):
         "route_available_count":sum(item.get("status") == "route_available" for item in local),
         "unavailable_count":sum(item.get("status") == "unavailable" for item in local),
         "gated_count":len(gated),
+        "registry":_registry_summary(),
         "free_first":True,
         "truthful":True,
     }
