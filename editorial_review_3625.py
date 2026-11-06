@@ -1223,6 +1223,15 @@ def register(app) -> None:
                 "message": "approval blocked until technical truth and the documented score thresholds pass with zero critical failures",
                 "release_gate": gate,
             })
+        dimension_scores = {}
+        rights_approval = False
+        rights_notes = ""
+        if str(card.get("content_type") or "").lower() == "image" and decision == "approve":
+            valid_image_review, dimension_scores, review_error = _image_role_review_validation(payload or {})
+            if not valid_image_review:
+                raise HTTPException(422, review_error)
+            rights_approval = True
+            rights_notes = str((payload or {}).get("rights_notes") or "").strip()[:4000]
         review = {
             "review_id": "edrev_" + uuid.uuid4().hex,
             "project_id": project_id,
@@ -1231,12 +1240,19 @@ def register(app) -> None:
             "decision": decision,
             "note": note,
             "scorecard_version": VERSION,
+            "dimension_scores": dimension_scores,
+            "rights_approval": rights_approval,
+            "rights_notes": rights_notes,
             "created_at": time.time(),
         }
         with s.DB_LOCK, s._connect() as db:
             db.execute(
-                "INSERT INTO aii_editorial_reviews(review_id,project_id,user_id,content_fingerprint,decision,note,scorecard_version,created_at) VALUES(?,?,?,?,?,?,?,?)",
-                (review["review_id"], project_id, user_id, current, decision, note, VERSION, review["created_at"]),
+                "INSERT INTO aii_editorial_reviews(review_id,project_id,user_id,content_fingerprint,decision,note,scorecard_version,created_at,dimension_scores_json,rights_approval,rights_notes) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    review["review_id"], project_id, user_id, current, decision, note,
+                    VERSION, review["created_at"], json.dumps(dimension_scores, sort_keys=True),
+                    1 if rights_approval else 0, rights_notes,
+                ),
             )
         try:
             s.audit_event(project_id, "editorial_human_review", {
@@ -1244,6 +1260,9 @@ def register(app) -> None:
                 "review_id": review["review_id"],
                 "content_fingerprint": current,
                 "scorecard_version": VERSION,
+                "dimension_scores": dimension_scores,
+                "rights_approval": rights_approval,
+                "rights_notes_present": len(rights_notes) >= 20,
             })
         except Exception:
             pass
