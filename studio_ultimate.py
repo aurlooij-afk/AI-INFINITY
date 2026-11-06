@@ -7852,7 +7852,7 @@ def _save_asset(project_id: str, kind: str, path: Path, media_type: str, metadat
         "timeline", "editable_timeline", "timeline_bundle", "otio", "otio_bundle",
         # Generated native video candidates must be durably stored before they
         # can be selected for a resumable canonical production rerender.
-        "candidate",
+        "candidate", "image", "image_manifest", "primary_content_delivery",
     }
     if kind in durable_kinds and path.exists() and path.is_file():
         try:
