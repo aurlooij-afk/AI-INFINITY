@@ -312,7 +312,7 @@ def compile_intent(command,raw):
       "success":{
         "technical_qc_required":True,"duration_tolerance_seconds":1.0,"aspect_tolerance":0.02,
         "required_artifacts": (
-          ["image.png", "image_manifest.json", "rights_manifest.json", "production_manifest.json"] if ct == "image" else
+          ["image.png", "image_package.zip", "image_package_manifest.json", "image_manifest.json", "sources.json", "rights_manifest.json", "production_manifest.json", "primary_content_delivery.json"] if ct == "image" else
           ["final.mp4", "audio_master.mp3", "captions.srt", "thumbnail.jpg", "script.md", "manifest.json"] if ct in {"video", "social"} else
           ["audio_master.mp3", "podcast_rss.xml"] if ct == "podcast" else
           ["website.zip", "website_manifest.json"] if ct == "website" else
