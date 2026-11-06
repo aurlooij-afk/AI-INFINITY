@@ -348,3 +348,42 @@ def test_production_creator_ui_exposes_protected_self_maintenance_console():
     assert 'studio_ultimate.register(app)' in main
     assert 'self_maintenance.register(app)' in main
 
+@pytest.mark.parametrize("source", [
+    'token = "abcdefghijklmnopqrstuvwxyz123456"',
+    'secret = "this-is-a-long-fake-secret-value"',
+    'GEMINI_API_KEY = "abcdefghijklmnopqrstuvwxyz123456"',
+    'os.environ["HF_TOKEN"] = "abcdefghijklmnopqrstuvwxyz123456"',
+    'SUPABASE_SERVICE_ROLE_KEY = "abcdefghijklmnopqrstuvwxyz123456"',
+    'worker_access_token = "abcdefghijklmnopqrstuvwxyz123456"',
+    'value = "ghp_abcdefghijklmnopqrstuvwxyz1234567890"',
+    'value = "sk-proj-abcdefghijklmnopqrstuvwxyz1234567890"',
+    'value = "github_pat_abcdefghijklmnopqrstuvwxyz1234567890"',
+    'value = "hf_abcdefghijklmnopqrstuvwxyz1234567890"',
+])
+def test_embedded_secret_detector_catches_common_credential_shapes(source):
+    assert maintenance.contains_embedded_secret(source) is True
+
+
+@pytest.mark.parametrize("source", [
+    'token = "temporary-local-preview"',
+    'message = "The secret is never stored in browser localStorage."',
+    'description = "Use the GitHub API key setting from the environment."',
+    'def build_token_label():\n    return "not a credential"',
+])
+def test_embedded_secret_detector_avoids_ordinary_non_credential_text(source):
+    assert maintenance.contains_embedded_secret(source) is False
+
+
+def test_change_validation_rejects_generic_token_variable_and_provider_token_prefixes():
+    requested = {"studio_ultimate.py", "tests/test_example.py"}
+    for source in (
+        'token = "abcdefghijklmnopqrstuvwxyz123456"\n',
+        'credential = "ghp_abcdefghijklmnopqrstuvwxyz1234567890"\n',
+        'os.environ["AI_INFINITY_WAN_WORKER_TOKEN"] = "abcdefghijklmnopqrstuvwxyz123456"\n',
+    ):
+        with pytest.raises(HTTPException, match="secret"):
+            maintenance.validate_changes([
+                {"path": "studio_ultimate.py", "content": source},
+                {"path": "tests/test_example.py", "content": "def test_ok(): pass\n"},
+            ], requested)
+
