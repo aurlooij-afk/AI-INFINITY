@@ -1472,6 +1472,19 @@ def t20_image():
         rights = jart(session, base, project_id, "rights_manifest.json")
         production = jart(session, base, project_id, "production_manifest.json")
         primary = jart(session, base, project_id, "primary_content_delivery.json")
+        image_package = dl(session, base, project_id, "image_package.zip", min_bytes=1000)
+        package_manifest = jart(session, base, project_id, "image_package_manifest.json")
+        with zipfile.ZipFile(image_package) as bundle:
+            assert bundle.testzip() is None
+            packaged_names = set(bundle.namelist())
+            assert "ai-infinity-image/image.png" in packaged_names
+            packaged_rights = json.loads(bundle.read("ai-infinity-image/rights_manifest.json"))
+            assert packaged_rights.get("rights_status") == "REVIEW_REQUIRED"
+        package_sha = sha(image_package)
+        package_row = next((row for row in primary.get("artifacts", []) if row.get("name") == "image_package.zip"), {})
+        assert package_row.get("sha256") == package_sha
+        assert package_manifest.get("entrypoint") == "image.png"
+        assert package_manifest.get("redistribution_authorized") is False
         from PIL import Image
         with Image.open(image) as opened:
             opened.verify()
@@ -1498,6 +1511,8 @@ def t20_image():
             "format": image_format,
             "resolution": dimensions,
             "sha256": actual_sha,
+            "package_sha256": package_sha,
+            "package_file_count": len(packaged_names),
             "generation_mode": manifest["generation"]["mode"],
             "primary_delivery": "PASS",
             "rights_status": rights["status"],
