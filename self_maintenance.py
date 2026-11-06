@@ -35,6 +35,7 @@ ROOT_MODULES = {
     "professional_creator_fabric.py", "universal_command_batch.py",
     "wan_video_worker.py", "self_maintenance.py",
 }
+ROOT_TEXT_FILES = {"creator_studio_2030.html", "ui_3800.html"}
 BLOCKED_FILES = {
     ".env", ".env.local", ".env.production", ".session-key",
     "AI_Infinity_Creator_Benchmark_and_Reuse_Plan.md",
@@ -82,14 +83,17 @@ def validate_path(value: object) -> str:
         raise HTTPException(422, "Invalid repository path.")
     if any(part.startswith(".") for part in parts) or parts[-1] in BLOCKED_FILES or parts[-1].lower().startswith(".env"):
         raise HTTPException(403, "Hidden, protected, and secret-bearing files are excluded.")
+    if path in ROOT_TEXT_FILES:
+        return path
     allowed = (
         path in ROOT_MODULES
+        or ("/" not in path and path.endswith(".py"))
         or path.startswith("ai_infinity/")
         or path.startswith("tests/")
         or path.startswith("scripts/")
     )
     if not allowed or not path.endswith(".py"):
-        raise HTTPException(403, "Only allowlisted Python source and test files are available.")
+        raise HTTPException(403, "Only allowlisted root Python, application, script, test, and UI files are available.")
     return path
 
 
@@ -367,7 +371,7 @@ def generate_changes(goal: str, files: list, model_fn) -> dict:
     prompt = (
         "Act as the principal engineer for AI Infinity. Implement the requested goal with the smallest safe code change. "
         "Return only valid JSON with keys summary and changes. Include at least one regression-test change. "
-        "For a file whose content_mode is full_file, return {path, content} with the complete replacement file. "
+        "For Python source and the two allowlisted UI HTML files, when content_mode is full_file, return {path, content} with the complete replacement file. "
         "For a file whose content_mode is line_ranges, return {path, edits:[{start_line,end_line,expected_sha256,replacement_text}]}. "
         "A line_ranges edit MUST replace one entire listed editable range, using its exact start_line, end_line and sha256. "
         "Never edit reference-only lines, invent line numbers, or change a range whose hash was not supplied. "
@@ -470,10 +474,19 @@ def validate_changes(changes: list, requested_paths: set[str]) -> list:
             raise HTTPException(413, f"Proposed content for {path} is invalid or too large.")
         if SECRET_LITERAL.search(content):
             raise HTTPException(422, f"Potential hard-coded secret detected in {path}.")
-        try:
-            ast.parse(content, filename=path)
-        except SyntaxError as exc:
-            raise HTTPException(422, f"Python syntax error in {path} at line {exc.lineno}.") from None
+        if path.endswith(".py"):
+            try:
+                ast.parse(content, filename=path)
+            except SyntaxError as exc:
+                raise HTTPException(422, f"Python syntax error in {path} at line {exc.lineno}.") from None
+        elif path.endswith(".html"):
+            try:
+                from html.parser import HTMLParser
+                parser = HTMLParser(convert_charrefs=True)
+                parser.feed(content)
+                parser.close()
+            except Exception:
+                raise HTTPException(422, f"HTML structure validation failed for {path}.") from None
         output.append({"path": path, "content": content})
     if len({row["path"] for row in output}) != len(output):
         raise HTTPException(422, "Duplicate paths in proposed changes.")
