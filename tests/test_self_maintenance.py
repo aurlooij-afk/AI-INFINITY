@@ -103,3 +103,98 @@ def test_production_docker_image_copies_and_compiles_self_maintenance_module():
     assert compile_lines[-1].strip().endswith("self_maintenance.py")
     assert "self_maintenance.py" not in " ".join(compile_lines[1:-1])
     assert all(line.endswith(chr(92)) for line in compile_lines[:-1])
+
+def _large_core_source() -> str:
+    prefix = []
+    suffix = []
+    for index in range(900):
+        prefix.extend([f"def unrelated_before_{index}():", f"    return {index}"])
+        suffix.extend([f"def unrelated_after_{index}():", f"    return {index}"])
+    target = [
+        "def generate_longform_narration():",
+        "    return 'original narration planner'",
+    ]
+    return "\n".join(prefix + target + suffix) + "\n"
+
+
+def test_large_core_module_uses_bounded_hash_pinned_source_windows():
+    source = _large_core_source()
+    context, ranges, mode = maintenance._bounded_source_context(
+        source, "repair longform narration generator", "studio_ultimate.py"
+    )
+    assert mode == "line_ranges"
+    assert len(context.encode("utf-8")) < len(source.encode("utf-8"))
+    assert len(context.encode("utf-8")) <= maintenance.MAX_CONTEXT_FILE_BYTES
+    assert len(ranges) == 1
+    assert "generate_longform_narration" in context
+    assert ranges[0]["start_line"] > 1
+    assert ranges[0]["end_line"] < len(source.splitlines())
+
+
+def test_large_core_module_edit_replaces_only_the_inspected_hash_pinned_range():
+    source = _large_core_source()
+    context, ranges, mode = maintenance._bounded_source_context(
+        source, "repair longform narration generator", "studio_ultimate.py"
+    )
+    assert mode == "line_ranges"
+    original = {
+        "path": "studio_ultimate.py",
+        "sha": "a" * 40,
+        "sha256": __import__("hashlib").sha256(source.encode("utf-8")).hexdigest(),
+        "content": source,
+    }
+    inspected = [{
+        "path": "studio_ultimate.py",
+        "content": context,
+        "content_mode": mode,
+        "editable_ranges": ranges,
+    }]
+    changed = maintenance.apply_window_edits(
+        [{
+            "path": "studio_ultimate.py",
+            "edits": [{
+                **ranges[0],
+                "replacement_text": (
+                    "def generate_longform_narration():\n"
+                    "    return 'revised, evidence-aware narration planner'"
+                ),
+            }],
+        }],
+        {"studio_ultimate.py": original},
+        inspected,
+    )
+    updated = changed[0]["content"]
+    assert "unrelated_before_0" in updated
+    assert "unrelated_after_899" in updated
+    assert "revised, evidence-aware narration planner" in updated
+    assert "original narration planner" not in updated
+    import ast
+    ast.parse(updated)
+
+
+def test_large_core_module_edit_rejects_stale_or_uninspected_range_hash():
+    source = _large_core_source()
+    context, ranges, mode = maintenance._bounded_source_context(
+        source, "repair longform narration generator", "studio_ultimate.py"
+    )
+    original = {"path": "studio_ultimate.py", "sha": "a" * 40, "content": source}
+    inspected = [{
+        "path": "studio_ultimate.py",
+        "content": context,
+        "content_mode": mode,
+        "editable_ranges": ranges,
+    }]
+    with pytest.raises(HTTPException, match="hash-pinned"):
+        maintenance.apply_window_edits(
+            [{
+                "path": "studio_ultimate.py",
+                "edits": [{
+                    **ranges[0],
+                    "expected_sha256": "0" * 64,
+                    "replacement_text": "def generate_longform_narration():\n    return 'unsafe'",
+                }],
+            }],
+            {"studio_ultimate.py": original},
+            inspected,
+        )
+
