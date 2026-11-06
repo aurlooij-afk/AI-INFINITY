@@ -357,3 +357,31 @@ def run_native_image_project(
     if active_project is not None and hasattr(active_project, "project_id"):
         active_project.project_id = None
     return result
+
+def install(studio_module) -> None:
+    """Attach image intent to the existing Creator Studio queue, without a second worker."""
+    if getattr(studio_module, "_ai_infinity_native_image_runtime_installed", False):
+        return
+    original_normalizer = studio_module.normalize_creator_content_type
+    original_runner = studio_module.run_project
+
+    def normalize_content_type(value: Any) -> str:
+        selected = str(value or "").strip().lower()
+        if selected in {"image", "picture", "illustration", "poster", "cover_art"}:
+            return "image"
+        return original_normalizer(value)
+
+    def dispatch_project(project_id: str, model_fn) -> None:
+        project = studio_module._get_project(project_id)
+        request = _request(project or {})
+        if normalize_content_type(request.get("content_type")) == "image":
+            run_native_image_project(project_id, studio_module=studio_module)
+            return
+        return original_runner(project_id, model_fn)
+
+    existing = set(getattr(studio_module, "SUPPORTED_CREATOR_CONTENT_TYPES", ()))
+    studio_module.SUPPORTED_CREATOR_CONTENT_TYPES = frozenset(existing | {"image"})
+    studio_module.normalize_creator_content_type = normalize_content_type
+    studio_module.run_project = dispatch_project
+    studio_module._ai_infinity_native_image_runtime_installed = True
+
