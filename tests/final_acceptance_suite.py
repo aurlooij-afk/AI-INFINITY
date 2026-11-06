@@ -15,7 +15,7 @@ if str(REPO_ROOT) not in sys.path:
 TMP=Path("/tmp/ai-infinity-final-acceptance"); TMP.mkdir(parents=True,exist_ok=True)
 PYURL="https://www.python.org/"
 
-SCENARIO_COUNT = 19
+SCENARIO_COUNT = 20
 HUMAN_REVIEW_POLICY = {
     "average_minimum": 4.5,
     "average_scope": "six required approval roles",
@@ -1443,6 +1443,72 @@ def t19_presentation():
     return _content_mode_acceptance("presentation", 18091, title="PowerPoint presentation")
 
 
+
+def t20_image():
+    data_dir = TMP / "native-image"
+    shutil.rmtree(data_dir, ignore_errors=True)
+    process, base, server_log = start(data_dir, 18092, {"AI_INFINITY_TEST_MEDIA": "1"})
+    session = requests.Session()
+    try:
+        project_id = create(
+            session,
+            base,
+            "Create a standalone cinematic editorial image of a solar research station in the desert",
+            content_type="image",
+            title="Native Image Acceptance",
+            language="English",
+            idempotency_key="native-image-acceptance-v1",
+        )
+        last = {}
+        deadline = time.time() + 180
+        while time.time() < deadline:
+            last = req(session, base, f"/infinity/studio/project/{quote(project_id, safe='')}")
+            if str(last.get("status") or "").lower() in {"completed", "completed_with_qc_warnings", "failed", "cancelled"}:
+                break
+            time.sleep(1)
+        assert str(last.get("status") or "").lower() == "completed_with_qc_warnings", last
+        image = dl(session, base, project_id, "image.png", min_bytes=1000)
+        manifest = jart(session, base, project_id, "image_manifest.json")
+        rights = jart(session, base, project_id, "rights_manifest.json")
+        production = jart(session, base, project_id, "production_manifest.json")
+        primary = jart(session, base, project_id, "primary_content_delivery.json")
+        from PIL import Image
+        with Image.open(image) as opened:
+            opened.verify()
+        with Image.open(image) as opened:
+            dimensions = [opened.width, opened.height]
+            image_format = opened.format
+        actual_sha = sha(image)
+        assert image_format == "PNG" and min(dimensions) >= 640, (image_format, dimensions)
+        assert manifest["project_id"] == project_id
+        assert manifest["output"]["sha256"] == actual_sha
+        assert manifest["generation"]["mode"] in {"ai_provider", "local_editorial_illustration_fallback"}
+        assert rights["status"] == "REVIEW_REQUIRED"
+        assert rights["redistribution_authorized"] is False
+        assert rights["assets"][0]["sha256"] == actual_sha
+        assert production["primary_deliverable"]["sha256"] == actual_sha
+        assert primary["status"] == "PASS" and primary["primary_delivery_verified"] is True
+        assert primary["rights_review_status"] == "REVIEW_REQUIRED"
+        assert primary["human_review_status"] == "PENDING"
+        assert last.get("progress") == 100, last
+        return {
+            "test": 20,
+            "project_id": project_id,
+            "content_type": "image",
+            "format": image_format,
+            "resolution": dimensions,
+            "sha256": actual_sha,
+            "generation_mode": manifest["generation"]["mode"],
+            "primary_delivery": "PASS",
+            "rights_status": rights["status"],
+            "human_review": primary["human_review_status"],
+            "publication": primary["external_publication_status"],
+            "runtime_status": last.get("status"),
+            "truthful": True,
+        }
+    finally:
+        stop(process, server_log)
+
 def main():
     SCENARIO_RESULTS.clear()
     _persist_acceptance_result()
@@ -1466,6 +1532,7 @@ def main():
         "17": "Responsive exportable website with local video, captions and project evidence",
         "18": "Editable Word document verified by reopening its OOXML package",
         "19": "Editable 16:9 PowerPoint deck verified by reopening its OOXML package",
+        "20": "Standalone native image with PNG integrity, SHA-256, rights manifest and review gates",
     }
     requested = {
         "01": {"duration_seconds": 60, "resolution": [1920, 1080], "aspect_ratio": "16:9", "quality_preset": "cinematic"},
@@ -1487,6 +1554,7 @@ def main():
         "17": {"content_type": "website", "native_format": "static HTML/CSS", "site_zip_hash_verified": True},
         "18": {"content_type": "document", "native_format": "DOCX", "reopen_verified": True},
         "19": {"content_type": "presentation", "native_format": "PPTX", "reopen_verified": True},
+        "20": {"content_type": "image", "native_format": "PNG", "sha256_verified": True, "rights_review_required": True},
     }
     process = None
     server_log = None
@@ -1539,6 +1607,7 @@ def main():
     _record_scenario("17", descriptions["17"], t17_website, requested=requested["17"])
     _record_scenario("18", descriptions["18"], t18_document, requested=requested["18"])
     _record_scenario("19", descriptions["19"], t19_presentation, requested=requested["19"])
+    _record_scenario("20", descriptions["20"], t20_image, requested=requested["20"])
 
     document = _acceptance_result_document()
     _persist_acceptance_result()
