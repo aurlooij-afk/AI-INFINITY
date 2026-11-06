@@ -679,7 +679,7 @@ def test_api_anything_user_profile_operation_dispatches_tier_and_user_id(monkeyp
         "reader-site", "getRecord", {"recordId": "rec-42"},
         {
             "user_id": "user-research-7", "allow_writes": False,
-            "max_tier": 2, "dry_run": False, "idempotency_key": "", "again": False, "auto_preflight": True,
+            "max_tier": 2, "dry_run": False, "idempotency_key": "", "again": False, "auto_preflight": False,
         },
     )]
 
@@ -719,7 +719,7 @@ def test_api_anything_write_uses_explicit_natural_language_intent_without_flag(m
     connector_fake = SimpleNamespace(
         execute_api_anything_operation=lambda site, operation, params, **kwargs: (
             calls.append((site, operation, params, kwargs)) or {
-                "status": "dry_run_required", "executed": False,
+                "status": "write_confirmation_required", "executed": False,
                 "write_capable": True, "truthful": True,
             }
         ),
@@ -731,16 +731,44 @@ def test_api_anything_write_uses_explicit_natural_language_intent_without_flag(m
     )
     assert result["route"] == "public_api"
     assert result["executed"] is False
-    assert result["status"] == "dry_run_required"
+    assert result["status"] == "write_confirmation_required"
     assert result["write"] is True
     assert calls == [(
         "social-site", "sendMessage", {"recipient": "reviewer", "body": "hello"},
         {
             "user_id": "user-write-4", "allow_writes": False, "max_tier": 3,
-            "dry_run": False, "idempotency_key": "", "again": False, "auto_preflight": True,
+            "dry_run": False, "idempotency_key": "", "again": False, "auto_preflight": False,
         },
     )]
 
+
+
+def test_api_anything_explicit_payload_approval_is_forwarded_without_auto_preflight(monkeypatch):
+    calls = []
+    connector_fake = SimpleNamespace(
+        execute_api_anything_operation=lambda site, operation, params, **kwargs: (
+            calls.append((site, operation, params, kwargs)) or {
+                "status": "dry_run_required", "executed": False,
+                "write_capable": True, "truthful": True,
+            }
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "api_anything_connector", connector_fake)
+
+    result = canonical.dispatch_command(
+        "Use API Anything site=social-site operation=sendMessage recipient=reviewer body=hello",
+        "user-write-approved", {"api_anything_allow_writes": True},
+    )
+
+    assert result["status"] == "dry_run_required"
+    assert result["executed"] is False
+    assert calls == [(
+        "social-site", "sendMessage", {"recipient": "reviewer", "body": "hello"},
+        {
+            "user_id": "user-write-approved", "allow_writes": True, "max_tier": 3,
+            "dry_run": False, "idempotency_key": "", "again": False, "auto_preflight": False,
+        },
+    )]
 
 
 def test_api_anything_catalog_includes_read_and_write_ops_by_default(monkeypatch):
