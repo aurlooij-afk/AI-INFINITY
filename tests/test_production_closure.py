@@ -227,13 +227,22 @@ def _native_primary_fixture(tmp_path, kind):
         "document": {"document.docx", "document_manifest.json"},
         "presentation": {"presentation.pptx", "presentation_manifest.json"},
     }[kind]
-    names = sorted(required | {"sources.json", "rights_manifest.json"})
+    names = sorted(required | {"sources.json", "rights_manifest.json", "visual_rights.json"})
     files = {}
     rows = []
     metadata = {
         "sources.json": {"truthful": True, "source_count": 2, "sources": [{"url": "https://example.org/source"}]},
-        "rights_manifest.json": {"project_id": project_id, "truthful": True, "assets": [{"rights_state": "cleared"}]},
-        "visual_rights.json": {"project_id": project_id, "truthful": True, "assets": [{"rights_state": "original_generated"}]},
+        "rights_manifest.json": {
+            "project_id": project_id, "truthful": True,
+            "assets": [{"asset": "primary-text-output", "rights_state": "review_required"}],
+        },
+        "visual_rights.json": {
+            "project_id": project_id, "truthful": True,
+            "assets": [
+                {"asset": "scene_01.mp4", "rights_state": "blocked_fallback", "truthful": True},
+                {"asset": "scene_02.mp4", "rights_state": "review_required", "truthful": True},
+            ],
+        },
         "fact_check.json": {"claims": [{"status": "supported_candidate"}]},
         "provenance.json": {"truthful": True, "sources": [{"id": "source-1"}]},
     }
@@ -305,10 +314,13 @@ def test_native_primary_outputs_complete_as_review_required_without_approving_co
             "project_status_completed": False,
             "qualified_illustrative_fallback": False,
             "fallback_visual_count": 2,
-            "visual_rights_evidence_present": True,
+            # Companion visuals are explicitly review-required, not cleared.
+            # Their open status must block video publication, not erase the
+            # separate non-published native draft.
+            "visual_rights_evidence_present": False,
             "visual_rights_unknown_count": 0,
-            "visual_rights_review_required_count": 0,
-            "visual_rights_unresolved_count": 0,
+            "visual_rights_review_required_count": 2,
+            "visual_rights_unresolved_count": 2,
             "research_required_and_present": True,
             "fresh_evidence_ok": True,
             "fact_check_present": True,
@@ -320,17 +332,43 @@ def test_native_primary_outputs_complete_as_review_required_without_approving_co
             project_id, {"content_type": kind}, files, checks, []
         ) is True, kind
 
-        # A changed primary artifact or unresolved rights must fail closed.
-        first_required = next(iter(sorted({row["name"] for row in rows} - {"sources.json", "rights_manifest.json"})))
+        assert checks["visual_rights_evidence_present"] is False
+        assert primary["rights_review_status"] == "PENDING"
+        assert primary["human_review_status"] == "PENDING"
+        assert primary["external_publication_status"] == "NOT_PUBLISHED"
+
+        # Open companion-video rights are intentionally not a native-draft
+        # approval. An unclassified/malformed rights state must still fail.
+        visual_path = files["visual_rights.json"]
+        visual_payload = json.loads(visual_path.read_text(encoding="utf-8"))
+        visual_payload["assets"][0]["rights_state"] = "unclassified"
+        visual_path.write_text(json.dumps(visual_payload), encoding="utf-8")
+        visual_digest = hashlib.sha256(visual_path.read_bytes()).hexdigest()
+        registry["visual_rights.json"] = {
+            "sha256": visual_digest,
+            "size_bytes": visual_path.stat().st_size,
+        }
+        assert closure._native_primary_delivery_eligible(
+            project_id, {"content_type": kind}, files, checks, []
+        ) is False, kind + " accepted an unclassified rights state"
+        visual_payload["assets"][0]["rights_state"] = "blocked_fallback"
+        visual_path.write_text(json.dumps(visual_payload), encoding="utf-8")
+        registry["visual_rights.json"] = {
+            "sha256": hashlib.sha256(visual_path.read_bytes()).hexdigest(),
+            "size_bytes": visual_path.stat().st_size,
+        }
+
+        # A changed primary artifact still fails closed.
+        first_required = next(iter(sorted({row["name"] for row in rows} - {"sources.json", "rights_manifest.json", "visual_rights.json"})))
         files[first_required].write_bytes(b"tampered after primary verification")
         assert closure._native_primary_delivery_eligible(
             project_id, {"content_type": kind}, files, checks, []
         ) is False, kind + " accepted tampered bytes"
         files[first_required].write_bytes(("verified primary artifact:" + first_required).encode("utf-8"))
-        checks["visual_rights_unresolved_count"] = 1
+        checks["visual_rights_unresolved_count"] = 2
         assert closure._native_primary_delivery_eligible(
             project_id, {"content_type": kind}, files, checks, []
-        ) is False, kind + " accepted unresolved rights"
+        ) is True, kind + " incorrectly coupled native review to companion-video rights"
         checks["visual_rights_unresolved_count"] = 0
         checks["research_required_and_present"] = False
         assert closure._native_primary_delivery_eligible(
