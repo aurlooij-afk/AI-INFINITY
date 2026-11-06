@@ -880,18 +880,33 @@ def _ensure_review_table() -> None:
                 decision TEXT NOT NULL,
                 note TEXT NOT NULL DEFAULT '',
                 scorecard_version TEXT NOT NULL,
-                created_at REAL NOT NULL
+                created_at REAL NOT NULL,
+                dimension_scores_json TEXT NOT NULL DEFAULT '{}',
+                rights_approval INTEGER NOT NULL DEFAULT 0,
+                rights_notes TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_aii_editorial_reviews_project
                 ON aii_editorial_reviews(project_id, created_at DESC);
         """)
+        columns = {
+            str(row["name"])
+            for row in db.execute("PRAGMA table_info(aii_editorial_reviews)").fetchall()
+        }
+        migrations = {
+            "dimension_scores_json": "ALTER TABLE aii_editorial_reviews ADD COLUMN dimension_scores_json TEXT NOT NULL DEFAULT '{}'",
+            "rights_approval": "ALTER TABLE aii_editorial_reviews ADD COLUMN rights_approval INTEGER NOT NULL DEFAULT 0",
+            "rights_notes": "ALTER TABLE aii_editorial_reviews ADD COLUMN rights_notes TEXT NOT NULL DEFAULT ''",
+        }
+        for name, statement in migrations.items():
+            if name not in columns:
+                db.execute(statement)
 
 
 def _review_rows(project_id: str, user_id: str) -> List[Dict[str, Any]]:
     s = _studio()
     with s.DB_LOCK, s._connect() as db:
         rows = db.execute(
-            "SELECT review_id, project_id, user_id, content_fingerprint, decision, note, scorecard_version, created_at FROM aii_editorial_reviews WHERE project_id=? AND user_id=? ORDER BY created_at DESC",
+            "SELECT review_id, project_id, user_id, content_fingerprint, decision, note, scorecard_version, created_at, dimension_scores_json, rights_approval, rights_notes FROM aii_editorial_reviews WHERE project_id=? AND user_id=? ORDER BY created_at DESC",
             (project_id, user_id),
         ).fetchall()
     return [dict(row) for row in rows]
@@ -909,10 +924,33 @@ def _review_state(rows: List[Dict[str, Any]], fingerprint: str) -> Dict[str, Any
             "latest_review": latest,
         }
     state = "approved" if latest.get("decision") == "approve" else "rejected"
+    scores_raw = latest.get("dimension_scores_json")
+    has_image_roles = bool(scores_raw and str(scores_raw).strip() not in {"", "{}"})
+    if has_image_roles:
+        try:
+            image_scores = json.loads(str(scores_raw))
+            valid_roles = isinstance(image_scores, dict) and set(image_scores) == _IMAGE_REVIEW_ROLES
+            numeric_scores = {key: float(value) for key, value in image_scores.items()} if valid_roles else {}
+            roles_valid = (
+                valid_roles
+                and all(1.0 <= value <= 5.0 for value in numeric_scores.values())
+                and min(numeric_scores.values()) >= 4.0
+                and sum(numeric_scores.values()) / 6.0 >= 4.5
+            )
+        except (TypeError, ValueError, OverflowError, json.JSONDecodeError):
+            roles_valid = False
+        rights_valid = int(latest.get("rights_approval") or 0) == 1 and len(str(latest.get("rights_notes") or "").strip()) >= 20
+        if state == "approved" and not (roles_valid and rights_valid):
+            state = "incomplete"
     return {
         "state": state,
         "required": state != "approved",
-        "publish_ready": state == "approved",
+        # A reviewed image remains a private/reviewable asset. The review panel
+        # records an owner decision but does not implement external image publishing.
+        "publish_ready": state == "approved" and not has_image_roles,
+        "review_complete": state == "approved" and has_image_roles,
+        "image_role_scores": numeric_scores if has_image_roles and roles_valid else None,
+        "rights_approved_for_exact_asset": bool(has_image_roles and rights_valid),
         "latest_review": latest,
     }
 
