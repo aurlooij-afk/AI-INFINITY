@@ -273,6 +273,19 @@ def _image_review_fixture(tmp_path):
         ("rights_manifest.json", rights_manifest),
         ("primary_content_delivery.json", primary),
         ("production_manifest.json", production),
+        ("sources.json", {
+            "schema": "ai-infinity.sources.v1",
+            "project_id": project_id,
+            "source_count": 0,
+            "sources": [],
+            "creator_input": {
+                "type": "user_prompt",
+                "sha256": hashlib.sha256(
+                    b"Create a cinematic image of a solar research station in the desert"
+                ).hexdigest(),
+            },
+            "truthful": True,
+        }),
     ):
         path = tmp_path / name
         path.write_text(json.dumps(value), encoding="utf-8")
