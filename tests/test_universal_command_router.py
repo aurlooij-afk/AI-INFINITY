@@ -771,7 +771,8 @@ def test_natural_language_standalone_image_request_routes_to_real_image_delivera
     assert decision["content_type"] == "image"
     assert intent["constraints"]["content_type"] == "image"
     assert intent["success"]["required_artifacts"] == [
-        "image.png", "image_manifest.json", "rights_manifest.json", "production_manifest.json"
+        "image.png", "image_package.zip", "image_package_manifest.json", "image_manifest.json",
+        "sources.json", "rights_manifest.json", "production_manifest.json", "primary_content_delivery.json"
     ]
 
 
