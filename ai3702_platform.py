@@ -87,13 +87,24 @@ def _gated_capabilities() -> list[dict[str, Any]]:
 
 @APP.get("/infinity/3702/health")
 def health():
+    paths = _route_paths()
+    required = (
+        "/infinity/canonical/execute",
+        "/infinity/studio/project",
+        "/infinity/3701/knowledge/query",
+        "/infinity/storage/v1/status",
+        "/infinity/3705/readiness",
+        "/infinity/3706/internal-100",
+    )
+    checks = [{"route": path, "available": path in paths} for path in required]
     return {
-        "status":"healthy",
-        "version":VERSION,
-        "build":BUILD,
-        "routes":len(_route_paths()),
-        "truthful":True,
-        "external_authority_excluded":True,
+        "status": "healthy" if all(item["available"] for item in checks) else "degraded",
+        "version": VERSION,
+        "build": BUILD,
+        "routes": len(paths),
+        "required_route_checks": checks,
+        "truthful": True,
+        "external_authority_excluded": True,
     }
 
 @APP.get("/infinity/3702/capabilities")
