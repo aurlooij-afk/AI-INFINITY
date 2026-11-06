@@ -742,6 +742,10 @@ def build_runtime_report(
     *,
     python_version: str,
     platform_name: str,
+    application_version: str,
+    application_build: str,
+    deployed_revision: str | None,
+    route_paths: list[str],
     executables: dict,
     studio_health: dict,
     project_state: dict,
@@ -782,6 +786,10 @@ def build_runtime_report(
         "runtime": {
             "python_version": str(python_version).split()[0][:40],
             "platform": str(platform_name)[:120],
+            "deployed_revision": (
+                str(deployed_revision)
+                if re.fullmatch(r"[0-9a-f]{40}", str(deployed_revision or "")) else None
+            ),
             "executables": {
                 name: bool(executables.get(name))
                 for name in ("ffmpeg", "ffprobe", "espeak", "espeak-ng")
@@ -800,6 +808,16 @@ def build_runtime_report(
             "note": "Configuration is not proof of successful asset writes or read-back.",
         },
         "application": {
+            "version": str(application_version or "unknown")[:80],
+            "build": str(application_build or "unknown")[:100],
+            "route_count": len(set(str(path) for path in route_paths)),
+            "required_routes": {
+                path: path in set(str(item) for item in route_paths)
+                for path in (
+                    "/", "/infinity/studio/bootstrap", "/infinity/studio/health",
+                    "/infinity/storage/v1/status", "/infinity/studio/self-maintenance/runtime",
+                )
+            },
             "storage_routes_registered": app_state.get("ai_infinity_storage_routes_registered") is True,
             "creator_3800_layer_loaded": app_state.get("ai_infinity_3800") is True,
             "production_hardening_applied": bool(app_state.get("production_hardening")),
@@ -818,8 +836,12 @@ def build_runtime_report(
 
 
 def inspect_runtime(cfg: dict, app: FastAPI) -> dict:
+    studio_version = "unknown"
+    studio_build = "unknown"
     try:
         import studio_ultimate as studio
+        studio_version = str(getattr(studio, "VERSION", "unknown"))
+        studio_build = str(getattr(studio, "BUILD", "unknown"))
         health_endpoint = getattr(studio, "studio_health", None)
         if not callable(health_endpoint):
             route = next(
@@ -850,6 +872,19 @@ def inspect_runtime(cfg: dict, app: FastAPI) -> dict:
         asset_storage = {"configured_providers": configured, "primary_provider": primary}
     except Exception:
         asset_storage = {"configured_providers": []}
+    route_paths = [
+        str(getattr(route, "path", ""))
+        for route in getattr(app, "routes", [])
+        if getattr(route, "path", None)
+    ]
+    deployed_revision = next(
+        (
+            os.getenv(name, "").strip().lower()
+            for name in ("RENDER_GIT_COMMIT", "GIT_COMMIT", "SOURCE_VERSION", "COMMIT_SHA")
+            if re.fullmatch(r"[0-9a-f]{40}", os.getenv(name, "").strip().lower())
+        ),
+        None,
+    )
     state = getattr(app, "state", None)
     app_state = {
         "ai_infinity_storage_routes_registered": bool(getattr(state, "ai_infinity_storage_routes_registered", False)),
@@ -863,6 +898,10 @@ def inspect_runtime(cfg: dict, app: FastAPI) -> dict:
     return build_runtime_report(
         python_version=sys.version,
         platform_name=platform.platform(),
+        application_version=studio_version,
+        application_build=studio_build,
+        deployed_revision=deployed_revision,
+        route_paths=route_paths,
         executables={
             name: shutil.which(name)
             for name in ("ffmpeg", "ffprobe", "espeak", "espeak-ng")
