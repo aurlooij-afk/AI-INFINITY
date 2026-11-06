@@ -784,3 +784,19 @@ def test_creator_image_aliases_normalize_without_affecting_video_default():
         assert studio.normalize_creator_content_type(alias) == "image"
     assert studio.normalize_creator_content_type("spreadsheet") == "video"
 
+def test_standalone_image_command_dispatches_image_type_to_creator_engine(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        canonical,
+        "create_from_command",
+        lambda command, user_id, raw: (
+            calls.append((command, user_id, raw))
+            or {"status": "queued", "project_id": "studio_image_project"}
+        ),
+    )
+    command = "Create a standalone cinematic editorial image of a solar research station"
+    result = canonical.dispatch_command(command, "image-user", {"content_type": "video"})
+    assert result["route"] == "create"
+    assert result["executed"] is True
+    assert calls[0][2]["content_type"] == "image"
+
