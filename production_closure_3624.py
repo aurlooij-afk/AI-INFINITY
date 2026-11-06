@@ -338,22 +338,18 @@ def _native_primary_delivery_eligible(
     if not required or failures:
         return False
 
-    # Native content has its own evidence chain. Companion-video status,
-    # fallback classification and the overall project terminal state must not
-    # erase a separately verified article/audio/site/office deliverable.
-    # Rights evidence remains fail-closed: unresolved or unknown asset rights
-    # still prevent this native-delivery path.
+    # This predicate means "the primary draft is intact and can be reviewed by
+    # its owner", not "its visuals are rights-cleared or safe to publish".
+    # Companion-video visual QC and rights counters are intentionally separate:
+    # they keep the final MP4 and public release blocked, while an independently
+    # hashed native document/social/site draft remains available for review.
+    # The exact primary artifacts, research, facts, provenance and rights records
+    # are checked below; missing or malformed records still fail closed.
     if not (
-        checks.get("visual_rights_evidence_present") is True
-        and int(checks.get("visual_rights_unknown_count") or 0) == 0
-        and int(checks.get("visual_rights_review_required_count") or 0) == 0
-        and int(checks.get("visual_rights_unresolved_count") or 0) == 0
-        and checks.get("research_required_and_present") is True
+        checks.get("research_required_and_present") is True
         and checks.get("fresh_evidence_ok") is True
         and checks.get("fact_check_present") is True
         and checks.get("provenance_present") is True
-        and checks.get("required_artifacts_present") is True
-        and checks.get("artifact_registry_consistent") is True
     ):
         return False
 
@@ -406,6 +402,22 @@ def _native_primary_delivery_eligible(
         ):
             return False
 
+        visual_rights_assets = visual_rights.get("assets")
+        known_rights_states = {
+            "cleared", "original_generated", "review_required",
+            "blocked_fallback", "unknown",
+        }
+        visual_rights_records_valid = (
+            isinstance(visual_rights_assets, list)
+            and bool(visual_rights_assets)
+            and all(
+                isinstance(row, dict)
+                and bool(str(row.get("asset") or "").strip())
+                and str(row.get("rights_state") or "") in known_rights_states
+                and row.get("truthful") is True
+                for row in visual_rights_assets
+            )
+        )
         if not (
             production.get("project_id") == project_id
             and production.get("truthful") is True
@@ -416,7 +428,7 @@ def _native_primary_delivery_eligible(
             and bool(rights.get("assets"))
             and visual_rights.get("project_id") == project_id
             and visual_rights.get("truthful") is True
-            and bool(visual_rights.get("assets"))
+            and visual_rights_records_valid
             and bool(facts.get("claims") is not None or facts.get("review_items") is not None)
             and bool(provenance)
         ):
@@ -448,6 +460,17 @@ def _native_primary_delivery_eligible(
             return False
 
         registry = _artifact_registry(project_id)
+        # The project-scoped visual-rights ledger is independently hash-bound.
+        # REVIEW_REQUIRED/blocked_fallback states remain visible for the human
+        # reviewer; they are never rewritten as cleared by this native gate.
+        registered_visual_rights = registry.get(visual_rights_path.name)
+        if not isinstance(registered_visual_rights, dict) or (
+            str(registered_visual_rights.get("sha256") or "").lower()
+                != _studio().file_sha256(visual_rights_path)
+            or int(registered_visual_rights.get("size_bytes") or 0)
+                != visual_rights_path.stat().st_size
+        ):
+            return False
         # Check every file named by the primary manifest, not only the subset
         # required by the current output mode.
         for name, row in by_name.items():
