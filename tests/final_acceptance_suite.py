@@ -1,5 +1,9 @@
 from __future__ import annotations
-import concurrent.futures, hashlib, json, os, re, shutil, sqlite3, subprocess, sys, time, zipfile
+import concurrent.futures, datetime, hashlib, json, os, re, shutil, sqlite3, subprocess, sys, time, traceback, zipfile
+try:
+    import resource
+except ImportError:  # pragma: no cover - some non-POSIX development hosts
+    resource = None
 from pathlib import Path
 from urllib.parse import quote
 import requests
@@ -10,6 +14,169 @@ if str(REPO_ROOT) not in sys.path:
 
 TMP=Path("/tmp/ai-infinity-final-acceptance"); TMP.mkdir(parents=True,exist_ok=True)
 PYURL="https://www.python.org/"
+
+SCENARIO_COUNT = 20
+HUMAN_REVIEW_POLICY = {
+    "average_minimum": 4.5,
+    "average_scope": "six required approval roles",
+    "dimension_minimum": 4.0,
+    "critical_dimension_minimum": 4.0,
+    "required_approval_roles": [
+        "director", "cinematographer", "editor", "sound", "story", "rights",
+    ],
+    "role_score_minimum": 4.0,
+    "explicit_rights_approval_required": True,
+    "critical_fact_or_rights_failure_allowed": False,
+}
+SCENARIO_RESULTS: list[dict] = []
+SCENARIO_STARTED_AT = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def _utc_now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def _redact_diagnostic(value: str) -> str:
+    value = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,'\"]+", r"\1[REDACTED]", value)
+    value = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}", "Bearer [REDACTED]", value)
+    value = re.sub(
+        r"(?i)\b(api[_-]?key|access[_-]?key|secret|token|password)(\s*[:=]\s*)['\"]?[^\s,'\"}]+",
+        r"\1\2[REDACTED]",
+        value,
+    )
+    value = re.sub(r"(https?://[^\s?]+)\?[^\s]+", r"\1?[REDACTED]", value)
+    return value[:120_000]
+
+
+def _acceptance_result_document() -> dict:
+    statuses = [str(row.get("status") or "") for row in SCENARIO_RESULTS]
+    terminal = {"PASS", "FAIL", "BLOCKED", "REVIEW_REQUIRED"}
+    completed = sum(status in terminal for status in statuses)
+    complete = len(SCENARIO_RESULTS) == SCENARIO_COUNT and completed == SCENARIO_COUNT
+    passed = complete and all(status == "PASS" for status in statuses)
+    if passed:
+        overall = "PASS"
+    elif complete and any(status == "FAIL" for status in statuses):
+        overall = "FAIL"
+    elif complete:
+        overall = "BLOCKED"
+    else:
+        overall = "INCOMPLETE"
+    server = os.getenv("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
+    repository = os.getenv("GITHUB_REPOSITORY", "aurlooij-afk/AI-INFINITY")
+    run_id = os.getenv("AI_INFINITY_WORKFLOW_RUN_ID") or os.getenv("GITHUB_RUN_ID")
+    return {
+        "schema": "ai-infinity-final-acceptance-result.v2",
+        "repository": repository,
+        "branch": os.getenv("GITHUB_HEAD_REF") or os.getenv("GITHUB_REF_NAME"),
+        "source_revision": os.getenv("AI_INFINITY_SOURCE_REVISION") or os.getenv("GITHUB_SHA"),
+        "workflow_run_id": run_id,
+        "workflow_run_url": f"{server}/{repository}/actions/runs/{run_id}" if run_id else None,
+        "run_attempt": os.getenv("AI_INFINITY_WORKFLOW_RUN_ATTEMPT") or os.getenv("GITHUB_RUN_ATTEMPT"),
+        "started_at_utc": SCENARIO_STARTED_AT,
+        "updated_at_utc": _utc_now(),
+        "scenario_count": SCENARIO_COUNT,
+        "completed_scenarios": completed,
+        "overall_status": overall,
+        "passed": passed,
+        "tests": SCENARIO_RESULTS,
+    }
+
+
+def _persist_acceptance_result() -> bool:
+    configured = os.getenv("AI_INFINITY_EVIDENCE_DIR", "").strip()
+    root = Path(configured).resolve() if configured else TMP
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "final-acceptance-result.json"
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    payload = json.dumps(_acceptance_result_document(), ensure_ascii=False, indent=2, default=str) + "\n"
+    try:
+        temporary.write_text(payload, encoding="utf-8")
+        os.replace(temporary, path)
+        return True
+    except Exception as exc:
+        print("ACCEPTANCE_RESULT_WRITE_FAILED=" + _redact_diagnostic(type(exc).__name__ + ": " + str(exc)))
+        return False
+
+
+def _record_scenario(
+    scenario_id: str,
+    description: str,
+    runner=None,
+    *,
+    requested: dict | None = None,
+    blocked_reason: str | None = None,
+) -> dict:
+    started_wall = time.monotonic()
+    record = {
+        "scenario_id": scenario_id,
+        "description": description,
+        "source_revision": os.getenv("AI_INFINITY_SOURCE_REVISION") or os.getenv("GITHUB_SHA"),
+        "project_id": None,
+        "requested": requested or {},
+        "status": "RUNNING",
+        "started_at_utc": _utc_now(),
+        "completed_at_utc": None,
+        "wall_clock_seconds": None,
+    }
+    SCENARIO_RESULTS.append(record)
+    _persist_acceptance_result()
+    if blocked_reason:
+        record["status"] = "BLOCKED"
+        record["failure"] = {"reason": _redact_diagnostic(blocked_reason)}
+    else:
+        try:
+            actual = runner()
+            record["result"] = actual
+            if isinstance(actual, dict):
+                record["project_id"] = actual.get("project_id")
+                if actual.get("project_ids"):
+                    record["project_ids"] = actual.get("project_ids")
+            record["status"] = "PASS"
+        except Exception as exc:
+            assertion_payload = next((arg for arg in exc.args if isinstance(arg, dict)), None)
+            failure = {
+                "exception_type": type(exc).__name__,
+                "message": _redact_diagnostic(str(exc) or repr(exc.args)),
+                "traceback": _redact_diagnostic(traceback.format_exc()),
+            }
+            if assertion_payload is not None:
+                safe_payload = json.loads(json.dumps(assertion_payload, ensure_ascii=False, default=str))
+                failure["assertion_payload"] = safe_payload
+                record["project_id"] = safe_payload.get("project_id")
+                result_payload = safe_payload.get("result") if isinstance(safe_payload.get("result"), dict) else {}
+                quality = result_payload.get("quality") if isinstance(result_payload.get("quality"), dict) else {}
+                checks = quality.get("checks") if isinstance(quality.get("checks"), dict) else {}
+                if checks:
+                    failure["failed_quality_checks"] = [key for key, value in checks.items() if value is False]
+            record["failure"] = failure
+            record["status"] = "FAIL"
+    record["completed_at_utc"] = _utc_now()
+    record["wall_clock_seconds"] = round(time.monotonic() - started_wall, 3)
+    if resource is not None:
+        try:
+            own = resource.getrusage(resource.RUSAGE_SELF)
+            children = resource.getrusage(resource.RUSAGE_CHILDREN)
+            record["runtime_resources"] = {
+                "process_user_cpu_seconds": round(float(own.ru_utime), 3),
+                "process_system_cpu_seconds": round(float(own.ru_stime), 3),
+                "process_peak_rss_kib": int(own.ru_maxrss),
+                "completed_children_user_cpu_seconds": round(float(children.ru_utime), 3),
+                "completed_children_system_cpu_seconds": round(float(children.ru_stime), 3),
+                "highest_completed_child_peak_rss_kib": int(children.ru_maxrss),
+                "gpu_telemetry": "not_measured",
+            }
+        except Exception:
+            record["runtime_resources"] = {"gpu_telemetry": "not_measured", "cpu_memory_telemetry": "unavailable"}
+    print("ACCEPTANCE_SCENARIO_RESULT=" + json.dumps(record, ensure_ascii=False, default=str))
+    _persist_acceptance_result()
+    return record
+
+
+def _record_blocked_scenario(scenario_id: str, description: str, reason: str, requested: dict | None = None) -> dict:
+    return _record_scenario(scenario_id, description, requested=requested, blocked_reason=reason)
+
+
 def req(s,b,p,m="GET",**kw):
     r=s.request(m,b+p,timeout=180,**kw)
     if not r.ok:
@@ -107,6 +274,24 @@ def dl(s,b,pid,name,min_bytes=1):
     assert r.ok,(name,r.status_code,r.text[:1000])
     p=TMP/f"{pid}-{name.replace('/','_')}"; p.write_bytes(r.content); assert p.stat().st_size>=min_bytes,(name,p.stat().st_size); return p
 def jart(s,b,pid,name):return json.loads(dl(s,b,pid,name).read_text(encoding="utf-8"))
+def dl_streaming(s,b,pid,name,min_bytes=1):
+    """Stream large artifacts to disk without buffering the complete file in RAM."""
+    url=b+f"/infinity/studio/project/{quote(pid,safe='')}/asset/{quote(name,safe='')}"
+    response=s.get(url,stream=True,timeout=600)
+    assert response.ok,(name,response.status_code,response.text[:1000])
+    path=TMP/f"{pid}-{name.replace('/','_')}"
+    digest=hashlib.sha256()
+    size=0
+    with path.open("wb") as output:
+        for chunk in response.iter_content(chunk_size=1024*1024):
+            if not chunk:
+                continue
+            output.write(chunk)
+            digest.update(chunk)
+            size+=len(chunk)
+    response.close()
+    assert size>=min_bytes,(name,size)
+    return path,size,digest.hexdigest()
 def sha(p):
     h=hashlib.sha256()
     with p.open("rb") as f:
@@ -114,14 +299,34 @@ def sha(p):
     return h.hexdigest()
 def probe(p):
     x=subprocess.run(["ffprobe","-v","error","-show_format","-show_streams","-of","json",str(p)],capture_output=True,text=True,timeout=120); assert x.returncode==0,x.stderr; return json.loads(x.stdout)
-def integrated_lufs(p):
+
+def _normalized_srt_caption_text(srt_text: str) -> str:
+    """Return readable caption words across SRT cues, excluding sequence numbers and timestamps."""
+    cue_text = []
+    in_cue = False
+    for raw_line in str(srt_text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            in_cue = False
+            continue
+        if "-->" in line:
+            in_cue = True
+            continue
+        if in_cue and not re.fullmatch(r"\d+", line):
+            cue_text.append(re.sub(r"<[^>]+>", "", line))
+    return re.sub(r"\s+", " ", " ".join(cue_text)).strip().casefold()
+
+
+def audio_delivery_metrics(p):
     x=subprocess.run(
-        ["ffmpeg","-hide_banner","-nostats","-i",str(p),"-vn","-af","ebur128=framelog=verbose","-f","null","-"],
+        ["ffmpeg","-hide_banner","-nostats","-i",str(p),"-vn","-af","ebur128=peak=true:framelog=verbose","-f","null","-"],
         capture_output=True,text=True,timeout=180,
     )
-    values=re.findall(r"\bI:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*LUFS\b",(x.stderr or "")+(x.stdout or ""))
-    assert x.returncode==0 and values, (x.returncode,x.stderr[-2000:])
-    return float(values[-1])
+    output=(x.stderr or "")+(x.stdout or "")
+    values=re.findall(r"\bI:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*LUFS\b",output)
+    peaks=re.findall(r"\bPeak:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*dBFS\b",output)
+    assert x.returncode==0 and values and peaks, (x.returncode,x.stderr[-3000:])
+    return {"integrated_lufs":float(values[-1]),"true_peak_dbfs":float(peaks[-1])}
 def pdf(path):
     # A small but real, text-extractable source brief. The acceptance test should
     # prove that upload content drives the project topic, not just that a PDF exists.
@@ -204,7 +409,7 @@ def create_review_packet(project_id, files, truth, production, rights, media_pro
                 ("language_and_cultural_fit",True),("editability_and_project_recovery",False),
             ]
         ],
-        "internal_release_policy":{"average_minimum":4.0,"critical_dimension_minimum":3,"critical_fact_or_rights_failure_allowed":False},
+        "internal_release_policy":HUMAN_REVIEW_POLICY,
         "policy_note":"Internal review policy; not an external industry certification.",
     }
     metadata={
@@ -279,10 +484,14 @@ def capture_failed_project_evidence(s, b, project_id, status_payload):
     evidence["ffprobe"] = media_probe
     files = {"final.mp4": final}
     artifact_names = (
-        "thumbnail.jpg", "audio_master.mp3", "captions.srt", "script.md", "sources.json",
-        "manifest.json", "production_manifest.json", "rights_manifest.json", "provenance.json",
-        "fact_check.json", "visual_rights.json", "article.md", "seo.json",
-        "social_campaign.json", "accessibility.json",
+        "thumbnail.jpg", "audio_master.mp3", "narration_only.mp3", "podcast_rss.xml",
+        "captions.srt", "script.md", "sources.json", "manifest.json",
+        "production_manifest.json", "rights_manifest.json", "primary_content_delivery.json",
+        "provenance.json", "fact_check.json", "visual_rights.json", "article.md",
+        "seo.json", "social_campaign.json", "social_campaign.md", "accessibility.json",
+        "website.zip", "website_manifest.json", "website_README.md",
+        "document.docx", "document_manifest.json",
+        "presentation.pptx", "presentation_manifest.json",
     )
     for name in artifact_names:
         path = project_dir / name
@@ -331,7 +540,7 @@ def capture_failed_project_evidence(s, b, project_id, status_payload):
 
 
 def t1(s,b):
-    pid=create(s,b,"Create a professional 60-second AI Infinity launch video in English, 16:9, cinematic, research-backed, with voiceover, background music, captions, thumbnail, article, SEO metadata, social campaign package and production/rights manifests.",duration=60,format="long",aspect_ratio="16:9"); waitp(s,b,pid)
+    pid=create(s,b,"Create the flagship film titled ONE IDEA. INFINITE WORLDS. Exactly 60 seconds, 1920x1080, 16:9 landscape. Premium global technology campaign fused with an emotional cinematic short film. A lone creator sits at night before a blank screen; a small idea grows through research, imagination, story shaping, creation, refinement and the finished result. Use relevant distinct motion imagery, deliberate visual progression, purposeful cinematography, controlled transitions and professional sound. Avoid a slideshow, generic stock montage, tutorial and text-heavy advertisement. Include this exact spoken narration sentence: Every extraordinary world begins with something nobody else can see. End with AI Infinity. One idea. Infinite worlds.",title="ONE IDEA. INFINITE WORLDS.",duration=60,format="long",aspect_ratio="16:9",language="English",quality_preset="cinematic",require_full_hd=True); waitp(s,b,pid,timeout=1500)
     reqd={"final.mp4","thumbnail.jpg","audio_master.mp3","narration_only.mp3","captions.srt","article.md","seo.json","social_campaign.json","production_manifest.json","rights_manifest.json","package.zip"}; got=names(s,b,pid); assert reqd<=got,(reqd-got,got)
     src=jart(s,b,pid,"sources.json"); assert int(src.get("source_count") or len(src.get("sources")or[]))>0,src
     # Truth comes before final-file download: an unverified project must fail at
@@ -360,13 +569,27 @@ def t1(s,b):
     assert checks.get("aspect_ratio_passed") is True and checks.get("requested_aspect_ratio") == "16:9", truth
     assert int(checks.get("actual_rendered_scene_count") or 0) >= int(checks.get("minimum_professional_scene_count") or 1), truth
     assert checks.get("visual_rights_evidence_present") is True, truth
-    files={n:dl(s,b,pid,n) for n in reqd}; m=probe(files["final.mp4"]); dur=float((m.get("format")or{}).get("duration")or 0); assert 59<=dur<=61,m
+    assert int(checks.get("visual_rights_unresolved_count") or 0) == 0, truth
+    assert int(checks.get("visual_rights_review_required_count") or 0) == 0, truth
+    files={n:dl(s,b,pid,n) for n in reqd}
+    m=probe(files["final.mp4"])
+    full_decode=subprocess.run(
+        ["ffmpeg","-v","error","-xerror","-i",str(files["final.mp4"]),"-f","null","-"],
+        capture_output=True,text=True,timeout=600,
+    )
+    assert full_decode.returncode==0,("flagship MP4 full decode failed",full_decode.stderr[-3000:])
+    dur=float((m.get("format")or{}).get("duration")or 0); assert 59<=dur<=61,m
+    video=next((x for x in m.get("streams",[]) if x.get("codec_type")=="video"),{}); assert (int(video.get("width") or 0),int(video.get("height") or 0))==(1920,1080),m
+    script_text=dl(s,b,pid,"script.md").read_text(encoding="utf-8"); caption_text=dl(s,b,pid,"captions.srt").read_text(encoding="utf-8"); required_line="Every extraordinary world begins with something nobody else can see."; assert required_line.casefold() in script_text.casefold(),script_text[:3000]; assert required_line.casefold() in _normalized_srt_caption_text(caption_text),caption_text[:3000]
     assert any(x.get("codec_type")=="video" for x in m.get("streams",[])); assert any(x.get("codec_type")=="audio" for x in m.get("streams",[]))
     audio_probe=probe(files["audio_master.mp3"]); audio_dur=float((audio_probe.get("format")or{}).get("duration")or 0)
     assert any(x.get("codec_type")=="audio" for x in audio_probe.get("streams",[])),audio_probe
     assert abs(audio_dur-dur)<=1.0,("programme audio master must match the final video mix",audio_dur,dur)
-    audio_lufs=integrated_lufs(files["audio_master.mp3"])
-    assert -22.0<=audio_lufs<=-12.0,("programme audio master loudness outside delivery range",audio_lufs)
+    audio_metrics=audio_delivery_metrics(files["audio_master.mp3"])
+    audio_lufs=audio_metrics["integrated_lufs"]
+    audio_peak_dbfs=audio_metrics["true_peak_dbfs"]
+    assert -23.0<=audio_lufs<=-14.0,("programme audio master loudness outside -23 to -14 LUFS delivery range",audio_lufs)
+    assert audio_peak_dbfs<=-1.0,("programme audio master true peak exceeds -1 dBFS ceiling",audio_peak_dbfs)
     voice_probe=probe(files["narration_only.mp3"])
     assert any(x.get("codec_type")=="audio" for x in voice_probe.get("streams",[])),voice_probe
     assert sha(files["audio_master.mp3"]) != sha(files["narration_only.mp3"]), "programme mix and isolated narration must remain distinct artifacts"
@@ -394,6 +617,30 @@ def t1(s,b):
     return {
         "test":1,"project_id":pid,"duration":dur,"truth_verified":True,
         "manifest_hash_verified":True,"reviewer_packet":reviewer_packet,
+        "final_media_sha256":sha(files["final.mp4"]),
+        "final_media_bytes":files["final.mp4"].stat().st_size,
+        "ffprobe":m,
+        "full_decode_passed":True,
+        "audio_integrated_lufs":audio_lufs,
+        "audio_true_peak_dbfs":audio_peak_dbfs,
+        "resolution":[int(video.get("width") or 0),int(video.get("height") or 0)],
+        "fallback_visual_count":int(checks.get("fallback_visual_count") or 0),
+        "visual_rights_unresolved_count":int(checks.get("visual_rights_unresolved_count") or 0),
+        "quality_truth_checks":{
+            key:checks.get(key) for key in (
+                "actual_rendered_scene_count","verified_motion_source_count",
+                "minimum_motion_source_count","visual_rights_evidence_present",
+                "fallback_visual_count","visual_rights_cleared_count",
+                "visual_rights_review_required_count","visual_rights_unresolved_count",
+                "research_sources",
+            ) if key in checks
+        },
+        "source_count":int(src.get("source_count") or len(src.get("sources") or [])),
+        "rights_asset_count":len(rights.get("assets") or []),
+        "package_sha256":sha(files["package.zip"]),
+        "package_size_bytes":files["package.zip"].stat().st_size,
+        "package_round_trip_hash_verified":True,
+        "artifact_inventory":{name:{"size_bytes":path.stat().st_size,"sha256":sha(path)} for name,path in sorted(files.items()) if path.is_file()},
     }
 def t2(s,b):
     pid=create(s,b,"Create a professional 60-second AI Infinity launch video in Pashto, 9:16 vertical, cinematic, with natural voiceover, captions and music.",duration=60,format="short",aspect_ratio="9:16",language="Pashto"); waitp(s,b,pid)
@@ -433,7 +680,7 @@ def t3(s,b):
     assert script.startswith("# AI Infinity Creator Operating System"),script[:1200]
     assert "AI Infinity" in script and "captions" in script.lower() and "editing" in script.lower(),script[:2000]
     return {"test":3,"project_id":pid,"pdf_executed":True,"upload_topic_used":"AI Infinity Creator Operating System"}
-def t4(s,b):
+def t4(s,b,data_dir: Path):
     pid=create(s,b,"Create a 20-second research-backed video article package about Python's official website with evidence, captions, SEO and social copy.",duration=20,format="short",reference_urls=[PYURL]); waitp(s,b,pid,allow_review_draft=True)
     got=names(s,b,pid); assert {"final.mp4","thumbnail.jpg","captions.srt","article.md","seo.json","social_campaign.json","sources.json"}<=got,got
     src=jart(s,b,pid,"sources.json"); assert any(str(x.get("url")or"")==PYURL for x in src.get("sources",[])),src
@@ -499,11 +746,45 @@ def t4(s,b):
     assert imported.get("status")=="imported" and imported.get("truthful") is True,imported
     assert imported.get("render_required") is True and imported.get("truth_verified") is False,imported
     assert imported.get("human_review_status")=="PENDING",imported
-    assert any(row.get("enabled") is True for row in (imported.get("timeline") or {}).get("scenes") or []),imported
+    imported_timeline=imported.get("timeline") or {}
+    assert any(row.get("enabled") is True for row in imported_timeline.get("scenes") or []),imported
+
+    # Import is not the end of OTIO verification. Submit the imported editable
+    # timeline to the canonical render endpoint and independently inspect the
+    # new master. This must produce real bytes, not just a saved timeline row.
+    rerender_response=s.post(
+        b+f"/infinity/pro2/project/{quote(pid,safe='')}/timeline/render",
+        json=imported_timeline,
+        timeout=900,
+    )
+    assert rerender_response.status_code==200,(rerender_response.status_code,rerender_response.text[:3000])
+    rerender=rerender_response.json()
+    assert rerender.get("project_id")==pid and rerender.get("truthful") is True,rerender
+    assert rerender.get("status") in {"completed","completed_with_qc_review"},rerender
+    assert isinstance(rerender.get("quality"),dict),rerender
+
+    rerender_master=Path(data_dir)/"creator_studio"/pid/"final.mp4"
+    assert rerender_master.is_file() and rerender_master.stat().st_size>10000,rerender_master
+    rerender_probe=probe(rerender_master)
+    rerender_duration=float((rerender_probe.get("format") or {}).get("duration") or 0)
+    assert 18.5<=rerender_duration<=21.5,rerender_probe
+    rerender_video=next((x for x in rerender_probe.get("streams",[]) if x.get("codec_type")=="video"),{})
+    assert (int(rerender_video.get("width") or 0),int(rerender_video.get("height") or 0))==(1280,720),rerender_probe
+    rerender_decode=subprocess.run(
+        ["ffmpeg","-v","error","-xerror","-i",str(rerender_master),"-f","null","-"],
+        capture_output=True,text=True,timeout=300,
+    )
+    assert rerender_decode.returncode==0,rerender_decode.stderr[-3000:]
+    rerender_sha256=sha(rerender_master)
     return {
         "test":4,"project_id":pid,"reference_url":PYURL,
         "otio_routes_passed":True,"otio_scene_count":export["scene_count"],
         "otio_bundle_bytes":bundle_path.stat().st_size,"otio_manifest_hashes_verified":True,
+        "otio_import_rerender_passed":True,
+        "otio_rerender_duration_seconds":rerender_duration,
+        "otio_rerender_resolution":[1280,720],
+        "otio_rerender_full_decode_passed":True,
+        "otio_rerender_sha256":rerender_sha256,
         "otio_import_requires_rerender_and_human_review":True,
     }
 def t5():
@@ -805,8 +1086,26 @@ def _production_profile_acceptance(label: str, duration: int, fast_mode: bool, p
         project_id = create(
             session, base, brief,
             duration=duration, format=fmt, aspect_ratio="16:9", language="English",
+            quality_preset=("balanced" if fast_mode else "cinematic"),
+            require_full_hd=(not fast_mode),
         )
-        state = waitp(session, base, project_id, timeout=1500)
+        state = waitp(session, base, project_id, timeout=(3600 if duration >= 900 else 1500))
+        blueprint = state.get("blueprint") if isinstance(state.get("blueprint"), dict) else {}
+        script_generation = blueprint.get("script_generation") if isinstance(blueprint.get("script_generation"), dict) else {}
+        if duration >= 900:
+            assert script_generation.get("status") == "complete", {
+                "project_id": project_id,
+                "script_generation": script_generation,
+                "blueprint_keys": sorted(blueprint),
+            }
+            required_words = int(script_generation.get("required_spoken_words") or 0)
+            actual_words = int(script_generation.get("actual_spoken_words") or 0)
+            unique_ratio = float(script_generation.get("unique_sentence_ratio") or 0)
+            assert required_words >= 1875 and actual_words >= required_words, script_generation
+            assert unique_ratio >= 0.85 and script_generation.get("distinctness_passed") is True, script_generation
+            assert int(script_generation.get("repair_passes") or 0) <= 3, script_generation
+            script_file = dl(session, base, project_id, "script.md", min_bytes=1000)
+            assert script_file.is_file() and script_file.stat().st_size > 1000, script_file
         truth = req(
             session, base,
             f"/infinity/studio/project/{quote(project_id, safe='')}/truth",
@@ -816,6 +1115,8 @@ def _production_profile_acceptance(label: str, duration: int, fast_mode: bool, p
         assert checks.get("source_visual_policy_passed") is True, truth
         assert int(checks.get("fallback_visual_count") or 0) == 0, truth
         assert checks.get("visual_rights_evidence_present") is True, truth
+        assert int(checks.get("visual_rights_unresolved_count") or 0) == 0, truth
+        assert int(checks.get("visual_rights_review_required_count") or 0) == 0, truth
         assert checks.get("caption_sync_passed") is True, truth
         assert checks.get("script_sentence_integrity_passed") is True, truth
         assert checks.get("professional_scene_coverage_passed") is True, truth
@@ -830,13 +1131,19 @@ def _production_profile_acceptance(label: str, duration: int, fast_mode: bool, p
         assert video.get("codec_name") == "h264", media
         assert audio.get("codec_name") == "aac", media
         assert abs(actual_duration - duration) <= 1.0, media
+        audio_file = dl(session, base, project_id, "audio_master.mp3", min_bytes=1000)
+        audio_metrics = audio_delivery_metrics(audio_file)
+        audio_lufs = audio_metrics["integrated_lufs"]
+        audio_peak_dbfs = audio_metrics["true_peak_dbfs"]
+        assert -23.0 <= audio_lufs <= -14.0, ("programme audio master outside -23 to -14 LUFS", audio_lufs)
+        assert audio_peak_dbfs <= -1.0, ("programme audio master true peak exceeds -1 dBFS", audio_peak_dbfs)
         if fast_mode:
             assert (int(video.get("width") or 0), int(video.get("height") or 0)) == (1280, 720), media
         else:
             assert (int(video.get("width") or 0), int(video.get("height") or 0)) == (1920, 1080), media
         decode = subprocess.run(
             ["ffmpeg", "-v", "error", "-xerror", "-i", str(final_file), "-f", "null", "-"],
-            capture_output=True, text=True, timeout=600,
+            capture_output=True, text=True, timeout=(1800 if duration >= 900 else 600),
         )
         assert decode.returncode == 0, decode.stderr[-3000:]
 
@@ -844,8 +1151,51 @@ def _production_profile_acceptance(label: str, duration: int, fast_mode: bool, p
         assert manifest.get("truthful") is True and manifest.get("project_id") == project_id, manifest
         entries = {str(item.get("name")): str(item.get("sha256")) for item in (manifest.get("artifacts") or [])}
         assert entries.get("final.mp4") == sha(final_file), entries
+        rights = jart(session, base, project_id, "rights_manifest.json")
+        sources = jart(session, base, project_id, "sources.json")
+        rights_assets = rights.get("assets") or []
+        unresolved_rights = [
+            row for row in rights_assets
+            if str(row.get("rights_status") or "").strip().lower() in {
+                "unknown", "review_required", "not_verified", "not_verified_review_required",
+            }
+            or str(row.get("commercial_use_state") or "").strip().lower() in {
+                "unknown", "unknown_review_required", "review_required", "not_verified",
+            }
+        ]
+        assert not unresolved_rights, {"unresolved_rights": unresolved_rights[:20], "truth": truth}
+        package_file, package_bytes, package_sha256 = dl_streaming(
+            session, base, project_id, "package.zip", min_bytes=100_000
+        )
+        required_package = {
+            "final.mp4", "production_manifest.json", "rights_manifest.json",
+            "sources.json", "script.md", "captions.srt", "audio_master.mp3",
+        }
+        with zipfile.ZipFile(package_file) as archive:
+            assert archive.testzip() is None, "creator package contains a corrupt ZIP member"
+            package_names = set(archive.namelist())
+            assert required_package <= package_names, {
+                "missing_package_members": sorted(required_package - package_names),
+                "available": sorted(package_names)[:100],
+            }
+            archived_media_hash = hashlib.sha256()
+            with archive.open("final.mp4") as media_stream:
+                for chunk in iter(lambda: media_stream.read(1024 * 1024), b""):
+                    archived_media_hash.update(chunk)
+            assert archived_media_hash.hexdigest() == sha(final_file), {
+                "package_final_media_sha256": archived_media_hash.hexdigest(),
+                "downloaded_final_media_sha256": sha(final_file),
+            }
+        checks_summary = {
+            key: checks.get(key) for key in (
+                "actual_rendered_scene_count", "verified_motion_source_count",
+                "minimum_motion_source_count", "fallback_visual_count",
+                "visual_rights_cleared_count", "visual_rights_review_required_count",
+                "visual_rights_unresolved_count", "research_sources",
+            ) if key in checks
+        }
         return {
-            "test": 11 if label == "1080p-20s" else 12,
+            "test": 11 if label == "1080p-20s" else (12 if label == "720p-900s" else 13),
             "profile": label,
             "project_id": project_id,
             "requested_duration_seconds": duration,
@@ -853,32 +1203,444 @@ def _production_profile_acceptance(label: str, duration: int, fast_mode: bool, p
             "resolution": [int(video.get("width") or 0), int(video.get("height") or 0)],
             "scene_count": checks.get("actual_rendered_scene_count"),
             "fallback_visual_count": checks.get("fallback_visual_count"),
+            "visual_rights_unresolved_count": checks.get("visual_rights_unresolved_count"),
+            "truth_state": truth.get("state"),
             "truth_verified": True,
             "full_decode_passed": True,
+            "media_sha256": sha(final_file),
+            "media_size_bytes": final_file.stat().st_size,
+            "ffprobe": media,
+            "quality_truth_checks": checks_summary,
+            "source_count": sources.get("source_count", len(sources.get("sources") or [])),
+            "rights_asset_count": len(rights_assets),
+            "package_sha256": package_sha256,
+            "package_size_bytes": package_bytes,
+            "package_round_trip_hash_verified": True,
             "manifest_hash_verified": True,
+            "provider": state.get("result", {}).get("ai_provider") if isinstance(state.get("result"), dict) else None,
+            "voice_provider": state.get("result", {}).get("voice_provider") if isinstance(state.get("result"), dict) else None,
+            "audio_integrated_lufs": audio_lufs,
+            "audio_true_peak_dbfs": audio_peak_dbfs,
+            "script_generation": script_generation if duration >= 900 else None,
         }
     finally:
         stop(process, log)
 
 
 def t11():
-    # Exercise the non-fast production renderer on a real 20-second deliverable.
+    # Separate 20-second 1080p acceptance profile.
     return _production_profile_acceptance("1080p-20s", 20, False, 18083, "short")
 
 
 def t12():
-    # Exercise the long-form timeline against a measured three-minute deliverable.
-    return _production_profile_acceptance("720p-180s", 180, True, 18084, "long")
+    # Actual 15-minute / 900-second long-form project at 720p.
+    return _production_profile_acceptance("720p-900s", 900, True, 18084, "long")
+
+
+def t13():
+    # Separate real 20-second 720p baseline project.
+    return _production_profile_acceptance("720p-20s", 20, True, 18085, "short")
+
+
+def _content_mode_acceptance(
+    content_type: str,
+    port: int,
+    *,
+    title: str,
+) -> dict:
+    """Create one real project and verify the requested native content deliverable."""
+    data_dir = TMP / ("content-mode-" + content_type)
+    shutil.rmtree(data_dir, ignore_errors=True)
+    process, base, server_log = start(
+        data_dir,
+        port,
+        {
+            "AI_INFINITY_FAST_MODE": "1",
+            "AI_INFINITY_REQUIRE_SOURCE_VISUALS": "1",
+            "AI_INFINITY_REQUIRE_RESEARCH_EVIDENCE": "1",
+        },
+    )
+    session = requests.Session()
+    try:
+        project_id = create(
+            session,
+            base,
+            f"Create a premium 20-second {content_type} about accessible digital storytelling. Use relevant evidence and produce structured chapters, useful explanatory copy, source references and an editable package.",
+            title="Accessible Digital Storytelling",
+            duration=20,
+            format="short",
+            aspect_ratio="16:9",
+            language="English",
+            quality_preset="balanced",
+            require_full_hd=False,
+            content_type=content_type,
+        )
+        state = waitp(
+            session, base, project_id, timeout=1200, allow_review_required=True
+        )
+        assert state.get("status") == "completed_with_qc_warnings", state
+        truth = req(session, base, f"/infinity/studio/project/{quote(project_id, safe='')}/truth")
+        # The primary native deliverable can be independently verified while
+        # the separate video companion remains REVIEW_REQUIRED and unpublishable.
+        assert truth.get("verified") is False and truth.get("state") == "REVIEW_REQUIRED", truth
+        assert truth.get("publish_allowed_by_quality_gate") is False, truth
+        checks = truth.get("checks") or {}
+        assert checks.get("research_required_and_present") is True, truth
+        assert checks.get("primary_native_delivery_eligible") is True, truth
+        primary = jart(session, base, project_id, "primary_content_delivery.json")
+        assert primary.get("status") == "PASS", primary
+        assert primary.get("primary_scope_only") is True, primary
+        assert primary.get("human_review_status") == "PENDING", primary
+        assert primary.get("rights_review_status") == "PENDING", primary
+        assert primary.get("external_publication_status") == "NOT_PUBLISHED", primary
+        assert primary.get("companion_video", {}).get("status") == "REVIEW_REQUIRED", primary
+
+        visual_rights = jart(session, base, project_id, "visual_rights.json")
+        visual_rows = visual_rights.get("assets") if isinstance(visual_rights.get("assets"), list) else []
+        known_rights_states = {"cleared", "original_generated", "review_required", "blocked_fallback", "unknown"}
+        assert visual_rights.get("project_id") == project_id and visual_rights.get("truthful") is True
+        assert visual_rows and all(
+            isinstance(row, dict) and row.get("truthful") is True
+            and row.get("asset") and row.get("rights_state") in known_rights_states
+            for row in visual_rows
+        ), visual_rights
+
+        source = jart(session, base, project_id, "sources.json")
+        assert int(source.get("source_count") or len(source.get("sources") or [])) >= 1, source
+        production = jart(session, base, project_id, "production_manifest.json")
+        rights = jart(session, base, project_id, "rights_manifest.json")
+        assert production.get("truthful") is True and rights.get("truthful") is True
+        assert production.get("project_id") == project_id and rights.get("project_id") == project_id
+
+        if content_type == "article":
+            article = dl(session, base, project_id, "article.md", min_bytes=300)
+            seo = jart(session, base, project_id, "seo.json")
+            fact_check = jart(session, base, project_id, "fact_check.json")
+            text_value = article.read_text(encoding="utf-8")
+            assert text_value.count("## ") >= 2 and len(text_value.split()) >= 30, text_value[:1000]
+            assert seo.get("title") and seo.get("schema_org", {}).get("@type") == "Article", seo
+            assert fact_check.get("claims") is not None or fact_check.get("review_items") is not None, fact_check
+            delivered = {"article": article.name, "seo": "seo.json", "fact_check": "fact_check.json"}
+        elif content_type == "podcast":
+            audio = dl(session, base, project_id, "audio_master.mp3", min_bytes=1000)
+            rss = dl(session, base, project_id, "podcast_rss.xml", min_bytes=100)
+            audio_probe = probe(audio)
+            assert any(row.get("codec_type") == "audio" for row in audio_probe.get("streams", [])), audio_probe
+            import xml.etree.ElementTree as ET
+            channel = ET.parse(rss).getroot().find("./channel")
+            enclosure = channel.find("./item/enclosure") if channel is not None else None
+            assert enclosure is not None and enclosure.get("url") == "audio_master.mp3", rss.read_text()[:1000]
+            assert int(enclosure.get("length") or 0) == audio.stat().st_size, enclosure.attrib
+            assert enclosure.get("type") == "audio/mpeg", enclosure.attrib
+            delivered = {"audio": audio.name, "rss": rss.name, "audio_streams": len(audio_probe.get("streams", []))}
+        elif content_type == "social":
+            campaign = jart(session, base, project_id, "social_campaign.json")
+            expected = {"TikTok", "Instagram", "YouTube", "LinkedIn", "X", "Facebook"}
+            platforms = campaign.get("platforms") if isinstance(campaign.get("platforms"), dict) else campaign
+            assert expected <= set(platforms), sorted(platforms)
+            for platform in expected:
+                payload = platforms[platform]
+                values = json.dumps(payload, ensure_ascii=False)
+                assert len(re.sub(r"[^A-Za-z0-9\u0600-\u06ff]", "", values)) >= 20, (platform, payload)
+            assert campaign.get("method") == "platform_native_copy_and_delivery_contracts", campaign
+            delivered = {"campaign": "social_campaign.json", "platform_count": len(expected)}
+        elif content_type == "website":
+            package = dl(session, base, project_id, "website.zip", min_bytes=1000)
+            manifest = jart(session, base, project_id, "website_manifest.json")
+            readme = dl(session, base, project_id, "website_README.md", min_bytes=100)
+            assert manifest.get("deployment", {}).get("status") == "NOT_PUBLISHED", manifest
+            assert manifest.get("truthful") is True and manifest.get("entrypoint") == "index.html", manifest
+            import zipfile
+            with zipfile.ZipFile(package) as archive:
+                assert archive.testzip() is None
+                names = set(archive.namelist())
+                assert "ai-infinity-site/index.html" in names
+                page = archive.read("ai-infinity-site/index.html").decode("utf-8")
+                assert "rel=\"stylesheet\"" in page and "<video controls" in page
+                assert "ai-infinity-site/evidence/rights_manifest.json" in names
+                assert "ai-infinity-site/evidence/fact_check.json" in names
+            assert manifest.get("export_package", {}).get("sha256") == sha(package), manifest
+            assert "not a published" in readme.read_text(encoding="utf-8").lower()
+            delivered = {"website_zip": package.name, "sha256": sha(package), "site_files": len(names)}
+        elif content_type == "document":
+            document = dl(session, base, project_id, "document.docx", min_bytes=1000)
+            manifest = jart(session, base, project_id, "document_manifest.json")
+            from docx import Document
+            reopened = Document(document)
+            extracted = "\n".join(row.text for row in reopened.paragraphs)
+            assert manifest.get("verification") == "reopened_with_python_docx", manifest
+            assert len(reopened.tables) >= 1 and len(extracted.split()) >= 40, manifest
+            assert manifest.get("sha256") == sha(document), manifest
+            delivered = {"document": document.name, "paragraphs": len(reopened.paragraphs), "tables": len(reopened.tables)}
+        elif content_type == "presentation":
+            presentation = dl(session, base, project_id, "presentation.pptx", min_bytes=1000)
+            manifest = jart(session, base, project_id, "presentation_manifest.json")
+            from pptx import Presentation
+            reopened = Presentation(presentation)
+            extracted = "\n".join(
+                shape.text for slide in reopened.slides for shape in slide.shapes
+                if getattr(shape, "has_text_frame", False)
+            )
+            assert manifest.get("verification") == "reopened_with_python_pptx", manifest
+            assert manifest.get("slide_size") == "16:9" and len(reopened.slides) >= 3, manifest
+            assert len(extracted.split()) >= 40 and manifest.get("sha256") == sha(presentation), manifest
+            delivered = {"presentation": presentation.name, "slides": len(reopened.slides)}
+        else:
+            raise AssertionError("unknown acceptance content type: " + content_type)
+
+        primary_artifacts = {
+            str(row.get("name") or ""): row
+            for row in (primary.get("artifacts") or [])
+            if isinstance(row, dict)
+        }
+        required_names = set(
+            {
+                "article": {"article.md", "seo.json", "fact_check.json"},
+                "podcast": {"audio_master.mp3", "podcast_rss.xml"},
+                "social": {"social_campaign.json"},
+                "website": {"website.zip", "website_manifest.json"},
+                "document": {"document.docx", "document_manifest.json"},
+                "presentation": {"presentation.pptx", "presentation_manifest.json"},
+            }[content_type]
+        )
+        assert required_names <= set(primary_artifacts), (
+            content_type, required_names - set(primary_artifacts), sorted(primary_artifacts)
+        )
+        # Download and verify the primary deliverable directly. The mixed
+        # package.zip and final.mp4 remain blocked until their video gate passes.
+        for name, row in primary_artifacts.items():
+            if name in required_names:
+                downloaded = dl(session, base, project_id, name, min_bytes=1)
+                assert sha(downloaded) == row.get("sha256"), (name, row)
+        assert primary.get("companion_video", {}).get("status") == "REVIEW_REQUIRED"
+        assert primary.get("external_publication_status") == "NOT_PUBLISHED"
+        return {
+            "test": content_type,
+            "project_id": project_id,
+            "content_type": content_type,
+            "state": state.get("status"),
+            "primary_delivery_status": primary.get("status"),
+            "companion_video_truth": truth.get("state"),
+            "source_count": int(source.get("source_count") or len(source.get("sources") or [])),
+            "rights_asset_count": len(rights.get("assets") or []),
+            "deliverables": delivered,
+            "primary_artifact_hashes_verified": True,
+            "mixed_video_package_remains_blocked": True,
+        }
+    finally:
+        stop(process, server_log)
+
+
+def t14_article():
+    return _content_mode_acceptance("article", 18086, title="Article")
+
+
+def t15_podcast():
+    return _content_mode_acceptance("podcast", 18087, title="Podcast")
+
+
+def t16_social():
+    return _content_mode_acceptance("social", 18088, title="Social campaign")
+
+
+def t17_website():
+    return _content_mode_acceptance("website", 18089, title="Website")
+
+
+def t18_document():
+    return _content_mode_acceptance("document", 18090, title="Word document")
+
+
+def t19_presentation():
+    return _content_mode_acceptance("presentation", 18091, title="PowerPoint presentation")
+
+
+
+def t20_image():
+    data_dir = TMP / "native-image"
+    shutil.rmtree(data_dir, ignore_errors=True)
+    process, base, server_log = start(data_dir, 18092, {"AI_INFINITY_TEST_MEDIA": "1"})
+    session = requests.Session()
+    try:
+        project_id = create(
+            session,
+            base,
+            "Create a standalone cinematic editorial image of a solar research station in the desert",
+            content_type="image",
+            title="Native Image Acceptance",
+            language="English",
+            idempotency_key="native-image-acceptance-v1",
+        )
+        last = {}
+        deadline = time.time() + 180
+        while time.time() < deadline:
+            last = req(session, base, f"/infinity/studio/project/{quote(project_id, safe='')}")
+            if str(last.get("status") or "").lower() in {"completed", "completed_with_qc_warnings", "failed", "cancelled"}:
+                break
+            time.sleep(1)
+        assert str(last.get("status") or "").lower() == "completed_with_qc_warnings", last
+        image = dl(session, base, project_id, "image.png", min_bytes=1000)
+        manifest = jart(session, base, project_id, "image_manifest.json")
+        rights = jart(session, base, project_id, "rights_manifest.json")
+        production = jart(session, base, project_id, "production_manifest.json")
+        primary = jart(session, base, project_id, "primary_content_delivery.json")
+        image_package = dl(session, base, project_id, "image_package.zip", min_bytes=1000)
+        package_manifest = jart(session, base, project_id, "image_package_manifest.json")
+        with zipfile.ZipFile(image_package) as bundle:
+            assert bundle.testzip() is None
+            packaged_names = set(bundle.namelist())
+            assert "ai-infinity-image/image.png" in packaged_names
+            packaged_rights = json.loads(bundle.read("ai-infinity-image/rights_manifest.json"))
+            assert packaged_rights.get("rights_status") == "REVIEW_REQUIRED"
+        package_sha = sha(image_package)
+        package_row = next((row for row in primary.get("artifacts", []) if row.get("name") == "image_package.zip"), {})
+        assert package_row.get("sha256") == package_sha
+        assert package_manifest.get("entrypoint") == "image.png"
+        assert package_manifest.get("redistribution_authorized") is False
+        from PIL import Image
+        with Image.open(image) as opened:
+            opened.verify()
+        with Image.open(image) as opened:
+            dimensions = [opened.width, opened.height]
+            image_format = opened.format
+        actual_sha = sha(image)
+        assert image_format == "PNG" and min(dimensions) >= 640, (image_format, dimensions)
+        assert manifest["project_id"] == project_id
+        assert manifest["output"]["sha256"] == actual_sha
+        assert manifest["generation"]["mode"] in {"ai_provider", "local_editorial_illustration_fallback"}
+        assert rights["status"] == "REVIEW_REQUIRED"
+        assert rights["redistribution_authorized"] is False
+        assert rights["assets"][0]["sha256"] == actual_sha
+        assert production["primary_deliverable"]["sha256"] == actual_sha
+        assert primary["status"] == "PASS" and primary["primary_delivery_verified"] is True
+        assert primary["rights_review_status"] == "REVIEW_REQUIRED"
+        assert primary["human_review_status"] == "PENDING"
+        assert last.get("progress") == 100, last
+        return {
+            "test": 20,
+            "project_id": project_id,
+            "content_type": "image",
+            "format": image_format,
+            "resolution": dimensions,
+            "sha256": actual_sha,
+            "package_sha256": package_sha,
+            "package_file_count": len(packaged_names),
+            "generation_mode": manifest["generation"]["mode"],
+            "primary_delivery": "PASS",
+            "rights_status": rights["status"],
+            "human_review": primary["human_review_status"],
+            "publication": primary["external_publication_status"],
+            "runtime_status": last.get("status"),
+            "truthful": True,
+        }
+    finally:
+        stop(process, server_log)
 
 def main():
-    d=TMP/"base";shutil.rmtree(d,ignore_errors=True);p,b,l=start(d,18080,{"AI_INFINITY_TEST_MEDIA":"1"});s=requests.Session();out=[]
+    SCENARIO_RESULTS.clear()
+    _persist_acceptance_result()
+    descriptions = {
+        "01": "Flagship ONE IDEA. INFINITE WORLDS. 60-second 1080p cinematic production and creator package",
+        "02": "Pashto-language narration, script, captions and verified voice output",
+        "03": "Real PDF upload, text extraction and upload-to-creation influence",
+        "04": "Research-grounded creation and editable OTIO export, import and media bundle",
+        "05": "Three distinct short-form repurposed variants",
+        "06": "Provider-failure fallback transparency and fail-closed quality truth",
+        "07": "Degraded research remains review-required and blocks final delivery",
+        "08": "Process restart recovery without claiming persistent storage",
+        "09": "Four concurrent independent source-backed projects",
+        "10": "Corrupt-intermediate retry, recovery and cross-project isolation",
+        "11": "Independent 20-second 1080p delivery profile",
+        "12": "Real 15-minute / 900-second 720p long-form production",
+        "13": "Independent 20-second 720p baseline production",
+        "14": "Native research-backed article with SEO metadata and fact-check records",
+        "15": "Podcast audio master with a valid RSS enclosure bound to the real audio file",
+        "16": "Platform-native multi-network social campaign package",
+        "17": "Responsive exportable website with local video, captions and project evidence",
+        "18": "Editable Word document verified by reopening its OOXML package",
+        "19": "Editable 16:9 PowerPoint deck verified by reopening its OOXML package",
+        "20": "Standalone native image with PNG integrity, SHA-256, rights manifest and review gates",
+    }
+    requested = {
+        "01": {"duration_seconds": 60, "resolution": [1920, 1080], "aspect_ratio": "16:9", "quality_preset": "cinematic"},
+        "02": {"duration_seconds": 60, "language": "Pashto", "aspect_ratio": "9:16"},
+        "03": {"input": "acceptance-source.pdf", "workflow": "upload_to_creation"},
+        "04": {"duration_seconds": 20, "workflow": "research_and_otio_round_trip"},
+        "05": {"distinct_variants": 3},
+        "06": {"workflow": "provider_failure_fallback", "expected_truth": "REVIEW_REQUIRED"},
+        "07": {"workflow": "degraded_research", "expected_truth": "REVIEW_REQUIRED"},
+        "08": {"workflow": "ephemeral_process_restart", "persistent_storage_claimed": False},
+        "09": {"concurrency": 4, "duration_seconds_per_project": 20},
+        "10": {"workflow": "corrupt_intermediate_retry_and_isolation"},
+        "11": {"duration_seconds": 20, "resolution": [1920, 1080], "aspect_ratio": "16:9"},
+        "12": {"duration_seconds": 900, "resolution": [1280, 720], "aspect_ratio": "16:9"},
+        "13": {"duration_seconds": 20, "resolution": [1280, 720], "aspect_ratio": "16:9"},
+        "14": {"content_type": "article", "native_format": "Markdown", "minimum_chapters": 2},
+        "15": {"content_type": "podcast", "audio_format": "MP3", "rss_enclosure_verified": True},
+        "16": {"content_type": "social", "platforms": ["TikTok", "Instagram", "YouTube", "LinkedIn", "X", "Facebook"]},
+        "17": {"content_type": "website", "native_format": "static HTML/CSS", "site_zip_hash_verified": True},
+        "18": {"content_type": "document", "native_format": "DOCX", "reopen_verified": True},
+        "19": {"content_type": "presentation", "native_format": "PPTX", "reopen_verified": True},
+        "20": {"content_type": "image", "native_format": "PNG", "sha256_verified": True, "rights_review_required": True},
+    }
+    process = None
+    server_log = None
     try:
-        out += [t1(s,b),t2(s,b),t3(s,b),t4(s,b),t5(),t6(),t7(),t8(),t9(s,b)]
-        out.append(t10(s,b,d,out[-1]["project_ids"][0]))
+        data_dir = TMP / "base"
+        shutil.rmtree(data_dir, ignore_errors=True)
+        process, base, server_log = start(data_dir, 18080, {"AI_INFINITY_TEST_MEDIA": "1"})
+        session = requests.Session()
+        records = []
+        records.append(_record_scenario("01", descriptions["01"], lambda: t1(session, base), requested=requested["01"]))
+        records.append(_record_scenario("02", descriptions["02"], lambda: t2(session, base), requested=requested["02"]))
+        records.append(_record_scenario("03", descriptions["03"], lambda: t3(session, base), requested=requested["03"]))
+        records.append(_record_scenario("04", descriptions["04"], lambda: t4(session, base, data_dir), requested=requested["04"]))
+        records.append(_record_scenario("05", descriptions["05"], lambda: t5(), requested=requested["05"]))
+        records.append(_record_scenario("06", descriptions["06"], lambda: t6(), requested=requested["06"]))
+        records.append(_record_scenario("07", descriptions["07"], lambda: t7(), requested=requested["07"]))
+        records.append(_record_scenario("08", descriptions["08"], lambda: t8(), requested=requested["08"]))
+        records.append(_record_scenario("09", descriptions["09"], lambda: t9(session, base), requested=requested["09"]))
+        concurrency_result = records[-1].get("result") if records[-1].get("status") == "PASS" else None
+        concurrency_ids = concurrency_result.get("project_ids") if isinstance(concurrency_result, dict) else None
+        if isinstance(concurrency_ids, list) and concurrency_ids:
+            records.append(_record_scenario(
+                "10", descriptions["10"],
+                lambda: t10(session, base, data_dir, concurrency_ids[0]),
+                requested=requested["10"],
+            ))
+        else:
+            records.append(_record_blocked_scenario(
+                "10", descriptions["10"],
+                "Requires the four-project concurrency scenario to return a valid isolated project ID.",
+                requested["10"],
+            ))
+    except Exception as exc:
+        bootstrap_reason = "Shared API runtime could not be started: " + type(exc).__name__ + ": " + str(exc)
+        print("ACCEPTANCE_BOOTSTRAP_FAILURE=" + _redact_diagnostic(bootstrap_reason))
+        for scenario_id in map(lambda value: f"{value:02d}", range(1, 11)):
+            if not any(row.get("scenario_id") == scenario_id for row in SCENARIO_RESULTS):
+                _record_blocked_scenario(scenario_id, descriptions[scenario_id], bootstrap_reason, requested[scenario_id])
     finally:
-        stop(p,l)
-    # Run actual profile acceptance after shutting down the shared ten-scenario app.
-    out.append(t11())
-    out.append(t12())
-    print(json.dumps({"passed":True,"tests":out},ensure_ascii=False,indent=2))
-if __name__=="__main__":main()
+        if process is not None and server_log is not None:
+            stop(process, server_log)
+
+    # Isolated profiles run even when another scenario fails.
+    _record_scenario("11", descriptions["11"], t11, requested=requested["11"])
+    _record_scenario("12", descriptions["12"], t12, requested=requested["12"])
+    _record_scenario("13", descriptions["13"], t13, requested=requested["13"])
+    _record_scenario("14", descriptions["14"], t14_article, requested=requested["14"])
+    _record_scenario("15", descriptions["15"], t15_podcast, requested=requested["15"])
+    _record_scenario("16", descriptions["16"], t16_social, requested=requested["16"])
+    _record_scenario("17", descriptions["17"], t17_website, requested=requested["17"])
+    _record_scenario("18", descriptions["18"], t18_document, requested=requested["18"])
+    _record_scenario("19", descriptions["19"], t19_presentation, requested=requested["19"])
+    _record_scenario("20", descriptions["20"], t20_image, requested=requested["20"])
+
+    document = _acceptance_result_document()
+    _persist_acceptance_result()
+    print(json.dumps(document, ensure_ascii=False, indent=2, default=str))
+    return 0 if document["passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,10 +1,10 @@
 """AI Infinity boot-time production recovery.
 
-This module is loaded by Python automatically in the production image.  It keeps
-the free/local creator pipeline from failing before the first real scene when a
-non-essential procedural music/SFX helper encounters an ffmpeg/container
-limitation.  It never fabricates a finished artifact: every fallback is a real
-audio file generated locally and the existing verification path remains the
+This module is loaded by Python automatically in the production image. It adds
+bounded local recovery for non-essential SFX and media assembly. Music remains
+on the canonical provenance-aware generator so query selection, source
+attribution, and its truthful fallback manifest are preserved. It never
+fabricates a finished artifact; the existing verification path remains the
 source of truth.
 """
 from __future__ import annotations
@@ -33,48 +33,12 @@ def _apply() -> None:
     original_concat = getattr(studio, "concat_segments", None)
 
     if callable(original_music) and not getattr(original_music, "_aiinfinity_recovery", False):
-        def make_music_safe(outdir, seconds):
-            # Deterministic one-source local music first. This avoids the
-            # multi-input filter graph that was the most fragile early-stage
-            # operation on memory-constrained free containers.
-            out = Path(outdir) / "music.m4a"
-            duration = max(1.0, min(900.0, float(seconds)))
-            ffmpeg = getattr(studio, "ffmpeg")
-            try:
-                ffmpeg(
-                    "-f", "lavfi", "-i",
-                    f"sine=frequency=110:sample_rate=48000:duration={duration}",
-                    "-af", "volume=0.025,lowpass=f=1400,afade=t=in:st=0:d=1,"
-                    + "afade=t=out:st=" + str(max(0.1, duration - 2))
-                    + ":d=2",
-                    "-c:a", "aac", "-b:a", "64k", "-t", duration, out,
-                    timeout=180,
-                )
-                if _valid(out):
-                    return out
-            except Exception:
-                pass
-            # Try the original richer generator only after the stable local
-            # path; a later failure is still followed by a real local fallback.
-            try:
-                result = original_music(outdir, seconds)
-                if _valid(result):
-                    return result
-            except Exception:
-                pass
-            subprocess.run(
-                ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-                 "-threads", "1", "-f", "lavfi", "-i",
-                 f"sine=frequency=110:sample_rate=24000:duration={duration}",
-                 "-af", "volume=0.02",
-                 "-c:a", "aac", "-b:a", "48k", "-t", str(duration), str(out)],
-                check=True, timeout=180,
-            )
-            if not _valid(out):
-                raise RuntimeError("local music fallback produced no valid audio")
-            return out
-        make_music_safe._aiinfinity_recovery = True
-        studio.make_music = make_music_safe
+        try:
+            from ai_infinity.music_recovery import wrap_music_generator
+            studio.make_music = wrap_music_generator(original_music, _valid)
+        except Exception:
+            # The canonical generator remains usable without the optional guard.
+            pass
 
     if callable(original_sfx) and not getattr(original_sfx, "_aiinfinity_recovery", False):
         def make_sfx_safe(outdir, duration, index):

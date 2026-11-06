@@ -13,6 +13,27 @@ def test_research_only_command_does_not_default_to_video_creation():
     assert result["route"] == "research"
 
 
+def test_production_subject_is_not_replaced_by_quality_adjective():
+    command = (
+        "Create a 20-second premium, source-backed production about accessible digital storytelling. "
+        "Deliver a document as the primary content type."
+    )
+    assert canonical._derive_title_from_command(command) == "accessible digital storytelling"
+    intent = canonical.compile_intent(command, {"content_type": "document"})
+    assert intent["title"] == "accessible digital storytelling"
+    assert intent["constraints"]["content_type"] == "document"
+
+
+def test_subject_extraction_handles_article_website_and_presentation_briefs():
+    cases = (
+        ("Create a premium production about accessible digital storytelling.", "accessible digital storytelling"),
+        ("Create a website about renewable energy adoption.", "renewable energy adoption"),
+        ("Create a presentation about safe drinking water.", "safe drinking water"),
+    )
+    for command, expected in cases:
+        assert canonical._derive_title_from_command(command) == expected
+
+
 def test_research_and_creation_command_uses_existing_creator_pipeline():
     result = canonical.classify_command(
         "Research competitors and create a 60-second video about AI video editing"
@@ -25,6 +46,42 @@ def test_supported_content_formats_route_to_creation():
     assert canonical.classify_command("Create a podcast about accessible design")["route"] == "create"
     assert canonical.classify_command("Write an article about open source video tools")["route"] == "create"
     assert canonical.classify_command("Create a social campaign for a new tutorial")["route"] == "create"
+
+
+def test_native_website_word_and_powerpoint_outputs_route_to_creation():
+    commands = {
+        "Create a responsive static website about accessible design": "website",
+        "Create a Word document about climate adaptation": "document",
+        "Create a PowerPoint presentation about renewable energy": "presentation",
+    }
+    for command, expected_type in commands.items():
+        assert canonical.classify_command(command)["route"] == "create"
+        intent = canonical.compile_intent(command, {})
+        assert intent["constraints"]["content_type"] == expected_type
+        required = set(intent["success"]["required_artifacts"])
+        if expected_type == "website":
+            assert {"website.zip", "website_manifest.json"} <= required
+        elif expected_type == "document":
+            assert {"document.docx", "document_manifest.json"} <= required
+        else:
+            assert {"presentation.pptx", "presentation_manifest.json"} <= required
+
+
+def test_unimplemented_spreadsheets_and_web_apps_remain_explicitly_unsupported():
+    assert canonical.classify_command("Create a spreadsheet for expenses")["route"] == "unsupported_deliverable"
+    assert canonical.classify_command("Build a web application for task management")["route"] == "unsupported_deliverable"
+
+
+def test_supported_multilingual_native_content_requests_use_the_existing_creation_route():
+    examples = {
+        "ویب سائٹ بنائیں": "website",
+        "ورڈ ڈاکیومنٹ بنائیں": "document",
+        "پاورپوائنٹ پریزنٹیشن بنائیں": "presentation",
+    }
+    for command, content_type in examples.items():
+        result = canonical.classify_command(command)
+        assert result["route"] == "create"
+        assert result["content_type"] == content_type
 
 
 def test_unknown_task_does_not_create_a_default_video():
@@ -133,6 +190,8 @@ def test_primary_director_mode_command_box_uses_canonical_router_and_renders_res
     assert 'if(route==="create")' in handler
     assert "authorization_required" in handler or "supported safe execution route" in handler
     assert 'onclick="createCommand()">Run command</button>' in html
+    for content_type in ("image", "video", "podcast", "article", "social", "website", "document", "presentation"):
+        assert f'<option value="{content_type}">' in html
 
 
 def test_script_strategy_seo_analytics_publisher_and_monetization_are_distinct_routes():
@@ -196,12 +255,39 @@ def test_primary_director_mode_displays_agent_outputs_without_faking_media_creat
     assert "no external action was performed" in handler
 
 
-def test_unsupported_primary_deliverable_does_not_fall_back_to_ui_default_video():
-    result = canonical.classify_command(
-        "Create a website for AI Infinity",
-        {"content_type": "video"},
+def test_explicit_website_command_overrides_stale_video_ui_default():
+    command = "Create a website for AI Infinity"
+    result = canonical.classify_command(command, {"content_type": "video"})
+    intent = canonical.compile_intent(command, {"content_type": "video"})
+    assert result["route"] == "create"
+    assert intent["constraints"]["content_type"] == "website"
+    assert "website.zip" in intent["success"]["required_artifacts"]
+
+def test_creator_enqueue_preserves_every_implemented_native_content_type():
+    import studio_ultimate as studio
+
+    from ai_infinity.native_image_runtime import install as install_native_image_runtime
+    install_native_image_runtime(studio)
+
+    for content_type in ("video", "podcast", "article", "social", "website", "document", "presentation", "image"):
+        assert studio.normalize_creator_content_type(content_type) == content_type
+
+    # Unknown types remain safely bounded instead of being mistaken for a new engine.
+    assert studio.normalize_creator_content_type("spreadsheet") == "video"
+
+def test_natural_language_primary_deliverable_overrides_video_default_for_all_formats():
+    cases = (
+        ("Create a 30-second video about accessibility", "video"),
+        ("Create a podcast about accessibility", "podcast"),
+        ("Write an article about accessibility", "article"),
+        ("Create a social campaign about accessibility", "social"),
+        ("Create a website about accessibility", "website"),
+        ("Create a Word document about accessibility", "document"),
+        ("Create a PowerPoint presentation about accessibility", "presentation"),
     )
-    assert result["route"] == "unsupported_deliverable"
+    for command, expected in cases:
+        intent = canonical.compile_intent(command, {"content_type": "video"})
+        assert intent["constraints"]["content_type"] == expected, (command, intent)
 
 
 def test_supported_video_about_an_unsupported_topic_still_routes_to_video_creation():
@@ -262,12 +348,15 @@ def test_multilingual_creation_routes_use_the_intended_supported_content_type():
         assert result["content_type"] == expected_type, (command, result)
 
 
-def test_multilingual_script_request_and_unsupported_website_request_are_not_video_jobs():
+def test_multilingual_script_and_website_requests_do_not_become_video_jobs():
     script = canonical.classify_command("AI Infinity کا اسکرپٹ لکھیں", {"content_type": "video"})
     website = canonical.classify_command("أنشئ موقع ويب", {"content_type": "video"})
+    website_intent = canonical.compile_intent("أنشئ موقع ويب", {"content_type": "video"})
 
     assert script["route"] == "script"
-    assert website["route"] == "unsupported_deliverable"
+    assert website["route"] == "create"
+    assert website.get("content_type") == "website"
+    assert website_intent["constraints"]["content_type"] == "website"
 
 
 def test_multilingual_consequential_actions_require_authorization():
@@ -590,7 +679,7 @@ def test_api_anything_user_profile_operation_dispatches_tier_and_user_id(monkeyp
         "reader-site", "getRecord", {"recordId": "rec-42"},
         {
             "user_id": "user-research-7", "allow_writes": False,
-            "max_tier": 2, "dry_run": False, "idempotency_key": "", "again": False, "auto_preflight": True,
+            "max_tier": 2, "dry_run": False, "idempotency_key": "", "again": False, "auto_preflight": False,
         },
     )]
 
@@ -630,7 +719,7 @@ def test_api_anything_write_uses_explicit_natural_language_intent_without_flag(m
     connector_fake = SimpleNamespace(
         execute_api_anything_operation=lambda site, operation, params, **kwargs: (
             calls.append((site, operation, params, kwargs)) or {
-                "status": "dry_run_required", "executed": False,
+                "status": "write_confirmation_required", "executed": False,
                 "write_capable": True, "truthful": True,
             }
         ),
@@ -642,16 +731,44 @@ def test_api_anything_write_uses_explicit_natural_language_intent_without_flag(m
     )
     assert result["route"] == "public_api"
     assert result["executed"] is False
-    assert result["status"] == "dry_run_required"
+    assert result["status"] == "write_confirmation_required"
     assert result["write"] is True
     assert calls == [(
         "social-site", "sendMessage", {"recipient": "reviewer", "body": "hello"},
         {
             "user_id": "user-write-4", "allow_writes": False, "max_tier": 3,
-            "dry_run": False, "idempotency_key": "", "again": False, "auto_preflight": True,
+            "dry_run": False, "idempotency_key": "", "again": False, "auto_preflight": False,
         },
     )]
 
+
+
+def test_api_anything_explicit_payload_approval_is_forwarded_without_auto_preflight(monkeypatch):
+    calls = []
+    connector_fake = SimpleNamespace(
+        execute_api_anything_operation=lambda site, operation, params, **kwargs: (
+            calls.append((site, operation, params, kwargs)) or {
+                "status": "dry_run_required", "executed": False,
+                "write_capable": True, "truthful": True,
+            }
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "api_anything_connector", connector_fake)
+
+    result = canonical.dispatch_command(
+        "Use API Anything site=social-site operation=sendMessage recipient=reviewer body=hello",
+        "user-write-approved", {"api_anything_allow_writes": True},
+    )
+
+    assert result["status"] == "dry_run_required"
+    assert result["executed"] is False
+    assert calls == [(
+        "social-site", "sendMessage", {"recipient": "reviewer", "body": "hello"},
+        {
+            "user_id": "user-write-approved", "allow_writes": True, "max_tier": 3,
+            "dry_run": False, "idempotency_key": "", "again": False, "auto_preflight": False,
+        },
+    )]
 
 
 def test_api_anything_catalog_includes_read_and_write_ops_by_default(monkeypatch):
@@ -673,3 +790,42 @@ def test_api_anything_catalog_includes_read_and_write_ops_by_default(monkeypatch
     assert result["status"] == "completed"
     assert [op["operation"] for op in result["operations"]] == ["search", "updateRecord"]
     assert calls == [{"site_name": "", "limit": 200, "user_id": "user-catalog-5", "include_writes": True}]
+
+def test_natural_language_standalone_image_request_routes_to_real_image_deliverable():
+    command = "Create a standalone cinematic editorial image of a solar research station in the desert"
+    decision = canonical.classify_command(command, {"content_type": "video"})
+    intent = canonical.compile_intent(command, {"content_type": "video"})
+    assert decision["route"] == "create"
+    assert decision["content_type"] == "image"
+    assert intent["constraints"]["content_type"] == "image"
+    assert intent["success"]["required_artifacts"] == [
+        "image.png", "image_package.zip", "image_package_manifest.json", "image_manifest.json",
+        "sources.json", "rights_manifest.json", "production_manifest.json", "primary_content_delivery.json"
+    ]
+
+
+def test_creator_image_aliases_normalize_without_affecting_video_default():
+    import studio_ultimate as studio
+    from ai_infinity.native_image_runtime import install as install_native_image_runtime
+
+    install_native_image_runtime(studio)
+    for alias in ("image", "picture", "illustration", "poster", "cover_art"):
+        assert studio.normalize_creator_content_type(alias) == "image"
+    assert studio.normalize_creator_content_type("spreadsheet") == "video"
+
+def test_standalone_image_command_dispatches_image_type_to_creator_engine(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        canonical,
+        "create_from_command",
+        lambda command, user_id, raw: (
+            calls.append((command, user_id, raw))
+            or {"status": "queued", "project_id": "studio_image_project"}
+        ),
+    )
+    command = "Create a standalone cinematic editorial image of a solar research station"
+    result = canonical.dispatch_command(command, "image-user", {"content_type": "video"})
+    assert result["route"] == "create"
+    assert result["executed"] is True
+    assert calls[0][2]["content_type"] == "image"
+

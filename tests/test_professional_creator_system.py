@@ -63,13 +63,14 @@ def test_explicit_timecoded_brand_film_brief_is_preserved_by_offline_planner():
     chapters = plan["chapters"]
     assert plan["title"] == "ONE IDEA. INFINITE WORLDS."
     assert plan["storyboard_origin"] == "explicit_timecoded_user_brief"
-    assert plan["brief_fidelity"]["timecoded_scenes"] == 7
-    assert [chapter["duration"] for chapter in chapters] == [4.0, 8.0, 13.0, 15.0, 9.0, 7.0, 4.0]
+    assert plan["brief_fidelity"]["timecoded_scenes"] == 9
+    assert [chapter["duration"] for chapter in chapters] == [4.0, 8.0, 7.0, 6.0, 7.0, 8.0, 9.0, 7.0, 4.0]
     assert sum(chapter["duration"] for chapter in chapters) == 60.0
     assert chapters[0]["narration"] == "Every extraordinary world begins with something nobody else can see."
-    assert chapters[5]["narration"] == "Research it. Shape it. Bring it to life. Then make it better."
-    assert chapters[6]["narration"] == "AI Infinity. One idea. Infinite worlds."
-    assert len({chapter["visual_focus"] for chapter in chapters}) == 7
+    assert chapters[7]["narration"] == "Research it. Shape it. Bring it to life. Then make it better."
+    assert chapters[8]["narration"] == "AI Infinity. One idea. Infinite worlds."
+    assert len({chapter["visual_focus"] for chapter in chapters}) == 9
+    assert sum(len(chapter["narration"].split()) for chapter in chapters) >= 120
     assert "futuristic city" in chapters[1]["visual_focus"].lower()
     assert "generic Creator OS marketing copy" not in " ".join(chapter["narration"] for chapter in chapters)
     model_calls = []
@@ -89,5 +90,7 @@ def test_explicit_timecoded_brand_film_brief_is_preserved_by_offline_planner():
     )
     assert provider == "explicit-timecoded-user-brief"
     assert model_calls == []
-    assert [chapter["duration"] for chapter in model_plan["chapters"]] == [4.0, 8.0, 13.0, 15.0, 9.0, 7.0, 4.0]
+    assert [chapter["duration"] for chapter in model_plan["chapters"]] == [4.0, 8.0, 7.0, 6.0, 7.0, 8.0, 9.0, 7.0, 4.0]
+    assert len(model_plan["chapters"]) == 9
+    assert sum(len(chapter["narration"].split()) for chapter in model_plan["chapters"]) >= 120
 

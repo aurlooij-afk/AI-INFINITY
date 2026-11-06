@@ -195,10 +195,13 @@ def _derive_title_from_command(command):
     # official website". Without the intermediate deliverable nouns, the old
     # parser could promote "research-backed" or another modifier to the title.
     about = re.search(
-        r"\b(?:video|film|short|reel|documentary|explainer|podcast|article|blog|post)\b"
-        r"(?:\s+(?:article|package|campaign|content|clip|episode|show|story|series|video)){0,4}"
+        r"\b(?:video|film|short|reel|documentary|explainer|podcast|article|blog|post|"
+        r"production|creation|content|package|deliverable|website|web\s+site|landing\s+page|"
+        r"document|presentation|report|guide|newsletter|campaign|social)\b"
+        r"(?:\s+(?:article|package|campaign|content|clip|episode|show|story|series|video|"
+        r"production|deliverable)){0,4}"
         r"\s+(?:about|on|for|covering|exploring)\s+(.+?)"
-        r"(?=,|;|\.|$|\s+(?:with|in|for|using|including|featuring)\s+)",
+        r"(?=,|;|\.|$|\s+(?:with|in|for|using|including|featuring|deliver|output|as\s+the\s+primary)\s+)",
         text, re.I,
     )
     if about:
@@ -236,23 +239,35 @@ def compile_intent(command,raw):
     # a natural-language command, infer the primary deliverable from its first
     # occurrence; collateral assets (e.g. article.md/social copy in a video pack)
     # must not silently disable the primary video's verification gates.
-    allowed_types={"video","podcast","article","social"}
+    allowed_types={"video","podcast","article","social","website","document","presentation","image"}
     requested_type=clean(raw.get("content_type"),30).lower()
-    if requested_type in allowed_types:
-        ct=requested_type
-    else:
-        intent_patterns=(
-            (r"\b(?:video|film|reel|documentary|explainer)\b","video"),
-            (r"\b(?:podcast|audio show)\b","podcast"),
-            (r"\b(?:article|blog|essay|report|guide|newsletter|white paper|research brief)\b","article"),
-            (r"\b(?:social(?:\s+media)?\s+(?:post|campaign)|linkedin post|instagram post|tweet|x post)\b","social"),
-        )
-        intent_matches=[]
-        for pattern, inferred_type in intent_patterns:
-            match=re.search(pattern,low)
-            if match:
-                intent_matches.append((match.start(),inferred_type))
-        ct=min(intent_matches,key=lambda item:item[0])[1] if intent_matches else "video"
+    # A concrete deliverable named in the natural-language command must override
+    # a stale UI default (commonly "video"). Otherwise "Create a website" can
+    # be silently executed as a video even though the website exporter exists.
+    intent_patterns=(
+        (r"\b(?:video|film|reel|documentary|explainer)\b","video"),
+        (r"\b(?:podcast|audio show)\b","podcast"),
+        (r"\b(?:article|blog|essay|report|guide|newsletter|white paper|research brief)\b","article"),
+        (r"\b(?:social(?:\s+media)?\s+(?:post|campaign)|linkedin post|instagram post|tweet|x post)\b","social"),
+        (r"\b(?:static website|website package|website|web site|landing page|microsite)\b","website"),
+        (r"\b(?:word document|docx|document)\b","document"),
+        (r"\b(?:powerpoint|presentation|slide deck|slides)\b","presentation"),
+        (r"\b(?:image|picture|illustration|poster|cover art|key art|graphic)\b","image"),
+        (r"(?:ویڈیو|ویدیو|ویدئوی|ویډیو|فيديو|مقطع|فلم|فیلم)","video"),
+        (r"(?:پوڈکاسٹ|پادکست|پوډکاسټ|بودكاست)","podcast"),
+        (r"(?:مضمون|مقالہ|مقاله|گزارش|مقال|تقرير)","article"),
+        (r"(?:سوشل\s+(?:پوسٹ|مہم)|پست\s+اجتماعی|کمپین|ټولنیز\s+پوسټ|منشور|حملة)","social"),
+        (r"(?:ویب\s*سائٹ|وب.?سایت|ویبپاڼه|موقع\s+(?:إلكتروني|ويب)|صفحه\s+وب)","website"),
+        (r"(?:ورڈ\s*ڈاکیومنٹ|ورډ\s+سند|مستند\s+وورد|ملف\s+وورد|سند\s+ورد)","document"),
+        (r"(?:عرض\s+تقديمي|پاورپوائنٹ|پاورپوینټ|پرزینتیشن|پریزنٹیشن|ارائه\s+اسلایدی)","presentation"),
+    )
+    intent_matches=[]
+    for pattern, inferred_type in intent_patterns:
+        match=re.search(pattern,low)
+        if match:
+            intent_matches.append((match.start(),inferred_type))
+    command_type=min(intent_matches,key=lambda item:item[0])[1] if intent_matches else ""
+    ct=command_type or (requested_type if requested_type in allowed_types else "video")
     fmt=clean(raw.get("format"),30).lower()
     if fmt not in {"long","short","shorts","reel","tiktok"}:fmt=""
     explicit_ratio=clean(raw.get("aspect_ratio"),10)
@@ -296,10 +311,14 @@ def compile_intent(command,raw):
                      "content_type":ct,"language":language,"platforms":platforms},
       "success":{
         "technical_qc_required":True,"duration_tolerance_seconds":1.0,"aspect_tolerance":0.02,
-        "required_artifacts":(
-          ["final.mp4","audio_master.mp3","captions.srt","thumbnail.jpg","script.md","manifest.json"]
-          if ct in {"video","social"} else
-          (["audio_master.mp3","podcast_rss.xml"] if ct=="podcast" else ["article.md","thumbnail.jpg"])
+        "required_artifacts": (
+          ["image.png", "image_package.zip", "image_package_manifest.json", "image_manifest.json", "sources.json", "rights_manifest.json", "production_manifest.json", "primary_content_delivery.json"] if ct == "image" else
+          ["final.mp4", "audio_master.mp3", "captions.srt", "thumbnail.jpg", "script.md", "manifest.json"] if ct in {"video", "social"} else
+          ["audio_master.mp3", "podcast_rss.xml"] if ct == "podcast" else
+          ["website.zip", "website_manifest.json"] if ct == "website" else
+          ["document.docx", "document_manifest.json"] if ct == "document" else
+          ["presentation.pptx", "presentation_manifest.json"] if ct == "presentation" else
+          ["article.md", "thumbnail.jpg"]
         ),
         "creative_evaluation":"best-effort when a semantic model is configured"
       },
@@ -577,7 +596,38 @@ var c=(document.getElementById("aiiCanonCmd").value||"").trim(),out=document.get
 if(!c){out.textContent="Describe what you want to create or change.";return}
 out.textContent="Capability check…";
 try{
+var rows=c.split(/\r?\n/).map(function(line){return line.trim()}).filter(Boolean);
+var listMode=rows.length>1 && rows.every(function(line){return /^(?:\d+[.)]|[-*])\s+/.test(line)});
 var r;
+if(listMode){
+ var commands=rows.map(function(line,index){
+  var command=line.replace(/^(?:\d+[.)]|[-*])\s+/,"").trim();
+  var from=command.match(/^\[from:([A-Za-z0-9._-]+)\]\s*/i);
+  var item={id:"step-"+(index+1),command:from?command.slice(from[0].length).trim():command};
+  if(pid)item.payload={project_id:pid};
+  if(from){item.depends_on=[from[1]];item.project_id_from=from[1]}
+  return item;
+ });
+ // Keep the same idempotency key if the network drops after the server
+ // accepted the batch. A retry then returns the persisted batch instead of
+ // dispatching duplicate creative work. Clear it only after a response arrives.
+ var pending=null;
+ try{pending=JSON.parse(localStorage.getItem("aii_pending_batch")||"null")}catch(e){}
+ var key=pending&&pending.command===c&&pending.key
+   ? pending.key
+   : "aii-ui-"+Date.now()+"-"+Math.random().toString(36).slice(2,12);
+ localStorage.setItem("aii_pending_batch",JSON.stringify({command:c,key:key}));
+ r=await api("/infinity/canonical/batches",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({idempotency_key:key,commands:commands})});
+ localStorage.removeItem("aii_pending_batch");
+ var lastPid="";
+ (r.steps||[]).forEach(function(step){
+  var nested=step.result&&step.result.result;
+  if(nested&&nested.project_id)lastPid=nested.project_id;
+ });
+ if(lastPid){pid=lastPid;localStorage.setItem("aii_canonical_project",pid)}
+ out.textContent="Batch "+r.status+" · "+(r.completed_steps||0)+" complete · "+(r.accepted_steps||0)+" accepted · "+(r.failed_steps||0)+" failed\n"+JSON.stringify(r.steps||[],null,2);
+ return;
+}
 if(pid){r=await api("/infinity/canonical/project/"+encodeURIComponent(pid)+"/command",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({command:c})})}
 else{r=await api("/infinity/canonical/create",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({command:c})});if(r.project_id){pid=r.project_id;localStorage.setItem("aii_canonical_project",pid)}}
 out.innerHTML="<span>"+esc(r.message||r.status||"accepted")+"</span><br><br><span>"+esc(JSON.stringify({project_id:r.project_id,version_id:r.version_id,state:r.canonical_state||r.state},null,2))+"</span>";
@@ -606,6 +656,8 @@ def create_from_command(command,user_id,raw):
             if row[1]!=req_hash:raise HTTPException(409,"idempotency key is already bound to a different request")
             return {"status":"existing","project_id":row[0],"truthful":True}
     c=intent["constraints"]
+    required_artifacts = intent.get("success", {}).get("required_artifacts") or []
+    initial_artifact_name = str(required_artifacts[0]) if required_artifacts else "final.mp4"
     req={"title":intent["title"],"objective":intent["objective"],"topic":intent["objective"],"format":c["format"],
          "duration":c["duration_seconds"],"content_type":c["content_type"],"audience":intent["audience"],
          "tone":intent["tone"],"voice":intent["voice"],"language":c["language"],"platforms":c["platforms"],
@@ -643,7 +695,7 @@ def create_from_command(command,user_id,raw):
         vid=uid("ver")
         c.execute(
           "INSERT INTO canonical_versions(version_id,project_id,parent_version_id,engine_project_id,kind,label,state,operation_json,artifact_name,evidence_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-          (vid,pid,None,pid,"base","Version 1","PENDING",json.dumps({"operation":"initial_creation","intent_sha256":digest(intent)},sort_keys=True),"final.mp4","{}",now(),now())
+          (vid,pid,None,pid,"base","Version 1","PENDING",json.dumps({"operation":"initial_creation","intent_sha256":digest(intent)},sort_keys=True),initial_artifact_name,"{}",now(),now())
         )
         c.execute("UPDATE canonical_projects SET current_version_id=? WHERE project_id=?",(vid,pid))
     add_memory(user_id,"Current project objective","context",intent["objective"],pid,"project",1.0,"user_command")
@@ -722,13 +774,13 @@ def classify_command(command, raw=None):
         low,
     ))
     explicit_media_output = bool(re.search(
-        r"\b(?:create|make|generate|produce|build)\s+(?:(?:a|an|the|new|short|long|cinematic|professional|vertical|horizontal|\d+[- ]second)\s+){0,5}(?:video|film|reel|documentary|explainer|podcast|article|blog|essay|report|guide|newsletter|social campaign|social post)\b",
+        r"\b(?:create|make|generate|produce|build)\s+(?:(?:a|an|the|new|short|long|cinematic|professional|vertical|horizontal|responsive|static|\d+[- ]second)\s+){0,5}(?:image|picture|illustration|poster|cover art|key art|graphic|video|film|reel|documentary|explainer|podcast|article|blog|essay|report|guide|newsletter|social campaign|social post|website|web site|landing page|microsite|word document|docx|document|powerpoint|presentation|slide deck|slides)\b",
         low,
     ))
     if unsupported_primary and not explicit_media_output:
         return {
             "route": "unsupported_deliverable",
-            "reason": "This request names a deliverable that the current runtime does not implement. It will not be silently converted into a video. Supported creation outputs are video, podcast, article/report, and social package.",
+            "reason": "This request names a deliverable that the current runtime does not implement. It will not be silently converted into a video. Supported creation outputs are video, podcast, article/report, social package, exportable static websites, editable Word documents, and PowerPoint decks.",
         }
     # Normalize common status phrasings before broad capability inference. This
     # avoids misrouting short commands like "Check project status" as unknown.
@@ -783,14 +835,18 @@ def classify_command(command, raw=None):
         low,
     ))
     localized_types = (
+        (r"(?:تصویر|عکس|تصوير|صورة|صوّر|أنشئ صورة|انځور|انځورونه)", "image"),
         (r"(?:ویڈیو|ویدیو|ویدئوی|ویډیو|فيديو|مقطع|فلم|فیلم)", "video"),
         (r"(?:پوڈکاسٹ|پادکست|پوډکاسټ|بودكاست)", "podcast"),
         (r"(?:مضمون|مقالہ|مقاله|گزارش|مقال|تقرير)", "article"),
         (r"(?:سوشل\s+(?:پوسٹ|مہم)|پست\s+اجتماعی|کمپین|ټولنیز\s+پوسټ|منشور|حملة)", "social"),
+        (r"(?:ویب\s*سائٹ|وب.?سایت|ویبپاڼه|موقع\s+(?:إلكتروني|ويب)|صفحه\s+وب)", "website"),
+        (r"(?:ورڈ\s*ڈاکیومنٹ|ورډ\s+سند|مستند\s+وورد|ملف\s+وورد|سند\s+ورد)", "document"),
+        (r"(?:عرض\s+تقديمي|پاورپوائنٹ|پاورپوینټ|پرزینتیشن|پریزنٹیشن|ارائه\s+اسلایدی)", "presentation"),
     )
     localized_content_type = next((kind for pattern, kind in localized_types if re.search(pattern, low)), "")
     localized_unsupported = bool(re.search(
-        r"(?:ویب\s*سائٹ|وب.?سایت|ویبپاڼه|موقع\s+(?:إلكتروني|ويب)|تطبيق|جدول\s+بيانات|صفحه\s+گسترده|عرض\s+تقديمي|پاورپوائنٹ|قاعدة\s+بيانات)",
+        r"(?:تطبيق|ایپلیکیشن|اپلیکیشن|جدول\s+بيانات|صفحه\s+گسترده|سپریڈ\s*شیٹ|قاعدة\s+بيانات)",
         low,
     ))
     if localized_unsupported and not localized_content_type and localized_create:
@@ -806,8 +862,8 @@ def classify_command(command, raw=None):
         return {"route": "research", "reason": "Matched a supported multilingual research request."}
     if not explicit and localized_create:
         selected_type = localized_content_type or clean(payload.get("content_type"), 30).lower()
-        if selected_type not in {"video", "podcast", "article", "social"}:
-            return {"route": "deliverable_required", "reason": "Specify a supported output: video, podcast, article/report, or social package."}
+        if selected_type not in {"video", "podcast", "article", "social", "website", "document", "presentation", "image"}:
+            return {"route": "deliverable_required", "reason": "Specify a supported output: image, video, podcast, article/report, social package, website, editable Word document, or PowerPoint deck."}
         return {"route": "create", "content_type": selected_type, "reason": "Matched a supported multilingual creation request."}
 
     if explicit in supported:
@@ -826,7 +882,7 @@ def classify_command(command, raw=None):
     else:
         creation = bool(re.search(r"\b(create|make|generate|produce|build|write|draft|develop|turn|convert|transform|repurpose)\b", low))
         media_creation = bool(re.search(
-            r"\b(?:create|make|generate|produce|build)\s+(?:(?:a|an|the|new|short|long|cinematic|professional|vertical|horizontal|\d+[- ]second)\s+){0,5}(?:video|film|reel|documentary|explainer|podcast|article|blog|essay|report|guide|newsletter|social campaign|social post)\b",
+            r"\b(?:create|make|generate|produce|build)\s+(?:(?:a|an|the|new|short|long|cinematic|professional|vertical|horizontal|responsive|static|\d+[- ]second)\s+){0,5}(?:video|film|reel|documentary|explainer|podcast|article|blog|essay|report|guide|newsletter|social campaign|social post|website|web site|landing page|microsite|word document|docx|document|powerpoint|presentation|slide deck|slides)\b",
             low,
         ))
         script_request = bool(
@@ -859,13 +915,16 @@ def classify_command(command, raw=None):
             route = "strategy"
         elif re.search(r"\b(website|web\s+site|web\s+app|web\s+application|mobile\s+app|mobile\s+application|spreadsheet|slide\s+deck|presentation|powerpoint|database|api\s+endpoint|codebase|code\s+project|computer\s+program|ios\s+app|android\s+app)\b", low) and not any(
             re.search(pattern, low) for pattern in (
-                r"\b(video|film|reel|documentary|explainer|launch film|shorts?)\b",
+                r"\b(image|picture|illustration|poster|cover art|key art|graphic|video|film|reel|documentary|explainer|launch film|shorts?)\b",
                 r"\b(podcast|audio show)\b",
                 r"\b(article|blog|essay|report|guide|newsletter|white paper|research brief)\b",
                 r"\b(social post|social campaign|linkedin post|instagram post|tweet|x post)\b",
+                r"\b(?:static website|website package|website|web site|landing page|microsite)\b",
+        r"\b(?:word document|docx|document)\b",
+        r"\b(?:powerpoint|presentation|slide deck|slides)\b",
             )
         ):
-            return {"route": "unsupported_deliverable", "reason": "This request names a deliverable that the current runtime does not implement. It will not be silently converted into a video. Supported creation outputs are video, podcast, article/report, and social package."}
+            return {"route": "unsupported_deliverable", "reason": "This request names a deliverable that the current runtime does not implement. It will not be silently converted into a video. Supported creation outputs are video, podcast, article/report, social package, exportable static websites, editable Word documents, and PowerPoint decks."}
         elif media_creation:
             route = "create"
         elif research and not creation:
@@ -876,18 +935,31 @@ def classify_command(command, raw=None):
                 r"\b(podcast|audio show)\b",
                 r"\b(article|blog|essay|report|guide|newsletter|white paper|research brief)\b",
                 r"\b(social post|social campaign|linkedin post|instagram post|tweet|x post)\b",
+                r"\b(?:static website|website package|website|web site|landing page|microsite)\b",
+        r"\b(?:word document|docx|document)\b",
+        r"\b(?:powerpoint|presentation|slide deck|slides)\b",
             )
-            has_known_deliverable = clean(payload.get("content_type"), 30).lower() in {"video", "podcast", "article", "social"} or any(re.search(pattern, low) for pattern in types)
+            has_known_deliverable = clean(payload.get("content_type"), 30).lower() in {"video", "podcast", "article", "social", "website", "document", "presentation", "image"} or any(re.search(pattern, low) for pattern in types)
             if creation and has_known_deliverable:
                 route = "create"
             elif research:
                 route = "research"
             elif creation:
-                return {"route": "deliverable_required", "reason": "Specify a supported deliverable: video, podcast, article/report, or social package."}
+                return {"route": "deliverable_required", "reason": "Specify a supported deliverable: video, podcast, article/report, social package, website, editable Word document, or PowerPoint deck."}
             else:
                 return {"route": "unsupported", "reason": "No safe executable route matched this command."}
     if route in {"edit", "project_status"} and not payload.get("project_id"):
         return {"route": "project_id_required", "reason": "This action requires an existing project ID."}
+    if route == "create":
+        # Return the same authoritative primary-output type that compile_intent
+        # will execute. This keeps the command preview and dispatched project
+        # aligned when a stale UI default conflicts with the user's image/video/etc.
+        inferred_type = compile_intent(text, payload)["constraints"]["content_type"]
+        return {
+            "route": "create",
+            "content_type": inferred_type,
+            "reason": "Matched a supported natural-language production request.",
+        }
     return {"route": route, "reason": "Matched an implemented AI Infinity capability."}
 
 
@@ -1027,7 +1099,6 @@ def dispatch_command(command, user_id, raw=None):
             write_allowance = (
                 payload.get("api_anything_allow_writes") is True
                 or bool(re.search(r"(?:^|\s)--allow-writes(?:\s|$)", cmd, re.I))
-                or (bool(operation_name) and hasattr(connector, "execute_api_anything_operation"))
             )
             dry_run = payload.get("api_anything_dry_run") is True or bool(
                 re.search(r"(?:^|\s)--dry(?:\s|$)", cmd, re.I)
@@ -1053,8 +1124,8 @@ def dispatch_command(command, user_id, raw=None):
                 if hasattr(connector, "execute_api_anything_operation"):
                     result = connector.execute_api_anything_operation(
                         site_name, operation_name, params, user_id=user_id,
-                        allow_writes=False, max_tier=max_tier, dry_run=dry_run,
-                        idempotency_key=idempotency_key, again=again, auto_preflight=True,
+                        allow_writes=write_allowance, max_tier=max_tier, dry_run=dry_run,
+                        idempotency_key=idempotency_key, again=again, auto_preflight=False,
                     )
                 elif hasattr(connector, "execute_bundled_operation"):
                     result = connector.execute_bundled_operation(
@@ -1064,7 +1135,7 @@ def dispatch_command(command, user_id, raw=None):
                     result = connector.execute_bundled_read_only(site_name, operation_name, params)
                 result_status = result.get("status")
                 executed = result.get("executed") is True
-                if result_status in {"write_confirmation_required", "dry_run_required", "preview_receipt_persist_failed"}:
+                if result_status in {"write_confirmation_required", "dry_run_required", "preview_receipt_persist_failed", "write_approval_expired", "write_approval_invalid"}:
                     status = result_status
                 elif result_status == "dry_run_ready":
                     status = "dry_run_ready"
@@ -1332,7 +1403,7 @@ def dispatch_command(command, user_id, raw=None):
     if route == "create":
         effective_payload = dict(payload)
         inferred_type = clean(decision.get("content_type"), 30).lower()
-        if inferred_type in {"video", "podcast", "article", "social"}:
+        if inferred_type in {"image", "video", "podcast", "article", "social", "website", "document", "presentation"}:
             effective_payload["content_type"] = inferred_type
         result = create_from_command(cmd, user_id, effective_payload)
         return {"status": result.get("status", "queued"), "route": route, "result": result, "executed": True, "truthful": True}

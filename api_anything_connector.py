@@ -25,6 +25,7 @@ UPSTREAM_COMMIT = "69bef64f5b3628f448d3d9c2435c455bcb6ea38d"
 MAX_QUERY_CHARS = 250
 MAX_OUTPUT_CHARS = 2_000_000
 DEFAULT_TIMEOUT_SECONDS = 12
+WRITE_PREVIEW_TTL_SECONDS = 600
 
 
 def status() -> dict[str, Any]:
@@ -940,6 +941,39 @@ def _write_preview_key(site_name: str, operation_name: str, parameters: dict[str
     return hashlib.sha256(payload).hexdigest()
 
 
+def _write_preview_parameters_sha256(parameters: dict[str, Any]) -> str:
+    encoded = json.dumps(parameters, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_write_preview_receipt(
+    preview_path: Path, site_name: str, operation_name: str,
+    parameters: dict[str, Any], max_tier: int,
+) -> str:
+    """Validate an exact-action, user-scoped, single-use preview receipt and its expiry."""
+    try:
+        receipt = json.loads(preview_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError):
+        return "invalid"
+    if not isinstance(receipt, dict):
+        return "invalid"
+    if (
+        receipt.get("site") != site_name
+        or receipt.get("operation") != operation_name
+        or receipt.get("parameters_sha256") != _write_preview_parameters_sha256(parameters)
+        or receipt.get("max_tier") != max_tier
+        or type(receipt.get("created_at")) is not int
+    ):
+        return "invalid"
+    now = int(time.time())
+    created_at = receipt["created_at"]
+    if created_at > now + 30:
+        return "invalid"
+    if now - created_at > WRITE_PREVIEW_TTL_SECONDS:
+        return "expired"
+    return "valid"
+
+
 def execute_api_anything_operation(
     site_name: str, operation_name: str, parameters: dict[str, Any] | None = None, *,
     user_id: str = "anonymous", allow_writes: bool = False, max_tier: int = 3,
@@ -1079,9 +1113,7 @@ def execute_api_anything_operation(
                     preview_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
                     preview_path.write_text(json.dumps({
                         "site": site_name, "operation": operation_name,
-                        "parameters_sha256": hashlib.sha256(
-                            json.dumps(safe_params, sort_keys=True, ensure_ascii=False).encode("utf-8")
-                        ).hexdigest(),
+                        "parameters_sha256": _write_preview_parameters_sha256(safe_params),
                         "max_tier": max_tier, "created_at": int(time.time()),
                     }), encoding="utf-8")
                     preview_path.chmod(0o600)
@@ -1089,10 +1121,22 @@ def execute_api_anything_operation(
                     return {"status": "preview_receipt_persist_failed", "executed": False, "truthful": True}
 
             if is_write and (allow_writes or auto_preflight) and not dry_run:
+                if not preview_path.is_file():
+                    return {"status": "dry_run_required", "executed": False, "truthful": True}
+                receipt_status = _validate_write_preview_receipt(
+                    preview_path, site_name, operation_name, safe_params, max_tier,
+                )
+                if receipt_status != "valid":
+                    try:
+                        preview_path.unlink()
+                    except OSError:
+                        pass
+                    return {
+                        "status": "write_approval_expired" if receipt_status == "expired" else "write_approval_invalid",
+                        "executed": False, "write_capable": True, "truthful": True,
+                    }
                 try:
                     preview_path.unlink()
-                except FileNotFoundError:
-                    return {"status": "dry_run_required", "executed": False, "truthful": True}
                 except OSError:
                     return {"status": "preview_receipt_consume_failed", "executed": False, "truthful": True}
             result, error = run(args)
@@ -1126,9 +1170,7 @@ def execute_api_anything_operation(
                         preview_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
                         preview_path.write_text(json.dumps({
                             "site": site_name, "operation": operation_name,
-                            "parameters_sha256": hashlib.sha256(
-                                json.dumps(safe_params, sort_keys=True, ensure_ascii=False).encode("utf-8")
-                            ).hexdigest(),
+                            "parameters_sha256": _write_preview_parameters_sha256(safe_params),
                             "max_tier": max_tier, "created_at": int(time.time()),
                         }), encoding="utf-8")
                         preview_path.chmod(0o600)
@@ -1205,9 +1247,7 @@ def execute_api_anything_operation(
                 "site": site_name, "operation": operation_name, "source": site.get("source"),
                 "read_only": not is_write, "write_capable": is_write, "write_outcome": write_outcome,
                 "transport_tier": returned_tier, "result": data,
-                "parameters_sha256": hashlib.sha256(
-                    json.dumps(safe_params, sort_keys=True, ensure_ascii=False).encode("utf-8")
-                ).hexdigest(),
+                "parameters_sha256": _write_preview_parameters_sha256(safe_params),
                 "latency_ms": round((time.monotonic() - started) * 1000, 2),
                 "upstream_commit": UPSTREAM_COMMIT, "executed": True, "truthful": True,
             }

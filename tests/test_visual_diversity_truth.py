@@ -9,6 +9,8 @@ import studio_ultimate as studio
 
 
 class _FileHasher:
+    Image = studio.Image
+
     @staticmethod
     def file_sha256(path: Path) -> str:
         digest = hashlib.sha256()
@@ -18,10 +20,28 @@ class _FileHasher:
         return digest.hexdigest()
 
 
+def _write_visual(path: Path, pattern: str, shift: int = 0) -> Path:
+    image = studio.Image.new("RGB", (96, 96), (0, 0, 0))
+    draw = studio.ImageDraw.Draw(image)
+    if pattern == "horizontal":
+        draw.rectangle((12 + shift, 12, 82, 24), fill=(255, 255, 255))
+        draw.rectangle((12, 42 + shift, 54, 54 + shift), fill=(180, 180, 180))
+    elif pattern == "vertical":
+        draw.rectangle((12, 12 + shift, 24, 82), fill=(255, 255, 255))
+        draw.rectangle((42 + shift, 12, 54 + shift, 54), fill=(180, 180, 180))
+    elif pattern == "diagonal":
+        draw.polygon([(4, 84), (18, 84), (84, 18), (84, 4)], fill=(255, 255, 255))
+        draw.ellipse((8, 8, 32, 32), fill=(160, 160, 160))
+    else:
+        raise AssertionError("unknown test pattern")
+    image.save(path, format="PNG")
+    return path
+
+
 def test_single_scene_ignores_duplicate_asset_rows_for_diversity_threshold(monkeypatch, tmp_path):
     monkeypatch.setattr(closure, "_studio", lambda: _FileHasher())
     asset = tmp_path / "visual.jpg"
-    asset.write_bytes(b"same verified visual bytes")
+    _write_visual(asset, "horizontal")
 
     rows = [{"path": str(asset)}, {"path": str(asset)}]
     result = closure._visual_diversity_metrics(rows, scene_count=1)
@@ -35,8 +55,8 @@ def test_multi_scene_diversity_threshold_is_not_weakened_by_duplicate_rows(monke
     monkeypatch.setattr(closure, "_studio", lambda: _FileHasher())
     asset_a = tmp_path / "visual-a.jpg"
     asset_b = tmp_path / "visual-b.jpg"
-    asset_a.write_bytes(b"scene visual A")
-    asset_b.write_bytes(b"scene visual B")
+    _write_visual(asset_a, "horizontal")
+    _write_visual(asset_b, "vertical")
 
     rows = [
         {"path": str(asset_a)},
@@ -54,9 +74,9 @@ def test_multi_scene_diversity_threshold_is_not_weakened_by_duplicate_rows(monke
 def test_multi_scene_diversity_passes_at_the_existing_sixty_percent_threshold(monkeypatch, tmp_path):
     monkeypatch.setattr(closure, "_studio", lambda: _FileHasher())
     assets = []
-    for index, payload in enumerate((b"visual A", b"visual B", b"visual C"), start=1):
-        asset = tmp_path / f"visual-{index}.jpg"
-        asset.write_bytes(payload)
+    for index, pattern in enumerate(("horizontal", "vertical", "diagonal"), start=1):
+        asset = tmp_path / f"visual-{index}.png"
+        _write_visual(asset, pattern)
         assets.append(asset)
 
     rows = [{"path": str(path)} for path in assets]
@@ -1441,6 +1461,9 @@ def test_curated_launch_video_adapter_preserves_motion_source_and_item_rights(mo
     monkeypatch.setattr(studio_module, "ffprobe_json", fake_probe)
     monkeypatch.setattr(studio_module, "probe_duration", lambda path: 12.0)
     monkeypatch.setattr(studio_module, "FAST_MODE", True)
+    # These tests mock media bytes and FFprobe. Keep the independent real-media
+    # black-frame check disabled only for the synthetic fixture, not production.
+    monkeypatch.setattr(studio_module, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
 
     row = studio_module._curated_pexels_launch_video({
         "topic": "AI Infinity launch",
@@ -1487,6 +1510,9 @@ def test_curated_launch_video_selects_by_scene_semantics_not_ordinal(monkeypatch
     monkeypatch.setattr(module, "ffprobe_json", fake_probe)
     monkeypatch.setattr(module, "probe_duration", lambda path: 12.0)
     monkeypatch.setattr(module, "FAST_MODE", True)
+    # These tests mock media bytes and FFprobe. Keep the independent real-media
+    # black-frame check disabled only for the synthetic fixture, not production.
+    monkeypatch.setattr(module, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
 
     # Scene 5 of the five-scene short storyboard is final playback, not a
     # creator-filming shot. The old index-only mapping chose source 7677005.
@@ -1502,7 +1528,7 @@ def test_curated_launch_video_selects_by_scene_semantics_not_ordinal(monkeypatch
     assert row is not None, module.MEDIA_DEBUG_ERRORS.get("pexels-curated-launch-video")
     assert row["kind"] == "video"
     assert row["quality_tier"] == "curated_free_source_motion_video"
-    assert row["source_id"] in {12358562, 35820856}
+    assert row["source_id"] in {12358562, 35820856, 7239491}
     assert row["source_id"] != 7677005
     assert row["selection_reason"] == "scene_concepts_and_source_metadata_match"
     assert row["source_url"].startswith("https://www.pexels.com/video/")
@@ -1536,6 +1562,17 @@ def test_curated_launch_video_retries_another_relevant_clip_after_download_failu
     monkeypatch.setattr(module, "ffprobe_json", fake_probe)
     monkeypatch.setattr(module, "probe_duration", lambda path: 12.0)
     monkeypatch.setattr(module, "FAST_MODE", True)
+    # These tests mock media bytes and FFprobe. Keep the independent real-media
+    # black-frame check disabled only for the synthetic fixture, not production.
+    monkeypatch.setattr(module, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        module,
+        "_curated_launch_visual_candidate_relevant",
+        lambda candidate, *_args, **_kwargs: candidate.get("title") in {
+            "Close up of computer screen",
+            "Professional video editing at workstation",
+        },
+    )
 
     row = module._curated_pexels_launch_video({
         "topic": "AI Infinity launch",
@@ -1547,10 +1584,10 @@ def test_curated_launch_video_retries_another_relevant_clip_after_download_failu
     }, tmp_path, 5)
 
     assert row is not None, module.MEDIA_DEBUG_ERRORS.get("pexels-curated-launch-video")
-    assert row["source_id"] == 35820856
+    assert row["source_id"] in {35820856, 7239491}
     assert len(downloads) == 2, downloads
     assert downloads[0].endswith("/12358562-hd_1920_1080_30fps.mp4")
-    assert downloads[1].endswith("/15188259_1920_1080_30fps.mp4")
+    assert downloads[1].endswith(("/15188259_1920_1080_30fps.mp4", "/7239491-hd_1920_1080_30fps.mp4"))
 
 
 def test_curated_launch_video_keeps_creator_filming_clip_when_that_scene_is_requested(monkeypatch, tmp_path):
@@ -1573,6 +1610,9 @@ def test_curated_launch_video_keeps_creator_filming_clip_when_that_scene_is_requ
     monkeypatch.setattr(module, "ffprobe_json", fake_probe)
     monkeypatch.setattr(module, "probe_duration", lambda path: 12.0)
     monkeypatch.setattr(module, "FAST_MODE", True)
+    # These tests mock media bytes and FFprobe. Keep the independent real-media
+    # black-frame check disabled only for the synthetic fixture, not production.
+    monkeypatch.setattr(module, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
 
     row = module._curated_pexels_launch_video({
         "topic": "AI Infinity launch",
@@ -2001,3 +2041,43 @@ def test_final_delivery_subtitle_mux_uses_authoritative_srt(monkeypatch, tmp_pat
     assert "-metadata:s:s:0" in args and "language=eng" in args
     assert "-disposition:s:0" in args and "default" in args
     assert output.is_file() and output.stat().st_size > 10_000
+
+
+
+def test_perceptual_diversity_rejects_near_duplicate_visuals_with_different_file_hashes(monkeypatch, tmp_path):
+    monkeypatch.setattr(closure, "_studio", lambda: _FileHasher())
+    first = _write_visual(tmp_path / "shot-a.png", "horizontal")
+    near_first = _write_visual(tmp_path / "shot-a-reencoded.png", "horizontal", shift=1)
+    second = _write_visual(tmp_path / "shot-b.png", "vertical")
+    near_second = _write_visual(tmp_path / "shot-b-reencoded.png", "vertical", shift=1)
+
+    result = closure._visual_diversity_metrics(
+        [{"path": str(path)} for path in (first, near_first, second, near_second)],
+        scene_count=4,
+        rendered_scene_paths=[first, near_first, second, near_second],
+    )
+
+    assert result["unique_visual_hashes"] == 4
+    assert result["visual_diversity_ok"] is True
+    assert result["perceptual_sample_source"] == "rendered_scene_masters"
+    assert result["perceptual_sample_count"] == 4
+    assert result["perceptual_unique_visual_hashes"] == 2
+    assert result["required_perceptual_unique_visual_hashes"] == 3
+    assert result["perceptual_duplicate_visual_pairs"] >= 2
+    assert result["perceptual_diversity_ok"] is False
+
+
+def test_perceptual_diversity_fails_closed_on_unreadable_multi_scene_media(monkeypatch, tmp_path):
+    monkeypatch.setattr(closure, "_studio", lambda: _FileHasher())
+    valid = _write_visual(tmp_path / "valid.png", "horizontal")
+    invalid = tmp_path / "corrupt.png"
+    invalid.write_bytes(b"not an image and not a video")
+
+    result = closure._visual_diversity_metrics(
+        [{"path": str(valid)}, {"path": str(invalid)}],
+        scene_count=2,
+        rendered_scene_paths=[valid, invalid],
+    )
+
+    assert result["perceptual_unreadable_visual_count"] == 1
+    assert result["perceptual_diversity_ok"] is False

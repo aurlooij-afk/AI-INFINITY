@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1
+# Standalone self-hosted NVIDIA GPU worker; not part of the Render web image.
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+ARG WAN_SOURCE_REVISION=1ea34ff48f87168174e12956e200b1d908b1c5ff
+ARG TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0"
+ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 CUDA_HOME=/usr/local/cuda LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64 MAX_JOBS=2 TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST} WAN_SOURCE_DIR=/opt/Wan2.2 WAN_MODEL_DIR=/models/Wan2.2-TI2V-5B WAN_WORKER_DATA_DIR=/data/wan-worker PORT=8765 PATH=/opt/ai-infinity-venv/bin:/usr/local/cuda/bin:$PATH
+RUN apt-get update && apt-get install -y --no-install-recommends python3.10 python3.10-dev python3.10-venv git ca-certificates build-essential ninja-build pkg-config ffmpeg libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 && rm -rf /var/lib/apt/lists/*
+RUN python3.10 -m venv /opt/ai-infinity-venv && python -m pip install --upgrade pip setuptools wheel ninja && python -m pip install --index-url https://download.pytorch.org/whl/cu124 torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1
+RUN git clone https://github.com/Wan-Video/Wan2.2.git "$WAN_SOURCE_DIR" && git -C "$WAN_SOURCE_DIR" checkout --detach "$WAN_SOURCE_REVISION" && test "$(git -C "$WAN_SOURCE_DIR" rev-parse HEAD)" = "$WAN_SOURCE_REVISION" && test "$(git -C "$WAN_SOURCE_DIR" remote get-url origin)" = "https://github.com/Wan-Video/Wan2.2.git"
+WORKDIR /opt/Wan2.2
+RUN grep -viE '^[[:space:]]*flash[_-]attn([[:space:]]|$)' requirements.txt > /tmp/wan-requirements.txt && python -m pip install -r /tmp/wan-requirements.txt && python -m pip install flash-attn --no-build-isolation
+WORKDIR /app
+COPY wan_worker_requirements.txt /app/wan_worker_requirements.txt
+RUN python -m pip install -r /app/wan_worker_requirements.txt
+COPY wan_video_worker.py /app/wan_video_worker.py
+COPY scripts/prepare_wan22_model.py /app/scripts/prepare_wan22_model.py
+RUN useradd --system --create-home --uid 10001 --shell /usr/sbin/nologin aiinfinity-worker && mkdir -p /models /data/wan-worker && chown -R aiinfinity-worker:aiinfinity-worker /app /models /data/wan-worker
+USER aiinfinity-worker
+EXPOSE 8765
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=3).read()" || exit 1
+CMD ["uvicorn", "wan_video_worker:app", "--host", "0.0.0.0", "--port", "8765", "--workers", "1"]
