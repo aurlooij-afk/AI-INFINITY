@@ -283,6 +283,7 @@ def run_native_image_project(
         "truthful": True,
     }
     _json(package_manifest_path, package_manifest)
+    package_manifest_sha = _sha256(package_manifest_path)
     package_path = outdir / "image_package.zip"
     with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
         for source in package_inputs:
@@ -291,6 +292,9 @@ def run_native_image_project(
     with zipfile.ZipFile(package_path, "r") as bundle:
         package_integrity = bundle.testzip() is None
         package_names = set(bundle.namelist())
+        packaged_manifest_sha = hashlib.sha256(
+            bundle.read("ai-infinity-image/image_package_manifest.json")
+        ).hexdigest() if "ai-infinity-image/image_package_manifest.json" in package_names else ""
     required_package_names = {
         "ai-infinity-image/image.png",
         "ai-infinity-image/image_manifest.json",
@@ -320,7 +324,7 @@ def run_native_image_project(
             "image_sha256_matches": _sha256(image_path) == image_hash,
             "image_manifest_hash_matches": _sha256(manifest_path) == manifest_hash,
             "image_package_integrity_passed": package_integrity and _sha256(package_path) == package_sha,
-            "image_package_manifest_hash_matches": _sha256(package_manifest_path) == _sha256(package_manifest_path),
+            "image_package_manifest_hash_matches": package_manifest_sha == packaged_manifest_sha,
             "image_package_contains_required_files": required_package_names.issubset(package_names),
             "rights_review_remains_open": rights.get("rights_status") == "REVIEW_REQUIRED",
             "redistribution_remains_blocked": rights.get("redistribution_authorized") is False,
@@ -329,7 +333,7 @@ def run_native_image_project(
             {"name": image_path.name, "media_type": "image/png", "size_bytes": image_size, "sha256": image_hash},
             {"name": manifest_path.name, "media_type": "application/json", "size_bytes": manifest_path.stat().st_size, "sha256": manifest_hash},
             {"name": package_path.name, "media_type": "application/zip", "size_bytes": package_size, "sha256": package_sha},
-            {"name": package_manifest_path.name, "media_type": "application/json", "size_bytes": package_manifest_path.stat().st_size, "sha256": _sha256(package_manifest_path)},
+            {"name": package_manifest_path.name, "media_type": "application/json", "size_bytes": package_manifest_path.stat().st_size, "sha256": package_manifest_sha},
         ],
         "human_review_status": "PENDING",
         "rights_review_status": "REVIEW_REQUIRED",
