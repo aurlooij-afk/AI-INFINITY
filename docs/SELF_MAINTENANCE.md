@@ -20,9 +20,10 @@ The code writer also requires the existing Gemini Free Tier configuration: `GEMI
 
 ## API
 
-All endpoints require the `X-AI-Infinity-Maintenance-Token` header. Creator Studio exposes the operator console under **System → Self-maintenance**. Its password field is transient, the browser refuses to send the token over non-HTTPS production origins, and the token is not stored in local/session storage. The console supports readiness, repository discovery, bounded inspection, autonomous draft improvement, and exact-commit CI review.
+All endpoints require the `X-AI-Infinity-Maintenance-Token` header. Creator Studio exposes the operator console under **System → Self-maintenance**. Its password field is transient, the browser refuses to send the token over non-HTTPS production origins, and the token is not stored in local/session storage. The console supports readiness, redacted live-runtime inspection, repository discovery, bounded inspection, autonomous draft improvement, and exact-commit CI review.
 
 - `GET /infinity/studio/self-maintenance/status` — reports configuration and writer readiness without returning secrets.
+- `GET /infinity/studio/self-maintenance/runtime` — reports redacted live application, media-tool, project-state and asset-storage configuration. Provider configuration is explicitly not treated as proof of durable writes or read-back.
 - `POST /infinity/studio/self-maintenance/discover` — JSON body: `{"goal":"Locate the long-form narration planner and its regression tests.","limit":20}`. Returns allowlisted Python source candidates and matching file SHAs without returning source bodies. A truncated Git tree is reported explicitly.
 - `POST /infinity/studio/self-maintenance/ci` — JSON body: `{"commit_sha":"<full 40-character SHA>","limit":10}`. Reads run/job/step outcomes for the exact commit without returning raw logs. The token needs Actions: Read.
 - `POST /infinity/studio/self-maintenance/inspect` — JSON body: `{"goal":"Locate the long-form narration planner and provider repair path.","paths":["studio_ultimate.py","tests/test_longform_production_planner.py"]}`.
