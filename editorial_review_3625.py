@@ -212,7 +212,8 @@ def _fingerprint(project: Dict[str, Any], files: Dict[str, Path]) -> str:
         "transcript.txt", "sources.json", "fact_check.json", "provenance.json",
         "visual_rights.json", "manifest.json", "production_manifest.json",
         "rights_manifest.json", "seo.json", "social_campaign.json", "package.zip",
-        "accessibility.json", "timeline.json",
+        "accessibility.json", "timeline.json", "image.png", "image_manifest.json",
+        "primary_content_delivery.json",
     }
     artifacts = []
     for name, path in sorted(files.items()):
@@ -241,6 +242,242 @@ def _fingerprint(project: Dict[str, Any], files: Dict[str, Path]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+
+_IMAGE_REVIEW_ROLES = {
+    "art_direction", "visual_design", "composition", "color", "accessibility", "rights",
+}
+
+
+def _image_role_review_validation(payload: Dict[str, Any]) -> Tuple[bool, Dict[str, float], str]:
+    scores_raw = payload.get("dimension_scores")
+    if not isinstance(scores_raw, dict) or set(str(k).strip().casefold() for k in scores_raw) != _IMAGE_REVIEW_ROLES:
+        return False, {}, "exactly six image-review scores are required: art_direction, visual_design, composition, color, accessibility, rights"
+    try:
+        scores = {str(k).strip().casefold(): float(v) for k, v in scores_raw.items()}
+    except (TypeError, ValueError, OverflowError):
+        return False, {}, "all six image-review scores must be numeric"
+    if any(not (1.0 <= value <= 5.0) for value in scores.values()):
+        return False, scores, "image-review scores must be between 1 and 5"
+    average = sum(scores.values()) / len(scores)
+    if min(scores.values()) < 4.0 or average < 4.5:
+        return False, scores, "image approval requires every role score to be at least 4.0 and the six-role average to be at least 4.5"
+    if payload.get("rights_approval") is not True:
+        return False, scores, "explicit image rights approval is required"
+    rights_notes = str(payload.get("rights_notes") or "").strip()
+    if len(rights_notes) < 20:
+        return False, scores, "rights notes must describe the actual rights/provenance review in at least 20 characters"
+    review_note = str(payload.get("note") or "").strip()
+    if len(review_note) < 20:
+        return False, scores, "review notes must explain the image approval in at least 20 characters"
+    return True, scores, ""
+
+
+def _build_image_scorecard(
+    project: Dict[str, Any],
+    files: Dict[str, Path],
+    req: Dict[str, Any],
+    blueprint: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Image-specific primary-deliverable review; never requires or invents an MP4."""
+    pid = str(project.get("project_id") or "")
+    image_path = files.get("image.png")
+    image_manifest = _read_json(files.get("image_manifest.json"))
+    primary = _read_json(files.get("primary_content_delivery.json"))
+    production = _read_json(files.get("production_manifest.json"))
+    rights = _read_json(files.get("rights_manifest.json"))
+    prompt = str(req.get("image_prompt") or req.get("prompt") or req.get("objective") or req.get("topic") or "").strip()
+    title = str(req.get("title") or project.get("title") or "").strip()
+    image = {}
+    image_opened = False
+    image_sha = ""
+    image_size = 0
+    try:
+        if image_path and image_path.is_file():
+            from PIL import Image
+            with Image.open(image_path) as opened:
+                opened.verify()
+            with Image.open(image_path) as opened:
+                image = {
+                    "format": str(opened.format or "").upper(),
+                    "width": int(opened.width),
+                    "height": int(opened.height),
+                    "mode": str(opened.mode or ""),
+                }
+            image_opened = True
+            image_size = image_path.stat().st_size
+            image_sha = _studio().file_sha256(image_path)
+    except Exception:
+        image = {}
+        image_opened = False
+
+    manifest_output = image_manifest.get("output") if isinstance(image_manifest.get("output"), dict) else {}
+    generation = image_manifest.get("generation") if isinstance(image_manifest.get("generation"), dict) else {}
+    right_assets = rights.get("assets") if isinstance(rights.get("assets"), list) else []
+    matching_right = next((
+        row for row in right_assets
+        if isinstance(row, dict)
+        and str(row.get("asset") or "") == "image.png"
+        and str(row.get("sha256") or "") == image_sha
+    ), {})
+    primary_checks = primary.get("checks") if isinstance(primary.get("checks"), dict) else {}
+    primary_artifacts = primary.get("artifacts") if isinstance(primary.get("artifacts"), list) else []
+    primary_image = next((
+        row for row in primary_artifacts
+        if isinstance(row, dict)
+        and str(row.get("name") or "") == "image.png"
+        and str(row.get("sha256") or "") == image_sha
+    ), {})
+    integrity_checks = {
+        "image_opens_and_decodes": image_opened,
+        "png_format": image.get("format") == "PNG",
+        "minimum_dimensions": int(image.get("width") or 0) >= 640 and int(image.get("height") or 0) >= 360,
+        "image_manifest_project_binding": image_manifest.get("project_id") == pid,
+        "image_manifest_sha256_matches": bool(image_sha) and manifest_output.get("sha256") == image_sha,
+        "primary_delivery_project_binding": primary.get("project_id") == pid,
+        "primary_delivery_status_pass": primary.get("status") == "PASS" and primary.get("primary_delivery_verified") is True,
+        "primary_delivery_artifact_sha_matches": bool(primary_image),
+        "rights_manifest_project_binding": rights.get("project_id") == pid,
+        "rights_manifest_asset_sha_matches": bool(matching_right),
+        "production_manifest_project_binding": production.get("project_id") == pid,
+        "production_manifest_primary_sha_matches": (
+            isinstance(production.get("primary_deliverable"), dict)
+            and production["primary_deliverable"].get("sha256") == image_sha
+        ),
+    }
+    critical_failures = [key for key, passed in integrity_checks.items() if not passed]
+    rights_status = str(rights.get("rights_status") or rights.get("status") or "REVIEW_REQUIRED").upper()
+    rights_review_required = rights_status != "CLEARED"
+    dimensions = [
+        {
+            "id": "brief_alignment", "dimension": "Brief alignment and image intent",
+            "critic_pass": "image_integrity", "applicable": True, "score": 4 if bool(title and prompt) else 2,
+            "scale": "1–5 evidence scale",
+            "evidence": [f"title_present={bool(title)}", f"prompt_present={bool(prompt)}", f"language={req.get('language') or 'unknown'}"],
+            "method": "Checks persisted creator brief and prompt binding; does not claim the output semantically fulfils the brief.",
+            "limitation": "Semantic visual alignment requires human viewing.",
+        },
+        {
+            "id": "image_file_integrity", "dimension": "Image file integrity and provenance binding",
+            "critic_pass": "image_integrity", "applicable": True, "score": 5 if not critical_failures else 1,
+            "scale": "1–5 evidence scale",
+            "evidence": [f"{key}={passed}" for key, passed in integrity_checks.items()],
+            "method": "Opens the actual PNG, inspects dimensions, computes SHA-256 and compares the exact bytes with image, primary-delivery, production and rights manifests.",
+            "limitation": "Byte integrity proves identity and decode, not aesthetic quality or legal ownership.",
+        },
+        {
+            "id": "composition_framing", "dimension": "Composition, framing and resolution",
+            "critic_pass": "image_integrity", "applicable": True,
+            "score": 5 if image.get("width", 0) >= 1920 and image.get("height", 0) >= 1080 else 4 if image.get("width", 0) >= 1280 and image.get("height", 0) >= 720 else 3 if image_opened else 1,
+            "scale": "1–5 evidence scale",
+            "evidence": [f"width={image.get('width', 0)}", f"height={image.get('height', 0)}", f"format={image.get('format', 'unknown')}"],
+            "method": "Measures decoded pixel dimensions and format only.",
+            "limitation": "Composition, visual hierarchy, crop quality and colour judgement need human inspection.",
+        },
+        {
+            "id": "visual_design", "dimension": "Visual design and stylistic coherence",
+            "critic_pass": "human_review", "applicable": True, "score": 3 if image_opened else 1,
+            "scale": "1–5 evidence scale",
+            "evidence": [f"generation_mode={generation.get('mode') or 'unknown'}", f"provider_or_method={generation.get('provider_or_method') or 'unknown'}"],
+            "method": "Reports the generation method; does not infer visual appeal from a filename or prompt.",
+            "limitation": "A human must inspect the actual image for visual quality, coherence and brief fidelity.",
+        },
+        {
+            "id": "accessibility_description", "dimension": "Accessibility description and language",
+            "critic_pass": "human_review", "applicable": True,
+            "score": 4 if str((image_manifest.get("accessibility") or {}).get("alt_text_draft") or "").strip() else 2,
+            "scale": "1–5 evidence scale",
+            "evidence": [f"alt_text_draft_present={bool(str((image_manifest.get('accessibility') or {}).get('alt_text_draft') or '').strip())}", f"language={image_manifest.get('language') or 'unknown'}"],
+            "method": "Checks for a non-empty draft alternative description and declared language.",
+            "limitation": "Alternative text accuracy and suitability must be reviewed by a person.",
+        },
+        {
+            "id": "rights_provenance", "dimension": "Rights, source and provenance review",
+            "critic_pass": "human_review", "applicable": True,
+            "score": 3 if bool(matching_right) and rights_review_required else 1 if not matching_right else 4,
+            "scale": "1–5 evidence scale",
+            "evidence": [f"rights_status={rights_status}", f"rights_asset_sha_matches={bool(matching_right)}", f"declared_license={matching_right.get('declared_license') or 'not supplied'}"],
+            "method": "Binds the rights record to the exact image SHA-256; keeps REVIEW_REQUIRED visible until explicit human rights approval.",
+            "limitation": "A manifest is not a legal opinion or a license grant.",
+        },
+    ]
+    applicable = [row for row in dimensions if row.get("applicable")]
+    avg = round(sum(float(row["score"]) for row in applicable) / len(applicable), 3) if applicable else 0.0
+    min_score = min([float(row["score"]) for row in applicable] or [0])
+    image_integrity_passed = not critical_failures
+    # This means ready for a human review, not approved or publishable.
+    eligible_for_human_approval = image_integrity_passed and bool(matching_right)
+    fingerprint = _fingerprint(project, files)
+    return {
+        "schema": SCHEMA,
+        "version": VERSION,
+        "project_id": pid,
+        "project_status": project.get("status"),
+        "content_type": "image",
+        "content_fingerprint": fingerprint,
+        "generated_at_epoch": int(project.get("updated_at") or project.get("created_at") or 0),
+        "scoring_policy": {
+            "scale": {"1": "critical weakness", "2": "weak", "3": "adequate but needs review", "4": "strong observable evidence", "5": "strong evidence across applicable checks"},
+            "thresholds": {"automated_average_reference": 4.0, "human_image_role_average_at_least": 4.5, "each_human_role_at_least": 4.0, "critical_failures_allowed": 0},
+            "automated_judgements_are_not_human_taste": True,
+            "automatic_publish_approval": False,
+        },
+        "brief": {
+            "title": title, "objective": prompt, "content_type": "image",
+            "language": req.get("language"), "visual_style": req.get("visual_style"),
+        },
+        "media": {
+            "image_png_present": bool(image_path and image_path.is_file()),
+            "image_size_bytes": image_size,
+            "image_sha256": image_sha or None,
+            "width": image.get("width"), "height": image.get("height"),
+            "format": image.get("format"), "generation_mode": generation.get("mode"),
+            "fallback_used": generation.get("fallback_used") is True,
+        },
+        "dimensions": dimensions,
+        "critique_passes": {
+            "native_image_integrity": {
+                "type": "independent deterministic PNG decode, byte-hash and manifest-binding checks",
+                "conclusion": "confirms exact image identity and integrity only",
+            },
+            "human_visual_review": {
+                "type": "requires human visual judgement; automated metadata is not a critic",
+                "required_roles": sorted(_IMAGE_REVIEW_ROLES),
+                "minimum_role_score": 4.0,
+                "minimum_average_score": 4.5,
+                "explicit_rights_approval_required": True,
+            },
+        },
+        "technical_truth": {
+            "verified": image_integrity_passed,
+            "scope": "native_primary_image_integrity_only",
+            "checks": integrity_checks,
+            "failures": critical_failures,
+            "warnings": ["rights and creative approval remain separate human decisions"] if rights_review_required else [],
+        },
+        "release_gate": {
+            "average_score": avg,
+            "minimum_dimension_score": min_score,
+            "critical_failure_count": len(critical_failures),
+            "critical_failures": critical_failures,
+            "technical_truth_passed": image_integrity_passed,
+            "score_threshold_passed": avg >= 4.0 and min_score >= 3.0,
+            "eligible_for_human_approval": eligible_for_human_approval,
+            "rights_review_required": rights_review_required,
+            "explicit_rights_approval_required": True,
+            "required_human_roles": sorted(_IMAGE_REVIEW_ROLES),
+            "human_role_score_minimum": 4.0,
+            "human_role_average_minimum": 4.5,
+            "publish_ready": False,
+            "publish_ready_reason": "Image review can record an owner-bound visual and rights decision; external image publishing is not enabled by this review panel.",
+        },
+        "human_approval": {
+            "state": "pending", "required": True, "publish_ready": False,
+            "rights_approval_required": True,
+        },
+        "truthful": True,
+    }
+
+
 def _security_scan(files: Dict[str, Path]) -> List[str]:
     findings = []
     scan_names = {
@@ -265,6 +502,8 @@ def build_scorecard(project: Dict[str, Any]) -> Dict[str, Any]:
     files = _project_files(pid)
     req = _loads(project.get("request_json"))
     blueprint = _loads(project.get("blueprint_json"))
+    if str(req.get("content_type") or "").strip().lower() == "image":
+        return _build_image_scorecard(project, files, req, blueprint)
     plan = blueprint.get("plan") if isinstance(blueprint.get("plan"), dict) else blueprint
     chapters = _scene_list(blueprint)
     script = _read_text(files.get("script.md")) or _read_text(files.get("transcript.txt"))
