@@ -141,27 +141,45 @@ def build_static_website_package(
     evidence_dir.mkdir(parents=True, exist_ok=True)
     # Every export carries an explicit rights record. Missing upstream evidence is
     # represented as REVIEW_REQUIRED; never infer clearance from the absence of a file.
+    # Rights evidence is written into the export itself. Do not mutate the
+    # project's root manifest as a side effect of packaging, and never treat a
+    # missing or malformed upstream record as clearance.
     rights_source = root / "rights_manifest.json"
-    if not rights_source.is_file() or rights_source.stat().st_size <= 0:
-        rights_fallback = {
+    rights_target = evidence_dir / "rights_manifest.json"
+    rights_payload = None
+    if rights_source.is_file() and rights_source.stat().st_size > 0:
+        try:
+            candidate_rights = json.loads(rights_source.read_text(encoding="utf-8"))
+            if isinstance(candidate_rights, dict):
+                rights_payload = candidate_rights
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            # Preserve malformed input for diagnosis, but do not package it as
+            # the authoritative rights record.
+            shutil.copy2(rights_source, evidence_dir / "rights_manifest.source.invalid")
+    if rights_payload is None:
+        rights_payload = {
             "schema": "ai-infinity.rights-manifest.v1",
             "project_id": str(project_id),
             "status": "REVIEW_REQUIRED",
             "rights_status": "REVIEW_REQUIRED",
             "assets": [],
             "source_record_count": len(source_rows),
-            "reason": "No project rights manifest was available when this static site export was created.",
+            "reason": "No valid project rights manifest was available when this static site export was created.",
             "human_review_required": True,
             "redistribution_authorized": False,
             "truthful": True,
         }
-        rights_source = root / "rights_manifest.json"
-        rights_source.write_text(
-            json.dumps(rights_fallback, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+    rights_target.write_text(
+        json.dumps(rights_payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    copied.append({
+        "path": "evidence/rights_manifest.json",
+        "size_bytes": rights_target.stat().st_size,
+        "sha256": _sha256(rights_target),
+    })
     for evidence_name in (
-        "sources.json", "provenance.json", "fact_check.json", "rights_manifest.json",
+        "sources.json", "provenance.json", "fact_check.json",
         "seo.json", "social_campaign.json",
         "accessibility.json", "platform_manifest.json",
     ):
