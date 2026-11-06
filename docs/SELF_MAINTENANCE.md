@@ -14,6 +14,8 @@ Configure these values as service secrets/environment variables in the deploymen
 | `AI_INFINITY_MAINTENANCE_GITHUB_TOKEN` | Fine-grained GitHub token limited to this repository, with Contents: Read and write and Pull requests: Read and write. Metadata read is required by GitHub. |
 | `AI_INFINITY_MAINTENANCE_ADMIN_TOKEN` | Independently generated high-entropy secret. Never reuse a session cookie, provider key, or GitHub token. |
 
+The allowlist covers selected root application modules, `ai_infinity/`, `scripts/`, and `tests/` Python files; protected documents, hidden files, environment files, deployment definitions, and workflow files remain excluded. Large source files are read server-side up to 1 MB per file and 2 MB aggregate, while model context is capped at 80 KB across the request. For a large module, provide a goal describing the target function or behavior; the writer receives bounded, line-numbered function/class windows, not the entire module. Proposed edits must cite the exact inspected line range and SHA-256; the server applies those edits to the full source and checks the complete resulting Python file before opening a PR.
+
 The code writer also requires the existing Gemini Free Tier configuration: `GEMINI_API_KEY` (or `AI_INFINITY_GEMINI_API_KEY` / `GOOGLE_AI_STUDIO_API_KEY`) and an affirmative explicit data-use acknowledgement via `AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK` (or one of the supported aliases). The model is pinned to `gemini-3.1-flash-lite`; no paid-model fallback is used.
 
 ## API
