@@ -38,8 +38,17 @@ def _request(project: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def _zero_cost_image_provider_allowed() -> bool:
-    """Do not call a metered inference endpoint merely because a token exists."""
+def _zero_cost_image_provider_allowed(studio_module=None) -> bool:
+    """Require an explicit no-cost attestation and respect the global provider kill switch."""
+    if studio_module is not None:
+        disabled = getattr(studio_module, "_external_providers_disabled", None)
+        if callable(disabled):
+            try:
+                if disabled():
+                    return False
+            except Exception:
+                # A failed policy check must fail closed.
+                return False
     return (
         os.getenv("AI_INFINITY_HF_IMAGE_ZERO_COST_CONFIRMED", "").strip().lower()
         in {"1", "true", "yes", "on"}
@@ -92,7 +101,7 @@ def run_native_image_project(
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     if image_generator is None:
-        if _zero_cost_image_provider_allowed():
+        if _zero_cost_image_provider_allowed(studio):
             image_generator = studio._hf_image
         else:
             image_generator = lambda _prompt, _outdir, _index: None
@@ -104,7 +113,7 @@ def run_native_image_project(
     if callable(getattr(studio, "audit_event", None)):
         studio.audit_event(project_id, "native_image_generation_started", {
             "content_type": "image",
-            "zero_cost_ai_provider_authorized": _zero_cost_image_provider_allowed(),
+            "zero_cost_ai_provider_authorized": _zero_cost_image_provider_allowed(studio),
             "truthful": True,
         })
 
