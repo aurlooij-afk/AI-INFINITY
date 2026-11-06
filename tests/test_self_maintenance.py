@@ -323,19 +323,28 @@ def test_self_maintenance_validates_allowlisted_ui_html_and_requires_python_regr
     with pytest.raises(HTTPException, match="regression-test"):
         maintenance.validate_changes([changes[0]], {"creator_studio_2030.html"})
 
-def test_creator_studio_exposes_authenticated_non_persistent_self_maintenance_controls():
+def test_production_creator_ui_exposes_protected_self_maintenance_console():
     root = Path(__file__).resolve().parents[1]
-    html = (root / "ui_3800.html").read_text(encoding="utf-8")
+    html = (root / "creator_studio_2030.html").read_text(encoding="utf-8")
+    studio = (root / "studio_ultimate.py").read_text(encoding="utf-8")
+    main = (root / "main.py").read_text(encoding="utf-8")
     assert '<section id="maintenance" class="section">' in html
-    assert 'id="maintenanceToken" class="field" type="password" autocomplete="off"' in html
+    assert 'data-target="maintenance"' in html
+    assert 'id="maintenanceToken2030" class="field" type="password" autocomplete="off"' in html
     assert 'X-AI-Infinity-Maintenance-Token' in html
-    assert 'function maintenanceDiscover()' in html
-    assert 'function maintenanceInspect()' in html
-    assert 'function maintenanceImprove()' in html
-    assert 'function maintenanceCI()' in html
+    assert 'function maintenanceDiscover2030()' in html
+    assert 'function maintenanceInspect2030()' in html
+    assert 'function maintenanceImprove2030()' in html
+    assert 'function maintenanceCI2030()' in html
     assert 'window.location.protocol!=="https:"' in html
-    # The operator secret is never persisted in browser storage.
-    maintenance_script = html[html.index("var maintenanceCandidates="):html.index("async function refreshAll()")]
+    script_start = html.index("let maintenanceCandidates2030=")
+    script_end = html.index("function fillCmd(", script_start)
+    maintenance_script = html[script_start:script_end]
     assert "localStorage" not in maintenance_script
     assert "sessionStorage" not in maintenance_script
+    # Bind the UI test to the real production root, not the legacy 3800 shell.
+    assert '_CREATOR_2030_UI_PATH = Path(__file__).with_name("creator_studio_2030.html")' in studio
+    assert 'HTMLResponse(CREATOR_STUDIO_2030_UI)' in studio
+    assert 'studio_ultimate.register(app)' in main
+    assert 'self_maintenance.register(app)' in main
 
