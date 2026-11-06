@@ -115,7 +115,9 @@ def rank_source_candidates(paths: list[str], goal: str, limit: int = 20) -> list
         score = sum(4 for token in tokens if token in lowered)
         if path in ROOT_MODULES:
             score += 1
-        if path.startswith("tests/") and any(term in " ".join(tokens) for term in ("test", "regression", "acceptance")):
+        # Keep tests discoverable even when the user's goal omits the word "test".
+        # Topic-specific filename matches still outrank these general test candidates.
+        if path.startswith("tests/"):
             score += 2
         if score:
             ranked.append({
@@ -533,11 +535,130 @@ def create_draft_pr(cfg: dict, changes: list, originals: dict, goal: str, summar
     }
 
 
-def improve_repository(cfg: dict, goal: str, paths: list, model_fn) -> dict:
+def summarize_ci_runs(runs: list[dict], jobs_by_run: dict[int, list[dict]], commit_sha: str | None = None) -> dict:
+    """Summarize GitHub Actions outcomes without exposing raw logs or secret-bearing output."""
+    output = []
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        sha = str(run.get("head_sha") or "")
+        if commit_sha and sha != commit_sha:
+            continue
+        run_id = int(run.get("id") or 0)
+        jobs = jobs_by_run.get(run_id, [])
+        failed_jobs = []
+        active_jobs = []
+        for job in jobs:
+            if not isinstance(job, dict):
+                continue
+            job_status = str(job.get("status") or "")
+            conclusion = str(job.get("conclusion") or "")
+            failed_steps = [
+                str(step.get("name") or "unnamed step")
+                for step in (job.get("steps") or [])
+                if isinstance(step, dict) and str(step.get("conclusion") or "").lower() == "failure"
+            ]
+            if conclusion == "failure":
+                failed_jobs.append({
+                    "name": str(job.get("name") or "unnamed job"),
+                    "failed_steps": failed_steps,
+                })
+            elif job_status not in {"completed"}:
+                active_jobs.append(str(job.get("name") or "unnamed job"))
+        output.append({
+            "run_id": run_id,
+            "name": str(run.get("name") or ""),
+            "head_sha": sha,
+            "branch": str(run.get("head_branch") or ""),
+            "status": str(run.get("status") or ""),
+            "conclusion": run.get("conclusion"),
+            "html_url": str(run.get("html_url") or ""),
+            "failed_jobs": failed_jobs,
+            "active_jobs": active_jobs,
+            "truthful": True,
+        })
+    return {
+        "commit_sha_filter": commit_sha,
+        "run_count": len(output),
+        "runs": output,
+        "raw_logs_included": False,
+        "truthful": True,
+    }
+
+
+def inspect_ci(cfg: dict, commit_sha: str | None = None, limit: int = 10) -> dict:
+    if commit_sha and not re.fullmatch(r"[0-9a-f]{40}", str(commit_sha)):
+        raise HTTPException(422, "Commit SHA must be a full 40-character Git SHA.")
+    try:
+        requested_limit = int(limit or 10)
+    except (TypeError, ValueError):
+        raise HTTPException(422, "CI run limit must be an integer between 1 and 20.") from None
+    if not 1 <= requested_limit <= 20:
+        raise HTTPException(422, "CI run limit must be between 1 and 20.")
+    query = f"/repos/{cfg['repository']}/actions/runs?branch={quote(cfg['base_branch'], safe='')}&per_page={requested_limit}"
+    response = github_request(cfg, "GET", query)
+    runs = response.get("workflow_runs") if isinstance(response.get("workflow_runs"), list) else []
+    jobs_by_run = {}
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        run_id = int(run.get("id") or 0)
+        if not run_id:
+            continue
+        job_response = github_request(
+            cfg, "GET",
+            f"/repos/{cfg['repository']}/actions/runs/{run_id}/jobs?per_page=100",
+        )
+        jobs_by_run[run_id] = job_response.get("jobs") if isinstance(job_response.get("jobs"), list) else []
+    summary = summarize_ci_runs(runs, jobs_by_run, commit_sha)
+    summary.update({
+        "repository": cfg["repository"],
+        "base_branch": cfg["base_branch"],
+        "queried_run_count": len(runs),
+        "truthful": True,
+    })
+    return summary
+
+
+def select_autonomous_sources(matches: list[dict], max_code: int = 4, max_tests: int = 3) -> list[str]:
+    """Select relevant application and regression-test paths from repository discovery."""
+    code_paths = []
+    test_paths = []
+    for row in matches:
+        path = str(row.get("path") or "")
+        try:
+            validate_path(path)
+        except HTTPException:
+            continue
+        if path.startswith("tests/"):
+            if path not in test_paths:
+                test_paths.append(path)
+        elif path not in code_paths:
+            code_paths.append(path)
+    selected = code_paths[:max(1, min(int(max_code), 5))]
+    selected_tests = test_paths[:max(1, min(int(max_tests), 4))]
+    if not selected:
+        raise HTTPException(422, "Repository discovery found no relevant allowlisted application source. Supply explicit paths.")
+    if not selected_tests:
+        raise HTTPException(422, "Repository discovery found no matching regression-test file. Supply a relevant test path.")
+    result = selected + selected_tests
+    if len(result) > MAX_FILES:
+        result = result[:MAX_FILES - 1] + [selected_tests[0]]
+    return result
+
+
+def improve_repository(cfg: dict, goal: str, paths: list | None, model_fn) -> dict:
     goal = re.sub(r"\s+", " ", str(goal or "")).strip()
     if not 12 <= len(goal) <= 2000:
         raise HTTPException(422, "Provide a specific engineering goal between 12 and 2,000 characters.")
-    inspected = inspect_sources(cfg, paths, goal=goal)
+    discovery = None
+    explicit_paths = isinstance(paths, list) and len(paths) > 0
+    if explicit_paths:
+        selected_paths = paths
+    else:
+        discovery = discover_sources(cfg, goal, limit=40)
+        selected_paths = select_autonomous_sources(discovery.get("matches") or [])
+    inspected = inspect_sources(cfg, selected_paths, goal=goal)
     originals = {}
     for row in inspected["files"]:
         original = read_source(cfg, row["path"])
@@ -552,6 +673,12 @@ def improve_repository(cfg: dict, goal: str, paths: list, model_fn) -> dict:
         "status": "draft_pr_created", "goal": goal,
         "summary": str(generated.get("summary") or "")[:4000],
         "provider": generated.get("provider"),
+        "source_discovery": {
+            "automatic": not explicit_paths,
+            "tree_truncated": discovery.get("tree_truncated") if discovery else None,
+            "candidate_paths": [row["path"] for row in (discovery or {}).get("matches", [])],
+            "selected_paths": [row["path"] for row in inspected["files"]],
+        },
         "changed_files": [row["path"] for row in changes],
         "pull_request": pr, "ci_verification": "pending",
         "merge_performed": False, "deployment_performed": False, "truthful": True,
@@ -591,6 +718,15 @@ def register(app: FastAPI) -> None:
         if not isinstance(payload, dict):
             raise HTTPException(422, "A JSON object is required.")
         return discover_sources(cfg, payload.get("goal"), payload.get("limit", 20))
+
+    @app.post("/infinity/studio/self-maintenance/ci")
+    async def maintenance_ci(request: FastAPIRequest):
+        cfg = load_settings()
+        authorize(request, cfg)
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(422, "A JSON object is required.")
+        return inspect_ci(cfg, payload.get("commit_sha"), payload.get("limit", 10))
 
     @app.post("/infinity/studio/self-maintenance/inspect")
     async def maintenance_inspect(request: FastAPIRequest):
