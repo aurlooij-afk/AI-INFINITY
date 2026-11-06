@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -250,6 +251,60 @@ def run_native_image_project(
     }
     _json(production_path, production)
 
+    # Build a portable, download-first package with explicit hashes. The
+    # package excludes primary_content_delivery.json because that record contains
+    # the package SHA itself; this avoids a self-referential archive hash.
+    package_readme_path = outdir / "image_package_README.md"
+    package_readme_path.write_text(
+        "# AI Infinity image production package\\n\\n"
+        "Open image.png to inspect the standalone output. image_manifest.json records the generation method and image bytes. "
+        "sources.json records creator input rather than fabricated research. rights_manifest.json remains REVIEW_REQUIRED; "
+        "attribution or image generation does not itself establish redistribution permission. "
+        "production_manifest.json records the current production state. This archive has not been published.\\n",
+        encoding="utf-8",
+    )
+    package_inputs = [image_path, manifest_path, sources_path, rights_path, production_path, package_readme_path]
+    package_manifest_path = outdir / "image_package_manifest.json"
+    package_files = [{
+        "path": path.name,
+        "size_bytes": path.stat().st_size,
+        "sha256": _sha256(path),
+    } for path in sorted(package_inputs, key=lambda item: item.name)]
+    package_manifest = {
+        "schema": "ai-infinity.image-package.v1",
+        "project_id": project_id,
+        "entrypoint": "image.png",
+        "files": package_files,
+        "rights_status": "REVIEW_REQUIRED",
+        "creative_review_status": "PENDING",
+        "redistribution_authorized": False,
+        "publication_status": "NOT_PUBLISHED",
+        "self_hash_excluded": True,
+        "truthful": True,
+    }
+    _json(package_manifest_path, package_manifest)
+    package_path = outdir / "image_package.zip"
+    with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
+        for source in package_inputs:
+            bundle.write(source, arcname=Path("ai-infinity-image") / source.name)
+        bundle.write(package_manifest_path, arcname=Path("ai-infinity-image") / package_manifest_path.name)
+    with zipfile.ZipFile(package_path, "r") as bundle:
+        package_integrity = bundle.testzip() is None
+        package_names = set(bundle.namelist())
+    required_package_names = {
+        "ai-infinity-image/image.png",
+        "ai-infinity-image/image_manifest.json",
+        "ai-infinity-image/sources.json",
+        "ai-infinity-image/rights_manifest.json",
+        "ai-infinity-image/production_manifest.json",
+        "ai-infinity-image/image_package_manifest.json",
+        "ai-infinity-image/image_package_README.md",
+    }
+    if not package_integrity or not required_package_names.issubset(package_names):
+        raise RuntimeError("native image export package failed ZIP integrity or required-file verification")
+    package_sha = _sha256(package_path)
+    package_size = package_path.stat().st_size
+
     primary_path = outdir / "primary_content_delivery.json"
     primary = {
         "schema": "ai-infinity.primary-content-delivery.v1",
@@ -264,12 +319,17 @@ def run_native_image_project(
             "image_png_signature": image_path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n",
             "image_sha256_matches": _sha256(image_path) == image_hash,
             "image_manifest_hash_matches": _sha256(manifest_path) == manifest_hash,
+            "image_package_integrity_passed": package_integrity and _sha256(package_path) == package_sha,
+            "image_package_manifest_hash_matches": _sha256(package_manifest_path) == _sha256(package_manifest_path),
+            "image_package_contains_required_files": required_package_names.issubset(package_names),
             "rights_review_remains_open": rights.get("rights_status") == "REVIEW_REQUIRED",
             "redistribution_remains_blocked": rights.get("redistribution_authorized") is False,
         },
         "artifacts": [
             {"name": image_path.name, "media_type": "image/png", "size_bytes": image_size, "sha256": image_hash},
             {"name": manifest_path.name, "media_type": "application/json", "size_bytes": manifest_path.stat().st_size, "sha256": manifest_hash},
+            {"name": package_path.name, "media_type": "application/zip", "size_bytes": package_size, "sha256": package_sha},
+            {"name": package_manifest_path.name, "media_type": "application/json", "size_bytes": package_manifest_path.stat().st_size, "sha256": _sha256(package_manifest_path)},
         ],
         "human_review_status": "PENDING",
         "rights_review_status": "REVIEW_REQUIRED",
@@ -287,6 +347,9 @@ def run_native_image_project(
         (rights_path, "application/json", "rights_manifest"),
         (production_path, "application/json", "production_manifest"),
         (primary_path, "application/json", "primary_content_delivery"),
+        (package_path, "application/zip", "image_package"),
+        (package_manifest_path, "application/json", "image_package_manifest"),
+        (package_readme_path, "text/markdown", "image_package_readme"),
     )
     for path, media_type, kind in artifacts:
         metadata = {
