@@ -18,7 +18,7 @@ def _first_nonempty_env(names: tuple[str, ...]) -> str:
 
 
 def verify_gemini_writer() -> dict[str, Any]:
-    api_key = _first_nonempty_env(("GEMINI_API_KEY", "AI_INFINITY_GEMINI_API_KEY", "GOOGLE_AI_STUDIO_API_KEY"))
+    api_key = _first_nonempty_env(("GEMINI_API_KEY", "AI_INFINITY_GEMINI_API_KEY", "GOOGLE_AI_STUDIO_API_KEY", "GOOGLE_API_KEY", "GEMINI_KEY", "AI_STUDIO_API_KEY"))
     ack = _first_nonempty_env((
         "AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK",
         "GEMINI_FREE_TIER_DATA_USE_ACK",
