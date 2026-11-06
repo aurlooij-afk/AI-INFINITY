@@ -323,3 +323,19 @@ def test_self_maintenance_validates_allowlisted_ui_html_and_requires_python_regr
     with pytest.raises(HTTPException, match="regression-test"):
         maintenance.validate_changes([changes[0]], {"creator_studio_2030.html"})
 
+def test_creator_studio_exposes_authenticated_non_persistent_self_maintenance_controls():
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "ui_3800.html").read_text(encoding="utf-8")
+    assert '<section id="maintenance" class="section">' in html
+    assert 'id="maintenanceToken" class="field" type="password" autocomplete="off"' in html
+    assert 'X-AI-Infinity-Maintenance-Token' in html
+    assert 'function maintenanceDiscover()' in html
+    assert 'function maintenanceInspect()' in html
+    assert 'function maintenanceImprove()' in html
+    assert 'function maintenanceCI()' in html
+    assert 'window.location.protocol!=="https:"' in html
+    # The operator secret is never persisted in browser storage.
+    maintenance_script = html[html.index("var maintenanceCandidates="):html.index("async function refreshAll()")]
+    assert "localStorage" not in maintenance_script
+    assert "sessionStorage" not in maintenance_script
+
