@@ -123,6 +123,82 @@ def test_repository_discovery_route_is_registered():
     maintenance.register(app)
     paths = {route.path for route in app.routes}
     assert "/infinity/studio/self-maintenance/discover" in paths
+    assert "/infinity/studio/self-maintenance/ci" in paths
+
+
+def test_autonomous_source_selection_always_includes_relevant_tests():
+    candidates = [
+        {"path": "studio_ultimate.py", "match_score": 5},
+        {"path": "production_intelligence.py", "match_score": 4},
+        {"path": "tests/test_longform_production_planner.py", "match_score": 8},
+        {"path": "tests/test_runtime_truth.py", "match_score": 2},
+        {"path": ".github/workflows/final-acceptance-suite.yml", "match_score": 20},
+    ]
+    selected = maintenance.select_autonomous_sources(candidates)
+    assert "studio_ultimate.py" in selected
+    assert "tests/test_longform_production_planner.py" in selected
+    assert all(not path.startswith(".github/") for path in selected)
+    assert len(selected) <= maintenance.MAX_FILES
+
+
+def test_autonomous_source_selection_fails_when_no_relevant_regression_test_exists():
+    with pytest.raises(HTTPException, match="regression-test"):
+        maintenance.select_autonomous_sources([
+            {"path": "studio_ultimate.py", "match_score": 5},
+            {"path": "production_intelligence.py", "match_score": 3},
+        ])
+
+
+def test_ci_summary_is_commit_bound_and_exposes_failed_step_names_without_logs():
+    runs = [
+        {
+            "id": 101, "name": "Creator Guard", "head_sha": "a" * 40,
+            "head_branch": "main", "status": "completed", "conclusion": "failure",
+            "html_url": "https://github.com/example/repo/actions/runs/101",
+        },
+        {
+            "id": 102, "name": "Other Commit", "head_sha": "b" * 40,
+            "head_branch": "main", "status": "completed", "conclusion": "success",
+        },
+    ]
+    jobs = {
+        101: [{
+            "name": "Python tests", "status": "completed", "conclusion": "failure",
+            "steps": [
+                {"name": "Checkout", "conclusion": "success"},
+                {"name": "Longform planner regression", "conclusion": "failure"},
+            ],
+        }],
+        102: [],
+    }
+    result = maintenance.summarize_ci_runs(runs, jobs, commit_sha="a" * 40)
+    assert result["run_count"] == 1
+    assert result["runs"][0]["run_id"] == 101
+    assert result["runs"][0]["failed_jobs"][0]["failed_steps"] == ["Longform planner regression"]
+    assert result["raw_logs_included"] is False
+    assert "Other Commit" not in str(result)
+
+
+def test_inspect_ci_queries_exact_head_sha_and_summarizes_jobs(monkeypatch):
+    calls = []
+
+    def fake_github(_cfg, method, path, payload=None):
+        calls.append((method, path))
+        if path.startswith("/repos/example/repo/actions/runs?"):
+            return {"workflow_runs": [{
+                "id": 77, "name": "Acceptance", "head_sha": "c" * 40,
+                "head_branch": "feature", "status": "completed", "conclusion": "success",
+            }]}
+        if path.endswith("/actions/runs/77/jobs?per_page=100"):
+            return {"jobs": [{"name": "Acceptance", "status": "completed", "conclusion": "success", "steps": []}]}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(maintenance, "github_request", fake_github)
+    cfg = {"repository": "example/repo", "base_branch": "main"}
+    result = maintenance.inspect_ci(cfg, commit_sha="c" * 40, limit=5)
+    assert result["run_count"] == 1
+    assert "head_sha=" + "c" * 40 in calls[0][1]
+    assert "branch=main" not in calls[0][1]
 
 def test_production_docker_image_copies_and_compiles_self_maintenance_module():
     root = Path(__file__).resolve().parents[1]
