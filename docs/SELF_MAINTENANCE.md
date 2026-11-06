@@ -23,6 +23,7 @@ The code writer also requires the existing Gemini Free Tier configuration: `GEMI
 All endpoints require the `X-AI-Infinity-Maintenance-Token` header.
 
 - `GET /infinity/studio/self-maintenance/status` — reports configuration and writer readiness without returning secrets.
+- `POST /infinity/studio/self-maintenance/discover` — JSON body: `{"goal":"Locate the long-form narration planner and its regression tests.","limit":20}`. Returns allowlisted Python source candidates and matching file SHAs without returning source bodies. A truncated Git tree is reported explicitly.
 - `POST /infinity/studio/self-maintenance/inspect` — JSON body: `{"goal":"Locate the long-form narration planner and provider repair path.","paths":["studio_ultimate.py","tests/test_longform_production_planner.py"]}`.
 - `POST /infinity/studio/self-maintenance/improve` — JSON body: `{"goal":"Repair the verified long-form narration provider path and add regression tests.","paths":["studio_ultimate.py","tests/test_longform_production_planner.py"]}`.
 
@@ -30,7 +31,7 @@ All endpoints require the `X-AI-Infinity-Maintenance-Token` header.
 
 The module is disabled unless explicitly enabled and both GitHub and admin credentials are configured. It accepts only allowlisted Python source and test paths, reads source files up to 1 MB (8 files / 2 MB aggregate), and limits combined model context to 80 KB. Small files are inspected whole; large modules are inspected through goal-matched function/class windows with exact line ranges and SHA-256 hashes. Large-file edits must replace only one of those exact hash-pinned windows; the server rechecks the source hash, applies the edits to the complete file, parses the complete resulting Python module, rejects likely hard-coded secrets, and requires at least one regression-test file in every change set.
 
-An improvement is committed to a newly created `ai-infinity/self-maintenance/*` branch and opened as a **draft pull request**. It does not write to `main`, run arbitrary shell commands, merge, deploy, publish, alter environment variables, or approve rights. Review the exact diff and exact-head CI evidence before marking a pull request ready or merging it. CI success is not production certification.
+The intended sequence is **discover → inspect → improve**. Discovery finds likely source and test paths; inspection supplies bounded source context and hashes; improvement proposes verified content or exact-range changes. An improvement is committed to a newly created `ai-infinity/self-maintenance/*` branch and opened as a **draft pull request**. It does not write to `main`, run arbitrary shell commands, merge, deploy, publish, alter environment variables, or approve rights. Review the exact diff and exact-head CI evidence before marking a pull request ready or merging it. CI success is not production certification.
 
 ## Security boundaries
 
