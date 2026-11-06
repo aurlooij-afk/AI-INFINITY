@@ -656,6 +656,8 @@ def create_from_command(command,user_id,raw):
             if row[1]!=req_hash:raise HTTPException(409,"idempotency key is already bound to a different request")
             return {"status":"existing","project_id":row[0],"truthful":True}
     c=intent["constraints"]
+    required_artifacts = intent.get("success", {}).get("required_artifacts") or []
+    initial_artifact_name = str(required_artifacts[0]) if required_artifacts else "final.mp4"
     req={"title":intent["title"],"objective":intent["objective"],"topic":intent["objective"],"format":c["format"],
          "duration":c["duration_seconds"],"content_type":c["content_type"],"audience":intent["audience"],
          "tone":intent["tone"],"voice":intent["voice"],"language":c["language"],"platforms":c["platforms"],
@@ -693,7 +695,7 @@ def create_from_command(command,user_id,raw):
         vid=uid("ver")
         c.execute(
           "INSERT INTO canonical_versions(version_id,project_id,parent_version_id,engine_project_id,kind,label,state,operation_json,artifact_name,evidence_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-          (vid,pid,None,pid,"base","Version 1","PENDING",json.dumps({"operation":"initial_creation","intent_sha256":digest(intent)},sort_keys=True),"final.mp4","{}",now(),now())
+          (vid,pid,None,pid,"base","Version 1","PENDING",json.dumps({"operation":"initial_creation","intent_sha256":digest(intent)},sort_keys=True),initial_artifact_name,"{}",now(),now())
         )
         c.execute("UPDATE canonical_projects SET current_version_id=? WHERE project_id=?",(vid,pid))
     add_memory(user_id,"Current project objective","context",intent["objective"],pid,"project",1.0,"user_command")
