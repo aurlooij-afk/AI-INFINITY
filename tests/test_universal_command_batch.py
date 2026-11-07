@@ -375,3 +375,28 @@ def test_batch_http_handler_offloads_blocking_orchestration_from_asgi_event_loop
     assert "from starlette.concurrency import run_in_threadpool" in source
     assert "result = await run_in_threadpool(" in source
     assert "cancel_requested=lambda: cancellation_requested(batch_id)" in source
+
+
+
+def test_existing_idempotent_batch_step_preserves_original_completion_state():
+    from universal_command_batch import execute_commands, normalize_commands
+
+    commands = normalize_commands([{"id": "same", "command": "repeat existing job"}])
+    result = execute_commands(
+        commands,
+        user_id="owner-1",
+        batch_id="batch-idempotent-existing",
+        dispatch=lambda *args: {
+            "status": "existing",
+            "executed": False,
+            "execution": {
+                "execution_id": "exec-existing",
+                "state": "completed",
+                "replayed": True,
+            },
+        },
+        checkpoint=lambda rows, state: None,
+    )
+    assert result["completed_steps"] == 1
+    assert result["accepted_steps"] == 0
+    assert result["steps"][0]["state"] == "completed"
