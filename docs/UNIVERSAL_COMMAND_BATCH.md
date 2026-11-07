@@ -70,3 +70,6 @@ POST /infinity/canonical/batches/{batch_id}/cancel
 ~~~
 
 The request is persisted in the same database row as the batch. The coordinator polls that durable flag between task dispatches and marks tasks that have not started as `cancelled`. Commands already dispatched are allowed to settle; this endpoint does not kill worker threads, stop a queued Creator Studio render, or reverse an external side effect. Their final outcome must be read from the batch/project evidence. If the process is interrupted, a recorded running task remains reconciliation-required rather than being replayed. Cancellation-state read failures halt additional dispatch (fail-closed).
+
+
+The HTTP handler offloads the blocking DAG coordinator to Starlette's worker pool. This keeps the ASGI event loop available to accept a concurrent cancellation request while the batch is executing.
