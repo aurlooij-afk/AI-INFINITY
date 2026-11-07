@@ -396,6 +396,11 @@ def get_execution(execution_id: str, user_id: str) -> dict[str, Any]:
         "execution_id": row[0], "project_id": row[1], "capability_id": row[2],
         "route": row[3], "request_sha256": row[4], "state": row[5],
         "result": summary, "started_at": row[7], "completed_at": row[8],
+        "reconciliation_required": row[5] == "running",
+        "reconciliation_policy": (
+            "inspect domain-specific project/provider read-back before any retry; never auto-replay"
+            if row[5] == "running" else "not_required"
+        ),
         "verification": "domain_specific_evidence_required",
         "truthful": True,
     }
@@ -411,12 +416,18 @@ def register(app: Any) -> None:
     @app.get("/infinity/execution/health")
     def execution_health():
         snapshot = registry_snapshot()
+        canonical_module = _canonical()
+        with canonical_module.studio().DB_LOCK, canonical_module.db() as connection:
+            running_count = int(connection.execute(
+                "SELECT COUNT(*) FROM canonical_executions WHERE state='running'"
+            ).fetchone()[0])
         return {
             "status": "healthy" if snapshot["executable_count"] > 0 else "degraded",
             "registry_count": snapshot["registry_count"],
             "executable_count": snapshot["executable_count"],
             "guard_count": snapshot["guard_count"],
             "ledger": "sqlite_persisted",
+            "active_or_interrupted_executions": running_count,
             "retry_policy": snapshot["retry_policy"],
             "truthful": True,
         }
