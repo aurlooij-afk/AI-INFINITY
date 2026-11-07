@@ -1,0 +1,62 @@
+name: AI Infinity — GitHub Autonomy Benchmark
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "self_maintenance.py"
+      - "scripts/benchmark_github_access.py"
+      - "tests/test_self_maintenance.py"
+      - ".github/workflows/universal-github-access-benchmark.yml"
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+  actions: read
+  checks: read
+  statuses: read
+
+jobs:
+  repository-access:
+    name: Measure real repository-scoped GitHub access
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the minimal self-maintenance runtime dependency
+        run: python -m pip install --disable-pip-version-check fastapi
+
+      - name: Compile benchmark and repository executor
+        run: python -m py_compile self_maintenance.py scripts/benchmark_github_access.py
+
+      - name: Exercise real GitHub API permissions and self-maintenance execution
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          AI_INFINITY_MAINTENANCE_GITHUB_TOKEN: ${{ secrets.AI_INFINITY_MAINTENANCE_GITHUB_TOKEN || secrets.AI_INFINITY_GITHUB_TOKEN }}
+          AI_INFINITY_MAINTENANCE_GITHUB_TOKEN_SOURCE: ${{ secrets.AI_INFINITY_MAINTENANCE_GITHUB_TOKEN != '' && 'AI_INFINITY_MAINTENANCE_GITHUB_TOKEN' || secrets.AI_INFINITY_GITHUB_TOKEN != '' && 'AI_INFINITY_GITHUB_TOKEN' || 'GITHUB_TOKEN' }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          AI_INFINITY_BENCHMARK_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python scripts/benchmark_github_access.py --output github-access-benchmark.json
+
+      - name: Upload measured permission and performance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-infinity-github-access-benchmark
+          path: github-access-benchmark.json
+          if-no-files-found: warn
+          retention-days: 30
