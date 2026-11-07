@@ -72,6 +72,76 @@ def _save(path: Path, report: dict) -> None:
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def account_wide_access_verification(report: dict, operation_states: dict[str, str]) -> dict:
+    """Verify account-wide repository coverage from explicit, bounded evidence.
+
+    This is intentionally narrower than claiming unrestricted GitHub API access:
+    it covers the complete repository inventory visible to the configured token,
+    plus a real reversible write probe in a second repository.
+    """
+    identity = report.get("authenticated_identity") or {}
+    graphql = report.get("graphql_identity") or {}
+    inventory = report.get("accessible_repositories") or {}
+    cross_write = report.get("cross_repository_write_probe") or {}
+    temporary_pr = report.get("temporary_write_probe") or {}
+
+    checks = {
+        "authenticated_user_identity": bool(identity.get("login")),
+        "graphql_identity_matches_authenticated_user": bool(
+            identity.get("login")
+            and graphql.get("login")
+            and str(identity.get("login")).casefold() == str(graphql.get("login")).casefold()
+        ),
+        "complete_token_visible_repository_inventory": bool(
+            inventory.get("pagination_complete") is True
+            and inventory.get("complete_account_inventory_claimed") is True
+            and int(inventory.get("total_repository_count") or 0) > 1
+            and operation_states.get("accessible_repositories_all_pages") == "PASS"
+        ),
+        "cross_repository_read": bool(
+            operation_states.get("cross_repository_metadata_read_sample") == "PASS"
+            and (report.get("cross_repository_probe") or {}).get("repository")
+        ),
+        "cross_repository_write_and_cleanup": bool(
+            cross_write.get("branch_created") is True
+            and cross_write.get("default_branch_modified") is False
+            and operation_states.get("cross_repository_temporary_branch_create") == "PASS"
+            and operation_states.get("cross_repository_temporary_branch_delete_cleanup") == "PASS"
+        ),
+        "configured_repository_self_maintenance_write_round_trip": bool(
+            temporary_pr.get("pull_request_number")
+            and operation_states.get("self_maintenance_source_to_commit_to_draft_pr") == "PASS"
+            and operation_states.get("temporary_pull_request_readback") == "PASS"
+            and operation_states.get("temporary_pull_request_close") == "PASS"
+            and operation_states.get("temporary_branch_delete_cleanup") == "PASS"
+        ),
+    }
+    verified = all(checks.values())
+    evidence_operations = (
+        "accessible_repositories_all_pages",
+        "cross_repository_metadata_read_sample",
+        "cross_repository_temporary_branch_create",
+        "cross_repository_temporary_branch_delete_cleanup",
+        "self_maintenance_source_to_commit_to_draft_pr",
+        "temporary_pull_request_readback",
+        "temporary_pull_request_close",
+        "temporary_branch_delete_cleanup",
+    )
+    blocked = any(operation_states.get(name) in {"BLOCKED", "NOT_RUN"} for name in evidence_operations)
+    return {
+        "verified": verified,
+        "status": "VERIFIED" if verified else "BLOCKED" if blocked else "NOT_VERIFIED",
+        "scope": "complete_repository_inventory_returned_by_the_configured_token_and_sampled_cross_repository_write",
+        "total_token_visible_repositories": int(inventory.get("total_repository_count") or 0),
+        "checks": checks,
+        "limitations": [
+            "This verifies the complete repository inventory returned by GitHub /user/repos for this credential, subject to the pagination ceiling.",
+            "It does not prove access to every GitHub API endpoint, every organization resource, or repositories hidden by token grants, SSO, or organization policy.",
+            "The cross-repository write probe creates and deletes a temporary branch without committing or modifying the sampled repository's default branch.",
+        ],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", default="github-access-benchmark.json")
@@ -567,8 +637,23 @@ def main() -> int:
             "temporary_pull_request_readback",
             "temporary_pull_request_close",
             "temporary_branch_delete_cleanup",
+            "account_wide_access_verification",
         }
         operation_states = {item["name"]: item["status"] for item in report["operations"]}
+        account_wide = account_wide_access_verification(report, operation_states)
+        report["account_wide_access_verified"] = account_wide["verified"]
+        report["account_wide_access_verification"] = account_wide
+        verification_status = (
+            "PASS" if account_wide["verified"]
+            else "BLOCKED" if account_wide["status"] == "BLOCKED"
+            else "FAIL"
+        )
+        report["operations"].append({
+            "name": "account_wide_access_verification",
+            "status": verification_status,
+            "duration_ms": 0.0,
+        })
+        operation_states["account_wide_access_verification"] = verification_status
         report["required_operations"] = {
             name: operation_states.get(name, "NOT_RUN")
             for name in sorted(required_operations)
