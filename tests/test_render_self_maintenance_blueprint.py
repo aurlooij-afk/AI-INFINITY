@@ -14,17 +14,17 @@ def test_render_blueprint_declares_owner_authorized_github_runtime_without_commi
     }
     for key, value in expected_values.items():
         match = re.search(
-            rf"(?m)^      - key: {re.escape(key)}\\n        value: {re.escape(value)}$",
+            rf"(?m)^      - key: {re.escape(key)}\n        value: {re.escape(value)}$",
             source,
         )
         assert match, f"{key} must be declared with its exact runtime value"
 
     assert re.search(
-        r"(?m)^      - key: AI_INFINITY_MAINTENANCE_GITHUB_TOKEN\\n        sync: false$",
+        r"(?m)^      - key: AI_INFINITY_MAINTENANCE_GITHUB_TOKEN\n        sync: false$",
         source,
     ), "the owner token must be requested manually, never generated or committed"
     assert re.search(
-        r"(?m)^      - key: AI_INFINITY_MAINTENANCE_ADMIN_TOKEN\\n        generateValue: true$",
+        r"(?m)^      - key: AI_INFINITY_MAINTENANCE_ADMIN_TOKEN\n        generateValue: true$",
         source,
     ), "the operator token must be generated independently by Render"
 
