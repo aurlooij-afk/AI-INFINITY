@@ -103,12 +103,24 @@ def main() -> int:
         "truthful": True,
     }
     if not repo or "/" not in repo or not token:
+        completed = time.time()
         report.update({
             "status": "BLOCKED",
             "error": (
                 "GITHUB_REPOSITORY is invalid or no dedicated owner-provisioned GitHub token is configured. "
                 "The workflow GITHUB_TOKEN is intentionally not accepted as a substitute."
             ),
+            "completed_at_epoch": completed,
+            "duration_seconds": round(completed - report["started_at_epoch"], 3),
+            "operation_pass_count": 0,
+            "operation_fail_count": 0,
+            "operation_blocked_count": 0,
+            "operation_attempt_count": 0,
+            "operation_pass_rate": None,
+            "token_value_recorded": False,
+            "secrets_returned": False,
+            "temporary_pull_request_merged": False,
+            "production_deployment_performed": False,
         })
         _save(output, report)
         return 2
@@ -214,14 +226,46 @@ def main() -> int:
                 raise RuntimeError("GitHub accessible-repository response was not an array")
             return value
 
-        ok, repository_rows = run_operation(
-            "accessible_repositories_first_page",
+        def list_accessible_repositories():
+            page_size = 100
+            max_pages = 100
+            rows = []
+            first_page_count = 0
+            pagination_complete = False
+            for page in range(1, max_pages + 1):
+                value = maintenance.github_request(
+                    cfg,
+                    "GET",
+                    (
+                        "/user/repos?per_page=100"
+                        f"&page={page}&visibility=all"
+                        "&affiliation=owner,collaborator,organization_member&sort=updated"
+                    ),
+                )
+                if not isinstance(value, list):
+                    raise RuntimeError("GitHub accessible-repository response was not an array")
+                if page == 1:
+                    first_page_count = len(value)
+                rows.extend(value)
+                if len(value) < page_size:
+                    pagination_complete = True
+                    break
+            return {
+                "rows": rows,
+                "pages_fetched": min(page, max_pages),
+                "first_page_count": first_page_count,
+                "pagination_complete": pagination_complete,
+                "page_limit": max_pages,
+            }
+
+        ok, repository_inventory = run_operation(
+            "accessible_repositories_all_pages",
             list_accessible_repositories,
         )
         sampled_repository = None
         if ok:
             normalized_repositories = []
-            for row in repository_rows:
+            for row in repository_inventory["rows"]:
                 if not isinstance(row, dict):
                     continue
                 full_name = str(row.get("full_name") or "")
@@ -238,10 +282,14 @@ def main() -> int:
                         },
                     })
             report["accessible_repositories"] = {
-                "first_page_count": len(normalized_repositories),
+                "first_page_count": repository_inventory["first_page_count"],
+                "total_repository_count": len(normalized_repositories),
+                "pages_fetched": repository_inventory["pages_fetched"],
+                "pagination_complete": repository_inventory["pagination_complete"],
+                "page_limit": repository_inventory["page_limit"],
                 "first_page_sample": normalized_repositories[:20],
-                "more_pages_possible": len(repository_rows) == 100,
-                "complete_account_inventory_claimed": False,
+                "complete_account_inventory_claimed": repository_inventory["pagination_complete"],
+                "scope_note": "This is the set returned by /user/repos for the configured token; repositories outside the token's grants and organization policy are not visible.",
             }
             sampled_repository = next(
                 (
@@ -333,6 +381,29 @@ def main() -> int:
                     ],
                     "complete_account_inventory_claimed": False,
                 }
+
+        def read_authenticated_graphql_viewer():
+            value = maintenance.github_request(
+                cfg,
+                "POST",
+                "/graphql",
+                {"query": "query { viewer { login } }", "variables": {}},
+            )
+            viewer = ((value.get("data") or {}).get("viewer") or {}) if isinstance(value, dict) else {}
+            if not viewer.get("login"):
+                errors = value.get("errors") if isinstance(value, dict) else None
+                raise RuntimeError(
+                    "GitHub GraphQL viewer query did not return a login"
+                    + (f" ({len(errors)} GraphQL errors)" if isinstance(errors, list) else "")
+                )
+            return viewer
+
+        ok, viewer = run_operation(
+            "authenticated_graphql_viewer_read",
+            read_authenticated_graphql_viewer,
+        )
+        if ok:
+            report["graphql_identity"] = {"login": str(viewer.get("login") or "")[:100]}
 
         ok, rate = run_operation(
             "authenticated_rate_limit_read",
@@ -484,8 +555,9 @@ def main() -> int:
         required_operations = {
             "repository_metadata_and_effective_permissions",
             "authenticated_user_identity",
-            "accessible_repositories_first_page",
+            "accessible_repositories_all_pages",
             "cross_repository_metadata_read_sample",
+            "authenticated_graphql_viewer_read",
             "cross_repository_temporary_branch_create",
             "cross_repository_temporary_branch_delete_cleanup",
             "authenticated_rate_limit_read",
@@ -541,7 +613,11 @@ def main() -> int:
         report["operation_blocked_count"] = blocked
         report["operation_attempt_count"] = attempted
         report["operation_pass_rate"] = round(passed / attempted, 4) if attempted else None
-        report["status"] = "PASS" if exit_code == 0 else "FAIL"
+        report["status"] = (
+            "PASS" if exit_code == 0
+            else "BLOCKED" if failed == 0 and blocked > 0
+            else "FAIL"
+        )
         report["token_value_recorded"] = False
         report["secrets_returned"] = False
         report["temporary_pull_request_merged"] = False
