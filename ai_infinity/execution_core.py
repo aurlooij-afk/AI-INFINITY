@@ -136,7 +136,9 @@ def _execution_state(result: dict[str, Any]) -> str:
         return "accepted"
     if status in {"completed", "learned", "dry_run_ready"}:
         return "completed"
-    if status in {"degraded", "failed", "error", "write_outcome_ambiguous", "write_accepted_not_independently_verified"}:
+    if status == "write_outcome_ambiguous":
+        return "reconciliation_required"
+    if status in {"degraded", "failed", "error", "write_accepted_not_independently_verified"}:
         return "degraded" if status == "degraded" else "failed"
     return "completed" if result.get("executed") is True else "blocked"
 
