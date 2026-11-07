@@ -156,6 +156,7 @@ def execute_commands(
     dispatch: Callable[[str, str, dict[str, Any]], dict[str, Any]],
     checkpoint: Callable[[list[dict[str, Any]], str], None],
     max_concurrency: int = 1,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Run ready DAG nodes through the canonical dispatcher; never auto-replay."""
     if isinstance(max_concurrency, bool) or not isinstance(max_concurrency, int):
@@ -166,7 +167,7 @@ def execute_commands(
     steps = {step["id"]: step for step in commands}
     order = {step["id"]: n for n, step in enumerate(commands, 1)}
     success = {"completed", "accepted"}
-    failed_terminal = {"failed", "authorization_required", "dependency_blocked", "not_run"}
+    failed_terminal = {"failed", "authorization_required", "dependency_blocked", "not_run", "cancelled"}
     records = {}
     results = []
     for step in commands:
@@ -186,6 +187,7 @@ def execute_commands(
     pending = set(steps)
     running = {}
     halt = [False]
+    cancellation_observed = [False]
     checkpoint(results, "running")
 
     def block_failed_dependencies():
@@ -253,6 +255,26 @@ def execute_commands(
 
     with ThreadPoolExecutor(max_workers=max_concurrency, thread_name_prefix="aii-task") as pool:
         while pending or running:
+            # Cancellation is durable and may be requested by another process.
+            # It prevents tasks that have not been dispatched from starting; it
+            # deliberately does not pretend to terminate already-running work.
+            if not cancellation_observed[0] and cancel_requested is not None:
+                try:
+                    requested = bool(cancel_requested())
+                except Exception:
+                    # Fail closed: if the cancellation state cannot be read,
+                    # do not dispatch additional side-effecting commands.
+                    requested = True
+                if requested:
+                    cancellation_observed[0] = True
+                    for task_id in sorted(tuple(pending), key=order.get):
+                        records[task_id].update({
+                            "state": "cancelled",
+                            "reason": "Cancellation was requested before this task was dispatched.",
+                            "executed": False, "completed_at": time.time(),
+                        })
+                        pending.remove(task_id)
+                    checkpoint(results, "cancellation_requested")
             block_failed_dependencies()
             if halt[0]:
                 for task_id in sorted(tuple(pending), key=order.get):
@@ -310,7 +332,11 @@ def execute_commands(
 
     states = [row["state"] for row in results]
     completed_or_accepted = sum(state in success for state in states)
-    if "failed" in states:
+    cancelled_steps = sum(state == "cancelled" for state in states)
+    if cancelled_steps:
+        other_terminal_work = any(state in {"failed", "authorization_required"} for state in states)
+        overall = "partially_cancelled" if completed_or_accepted or other_terminal_work else "cancelled"
+    elif "failed" in states:
         overall = "partial" if completed_or_accepted else "failed"
     elif any(state in {"authorization_required", "dependency_blocked", "not_run"} for state in states):
         overall = "partial" if completed_or_accepted else "blocked"
@@ -326,6 +352,8 @@ def execute_commands(
         "accepted_steps": sum(state == "accepted" for state in states),
         "failed_steps": sum(state == "failed" for state in states),
         "blocked_steps": sum(state in {"authorization_required", "dependency_blocked", "not_run"} for state in states),
+        "cancelled_steps": cancelled_steps,
+        "cancellation_observed": cancellation_observed[0],
         "executed": any(row.get("executed") is True for row in results),
         "steps": results, "truthful": True,
     }
@@ -353,6 +381,10 @@ def register(app: Any) -> None:
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(canonical_command_batches)").fetchall()}
         if "max_concurrency" not in columns:
             connection.execute("ALTER TABLE canonical_command_batches ADD COLUMN max_concurrency INTEGER NOT NULL DEFAULT 1")
+        if "cancel_requested_at" not in columns:
+            connection.execute("ALTER TABLE canonical_command_batches ADD COLUMN cancel_requested_at REAL")
+        if "cancel_reason" not in columns:
+            connection.execute("ALTER TABLE canonical_command_batches ADD COLUMN cancel_reason TEXT")
         connection.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_canonical_command_batches_idempotency
@@ -371,7 +403,7 @@ def register(app: Any) -> None:
     def load(batch_id: str, user_id: str) -> dict[str, Any]:
         with canonical.studio().DB_LOCK, canonical.db() as connection:
             row = connection.execute(
-                "SELECT batch_id,user_id,request_sha256,commands_json,results_json,status,created_at,updated_at,max_concurrency "
+                "SELECT batch_id,user_id,request_sha256,commands_json,results_json,status,created_at,updated_at,max_concurrency,cancel_requested_at,cancel_reason "
                 "FROM canonical_command_batches WHERE batch_id=? AND user_id=?",
                 (batch_id, user_id),
             ).fetchone()
@@ -386,9 +418,20 @@ def register(app: Any) -> None:
             "batch_id": row[0], "status": row[5], "commands": commands,
             "steps": results, "created_at": row[6], "updated_at": row[7],
             "max_concurrency": int(row[8] or 1),
+            "cancel_requested": row[9] is not None,
+            "cancel_requested_at": row[9],
+            "cancel_reason": row[10] or "",
             "reconciliation_required": bool(row[5] == "running" and any(item.get("state") == "running" for item in results if isinstance(item, dict))),
             "truthful": True,
         }
+
+    def cancellation_requested(batch_id: str) -> bool:
+        with canonical.studio().DB_LOCK, canonical.db() as connection:
+            row = connection.execute(
+                "SELECT cancel_requested_at FROM canonical_command_batches WHERE batch_id=?",
+                (batch_id,),
+            ).fetchone()
+        return bool(row and row[0] is not None)
 
     @app.post("/infinity/canonical/batches")
     async def canonical_command_batch(request: Request, response: Response):
@@ -445,9 +488,38 @@ def register(app: Any) -> None:
             dispatch=canonical.dispatch_command,
             checkpoint=lambda rows, state: save(batch_id, rows, state),
             max_concurrency=max_concurrency,
+            cancel_requested=lambda: cancellation_requested(batch_id),
         )
         save(batch_id, result["steps"], result["status"])
         result["replayed"] = False
+        return result
+
+    @app.post("/infinity/canonical/batches/{batch_id}/cancel")
+    def canonical_cancel_command_batch(batch_id: str, request: Request, response: Response):
+        user_id = canonical.current_user(request, response)
+        with canonical.studio().DB_LOCK, canonical.db() as connection:
+            row = connection.execute(
+                "SELECT status,cancel_requested_at FROM canonical_command_batches WHERE batch_id=? AND user_id=?",
+                (batch_id, user_id),
+            ).fetchone()
+            if not row:
+                raise HTTPException(404, "command batch not found")
+            if row[0] == "running" and row[1] is None:
+                connection.execute(
+                    "UPDATE canonical_command_batches SET cancel_requested_at=?,cancel_reason=?,updated_at=? "
+                    "WHERE batch_id=? AND user_id=? AND status='running' AND cancel_requested_at IS NULL",
+                    (time.time(), "owner_requested", time.time(), batch_id, user_id),
+                )
+        result = load(batch_id, user_id)
+        result["cancellation_state"] = (
+            "requested" if result["cancel_requested"] and result["status"] == "running"
+            else "already_requested" if result["cancel_requested"]
+            else "not_running"
+        )
+        result["cancellation_semantics"] = (
+            "Prevents commands not yet dispatched from starting. Already-running commands are allowed to settle; "
+            "their side effects are not forcibly interrupted. Reconcile any running state after process interruption."
+        )
         return result
 
     @app.get("/infinity/canonical/batches/{batch_id}")
