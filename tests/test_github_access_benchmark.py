@@ -213,6 +213,7 @@ def test_missing_owner_token_writes_truthful_blocked_metrics(monkeypatch, tmp_pa
     assert result == 2
     assert report["status"] == "BLOCKED"
     assert report["credential_source"] == "missing_dedicated_owner_token"
+    assert report["account_wide_access_verified"] is False
     assert report["operation_attempt_count"] == 0
     assert report["operation_pass_count"] == 0
     assert report["operation_fail_count"] == 0
@@ -253,4 +254,36 @@ def test_account_wide_verification_fails_closed_for_truncated_or_unproven_reposi
     assert result["verified"] is False
     assert result["status"] == "NOT_VERIFIED"
     assert result["checks"]["complete_token_visible_repository_inventory"] is False
+
+def test_account_wide_verification_rejects_mismatched_rest_and_graphql_identities():
+    report = {
+        "authenticated_identity": {"login": "owner"},
+        "graphql_identity": {"login": "different-account"},
+        "accessible_repositories": {
+            "pagination_complete": True,
+            "complete_account_inventory_claimed": True,
+            "total_repository_count": 2,
+        },
+        "cross_repository_probe": {"repository": "owner/second-project"},
+        "cross_repository_write_probe": {
+            "branch_created": True,
+            "default_branch_modified": False,
+        },
+        "temporary_write_probe": {"pull_request_number": 123},
+    }
+    operations = {
+        "accessible_repositories_all_pages": "PASS",
+        "cross_repository_metadata_read_sample": "PASS",
+        "cross_repository_temporary_branch_create": "PASS",
+        "cross_repository_temporary_branch_delete_cleanup": "PASS",
+        "self_maintenance_source_to_commit_to_draft_pr": "PASS",
+        "temporary_pull_request_readback": "PASS",
+        "temporary_pull_request_close": "PASS",
+        "temporary_branch_delete_cleanup": "PASS",
+    }
+
+    result = benchmark.account_wide_access_verification(report, operations)
+
+    assert result["verified"] is False
+    assert result["checks"]["graphql_identity_matches_authenticated_user"] is False
 
