@@ -33,7 +33,7 @@ All endpoints require the `X-AI-Infinity-Maintenance-Token` header. Creator Stud
 
 ### Canonical command entry for GitHub
 
-The same GitHub adapter is callable through the existing natural-language command dispatcher at `POST /infinity/canonical/execute`. This keeps GitHub operations on the shared command path instead of requiring a separate GitHub executor. Requests require both the normal AI Infinity user session and the independent `X-AI-Infinity-Maintenance-Token` operator header.
+The same GitHub adapter is callable through the existing natural-language command dispatcher at `POST /infinity/canonical/execute`. This keeps GitHub operations on the shared command path instead of requiring a separate GitHub executor. Requests require both the normal AI Infinity user session and the independent `X-AI-Infinity-Maintenance-Token` operator header. Explicit REST command text such as `Run GitHub REST GET /user/repos?per_page=100` is parsed into an API request; structured payloads are also supported.
 
 REST example:
 
