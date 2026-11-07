@@ -363,17 +363,47 @@ def dispatch(command: str, user_id: str, payload: dict[str, Any] | None = None,
         })
         raise
     except Exception as exc:
+        # Once a domain dispatcher has been entered, an exception does not prove
+        # that an external/provider side effect did not occur. Preserve the
+        # uncertainty as a first-class terminal state and never invite replay.
         completed_at = time.time()
+        summary = {
+            "status": "write_outcome_ambiguous",
+            "error_type": type(exc).__name__,
+            "reconciliation_required": True,
+        }
         _record(
             execution_id, str(user_id), project_id, capability, request_sha256,
-            "failed", {"status": "dispatch_exception", "error_type": type(exc).__name__},
-            started_at, completed_at,
+            "reconciliation_required", summary, started_at, completed_at,
         )
-        _event(str(user_id), project_id, "execution_failed", {
+        _event(str(user_id), project_id, "execution_reconciliation_required", {
             "execution_id": execution_id, "capability_id": capability["id"],
             "route": route, "error_type": type(exc).__name__,
+            "retry_policy": "never_auto_replay",
         })
-        raise
+        return {
+            "status": "write_outcome_ambiguous",
+            "route": route,
+            "executed": False,
+            "reconciliation_required": True,
+            "reason": (
+                "The dispatcher raised after invocation. Its external outcome is unknown; "
+                "inspect the target resource and provider evidence before any retry."
+            ),
+            "execution": {
+                "execution_id": execution_id,
+                "capability_id": capability["id"],
+                "domain": capability["domain"],
+                "state": "reconciliation_required",
+                "started_at": started_at,
+                "completed_at": completed_at,
+                "request_sha256": request_sha256,
+                "side_effect_policy": capability["side_effect_policy"],
+                "verification": "not_independently_verified",
+                "retry_policy": "never_auto_replay",
+            },
+            "truthful": True,
+        }
 
 
 def get_execution(execution_id: str, user_id: str) -> dict[str, Any]:
@@ -396,10 +426,10 @@ def get_execution(execution_id: str, user_id: str) -> dict[str, Any]:
         "execution_id": row[0], "project_id": row[1], "capability_id": row[2],
         "route": row[3], "request_sha256": row[4], "state": row[5],
         "result": summary, "started_at": row[7], "completed_at": row[8],
-        "reconciliation_required": row[5] == "running",
+        "reconciliation_required": row[5] in {"running", "reconciliation_required"},
         "reconciliation_policy": (
             "inspect domain-specific project/provider read-back before any retry; never auto-replay"
-            if row[5] == "running" else "not_required"
+            if row[5] in {"running", "reconciliation_required"} else "not_required"
         ),
         "verification": "domain_specific_evidence_required",
         "truthful": True,
