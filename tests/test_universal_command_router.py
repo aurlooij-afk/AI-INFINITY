@@ -829,3 +829,127 @@ def test_standalone_image_command_dispatches_image_type_to_creator_engine(monkey
     assert result["executed"] is True
     assert calls[0][2]["content_type"] == "image"
 
+
+
+def test_github_api_payload_routes_through_canonical_command_core():
+    result = canonical.classify_command(
+        "Inspect the current GitHub identity",
+        {"task_type": "github_api", "github_path": "/user", "github_method": "GET"},
+    )
+    assert result["route"] == "github_api"
+
+
+def test_github_graphql_payload_routes_through_canonical_command_core():
+    result = canonical.classify_command(
+        "Inspect GitHub repositories",
+        {"task_type": "github_graphql", "github_graphql_query": "query { viewer { login } }"},
+    )
+    assert result["route"] == "github_api"
+
+
+def test_canonical_github_command_requires_operator_authorization(monkeypatch):
+    import self_maintenance as maintenance
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("GitHub must not be called without maintenance authorization")
+
+    monkeypatch.setattr(maintenance, "github_request", forbidden)
+    result = canonical.dispatch_command(
+        "Inspect GitHub user",
+        "test-user",
+        {"task_type": "github_api", "github_path": "/user", "github_method": "GET"},
+    )
+    assert result["status"] == "authorization_required"
+    assert result["executed"] is False
+
+
+def test_canonical_github_command_executes_through_shared_github_adapter(monkeypatch):
+    import self_maintenance as maintenance
+
+    cfg = {
+        "ready": True,
+        "repository": "owner/project",
+        "base_branch": "main",
+        "github_token": "ghp_abcdefghijklmnopqrstuvwxyz123456",
+        "admin_token": "owner-admin-placeholder",
+        "github_access_mode": "github_full",
+    }
+    captured = {}
+
+    class FakeRequest:
+        headers = {"x-ai-infinity-maintenance-token": "owner-admin-placeholder"}
+
+    monkeypatch.setattr(maintenance, "load_settings", lambda: cfg)
+
+    def authorize(request, settings):
+        captured["authorized"] = request.headers["x-ai-infinity-maintenance-token"] == settings["admin_token"]
+
+    def fake_github_request(settings, method, path, body=None):
+        captured.update({"settings": settings, "method": method, "path": path, "body": body})
+        return {"login": "owner", "note": "bearer ghp_abcdefghijklmnopqrstuvwxyz123456"}
+
+    monkeypatch.setattr(maintenance, "authorize", authorize)
+    monkeypatch.setattr(maintenance, "validate_github_contents_path", lambda path: None)
+    monkeypatch.setattr(maintenance, "github_request", fake_github_request)
+
+    result = canonical.dispatch_command(
+        "Inspect authenticated GitHub user",
+        "test-user",
+        {"task_type": "github_api", "github_path": "/user", "github_method": "GET"},
+        request=FakeRequest(),
+    )
+
+    assert result["status"] == "completed"
+    assert result["route"] == "github_api"
+    assert result["executed"] is True
+    assert result["read_only"] is True
+    assert captured["authorized"] is True
+    assert captured["method"] == "GET"
+    assert captured["path"] == "/user"
+    assert "ghp_abcdefghijklmnopqrstuvwxyz123456" not in str(result)
+    assert "[REDACTED]" in result["result"]["note"]
+
+
+def test_canonical_graphql_command_uses_post_and_server_side_credentials(monkeypatch):
+    import self_maintenance as maintenance
+
+    cfg = {
+        "ready": True,
+        "repository": "owner/project",
+        "base_branch": "main",
+        "github_token": "server-side-token-value",
+        "admin_token": "owner-admin-placeholder",
+        "github_access_mode": "github_full",
+    }
+    captured = {}
+
+    class FakeRequest:
+        headers = {"x-ai-infinity-maintenance-token": "owner-admin-placeholder"}
+
+    monkeypatch.setattr(maintenance, "load_settings", lambda: cfg)
+    monkeypatch.setattr(maintenance, "authorize", lambda request, settings: None)
+    monkeypatch.setattr(maintenance, "validate_github_contents_path", lambda path: None)
+
+    def fake_github_request(settings, method, path, body=None):
+        captured.update({"method": method, "path": path, "body": body})
+        return {"data": {"viewer": {"login": "owner"}}}
+
+    monkeypatch.setattr(maintenance, "github_request", fake_github_request)
+    result = canonical.dispatch_command(
+        "Query the authenticated GitHub viewer",
+        "test-user",
+        {
+            "task_type": "github_graphql",
+            "github_graphql_query": "query { viewer { login } }",
+            "github_graphql_variables": {"unused": False},
+        },
+        request=FakeRequest(),
+    )
+
+    assert result["status"] == "completed"
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/graphql"
+    assert captured["body"] == {
+        "query": "query { viewer { login } }",
+        "variables": {"unused": False},
+    }
