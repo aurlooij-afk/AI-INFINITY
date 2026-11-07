@@ -11,11 +11,12 @@ import os
 import platform
 import shutil
 import sys
+import time
 import re
 import uuid
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 from urllib.request import Request, urlopen
 
 from fastapi import FastAPI, HTTPException, Request as FastAPIRequest
@@ -262,7 +263,8 @@ def github_request(cfg: dict, method: str, path: str, payload: dict | None = Non
         raise HTTPException(405, "Unsupported GitHub HTTP method.")
     repository = str(cfg.get("repository") or "").strip()
     repository_prefix = f"/repos/{repository}/" if repository else ""
-    if path != "/rate_limit" and (not repository_prefix or not path.startswith(repository_prefix)):
+    repository_root = f"/repos/{repository}" if repository else ""
+    if path not in {"/rate_limit", repository_root} and (not repository_prefix or not path.startswith(repository_prefix)):
         raise HTTPException(403, "GitHub API access is limited to the configured repository.")
     if not path.startswith("/") or "://" in path or "\\" in path or ".." in path.split("/"):
         raise HTTPException(422, "Invalid GitHub API path.")
@@ -623,18 +625,18 @@ def create_draft_pr(cfg: dict, changes: list, originals: dict, goal: str, summar
             if not original or not original.get("sha"):
                 raise HTTPException(409, f"Original SHA unavailable for {change['path']}.")
             github_request(cfg, "PUT", f"/repos/{repository}/contents/{quote(change['path'], safe='/')}", {
-                "message": "feat(self-maintenance): " + re.sub(r"\\s+", " ", goal)[:100],
+                "message": "feat(self-maintenance): " + re.sub(r"\s+", " ", goal)[:100],
                 "content": base64.b64encode(change["content"].encode("utf-8")).decode("ascii"),
                 "sha": original["sha"], "branch": branch,
             })
         pr = github_request(cfg, "POST", f"/repos/{repository}/pulls", {
-            "title": "[AI Infinity self-maintenance] " + re.sub(r"\\s+", " ", goal)[:150],
+            "title": "[AI Infinity self-maintenance] " + re.sub(r"\s+", " ", goal)[:150],
             "body": (
-                "## Automated engineering proposal\\n\\n" + summary[:4000]
-                + "\\n\\n## Files\\n" + "\\n".join("- " + row["path"] for row in changes)
-                + "\\n\\n## Verification\\n- Draft PR only; GitHub Actions must verify this candidate.\\n"
-                + "- No deployment, publishing, or human approval is performed by this operation.\\n"
-                + "- Review the diff and CI evidence before merging.\\n"
+                "## Automated engineering proposal\n\n" + summary[:4000]
+                + "\n\n## Files\n" + "\n".join("- " + row["path"] for row in changes)
+                + "\n\n## Verification\n- Draft PR only; GitHub Actions must verify this candidate.\n"
+                + "- No deployment, publishing, or human approval is performed by this operation.\n"
+                + "- Review the diff and CI evidence before merging.\n"
             ),
             "head": branch, "base": base, "draft": True,
         })
@@ -991,6 +993,20 @@ def inspect_runtime(cfg: dict, app: FastAPI) -> dict:
     )
 
 
+def validate_github_contents_path(path: str) -> None:
+    """Apply repository-full text and protected-file rules to Contents API operations."""
+    marker = "/contents/"
+    if marker not in path:
+        return
+    raw = path.split(marker, 1)[1].split("?", 1)[0]
+    try:
+        decoded = unquote(raw)
+    except Exception:
+        raise HTTPException(422, "Invalid GitHub contents path.") from None
+    if decoded:
+        validate_path(decoded, access_mode="repository_full")
+
+
 def redact_github_response(value: Any, depth: int = 0) -> Any:
     """Redact credential-like fields before generic GitHub API results reach callers."""
     if depth > 12:
@@ -1081,6 +1097,7 @@ def register(app: FastAPI) -> None:
         body = payload.get("body")
         if body is not None and not isinstance(body, dict):
             raise HTTPException(422, "GitHub API request body must be a JSON object.")
+        validate_github_contents_path(path_value)
         started = time.monotonic()
         result = github_request(cfg, method, path_value, body)
         result = validate_github_content_response(path_value, result)
