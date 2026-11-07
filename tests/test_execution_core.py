@@ -202,3 +202,31 @@ def test_interrupted_running_execution_is_explicitly_reconciliation_required(tmp
     assert result["state"] == "running"
     assert result["reconciliation_required"] is True
     assert "never auto-replay" in result["reconciliation_policy"]
+
+def test_dispatch_exception_is_ambiguous_and_requires_reconciliation_not_failed(tmp_path, monkeypatch):
+    fake, events, calls, db_path = _fake_canonical(tmp_path, monkeypatch)
+
+    def uncertain_dispatch(command, user_id, payload, request=None):
+        calls.append((command, user_id, dict(payload), request))
+        raise RuntimeError("provider connection dropped after request submission")
+
+    fake.dispatch_command = uncertain_dispatch
+    result = execution_core.dispatch(
+        "Create a 20 second video about accessibility",
+        "user-1",
+        {"idempotency_key": "uncertain-create-001"},
+    )
+
+    assert result["status"] == "write_outcome_ambiguous"
+    assert result["executed"] is False
+    assert result["reconciliation_required"] is True
+    assert result["execution"]["state"] == "reconciliation_required"
+    assert result["execution"]["retry_policy"] == "never_auto_replay"
+    assert events[-1][2] == "execution_reconciliation_required"
+
+    stored = execution_core.get_execution(result["execution"]["execution_id"], "user-1")
+    assert stored["state"] == "reconciliation_required"
+    assert stored["reconciliation_required"] is True
+    assert "never auto-replay" in stored["reconciliation_policy"]
+    assert len(calls) == 1
+
