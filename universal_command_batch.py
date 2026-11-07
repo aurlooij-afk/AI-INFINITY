@@ -490,7 +490,7 @@ def register(app: Any) -> None:
             commands,
             user_id=user_id,
             batch_id=batch_id,
-            dispatch=canonical.dispatch_command,
+            dispatch=__import__("ai_infinity.execution_core", fromlist=["dispatch"]).dispatch,
             checkpoint=lambda rows, state: save(batch_id, rows, state),
             max_concurrency=max_concurrency,
             cancel_requested=lambda: cancellation_requested(batch_id),
