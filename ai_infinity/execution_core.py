@@ -347,6 +347,21 @@ def dispatch(command: str, user_id: str, payload: dict[str, Any] | None = None,
             "retry_policy": "never_auto_replay",
         }
         return result
+    except HTTPException as exc:
+        completed_at = time.time()
+        blocked = int(exc.status_code) in {401, 403}
+        failure_status = "authorization_required" if blocked else "dispatch_http_error"
+        _record(
+            execution_id, str(user_id), project_id, capability, request_sha256,
+            "blocked" if blocked else "failed",
+            {"status": failure_status, "http_status": int(exc.status_code)},
+            started_at, completed_at,
+        )
+        _event(str(user_id), project_id, "execution_blocked" if blocked else "execution_failed", {
+            "execution_id": execution_id, "capability_id": capability["id"],
+            "route": route, "http_status": int(exc.status_code),
+        })
+        raise
     except Exception as exc:
         completed_at = time.time()
         _record(
