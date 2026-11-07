@@ -232,7 +232,10 @@ def dispatch(command: str, user_id: str, payload: dict[str, Any] | None = None,
     execution_id = "exec_" + uuid.uuid4().hex
     started_at = time.time()
     request_sha256 = _digest(text, body)
-    project_id = str(body.get("project_id") or "").strip()
+    # Never trust a caller-supplied project_id for cross-project event attribution.
+    # The domain dispatcher must first validate ownership and return the canonical
+    # project identity before the ledger associates an execution with that project.
+    project_id = ""
     _record(
         execution_id, str(user_id), project_id, capability, request_sha256,
         "running", {}, started_at, None,
@@ -251,7 +254,7 @@ def dispatch(command: str, user_id: str, payload: dict[str, Any] | None = None,
         state = _execution_state(result)
         summary = _summary(result, route)
         completed_at = time.time()
-        final_project_id = str(summary.get("project_id") or project_id)
+        final_project_id = str(summary.get("project_id") or "")
         _record(
             execution_id, str(user_id), final_project_id, capability, request_sha256,
             state, summary, started_at, completed_at,
