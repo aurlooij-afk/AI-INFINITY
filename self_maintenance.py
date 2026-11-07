@@ -1090,9 +1090,9 @@ def redact_github_response(value: Any, depth: int = 0, secret_values: tuple[str,
     return value
 
 
-def validate_github_content_response(path: str, result: dict) -> dict:
+def validate_github_content_response(path: str, result: Any) -> Any:
     """Do not return base64 file contents when source appears to contain credentials."""
-    if "/contents/" not in path or result.get("encoding") != "base64":
+    if not isinstance(result, dict) or "/contents/" not in path or result.get("encoding") != "base64":
         return result
     encoded = str(result.get("content") or "").replace("\\n", "")
     try:
@@ -1134,7 +1134,7 @@ def register(app: FastAPI) -> None:
             "large_module_edit_mode": "exact_sha256_pinned_line_ranges",
             "allowed_source_roots": (
                 ["all_repository_text_and_configuration_paths"]
-                if cfg.get("github_access_mode") == "repository_full"
+                if cfg.get("github_access_mode") in {"repository_full", "github_full"}
                 else ["root_python_modules", "ai_infinity/", "scripts/", "tests/", "creator_studio_2030.html", "ui_3800.html"]
             ),
             "regression_test_required": True,
@@ -1149,7 +1149,7 @@ def register(app: FastAPI) -> None:
 
     @app.post("/infinity/studio/self-maintenance/github/execute")
     async def maintenance_github_execute(request: FastAPIRequest):
-        """Repository-scoped GitHub REST executor for owner-authorized autonomy testing."""
+        """Owner-authorized GitHub REST/GraphQL executor over token-permitted resources."""
         cfg = load_settings()
         authorize(request, cfg)
         payload = await request.json()
@@ -1166,7 +1166,7 @@ def register(app: FastAPI) -> None:
         started = time.monotonic()
         result = github_request(cfg, method, path_value, body)
         result = validate_github_content_response(path_value, result)
-        safe_result = redact_github_response(result)
+        safe_result = redact_github_response(result, secret_values=(str(cfg.get("github_token") or ""),))
         encoded = json.dumps(safe_result, ensure_ascii=False)
         if len(encoded.encode("utf-8")) > 1_500_000:
             raise HTTPException(413, "GitHub API response exceeds the 1.5 MB presentation limit.")
