@@ -486,12 +486,21 @@ def register(app: Any) -> None:
             existing["replayed"] = True
             return existing
 
+        # Preserve the authenticated request context for capabilities such as
+        # GitHub API execution, which require the separate operator authorization
+        # header. The request body has already been consumed above; headers and
+        # request-scoped authentication remain available to the worker dispatch.
+        def dispatch_registered(command: str, owner_id: str, command_payload: dict[str, Any]):
+            return execution_core.dispatch(
+                command, owner_id, command_payload, request=request,
+            )
+
         result = await run_in_threadpool(
             execute_commands,
             commands,
             user_id=user_id,
             batch_id=batch_id,
-            dispatch=execution_core.dispatch,
+            dispatch=dispatch_registered,
             checkpoint=lambda rows, state: save(batch_id, rows, state),
             max_concurrency=max_concurrency,
             cancel_requested=lambda: cancellation_requested(batch_id),
