@@ -98,6 +98,9 @@ def load_settings() -> dict:
     base_branch = os.getenv("AI_INFINITY_MAINTENANCE_BASE_BRANCH", "main").strip()
     github_token = os.getenv("AI_INFINITY_MAINTENANCE_GITHUB_TOKEN", "").strip()
     admin_token = os.getenv("AI_INFINITY_MAINTENANCE_ADMIN_TOKEN", "").strip()
+    access_mode = os.getenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", "restricted").strip().lower()
+    if access_mode not in {"restricted", "repository_full"}:
+        access_mode = "restricted"
     repo_valid = re.fullmatch(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}", repository) is not None
     branch_valid = re.fullmatch(r"[A-Za-z0-9_./-]{1,120}", base_branch) is not None and ".." not in base_branch
     enabled = _enabled("AI_INFINITY_SELF_MAINTENANCE_ENABLED")
@@ -107,6 +110,7 @@ def load_settings() -> dict:
         "base_branch": base_branch if branch_valid else "",
         "github_token": github_token,
         "admin_token": admin_token,
+        "github_access_mode": access_mode,
         "ready": bool(enabled and repo_valid and branch_valid and github_token and admin_token),
     }
 
@@ -119,14 +123,55 @@ def authorize(request: FastAPIRequest, cfg: dict) -> None:
         raise HTTPException(403, "Self-maintenance authorization failed.")
 
 
-def validate_path(value: object) -> str:
+def validate_path(value: object, access_mode: str | None = None) -> str:
+    """Validate a repository path under restricted or temporary full-repository mode.
+
+    repository_full covers tracked text/code/configuration in the one configured
+    repository. Credential stores, hidden Git internals, environment files and the
+    two owner-protected documents remain excluded from model-readable edits.
+    """
     path = str(value or "").strip().replace("\\", "/")
     parts = path.split("/")
     if not path or len(path) > 240 or path.startswith("/") or any(part in {"", ".", ".."} for part in parts):
         raise HTTPException(422, "Invalid repository path.")
-    if any(part.startswith(".") for part in parts) or parts[-1] in BLOCKED_FILES or parts[-1].lower().startswith(".env"):
-        raise HTTPException(403, "Hidden, protected, and secret-bearing files are excluded.")
+    mode = str(access_mode or os.getenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", "restricted")).strip().lower()
+    full_repository = mode == "repository_full"
+    lowered_parts = [part.lower() for part in parts]
+    blocked_directory_names = {"secrets", "credentials", "private-keys", "private_keys", ".git"}
+    if (
+        parts[-1] in BLOCKED_FILES
+        or parts[-1].lower().startswith(".env")
+        or any(name in blocked_directory_names for name in lowered_parts)
+        or any(part.lower().endswith((".pem", ".p12", ".pfx", ".key")) for part in parts)
+    ):
+        raise HTTPException(403, "Protected documents and credential-bearing paths are excluded.")
+    if any(part.startswith(".") for part in parts):
+        permitted_hidden_roots = {".github", ".ai-infinity"}
+        permitted_root_dotfiles = {".gitignore", ".dockerignore", ".editorconfig"}
+        if not full_repository or not (
+            parts[0] in permitted_hidden_roots
+            or (len(parts) == 1 and parts[0] in permitted_root_dotfiles)
+        ):
+            raise HTTPException(403, "Hidden and Git-internal paths are excluded in restricted mode.")
     if path in ROOT_TEXT_FILES:
+        return path
+    if full_repository:
+        text_extensions = {
+            ".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+            ".html", ".htm", ".css", ".scss", ".json", ".jsonl", ".yaml",
+            ".yml", ".toml", ".ini", ".cfg", ".conf", ".md", ".rst", ".txt",
+            ".sh", ".bash", ".ps1", ".sql", ".xml", ".svg", ".csv", ".tsv",
+            ".properties", ".lock", ".example",
+        }
+        text_names = {
+            "dockerfile", "dockerfile.wan-worker", "makefile", "license",
+            "notice", "readme", "readme.md", "requirements.txt", "procfile",
+            ".gitignore", ".dockerignore", ".editorconfig",
+        }
+        suffix = Path(path).suffix.lower()
+        basename = Path(path).name.lower()
+        if suffix not in text_extensions and basename not in text_names:
+            raise HTTPException(415, "Repository-wide mode supports text/code/configuration files; binary assets are not editable as text.")
         return path
     allowed = (
         path in ROOT_MODULES
@@ -136,7 +181,7 @@ def validate_path(value: object) -> str:
         or path.startswith("scripts/")
     )
     if not allowed or not path.endswith(".py"):
-        raise HTTPException(403, "Only allowlisted root Python, application, script, test, and UI files are available.")
+        raise HTTPException(403, "Restricted mode permits only allowlisted application, script, test and UI source files.")
     return path
 
 
@@ -211,9 +256,19 @@ def discover_sources(cfg: dict, goal: str, limit: int = 20) -> dict:
 
 
 def github_request(cfg: dict, method: str, path: str, payload: dict | None = None) -> dict:
-    if not path.startswith("/repos/"):
-        raise ValueError("Unsupported GitHub API path.")
+    """Call GitHub REST only for the configured repository (plus /rate_limit)."""
+    method = str(method or "").upper()
+    if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+        raise HTTPException(405, "Unsupported GitHub HTTP method.")
+    repository = str(cfg.get("repository") or "").strip()
+    repository_prefix = f"/repos/{repository}/" if repository else ""
+    if path != "/rate_limit" and (not repository_prefix or not path.startswith(repository_prefix)):
+        raise HTTPException(403, "GitHub API access is limited to the configured repository.")
+    if not path.startswith("/") or "://" in path or "\\" in path or ".." in path.split("/"):
+        raise HTTPException(422, "Invalid GitHub API path.")
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    if data is not None and len(data) > 2_000_000:
+        raise HTTPException(413, "GitHub request body exceeds the 2 MB limit.")
     request = Request(
         "https://api.github.com" + path,
         data=data,
@@ -224,7 +279,7 @@ def github_request(cfg: dict, method: str, path: str, payload: dict | None = Non
             "Content-Type": "application/json",
             "User-Agent": "AI-Infinity-Self-Maintenance/1.0",
         },
-        method=method.upper(),
+        method=method,
     )
     try:
         with urlopen(request, timeout=25) as response:
@@ -915,6 +970,45 @@ def inspect_runtime(cfg: dict, app: FastAPI) -> dict:
     )
 
 
+def redact_github_response(value: Any, depth: int = 0) -> Any:
+    """Redact credential-like fields before generic GitHub API results reach callers."""
+    if depth > 12:
+        return "[TRUNCATED]"
+    sensitive = re.compile(
+        r"(?:^|_)(?:token|secret|password|authorization|private_key|access_key|application_key|service_role_key)(?:$|_)",
+        re.I,
+    )
+    if isinstance(value, dict):
+        output = {}
+        for key, item in value.items():
+            if sensitive.search(str(key)):
+                output[str(key)] = "[REDACTED]"
+            else:
+                output[str(key)] = redact_github_response(item, depth + 1)
+        return output
+    if isinstance(value, list):
+        return [redact_github_response(item, depth + 1) for item in value[:500]]
+    if isinstance(value, str):
+        return value[:250_000]
+    return value
+
+
+def validate_github_content_response(path: str, result: dict) -> dict:
+    """Do not return base64 file contents when source appears to contain credentials."""
+    if "/contents/" not in path or result.get("encoding") != "base64":
+        return result
+    encoded = str(result.get("content") or "").replace("\\n", "")
+    try:
+        decoded = base64.b64decode(encoded, validate=False).decode("utf-8")
+    except Exception:
+        return result
+    if contains_embedded_secret(decoded):
+        result = dict(result)
+        result["content"] = "[REDACTED_CREDENTIAL_DETECTED]"
+        result["credential_content_redacted"] = True
+    return result
+
+
 def register(app: FastAPI) -> None:
     @app.get("/infinity/studio/self-maintenance/status")
     def maintenance_status(request: FastAPIRequest):
@@ -928,6 +1022,9 @@ def register(app: FastAPI) -> None:
             "enabled": cfg["enabled"], "ready": cfg["ready"],
             "repository": cfg["repository"] or None, "base_branch": cfg["base_branch"] or None,
             "github_write_adapter": bool(cfg["github_token"]),
+            "github_access_mode": cfg.get("github_access_mode", "restricted"),
+            "github_access_scope": "configured_repository_only",
+            "generic_github_rest_adapter": True,
             "free_tier_code_writer_ready": writer_ready,
             "execution_model": "repository discovery + bounded source inspection + hash-pinned edits + draft GitHub PR + commit-bound CI inspection",
             "repository_discovery": True,
@@ -936,10 +1033,49 @@ def register(app: FastAPI) -> None:
             "aggregate_source_limit_bytes": MAX_TOTAL_BYTES,
             "model_context_limit_bytes": MAX_TOTAL_CONTEXT_BYTES,
             "large_module_edit_mode": "exact_sha256_pinned_line_ranges",
-            "allowed_source_roots": ["root_python_modules", "ai_infinity/", "scripts/", "tests/", "creator_studio_2030.html", "ui_3800.html"],
+            "allowed_source_roots": (
+                ["all_repository_text_and_configuration_paths"]
+                if cfg.get("github_access_mode") == "repository_full"
+                else ["root_python_modules", "ai_infinity/", "scripts/", "tests/", "creator_studio_2030.html", "ui_3800.html"]
+            ),
             "regression_test_required": True,
+            "generic_github_methods": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+            "generic_github_path_scope": "configured_repository_only",
             "direct_main_writes": False, "arbitrary_shell_execution": False,
             "automatic_merge": False, "automatic_deploy": False, "truthful": True,
+        }
+
+    @app.post("/infinity/studio/self-maintenance/github/execute")
+    async def maintenance_github_execute(request: FastAPIRequest):
+        """Repository-scoped GitHub REST executor for owner-authorized autonomy testing."""
+        cfg = load_settings()
+        authorize(request, cfg)
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(422, "A JSON object is required.")
+        method = str(payload.get("method") or "GET").upper()
+        path_value = str(payload.get("path") or "").strip()
+        if len(path_value) > 2000:
+            raise HTTPException(422, "GitHub API path exceeds the 2,000-character limit.")
+        body = payload.get("body")
+        if body is not None and not isinstance(body, dict):
+            raise HTTPException(422, "GitHub API request body must be a JSON object.")
+        started = time.monotonic()
+        result = github_request(cfg, method, path_value, body)
+        result = validate_github_content_response(path_value, result)
+        safe_result = redact_github_response(result)
+        encoded = json.dumps(safe_result, ensure_ascii=False)
+        if len(encoded.encode("utf-8")) > 1_500_000:
+            raise HTTPException(413, "GitHub API response exceeds the 1.5 MB presentation limit.")
+        return {
+            "status": "completed",
+            "repository": cfg["repository"],
+            "method": method,
+            "path": path_value,
+            "duration_ms": round((time.monotonic() - started) * 1000, 2),
+            "result": safe_result,
+            "credential_values_redacted": True,
+            "truthful": True,
         }
 
     @app.get("/infinity/studio/self-maintenance/runtime")
