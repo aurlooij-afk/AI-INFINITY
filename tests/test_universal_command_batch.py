@@ -400,3 +400,34 @@ def test_existing_idempotent_batch_step_preserves_original_completion_state():
     assert result["completed_steps"] == 1
     assert result["accepted_steps"] == 0
     assert result["steps"][0]["state"] == "completed"
+
+def test_ambiguous_dispatch_outcome_is_reconciliation_required_and_blocks_dependents():
+    commands = normalize_commands([
+        {"id": "write", "command": "submit the external write"},
+        {
+            "id": "followup",
+            "command": "inspect the result",
+            "depends_on": ["write"],
+        },
+    ])
+
+    def dispatch(command, user_id, payload):
+        return {
+            "status": "write_outcome_ambiguous",
+            "executed": False,
+            "reconciliation_required": True,
+        }
+
+    result = execute_commands(
+        commands,
+        user_id="owner-1",
+        batch_id="batch-ambiguous-001",
+        dispatch=dispatch,
+        checkpoint=lambda rows, status: None,
+    )
+
+    assert result["status"] == "reconciliation_required"
+    assert result["reconciliation_required_steps"] == 1
+    assert result["steps"][0]["state"] == "reconciliation_required"
+    assert result["steps"][1]["state"] == "dependency_blocked"
+
