@@ -603,39 +603,60 @@ def validate_changes(changes: list, requested_paths: set[str]) -> list:
 
 
 def create_draft_pr(cfg: dict, changes: list, originals: dict, goal: str, summary: str) -> dict:
+    """Create a draft PR and clean up its branch if any intermediate write fails."""
     repository = cfg["repository"]
     base = cfg["base_branch"]
     branch = "ai-infinity/self-maintenance/" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
-    ref = github_request(cfg, "GET", f"/repos/{repository}/git/ref/heads/{quote(base, safe='')}")
-    base_sha = str((ref.get("object") or {}).get("sha") or "")
-    if not re.fullmatch(r"[0-9a-f]{40}", base_sha):
-        raise HTTPException(502, "GitHub did not return a valid base commit SHA.")
-    github_request(cfg, "POST", f"/repos/{repository}/git/refs", {"ref": "refs/heads/" + branch, "sha": base_sha})
-    for change in changes:
-        original = originals.get(change["path"])
-        if not original or not original.get("sha"):
-            raise HTTPException(409, f"Original SHA unavailable for {change['path']}.")
-        github_request(cfg, "PUT", f"/repos/{repository}/contents/{quote(change['path'], safe='/')}", {
-            "message": "feat(self-maintenance): " + re.sub(r"\s+", " ", goal)[:100],
-            "content": base64.b64encode(change["content"].encode("utf-8")).decode("ascii"),
-            "sha": original["sha"], "branch": branch,
+    branch_ref_path = f"/repos/{repository}/git/refs/heads/{quote(branch, safe='/')}"
+    base_ref_path = f"/repos/{repository}/git/ref/heads/{quote(base, safe='/')}"
+    branch_created = False
+    pr_number = None
+    try:
+        ref = github_request(cfg, "GET", base_ref_path)
+        base_sha = str((ref.get("object") or {}).get("sha") or "")
+        if not re.fullmatch(r"[0-9a-f]{40}", base_sha):
+            raise HTTPException(502, "GitHub did not return a valid base commit SHA.")
+        github_request(cfg, "POST", f"/repos/{repository}/git/refs", {"ref": "refs/heads/" + branch, "sha": base_sha})
+        branch_created = True
+        for change in changes:
+            original = originals.get(change["path"])
+            if not original or not original.get("sha"):
+                raise HTTPException(409, f"Original SHA unavailable for {change['path']}.")
+            github_request(cfg, "PUT", f"/repos/{repository}/contents/{quote(change['path'], safe='/')}", {
+                "message": "feat(self-maintenance): " + re.sub(r"\\s+", " ", goal)[:100],
+                "content": base64.b64encode(change["content"].encode("utf-8")).decode("ascii"),
+                "sha": original["sha"], "branch": branch,
+            })
+        pr = github_request(cfg, "POST", f"/repos/{repository}/pulls", {
+            "title": "[AI Infinity self-maintenance] " + re.sub(r"\\s+", " ", goal)[:150],
+            "body": (
+                "## Automated engineering proposal\\n\\n" + summary[:4000]
+                + "\\n\\n## Files\\n" + "\\n".join("- " + row["path"] for row in changes)
+                + "\\n\\n## Verification\\n- Draft PR only; GitHub Actions must verify this candidate.\\n"
+                + "- No deployment, publishing, or human approval is performed by this operation.\\n"
+                + "- Review the diff and CI evidence before merging.\\n"
+            ),
+            "head": branch, "base": base, "draft": True,
         })
-    pr = github_request(cfg, "POST", f"/repos/{repository}/pulls", {
-        "title": "[AI Infinity self-maintenance] " + re.sub(r"\s+", " ", goal)[:150],
-        "body": (
-            "## Automated engineering proposal\n\n" + summary[:4000]
-            + "\n\n## Files\n" + "\n".join("- " + row["path"] for row in changes)
-            + "\n\n## Verification\n- Draft PR only; GitHub Actions must verify this candidate.\n"
-            + "- No main write, merge, deployment, publishing, or human approval is performed.\n"
-            + "- Review the diff and CI evidence before merging.\n"
-        ),
-        "head": branch, "base": base, "draft": True,
-    })
-    return {
-        "branch": branch, "base_sha": base_sha,
-        "pull_request_number": pr.get("number"), "pull_request_url": pr.get("html_url"),
-        "draft": pr.get("draft") is True,
-    }
+        pr_number = int(pr.get("number") or 0) or None
+        return {
+            "branch": branch, "base_sha": base_sha,
+            "pull_request_number": pr_number, "pull_request_url": pr.get("html_url"),
+            "draft": pr.get("draft") is True,
+        }
+    except Exception:
+        # A partial GitHub write must not leave an orphan benchmark/maintenance branch.
+        if pr_number:
+            try:
+                github_request(cfg, "PATCH", f"/repos/{repository}/pulls/{pr_number}", {"state": "closed"})
+            except Exception:
+                pass
+        if branch_created:
+            try:
+                github_request(cfg, "DELETE", branch_ref_path)
+            except Exception:
+                pass
+        raise
 
 
 def summarize_ci_runs(runs: list[dict], jobs_by_run: dict[int, list[dict]], commit_sha: str | None = None) -> dict:
