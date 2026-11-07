@@ -16,6 +16,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from urllib.parse import quote
 from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -132,6 +133,7 @@ def main() -> int:
 
     created_pr = None
     created_branch = None
+    created_cross_repository_branch = None
     exit_code = 1
 
     def run_operation(name: str, action):
@@ -270,6 +272,47 @@ def main() -> int:
                 "name": "cross_repository_metadata_read_sample",
                 "status": "BLOCKED",
                 "error": "No second authorized repository was returned on the first user-repositories page; multi-repository access was not demonstrated.",
+            })
+
+        if sampled_repository:
+            sample_name = sampled_repository["full_name"]
+            base_branch = sampled_repository.get("default_branch") or "main"
+            probe_branch = f"ai-infinity-access-probe-{run_marker}"
+
+            def create_cross_repository_probe_branch():
+                base_ref = maintenance.github_request(
+                    cfg,
+                    "GET",
+                    f"/repos/{sample_name}/git/ref/heads/{quote(base_branch, safe='')}",
+                )
+                base_sha = str((base_ref.get("object") or {}).get("sha") or "")
+                if not re.fullmatch(r"[0-9a-f]{40}", base_sha):
+                    raise RuntimeError("GitHub did not return a valid second-repository base SHA")
+                maintenance.github_request(
+                    cfg,
+                    "POST",
+                    f"/repos/{sample_name}/git/refs",
+                    {"ref": "refs/heads/" + probe_branch, "sha": base_sha},
+                )
+                return {"branch": probe_branch, "base_sha": base_sha}
+
+            ok, cross_branch = run_operation(
+                "cross_repository_temporary_branch_create",
+                create_cross_repository_probe_branch,
+            )
+            if ok:
+                created_cross_repository_branch = (sample_name, probe_branch)
+                report["cross_repository_write_probe"] = {
+                    "repository": sample_name,
+                    "branch_created": True,
+                    "commit_created": False,
+                    "default_branch_modified": False,
+                }
+        else:
+            report["operations"].append({
+                "name": "cross_repository_temporary_branch_create",
+                "status": "BLOCKED",
+                "error": "No second authorized repository was available for a reversible cross-repository write probe.",
             })
 
         ok, organizations = run_operation(
@@ -419,11 +462,32 @@ def main() -> int:
             if ok:
                 created_branch = None
 
+        if created_cross_repository_branch:
+            sample_name, probe_branch = created_cross_repository_branch
+            ok, _ = run_operation(
+                "cross_repository_temporary_branch_delete_cleanup",
+                lambda: maintenance.github_request(
+                    cfg,
+                    "DELETE",
+                    f"/repos/{sample_name}/git/refs/heads/{quote(probe_branch, safe='')}",
+                ),
+            )
+            if ok:
+                created_cross_repository_branch = None
+        else:
+            report["operations"].append({
+                "name": "cross_repository_temporary_branch_delete_cleanup",
+                "status": "BLOCKED",
+                "error": "No temporary cross-repository branch was created; no cleanup request was necessary.",
+            })
+
         required_operations = {
             "repository_metadata_and_effective_permissions",
             "authenticated_user_identity",
             "accessible_repositories_first_page",
             "cross_repository_metadata_read_sample",
+            "cross_repository_temporary_branch_create",
+            "cross_repository_temporary_branch_delete_cleanup",
             "authenticated_rate_limit_read",
             "repository_wide_recursive_tree_discovery",
             "cross_directory_source_inspection",
@@ -455,6 +519,17 @@ def main() -> int:
                 report["emergency_cleanup_branch"] = "PASS"
             except Exception:
                 report["emergency_cleanup_branch"] = "FAIL"
+        if created_cross_repository_branch:
+            sample_name, probe_branch = created_cross_repository_branch
+            try:
+                maintenance.github_request(
+                    cfg,
+                    "DELETE",
+                    f"/repos/{sample_name}/git/refs/heads/{quote(probe_branch, safe='')}",
+                )
+                report["emergency_cleanup_cross_repository_branch"] = "PASS"
+            except Exception:
+                report["emergency_cleanup_cross_repository_branch"] = "FAIL"
         report["completed_at_epoch"] = time.time()
         report["duration_seconds"] = round(report["completed_at_epoch"] - report["started_at_epoch"], 3)
         passed = sum(op["status"] == "PASS" for op in report["operations"])
