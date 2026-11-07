@@ -17,7 +17,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, urlsplit
 from urllib.request import Request, urlopen
 
 from fastapi import FastAPI, HTTPException, Request as FastAPIRequest
@@ -101,7 +101,7 @@ def load_settings() -> dict:
     github_token = os.getenv("AI_INFINITY_MAINTENANCE_GITHUB_TOKEN", "").strip()
     admin_token = os.getenv("AI_INFINITY_MAINTENANCE_ADMIN_TOKEN", "").strip()
     access_mode = os.getenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", "restricted").strip().lower()
-    if access_mode not in {"restricted", "repository_full"}:
+    if access_mode not in {"restricted", "repository_full", "github_full"}:
         access_mode = "restricted"
     repo_valid = re.fullmatch(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}", repository) is not None
     branch_valid = re.fullmatch(r"[A-Za-z0-9_./-]{1,120}", base_branch) is not None and ".." not in base_branch
@@ -126,18 +126,18 @@ def authorize(request: FastAPIRequest, cfg: dict) -> None:
 
 
 def validate_path(value: object, access_mode: str | None = None) -> str:
-    """Validate a repository path under restricted or temporary full-repository mode.
+    """Validate a repository text path; preserve credentials and owner-protected files.
 
-    repository_full covers tracked text/code/configuration in the one configured
-    repository. Credential stores, hidden Git internals, environment files and the
-    two owner-protected documents remain excluded from model-readable edits.
+    github_full removes the configured-repository boundary for GitHub API calls and
+    self-maintenance targets. Source editing remains text-only and keeps explicit
+    secret/protected-document exclusions.
     """
     path = str(value or "").strip().replace("\\", "/")
     parts = path.split("/")
     if not path or len(path) > 240 or path.startswith("/") or any(part in {"", ".", ".."} for part in parts):
         raise HTTPException(422, "Invalid repository path.")
     mode = str(access_mode or os.getenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", "restricted")).strip().lower()
-    full_repository = mode == "repository_full"
+    full_repository = mode in {"repository_full", "github_full"}
     lowered_parts = [part.lower() for part in parts]
     blocked_directory_names = {"secrets", "credentials", "private-keys", "private_keys", ".git"}
     if (
@@ -257,19 +257,68 @@ def discover_sources(cfg: dict, goal: str, limit: int = 20) -> dict:
     }
 
 
-def github_request(cfg: dict, method: str, path: str, payload: dict | None = None) -> dict:
-    """Call GitHub REST only for the configured repository (plus /rate_limit)."""
+def validate_github_api_path(path: str) -> str:
+    """Validate a relative GitHub API path while pinning requests to api.github.com."""
+    if not isinstance(path, str) or not path or len(path) > 2000:
+        raise HTTPException(422, "GitHub API path must be a non-empty relative path under 2,000 characters.")
+    if any(ord(char) < 0x21 or ord(char) == 0x7f for char in path):
+        raise HTTPException(422, "GitHub API path contains whitespace or control characters; URL-encode path values.")
+    parsed = urlsplit(path)
+    if (
+        not path.startswith("/")
+        or path.startswith("//")
+        or parsed.scheme
+        or parsed.netloc
+        or parsed.fragment
+        or not parsed.path.startswith("/")
+    ):
+        raise HTTPException(422, "Only relative GitHub API paths are accepted; the API host is fixed.")
+    decoded_path = unquote(parsed.path)
+    if "\\" in decoded_path or any(part in {".", ".."} for part in decoded_path.split("/")):
+        raise HTTPException(422, "GitHub API path traversal is not permitted.")
+    return path
+
+
+def target_repository_config(cfg: dict, payload: dict) -> dict:
+    """Resolve an explicit repository/branch target under the active access mode."""
+    repository = str(payload.get("repository") or cfg.get("repository") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}", repository):
+        raise HTTPException(422, "A valid owner/repository target is required.")
+    mode = str(cfg.get("github_access_mode") or "restricted").lower()
+    if mode != "github_full" and repository != cfg.get("repository"):
+        raise HTTPException(403, "Cross-repository self-maintenance requires github_full access mode.")
+    base_branch = str(payload.get("base_branch") or ("main" if repository != cfg.get("repository") else cfg.get("base_branch") or "main")).strip()
+    if not re.fullmatch(r"[A-Za-z0-9_./-]{1,120}", base_branch) or ".." in base_branch:
+        raise HTTPException(422, "Invalid target base branch.")
+    target = dict(cfg)
+    target["repository"] = repository
+    target["base_branch"] = base_branch
+    return target
+
+
+def github_request(cfg: dict, method: str, path: str, payload: Any = None) -> Any:
+    """Call GitHub REST or GraphQL using the configured credential's real permissions.
+
+    In github_full mode no application-level repository allowlist is applied. The
+    fixed API origin and GitHub's own token, SSO, organization and repository
+    permissions remain authoritative.
+    """
     method = str(method or "").upper()
     if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
         raise HTTPException(405, "Unsupported GitHub HTTP method.")
-    repository = str(cfg.get("repository") or "").strip()
-    repository_prefix = f"/repos/{repository}/" if repository else ""
-    repository_root = f"/repos/{repository}" if repository else ""
-    if path not in {"/rate_limit", repository_root} and (not repository_prefix or not path.startswith(repository_prefix)):
-        raise HTTPException(403, "GitHub API access is limited to the configured repository.")
-    if not path.startswith("/") or "://" in path or "\\" in path or ".." in path.split("/"):
-        raise HTTPException(422, "Invalid GitHub API path.")
-    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    path = validate_github_api_path(path)
+    access_mode = str(cfg.get("github_access_mode") or os.getenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", "restricted")).lower()
+    if access_mode != "github_full":
+        repository = str(cfg.get("repository") or "").strip()
+        repository_prefix = f"/repos/{repository}/" if repository else ""
+        repository_root = f"/repos/{repository}" if repository else ""
+        if path not in {"/rate_limit", repository_root} and (
+            not repository_prefix or not urlsplit(path).path.startswith(repository_prefix)
+        ):
+            raise HTTPException(403, "GitHub API access is limited to the configured repository.")
+    if payload is not None and not isinstance(payload, (dict, list)):
+        raise HTTPException(422, "GitHub JSON request bodies must be objects or arrays.")
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
     if data is not None and len(data) > 2_000_000:
         raise HTTPException(413, "GitHub request body exceeds the 2 MB limit.")
     request = Request(
@@ -277,26 +326,25 @@ def github_request(cfg: dict, method: str, path: str, payload: dict | None = Non
         data=data,
         headers={
             "Accept": "application/vnd.github+json",
-            "Authorization": "Bearer " + cfg["github_token"],
+            "Authorization": "Bearer " + str(cfg.get("github_token") or ""),
             "X-GitHub-Api-Version": "2022-11-28",
             "Content-Type": "application/json",
             "User-Agent": "AI-Infinity-Self-Maintenance/1.0",
         },
         method=method,
     )
+    started = time.monotonic()
+    safe_path = urlsplit(path).path[:180]
     try:
         with urlopen(request, timeout=25) as response:
             raw = response.read(2_000_001)
         if len(raw) > 2_000_000:
             raise RuntimeError("GitHub response exceeded the size limit.")
         value = json.loads(raw.decode("utf-8")) if raw else {}
-        if not isinstance(value, dict):
-            raise RuntimeError("Unexpected GitHub API response.")
+        if not isinstance(value, (dict, list)):
+            raise RuntimeError("Unexpected GitHub API response shape.")
         return value
     except HTTPError as exc:
-        # Preserve the exact denied operation for the redacted benchmark report.
-        # Never include GitHub response bodies or authorization headers.
-        safe_path = str(path).split("?", 1)[0][:180]
         if exc.code == 401:
             raise HTTPException(401, f"GitHub token authentication failed for {method} {safe_path} (HTTP 401).") from None
         if exc.code == 403:
@@ -305,7 +353,7 @@ def github_request(cfg: dict, method: str, path: str, payload: dict | None = Non
             raise HTTPException(404, f"GitHub resource not found or masked for {method} {safe_path} (HTTP 404).") from None
         raise HTTPException(502, f"GitHub request failed for {method} {safe_path} (HTTP {exc.code}).") from None
     except (URLError, TimeoutError, OSError, UnicodeDecodeError, json.JSONDecodeError):
-        raise HTTPException(502, "GitHub API request could not be completed.") from None
+        raise HTTPException(502, f"GitHub API request could not be completed for {method} {safe_path}.") from None
 
 
 def read_source(cfg: dict, path: str) -> dict:
@@ -1013,8 +1061,8 @@ def validate_github_contents_path(path: str) -> None:
         validate_path(decoded, access_mode="repository_full")
 
 
-def redact_github_response(value: Any, depth: int = 0) -> Any:
-    """Redact credential-like fields before generic GitHub API results reach callers."""
+def redact_github_response(value: Any, depth: int = 0, secret_values: tuple[str, ...] = ()) -> Any:
+    """Redact credential-like keys, known token formats and the active bearer token."""
     if depth > 12:
         return "[TRUNCATED]"
     sensitive = re.compile(
@@ -1027,12 +1075,18 @@ def redact_github_response(value: Any, depth: int = 0) -> Any:
             if sensitive.search(str(key)):
                 output[str(key)] = "[REDACTED]"
             else:
-                output[str(key)] = redact_github_response(item, depth + 1)
+                output[str(key)] = redact_github_response(item, depth + 1, secret_values)
         return output
     if isinstance(value, list):
-        return [redact_github_response(item, depth + 1) for item in value[:500]]
+        return [redact_github_response(item, depth + 1, secret_values) for item in value[:500]]
     if isinstance(value, str):
-        return value[:250_000]
+        cleaned = value
+        for secret in secret_values:
+            secret = str(secret or "")
+            if len(secret) >= 8:
+                cleaned = cleaned.replace(secret, "[REDACTED]")
+        cleaned = KNOWN_TOKEN_FORMAT.sub("[REDACTED_TOKEN]", cleaned)
+        return cleaned[:250_000]
     return value
 
 
@@ -1066,8 +1120,10 @@ def register(app: FastAPI) -> None:
             "repository": cfg["repository"] or None, "base_branch": cfg["base_branch"] or None,
             "github_write_adapter": bool(cfg["github_token"]),
             "github_access_mode": cfg.get("github_access_mode", "restricted"),
-            "github_access_scope": "configured_repository_only",
+            "github_access_scope": ("token_authorized_github_resources" if cfg.get("github_access_mode") == "github_full" else "configured_repository_only"),
             "generic_github_rest_adapter": True,
+            "generic_github_graphql_adapter": True,
+            "account_wide_scope_is_token_limited": cfg.get("github_access_mode") == "github_full",
             "free_tier_code_writer_ready": writer_ready,
             "execution_model": "repository discovery + bounded source inspection + hash-pinned edits + draft GitHub PR + commit-bound CI inspection",
             "repository_discovery": True,
@@ -1083,8 +1139,11 @@ def register(app: FastAPI) -> None:
             ),
             "regression_test_required": True,
             "generic_github_methods": ["GET", "POST", "PUT", "PATCH", "DELETE"],
-            "generic_github_path_scope": "configured_repository_only",
-            "direct_main_writes": False, "arbitrary_shell_execution": False,
+            "generic_github_path_scope": ("any_GitHub_API_resource_authorized_by_token" if cfg.get("github_access_mode") == "github_full" else "configured_repository_only"),
+            "generic_github_protocols": ["GitHub REST v3", "GitHub GraphQL"],
+            "self_maintenance_write_model": "draft_pr_only",
+            "generic_api_write_authority": "forwarded_to_GitHub_and_enforced_by_token_and_repository_rules",
+            "arbitrary_shell_execution": False,
             "automatic_merge": False, "automatic_deploy": False, "truthful": True,
         }
 
@@ -1101,8 +1160,8 @@ def register(app: FastAPI) -> None:
         if len(path_value) > 2000:
             raise HTTPException(422, "GitHub API path exceeds the 2,000-character limit.")
         body = payload.get("body")
-        if body is not None and not isinstance(body, dict):
-            raise HTTPException(422, "GitHub API request body must be a JSON object.")
+        if body is not None and not isinstance(body, (dict, list)):
+            raise HTTPException(422, "GitHub API request body must be a JSON object or array.")
         validate_github_contents_path(path_value)
         started = time.monotonic()
         result = github_request(cfg, method, path_value, body)
@@ -1114,6 +1173,7 @@ def register(app: FastAPI) -> None:
         return {
             "status": "completed",
             "repository": cfg["repository"],
+            "access_scope": ("token_authorized_github_resources" if cfg.get("github_access_mode") == "github_full" else "configured_repository_only"),
             "method": method,
             "path": path_value,
             "duration_ms": round((time.monotonic() - started) * 1000, 2),
@@ -1135,7 +1195,8 @@ def register(app: FastAPI) -> None:
         payload = await request.json()
         if not isinstance(payload, dict):
             raise HTTPException(422, "A JSON object is required.")
-        return discover_sources(cfg, payload.get("goal"), payload.get("limit", 20))
+        target_cfg = target_repository_config(cfg, payload)
+        return discover_sources(target_cfg, payload.get("goal"), payload.get("limit", 20))
 
     @app.post("/infinity/studio/self-maintenance/ci")
     async def maintenance_ci(request: FastAPIRequest):
@@ -1144,17 +1205,21 @@ def register(app: FastAPI) -> None:
         payload = await request.json()
         if not isinstance(payload, dict):
             raise HTTPException(422, "A JSON object is required.")
-        return inspect_ci(cfg, payload.get("commit_sha"), payload.get("limit", 10))
+        target_cfg = target_repository_config(cfg, payload)
+        return inspect_ci(target_cfg, payload.get("commit_sha"), payload.get("limit", 10))
 
     @app.post("/infinity/studio/self-maintenance/inspect")
     async def maintenance_inspect(request: FastAPIRequest):
         cfg = load_settings()
         authorize(request, cfg)
         payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(422, "A JSON object is required.")
+        target_cfg = target_repository_config(cfg, payload)
         return inspect_sources(
-            cfg,
-            payload.get("paths") if isinstance(payload, dict) else None,
-            goal=payload.get("goal", "") if isinstance(payload, dict) else "",
+            target_cfg,
+            payload.get("paths"),
+            goal=payload.get("goal", ""),
         )
 
     @app.post("/infinity/studio/self-maintenance/improve")
@@ -1164,4 +1229,5 @@ def register(app: FastAPI) -> None:
         payload = await request.json()
         if not isinstance(payload, dict):
             raise HTTPException(422, "A JSON object is required.")
-        return improve_repository(cfg, payload.get("goal"), payload.get("paths"), free_tier_writer())
+        target_cfg = target_repository_config(cfg, payload)
+        return improve_repository(target_cfg, payload.get("goal"), payload.get("paths"), free_tier_writer())
