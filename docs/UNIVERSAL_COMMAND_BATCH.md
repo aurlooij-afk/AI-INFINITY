@@ -59,3 +59,14 @@ The endpoint accepts up to 20 tasks and a max_concurrency value from 1 to 4 (def
 - Publish, send, delete, purchase, payment, transfer, and other protected actions remain subject to their existing authorization and confirmation rules.
 
 The coordinator's verification field explicitly states that independent verification was not performed by the batch layer. Domain-specific verification remains the responsibility of the invoked capability and its evidence engine. The command batch is an execution coordinator over existing capabilities, not a claim that every external API or provider is available. Unsupported or unconfigured routes remain explicitly blocked or degraded.
+
+
+## Cancellation
+
+An owner-authenticated caller can request cancellation while a batch is running:
+
+~~~http
+POST /infinity/canonical/batches/{batch_id}/cancel
+~~~
+
+The request is persisted in the same database row as the batch. The coordinator polls that durable flag between task dispatches and marks tasks that have not started as `cancelled`. Commands already dispatched are allowed to settle; this endpoint does not kill worker threads, stop a queued Creator Studio render, or reverse an external side effect. Their final outcome must be read from the batch/project evidence. If the process is interrupted, a recorded running task remains reconciliation-required rather than being replayed. Cancellation-state read failures halt additional dispatch (fail-closed).
