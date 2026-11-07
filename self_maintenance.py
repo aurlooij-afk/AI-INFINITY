@@ -99,6 +99,13 @@ def load_settings() -> dict:
     repository = os.getenv("AI_INFINITY_MAINTENANCE_REPOSITORY", "").strip()
     base_branch = os.getenv("AI_INFINITY_MAINTENANCE_BASE_BRANCH", "main").strip()
     github_token = os.getenv("AI_INFINITY_MAINTENANCE_GITHUB_TOKEN", "").strip()
+    github_token_source = "AI_INFINITY_MAINTENANCE_GITHUB_TOKEN" if github_token else ""
+    if not github_token:
+        github_token = os.getenv("AI_INFINITY_GITHUB_TOKEN", "").strip()
+        if github_token:
+            github_token_source = "AI_INFINITY_GITHUB_TOKEN"
+    if not github_token:
+        github_token_source = "missing_dedicated_owner_token"
     admin_token = os.getenv("AI_INFINITY_MAINTENANCE_ADMIN_TOKEN", "").strip()
     access_mode = os.getenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", "github_full").strip().lower()
     if access_mode not in {"restricted", "repository_full", "github_full"}:
@@ -111,18 +118,42 @@ def load_settings() -> dict:
         "repository": repository if repo_valid else "",
         "base_branch": base_branch if branch_valid else "",
         "github_token": github_token,
+        "github_token_source": github_token_source,
+        "github_token_configured": bool(github_token),
         "admin_token": admin_token,
+        "admin_token_configured": bool(admin_token),
+        "repository_configured": bool(repo_valid),
+        "base_branch_configured": bool(branch_valid),
         "github_access_mode": access_mode,
+        "operator_ready": bool(enabled and admin_token),
         "ready": bool(enabled and repo_valid and branch_valid and github_token and admin_token),
     }
 
 
-def authorize(request: FastAPIRequest, cfg: dict) -> None:
-    if not cfg["ready"]:
-        raise HTTPException(503, "Self-maintenance is disabled or missing repository, GitHub, or admin configuration.")
+def authorize_operator(request: FastAPIRequest, cfg: dict) -> None:
+    """Authenticate an operator without requiring GitHub execution credentials.
+
+    This permits the status endpoint to report a genuine missing-credential state
+    while all GitHub operations remain blocked by authorize() until ready.
+    """
+    if not cfg.get("enabled") or not cfg.get("admin_token"):
+        raise HTTPException(503, "Self-maintenance status requires enablement and a separate operator credential.")
     supplied = str(request.headers.get("x-ai-infinity-maintenance-token") or "")
     if not hmac.compare_digest(supplied, cfg["admin_token"]):
         raise HTTPException(403, "Self-maintenance authorization failed.")
+
+
+def authorize(request: FastAPIRequest, cfg: dict) -> None:
+    authorize_operator(request, cfg)
+    if not cfg["ready"]:
+        missing = []
+        if not cfg.get("repository_configured"):
+            missing.append("AI_INFINITY_MAINTENANCE_REPOSITORY")
+        if not cfg.get("base_branch_configured"):
+            missing.append("AI_INFINITY_MAINTENANCE_BASE_BRANCH")
+        if not cfg.get("github_token_configured"):
+            missing.append(str(cfg.get("github_token_source") or "missing_dedicated_owner_token"))
+        raise HTTPException(503, "Self-maintenance execution is not ready; missing configuration: " + ", ".join(missing))
 
 
 def validate_path(value: object, access_mode: str | None = None) -> str:
@@ -1155,15 +1186,26 @@ def register(app: FastAPI) -> None:
     @app.get("/infinity/studio/self-maintenance/status")
     def maintenance_status(request: FastAPIRequest):
         cfg = load_settings()
-        authorize(request, cfg)
+        authorize_operator(request, cfg)
         try:
             writer_ready = callable(free_tier_writer())
         except HTTPException:
             writer_ready = False
         return {
             "enabled": cfg["enabled"], "ready": cfg["ready"],
+            "operator_ready": cfg["operator_ready"],
             "repository": cfg["repository"] or None, "base_branch": cfg["base_branch"] or None,
-            "github_write_adapter": bool(cfg["github_token"]),
+            "repository_configured": cfg["repository_configured"],
+            "base_branch_configured": cfg["base_branch_configured"],
+            "github_write_adapter": cfg["github_token_configured"],
+            "github_token_configured": cfg["github_token_configured"],
+            "github_token_source": cfg["github_token_source"],
+            "admin_token_configured": cfg["admin_token_configured"],
+            "execution_blocked_reason": (
+                cfg["github_token_source"]
+                if not cfg["github_token_configured"]
+                else None
+            ),
             "github_access_mode": cfg.get("github_access_mode", "restricted"),
             "github_access_scope": ("token_authorized_github_resources" if cfg.get("github_access_mode") == "github_full" else "configured_repository_only"),
             "github_full_mode_definition": "No application-level repository path filter; effective access remains bounded by token permissions, SSO, organization policy and repository rules.",
