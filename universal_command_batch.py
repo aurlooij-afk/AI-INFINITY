@@ -275,7 +275,8 @@ def execute_commands(
                             "executed": False, "completed_at": time.time(),
                         })
                         pending.remove(task_id)
-                    checkpoint(results, "cancellation_requested")
+                    # The batch remains active while already-dispatched work settles.
+                    checkpoint(results, "running")
             block_failed_dependencies()
             if halt[0]:
                 for task_id in sorted(tuple(pending), key=order.get):
