@@ -990,3 +990,40 @@ def test_github_rest_command_syntax_routes_and_extracts_method_and_path(monkeypa
     assert result["status"] == "completed"
     assert captured == {"method": "GET", "path": "/user/repos?per_page=20"}
     assert result["read_only"] is True
+
+
+def test_github_graphql_command_syntax_routes_through_canonical_dispatch(monkeypatch):
+    import self_maintenance as maintenance
+
+    cfg = {
+        "ready": True,
+        "repository": "owner/project",
+        "base_branch": "main",
+        "github_token": "server-side-token",
+        "admin_token": "owner-admin-placeholder",
+        "github_access_mode": "github_full",
+    }
+    captured = {}
+
+    class FakeRequest:
+        headers = {"x-ai-infinity-maintenance-token": "owner-admin-placeholder"}
+
+    monkeypatch.setattr(maintenance, "load_settings", lambda: cfg)
+    monkeypatch.setattr(maintenance, "authorize", lambda request, settings: None)
+    monkeypatch.setattr(maintenance, "validate_github_contents_path", lambda path: None)
+
+    def fake_github_request(settings, method, path, body=None):
+        captured.update({"method": method, "path": path, "body": body})
+        return {"data": {"viewer": {"login": "owner"}}}
+
+    monkeypatch.setattr(maintenance, "github_request", fake_github_request)
+    result = canonical.dispatch_command(
+        "GitHub GraphQL query { viewer { login } }",
+        "test-user",
+        {},
+        request=FakeRequest(),
+    )
+    assert result["status"] == "completed"
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/graphql"
+    assert captured["body"]["query"] == "query { viewer { login } }"
