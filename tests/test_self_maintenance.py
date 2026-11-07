@@ -473,3 +473,81 @@ def test_runtime_inspection_does_not_report_object_storage_configuration_as_dura
     assert report["asset_storage"]["durability_claimed"] is False
     assert "successful asset writes or read-back" in report["asset_storage"]["note"]
 
+
+
+
+def test_repository_full_mode_can_inspect_workflows_configuration_and_docs(monkeypatch):
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", "repository_full")
+    assert maintenance.validate_path(".github/workflows/final-acceptance-suite.yml") == ".github/workflows/final-acceptance-suite.yml"
+    assert maintenance.validate_path(".ai-infinity/STATE.md") == ".ai-infinity/STATE.md"
+    assert maintenance.validate_path("render.yaml") == "render.yaml"
+    assert maintenance.validate_path("requirements.txt") == "requirements.txt"
+    assert maintenance.validate_path("README.md") == "README.md"
+    assert maintenance.validate_path("docs/KNOWN-BLOCKERS.md") == "docs/KNOWN-BLOCKERS.md"
+
+
+@pytest.mark.parametrize("path", [
+    "../main.py", ".env", ".env.production", "secrets/provider.txt",
+    "credentials/token.json", "private-keys/signing.pem", ".git/config",
+    "AI_Infinity_Creator_Benchmark_and_Reuse_Plan.md",
+    "AI_Infinity_10_Method_Deep_Research_and_Master_Command.md",
+    "assets/final.mp4",
+])
+def test_repository_full_mode_still_blocks_secrets_protected_docs_and_binary_assets(monkeypatch, path):
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", "repository_full")
+    with pytest.raises(HTTPException):
+        maintenance.validate_path(path)
+
+
+def test_repository_full_mode_is_not_active_in_restricted_mode(monkeypatch):
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", "restricted")
+    with pytest.raises(HTTPException):
+        maintenance.validate_path(".github/workflows/final-acceptance-suite.yml")
+    assert maintenance.validate_path("tests/test_runtime_truth.py") == "tests/test_runtime_truth.py"
+
+
+def test_github_request_is_limited_to_configured_repository_and_supported_methods(monkeypatch):
+    calls = []
+    class FakeResponse:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self, limit=0): return b'{"resources":{"core":{"remaining":42}}}'
+    def fake_urlopen(request, timeout=0):
+        calls.append((request.method, request.full_url))
+        return FakeResponse()
+    monkeypatch.setattr(maintenance, "urlopen", fake_urlopen)
+    cfg = {"repository": "aurlooij-afk/AI-INFINITY", "github_token": "not-a-real-token"}
+    result = maintenance.github_request(cfg, "GET", "/rate_limit")
+    assert result["resources"]["core"]["remaining"] == 42
+    assert calls[0][0] == "GET"
+    with pytest.raises(HTTPException, match="configured repository"):
+        maintenance.github_request(cfg, "GET", "/repos/someone/other-repo")
+    with pytest.raises(HTTPException, match="configured repository"):
+        maintenance.github_request(cfg, "DELETE", "/repos/aurlooij-afk/OTHER-REPO/git/refs/heads/main")
+    with pytest.raises(HTTPException, match="HTTP method"):
+        maintenance.github_request(cfg, "TRACE", "/rate_limit")
+
+
+def test_generic_github_response_redacts_credentials_and_source_content_when_needed():
+    redacted = maintenance.redact_github_response({
+        "repository": "aurlooij-afk/AI-INFINITY",
+        "token": "never-return-this",
+        "nested": {"private_key": "never-return-this-either", "ok": True},
+    })
+    encoded = json.dumps(redacted)
+    assert "never-return-this" not in encoded
+    assert redacted["nested"]["ok"] is True
+
+    source = 'GEMINI_API_KEY = "abcdefghijklmnopqrstuvwxyz123456"'
+    import base64
+    row = {"encoding": "base64", "content": base64.b64encode(source.encode()).decode()}
+    safe = maintenance.validate_github_content_response("/repos/owner/repo/contents/.env", row)
+    assert safe["credential_content_redacted"] is True
+    assert safe["content"] == "[REDACTED_CREDENTIAL_DETECTED]"
+
+
+def test_register_exposes_repository_scoped_github_rest_execution_route():
+    app = FastAPI()
+    maintenance.register(app)
+    paths = {route.path for route in app.routes}
+    assert "/infinity/studio/self-maintenance/github/execute" in paths
