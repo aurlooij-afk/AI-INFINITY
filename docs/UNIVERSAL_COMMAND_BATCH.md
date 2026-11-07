@@ -73,3 +73,15 @@ The request is persisted in the same database row as the batch. The coordinator 
 
 
 The HTTP handler offloads the blocking DAG coordinator to Starlette's worker pool. This keeps the ASGI event loop available to accept a concurrent cancellation request while the batch is executing.
+
+
+## Shared executable capability registry
+
+The canonical natural-language endpoint and the multi-command coordinator now dispatch through the same execution core:
+
+- `GET /infinity/execution/health` reports registry/ledger health.
+- `GET /infinity/execution/capabilities` lists the currently bound canonical routes.
+- `GET /infinity/execution/{execution_id}` returns the caller-scoped execution record.
+- `POST /infinity/canonical/execute` and every batch task use the same registry-backed dispatcher.
+
+The current registry has 14 executable canonical route bindings and five non-executable guard routes. It does **not** turn the 607-entry provider inventory into callable tools: those entries remain discovery metadata unless a concrete adapter is bound. All dispatches preserve the existing domain authorization gates, use `never_auto_replay`, and record a durable execution ID, request digest, route/capability identity, state, and a redacted result summary. The execution core does not claim independent verification; artifact, research, storage, and provider evidence remain the responsibility of their domain verifiers.
