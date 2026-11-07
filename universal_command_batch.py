@@ -169,7 +169,7 @@ def execute_commands(
     steps = {step["id"]: step for step in commands}
     order = {step["id"]: n for n, step in enumerate(commands, 1)}
     success = {"completed", "accepted"}
-    failed_terminal = {"failed", "authorization_required", "dependency_blocked", "not_run", "cancelled"}
+    failed_terminal = {"failed", "authorization_required", "reconciliation_required", "dependency_blocked", "not_run", "cancelled"}
     records = {}
     results = []
     for step in commands:
@@ -228,8 +228,10 @@ def execute_commands(
             status = str(data.get("status") or "").strip().lower()
             if status in {"authorization_required", "write_confirmation_required", "dry_run_required"}:
                 state = "authorization_required"
+            elif status == "write_outcome_ambiguous":
+                state = "reconciliation_required"
             elif status in {"unsupported_or_incomplete", "unsupported", "degraded", "failed", "error",
-                            "write_outcome_ambiguous", "write_accepted_not_independently_verified"}:
+                            "write_accepted_not_independently_verified"}:
                 state = "failed"
             elif status == "existing":
                 prior_state = str((data.get("execution") or {}).get("state") or "")
@@ -261,7 +263,7 @@ def execute_commands(
             row.update({"state": "failed", "error_type": type(exc).__name__,
                         "error": "Command dispatch raised an unhandled error; inspect server logs.",
                         "completed_at": time.time(), "executed": False})
-        if row["state"] in {"failed", "authorization_required"} and not step["continue_on_error"]:
+        if row["state"] in {"failed", "authorization_required", "reconciliation_required"} and not step["continue_on_error"]:
             halt[0] = True
         checkpoint(results, "running")
 
@@ -351,6 +353,8 @@ def execute_commands(
         overall = "partially_cancelled" if completed_or_accepted or other_terminal_work else "cancelled"
     elif "failed" in states:
         overall = "partial" if completed_or_accepted else "failed"
+    elif "reconciliation_required" in states:
+        overall = "partial" if completed_or_accepted else "reconciliation_required"
     elif any(state in {"authorization_required", "dependency_blocked", "not_run"} for state in states):
         overall = "partial" if completed_or_accepted else "blocked"
     elif "accepted" in states:
@@ -364,6 +368,7 @@ def execute_commands(
         "completed_steps": sum(state == "completed" for state in states),
         "accepted_steps": sum(state == "accepted" for state in states),
         "failed_steps": sum(state == "failed" for state in states),
+        "reconciliation_required_steps": sum(state == "reconciliation_required" for state in states),
         "blocked_steps": sum(state in {"authorization_required", "dependency_blocked", "not_run"} for state in states),
         "cancelled_steps": cancelled_steps,
         "cancellation_observed": cancellation_observed[0],
