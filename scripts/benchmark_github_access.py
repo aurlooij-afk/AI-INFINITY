@@ -12,6 +12,7 @@ is deleted in a finally block. No token or secret value is written to the report
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -91,8 +92,10 @@ def main() -> int:
         "workflow_run_id": run_id,
         "workflow_run_attempt": run_attempt,
         "credential_source": token_source,
-        "access_mode": "repository_full",
-        "scope": "configured_repository_only",
+        "access_mode": "github_full",
+        "scope": "all_GitHub_API_resources_authorized_by_configured_owner_token",
+        "application_repository_allowlist": False,
+        "account_wide_access_verified": False,
         "started_at_epoch": time.time(),
         "operations": [],
         "status": "RUNNING",
@@ -112,7 +115,7 @@ def main() -> int:
     os.environ["AI_INFINITY_MAINTENANCE_REPOSITORY"] = repo
     os.environ.setdefault("AI_INFINITY_MAINTENANCE_BASE_BRANCH", "main")
     os.environ["AI_INFINITY_MAINTENANCE_GITHUB_TOKEN"] = token
-    os.environ["AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE"] = "repository_full"
+    os.environ["AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE"] = "github_full"
     os.environ["AI_INFINITY_SELF_MAINTENANCE_ENABLED"] = "true"
     # The benchmark invokes internal functions directly; this one-use value is never
     # transmitted and is not used as a GitHub credential.
@@ -181,6 +184,112 @@ def main() -> int:
                 "visibility": metadata.get("visibility"),
                 "archived": metadata.get("archived"),
             }
+
+        def read_authenticated_user():
+            value = maintenance.github_request(cfg, "GET", "/user")
+            if not isinstance(value, dict) or not value.get("login"):
+                raise RuntimeError("GitHub did not return an authenticated user identity")
+            return value
+
+        ok, identity = run_operation(
+            "authenticated_user_identity",
+            read_authenticated_user,
+        )
+        if ok:
+            report["authenticated_identity"] = {
+                "login": str(identity.get("login") or "")[:100],
+                "id": identity.get("id"),
+                "type": str(identity.get("type") or "")[:40],
+            }
+
+        def list_accessible_repositories():
+            value = maintenance.github_request(
+                cfg,
+                "GET",
+                "/user/repos?per_page=100&visibility=all&affiliation=owner,collaborator,organization_member&sort=updated",
+            )
+            if not isinstance(value, list):
+                raise RuntimeError("GitHub accessible-repository response was not an array")
+            return value
+
+        ok, repository_rows = run_operation(
+            "accessible_repositories_first_page",
+            list_accessible_repositories,
+        )
+        sampled_repository = None
+        if ok:
+            normalized_repositories = []
+            for row in repository_rows:
+                if not isinstance(row, dict):
+                    continue
+                full_name = str(row.get("full_name") or "")
+                if re.fullmatch(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}", full_name):
+                    normalized_repositories.append({
+                        "full_name": full_name,
+                        "private": row.get("private") is True,
+                        "archived": row.get("archived") is True,
+                        "default_branch": str(row.get("default_branch") or "")[:120],
+                        "permissions": {
+                            key: (row.get("permissions") or {}).get(key)
+                            for key in ("pull", "push", "admin")
+                            if isinstance(row.get("permissions"), dict) and key in row.get("permissions", {})
+                        },
+                    })
+            report["accessible_repositories"] = {
+                "first_page_count": len(normalized_repositories),
+                "first_page_sample": normalized_repositories[:20],
+                "more_pages_possible": len(repository_rows) == 100,
+                "complete_account_inventory_claimed": False,
+            }
+            sampled_repository = next(
+                (
+                    row for row in normalized_repositories
+                    if row["full_name"].casefold() != repo.casefold()
+                ),
+                None,
+            )
+
+        if sampled_repository:
+            sample_name = sampled_repository["full_name"]
+            ok, cross_repo_metadata = run_operation(
+                "cross_repository_metadata_read_sample",
+                lambda: maintenance.github_request(cfg, "GET", f"/repos/{sample_name}"),
+            )
+            if ok:
+                permissions = cross_repo_metadata.get("permissions") if isinstance(cross_repo_metadata, dict) else None
+                report["cross_repository_probe"] = {
+                    "repository": sample_name,
+                    "visibility": cross_repo_metadata.get("visibility"),
+                    "permissions": {
+                        key: permissions.get(key)
+                        for key in ("pull", "triage", "push", "maintain", "admin")
+                    } if isinstance(permissions, dict) else None,
+                }
+        else:
+            report["operations"].append({
+                "name": "cross_repository_metadata_read_sample",
+                "status": "BLOCKED",
+                "error": "No second authorized repository was returned on the first user-repositories page; multi-repository access was not demonstrated.",
+            })
+
+        ok, organizations = run_operation(
+            "organization_memberships_first_page",
+            lambda: maintenance.github_request(cfg, "GET", "/user/orgs?per_page=100"),
+        )
+        if ok:
+            if not isinstance(organizations, list):
+                report["operations"][-1]["status"] = "FAIL"
+                report["operations"][-1]["error"] = "GitHub organization-membership response was not an array"
+            else:
+                report["organization_memberships"] = {
+                    "first_page_count": len(organizations),
+                    "names": [
+                        str(row.get("login") or "")[:100]
+                        for row in organizations[:20]
+                        if isinstance(row, dict) and row.get("login")
+                    ],
+                    "complete_account_inventory_claimed": False,
+                }
 
         ok, rate = run_operation(
             "authenticated_rate_limit_read",
@@ -312,6 +421,9 @@ def main() -> int:
 
         required_operations = {
             "repository_metadata_and_effective_permissions",
+            "authenticated_user_identity",
+            "accessible_repositories_first_page",
+            "cross_repository_metadata_read_sample",
             "authenticated_rate_limit_read",
             "repository_wide_recursive_tree_discovery",
             "cross_directory_source_inspection",
