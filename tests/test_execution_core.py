@@ -111,7 +111,8 @@ def test_canonical_command_and_batch_paths_share_the_execution_core():
     canonical_source = (root / "ai_infinity_canonical.py").read_text(encoding="utf-8")
     batch_source = (root / "universal_command_batch.py").read_text(encoding="utf-8")
     assert "from ai_infinity.execution_core import dispatch as execute_registered" in canonical_source
-    assert "dispatch=execution_core.dispatch" in batch_source
+    assert "return execution_core.dispatch(" in batch_source
+    assert "dispatch=dispatch_registered" in batch_source
 
 
 
