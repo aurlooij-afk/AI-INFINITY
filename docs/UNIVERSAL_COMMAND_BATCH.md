@@ -85,3 +85,12 @@ The canonical natural-language endpoint and the multi-command coordinator now di
 - `POST /infinity/canonical/execute` and every batch task use the same registry-backed dispatcher.
 
 The current registry has 14 executable canonical route bindings and five non-executable guard routes. It does **not** turn the 607-entry provider inventory into callable tools: those entries remain discovery metadata unless a concrete adapter is bound. All dispatches preserve the existing domain authorization gates, use `never_auto_replay`, and record a durable execution ID, request digest, route/capability identity, state, and a redacted result summary. The execution core does not claim independent verification; artifact, research, storage, and provider evidence remain the responsibility of their domain verifiers.
+
+
+## Execution ledger, replay protection, and interrupted work
+
+Every canonical command and every batch task dispatches through `ai_infinity.execution_core`. The shared ledger stores an execution ID, owner ID, capability identity, route, request SHA-256 digest, lifecycle state, and a bounded result summary. It does not persist the raw command or raw provider response.
+
+For direct commands, supply an optional `idempotency_key` in the JSON payload (8–128 safe characters). A matching retry returns the existing execution record without dispatching a second time. Reusing the same key with a different command/payload returns HTTP 409. Keys are scoped to the authenticated user. Batch tasks already receive deterministic per-task keys and use the same ledger.
+
+A ledger row left in `running` after process interruption is surfaced with `reconciliation_required=true`. Operators must inspect the domain's actual project/provider state before taking further action. The execution core never assumes that a timed-out request did nothing and never automatically replays an uncertain side effect.
