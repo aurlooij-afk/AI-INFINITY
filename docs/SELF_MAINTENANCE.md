@@ -31,6 +31,45 @@ All endpoints require the `X-AI-Infinity-Maintenance-Token` header. Creator Stud
 - `POST /infinity/studio/self-maintenance/inspect` — JSON body: `{"goal":"Locate the long-form narration planner and provider repair path.","paths":["studio_ultimate.py","tests/test_longform_production_planner.py"]}`.
 - `POST /infinity/studio/self-maintenance/improve` — JSON body: `{"goal":"Repair the verified long-form narration provider path and add regression tests.","paths":["studio_ultimate.py","tests/test_longform_production_planner.py"]}`.
 
+### Canonical command entry for GitHub
+
+The same GitHub adapter is callable through the existing natural-language command dispatcher at `POST /infinity/canonical/execute`. This keeps GitHub operations on the shared command path instead of requiring a separate GitHub executor. Requests require both the normal AI Infinity user session and the independent `X-AI-Infinity-Maintenance-Token` operator header.
+
+REST example:
+
+```json
+{
+  "command": "Inspect the authenticated GitHub user",
+  "task_type": "github_api",
+  "github_method": "GET",
+  "github_path": "/user"
+}
+```
+
+Cross-repository example (available only in `github_full`):
+
+```json
+{
+  "command": "List repositories accessible to the owner token",
+  "task_type": "github_api",
+  "github_method": "GET",
+  "github_path": "/user/repos?per_page=100&visibility=all"
+}
+```
+
+GraphQL example:
+
+```json
+{
+  "command": "Read the authenticated GitHub viewer",
+  "task_type": "github_graphql",
+  "github_graphql_query": "query { viewer { login } }",
+  "github_graphql_variables": {}
+}
+```
+
+The canonical response includes the selected route, method/path, duration, redacted result and whether the operation was read-only or a write. The server-side GitHub token is never accepted from a request body or returned to the client.
+
 ## Execution and release policy
 
 The module is disabled unless explicitly enabled and both GitHub and admin credentials are configured. In restricted mode, it accepts only allowlisted Python source and test paths. In repository_full/github_full modes, source inspection and edits can cover permitted text/code/configuration paths. It reads source files up to 1 MB (8 files / 2 MB aggregate), and limits combined model context to 80 KB. Small files are inspected whole; large modules are inspected through goal-matched function/class windows with exact line ranges and SHA-256 hashes. Large-file edits must replace only one of those exact hash-pinned windows; the server rechecks the source hash, applies the edits to the complete file, parses the complete resulting Python module, rejects credential assignments under common key/token names and recognizable provider-token formats, and requires at least one regression-test file in every change set.
