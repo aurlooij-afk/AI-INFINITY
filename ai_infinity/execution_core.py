@@ -11,6 +11,8 @@ truthful lifecycle record; it is not a replacement creator engine.
 
 import hashlib
 import json
+import re
+import sqlite3
 import time
 import uuid
 from typing import Any
@@ -101,6 +103,7 @@ def _ensure_schema() -> None:
             CREATE TABLE IF NOT EXISTS canonical_executions (
                 execution_id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
+                idempotency_key TEXT,
                 project_id TEXT,
                 capability_id TEXT NOT NULL,
                 route TEXT NOT NULL,
@@ -112,9 +115,16 @@ def _ensure_schema() -> None:
             )
             """
         )
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(canonical_executions)").fetchall()}
+        if "idempotency_key" not in columns:
+            connection.execute("ALTER TABLE canonical_executions ADD COLUMN idempotency_key TEXT")
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_canonical_executions_user "
             "ON canonical_executions(user_id, started_at DESC)"
+        )
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_canonical_executions_idempotency "
+            "ON canonical_executions(user_id, idempotency_key) WHERE idempotency_key IS NOT NULL"
         )
 
 
@@ -146,16 +156,16 @@ def _summary(result: dict[str, Any], route: str) -> dict[str, Any]:
 
 def _record(execution_id: str, user_id: str, project_id: str, capability: dict[str, Any],
             request_sha256: str, state: str, summary: dict[str, Any], started_at: float,
-            completed_at: float | None) -> None:
+            completed_at: float | None, idempotency_key: str | None = None) -> None:
     canonical = _canonical()
     _ensure_schema()
     with canonical.studio().DB_LOCK, canonical.db() as connection:
         connection.execute(
             """
             INSERT INTO canonical_executions (
-                execution_id,user_id,project_id,capability_id,route,request_sha256,
+                execution_id,user_id,idempotency_key,project_id,capability_id,route,request_sha256,
                 state,result_summary_json,started_at,completed_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(execution_id) DO UPDATE SET
                 project_id=excluded.project_id,
                 state=excluded.state,
@@ -163,10 +173,54 @@ def _record(execution_id: str, user_id: str, project_id: str, capability: dict[s
                 completed_at=excluded.completed_at
             """,
             (
-                execution_id, user_id, project_id or None, capability["id"], capability["route"],
-                request_sha256, state, _json(summary), started_at, completed_at,
+                execution_id, user_id, idempotency_key, project_id or None,
+                capability["id"], capability["route"], request_sha256, state,
+                _json(summary), started_at, completed_at,
             ),
         )
+
+
+def _find_idempotent_execution(user_id: str, idempotency_key: str, request_sha256: str) -> dict[str, Any] | None:
+    canonical = _canonical()
+    _ensure_schema()
+    with canonical.studio().DB_LOCK, canonical.db() as connection:
+        row = connection.execute(
+            "SELECT execution_id,project_id,capability_id,route,request_sha256,state,"
+            "result_summary_json,started_at,completed_at FROM canonical_executions "
+            "WHERE user_id=? AND idempotency_key=?",
+            (user_id, idempotency_key),
+        ).fetchone()
+    if not row:
+        return None
+    if row[4] != request_sha256:
+        raise HTTPException(409, "idempotency_key is already bound to a different command and payload.")
+    try:
+        summary = json.loads(row[6] or "{}")
+    except Exception:
+        summary = {}
+    return {
+        "execution_id": row[0], "project_id": row[1], "capability_id": row[2],
+        "route": row[3], "request_sha256": row[4], "state": row[5],
+        "result": summary, "started_at": row[7], "completed_at": row[8],
+    }
+
+
+def _replay_response(existing: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "existing",
+        "executed": False,
+        "idempotent_replay": True,
+        "result": existing.get("result") or {},
+        "execution": {
+            "execution_id": existing["execution_id"],
+            "capability_id": existing["capability_id"],
+            "state": existing["state"],
+            "request_sha256": existing["request_sha256"],
+            "retry_policy": "never_auto_replay",
+            "replayed": True,
+        },
+        "truthful": True,
+    }
 
 
 def _event(user_id: str, project_id: str, name: str, data: dict[str, Any]) -> None:
@@ -232,14 +286,30 @@ def dispatch(command: str, user_id: str, payload: dict[str, Any] | None = None,
     execution_id = "exec_" + uuid.uuid4().hex
     started_at = time.time()
     request_sha256 = _digest(text, body)
+    raw_idempotency_key = body.get("idempotency_key") or body.get("execution_idempotency_key")
+    idempotency_key = str(raw_idempotency_key).strip() if raw_idempotency_key is not None else ""
+    if idempotency_key and not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", idempotency_key):
+        raise HTTPException(422, "idempotency_key must be 8..128 safe characters.")
+    if idempotency_key:
+        existing = _find_idempotent_execution(str(user_id), idempotency_key, request_sha256)
+        if existing:
+            return _replay_response(existing)
     # Never trust a caller-supplied project_id for cross-project event attribution.
     # The domain dispatcher must first validate ownership and return the canonical
     # project identity before the ledger associates an execution with that project.
     project_id = ""
-    _record(
-        execution_id, str(user_id), project_id, capability, request_sha256,
-        "running", {}, started_at, None,
-    )
+    try:
+        _record(
+            execution_id, str(user_id), project_id, capability, request_sha256,
+            "running", {}, started_at, None, idempotency_key or None,
+        )
+    except sqlite3.IntegrityError:
+        if not idempotency_key:
+            raise
+        existing = _find_idempotent_execution(str(user_id), idempotency_key, request_sha256)
+        if existing:
+            return _replay_response(existing)
+        raise
     _event(str(user_id), project_id, "execution_started", {
         "execution_id": execution_id, "capability_id": capability["id"],
         "route": route, "request_sha256": request_sha256,
