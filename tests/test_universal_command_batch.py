@@ -301,3 +301,67 @@ def test_concurrency_limit_is_validated():
             checkpoint=lambda *args: None,
             max_concurrency=5,
         )
+
+
+
+def test_cancel_request_prevents_pending_commands_but_does_not_claim_to_interrupt_running_work():
+    commands = normalize_commands([
+        {"id": "first", "command": "complete the first independent task"},
+        {"id": "second", "command": "complete the second independent task"},
+        {"id": "third", "command": "complete the third independent task"},
+    ])
+    calls = []
+
+    def dispatch(command, user_id, payload):
+        calls.append(command)
+        return {"status": "completed", "executed": True, "result": {"command": command}}
+
+    def cancellation_requested():
+        # The scheduler polls between settled tasks. Once the first dispatch has
+        # returned, subsequent commands must remain unstarted.
+        return len(calls) >= 1
+
+    result = execute_commands(
+        commands,
+        user_id="owner-1",
+        batch_id="batch-cancel-1",
+        dispatch=dispatch,
+        checkpoint=lambda rows, status: None,
+        max_concurrency=1,
+        cancel_requested=cancellation_requested,
+    )
+
+    assert calls == ["complete the first independent task"]
+    assert result["status"] == "partially_cancelled"
+    assert result["completed_steps"] == 1
+    assert result["cancelled_steps"] == 2
+    assert [step["state"] for step in result["steps"]] == [
+        "completed", "cancelled", "cancelled",
+    ]
+    assert result["cancellation_observed"] is True
+
+
+def test_cancellation_callback_failure_fails_closed_before_dispatch():
+    commands = normalize_commands([
+        {"id": "one", "command": "perform the first task"},
+    ])
+
+    def unavailable_cancellation_store():
+        raise RuntimeError("state store unavailable")
+
+    calls = []
+    result = execute_commands(
+        commands,
+        user_id="owner-1",
+        batch_id="batch-cancel-store-1",
+        dispatch=lambda *args: calls.append(args) or {
+            "status": "completed", "executed": True,
+        },
+        checkpoint=lambda rows, status: None,
+        cancel_requested=unavailable_cancellation_store,
+    )
+
+    assert calls == []
+    assert result["status"] == "cancelled"
+    assert result["cancelled_steps"] == 1
+    assert result["cancellation_observed"] is True
