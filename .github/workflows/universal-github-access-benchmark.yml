@@ -9,13 +9,11 @@ on:
       - "tests/test_self_maintenance.py"
       - ".github/workflows/universal-github-access-benchmark.yml"
 
+# The benchmark's repository writes use the dedicated owner token below.
+# The workflow token is read-only and is used only for checkout/artifact transport.
 permissions:
-  contents: write
-  pull-requests: write
-  issues: read
-  actions: read
-  checks: read
-  statuses: read
+  contents: read
+  actions: write
 
 jobs:
   repository-access:
@@ -42,9 +40,8 @@ jobs:
 
       - name: Exercise real GitHub API permissions and self-maintenance execution
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           AI_INFINITY_MAINTENANCE_GITHUB_TOKEN: ${{ secrets.AI_INFINITY_MAINTENANCE_GITHUB_TOKEN || secrets.AI_INFINITY_GITHUB_TOKEN }}
-          AI_INFINITY_MAINTENANCE_GITHUB_TOKEN_SOURCE: ${{ secrets.AI_INFINITY_MAINTENANCE_GITHUB_TOKEN != '' && 'AI_INFINITY_MAINTENANCE_GITHUB_TOKEN' || secrets.AI_INFINITY_GITHUB_TOKEN != '' && 'AI_INFINITY_GITHUB_TOKEN' || 'GITHUB_TOKEN' }}
+          AI_INFINITY_MAINTENANCE_GITHUB_TOKEN_SOURCE: ${{ secrets.AI_INFINITY_MAINTENANCE_GITHUB_TOKEN != '' && 'AI_INFINITY_MAINTENANCE_GITHUB_TOKEN' || secrets.AI_INFINITY_GITHUB_TOKEN != '' && 'AI_INFINITY_GITHUB_TOKEN' || 'missing_dedicated_owner_token' }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           AI_INFINITY_BENCHMARK_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GITHUB_RUN_ID: ${{ github.run_id }}
