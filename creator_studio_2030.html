@@ -131,7 +131,7 @@
 <div class="sectionHead"><div><h2>Self-maintenance</h2><p>Discover → inspect → improve → verify · isolated draft-PR workflow</p></div></div>
 <div class="grid2">
   <div class="card cardPad">
-    <div class="notice warn">Operator-only controls. The password token is held only in this page and sent to the same-origin API over HTTPS. It is never saved to browser storage or returned by the backend. Use a trusted device and network.</div>
+    <div class="notice warn">Operator-only controls. The admin token is held only in this page and sent to the same-origin API over HTTPS; it is never saved to browser storage or returned by the backend. Enter it here to authorize self-maintenance and explicit GitHub REST / GraphQL commands in the main command box. GitHub access still follows the configured server credential and its real permissions. Use a trusted device and network.</div>
     <div style="margin-top:10px"><div class="hint" style="margin-bottom:4px">Maintenance admin token</div><input id="maintenanceToken2030" class="field" type="password" autocomplete="off" spellcheck="false" placeholder="Server-configured operator token"></div>
     <div style="margin-top:9px"><div class="hint" style="margin-bottom:4px">Engineering objective</div><textarea id="maintenanceGoal2030" class="field" style="min-height:90px;padding:10px;resize:vertical">Inspect the current universal production system, identify the highest-impact verified capability gap, and prepare the smallest safe code repair with regression tests.</textarea></div>
     <div class="actionRow">
