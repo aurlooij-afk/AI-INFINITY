@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from fastapi import FastAPI, HTTPException, Request as FastAPIRequest
 
@@ -296,6 +296,28 @@ def target_repository_config(cfg: dict, payload: dict) -> dict:
     return target
 
 
+class _GitHubRedirectHandler(HTTPRedirectHandler):
+    """Allow redirects only when HTTPS remains pinned to api.github.com."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        old_url = urlsplit(req.full_url)
+        new_url = urlsplit(newurl)
+        if (
+            old_url.scheme != "https"
+            or old_url.hostname != "api.github.com"
+            or new_url.scheme != "https"
+            or new_url.hostname != "api.github.com"
+            or new_url.port not in {None, 443}
+        ):
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _github_urlopen(request: Request, timeout: int = 25):
+    """Open GitHub API requests without forwarding bearer credentials off-host."""
+    return build_opener(_GitHubRedirectHandler()).open(request, timeout=timeout)
+
+
 def github_request(cfg: dict, method: str, path: str, payload: Any = None) -> Any:
     """Call GitHub REST or GraphQL using the configured credential's real permissions.
 
@@ -336,7 +358,7 @@ def github_request(cfg: dict, method: str, path: str, payload: Any = None) -> An
     started = time.monotonic()
     safe_path = urlsplit(path).path[:180]
     try:
-        with urlopen(request, timeout=25) as response:
+        with _github_urlopen(request, timeout=25) as response:
             raw = response.read(2_000_001)
         if len(raw) > 2_000_000:
             raise RuntimeError("GitHub response exceeded the size limit.")
@@ -1121,6 +1143,7 @@ def register(app: FastAPI) -> None:
             "github_write_adapter": bool(cfg["github_token"]),
             "github_access_mode": cfg.get("github_access_mode", "restricted"),
             "github_access_scope": ("token_authorized_github_resources" if cfg.get("github_access_mode") == "github_full" else "configured_repository_only"),
+            "github_full_mode_definition": "No application-level repository path filter; effective access remains bounded by token permissions, SSO, organization policy and repository rules.",
             "generic_github_rest_adapter": True,
             "generic_github_graphql_adapter": True,
             "account_wide_scope_is_token_limited": cfg.get("github_access_mode") == "github_full",
