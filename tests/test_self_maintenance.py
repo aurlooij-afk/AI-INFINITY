@@ -586,3 +586,112 @@ def test_repository_full_settings_are_opt_in_and_reported(monkeypatch):
     assert maintenance.load_settings()["github_access_mode"] == "restricted"
     monkeypatch.setenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", "repository_full")
     assert maintenance.load_settings()["github_access_mode"] == "repository_full"
+
+
+def test_github_full_mode_forwards_rest_and_graphql_requests_across_github_resources(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, body):
+            self.body = body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def read(self, limit=0):
+            return self.body
+
+    def fake_urlopen(request, timeout=0):
+        calls.append(request)
+        if request.full_url.endswith("/user/repos?per_page=100"):
+            return FakeResponse(b'[{"full_name":"other-owner/other-repo"}]')
+        if request.full_url.endswith("/graphql"):
+            return FakeResponse(b'{"data":{"viewer":{"login":"owner"}}}')
+        return FakeResponse(b'{"login":"owner","id":123}')
+
+    monkeypatch.setattr(maintenance, "urlopen", fake_urlopen)
+    cfg = {
+        "repository": "aurlooij-afk/AI-INFINITY",
+        "github_token": "owner-token-placeholder",
+        "github_access_mode": "github_full",
+    }
+
+    user = maintenance.github_request(cfg, "GET", "/user")
+    repositories = maintenance.github_request(cfg, "GET", "/user/repos?per_page=100")
+    organization = maintenance.github_request(cfg, "GET", "/orgs/example-org")
+    graphql = maintenance.github_request(
+        cfg, "POST", "/graphql", {"query": "query { viewer { login } }"}
+    )
+
+    assert user["login"] == "owner"
+    assert repositories == [{"full_name": "other-owner/other-repo"}]
+    assert organization["login"] == "owner"
+    assert graphql["data"]["viewer"]["login"] == "owner"
+    assert calls[0].full_url == "https://api.github.com/user"
+    assert calls[2].full_url == "https://api.github.com/orgs/example-org"
+    assert calls[3].data == b'{"query": "query { viewer { login } }"}'
+    assert all(request.get_header("Authorization") == "Bearer owner-token-placeholder" for request in calls)
+
+
+@pytest.mark.parametrize("path", [
+    "https://attacker.example/repos/owner/repo",
+    "//attacker.example/repos/owner/repo",
+    "/repos/owner/../other",
+    "/repos/owner/%2e%2e/other",
+    "/repos/owner/repo#fragment",
+])
+def test_github_full_mode_rejects_external_hosts_and_path_traversal(path):
+    cfg = {
+        "repository": "aurlooij-afk/AI-INFINITY",
+        "github_token": "owner-token-placeholder",
+        "github_access_mode": "github_full",
+    }
+    with pytest.raises(HTTPException):
+        maintenance.github_request(cfg, "GET", path)
+
+
+def test_github_full_mode_allows_self_maintenance_targeting_another_authorized_repository():
+    cfg = {
+        "repository": "aurlooij-afk/AI-INFINITY",
+        "base_branch": "main",
+        "github_access_mode": "github_full",
+    }
+    target = maintenance.target_repository_config(
+        cfg, {"repository": "another-owner/another-repo", "base_branch": "develop"}
+    )
+    assert target["repository"] == "another-owner/another-repo"
+    assert target["base_branch"] == "develop"
+    assert cfg["repository"] == "aurlooij-afk/AI-INFINITY"
+
+
+def test_non_full_mode_does_not_allow_cross_repository_self_maintenance():
+    cfg = {
+        "repository": "aurlooij-afk/AI-INFINITY",
+        "base_branch": "main",
+        "github_access_mode": "repository_full",
+    }
+    with pytest.raises(HTTPException, match="github_full"):
+        maintenance.target_repository_config(
+            cfg, {"repository": "another-owner/another-repo"}
+        )
+
+
+def test_generic_github_redaction_removes_the_active_token_even_inside_free_text():
+    token = "ghp_abcdefghijklmnopqrstuvwxyz123456"
+    redacted = maintenance.redact_github_response(
+        {"message": f"diagnostic echoed {token} unexpectedly"},
+        secret_values=(token,),
+    )
+    assert token not in json.dumps(redacted)
+    assert "[REDACTED]" in redacted["message"]
+
+
+def test_github_full_mode_keeps_owner_protected_documents_unavailable_for_source_editing():
+    assert maintenance.validate_path("docs/SELF_MAINTENANCE.md", access_mode="github_full")
+    for path in (
+        "AI_Infinity_Creator_Benchmark_and_Reuse_Plan.md",
+        "AI_Infinity_10_Method_Deep_Research_and_Master_Command.md",
+        ".env.production",
+    ):
+        with pytest.raises(HTTPException):
+            maintenance.validate_path(path, access_mode="github_full")
