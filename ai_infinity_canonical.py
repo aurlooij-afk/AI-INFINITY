@@ -727,6 +727,9 @@ def classify_command(command, raw=None):
     }
     github_path = payload.get("github_path") or payload.get("github_api_path")
     github_graphql_query = payload.get("github_graphql_query")
+    github_graphql_syntax = re.search(r"\\bgithub\\s+graphql\\s+(.+)$", text, re.I)
+    if not github_graphql_query and github_graphql_syntax:
+        github_graphql_query = github_graphql_syntax.group(1).strip()
     github_rest_syntax = re.search(
         r"\bgithub\s+(?:api|rest)\s+(GET|POST|PUT|PATCH|DELETE)\s+(\S+)",
         text,
@@ -983,6 +986,9 @@ def dispatch_command(command, user_id, raw=None, request=None):
     github_path = payload.get("github_path") or payload.get("github_api_path")
     github_graphql_query = payload.get("github_graphql_query")
     cmd = clean(command, 4000)
+    github_graphql_syntax = re.search(r"\\bgithub\\s+graphql\\s+(.+)$", cmd, re.I)
+    if not github_graphql_query and github_graphql_syntax:
+        github_graphql_query = github_graphql_syntax.group(1).strip()
     github_rest_syntax = re.search(
         r"\bgithub\s+(?:api|rest)\s+(GET|POST|PUT|PATCH|DELETE)\s+(\S+)",
         cmd,
