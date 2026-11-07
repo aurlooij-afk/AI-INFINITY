@@ -723,3 +723,67 @@ def test_github_redirect_handler_refuses_cross_origin_and_non_https_redirects():
     assert same_origin.full_url == "https://api.github.com/user/repos"
     assert cross_origin is None
     assert downgrade is None
+
+
+
+def test_load_settings_defaults_to_github_full_without_enabling_missing_credentials(monkeypatch):
+    for name in (
+        "AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE",
+        "AI_INFINITY_MAINTENANCE_REPOSITORY",
+        "AI_INFINITY_MAINTENANCE_GITHUB_TOKEN",
+        "AI_INFINITY_MAINTENANCE_ADMIN_TOKEN",
+        "AI_INFINITY_SELF_MAINTENANCE_ENABLED",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    cfg = maintenance.load_settings()
+    assert cfg["github_access_mode"] == "github_full"
+    assert cfg["ready"] is False
+
+
+def test_github_full_mode_propagates_to_cross_directory_source_discovery_and_edits(monkeypatch):
+    cfg = {
+        "repository": "owner/repo",
+        "base_branch": "main",
+        "github_access_mode": "github_full",
+    }
+    paths = [
+        {"path": ".github/workflows/creator-runtime.yml", "size": 20, "sha": "a" * 40},
+        {"path": "tests/test_github_mode.py", "size": 30, "sha": "b" * 40},
+    ]
+    ranked = maintenance.rank_source_candidates(
+        paths, "inspect creator runtime workflow", access_mode=cfg["github_access_mode"]
+    )
+    assert {row["path"] for row in ranked} == {
+        ".github/workflows/creator-runtime.yml", "tests/test_github_mode.py"
+    }
+    selected = maintenance.select_autonomous_sources(
+        ranked, access_mode=cfg["github_access_mode"]
+    )
+    assert ".github/workflows/creator-runtime.yml" in selected
+    assert "tests/test_github_mode.py" in selected
+
+    source_text = {
+        ".github/workflows/creator-runtime.yml": "name: creator-runtime\\n",
+        "tests/test_github_mode.py": "def test_github_mode():\\n    assert True\\n",
+    }
+    def fake_read_source(_cfg, path):
+        content = source_text[path]
+        return {
+            "path": path, "sha": "c" * 40,
+            "sha256": __import__("hashlib").sha256(content.encode("utf-8")).hexdigest(),
+            "size_bytes": len(content.encode("utf-8")), "content": content,
+        }
+    monkeypatch.setattr(maintenance, "read_source", fake_read_source)
+    inspected = maintenance.inspect_sources(cfg, selected, goal="inspect creator runtime workflow")
+    originals = {path: fake_read_source(cfg, path) for path in selected}
+    proposed = [
+        {"path": ".github/workflows/creator-runtime.yml", "content": "name: updated\\n"},
+        {"path": "tests/test_github_mode.py", "content": "def test_github_mode():\\n    assert 2 == 2\\n"},
+    ]
+    expanded = maintenance.apply_window_edits(
+        proposed, originals, inspected["files"], access_mode=cfg["github_access_mode"]
+    )
+    validated = maintenance.validate_changes(
+        expanded, set(originals), access_mode=cfg["github_access_mode"]
+    )
+    assert {row["path"] for row in validated} == set(selected)
