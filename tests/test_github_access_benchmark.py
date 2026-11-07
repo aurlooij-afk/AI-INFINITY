@@ -67,17 +67,36 @@ def test_full_github_benchmark_probes_identity_cross_repo_write_and_cleanup(monk
         if path == "/user":
             return {"login": "owner", "id": 123, "type": "User"}
         if path.startswith("/user/repos?"):
-            return [{
-                "full_name": "owner/project",
-                "private": True,
-                "default_branch": "main",
-                "permissions": {"pull": True, "push": True, "admin": True},
-            }, {
-                "full_name": "owner/second-project",
-                "private": True,
-                "default_branch": "develop",
-                "permissions": {"pull": True, "push": True, "admin": False},
-            }]
+            if "&page=1&" in path:
+                rows = [{
+                    "full_name": "owner/project",
+                    "private": True,
+                    "default_branch": "main",
+                    "permissions": {"pull": True, "push": True, "admin": True},
+                }, {
+                    "full_name": "owner/second-project",
+                    "private": True,
+                    "default_branch": "develop",
+                    "permissions": {"pull": True, "push": True, "admin": False},
+                }]
+                rows.extend({
+                    "full_name": f"owner/benchmark-fixture-{index:03d}",
+                    "private": True,
+                    "default_branch": "main",
+                    "permissions": {"pull": True, "push": False, "admin": False},
+                } for index in range(98))
+                return rows
+            if "&page=2&" in path:
+                return [{
+                    "full_name": "owner/third-project",
+                    "private": True,
+                    "default_branch": "main",
+                    "permissions": {"pull": True, "push": True, "admin": False},
+                }]
+            return []
+        if path == "/graphql" and method == "POST":
+            assert payload == {"query": "query { viewer { login } }", "variables": {}}
+            return {"data": {"viewer": {"login": "owner"}}}
         if path == "/repos/owner/second-project":
             return {
                 "visibility": "private",
@@ -148,10 +167,17 @@ def test_full_github_benchmark_probes_identity_cross_repo_write_and_cleanup(monk
     assert report["application_repository_allowlist"] is False
     assert report["account_wide_access_verified"] is False
     assert report["authenticated_identity"]["login"] == "owner"
-    assert report["accessible_repositories"]["first_page_count"] == 2
+    assert report["accessible_repositories"]["first_page_count"] == 100
+    assert report["accessible_repositories"]["total_repository_count"] == 101
+    assert report["accessible_repositories"]["pages_fetched"] == 2
+    assert report["accessible_repositories"]["pagination_complete"] is True
+    assert report["required_operations"]["accessible_repositories_all_pages"] == "PASS"
+    assert report["required_operations"]["authenticated_graphql_viewer_read"] == "PASS"
+    assert report["graphql_identity"]["login"] == "owner"
     assert report["cross_repository_probe"]["repository"] == "owner/second-project"
     assert report["cross_repository_write_probe"]["branch_created"] is True
     assert report["required_operations"]["cross_repository_temporary_branch_delete_cleanup"] == "PASS"
+    assert any(method == "POST" and path == "/graphql" for method, path, _, _ in calls)
     assert any(
         method == "POST" and path == "/repos/owner/second-project/git/refs"
         for method, path, _, _ in calls
@@ -162,3 +188,28 @@ def test_full_github_benchmark_probes_identity_cross_repo_write_and_cleanup(monk
     )
     assert all(mode == "github_full" for _, _, _, mode in calls)
     assert report["token_value_recorded"] is False
+
+
+def test_missing_owner_token_writes_truthful_blocked_metrics(monkeypatch, tmp_path):
+    report_path = tmp_path / "blocked-github-benchmark.json"
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/project")
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_GITHUB_TOKEN", "")
+    monkeypatch.setenv("AI_INFINITY_GITHUB_TOKEN", "")
+    monkeypatch.setenv("GITHUB_TOKEN", "workflow-token-not-authorized-for-benchmark")
+    monkeypatch.setattr(
+        sys, "argv", ["benchmark", "--output", str(report_path)]
+    )
+
+    result = benchmark.main()
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert result == 2
+    assert report["status"] == "BLOCKED"
+    assert report["credential_source"] == "missing_dedicated_owner_token"
+    assert report["operation_attempt_count"] == 0
+    assert report["operation_pass_count"] == 0
+    assert report["operation_fail_count"] == 0
+    assert report["operation_pass_rate"] is None
+    assert report["duration_seconds"] >= 0
+    assert report["token_value_recorded"] is False
+    assert report["secrets_returned"] is False
