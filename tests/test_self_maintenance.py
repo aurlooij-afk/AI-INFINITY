@@ -515,7 +515,7 @@ def test_github_request_is_limited_to_configured_repository_and_supported_method
     def fake_urlopen(request, timeout=0):
         calls.append((request.method, request.full_url))
         return FakeResponse()
-    monkeypatch.setattr(maintenance, "urlopen", fake_urlopen)
+    monkeypatch.setattr(maintenance, "_github_urlopen", fake_urlopen)
     cfg = {"repository": "aurlooij-afk/AI-INFINITY", "github_token": "not-a-real-token"}
     result = maintenance.github_request(cfg, "GET", "/rate_limit")
     assert result["resources"]["core"]["remaining"] == 42
@@ -611,7 +611,7 @@ def test_github_full_mode_forwards_rest_and_graphql_requests_across_github_resou
             return FakeResponse(b'{"data":{"viewer":{"login":"owner"}}}')
         return FakeResponse(b'{"login":"owner","id":123}')
 
-    monkeypatch.setattr(maintenance, "urlopen", fake_urlopen)
+    monkeypatch.setattr(maintenance, "_github_urlopen", fake_urlopen)
     cfg = {
         "repository": "aurlooij-afk/AI-INFINITY",
         "github_token": "owner-token-placeholder",
@@ -704,3 +704,22 @@ def test_github_content_response_guard_preserves_non_object_api_results():
     assert maintenance.validate_github_content_response(
         "/user/repos?per_page=100", rows
     ) == rows
+
+
+def test_github_redirect_handler_refuses_cross_origin_and_non_https_redirects():
+    from urllib.request import Request
+
+    handler = maintenance._GitHubRedirectHandler()
+    request = Request("https://api.github.com/user")
+    same_origin = handler.redirect_request(
+        request, None, 302, "Found", {}, "https://api.github.com/user/repos"
+    )
+    cross_origin = handler.redirect_request(
+        request, None, 302, "Found", {}, "https://attacker.example/collect"
+    )
+    downgrade = handler.redirect_request(
+        request, None, 302, "Found", {}, "http://api.github.com/user"
+    )
+    assert same_origin.full_url == "https://api.github.com/user/repos"
+    assert cross_origin is None
+    assert downgrade is None
