@@ -54,6 +54,7 @@ button,input,textarea,select{font:inherit}button{cursor:pointer}a{color:inherit;
   <div class="kicker">Truth</div>
   <nav class="nav">
     <button data-target="system"><i>✓</i><span>System</span></button>
+    <button data-target="maintenance"><i>⟳</i><span>Self-maintenance</span></button>
   </nav>
 </aside>
 <section class="main">
@@ -188,6 +189,36 @@ button,input,textarea,select{font:inherit}button{cursor:pointer}a{color:inherit;
 <div id="powerOut" class="card pad" style="margin-top:12px"><div class="empty">Choose any capability above. Its live backend response appears here.</div></div>
 </section>
 
+<section id="maintenance" class="section">
+<div class="header"><div><h2>Self-maintenance</h2><p>discover → inspect → improve → verify · protected draft-PR workflow</p></div></div>
+<div class="grid2">
+  <div class="card pad">
+    <div class="notice warn">Operator-only controls. The maintenance token is kept only in this page's memory and sent over HTTPS in a request header. It is never written to browser storage or returned by the API. Do not use a shared or untrusted device.</div>
+    <div style="margin-top:10px"><label class="label">Maintenance admin token</label><input id="maintenanceToken" class="field" type="password" autocomplete="off" spellcheck="false" placeholder="Enter the server-configured operator token"></div>
+    <div style="margin-top:9px"><label class="label">Engineering objective</label><textarea id="maintenanceGoal" class="field area">Inspect the current universal production system, identify the highest-impact verified capability gap, and prepare the smallest safe code repair with regression tests.</textarea></div>
+    <div class="actions">
+      <button class="btn" onclick="maintenanceStatus()">Check readiness</button>
+      <button class="btn" onclick="maintenanceDiscover()">Discover sources</button>
+      <button class="btn" onclick="maintenanceInspect()">Inspect selected source windows</button>
+      <button class="btn primary" onclick="maintenanceImprove()">Prepare tested improvement PR</button>
+    </div>
+    <div style="margin-top:9px"><label class="label">Optional exact candidate commit SHA for CI inspection</label><input id="maintenanceCommit" class="field" placeholder="40-character commit SHA"></div>
+    <div class="actions"><button class="btn" onclick="maintenanceCI()">Inspect CI evidence</button></div>
+  </div>
+  <div class="card pad">
+    <div class="header"><div><h2>Execution boundaries</h2><p>actual repository operations, not simulated status</p></div></div>
+    <div class="list">
+      <div class="item"><b>Repository discovery</b><div class="sub">Ranks allowlisted source and regression-test files from the live Git tree.</div></div>
+      <div class="item"><b>Bounded inspection</b><div class="sub">Large modules use function windows with line numbers and SHA-256 checks.</div></div>
+      <div class="item"><b>Code revision</b><div class="sub">Whole-file replacement for small modules; exact-range patches for large modules.</div></div>
+      <div class="item"><b>Verification</b><div class="sub">Requires regression tests and candidate-bound GitHub Actions evidence.</div></div>
+      <div class="item"><b>Release protection</b><div class="sub">Draft PR only. No direct main write, merge, deployment, publishing or rights approval.</div></div>
+    </div>
+  </div>
+</div>
+<div id="maintenanceOut" class="card pad" style="margin-top:12px"><div class="empty">Enter the operator token and choose a real repository operation.</div></div>
+</section>
+
 <section id="system" class="section">
 <div class="header"><div><h2>System Truth</h2><p>The architecture promises only what the runtime can substantiate.</p></div></div>
 <div class="grid3">
@@ -211,6 +242,16 @@ function $(id){return document.getElementById(id)}
 function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,function(c){return({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]})}
 function toast(msg){var x=$("toast");x.textContent=msg;x.style.display="block";clearTimeout(window.__toast);window.__toast=setTimeout(function(){x.style.display="none"},3200)}
 async function api(path,opt){opt=opt||{};var r=await fetch(path,Object.assign({credentials:"same-origin",cache:"no-store",headers:Object.assign({"Accept":"application/json"},opt.headers||{})},opt));var t=await r.text();var d;try{d=JSON.parse(t)}catch(e){d={raw:t}}if(!r.ok){throw new Error((d&&d.detail)||("HTTP "+r.status))}return d}
+var maintenanceCandidates=null;
+function maintenanceHeaders(){var token=$("maintenanceToken").value.trim();if(!token)throw new Error("Enter the server-configured maintenance admin token.");if(window.location.protocol!=="https:"&&window.location.hostname!=="localhost"&&window.location.hostname!=="127.0.0.1")throw new Error("Self-maintenance credentials may only be sent over HTTPS.");return {"X-AI-Infinity-Maintenance-Token":token}}
+function maintenanceGoal(){var goal=$("maintenanceGoal").value.trim();if(goal.length<12)throw new Error("Describe a specific engineering objective (at least 12 characters).");return goal}
+function maintenanceShow(data){$("maintenanceOut").innerHTML='<div class="header"><div><h2>Live maintenance result</h2><p>response from the repository-maintenance backend</p></div></div><pre class="mono">'+esc(JSON.stringify(data,null,2))+'</pre>'}
+async function maintenanceCall(action,payload){var options={headers:maintenanceHeaders()};if(payload!==undefined){options.method="POST";options.headers["Content-Type"]="application/json";options.body=JSON.stringify(payload)}return api("/infinity/studio/self-maintenance/"+action,options)}
+async function maintenanceStatus(){try{var r=await maintenanceCall("status");maintenanceShow(r);toast(r.ready?"Self-maintenance ready":"Self-maintenance is not configured")}catch(e){maintenanceShow({status:"unavailable",reason:e.message,truthful:true});toast(e.message)}}
+async function maintenanceDiscover(){try{var r=await maintenanceCall("discover",{goal:maintenanceGoal(),limit:40});maintenanceCandidates=r;maintenanceShow(r);toast("Repository discovery completed")}catch(e){maintenanceCandidates=null;maintenanceShow({status:"discovery_failed",reason:e.message,truthful:true});toast(e.message)}}
+async function maintenanceInspect(){try{if(!maintenanceCandidates)await maintenanceDiscover();var paths=maintenanceCandidates&&maintenanceCandidates.suggested_paths||[];if(!paths.length)throw new Error("Discovery found no source/test pair. Refine the objective or provide explicit paths through the API.");var r=await maintenanceCall("inspect",{goal:maintenanceGoal(),paths:paths});maintenanceShow({selected_paths:paths,inspection:r,truthful:true});toast("Source windows inspected")}catch(e){maintenanceShow({status:"inspection_failed",reason:e.message,truthful:true});toast(e.message)}}
+async function maintenanceImprove(){try{var goal=maintenanceGoal();var r=await maintenanceCall("improve",{goal:goal});maintenanceShow(r);if(r.pull_request&&r.pull_request.pull_request_url){var rawUrl=String(r.pull_request.pull_request_url||"");var parsedUrl;try{parsedUrl=new URL(rawUrl)}catch(e){parsedUrl=null}if(parsedUrl&&parsedUrl.protocol==="https:"&&parsedUrl.hostname==="github.com"){$("maintenanceOut").insertAdjacentHTML("afterbegin",'<div class="notice good">Draft improvement created: <a href="'+esc(parsedUrl.href)+'" target="_blank" rel="noopener noreferrer">Review the proposed GitHub PR</a>. CI remains pending until the exact candidate completes verification.</div>')}}toast("Draft self-improvement PR created")}catch(e){maintenanceShow({status:"improvement_failed",reason:e.message,truthful:true});toast(e.message)}}
+async function maintenanceCI(){try{var commit=$("maintenanceCommit").value.trim();var payload={limit:10};if(commit)payload.commit_sha=commit;var r=await maintenanceCall("ci",payload);maintenanceShow(r);toast("CI evidence inspected")}catch(e){maintenanceShow({status:"ci_inspection_failed",reason:e.message,truthful:true});toast(e.message)}}
 function nav(){document.querySelectorAll(".nav button").forEach(function(b){b.onclick=function(){var id=b.getAttribute("data-target");document.querySelectorAll(".nav button").forEach(x=>x.classList.remove("active"));b.classList.add("active");document.getElementById(id).scrollIntoView({behavior:"smooth"});$("crumb").textContent=id+" · AI Infinity final creator OS"}})}
 async function refreshAll(){try{await Promise.all([home(),loadDNA(),loadWorlds(),projects(),loadExperiments(),graph(),reusable(),analytics(),system()]);$("live").textContent="● live";toast("Workspace refreshed")}catch(e){$("live").textContent="● offline";toast(e.message)}}
 async function home(){var s=await api("/infinity/3800/summary"),c=await api("/infinity/3800/capabilities");$("sProjects").textContent=s.projects;$("sWorlds").textContent=s.worlds;$("sExperiments").textContent=s.experiments;$("homeTruth").innerHTML='<b>Core:</b> '+(c.free_policy.core_free?"free":"restricted")+' · credits '+(c.free_policy.credits?"on":"off")+' · paid API required '+(c.free_policy.paid_api_required?"yes":"no")+' · external provider required '+(c.free_policy.remote_ai_optional?"no":"yes")}

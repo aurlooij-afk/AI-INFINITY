@@ -651,17 +651,34 @@ def reconcile_project(project_id: str) -> Dict[str, Any]:
     # writing its terminal result at the same moment a client polls /truth.
     # A transiently incomplete terminal snapshot must be reported as FAILED/DEGRADED
     # by this report, but it must not poison a still-finalizing project row.
-    if status == "completed" and not (required_ok and qc_passed):
+    if status == "completed" and not required_ok:
         failure_parts = [k for k, v in checks.items() if not bool(v)]
-        message = "Independent verification/QC is not yet complete; successful delivery remains blocked."
+        message = "Independent required-artifact verification failed; delivery remains blocked."
         if failure_parts:
-            message += " Failed checks: " + ", ".join(failure_parts[:24])
+            message += " Missing or invalid artifacts: " + ", ".join(failure_parts[:24])
         report["error"] = message[:1200]
         report["missing_or_invalid"] = failure_parts[:24]
         state = "FAILED"
         report["state"] = state
         report["verified"] = False
         report["qc_passed"] = False
+    elif status == "completed" and required_ok and not studio_qc["studio_qc_passed"]:
+        # Keep artifact integrity and professional QC separate. A complete,
+        # independently inspected delivery whose creative/media QC is open is
+        # DEGRADED (review required), not FAILED. The outer production-closure
+        # gate performs the stricter content-type/rights decision and may still
+        # fail the project. In particular, a valid native primary deliverable
+        # must not be erased because its independently gated video companion
+        # remains under review.
+        report["error"] = (
+            "Required artifacts passed independent inspection, but professional QC remains incomplete. "
+            "Delivery is review-required; approval and publication remain blocked."
+        )
+        report["state"] = "DEGRADED"
+        report["verified"] = False
+        report["qc_passed"] = False
+        report["missing_or_invalid"] = []
+        state = "DEGRADED"
     elif status == "completed_with_qc_warnings":
         report["error"] = "Delivery completed with QC warnings; professional verification remains degraded."
         report["state"] = "DEGRADED"
@@ -713,10 +730,17 @@ def reconcile_project(project_id: str) -> Dict[str, Any]:
 
 def _safe_render(original: Any, asset: Dict[str, Any], voice: Path, music: Path,
                  sfx: Path, duration: float, out: Path, title: str,
-                 aspect_ratio: str, attempt: int) -> None:
+                 aspect_ratio: str, attempt: int, music_offset_seconds: float = 0.0) -> None:
     s = _studio()
     try:
-        original(asset, voice, music, sfx, duration, out, title, aspect_ratio)
+        music_offset = max(0.0, float(music_offset_seconds))
+    except (TypeError, ValueError, OverflowError):
+        music_offset = 0.0
+    try:
+        original(
+            asset, voice, music, sfx, duration, out, title, aspect_ratio,
+            music_offset_seconds=music_offset,
+        )
         if _valid_file(out, 10000) and _media_probe(out).get("ok"):
             return
         raise RuntimeError("primary renderer produced an invalid artifact")
@@ -742,10 +766,13 @@ def _safe_render(original: Any, asset: Dict[str, Any], voice: Path, music: Path,
             visual_args = ["-stream_loop", "-1", "-i", src] if str(asset.get("kind")) == "video" else ["-loop", "1", "-i", src]
             simple_vf = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps=24"
             ff = getattr(s, "ffmpeg")
+            audio_args: List[Any] = ["-i", voice]
+            if music_offset > 0.0:
+                audio_args.extend(["-ss", f"{music_offset:.3f}"])
+            audio_args.extend(["-i", music])
             ff(
                 *visual_args,
-                "-i", voice,
-                "-i", music,
+                *audio_args,
                 "-filter_complex", "[1:a]volume=0.95[v];[2:a]volume=0.04[m];[v][m]amix=inputs=2:duration=first[a]",
                 "-map", "0:v:0", "-map", "[a]", "-vf", simple_vf, "-t", max(1.0, float(duration)),
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-pix_fmt", "yuv420p",
@@ -964,6 +991,16 @@ def _emergency_finalize(project_id: str) -> bool:
     return True
 
 
+def _review_state_preservable(report: Dict[str, Any]) -> bool:
+    """Keep independently inspected drafts available for review without approval."""
+    if not isinstance(report, dict) or report.get("verified"):
+        return False
+    return str(report.get("state") or "").strip().upper() in {
+        "DEGRADED",
+        "REVIEW_REQUIRED",
+    }
+
+
 def _guarded_run_project(project_id: str, model_fn: Any) -> None:
     s = _studio()
     original = _ORIGINALS.get("run_project")
@@ -1013,12 +1050,27 @@ def _guarded_run_project(project_id: str, model_fn: Any) -> None:
             current = s._get_project(project_id) or {}
             if report.get("verified") and current.get("status") not in {"completed"}:
                 s._update_project(project_id, status="completed", stage="complete", progress=100, error=None)
+            elif (
+                _review_state_preservable(report)
+                and current.get("status") in {"completed", "completed_with_qc_warnings"}
+            ):
+                # Preserve a real, independently inspected draft for review. This
+                # is not approval: Studio status remains warning-only and the
+                # production-closure layer still enforces the native/video/rights
+                # gates before determining the final deliverable state.
+                s._update_project(
+                    project_id,
+                    status="completed_with_qc_warnings",
+                    stage="quality_review_required",
+                    error=str(report.get("error") or "Professional QC remains review-required.")[:1200],
+                    progress=min(float(current.get("progress") or 99), 99),
+                )
             elif not report.get("verified") and current.get("status") in {"completed", "completed_with_qc_warnings"}:
                 s._update_project(
                     project_id,
                     status="failed",
                     stage="quality_control",
-                    error="Independent Reality Kernel proof failed; delivery remains blocked.",
+                    error="Independent Reality Kernel required-artifact proof failed; delivery remains blocked.",
                     progress=min(float(current.get("progress") or 100), 94),
                 )
         except Exception as exc:
@@ -1192,13 +1244,17 @@ def install() -> None:
 
     original_render = _ORIGINALS["_render_scene"]
     if not getattr(original_render, "_reality_first_wrapped", False):
-        def render_wrapped(asset, voice, music, sfx, duration, out, title, aspect_ratio="16:9"):
+        def render_wrapped(asset, voice, music, sfx, duration, out, title, aspect_ratio="16:9", music_offset_seconds=0.0):
             pid = str(getattr(s.ACTIVE_PROJECT, "project_id", "") or "")
             attempt = 1
             try:
                 root = _project_path(pid) if pid else Path(out).parent
                 _event(pid, f"scene:{Path(out).stem}", "RUNNING", 1, metadata={"output": str(out)})
-                _safe_render(original_render, asset, Path(voice), Path(music), Path(sfx), duration, Path(out), title, aspect_ratio, attempt)
+                _safe_render(
+                    original_render, asset, Path(voice), Path(music), Path(sfx),
+                    duration, Path(out), title, aspect_ratio, attempt,
+                    music_offset_seconds=music_offset_seconds,
+                )
                 source_hashes = []
                 for x in (asset.get("path"), str(voice), str(music), str(sfx)):
                     try:

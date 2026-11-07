@@ -18,6 +18,7 @@ Fail-closed rules:
 
 import atexit
 import hashlib
+import json
 import os
 import re
 import sqlite3
@@ -75,12 +76,34 @@ def _flag(name: str, default: str = "false") -> bool:
     return os.getenv(name, default).strip().lower() in TRUE
 
 
+def selected_backend() -> str:
+    raw = os.getenv("AI_INFINITY_PROJECT_STATE_BACKEND", "backblaze_b2").strip().lower()
+    if raw in {"b2", "backblaze", "backblaze_b2"}:
+        return "backblaze_b2"
+    if raw in {"supabase", "supabase_s3"}:
+        return "supabase_s3"
+    return raw
+
+
 def _cfg() -> Dict[str, str]:
-    # Use the same variable precedence as ai3704_storage_fabric. Deployments
-    # commonly configure BACKBLAZE_B2_* for artifact storage and the legacy
-    # B2_* aliases for older integrations; using a different key pair here can
-    # make media durability work while project-state snapshots fail (for
-    # example, HeadObject 403 from a restricted legacy key).
+    backend = selected_backend()
+    if backend == "supabase_s3":
+        # Supabase's documented S3 endpoint requires the generated server-side
+        # S3 access-key pair, the project region, and path-style addressing.
+        # The service-role JWT used by the REST artifact adapter is not an S3 key.
+        return {
+            "backend": backend,
+            "endpoint": os.getenv("SUPABASE_S3_ENDPOINT", "").strip(),
+            "bucket": (
+                os.getenv("SUPABASE_S3_BUCKET", "").strip()
+                or os.getenv("SUPABASE_STORAGE_BUCKET", "").strip()
+            ),
+            "access": os.getenv("SUPABASE_S3_ACCESS_KEY_ID", "").strip(),
+            "secret": os.getenv("SUPABASE_S3_SECRET_ACCESS_KEY", "").strip(),
+            "region": os.getenv("SUPABASE_S3_REGION", "").strip(),
+        }
+
+    # B2 remains the default and retains its shared credential precedence.
     endpoint = (
         os.getenv("BACKBLAZE_B2_ENDPOINT", "").strip()
         or os.getenv("B2_ENDPOINT", "").strip()
@@ -91,11 +114,7 @@ def _cfg() -> Dict[str, str]:
     )
     if not endpoint and region:
         endpoint = f"https://s3.{region}.backblazeb2.com"
-    # B2 endpoints encode the bucket's S3 signing region. When an operator has
-    # configured an endpoint but omitted both region aliases, the historical
-    # us-west-004 fallback can sign requests for the wrong region (B2 may reject
-    # HEAD/GET with 403 even though credentials and bucket are otherwise valid).
-    # Explicit region configuration remains authoritative.
+    # B2 endpoints encode their signing region; infer it when omitted.
     if not region and endpoint:
         try:
             hostname = (urlsplit(endpoint).hostname or "").lower()
@@ -105,6 +124,7 @@ def _cfg() -> Dict[str, str]:
         if match:
             region = match.group(1)
     return {
+        "backend": "backblaze_b2",
         "endpoint": endpoint,
         "bucket": (
             os.getenv("BACKBLAZE_B2_BUCKET", "").strip()
@@ -124,22 +144,17 @@ def _cfg() -> Dict[str, str]:
 
 def configured() -> bool:
     cfg = _cfg()
-    return bool(
-        boto3 is not None
-        and BotoConfig is not None
-        and cfg["endpoint"]
-        and cfg["bucket"]
-        and cfg["access"]
-        and cfg["secret"]
-    )
+    required = all((cfg["endpoint"], cfg["bucket"], cfg["access"], cfg["secret"]))
+    if cfg["backend"] == "supabase_s3":
+        required = required and bool(cfg["region"])
+    return bool(boto3 is not None and BotoConfig is not None and required)
 
 
 def contract_enabled() -> bool:
     return (
         os.getenv("AI_INFINITY_PERSISTENCE_MODE", "volatile").strip().lower() == "durable"
         and _flag("AI_INFINITY_PROJECT_STATE_DURABLE")
-        and os.getenv("AI_INFINITY_PROJECT_STATE_BACKEND", "backblaze_b2").strip().lower()
-        in {"backblaze_b2", "b2"}
+        and selected_backend() in {"backblaze_b2", "supabase_s3"}
     )
 
 
@@ -169,20 +184,24 @@ def object_key() -> str:
 
 def _client():
     if not configured():
-        raise RuntimeError("Backblaze B2 project-state backend is not configured")
+        raise RuntimeError("selected project-state object-store backend is not configured")
     cfg = _cfg()
+    options = {
+        "signature_version": "s3v4",
+        "connect_timeout": 8,
+        "read_timeout": 15,
+        "retries": {"max_attempts": 3, "mode": "standard"},
+    }
+    if cfg["backend"] == "supabase_s3":
+        # Supabase documents path-style S3 endpoints for generated S3 keys.
+        options["s3"] = {"addressing_style": "path"}
     return boto3.client(
         "s3",
         endpoint_url=cfg["endpoint"],
         region_name=cfg["region"],
         aws_access_key_id=cfg["access"],
         aws_secret_access_key=cfg["secret"],
-        config=BotoConfig(
-            signature_version="s3v4",
-            connect_timeout=8,
-            read_timeout=15,
-            retries={"max_attempts": 3, "mode": "standard"},
-        ),
+        config=BotoConfig(**options),
     )
 
 
@@ -200,8 +219,103 @@ def _is_missing_object_error(exc: BaseException) -> bool:
 
 
 
+def _manifest_key(key: Optional[str] = None) -> str:
+    return (key or object_key()) + ".manifest.json"
+
+
+def _read_snapshot_manifest(client, key: Optional[str] = None) -> Dict[str, Any]:
+    response = client.get_object(Bucket=_cfg()["bucket"], Key=_manifest_key(key))
+    body = response.get("Body")
+    if body is None:
+        raise RuntimeError("project-state snapshot manifest returned no body")
+    try:
+        raw = body.read()
+    finally:
+        close = getattr(body, "close", None)
+        if callable(close):
+            close()
+    try:
+        manifest = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError("project-state snapshot manifest is invalid JSON") from exc
+    if not isinstance(manifest, dict):
+        raise RuntimeError("project-state snapshot manifest is not an object")
+    digest = str(manifest.get("sha256") or "")
+    size = int(manifest.get("size_bytes") or 0)
+    snapshot_key = str(manifest.get("object_key") or "")
+    expected_prefix = (key or object_key()) + ".versions/"
+    if not re.fullmatch(r"[0-9a-f]{64}", digest) or size <= 0:
+        raise RuntimeError("project-state snapshot manifest has invalid size or SHA-256")
+    if not snapshot_key.startswith(expected_prefix) or snapshot_key == expected_prefix:
+        raise RuntimeError("project-state snapshot manifest references an unsafe object key")
+    return manifest
+
+
+def _write_snapshot_manifest(
+    client,
+    size_bytes: int,
+    sha256: str,
+    snapshot_at: str,
+    snapshot_object_key: str,
+) -> None:
+    expected_prefix = object_key() + ".versions/"
+    if not str(snapshot_object_key).startswith(expected_prefix):
+        raise ValueError("snapshot object key must be a unique key under the project-state version prefix")
+    payload = json.dumps(
+        {
+            "schema": "ai-infinity-project-state-snapshot-v1",
+            "object_key": str(snapshot_object_key),
+            "size_bytes": int(size_bytes),
+            "sha256": str(sha256),
+            "snapshot_at": str(snapshot_at),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    key = _manifest_key()
+    client.put_object(
+        Bucket=_cfg()["bucket"],
+        Key=key,
+        Body=payload,
+        ContentType="application/json",
+    )
+    response = client.get_object(Bucket=_cfg()["bucket"], Key=key)
+    body = response.get("Body")
+    if body is None:
+        raise RuntimeError("project-state snapshot manifest read-back returned no body")
+    try:
+        actual = body.read()
+    finally:
+        close = getattr(body, "close", None)
+        if callable(close):
+            close()
+    if actual != payload or hashlib.sha256(actual).hexdigest() != hashlib.sha256(payload).hexdigest():
+        raise RuntimeError("project-state snapshot manifest read-back integrity check failed")
+
+
 def _head(key: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    h = _client().head_object(Bucket=_cfg()["bucket"], Key=key or object_key())
+    cfg = _cfg()
+    target_key = key or object_key()
+    client = _client()
+    if cfg["backend"] == "supabase_s3":
+        manifest = _read_snapshot_manifest(client, target_key)
+        snapshot_object_key = str(manifest["object_key"])
+        try:
+            h = client.head_object(Bucket=cfg["bucket"], Key=snapshot_object_key)
+        except Exception as exc:
+            if _is_missing_object_error(exc):
+                raise RuntimeError("snapshot manifest points to a missing versioned object") from exc
+            raise
+        size = int(h.get("ContentLength") or 0)
+        if size != int(manifest.get("size_bytes") or -1):
+            raise RuntimeError("project-state snapshot manifest size does not match the versioned object")
+        return {
+            "size_bytes": size,
+            "sha256": str(manifest["sha256"]),
+            "snapshot_at": str(manifest.get("snapshot_at") or ""),
+            "object_key": snapshot_object_key,
+        }
+    h = client.head_object(Bucket=cfg["bucket"], Key=target_key)
     metadata = h.get("Metadata") or {}
     return {
         "size_bytes": int(h.get("ContentLength") or 0),
@@ -233,13 +347,15 @@ def _verify_roundtrip() -> bool:
     digest = hashlib.sha256(payload).hexdigest()
     client = _client()
     try:
-        client.put_object(
-            Bucket=cfg["bucket"],
-            Key=key,
-            Body=payload,
-            ContentType="text/plain",
-            Metadata={"ai-infinity-canary": "v1", "ai-infinity-sha256": digest},
-        )
+        put_args = {
+            "Bucket": cfg["bucket"],
+            "Key": key,
+            "Body": payload,
+            "ContentType": "text/plain",
+        }
+        if cfg["backend"] != "supabase_s3":
+            put_args["Metadata"] = {"ai-infinity-canary": "v1", "ai-infinity-sha256": digest}
+        client.put_object(**put_args)
         head = client.head_object(Bucket=cfg["bucket"], Key=key)
         body = client.get_object(Bucket=cfg["bucket"], Key=key).get("Body")
         if body is None:
@@ -251,11 +367,15 @@ def _verify_roundtrip() -> bool:
             if callable(close):
                 close()
         metadata = head.get("Metadata") or {}
+        metadata_matches = (
+            cfg["backend"] == "supabase_s3"
+            or str(metadata.get("ai-infinity-sha256") or "") == digest
+        )
         return bool(
             int(head.get("ContentLength") or -1) == len(payload)
             and actual == payload
             and hashlib.sha256(actual).hexdigest() == digest
-            and str(metadata.get("ai-infinity-sha256") or "") == digest
+            and metadata_matches
         )
     finally:
         try:
@@ -320,7 +440,7 @@ def configure(db_path: Path | str) -> Dict[str, Any]:
                 "active": bool(contract_enabled() and configured()),
                 "verified": False,
                 "snapshot_verified": False,
-                "backend": "backblaze_b2" if contract_enabled() else None,
+                "backend": selected_backend() if contract_enabled() else None,
                 "last_sync_at": None,
                 "last_sha256": None,
                 "last_error": None,
@@ -351,7 +471,7 @@ def configure(db_path: Path | str) -> Dict[str, Any]:
             verified = bool(_verify_roundtrip())
             if verified:
                 break
-            last_error = "B2 canary verification failed"
+            last_error = "object-store canary verification failed"
         except Exception as exc:
             last_error = _describe_storage_error(exc)
         if attempt + 1 < _MAX_CANARY_VERIFY_ATTEMPTS:
@@ -361,7 +481,7 @@ def configure(db_path: Path | str) -> Dict[str, Any]:
         _STATUS["verified"] = verified
         _STATUS["active"] = verified
         if not verified:
-            _STATUS["last_error"] = last_error or "B2 canary verification failed"
+            _STATUS["last_error"] = last_error or "object-store canary verification failed"
 
     if not verified:
         # Do not claim persistence or restore from an unverified backend.
@@ -422,7 +542,8 @@ def restore_on_startup() -> Dict[str, Any]:
         if len(expected) != 64:
             raise RuntimeError("remote project-state snapshot has no trustworthy SHA-256 metadata")
 
-        response = _client().get_object(Bucket=_cfg()["bucket"], Key=object_key())
+        snapshot_object_key = str(head.get("object_key") or object_key())
+        response = _client().get_object(Bucket=_cfg()["bucket"], Key=snapshot_object_key)
         body = response.get("Body")
         if body is None:
             raise RuntimeError("remote project-state snapshot download returned no body")
@@ -535,6 +656,10 @@ def snapshot_now() -> Dict[str, Any]:
             return {"status": "disabled", "truthful": True}
 
         tmp: Optional[Path] = None
+        client = None
+        backend_name = _cfg()["backend"]
+        base_object_key = object_key()
+        snapshot_object_key = base_object_key
         try:
             tmp = _snapshot_database()
             size = tmp.stat().st_size
@@ -543,28 +668,54 @@ def snapshot_now() -> Dict[str, Any]:
             digest = _sha256_path(tmp)
             stamp = str(time.time())
             client = _client()
-            with tmp.open("rb") as stream:
-                client.put_object(
-                    Bucket=_cfg()["bucket"],
-                    Key=object_key(),
-                    Body=stream,
-                    ContentType="application/x-sqlite3",
-                    Metadata={
-                        "ai-infinity-sha256": digest,
-                        "ai-infinity-snapshot-at": stamp,
-                        "ai-infinity-schema": "studio-state-v1",
-                    },
+            previous_snapshot_key = None
+            if backend_name == "supabase_s3":
+                try:
+                    previous_snapshot_key = str(
+                        _read_snapshot_manifest(client, base_object_key).get("object_key") or ""
+                    ) or None
+                except Exception as exc:
+                    if not _is_missing_object_error(exc):
+                        raise
+                snapshot_object_key = (
+                    base_object_key + ".versions/" + uuid.uuid4().hex + ".sqlite"
                 )
+            put_args = {
+                "Bucket": _cfg()["bucket"],
+                "Key": snapshot_object_key,
+                "Body": None,
+                "ContentType": "application/x-sqlite3",
+            }
+            if _cfg()["backend"] != "supabase_s3":
+                put_args["Metadata"] = {
+                    "ai-infinity-sha256": digest,
+                    "ai-infinity-snapshot-at": stamp,
+                    "ai-infinity-schema": "studio-state-v1",
+                }
+            with tmp.open("rb") as stream:
+                put_args["Body"] = stream
+                client.put_object(**put_args)
 
-            head = _head()
-            if not head or int(head.get("size_bytes") or -1) != size:
-                raise RuntimeError("B2 project-state snapshot size verification failed")
-            if str(head.get("sha256") or "") != digest:
-                raise RuntimeError("B2 project-state snapshot SHA-256 metadata verification failed")
+            if backend_name == "supabase_s3":
+                head_response = client.head_object(
+                    Bucket=_cfg()["bucket"],
+                    Key=snapshot_object_key,
+                )
+                if int(head_response.get("ContentLength") or -1) != size:
+                    raise RuntimeError("project-state snapshot size verification failed")
+            else:
+                head = _head()
+                if not head or int(head.get("size_bytes") or -1) != size:
+                    raise RuntimeError("project-state snapshot size verification failed")
+                if str(head.get("sha256") or "") != digest:
+                    raise RuntimeError("project-state snapshot SHA-256 metadata verification failed")
 
-            body = client.get_object(Bucket=_cfg()["bucket"], Key=object_key()).get("Body")
+            body = client.get_object(
+                Bucket=_cfg()["bucket"],
+                Key=snapshot_object_key,
+            ).get("Body")
             if body is None:
-                raise RuntimeError("B2 project-state snapshot read-back returned no body")
+                raise RuntimeError("project-state snapshot read-back returned no body")
             remote_hash = hashlib.sha256()
             remote_size = 0
             try:
@@ -579,7 +730,35 @@ def snapshot_now() -> Dict[str, Any]:
                 if callable(close):
                     close()
             if remote_size != size or remote_hash.hexdigest() != digest:
-                raise RuntimeError("B2 project-state snapshot read-back integrity check failed")
+                raise RuntimeError("project-state snapshot read-back integrity check failed")
+
+            if backend_name == "supabase_s3":
+                _write_snapshot_manifest(
+                    client,
+                    size,
+                    digest,
+                    stamp,
+                    snapshot_object_key,
+                )
+                published = _head(base_object_key)
+                if (
+                    not published
+                    or published.get("object_key") != snapshot_object_key
+                    or int(published.get("size_bytes") or -1) != size
+                    or str(published.get("sha256") or "") != digest
+                ):
+                    raise RuntimeError("published project-state snapshot manifest failed independent verification")
+                if previous_snapshot_key and previous_snapshot_key != snapshot_object_key:
+                    # The new immutable object and manifest have already passed
+                    # read-back. Removing only the superseded owned key bounds
+                    # storage use; Supabase does not implement S3 versioning.
+                    try:
+                        client.delete_object(
+                            Bucket=_cfg()["bucket"],
+                            Key=previous_snapshot_key,
+                        )
+                    except Exception:
+                        pass
 
             with _LOCK:
                 if _CHANGE_GENERATION != generation:
@@ -594,8 +773,34 @@ def snapshot_now() -> Dict[str, Any]:
                 _SYNC_DIRTY = False
                 _SYNC_FAILURES = 0
 
-            return {"status": "verified", "size_bytes": size, "sha256": digest, "snapshot_at": stamp, "truthful": True}
+            return {"status": "verified", "size_bytes": size, "sha256": digest, "snapshot_at": stamp, "object_key": snapshot_object_key, "truthful": True}
         except Exception as exc:
+            if (
+                client is not None
+                and backend_name == "supabase_s3"
+                and snapshot_object_key != base_object_key
+            ):
+                # If a new immutable version was uploaded but the manifest was
+                # not published, remove only that unreferenced version. If the
+                # manifest update succeeded but its read-back failed, retain the
+                # object because it may already be the active recovery point.
+                try:
+                    active_manifest = _read_snapshot_manifest(client, base_object_key)
+                    active_object_key = str(active_manifest.get("object_key") or "")
+                except Exception as manifest_error:
+                    active_object_key = ""
+                    if not _is_missing_object_error(manifest_error):
+                        # An unreadable pointer is not authority to delete either
+                        # the new snapshot or the previous one.
+                        active_object_key = snapshot_object_key
+                if active_object_key != snapshot_object_key:
+                    try:
+                        client.delete_object(
+                            Bucket=_cfg()["bucket"],
+                            Key=snapshot_object_key,
+                        )
+                    except Exception:
+                        pass
             with _LOCK:
                 _STATUS["snapshot_verified"] = False
                 _STATUS["last_error"] = _describe_storage_error(exc)
@@ -697,7 +902,7 @@ def status() -> Dict[str, Any]:
     out.update(
         {
             "snapshot_verified": bool(out.get("snapshot_verified")),
-            "backend": "backblaze_b2" if enabled else None,
+            "backend": selected_backend() if enabled else None,
             "object_key": object_key() if enabled else None,
             "contract_enabled": enabled,
             "truthful": True,

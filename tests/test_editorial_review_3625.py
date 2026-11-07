@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -226,3 +228,262 @@ def test_production_app_exposes_editorial_review_and_keeps_approval_explicit():
     assert "aii-editorial-review-3625" in root.text
     missing = client.get("/infinity/studio/project/not-a-real-project/editorial-scorecard")
     assert missing.status_code == 404
+
+def _image_review_fixture(tmp_path):
+    import json
+    from PIL import Image
+
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (1280, 720), (24, 48, 72)).save(image_path, format="PNG")
+    digest = hashlib.sha256(image_path.read_bytes()).hexdigest()
+    project_id = "image-review-fixture"
+    image_manifest = {
+        "project_id": project_id,
+        "language": "English",
+        "output": {"file": "image.png", "sha256": digest, "width": 1280, "height": 720, "format": "PNG"},
+        "generation": {"mode": "local_editorial_illustration_fallback", "fallback_used": True},
+        "accessibility": {
+            "alt_text_draft": "A solar research station in a desert landscape.",
+            "status": "DRAFT_REVIEW_REQUIRED",
+            "human_review_required": True,
+        },
+    }
+    rights_manifest = {
+        "project_id": project_id,
+        "status": "REVIEW_REQUIRED",
+        "rights_status": "REVIEW_REQUIRED",
+        "redistribution_authorized": False,
+        "assets": [{"asset": "image.png", "sha256": digest, "rights_status": "REVIEW_REQUIRED", "declared_license": "Original local procedural illustration; review required"}],
+    }
+    primary = {
+        "project_id": project_id,
+        "status": "PASS",
+        "primary_delivery_verified": True,
+        "artifacts": [{"name": "image.png", "sha256": digest}],
+        "checks": {"image_exists": True, "image_png_signature": True, "image_sha256_matches": True},
+    }
+    production = {
+        "project_id": project_id,
+        "content_type": "image",
+        "primary_deliverable": {"file": "image.png", "sha256": digest},
+    }
+    paths = {}
+    for name, value in (
+        ("image_manifest.json", image_manifest),
+        ("rights_manifest.json", rights_manifest),
+        ("primary_content_delivery.json", primary),
+        ("production_manifest.json", production),
+        ("sources.json", {
+            "schema": "ai-infinity.sources.v1",
+            "project_id": project_id,
+            "source_count": 0,
+            "sources": [],
+            "creator_input": {
+                "type": "user_prompt",
+                "sha256": hashlib.sha256(
+                    b"Create a cinematic image of a solar research station in the desert"
+                ).hexdigest(),
+            },
+            "truthful": True,
+        }),
+    ):
+        path = tmp_path / name
+        path.write_text(json.dumps(value), encoding="utf-8")
+        paths[name] = path
+    paths["image.png"] = image_path
+    package_readme = tmp_path / "image_package_README.md"
+    package_readme.write_text("Review the exact image, its source method and rights before redistribution.", encoding="utf-8")
+    package_manifest = {
+        "project_id": project_id,
+        "entrypoint": "image.png",
+        "files": [{"path": "image.png", "sha256": digest}],
+        "rights_status": "REVIEW_REQUIRED",
+        "redistribution_authorized": False,
+        "publication_status": "NOT_PUBLISHED",
+    }
+    package_manifest_path = tmp_path / "image_package_manifest.json"
+    package_manifest_path.write_text(json.dumps(package_manifest), encoding="utf-8")
+    package_path = tmp_path / "image_package.zip"
+    with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        for source in [
+            image_path,
+            *(path for name, path in paths.items() if name != "primary_content_delivery.json"),
+            package_readme,
+            package_manifest_path,
+        ]:
+            if source.is_file():
+                bundle.write(source, arcname="ai-infinity-image/" + source.name)
+    primary["artifacts"].append({
+        "name": "image_package.zip",
+        "sha256": hashlib.sha256(package_path.read_bytes()).hexdigest(),
+    })
+    paths["primary_content_delivery.json"].write_text(json.dumps(primary), encoding="utf-8")
+    paths["image_package_README.md"] = package_readme
+    paths["image_package_manifest.json"] = package_manifest_path
+    paths["image_package.zip"] = package_path
+    return project_id, digest, paths
+
+
+def test_image_scorecard_uses_actual_png_hash_and_keeps_rights_review_open(monkeypatch, tmp_path):
+    project_id, digest, paths = _image_review_fixture(tmp_path)
+
+    class FakeStudio:
+        @staticmethod
+        def file_sha256(path):
+            return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+    monkeypatch.setattr(editorial, "_studio", lambda: FakeStudio())
+    monkeypatch.setattr(editorial, "_canonical_current_version_id", lambda _pid: "image-version-1")
+    monkeypatch.setattr(editorial, "_project_files", lambda _pid: paths)
+    project = {
+        "project_id": project_id,
+        "title": "Solar research station",
+        "status": "completed_with_qc_warnings",
+        "updated_at": 100,
+        "request_json": {
+            "title": "Solar research station",
+            "content_type": "image",
+            "objective": "Create a cinematic image of a solar research station in the desert",
+            "language": "English",
+            "visual_style": "cinematic editorial",
+        },
+        "blueprint_json": {},
+    }
+
+    card = editorial.build_scorecard(project)
+
+    assert card["content_type"] == "image"
+    assert card["technical_truth"]["verified"] is True
+    assert card["technical_truth"]["scope"] == "native_primary_image_integrity_only"
+    assert card["media"]["image_sha256"] == digest
+    assert card["release_gate"]["eligible_for_human_approval"] is True
+    assert card["release_gate"]["rights_review_required"] is True
+    assert card["release_gate"]["explicit_rights_approval_required"] is True
+    assert card["release_gate"]["publish_ready"] is False
+    assert card["human_approval"]["state"] == "pending"
+    assert all(row["applicable"] for row in card["dimensions"])
+    assert "final_mp4_present" not in card["media"]
+
+
+def test_image_scorecard_blocks_manifest_or_asset_hash_mismatch(monkeypatch, tmp_path):
+    import json
+
+    project_id, digest, paths = _image_review_fixture(tmp_path)
+    manifest = json.loads(paths["image_manifest.json"].read_text())
+    manifest["output"]["sha256"] = "0" * 64
+    paths["image_manifest.json"].write_text(json.dumps(manifest), encoding="utf-8")
+
+    class FakeStudio:
+        @staticmethod
+        def file_sha256(path):
+            return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+    monkeypatch.setattr(editorial, "_studio", lambda: FakeStudio())
+    monkeypatch.setattr(editorial, "_canonical_current_version_id", lambda _pid: "image-version-1")
+    monkeypatch.setattr(editorial, "_project_files", lambda _pid: paths)
+    project = {
+        "project_id": project_id,
+        "title": "Solar research station",
+        "status": "completed_with_qc_warnings",
+        "request_json": {"title": "Solar research station", "content_type": "image", "objective": "Cinematic solar research station image"},
+        "blueprint_json": {},
+    }
+    card = editorial.build_scorecard(project)
+    assert card["technical_truth"]["verified"] is False
+    assert "image_manifest_sha256_matches" in card["release_gate"]["critical_failures"]
+    assert card["release_gate"]["eligible_for_human_approval"] is False
+    assert card["release_gate"]["publish_ready"] is False
+
+
+def test_image_human_review_requires_six_role_scores_and_explicit_rights_attestation():
+    valid = {
+        "note": "I inspected the actual image, the visual result and its exact source record.",
+        "dimension_scores": {
+            "art_direction": 5,
+            "visual_design": 5,
+            "composition": 4,
+            "color": 5,
+            "accessibility": 4,
+            "rights": 5,
+        },
+        "rights_approval": True,
+        "rights_notes": "Reviewed the local generation method and exact image hash; redistribution is approved for this asset.",
+    }
+    ok, scores, error = editorial._image_role_review_validation(valid)
+    assert ok is True
+    assert not error
+    assert len(scores) == 6
+
+    no_rights = dict(valid, rights_approval=False)
+    ok, _, error = editorial._image_role_review_validation(no_rights)
+    assert ok is False and "explicit image rights approval" in error
+
+    weak_average = dict(valid, dimension_scores={key: 4 for key in valid["dimension_scores"]})
+    ok, _, error = editorial._image_role_review_validation(weak_average)
+    assert ok is False and "average" in error
+
+
+def test_image_review_state_is_exact_fingerprint_bound_and_not_publish_ready():
+    scores = {
+        "art_direction": 5,
+        "visual_design": 5,
+        "composition": 4,
+        "color": 5,
+        "accessibility": 4,
+        "rights": 5,
+    }
+    rows = [{
+        "review_id": "image-review-1",
+        "content_fingerprint": "image-fingerprint-current",
+        "decision": "approve",
+        "dimension_scores_json": json.dumps(scores),
+        "rights_approval": 1,
+        "rights_notes": "Reviewed the exact image source, generation method and rights record.",
+        "created_at": 2,
+    }]
+    state = editorial._review_state(rows, "image-fingerprint-current")
+    assert state["state"] == "approved"
+    assert state["review_complete"] is True
+    assert state["rights_approved_for_exact_asset"] is True
+    assert state["publish_ready"] is False
+
+    stale = editorial._review_state(rows, "different-image-fingerprint")
+    assert stale["state"] == "stale"
+    assert stale["publish_ready"] is False
+
+    incomplete_rows = [dict(rows[0], rights_approval=0)]
+    incomplete = editorial._review_state(incomplete_rows, "image-fingerprint-current")
+    assert incomplete["state"] == "incomplete"
+    assert incomplete["publish_ready"] is False
+
+def test_review_table_migrates_existing_databases_for_image_roles_and_rights(monkeypatch, tmp_path):
+    import sqlite3
+    import threading
+
+    database = tmp_path / "editorial-reviews.sqlite3"
+
+    class FakeStudio:
+        DB_LOCK = threading.RLock()
+
+        @staticmethod
+        def _connect():
+            connection = sqlite3.connect(database)
+            connection.row_factory = sqlite3.Row
+            return connection
+
+    monkeypatch.setattr(editorial, "_studio", lambda: FakeStudio())
+    # Simulate a database created by the older video-only review schema.
+    with FakeStudio._connect() as db:
+        db.execute(
+            """CREATE TABLE aii_editorial_reviews (
+                review_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id TEXT NOT NULL,
+                content_fingerprint TEXT NOT NULL, decision TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '', scorecard_version TEXT NOT NULL, created_at REAL NOT NULL
+            )"""
+        )
+    editorial._ensure_review_table()
+    editorial._ensure_review_table()
+    with FakeStudio._connect() as db:
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(aii_editorial_reviews)")}
+    assert {"dimension_scores_json", "rights_approval", "rights_notes"} <= columns
+
