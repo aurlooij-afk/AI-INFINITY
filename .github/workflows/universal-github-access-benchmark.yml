@@ -9,6 +9,8 @@ on:
       - "scripts/benchmark_github_access.py"
       - "tests/test_self_maintenance.py"
       - "tests/test_github_access_benchmark.py"
+      - "tests/test_universal_command_router.py"
+      - "docs/SELF_MAINTENANCE.md"
       - ".github/workflows/universal-github-access-benchmark.yml"
 
 # The benchmark's repository writes use the dedicated owner token below.
