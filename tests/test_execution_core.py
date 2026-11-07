@@ -122,3 +122,59 @@ def test_batch_dispatch_preserves_request_context_for_operator_authorized_capabi
     assert "def dispatch_registered(command: str, owner_id: str, command_payload: dict[str, Any]):" in source
     assert "command, owner_id, command_payload, request=request," in source
     assert "dispatch=dispatch_registered" in source
+
+
+
+def test_idempotency_key_prevents_duplicate_execution_and_rejects_payload_rebinding(tmp_path, monkeypatch):
+    fake, events, calls, db_path = _fake_canonical(tmp_path, monkeypatch)
+    command = "Research reliable sources about accessibility"
+    payload = {"limit": 5, "idempotency_key": "research-job-0001"}
+
+    first = execution_core.dispatch(command, "user-1", payload)
+    replay = execution_core.dispatch(command, "user-1", payload)
+
+    assert len(calls) == 1
+    assert replay["status"] == "existing"
+    assert replay["executed"] is False
+    assert replay["idempotent_replay"] is True
+    assert replay["execution"]["execution_id"] == first["execution"]["execution_id"]
+    assert replay["execution"]["state"] == "completed"
+
+    with pytest.raises(HTTPException) as exc:
+        execution_core.dispatch(
+            "Research a different topic about accessibility",
+            "user-1",
+            payload,
+        )
+    assert exc.value.status_code == 409
+    assert len(calls) == 1
+
+
+def test_invalid_execution_idempotency_key_is_rejected(tmp_path, monkeypatch):
+    fake, events, calls, db_path = _fake_canonical(tmp_path, monkeypatch)
+    with pytest.raises(HTTPException) as exc:
+        execution_core.dispatch(
+            "Research reliable sources about accessibility",
+            "user-1",
+            {"idempotency_key": "bad key"},
+        )
+    assert exc.value.status_code == 422
+    assert calls == []
+
+
+def test_authorization_http_error_is_recorded_as_blocked(tmp_path, monkeypatch):
+    fake, events, calls, db_path = _fake_canonical(tmp_path, monkeypatch)
+    def deny(command, user_id, payload, request=None):
+        raise HTTPException(403, "operator authorization required")
+    fake.dispatch_command = deny
+    with pytest.raises(HTTPException):
+        execution_core.dispatch(
+            "Use GitHub API to inspect repository actions",
+            "user-1",
+            {"task_type": "github_api"},
+            request=object(),
+        )
+    with sqlite3.connect(str(db_path)) as connection:
+        row = connection.execute("SELECT state FROM canonical_executions").fetchone()
+    assert row[0] == "blocked"
+    assert events[-1][2] == "execution_blocked"
