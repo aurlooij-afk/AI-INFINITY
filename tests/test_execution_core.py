@@ -112,3 +112,13 @@ def test_canonical_command_and_batch_paths_share_the_execution_core():
     batch_source = (root / "universal_command_batch.py").read_text(encoding="utf-8")
     assert "from ai_infinity.execution_core import dispatch as execute_registered" in canonical_source
     assert "dispatch=execution_core.dispatch" in batch_source
+
+
+
+def test_batch_dispatch_preserves_request_context_for_operator_authorized_capabilities():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "universal_command_batch.py").read_text(encoding="utf-8")
+    assert "def dispatch_registered(command: str, owner_id: str, command_payload: dict[str, Any]):" in source
+    assert "command, owner_id, command_payload, request=request," in source
+    assert "dispatch=dispatch_registered" in source
