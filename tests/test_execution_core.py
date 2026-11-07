@@ -179,3 +179,26 @@ def test_authorization_http_error_is_recorded_as_blocked(tmp_path, monkeypatch):
         row = connection.execute("SELECT state FROM canonical_executions").fetchone()
     assert row[0] == "blocked"
     assert events[-1][2] == "execution_blocked"
+
+
+
+def test_interrupted_running_execution_is_explicitly_reconciliation_required(tmp_path, monkeypatch):
+    _fake_canonical(tmp_path, monkeypatch)
+    capability = dict(execution_core._BY_ROUTE["research"])
+    execution_core._record(
+        "exec_interrupted_123",
+        "user-1",
+        "",
+        capability,
+        "request-hash",
+        "running",
+        {},
+        100.0,
+        None,
+    )
+
+    result = execution_core.get_execution("exec_interrupted_123", "user-1")
+
+    assert result["state"] == "running"
+    assert result["reconciliation_required"] is True
+    assert "never auto-replay" in result["reconciliation_policy"]
