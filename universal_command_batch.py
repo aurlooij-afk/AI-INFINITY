@@ -17,6 +17,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import Any, Callable
 
 from fastapi import HTTPException, Request, Response
+from starlette.concurrency import run_in_threadpool
 
 import ai_infinity_canonical as canonical
 
@@ -483,8 +484,11 @@ def register(app: Any) -> None:
             existing["replayed"] = True
             return existing
 
-        result = execute_commands(
-            commands, user_id=user_id, batch_id=batch_id,
+        result = await run_in_threadpool(
+            execute_commands,
+            commands,
+            user_id=user_id,
+            batch_id=batch_id,
             dispatch=canonical.dispatch_command,
             checkpoint=lambda rows, state: save(batch_id, rows, state),
             max_concurrency=max_concurrency,
