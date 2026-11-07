@@ -5,7 +5,7 @@ import pytest
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 
-from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 import self_maintenance as maintenance
 
@@ -848,12 +848,19 @@ def test_status_endpoint_reports_missing_owner_token_but_execution_routes_remain
 
     app = FastAPI()
     maintenance.register(app)
-    client = TestClient(app)
-    headers = {"x-ai-infinity-maintenance-token": "operator-secret-for-test"}
-
-    status = client.get("/infinity/studio/self-maintenance/status", headers=headers)
-    assert status.status_code == 200
-    body = status.json()
+    scope = {
+        "type": "http", "method": "GET",
+        "path": "/infinity/studio/self-maintenance/status",
+        "headers": [(b"x-ai-infinity-maintenance-token", b"operator-secret-for-test")],
+        "query_string": b"", "server": ("test", 80), "client": ("test", 123),
+        "scheme": "http", "http_version": "1.1",
+    }
+    request = Request(scope)
+    status_endpoint = next(
+        route.endpoint for route in app.routes
+        if getattr(route, "path", "") == "/infinity/studio/self-maintenance/status"
+    )
+    body = status_endpoint(request)
     assert body["enabled"] is True
     assert body["operator_ready"] is True
     assert body["ready"] is False
@@ -862,9 +869,14 @@ def test_status_endpoint_reports_missing_owner_token_but_execution_routes_remain
     assert body["execution_blocked_reason"] == "missing_dedicated_owner_token"
     assert body["github_access_mode"] == "github_full"
 
-    runtime = client.get("/infinity/studio/self-maintenance/runtime", headers=headers)
-    assert runtime.status_code == 503
-    assert "missing_dedicated_owner_token" in runtime.json()["detail"]
+    runtime_endpoint = next(
+        route.endpoint for route in app.routes
+        if getattr(route, "path", "") == "/infinity/studio/self-maintenance/runtime"
+    )
+    with pytest.raises(HTTPException) as exc:
+        runtime_endpoint(request)
+    assert exc.value.status_code == 503
+    assert "missing_dedicated_owner_token" in str(exc.value.detail)
 
 
 def test_status_endpoint_still_requires_separate_operator_authentication(monkeypatch):
@@ -872,6 +884,17 @@ def test_status_endpoint_still_requires_separate_operator_authentication(monkeyp
     monkeypatch.setenv("AI_INFINITY_MAINTENANCE_ADMIN_TOKEN", "operator-secret-for-test")
     app = FastAPI()
     maintenance.register(app)
-    response = TestClient(app).get("/infinity/studio/self-maintenance/status")
-    assert response.status_code == 403
+    status_endpoint = next(
+        route.endpoint for route in app.routes
+        if getattr(route, "path", "") == "/infinity/studio/self-maintenance/status"
+    )
+    request = Request({
+        "type": "http", "method": "GET",
+        "path": "/infinity/studio/self-maintenance/status",
+        "headers": [], "query_string": b"", "server": ("test", 80),
+        "client": ("test", 123), "scheme": "http", "http_version": "1.1",
+    })
+    with pytest.raises(HTTPException) as exc:
+        status_endpoint(request)
+    assert exc.value.status_code == 403
 
