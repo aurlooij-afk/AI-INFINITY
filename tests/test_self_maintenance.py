@@ -763,8 +763,8 @@ def test_github_full_mode_propagates_to_cross_directory_source_discovery_and_edi
     assert "tests/test_github_mode.py" in selected
 
     source_text = {
-        ".github/workflows/creator-runtime.yml": "name: creator-runtime\\n",
-        "tests/test_github_mode.py": "def test_github_mode():\\n    assert True\\n",
+        ".github/workflows/creator-runtime.yml": "name: creator-runtime\n",
+        "tests/test_github_mode.py": "def test_github_mode():\n    assert True\n",
     }
     def fake_read_source(_cfg, path):
         content = source_text[path]
@@ -777,8 +777,8 @@ def test_github_full_mode_propagates_to_cross_directory_source_discovery_and_edi
     inspected = maintenance.inspect_sources(cfg, selected, goal="inspect creator runtime workflow")
     originals = {path: fake_read_source(cfg, path) for path in selected}
     proposed = [
-        {"path": ".github/workflows/creator-runtime.yml", "content": "name: updated\\n"},
-        {"path": "tests/test_github_mode.py", "content": "def test_github_mode():\\n    assert 2 == 2\\n"},
+        {"path": ".github/workflows/creator-runtime.yml", "content": "name: updated\n"},
+        {"path": "tests/test_github_mode.py", "content": "def test_github_mode():\n    assert 2 == 2\n"},
     ]
     expanded = maintenance.apply_window_edits(
         proposed, originals, inspected["files"], access_mode=cfg["github_access_mode"]
