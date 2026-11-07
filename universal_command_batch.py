@@ -20,6 +20,7 @@ from fastapi import HTTPException, Request, Response
 from starlette.concurrency import run_in_threadpool
 
 import ai_infinity_canonical as canonical
+import ai_infinity.execution_core as execution_core
 
 
 MAX_COMMANDS = 20
@@ -490,7 +491,7 @@ def register(app: Any) -> None:
             commands,
             user_id=user_id,
             batch_id=batch_id,
-            dispatch=__import__("ai_infinity.execution_core", fromlist=["dispatch"]).dispatch,
+            dispatch=execution_core.dispatch,
             checkpoint=lambda rows, state: save(batch_id, rows, state),
             max_concurrency=max_concurrency,
             cancel_requested=lambda: cancellation_requested(batch_id),
