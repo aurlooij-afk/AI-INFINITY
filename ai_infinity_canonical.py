@@ -717,12 +717,21 @@ def classify_command(command, raw=None):
         "revision": "edit", "modification": "edit", "plan": "strategy",
         "write_script": "script", "scriptwriting": "script",
         "performance": "analytics", "seo_metadata": "seo", "publish_options": "publisher",
+        "github": "github_api", "github_rest": "github_api",
+        "github_graphql": "github_api", "github_api_call": "github_api",
     }
     explicit = aliases.get(explicit, explicit)
     supported = {
         "research", "create", "edit", "project_status", "capabilities",
-        "script", "strategy", "marketing", "seo", "analytics", "publisher", "monetization", "public_api",
+        "script", "strategy", "marketing", "seo", "analytics", "publisher", "monetization", "public_api", "github_api",
     }
+    github_path = payload.get("github_path") or payload.get("github_api_path")
+    github_graphql_query = payload.get("github_graphql_query")
+    if explicit == "github_api" or github_path or github_graphql_query:
+        return {
+            "route": "github_api",
+            "reason": "Matched the authenticated GitHub REST/GraphQL execution capability; GitHub enforces the configured credential permissions.",
+        }
     action_words = {"publish", "post", "send", "delete", "destroy", "purchase", "buy", "pay", "transfer", "schedule", "upload"}
     explicit_action = explicit in action_words
     imperative_action = bool(re.match(
@@ -963,14 +972,59 @@ def classify_command(command, raw=None):
     return {"route": route, "reason": "Matched an implemented AI Infinity capability."}
 
 
-def dispatch_command(command, user_id, raw=None):
+def dispatch_command(command, user_id, raw=None, request=None):
     """Execute through existing engines; this is a router, not a second creator engine."""
     payload = raw if isinstance(raw, dict) else {}
+    github_path = payload.get("github_path") or payload.get("github_api_path")
+    github_graphql_query = payload.get("github_graphql_query")
     cmd = clean(command, 4000)
     if len(cmd) < 3:
         raise HTTPException(422, "A command of at least three characters is required.")
     decision = classify_command(cmd, payload)
     route = decision["route"]
+    if route == "github_api":
+        # The natural-language command core can invoke GitHub, but each call
+        # requires the independent operator credential and the GitHub token
+        # remains server-side. GitHub is authoritative for endpoint permissions.
+        if request is None:
+            return {
+                "status": "authorization_required", "route": route,
+                "reason": "GitHub API execution requires the operator maintenance authorization header.",
+                "executed": False, "truthful": True,
+            }
+        import self_maintenance as maintenance
+        cfg = maintenance.load_settings()
+        maintenance.authorize(request, cfg)
+        method = clean(payload.get("github_method") or payload.get("method") or ("POST" if github_graphql_query else "GET"), 10).upper()
+        path = clean(github_path or ("/graphql" if github_graphql_query else ""), 2000)
+        body = payload.get("github_body") if "github_body" in payload else payload.get("body")
+        if github_graphql_query:
+            if not isinstance(github_graphql_query, str) or not github_graphql_query.strip():
+                raise HTTPException(422, "A non-empty GitHub GraphQL query is required.")
+            variables = payload.get("github_graphql_variables")
+            body = {"query": github_graphql_query, "variables": variables if isinstance(variables, dict) else {}}
+        maintenance.validate_github_contents_path(path)
+        started = time.monotonic()
+        result = maintenance.github_request(cfg, method, path, body)
+        result = maintenance.validate_github_content_response(path, result)
+        safe_result = maintenance.redact_github_response(
+            result, secret_values=(str(cfg.get("github_token") or ""),)
+        )
+        return {
+            "status": "completed", "route": route,
+            "repository": cfg.get("repository"),
+            "access_scope": (
+                "token_authorized_github_resources"
+                if cfg.get("github_access_mode") == "github_full"
+                else "configured_repository_only"
+            ),
+            "method": method, "path": path,
+            "duration_ms": round((time.monotonic() - started) * 1000, 2),
+            "result": safe_result,
+            "executed": True, "read_only": method in {"GET", "HEAD"},
+            "write": method not in {"GET", "HEAD"},
+            "credential_values_redacted": True, "truthful": True,
+        }
     if route == "authorization_required":
         return {
             "status": "authorization_required", "route": route,
@@ -1441,7 +1495,7 @@ def register(app):
         uid_=current_user(request,response)
         payload=await request.json()
         command=clean(payload.get("command") or payload.get("instruction"),4000)
-        return dispatch_command(command,uid_,payload)
+        return dispatch_command(command,uid_,payload,request=request)
 
     @app.post("/infinity/canonical/preflight")
     async def canonical_preflight(request:Request,response:Response):
