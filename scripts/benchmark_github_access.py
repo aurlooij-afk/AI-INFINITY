@@ -35,7 +35,7 @@ def _benchmark_model(run_marker: str):
         files = source.get("files") if isinstance(source, dict) else []
         row = next(
             (item for item in (files or []) if isinstance(item, dict)
-             and item.get("path") == "tests/test_gemini_writer.py"),
+             and item.get("path") == "tests/test_project_status_truth_latency.py"),
             None,
         )
         if not row or row.get("content_mode") != "full_file":
@@ -47,7 +47,7 @@ def _benchmark_model(run_marker: str):
         )
         result = {
             "summary": "Temporary GitHub-access probe; no product behavior changed.",
-            "changes": [{"path": "tests/test_gemini_writer.py", "content": updated}],
+            "changes": [{"path": "tests/test_project_status_truth_latency.py", "content": updated}],
         }
         return {"text": json.dumps(result), "provider": "deterministic-github-access-benchmark"}
 
@@ -200,9 +200,9 @@ def main() -> int:
             }
 
         inspection_paths = [
-            ".github/workflows/final-acceptance-suite.yml",
-            "self_maintenance.py",
-            "tests/test_gemini_writer.py",
+            ".github/workflows/creator-studio-ci.yml",
+            "main.py",
+            "tests/test_project_status_truth_latency.py",
             "render.yaml",
         ]
         ok, inspected = run_operation(
@@ -253,7 +253,7 @@ def main() -> int:
             lambda: maintenance.improve_repository(
                 cfg,
                 "Run a temporary, reversible GitHub write-permission benchmark and add a marker comment to the inspected self-maintenance regression test.",
-                ["tests/test_gemini_writer.py"],
+                ["tests/test_project_status_truth_latency.py"],
                 _benchmark_model(run_marker),
             ),
         )
