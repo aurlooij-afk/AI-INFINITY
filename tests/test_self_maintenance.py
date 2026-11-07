@@ -519,6 +519,8 @@ def test_github_request_is_limited_to_configured_repository_and_supported_method
     cfg = {"repository": "aurlooij-afk/AI-INFINITY", "github_token": "not-a-real-token"}
     result = maintenance.github_request(cfg, "GET", "/rate_limit")
     assert result["resources"]["core"]["remaining"] == 42
+    repo_root = maintenance.github_request(cfg, "GET", "/repos/aurlooij-afk/AI-INFINITY")
+    assert repo_root["resources"]["core"]["remaining"] == 42
     assert calls[0][0] == "GET"
     with pytest.raises(HTTPException, match="configured repository"):
         maintenance.github_request(cfg, "GET", "/repos/someone/other-repo")
@@ -551,3 +553,36 @@ def test_register_exposes_repository_scoped_github_rest_execution_route():
     maintenance.register(app)
     paths = {route.path for route in app.routes}
     assert "/infinity/studio/self-maintenance/github/execute" in paths
+
+
+
+def test_github_contents_api_guard_rejects_protected_and_secret_files():
+    for path in (
+        "/repos/aurlooij-afk/AI-INFINITY/contents/.env",
+        "/repos/aurlooij-afk/AI-INFINITY/contents/.github/workflows/../.env.production",
+        "/repos/aurlooij-afk/AI-INFINITY/contents/AI_Infinity_Creator_Benchmark_and_Reuse_Plan.md",
+        "/repos/aurlooij-afk/AI-INFINITY/contents/credentials/provider-key.txt",
+    ):
+        with pytest.raises(HTTPException):
+            maintenance.validate_github_contents_path(path)
+
+
+def test_github_contents_api_guard_allows_repository_full_text_and_workflow_paths():
+    assert maintenance.validate_github_contents_path(
+        "/repos/aurlooij-afk/AI-INFINITY/contents/.github/workflows/final-acceptance-suite.yml"
+    ) is None
+    assert maintenance.validate_github_contents_path(
+        "/repos/aurlooij-afk/AI-INFINITY/contents/docs/SELF_MAINTENANCE.md"
+    ) is None
+
+
+def test_repository_full_settings_are_opt_in_and_reported(monkeypatch):
+    monkeypatch.setenv("AI_INFINITY_SELF_MAINTENANCE_ENABLED", "true")
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_REPOSITORY", "aurlooij-afk/AI-INFINITY")
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_BASE_BRANCH", "main")
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_GITHUB_TOKEN", "placeholder")
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_ADMIN_TOKEN", "placeholder-admin")
+    monkeypatch.delenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", raising=False)
+    assert maintenance.load_settings()["github_access_mode"] == "restricted"
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", "repository_full")
+    assert maintenance.load_settings()["github_access_mode"] == "repository_full"
