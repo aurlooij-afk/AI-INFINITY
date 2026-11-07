@@ -2,8 +2,9 @@ from __future__ import annotations
 
 """Measure AI Infinity's real GitHub repository access without touching main.
 
-The benchmark uses the configured maintenance token (or the workflow GITHUB_TOKEN),
-then exercises AI Infinity's own discovery, inspection, commit and draft-PR path.
+The benchmark requires a dedicated owner-provisioned GitHub token. It never falls
+back to the workflow GITHUB_TOKEN, whose effective write permissions may be restricted.
+It exercises AI Infinity's own discovery, inspection, commit and draft-PR path.
 Every write is made on a temporary branch; the draft PR is closed and the branch
 is deleted in a finally block. No token or secret value is written to the report.
 """
@@ -54,6 +55,16 @@ def _benchmark_model(run_marker: str):
     return invoke
 
 
+def resolve_benchmark_token(environ: dict[str, str] | None = None) -> tuple[str, str]:
+    """Resolve only an explicitly configured owner token; never downgrade silently."""
+    source = os.environ if environ is None else environ
+    if source.get("AI_INFINITY_MAINTENANCE_GITHUB_TOKEN", "").strip():
+        return source["AI_INFINITY_MAINTENANCE_GITHUB_TOKEN"].strip(), "AI_INFINITY_MAINTENANCE_GITHUB_TOKEN"
+    if source.get("AI_INFINITY_GITHUB_TOKEN", "").strip():
+        return source["AI_INFINITY_GITHUB_TOKEN"].strip(), "AI_INFINITY_GITHUB_TOKEN"
+    return "", "missing_dedicated_owner_token"
+
+
 def _save(path: Path, report: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -66,8 +77,8 @@ def main() -> int:
     output = Path(args.output)
 
     repo = os.getenv("GITHUB_REPOSITORY") or os.getenv("AI_INFINITY_MAINTENANCE_REPOSITORY", "")
-    token = os.getenv("AI_INFINITY_MAINTENANCE_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN", "")
-    token_source = os.getenv("AI_INFINITY_MAINTENANCE_GITHUB_TOKEN_SOURCE", "configured_github_token")
+    token, resolved_token_source = resolve_benchmark_token()
+    token_source = os.getenv("AI_INFINITY_MAINTENANCE_GITHUB_TOKEN_SOURCE", resolved_token_source)
     head_sha = os.getenv("AI_INFINITY_BENCHMARK_HEAD_SHA", os.getenv("GITHUB_SHA", ""))
     run_id = os.getenv("GITHUB_RUN_ID", "local")
     run_attempt = os.getenv("GITHUB_RUN_ATTEMPT", "1")
@@ -90,7 +101,10 @@ def main() -> int:
     if not repo or "/" not in repo or not token:
         report.update({
             "status": "BLOCKED",
-            "error": "GITHUB_REPOSITORY or GitHub token was not configured.",
+            "error": (
+                "GITHUB_REPOSITORY is invalid or no dedicated owner-provisioned GitHub token is configured. "
+                "The workflow GITHUB_TOKEN is intentionally not accepted as a substitute."
+            ),
         })
         _save(output, report)
         return 2
