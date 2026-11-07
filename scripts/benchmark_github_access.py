@@ -116,169 +116,248 @@ def main() -> int:
     created_pr = None
     created_branch = None
     exit_code = 1
+
+    def run_operation(name: str, action):
+        started = time.monotonic()
+        try:
+            result = action()
+            report["operations"].append({
+                "name": name,
+                "status": "PASS",
+                "duration_ms": round((time.monotonic() - started) * 1000, 2),
+            })
+            return True, result
+        except Exception as exc:
+            detail = getattr(exc, "detail", None)
+            if isinstance(detail, (str, int, float)):
+                safe_error = str(detail)[:300]
+            else:
+                safe_error = type(exc).__name__
+            report["operations"].append({
+                "name": name,
+                "status": "FAIL",
+                "duration_ms": round((time.monotonic() - started) * 1000, 2),
+                "error_type": type(exc).__name__,
+                "error": safe_error,
+            })
+            return False, None
+
     try:
-        started = time.monotonic()
-        metadata = maintenance.github_request(cfg, "GET", f"/repos/{repo}")
-        permissions = metadata.get("permissions") if isinstance(metadata.get("permissions"), dict) else {}
-        report["repository_permissions"] = {
-            key: permissions.get(key)
-            for key in ("pull", "triage", "push", "maintain", "admin")
-            if key in permissions
-        }
-        record("repository_metadata_and_effective_permissions", started, "PASS", {
-            "default_branch": metadata.get("default_branch"),
-            "visibility": metadata.get("visibility"),
-        })
+        ok, metadata = run_operation(
+            "repository_metadata_and_effective_permissions",
+            lambda: maintenance.github_request(cfg, "GET", f"/repos/{repo}"),
+        )
+        if ok:
+            permissions = metadata.get("permissions") if isinstance(metadata.get("permissions"), dict) else None
+            report["repository_permissions"] = {
+                "reported_by_github": permissions is not None,
+                "values": {
+                    key: permissions.get(key)
+                    for key in ("pull", "triage", "push", "maintain", "admin")
+                    if permissions is not None and key in permissions
+                } if permissions is not None else None,
+                "note": (
+                    "GitHub did not return a repository permissions object for this token."
+                    if permissions is None else
+                    "Reported permission flags are descriptive; the operation probes below establish actual access."
+                ),
+            }
+            report["repository_metadata"] = {
+                "default_branch": metadata.get("default_branch"),
+                "visibility": metadata.get("visibility"),
+                "archived": metadata.get("archived"),
+            }
 
-        started = time.monotonic()
-        rate = maintenance.github_request(cfg, "GET", "/rate_limit")
-        core = (rate.get("resources") or {}).get("core") or {}
-        report["rate_limit"] = {
-            "limit": core.get("limit"),
-            "remaining": core.get("remaining"),
-            "reset_epoch": core.get("reset"),
-        }
-        record("authenticated_rate_limit_read", started, "PASS")
+        ok, rate = run_operation(
+            "authenticated_rate_limit_read",
+            lambda: maintenance.github_request(cfg, "GET", "/rate_limit"),
+        )
+        if ok:
+            core = (rate.get("resources") or {}).get("core") or {}
+            report["rate_limit"] = {
+                "limit": core.get("limit"),
+                "remaining": core.get("remaining"),
+                "reset_epoch": core.get("reset"),
+            }
 
-        started = time.monotonic()
         goal = (
             "Inspect complete repository source, workflows, tests and execution modules; "
             "measure GitHub-backed self-maintenance discovery and candidate operations."
         )
-        discovery = maintenance.discover_sources(cfg, goal, limit=40)
-        report["discovery"] = {
-            "matched_count": discovery.get("matched_count"),
-            "tree_truncated": discovery.get("tree_truncated"),
-            "selected_paths": discovery.get("suggested_paths") or [],
-            "includes_github_workflows": any(
-                str(row.get("path", "")).startswith(".github/workflows/")
-                for row in discovery.get("matches", [])
-            ),
-        }
-        record("repository_wide_recursive_tree_discovery", started, "PASS")
-
-        started = time.monotonic()
-        inspected = maintenance.inspect_sources(
-            cfg,
-            [
-                ".github/workflows/final-acceptance-suite.yml",
-                "self_maintenance.py",
-                "tests/test_gemini_writer.py",
-                "render.yaml",
-            ],
-            goal=goal,
+        ok, discovery = run_operation(
+            "repository_wide_recursive_tree_discovery",
+            lambda: maintenance.discover_sources(cfg, goal, limit=40),
         )
-        report["inspection"] = {
-            "files": [
-                {
-                    "path": row.get("path"),
-                    "size_bytes": row.get("size_bytes"),
-                    "content_mode": row.get("content_mode"),
-                    "sha256": row.get("sha256"),
-                }
-                for row in inspected.get("files", [])
-            ],
-            "total_source_bytes": inspected.get("total_source_bytes"),
-            "total_context_bytes": inspected.get("total_context_bytes"),
-        }
-        record("cross_directory_source_inspection", started, "PASS")
+        if ok:
+            report["discovery"] = {
+                "matched_count": discovery.get("matched_count"),
+                "tree_truncated": discovery.get("tree_truncated"),
+                "selected_paths": discovery.get("suggested_paths") or [],
+                "includes_github_workflows": any(
+                    str(row.get("path", "")).startswith(".github/workflows/")
+                    for row in discovery.get("matches", [])
+                ),
+            }
+
+        inspection_paths = [
+            ".github/workflows/final-acceptance-suite.yml",
+            "self_maintenance.py",
+            "tests/test_gemini_writer.py",
+            "render.yaml",
+        ]
+        ok, inspected = run_operation(
+            "cross_directory_source_inspection",
+            lambda: maintenance.inspect_sources(cfg, inspection_paths, goal=goal),
+        )
+        if ok:
+            report["inspection"] = {
+                "files": [
+                    {
+                        "path": row.get("path"),
+                        "size_bytes": row.get("size_bytes"),
+                        "content_mode": row.get("content_mode"),
+                        "sha256": row.get("sha256"),
+                    }
+                    for row in inspected.get("files", [])
+                ],
+                "total_source_bytes": inspected.get("total_source_bytes"),
+                "total_context_bytes": inspected.get("total_context_bytes"),
+            }
 
         if head_sha and len(head_sha) == 40:
-            started = time.monotonic()
-            ci = maintenance.inspect_ci(cfg, commit_sha=head_sha, limit=10)
-            report["commit_bound_ci"] = {
-                "commit_sha_filter": ci.get("commit_sha_filter"),
-                "run_count": ci.get("run_count"),
-                "passed_runs": ci.get("passed_runs"),
-                "failed_runs": ci.get("failed_runs"),
-                "in_progress_runs": ci.get("in_progress_runs"),
-                "runs": ci.get("runs", [])[:10],
-            }
-            record("exact_candidate_workflow_and_job_inspection", started, "PASS")
+            ok, ci = run_operation(
+                "exact_candidate_workflow_and_job_inspection",
+                lambda: maintenance.inspect_ci(cfg, commit_sha=head_sha, limit=10),
+            )
+            if ok:
+                report["commit_bound_ci"] = {
+                    "commit_sha_filter": ci.get("commit_sha_filter"),
+                    "run_count": ci.get("run_count"),
+                    "passed_runs": ci.get("passed_runs"),
+                    "failed_runs": ci.get("failed_runs"),
+                    "in_progress_runs": ci.get("in_progress_runs"),
+                    "runs": ci.get("runs", [])[:10],
+                }
         else:
-            record("exact_candidate_workflow_and_job_inspection", time.monotonic(), "BLOCKED", {
-                "reason": "No full candidate SHA was supplied to the benchmark.",
+            report["operations"].append({
+                "name": "exact_candidate_workflow_and_job_inspection",
+                "status": "BLOCKED",
+                "error": "No full candidate SHA was supplied to the benchmark.",
             })
 
-        started = time.monotonic()
-        result = maintenance.improve_repository(
-            cfg,
-            "Run a temporary, reversible GitHub write-permission benchmark and add a marker comment to the inspected self-maintenance regression test.",
-            ["tests/test_gemini_writer.py"],
-            _benchmark_model(run_marker),
+        # This uses a deterministic, non-generative writer fixture. It measures
+        # AI Infinity's own source-inspection, content-write, branch and PR code,
+        # not the intelligence/quality of a language model.
+        ok, result = run_operation(
+            "self_maintenance_source_to_commit_to_draft_pr",
+            lambda: maintenance.improve_repository(
+                cfg,
+                "Run a temporary, reversible GitHub write-permission benchmark and add a marker comment to the inspected self-maintenance regression test.",
+                ["tests/test_gemini_writer.py"],
+                _benchmark_model(run_marker),
+            ),
         )
-        created_pr = int((result.get("pull_request") or {}).get("pull_request_number") or 0) or None
-        created_branch = str((result.get("pull_request") or {}).get("branch") or "")
-        report["temporary_write_probe"] = {
-            "pull_request_number": created_pr,
-            "pull_request_url": (result.get("pull_request") or {}).get("pull_request_url"),
-            "branch_prefix_valid": created_branch.startswith("ai-infinity/self-maintenance/"),
-            "changed_files": result.get("changed_files"),
-            "writer_provider": result.get("provider"),
+        if ok:
+            created_pr = int((result.get("pull_request") or {}).get("pull_request_number") or 0) or None
+            created_branch = str((result.get("pull_request") or {}).get("branch") or "")
+            report["temporary_write_probe"] = {
+                "pull_request_number": created_pr,
+                "pull_request_url": (result.get("pull_request") or {}).get("pull_request_url"),
+                "branch_prefix_valid": created_branch.startswith("ai-infinity/self-maintenance/"),
+                "changed_files": result.get("changed_files"),
+                "writer_provider": result.get("provider"),
+            }
+
+        if created_pr and created_branch:
+            ok, pr = run_operation(
+                "temporary_pull_request_readback",
+                lambda: maintenance.github_request(cfg, "GET", f"/repos/{repo}/pulls/{created_pr}"),
+            )
+            if ok:
+                report["temporary_pull_request_readback"] = {
+                    "draft": pr.get("draft") is True,
+                    "state": pr.get("state"),
+                    "head_branch": (pr.get("head") or {}).get("ref"),
+                }
+            else:
+                report["temporary_pull_request_readback"] = {"status": "unverified"}
+
+        # Always close/delete the temporary resources. Never merge or deploy them.
+        if created_pr:
+            run_operation(
+                "temporary_pull_request_close",
+                lambda: maintenance.github_request(cfg, "PATCH", f"/repos/{repo}/pulls/{created_pr}", {"state": "closed"}),
+            )
+        if created_branch:
+            ok, _ = run_operation(
+                "temporary_branch_delete_cleanup",
+                lambda: maintenance.github_request(cfg, "DELETE", f"/repos/{repo}/git/refs/heads/{created_branch}"),
+            )
+            if ok:
+                created_branch = None
+
+        required_operations = {
+            "repository_metadata_and_effective_permissions",
+            "authenticated_rate_limit_read",
+            "repository_wide_recursive_tree_discovery",
+            "cross_directory_source_inspection",
+            "self_maintenance_source_to_commit_to_draft_pr",
+            "temporary_pull_request_readback",
+            "temporary_pull_request_close",
+            "temporary_branch_delete_cleanup",
         }
-        record("self_maintenance_source_to_commit_to_draft_pr", started, "PASS")
-
-        if not created_pr or not created_branch:
-            raise RuntimeError("self-maintenance did not return a verifiable temporary PR and branch")
-
-        started = time.monotonic()
-        pr = maintenance.github_request(cfg, "GET", f"/repos/{repo}/pulls/{created_pr}")
-        record("temporary_pull_request_readback", started, "PASS", {
-            "draft": pr.get("draft") is True,
-            "state": pr.get("state"),
-            "head_branch": (pr.get("head") or {}).get("ref"),
-        })
-
-        # The test PR is never merged. Close it and delete the temporary branch.
-        started = time.monotonic()
-        maintenance.github_request(cfg, "PATCH", f"/repos/{repo}/pulls/{created_pr}", {"state": "closed"})
-        record("temporary_pull_request_close", started, "PASS")
-
-        started = time.monotonic()
-        maintenance.github_request(
-            cfg, "DELETE",
-            f"/repos/{repo}/git/refs/heads/{created_branch}",
-        )
-        created_branch = None
-        record("temporary_branch_delete_cleanup", started, "PASS")
-        created_pr = None
-        exit_code = 0
+        operation_states = {item["name"]: item["status"] for item in report["operations"]}
+        report["required_operations"] = {
+            name: operation_states.get(name, "NOT_RUN")
+            for name in sorted(required_operations)
+        }
+        exit_code = 0 if all(report["required_operations"][name] == "PASS" for name in required_operations) else 1
     except Exception as exc:
-        report["error_type"] = type(exc).__name__
-        report["error"] = str(getattr(exc, "detail", None) or "A GitHub operation failed; inspect the operation results.")
+        report["unexpected_error_type"] = type(exc).__name__
+        report["unexpected_error"] = str(getattr(exc, "detail", None) or "Unexpected benchmark failure.")[:300]
+    finally:
+        # Best-effort cleanup in case a later benchmark step raises unexpectedly.
         if created_pr:
             try:
                 maintenance.github_request(cfg, "PATCH", f"/repos/{repo}/pulls/{created_pr}", {"state": "closed"})
-                record("failure_cleanup_close_pull_request", time.monotonic(), "PASS")
+                report["emergency_cleanup_pr"] = "PASS"
             except Exception:
-                record("failure_cleanup_close_pull_request", time.monotonic(), "FAIL")
+                report["emergency_cleanup_pr"] = "FAIL"
         if created_branch:
             try:
                 maintenance.github_request(cfg, "DELETE", f"/repos/{repo}/git/refs/heads/{created_branch}")
-                record("failure_cleanup_delete_branch", time.monotonic(), "PASS")
+                report["emergency_cleanup_branch"] = "PASS"
             except Exception:
-                record("failure_cleanup_delete_branch", time.monotonic(), "FAIL")
-    finally:
+                report["emergency_cleanup_branch"] = "FAIL"
         report["completed_at_epoch"] = time.time()
         report["duration_seconds"] = round(report["completed_at_epoch"] - report["started_at_epoch"], 3)
         passed = sum(op["status"] == "PASS" for op in report["operations"])
-        attempted = sum(op["status"] != "BLOCKED" for op in report["operations"])
+        failed = sum(op["status"] == "FAIL" for op in report["operations"])
+        blocked = sum(op["status"] == "BLOCKED" for op in report["operations"])
+        attempted = passed + failed
         report["operation_pass_count"] = passed
+        report["operation_fail_count"] = failed
+        report["operation_blocked_count"] = blocked
         report["operation_attempt_count"] = attempted
         report["operation_pass_rate"] = round(passed / attempted, 4) if attempted else None
         report["status"] = "PASS" if exit_code == 0 else "FAIL"
         report["token_value_recorded"] = False
         report["secrets_returned"] = False
+        report["temporary_pull_request_merged"] = False
+        report["production_deployment_performed"] = False
         _save(output, report)
 
     print(json.dumps({
         "status": report["status"],
         "repository": repo,
         "operation_pass_count": report["operation_pass_count"],
+        "operation_fail_count": report["operation_fail_count"],
+        "operation_blocked_count": report["operation_blocked_count"],
         "operation_attempt_count": report["operation_attempt_count"],
         "operation_pass_rate": report["operation_pass_rate"],
         "duration_seconds": report["duration_seconds"],
         "repository_permissions": report.get("repository_permissions", {}),
+        "required_operations": report.get("required_operations", {}),
         "report": str(output),
     }, ensure_ascii=False))
     return exit_code
