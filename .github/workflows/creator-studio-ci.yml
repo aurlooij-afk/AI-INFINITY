@@ -189,6 +189,9 @@ jobs:
 
       - name: Verify guarded repository self-maintenance
         run: python -m pytest -q tests/test_self_maintenance.py
+
+      - name: Verify Render GitHub-wide self-maintenance runtime configuration
+        run: python -m pytest -q tests/test_render_self_maintenance_blueprint.py
       - name: Verify open-source Wan GPU worker contract and fail-closed readiness
         run: python -m pytest -q tests/test_wan_video_worker_contract.py tests/test_production_graph_durable_connection.py
       - name: Verify canonical 607 capability fabric
