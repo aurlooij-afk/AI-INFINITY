@@ -221,9 +221,12 @@ async function createCommand(){
   try{
     $("commandNotice").className="notice";
     $("commandNotice").textContent="Routing your command to the correct existing workflow…";
+    const headers={"content-type":"application/json"};
+    const githubCommand=/\\bgithub\\s+(?:api|rest)\\s+(?:GET|POST|PUT|PATCH|DELETE)\\s+\\/|\\bgithub\\s+graphql\\s+/i.test(objective);
+    if(githubCommand)Object.assign(headers,maintenanceHeaders2030());
     const d=await api("/infinity/canonical/execute",{
       method:"POST",
-      headers:{"content-type":"application/json"},
+      headers,
       body:JSON.stringify(payload)
     });
     const route=String(d.route||"");
