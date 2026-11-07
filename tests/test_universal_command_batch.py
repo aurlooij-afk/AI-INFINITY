@@ -365,3 +365,13 @@ def test_cancellation_callback_failure_fails_closed_before_dispatch():
     assert result["status"] == "cancelled"
     assert result["cancelled_steps"] == 1
     assert result["cancellation_observed"] is True
+
+
+
+def test_batch_http_handler_offloads_blocking_orchestration_from_asgi_event_loop():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "universal_command_batch.py").read_text(encoding="utf-8")
+    assert "from starlette.concurrency import run_in_threadpool" in source
+    assert "result = await run_in_threadpool(" in source
+    assert "cancel_requested=lambda: cancellation_requested(batch_id)" in source
