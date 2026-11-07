@@ -231,7 +231,17 @@ def execute_commands(
             elif status in {"unsupported_or_incomplete", "unsupported", "degraded", "failed", "error",
                             "write_outcome_ambiguous", "write_accepted_not_independently_verified"}:
                 state = "failed"
-            elif status in {"queued", "existing"}:
+            elif status == "existing":
+                prior_state = str((data.get("execution") or {}).get("state") or "")
+                if prior_state == "completed":
+                    state = "completed"
+                elif prior_state == "blocked":
+                    state = "authorization_required"
+                elif prior_state in {"failed", "degraded"}:
+                    state = "failed"
+                else:
+                    state = "accepted"
+            elif status == "queued":
                 state = "accepted"
             elif status in {"completed", "learned", "dry_run_ready"}:
                 state = "completed"
