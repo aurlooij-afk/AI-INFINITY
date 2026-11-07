@@ -100,7 +100,7 @@ def load_settings() -> dict:
     base_branch = os.getenv("AI_INFINITY_MAINTENANCE_BASE_BRANCH", "main").strip()
     github_token = os.getenv("AI_INFINITY_MAINTENANCE_GITHUB_TOKEN", "").strip()
     admin_token = os.getenv("AI_INFINITY_MAINTENANCE_ADMIN_TOKEN", "").strip()
-    access_mode = os.getenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", "restricted").strip().lower()
+    access_mode = os.getenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", "github_full").strip().lower()
     if access_mode not in {"restricted", "repository_full", "github_full"}:
         access_mode = "restricted"
     repo_valid = re.fullmatch(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}", repository) is not None
@@ -187,8 +187,10 @@ def validate_path(value: object, access_mode: str | None = None) -> str:
     return path
 
 
-def rank_source_candidates(paths: list[str], goal: str, limit: int = 20) -> list[dict]:
-    """Rank allowlisted Python source paths using goal terms without reading file bodies."""
+def rank_source_candidates(
+    paths: list[str], goal: str, limit: int = 20, access_mode: str | None = None
+) -> list[dict]:
+    """Rank permitted repository source/configuration paths without reading file bodies."""
     tokens = list(dict.fromkeys(
         token.casefold()
         for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", str(goal or ""))
@@ -198,7 +200,7 @@ def rank_source_candidates(paths: list[str], goal: str, limit: int = 20) -> list
     for row in paths:
         path = str(row.get("path") or "")
         try:
-            validate_path(path)
+            validate_path(path, access_mode=access_mode)
         except HTTPException:
             continue
         lowered = path.casefold()
@@ -240,9 +242,12 @@ def discover_sources(cfg: dict, goal: str, limit: int = 20) -> dict:
         [row for row in entries if isinstance(row, dict) and row.get("type") == "blob"],
         goal,
         limit,
+        access_mode=cfg.get("github_access_mode"),
     )
     try:
-        suggested_paths = select_autonomous_sources(candidates)
+        suggested_paths = select_autonomous_sources(
+            candidates, access_mode=cfg.get("github_access_mode")
+        )
     except HTTPException:
         suggested_paths = []
     return {
@@ -499,7 +504,10 @@ def _bounded_source_context(content: str, goal: str, path: str) -> tuple[str, li
 def inspect_sources(cfg: dict, paths: list, goal: str = "") -> dict:
     if not isinstance(paths, list) or not 1 <= len(paths) <= MAX_FILES:
         raise HTTPException(422, f"Specify between one and {MAX_FILES} source paths.")
-    selected = [validate_path(path) for path in paths]
+    selected = [
+        validate_path(path, access_mode=cfg.get("github_access_mode"))
+        for path in paths
+    ]
     if len(selected) != len(set(selected)):
         raise HTTPException(422, "Source paths must be unique.")
     files = []
@@ -577,7 +585,9 @@ def generate_changes(goal: str, files: list, model_fn) -> dict:
     return result
 
 
-def apply_window_edits(changes: list, originals: dict, inspected_files: list) -> list:
+def apply_window_edits(
+    changes: list, originals: dict, inspected_files: list, access_mode: str | None = None
+) -> list:
     """Expand hash-pinned range edits into complete source files without regenerating whole modules."""
     inspected = {row["path"]: row for row in inspected_files}
     if not isinstance(changes, list):
@@ -587,7 +597,7 @@ def apply_window_edits(changes: list, originals: dict, inspected_files: list) ->
     for change in changes:
         if not isinstance(change, dict):
             raise HTTPException(422, "Malformed proposed file change.")
-        path = validate_path(change.get("path"))
+        path = validate_path(change.get("path"), access_mode=access_mode)
         if path not in inspected or path not in originals:
             raise HTTPException(403, "Writer attempted to modify a file that was not inspected.")
         if "content" in change:
@@ -641,14 +651,16 @@ def apply_window_edits(changes: list, originals: dict, inspected_files: list) ->
     return output
 
 
-def validate_changes(changes: list, requested_paths: set[str]) -> list:
+def validate_changes(
+    changes: list, requested_paths: set[str], access_mode: str | None = None
+) -> list:
     if not isinstance(changes, list) or not 1 <= len(changes) <= MAX_FILES:
         raise HTTPException(422, "Proposed change set is empty or exceeds the file limit.")
     output = []
     for row in changes:
         if not isinstance(row, dict):
             raise HTTPException(422, "Malformed proposed file change.")
-        path = validate_path(row.get("path"))
+        path = validate_path(row.get("path"), access_mode=access_mode)
         if path not in requested_paths:
             raise HTTPException(403, "Writer attempted to change an uninspected file.")
         content = row.get("content")
@@ -827,14 +839,17 @@ def inspect_ci(cfg: dict, commit_sha: str | None = None, limit: int = 10) -> dic
     return summary
 
 
-def select_autonomous_sources(matches: list[dict], max_code: int = 4, max_tests: int = 3) -> list[str]:
+def select_autonomous_sources(
+    matches: list[dict], max_code: int = 4, max_tests: int = 3,
+    access_mode: str | None = None,
+) -> list[str]:
     """Select relevant application and regression-test paths from repository discovery."""
     code_paths = []
     test_paths = []
     for row in matches:
         path = str(row.get("path") or "")
         try:
-            validate_path(path)
+            validate_path(path, access_mode=access_mode)
         except HTTPException:
             continue
         if path.startswith("tests/"):
@@ -864,7 +879,10 @@ def improve_repository(cfg: dict, goal: str, paths: list | None, model_fn) -> di
         selected_paths = paths
     else:
         discovery = discover_sources(cfg, goal, limit=40)
-        selected_paths = select_autonomous_sources(discovery.get("matches") or [])
+        selected_paths = select_autonomous_sources(
+            discovery.get("matches") or [],
+            access_mode=cfg.get("github_access_mode"),
+        )
     inspected = inspect_sources(cfg, selected_paths, goal=goal)
     originals = {}
     for row in inspected["files"]:
@@ -873,8 +891,13 @@ def improve_repository(cfg: dict, goal: str, paths: list | None, model_fn) -> di
             raise HTTPException(409, f"{row['path']} changed during inspection; restart from a fresh source snapshot.")
         originals[row["path"]] = original
     generated = generate_changes(goal, inspected["files"], model_fn)
-    expanded = apply_window_edits(generated.get("changes"), originals, inspected["files"])
-    changes = validate_changes(expanded, set(originals))
+    expanded = apply_window_edits(
+        generated.get("changes"), originals, inspected["files"],
+        access_mode=cfg.get("github_access_mode"),
+    )
+    changes = validate_changes(
+        expanded, set(originals), access_mode=cfg.get("github_access_mode")
+    )
     pr = create_draft_pr(cfg, changes, originals, goal, str(generated.get("summary") or "Automated code proposal."))
     return {
         "status": "draft_pr_created", "goal": goal,
