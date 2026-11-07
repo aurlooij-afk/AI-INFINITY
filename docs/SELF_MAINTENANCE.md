@@ -11,7 +11,7 @@ Configure these values as service secrets/environment variables in the deploymen
 | `AI_INFINITY_SELF_MAINTENANCE_ENABLED` | `true` |
 | `AI_INFINITY_MAINTENANCE_REPOSITORY` | `aurlooij-afk/AI-INFINITY` |
 | `AI_INFINITY_MAINTENANCE_BASE_BRANCH` | `main` |
-| `AI_INFINITY_MAINTENANCE_GITHUB_TOKEN` | Owner-provisioned GitHub credential with the repository and endpoint permissions needed for the intended work. |
+| `AI_INFINITY_MAINTENANCE_GITHUB_TOKEN` | Owner-provisioned GitHub credential with the repository and endpoint permissions needed for the intended work. The explicit alias `AI_INFINITY_GITHUB_TOKEN` is also accepted; `GITHUB_TOKEN` is never used as a fallback. |
 | `AI_INFINITY_MAINTENANCE_ADMIN_TOKEN` | Independently generated high-entropy secret. Never reuse a session cookie, provider key, or GitHub token. |
 | `AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE` | `github_full` for GitHub-wide REST/GraphQL execution; `repository_full` or `restricted` for narrower scope. |
 
@@ -73,6 +73,8 @@ GraphQL example:
 The canonical response includes the selected route, method/path, duration, redacted result and whether the operation was read-only or a write. The server-side GitHub token is never accepted from a request body or returned to the client.
 
 ## Execution and release policy
+
+The operator-authenticated `GET /infinity/studio/self-maintenance/status` endpoint reports readiness even when the GitHub token is absent. With self-maintenance enabled and the separate admin token valid, it reports `github_token_source=missing_dedicated_owner_token`, `github_token_configured=false`, and `ready=false`; this diagnostic access does not enable GitHub operations. All execution endpoints continue to return HTTP 503 until the owner token, repository, branch, and separate operator secret are configured. The application never accepts Actions `GITHUB_TOKEN` as a substitute.
 
 The module is disabled unless explicitly enabled and both GitHub and admin credentials are configured. In restricted mode, it accepts only allowlisted Python source and test paths. In repository_full/github_full modes, source inspection and edits can cover permitted text/code/configuration paths. It reads source files up to 1 MB (8 files / 2 MB aggregate), and limits combined model context to 80 KB. Small files are inspected whole; large modules are inspected through goal-matched function/class windows with exact line ranges and SHA-256 hashes. Large-file edits must replace only one of those exact hash-pinned windows; the server rechecks the source hash, applies the edits to the complete file, parses the complete resulting Python module, rejects credential assignments under common key/token names and recognizable provider-token formats, and requires at least one regression-test file in every change set.
 
