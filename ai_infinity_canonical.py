@@ -727,7 +727,12 @@ def classify_command(command, raw=None):
     }
     github_path = payload.get("github_path") or payload.get("github_api_path")
     github_graphql_query = payload.get("github_graphql_query")
-    if explicit == "github_api" or github_path or github_graphql_query:
+    github_rest_syntax = re.search(
+        r"\bgithub\s+(?:api|rest)\s+(GET|POST|PUT|PATCH|DELETE)\s+(\S+)",
+        text,
+        re.I,
+    )
+    if explicit == "github_api" or github_path or github_graphql_query or github_rest_syntax:
         return {
             "route": "github_api",
             "reason": "Matched the authenticated GitHub REST/GraphQL execution capability; GitHub enforces the configured credential permissions.",
@@ -978,6 +983,11 @@ def dispatch_command(command, user_id, raw=None, request=None):
     github_path = payload.get("github_path") or payload.get("github_api_path")
     github_graphql_query = payload.get("github_graphql_query")
     cmd = clean(command, 4000)
+    github_rest_syntax = re.search(
+        r"\bgithub\s+(?:api|rest)\s+(GET|POST|PUT|PATCH|DELETE)\s+(\S+)",
+        cmd,
+        re.I,
+    )
     if len(cmd) < 3:
         raise HTTPException(422, "A command of at least three characters is required.")
     decision = classify_command(cmd, payload)
@@ -995,8 +1005,17 @@ def dispatch_command(command, user_id, raw=None, request=None):
         import self_maintenance as maintenance
         cfg = maintenance.load_settings()
         maintenance.authorize(request, cfg)
-        method = clean(payload.get("github_method") or payload.get("method") or ("POST" if github_graphql_query else "GET"), 10).upper()
-        path = clean(github_path or ("/graphql" if github_graphql_query else ""), 2000)
+        method = clean(
+            payload.get("github_method") or payload.get("method")
+            or (github_rest_syntax.group(1) if github_rest_syntax else "")
+            or ("POST" if github_graphql_query else "GET"),
+            10,
+        ).upper()
+        path = clean(
+            github_path or (github_rest_syntax.group(2) if github_rest_syntax else "")
+            or ("/graphql" if github_graphql_query else ""),
+            2000,
+        )
         body = payload.get("github_body") if "github_body" in payload else payload.get("body")
         if github_graphql_query:
             if not isinstance(github_graphql_query, str) or not github_graphql_query.strip():
