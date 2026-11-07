@@ -576,14 +576,14 @@ def test_github_contents_api_guard_allows_repository_full_text_and_workflow_path
     ) is None
 
 
-def test_repository_full_settings_are_opt_in_and_reported(monkeypatch):
+def test_github_full_is_default_and_narrower_modes_are_selectable(monkeypatch):
     monkeypatch.setenv("AI_INFINITY_SELF_MAINTENANCE_ENABLED", "true")
     monkeypatch.setenv("AI_INFINITY_MAINTENANCE_REPOSITORY", "aurlooij-afk/AI-INFINITY")
     monkeypatch.setenv("AI_INFINITY_MAINTENANCE_BASE_BRANCH", "main")
     monkeypatch.setenv("AI_INFINITY_MAINTENANCE_GITHUB_TOKEN", "placeholder")
     monkeypatch.setenv("AI_INFINITY_MAINTENANCE_ADMIN_TOKEN", "placeholder-admin")
     monkeypatch.delenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", raising=False)
-    assert maintenance.load_settings()["github_access_mode"] == "restricted"
+    assert maintenance.load_settings()["github_access_mode"] == "github_full"
     monkeypatch.setenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", "repository_full")
     assert maintenance.load_settings()["github_access_mode"] == "repository_full"
     monkeypatch.setenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", "github_full")
