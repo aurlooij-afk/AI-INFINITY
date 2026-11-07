@@ -1520,7 +1520,9 @@ def register(app):
         uid_=current_user(request,response)
         payload=await request.json()
         command=clean(payload.get("command") or payload.get("instruction"),4000)
-        return dispatch_command(command,uid_,payload,request=request)
+        from ai_infinity.execution_core import dispatch as execute_registered
+        from starlette.concurrency import run_in_threadpool
+        return await run_in_threadpool(execute_registered,command,uid_,payload,request=request)
 
     @app.post("/infinity/canonical/preflight")
     async def canonical_preflight(request:Request,response:Response):
@@ -1624,3 +1626,6 @@ def register(app):
     @app.get("/infinity/canonical")
     def canonical_info():
         return {"version":VERSION,"build":BUILD,"schema":SCHEMA,"truthful":True}
+
+    from ai_infinity.execution_core import register as register_execution_core
+    register_execution_core(app)
