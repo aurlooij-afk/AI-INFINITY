@@ -586,6 +586,8 @@ def test_repository_full_settings_are_opt_in_and_reported(monkeypatch):
     assert maintenance.load_settings()["github_access_mode"] == "restricted"
     monkeypatch.setenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", "repository_full")
     assert maintenance.load_settings()["github_access_mode"] == "repository_full"
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", "github_full")
+    assert maintenance.load_settings()["github_access_mode"] == "github_full"
 
 
 def test_github_full_mode_forwards_rest_and_graphql_requests_across_github_resources(monkeypatch):
@@ -695,3 +697,10 @@ def test_github_full_mode_keeps_owner_protected_documents_unavailable_for_source
     ):
         with pytest.raises(HTTPException):
             maintenance.validate_path(path, access_mode="github_full")
+
+
+def test_github_content_response_guard_preserves_non_object_api_results():
+    rows = [{"full_name": "owner/repository"}, {"full_name": "another/repository"}]
+    assert maintenance.validate_github_content_response(
+        "/user/repos?per_page=100", rows
+    ) == rows
