@@ -41,6 +41,21 @@ services:
         generateValue: true
       - key: AI_INFINITY_VAULT_KEY
         generateValue: true
+      # Owner-authorized GitHub execution and draft-PR self-maintenance.
+      # The GitHub credential must be supplied manually; never substitute GITHUB_TOKEN.
+      - key: AI_INFINITY_SELF_MAINTENANCE_ENABLED
+        value: "true"
+      - key: AI_INFINITY_MAINTENANCE_REPOSITORY
+        value: "aurlooij-afk/AI-INFINITY"
+      - key: AI_INFINITY_MAINTENANCE_BASE_BRANCH
+        value: "main"
+      - key: AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE
+        value: "github_full"
+      - key: AI_INFINITY_MAINTENANCE_GITHUB_TOKEN
+        sync: false
+      # Render generates a separate operator secret; do not reuse the GitHub token.
+      - key: AI_INFINITY_MAINTENANCE_ADMIN_TOKEN
+        generateValue: true
       # Optional external production connectors. Leave empty until authorized.
       - key: RUNWAYML_API_SECRET
         sync: false
