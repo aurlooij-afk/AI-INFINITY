@@ -1,4 +1,4 @@
-name: AI Infinity — GitHub Autonomy Benchmark
+name: AI Infinity — GitHub-Wide Autonomy Benchmark
 
 on:
   pull_request:
@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   repository-access:
-    name: Measure real repository-scoped GitHub access
+    name: Measure token-authorized GitHub-wide access
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -39,10 +39,11 @@ jobs:
       - name: Compile benchmark and repository executor
         run: python -m py_compile self_maintenance.py scripts/benchmark_github_access.py
 
-      - name: Exercise real GitHub API permissions and self-maintenance execution
+      - name: Exercise GitHub REST, GraphQL, cross-repository access and self-maintenance
         env:
           AI_INFINITY_MAINTENANCE_GITHUB_TOKEN: ${{ secrets.AI_INFINITY_MAINTENANCE_GITHUB_TOKEN || secrets.AI_INFINITY_GITHUB_TOKEN }}
           AI_INFINITY_MAINTENANCE_GITHUB_TOKEN_SOURCE: ${{ secrets.AI_INFINITY_MAINTENANCE_GITHUB_TOKEN != '' && 'AI_INFINITY_MAINTENANCE_GITHUB_TOKEN' || secrets.AI_INFINITY_GITHUB_TOKEN != '' && 'AI_INFINITY_GITHUB_TOKEN' || 'missing_dedicated_owner_token' }}
+          AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE: github_full
           GITHUB_REPOSITORY: ${{ github.repository }}
           AI_INFINITY_BENCHMARK_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GITHUB_RUN_ID: ${{ github.run_id }}
