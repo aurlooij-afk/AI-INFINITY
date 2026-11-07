@@ -165,7 +165,14 @@ def test_full_github_benchmark_probes_identity_cross_repo_write_and_cleanup(monk
     assert report["status"] == "PASS"
     assert report["access_mode"] == "github_full"
     assert report["application_repository_allowlist"] is False
-    assert report["account_wide_access_verified"] is False
+    assert report["account_wide_access_verified"] is True
+    assert report["account_wide_access_verification"]["status"] == "VERIFIED"
+    assert report["account_wide_access_verification"]["scope"] == (
+        "complete_repository_inventory_returned_by_the_configured_token_and_sampled_cross_repository_write"
+    )
+    assert report["account_wide_access_verification"]["total_token_visible_repositories"] == 101
+    assert all(report["account_wide_access_verification"]["checks"].values())
+    assert report["required_operations"]["account_wide_access_verification"] == "PASS"
     assert report["authenticated_identity"]["login"] == "owner"
     assert report["accessible_repositories"]["first_page_count"] == 100
     assert report["accessible_repositories"]["total_repository_count"] == 101
@@ -213,3 +220,37 @@ def test_missing_owner_token_writes_truthful_blocked_metrics(monkeypatch, tmp_pa
     assert report["duration_seconds"] >= 0
     assert report["token_value_recorded"] is False
     assert report["secrets_returned"] is False
+
+def test_account_wide_verification_fails_closed_for_truncated_or_unproven_repository_coverage():
+    report = {
+        "authenticated_identity": {"login": "owner"},
+        "graphql_identity": {"login": "owner"},
+        "accessible_repositories": {
+            "pagination_complete": False,
+            "complete_account_inventory_claimed": False,
+            "total_repository_count": 101,
+        },
+        "cross_repository_probe": {"repository": "owner/second-project"},
+        "cross_repository_write_probe": {
+            "branch_created": True,
+            "default_branch_modified": False,
+        },
+        "temporary_write_probe": {"pull_request_number": 123},
+    }
+    operations = {
+        "accessible_repositories_all_pages": "PASS",
+        "cross_repository_metadata_read_sample": "PASS",
+        "cross_repository_temporary_branch_create": "PASS",
+        "cross_repository_temporary_branch_delete_cleanup": "PASS",
+        "self_maintenance_source_to_commit_to_draft_pr": "PASS",
+        "temporary_pull_request_readback": "PASS",
+        "temporary_pull_request_close": "PASS",
+        "temporary_branch_delete_cleanup": "PASS",
+    }
+
+    result = benchmark.account_wide_access_verification(report, operations)
+
+    assert result["verified"] is False
+    assert result["status"] == "NOT_VERIFIED"
+    assert result["checks"]["complete_token_visible_repository_inventory"] is False
+
