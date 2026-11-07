@@ -294,11 +294,16 @@ def github_request(cfg: dict, method: str, path: str, payload: dict | None = Non
             raise RuntimeError("Unexpected GitHub API response.")
         return value
     except HTTPError as exc:
-        if exc.code in {401, 403}:
-            raise HTTPException(503, "GitHub maintenance permission is insufficient or expired.") from None
+        # Preserve the exact denied operation for the redacted benchmark report.
+        # Never include GitHub response bodies or authorization headers.
+        safe_path = str(path).split("?", 1)[0][:180]
+        if exc.code == 401:
+            raise HTTPException(401, f"GitHub token authentication failed for {method} {safe_path} (HTTP 401).") from None
+        if exc.code == 403:
+            raise HTTPException(403, f"GitHub token permission denied for {method} {safe_path} (HTTP 403).") from None
         if exc.code == 404:
-            raise HTTPException(404, "GitHub repository resource was not found.") from None
-        raise HTTPException(502, f"GitHub request failed ({exc.code}).") from None
+            raise HTTPException(404, f"GitHub resource not found or masked for {method} {safe_path} (HTTP 404).") from None
+        raise HTTPException(502, f"GitHub request failed for {method} {safe_path} (HTTP {exc.code}).") from None
     except (URLError, TimeoutError, OSError, UnicodeDecodeError, json.JSONDecodeError):
         raise HTTPException(502, "GitHub API request could not be completed.") from None
 
