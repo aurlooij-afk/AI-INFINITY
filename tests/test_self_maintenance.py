@@ -5,6 +5,8 @@ import pytest
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 
+from fastapi.testclient import TestClient
+
 import self_maintenance as maintenance
 
 
@@ -787,3 +789,89 @@ def test_github_full_mode_propagates_to_cross_directory_source_discovery_and_edi
         expanded, set(originals), access_mode=cfg["github_access_mode"]
     )
     assert {row["path"] for row in validated} == set(selected)
+
+def test_load_settings_reports_genuine_missing_dedicated_owner_token_without_workflow_fallback(monkeypatch):
+    for name in (
+        "AI_INFINITY_MAINTENANCE_GITHUB_TOKEN",
+        "AI_INFINITY_GITHUB_TOKEN",
+        "AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE",
+        "AI_INFINITY_MAINTENANCE_REPOSITORY",
+        "AI_INFINITY_MAINTENANCE_BASE_BRANCH",
+        "AI_INFINITY_MAINTENANCE_ADMIN_TOKEN",
+        "AI_INFINITY_SELF_MAINTENANCE_ENABLED",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "workflow-token-must-never-be-used")
+    monkeypatch.setenv("AI_INFINITY_SELF_MAINTENANCE_ENABLED", "true")
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_REPOSITORY", "aurlooij-afk/AI-INFINITY")
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_BASE_BRANCH", "main")
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_ADMIN_TOKEN", "separate-operator-secret")
+
+    cfg = maintenance.load_settings()
+
+    assert cfg["github_token"] == ""
+    assert cfg["github_token_configured"] is False
+    assert cfg["github_token_source"] == "missing_dedicated_owner_token"
+    assert cfg["operator_ready"] is True
+    assert cfg["ready"] is False
+
+
+def test_load_settings_accepts_only_explicit_owner_token_alias(monkeypatch):
+    monkeypatch.delenv("AI_INFINITY_MAINTENANCE_GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("AI_INFINITY_GITHUB_TOKEN", "explicit-owner-token")
+    monkeypatch.setenv("GITHUB_TOKEN", "workflow-token-must-not-be-used")
+    monkeypatch.setenv("AI_INFINITY_SELF_MAINTENANCE_ENABLED", "true")
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_REPOSITORY", "aurlooij-afk/AI-INFINITY")
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_BASE_BRANCH", "main")
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_ADMIN_TOKEN", "separate-operator-secret")
+
+    cfg = maintenance.load_settings()
+
+    assert cfg["github_token"] == "explicit-owner-token"
+    assert cfg["github_token_source"] == "AI_INFINITY_GITHUB_TOKEN"
+    assert cfg["ready"] is True
+
+
+def test_status_endpoint_reports_missing_owner_token_but_execution_routes_remain_blocked(monkeypatch):
+    for name in (
+        "AI_INFINITY_MAINTENANCE_GITHUB_TOKEN",
+        "AI_INFINITY_GITHUB_TOKEN",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "workflow-token-must-not-be-used")
+    monkeypatch.setenv("AI_INFINITY_SELF_MAINTENANCE_ENABLED", "true")
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_REPOSITORY", "aurlooij-afk/AI-INFINITY")
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_BASE_BRANCH", "main")
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_GITHUB_ACCESS_MODE", "github_full")
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_ADMIN_TOKEN", "operator-secret-for-test")
+    monkeypatch.setattr(maintenance, "free_tier_writer", lambda: None)
+
+    app = FastAPI()
+    maintenance.register(app)
+    client = TestClient(app)
+    headers = {"x-ai-infinity-maintenance-token": "operator-secret-for-test"}
+
+    status = client.get("/infinity/studio/self-maintenance/status", headers=headers)
+    assert status.status_code == 200
+    body = status.json()
+    assert body["enabled"] is True
+    assert body["operator_ready"] is True
+    assert body["ready"] is False
+    assert body["github_token_configured"] is False
+    assert body["github_token_source"] == "missing_dedicated_owner_token"
+    assert body["execution_blocked_reason"] == "missing_dedicated_owner_token"
+    assert body["github_access_mode"] == "github_full"
+
+    runtime = client.get("/infinity/studio/self-maintenance/runtime", headers=headers)
+    assert runtime.status_code == 503
+    assert "missing_dedicated_owner_token" in runtime.json()["detail"]
+
+
+def test_status_endpoint_still_requires_separate_operator_authentication(monkeypatch):
+    monkeypatch.setenv("AI_INFINITY_SELF_MAINTENANCE_ENABLED", "true")
+    monkeypatch.setenv("AI_INFINITY_MAINTENANCE_ADMIN_TOKEN", "operator-secret-for-test")
+    app = FastAPI()
+    maintenance.register(app)
+    response = TestClient(app).get("/infinity/studio/self-maintenance/status")
+    assert response.status_code == 403
+
