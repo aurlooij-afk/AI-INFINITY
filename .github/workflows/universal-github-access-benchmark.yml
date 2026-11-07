@@ -7,6 +7,7 @@ on:
       - "self_maintenance.py"
       - "scripts/benchmark_github_access.py"
       - "tests/test_self_maintenance.py"
+      - "tests/test_github_access_benchmark.py"
       - ".github/workflows/universal-github-access-benchmark.yml"
 
 # The benchmark's repository writes use the dedicated owner token below.
