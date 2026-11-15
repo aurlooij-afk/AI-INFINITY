@@ -1027,3 +1027,15 @@ def test_github_graphql_command_syntax_routes_through_canonical_dispatch(monkeyp
     assert captured["method"] == "POST"
     assert captured["path"] == "/graphql"
     assert captured["body"]["query"] == "query { viewer { login } }"
+
+
+def test_director_mode_signals_do_not_claim_static_capability_readiness():
+    html = Path("creator_studio_2030.html").read_text(encoding="utf-8")
+    start = html.index("function renderSignals(){")
+    end = html.index("\nasync function createCommand(){", start)
+    handler = html[start:end]
+
+    assert 'class="badge good">wired</span>' not in handler
+    assert "source quality is evaluated per run" in handler
+    assert "provider use is recorded per run" in handler
+    assert "durability depends on verified runtime storage" in handler
