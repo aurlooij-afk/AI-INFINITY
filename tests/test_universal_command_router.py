@@ -1039,3 +1039,16 @@ def test_director_mode_signals_do_not_claim_static_capability_readiness():
     assert "source quality is evaluated per run" in handler
     assert "provider use is recorded per run" in handler
     assert "durability depends on verified runtime storage" in handler
+
+
+def test_director_health_uses_verified_execution_health_not_legacy_media_status():
+    html = Path("creator_studio_2030.html").read_text(encoding="utf-8")
+    start = html.index("function setHealth(h){")
+    end = html.index("\nasync function boot(){", start)
+    handler = html[start:end]
+
+    assert "h.execution_health||{}" in handler
+    assert 'executionHealth.status||"unverified"' in handler
+    assert "blocking_requirements" in handler
+    assert 'const ok=h.status==="healthy"' not in handler
+    assert 'textContent="compatible"' not in handler
