@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ai-infinity-local-model-proof-\${{ github.ref }}
+  group: ai-infinity-local-model-proof-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -37,7 +37,7 @@ jobs:
       - name: Checkout exact candidate commit
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Set up Python
