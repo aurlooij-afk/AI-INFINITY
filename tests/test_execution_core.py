@@ -230,3 +230,130 @@ def test_dispatch_exception_is_ambiguous_and_requires_reconciliation_not_failed(
     assert "never auto-replay" in stored["reconciliation_policy"]
     assert len(calls) == 1
 
+
+
+def test_accepted_execution_exposes_owner_checked_live_project_progress(tmp_path, monkeypatch):
+    fake, events, calls, db_path = _fake_canonical(
+        tmp_path,
+        monkeypatch,
+        route="create",
+        result={
+            "status": "queued",
+            "route": "create",
+            "executed": True,
+            "project_id": "studio_running_001",
+        },
+    )
+    project = {
+        "project_id": "studio_running_001",
+        "user_id": "user-1",
+        "status": "running",
+        "state": "RUNNING",
+        "stage": "rendering",
+        "progress": 57.5,
+        "truth_verified": False,
+        "quality_state": "PENDING",
+    }
+    fake.studio = lambda: SimpleNamespace(
+        DB_LOCK=RLock(),
+        _get_project=lambda project_id: project,
+    )
+
+    result = execution_core.dispatch(
+        "Create a 60 second video about accessible design",
+        "user-1",
+        {"content_type": "video", "idempotency_key": "accepted-progress-001"},
+    )
+    stored = execution_core.get_execution(result["execution"]["execution_id"], "user-1")
+
+    assert stored["state"] == "accepted"
+    assert stored["reconciliation_required"] is True
+    assert "not completed" in stored["reconciliation_policy"]
+    assert stored["domain_project"]["available"] is True
+    assert stored["domain_project"]["project_id"] == "studio_running_001"
+    assert stored["domain_project"]["status"] == "running"
+    assert stored["domain_project"]["stage"] == "rendering"
+    assert stored["domain_project"]["progress"] == 57.5
+    assert stored["domain_project"]["domain_terminal"] is False
+    assert stored["domain_project"]["truth_verified"] is False
+
+
+def test_accepted_execution_qc_warning_is_terminal_but_not_approved(tmp_path, monkeypatch):
+    fake, events, calls, db_path = _fake_canonical(
+        tmp_path,
+        monkeypatch,
+        route="create",
+        result={
+            "status": "queued",
+            "route": "create",
+            "executed": True,
+            "project_id": "studio_review_001",
+        },
+    )
+    project = {
+        "project_id": "studio_review_001",
+        "user_id": "user-1",
+        "status": "completed_with_qc_warnings",
+        "state": "DEGRADED",
+        "stage": "complete",
+        "progress": 100,
+        "truth_verified": False,
+        "quality_state": "REVIEW_REQUIRED",
+        "human_review_status": "PENDING",
+    }
+    fake.studio = lambda: SimpleNamespace(
+        DB_LOCK=RLock(),
+        _get_project=lambda project_id: project,
+    )
+
+    result = execution_core.dispatch(
+        "Create a 60 second video about accessible design",
+        "user-1",
+        {"content_type": "video", "idempotency_key": "accepted-review-001"},
+    )
+    stored = execution_core.get_execution(result["execution"]["execution_id"], "user-1")
+
+    assert stored["state"] == "accepted"
+    assert stored["reconciliation_required"] is False
+    assert stored["domain_project"]["domain_terminal"] is True
+    assert stored["domain_project"]["review_required"] is True
+    assert stored["domain_project"]["truth_verified"] is False
+    assert "human approval separately" in stored["reconciliation_policy"]
+
+
+def test_accepted_execution_hides_project_when_domain_owner_differs(tmp_path, monkeypatch):
+    fake, events, calls, db_path = _fake_canonical(
+        tmp_path,
+        monkeypatch,
+        route="create",
+        result={
+            "status": "queued",
+            "route": "create",
+            "executed": True,
+            "project_id": "studio_private_001",
+        },
+    )
+    project = {
+        "project_id": "studio_private_001",
+        "user_id": "another-user",
+        "status": "running",
+        "progress": 83,
+    }
+    fake.studio = lambda: SimpleNamespace(
+        DB_LOCK=RLock(),
+        _get_project=lambda project_id: project,
+    )
+
+    result = execution_core.dispatch(
+        "Create a 60 second video about accessible design",
+        "user-1",
+        {"content_type": "video", "idempotency_key": "accepted-private-001"},
+    )
+    stored = execution_core.get_execution(result["execution"]["execution_id"], "user-1")
+
+    assert stored["reconciliation_required"] is True
+    assert stored["domain_project"] == {
+        "available": False,
+        "reason": "project_not_found_or_not_owned",
+        "truthful": True,
+    }
