@@ -518,7 +518,7 @@ def get_execution(execution_id: str, user_id: str) -> dict[str, Any]:
     if state == "reconciliation_required":
         policy = "inspect domain-specific project/provider read-back before any retry; never auto-replay"
     elif state == "running":
-        policy = "execution is running or was interrupted; reconcile the domain outcome before any retry"
+        policy = "execution is running or was interrupted; reconcile the domain outcome before any retry; never auto-replay"
     elif state == "accepted" and pending:
         policy = "dispatch was accepted, not completed; poll owner-checked project read-back; never auto-replay"
     elif state == "accepted":
