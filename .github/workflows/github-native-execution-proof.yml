@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ai-infinity-github-native-proof-\${{ github.ref }}
+  group: ai-infinity-github-native-proof-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -29,7 +29,7 @@ jobs:
     permissions:
       contents: read
     env:
-      GITHUB_TOKEN: \${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
       AI_INFINITY_FAST_MODE: "1"
       AI_INFINITY_3601_BACKGROUND: "false"
       PYTHONUNBUFFERED: "1"
@@ -37,7 +37,7 @@ jobs:
       - name: Checkout exact workflow commit
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Set up Python
@@ -78,8 +78,8 @@ jobs:
 
       - name: Run consent-gated real Gemini inference check
         env:
-          GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY || secrets.AI_INFINITY_GEMINI_API_KEY || secrets.GOOGLE_AI_STUDIO_API_KEY || secrets.GOOGLE_API_KEY || secrets.GEMINI_KEY || secrets.AI_STUDIO_API_KEY }}
-          AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK: \${{ vars.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK || secrets.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK || vars.GEMINI_FREE_TIER_DATA_USE_ACK || secrets.GEMINI_FREE_TIER_DATA_USE_ACK || vars.GOOGLE_AI_STUDIO_FREE_TIER_ACK || secrets.GOOGLE_AI_STUDIO_FREE_TIER_ACK }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.AI_INFINITY_GEMINI_API_KEY || secrets.GOOGLE_AI_STUDIO_API_KEY || secrets.GOOGLE_API_KEY || secrets.GEMINI_KEY || secrets.AI_STUDIO_API_KEY }}
+          AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK: ${{ vars.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK || secrets.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK || vars.GEMINI_FREE_TIER_DATA_USE_ACK || secrets.GEMINI_FREE_TIER_DATA_USE_ACK || vars.GOOGLE_AI_STUDIO_FREE_TIER_ACK || secrets.GOOGLE_AI_STUDIO_FREE_TIER_ACK }}
           AI_INFINITY_GEMINI_FREE_TIER_MODEL: gemini-3.1-flash-lite
         run: |
           python - <<'PY'
@@ -153,9 +153,9 @@ jobs:
 
       - name: Verify manifest, file hashes and exact source revision independently
         env:
-          EXPECTED_COMMIT_SHA: \${{ github.sha }}
-          EXPECTED_RUN_ID: \${{ github.run_id }}
-          EXPECTED_REPOSITORY: \${{ github.repository }}
+          EXPECTED_COMMIT_SHA: ${{ github.sha }}
+          EXPECTED_RUN_ID: ${{ github.run_id }}
+          EXPECTED_REPOSITORY: ${{ github.repository }}
         run: |
           python - <<'PY'
           import hashlib, json, os
