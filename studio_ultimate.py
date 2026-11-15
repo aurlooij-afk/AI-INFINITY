@@ -7958,6 +7958,52 @@ def _runtime_state_for_status(status: Any) -> str:
     return "READY"
 
 
+def _universal_execution_health(
+    media_core: bool,
+    voice_core: bool,
+    durability: Dict[str, Any],
+    queue_worker_started: bool,
+) -> Dict[str, Any]:
+    """Report universal-execution readiness from required runtime evidence only."""
+    persistent_state = isinstance(durability, dict) and durability.get("persistent") is True
+    checks = [
+        {
+            "id": "media_runtime",
+            "status": "AVAILABLE" if media_core else "UNAVAILABLE",
+            "evidence": "FFmpeg and FFprobe are present" if media_core else "FFmpeg/FFprobe are unavailable",
+        },
+        {
+            "id": "voice_runtime",
+            "status": "AVAILABLE" if voice_core else "UNAVAILABLE",
+            "evidence": "local speech runtime and media tools are present" if voice_core else "local speech runtime is unavailable",
+        },
+        {
+            "id": "persistent_project_state",
+            "status": "AVAILABLE" if persistent_state else "DEGRADED",
+            "evidence": (
+                "persistent volume or remote state backend independently verified"
+                if persistent_state
+                else str((durability or {}).get("reason") or "project-state durability is not verified")[:140]
+            ),
+        },
+        {
+            "id": "background_queue_worker",
+            "status": "AVAILABLE" if queue_worker_started else "DEGRADED",
+            "evidence": "background worker thread started" if queue_worker_started else "background worker thread is not running",
+        },
+    ]
+    blocking = [item["id"] for item in checks if item["status"] != "AVAILABLE"]
+    return {
+        "status": "healthy" if not blocking else "degraded",
+        "ready": not blocking,
+        "required_check_count": len(checks),
+        "passed_check_count": len(checks) - len(blocking),
+        "blocking_requirements": blocking,
+        "required_checks": checks,
+        "truthful": True,
+    }
+
+
 _STAGE_EVENTS = {
     "research": "RESEARCH_STARTED",
     "creative_direction": "DIRECTION_COMPLETED",
@@ -12170,6 +12216,11 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
                 "truthful": True,
             }
         native_video_ready = bool(native_video.get("enabled") is True)
+        queue_worker_started = bool(getattr(__import__(__name__), "WORKER_STARTED", False))
+        creator_runtime_status = "healthy" if media_core and voice_core else "degraded"
+        execution_health = _universal_execution_health(
+            media_core, voice_core, durability, queue_worker_started
+        )
         video_credentials_present = bool(
             os.getenv("HF_TOKEN", "").strip()
             or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
@@ -12177,7 +12228,7 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
             or os.getenv("RUNWAYML_API_SECRET", "").strip()
         )
         return {
-            "status": "healthy" if media_core and voice_core else "degraded", "version": VERSION, "build": BUILD,
+            "status": creator_runtime_status, "creator_runtime_status": creator_runtime_status, "execution_health": execution_health, "version": VERSION, "build": BUILD,
             "research": external_enabled, "internet_sources": external_enabled, "creative_engine": True,
             "ai_image_generation": bool(os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()),
             "ai_image_generation_provider_available": bool(os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()),
@@ -12200,7 +12251,7 @@ def register(app: Any, model_fn: Optional[Callable] = None) -> None:
             "persistence": durability,
             "download_without_publishing": True, "youtube_publishing": True, "webhook_publishing": True,
             "persistent_projects": bool(durability.get("persistent")),
-            "queued_workers": bool(getattr(__import__(__name__), "WORKER_STARTED", False)), "progress_tracking": True, "cancel_retry": True, "resumable_scene_checkpoints": True, "cancellable_ffmpeg": True, "artifact_sha256": True, "audit_trail": True, "signed_share_links": True,
+            "queued_workers": queue_worker_started, "progress_tracking": True, "cancel_retry": True, "resumable_scene_checkpoints": True, "cancellable_ffmpeg": True, "artifact_sha256": True, "audit_trail": True, "signed_share_links": True,
             "truthful": True,
             "one_command_creation": True, "optional_publishing": True, "download_first": True, "one_time_connections": True,
             "universal_creator_workspace": True, "creator_profile": True, "multi_platform_workflows": True, "platform_deliverable_packages": True, "seo_package": True, "accessibility_package": True, "provenance_package": True, "podcast_rss": True,
