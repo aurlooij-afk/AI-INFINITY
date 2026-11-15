@@ -1,0 +1,101 @@
+name: AI Infinity — GitHub-Hosted Local AI Inference Proof
+
+on:
+  push:
+    branches:
+      - ai-infinity/github-hosted-local-ai-runtime
+    paths:
+      - ".github/workflows/github-local-model-proof.yml"
+      - "studio_ultimate.py"
+      - "scripts/verify_local_ollama_inference.py"
+      - "scripts/verify_local_ollama_longform.py"
+      - "tests/test_local_ollama_writer.py"
+      - "requirements.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-infinity-local-model-proof-\${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  local-ai:
+    name: Verify local CPU model and real 15-minute script generation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    env:
+      AI_INFINITY_LOCAL_LLM_BASE_URL: http://127.0.0.1:11434
+      AI_INFINITY_LOCAL_LLM_MODEL: qwen2.5:7b
+      AI_INFINITY_LOCAL_LLM_TIMEOUT: "1200"
+      AI_INFINITY_FAST_MODE: "1"
+      AI_INFINITY_3601_BACKGROUND: "false"
+    steps:
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@v4
+        with:
+          ref: \${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install application runtime dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Install Ollama CPU runtime
+        run: |
+          set -euo pipefail
+          curl -fsSL https://ollama.com/install.sh | sh
+          if ! curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+            nohup env OLLAMA_HOST=127.0.0.1:11434 ollama serve >/tmp/ai-infinity-ollama.log 2>&1 &
+          fi
+          for attempt in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
+
+      - name: Pull pinned Apache-2.0 Qwen2.5 7B quantized model
+        run: |
+          set -euo pipefail
+          ollama pull qwen2.5:7b
+          ollama list
+
+      - name: Verify genuine local model inference
+        run: |
+          set -euo pipefail
+          python scripts/verify_local_ollama_inference.py \
+            --output github-local-ai-evidence/local-model-inference.json
+
+      - name: Verify production 900-second planner with genuine model-generated narration
+        run: |
+          set -euo pipefail
+          python scripts/verify_local_ollama_longform.py \
+            --output github-local-ai-evidence/local-model-longform.json
+
+      - name: Run local adapter contract and long-form quality regression tests
+        run: |
+          set -euo pipefail
+          python -m py_compile studio_ultimate.py scripts/verify_local_ollama_inference.py scripts/verify_local_ollama_longform.py
+          python -m pytest -q tests/test_local_ollama_writer.py tests/test_longform_production_planner.py
+
+      - name: Upload local inference and long-form evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-infinity-github-local-ai-evidence
+          path: github-local-ai-evidence/
+          if-no-files-found: warn
+          retention-days: 14
