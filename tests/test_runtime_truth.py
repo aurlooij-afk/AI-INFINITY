@@ -194,3 +194,40 @@ def test_3702_capabilities_never_claim_ready_from_registry_presence_alone(monkey
     assert registry["integration_state_counts"]["IMPLEMENTED_LOCAL"] == 24
     assert registry["integration_state_counts"]["IMPLEMENTED_REMOTE"] == 26
 
+
+
+def test_universal_execution_health_requires_verified_state_and_worker():
+    degraded = studio._universal_execution_health(
+        media_core=True,
+        voice_core=True,
+        durability={
+            "persistent": False,
+            "reason": "durable_mode_requested_but_backend_not_verified",
+        },
+        queue_worker_started=True,
+    )
+    assert degraded["status"] == "degraded"
+    assert degraded["ready"] is False
+    assert degraded["blocking_requirements"] == ["persistent_project_state"]
+    assert degraded["required_checks"][2]["status"] == "DEGRADED"
+
+    healthy = studio._universal_execution_health(
+        media_core=True,
+        voice_core=True,
+        durability={"persistent": True},
+        queue_worker_started=True,
+    )
+    assert healthy["status"] == "healthy"
+    assert healthy["ready"] is True
+    assert healthy["blocking_requirements"] == []
+
+
+def test_universal_execution_health_degrades_when_core_runtime_is_missing():
+    result = studio._universal_execution_health(
+        media_core=False,
+        voice_core=False,
+        durability={"persistent": True},
+        queue_worker_started=True,
+    )
+    assert result["status"] == "degraded"
+    assert result["blocking_requirements"] == ["media_runtime", "voice_runtime"]
