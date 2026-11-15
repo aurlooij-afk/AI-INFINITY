@@ -10,6 +10,7 @@ truthful lifecycle record; it is not a replacement creator engine.
 """
 
 import hashlib
+import math
 import json
 import re
 import sqlite3
@@ -408,6 +409,87 @@ def dispatch(command: str, user_id: str, payload: dict[str, Any] | None = None,
         }
 
 
+def _domain_project_readback(user_id: str, project_id: str | None) -> dict[str, Any] | None:
+    """Return minimal owner-checked project progress for an accepted execution.
+
+    This is a read-only projection of the domain project's current state. It does
+    not mutate the execution ledger, declare artifact quality, approve rights, or
+    authorize publishing. An inaccessible or differently-owned project is hidden.
+    """
+    if not project_id:
+        return None
+    try:
+        studio = _canonical().studio()
+        getter = getattr(studio, "_get_project", None)
+        if not callable(getter):
+            return {"available": False, "reason": "domain_project_readback_unavailable", "truthful": True}
+        project = getter(project_id)
+        if not isinstance(project, dict):
+            try:
+                project = dict(project) if project is not None else None
+            except Exception:
+                project = None
+        if not isinstance(project, dict):
+            return {"available": False, "reason": "project_not_found_or_not_visible", "truthful": True}
+
+        owner_id = str(project.get("user_id") or "")
+        if not owner_id or owner_id != str(user_id):
+            return {"available": False, "reason": "project_not_found_or_not_owned", "truthful": True}
+
+        status = str(project.get("status") or "").strip().lower()[:80] or "unknown"
+        state_value = project.get("state") or project.get("runtime_state")
+        if not state_value:
+            state_mapper = getattr(studio, "_runtime_state_for_status", None)
+            if callable(state_mapper):
+                try:
+                    state_value = state_mapper(status)
+                except Exception:
+                    state_value = None
+        state = str(state_value or "").strip().lower()[:80] or None
+        stage = str(project.get("stage") or "").strip()[:120] or None
+        progress = None
+        try:
+            candidate = float(project.get("progress"))
+            if math.isfinite(candidate):
+                progress = round(max(0.0, min(100.0, candidate)), 2)
+        except (TypeError, ValueError, OverflowError):
+            pass
+
+        terminal_states = {
+            "completed", "completed_with_qc_warnings", "failed", "cancelled",
+            "degraded", "blocked", "completed_with_warnings",
+        }
+        domain_terminal = status in terminal_states or state in terminal_states
+        quality_state = str(project.get("quality_state") or "").strip().upper()[:80] or None
+        human_review_status = str(project.get("human_review_status") or "").strip().upper()
+        review_required = bool(
+            status in {"completed_with_qc_warnings", "completed_with_warnings"}
+            or state in {"degraded", "completed_with_qc_warnings", "completed_with_warnings"}
+            or quality_state in {"DEGRADED", "REVIEW_REQUIRED", "PENDING"}
+            or project.get("human_review_required") is True
+            or human_review_status in {"PENDING", "REVIEW_REQUIRED"}
+        )
+        truth_verified = project.get("truth_verified")
+        if not isinstance(truth_verified, bool):
+            truth_verified = None
+        return {
+            "available": True,
+            "project_id": str(project_id),
+            "status": status,
+            "state": state,
+            "stage": stage,
+            "progress": progress,
+            "domain_terminal": domain_terminal,
+            "review_required": review_required,
+            "truth_verified": truth_verified,
+            "quality_state": quality_state,
+            "readback": "owner_checked_project_record",
+            "truthful": True,
+        }
+    except Exception:
+        return {"available": False, "reason": "domain_project_readback_failed", "truthful": True}
+
+
 def get_execution(execution_id: str, user_id: str) -> dict[str, Any]:
     canonical = _canonical()
     _ensure_schema()
@@ -424,15 +506,33 @@ def get_execution(execution_id: str, user_id: str) -> dict[str, Any]:
         summary = json.loads(row[6] or "{}")
     except Exception:
         summary = {}
+
+    state = str(row[5] or "unknown")
+    project = _domain_project_readback(str(user_id), str(row[1] or "") or None)
+    pending = state in {"running", "reconciliation_required"}
+    if state == "accepted":
+        # Dispatch acceptance is not task completion. Only an owner-checked
+        # terminal domain record settles the observation; review remains separate.
+        pending = not bool(project and project.get("available") and project.get("domain_terminal"))
+
+    if state == "reconciliation_required":
+        policy = "inspect domain-specific project/provider read-back before any retry; never auto-replay"
+    elif state == "running":
+        policy = "execution is running or was interrupted; reconcile the domain outcome before any retry"
+    elif state == "accepted" and pending:
+        policy = "dispatch was accepted, not completed; poll owner-checked project read-back; never auto-replay"
+    elif state == "accepted":
+        policy = "domain project reached a terminal state; assess quality, rights and human approval separately"
+    else:
+        policy = "not_required"
+
     return {
         "execution_id": row[0], "project_id": row[1], "capability_id": row[2],
-        "route": row[3], "request_sha256": row[4], "state": row[5],
+        "route": row[3], "request_sha256": row[4], "state": state,
         "result": summary, "started_at": row[7], "completed_at": row[8],
-        "reconciliation_required": row[5] in {"running", "reconciliation_required"},
-        "reconciliation_policy": (
-            "inspect domain-specific project/provider read-back before any retry; never auto-replay"
-            if row[5] in {"running", "reconciliation_required"} else "not_required"
-        ),
+        "domain_project": project,
+        "reconciliation_required": pending,
+        "reconciliation_policy": policy,
         "verification": "domain_specific_evidence_required",
         "truthful": True,
     }
