@@ -1644,6 +1644,113 @@ def _first_nonempty_env(names: Iterable[str]) -> str:
     return ""
 
 
+def _local_ollama_text_model() -> Optional[Callable]:
+    """Return a local-only Ollama writer when an explicitly local endpoint is configured.
+
+    The endpoint is deliberately restricted to loopback. Prompts must never be
+    sent to an arbitrary host through this adapter. This enables CPU inference
+    inside a GitHub-hosted runner without an API key or provider-side prompt
+    processing; it does not make the runner's filesystem or model persistent.
+    """
+    endpoint = os.getenv("AI_INFINITY_LOCAL_LLM_BASE_URL", "").strip()
+    model = os.getenv("AI_INFINITY_LOCAL_LLM_MODEL", "qwen2.5:7b").strip()
+    if not endpoint or not model:
+        return None
+    try:
+        parsed = urlparse(endpoint)
+        local_host = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+        valid_endpoint = (
+            parsed.scheme == "http"
+            and local_host
+            and parsed.port == 11434
+            and parsed.path in {"", "/"}
+            and not parsed.username
+            and not parsed.password
+            and not parsed.query
+            and not parsed.fragment
+        )
+    except ValueError:
+        valid_endpoint = False
+    if not valid_endpoint or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}", model):
+        return None
+
+    def call(payload: Dict[str, Any]) -> Dict[str, Any]:
+        messages = payload.get("messages") if isinstance(payload, dict) else []
+        messages = [
+            {
+                "role": str(item.get("role") or "user"),
+                "content": str(item.get("content") or ""),
+            }
+            for item in (messages if isinstance(messages, list) else [])
+            if isinstance(item, dict) and str(item.get("content") or "").strip()
+        ]
+        if not messages:
+            raise ValueError("Local Ollama writer requires at least one non-empty message.")
+        try:
+            temperature = max(
+                0.0,
+                min(1.0, float(payload.get("temperature", 0.55) or 0.55)),
+            )
+        except (TypeError, ValueError, OverflowError):
+            temperature = 0.55
+        try:
+            timeout = max(
+                60,
+                min(1800, int(os.getenv("AI_INFINITY_LOCAL_LLM_TIMEOUT", "900"))),
+            )
+        except (TypeError, ValueError, OverflowError):
+            timeout = 900
+
+        body = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "format": "json",
+            "keep_alive": "30m",
+            "options": {
+                "temperature": temperature,
+                "num_ctx": 32768,
+                "num_predict": 8192,
+            },
+        }
+        request = URLRequest(
+            endpoint.rstrip("/") + "/api/chat",
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": f"AI-Infinity/{VERSION}-Local-Ollama",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                result = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            # No local response bodies or request content are copied into logs.
+            raise RuntimeError(f"Local Ollama inference failed: {type(exc).__name__}") from None
+
+        message = result.get("message") if isinstance(result, dict) else {}
+        text_value = str(message.get("content") or "").strip() if isinstance(message, dict) else ""
+        if not text_value:
+            raise RuntimeError("Local Ollama returned no generated text.")
+        if result.get("done") is False:
+            raise RuntimeError("Local Ollama generation did not finish.")
+        usage = {
+            key: result.get(key)
+            for key in ("prompt_eval_count", "eval_count", "total_duration", "load_duration", "eval_duration")
+            if result.get(key) is not None
+        }
+        return {
+            "text": text_value,
+            "provider": f"local-ollama:{model}",
+            "finish_reason": str(result.get("done_reason") or "stop"),
+            "usage": usage,
+        }
+
+    return call
+
+
 def _gemini_api_key() -> str:
     """Resolve supported Gemini key names into one canonical runtime value."""
     return _first_nonempty_env((
@@ -1910,11 +2017,13 @@ Return ONLY JSON with:
 title, hook, premise, audience, tone, cta, language, platform_adaptations, chapters
 Each chapter must include: heading, narration, visual_query, image_prompt, on_screen, duration, proof_needed.
 Use 5-18 chapters. Total durations should approximately equal the target. Narration must be original and information-dense rather than filler. Make every visual_query materially different from the previous scene. Favor concrete locations, people, objects, processes, macro details, environmental shots, diagrams or editorial compositions that can be found or generated for this exact topic. Never put generic labels such as "Hook" or "The key idea" in image prompts. On-screen text should be a concise claim or phrase, not a duplicate section heading. Separate factual claims from creative framing. For unsupported facts, put the topic/claim in proof_needed. Avoid deceptive impersonation, fabricated citations and synthetic claims presented as observed events."""
-    # Select an actually configured, explicitly authorized no-cost writer. Gemini
-    # was previously implemented but never wired into this selector, so a valid
-    # Free Tier key could sit unused while long-form jobs silently fell back to the
-    # deterministic outline. Do not make external calls when the global provider
-    # kill switch is active.
+    # Prefer an explicitly configured loopback-only local model. This keeps
+    # prompts on the GitHub-hosted runner and needs no provider key or remote
+    # inference request. Remote providers remain opt-in and data-policy-gated.
+    if model_fn is None:
+        model_fn = _local_ollama_text_model()
+
+    # Select an actually configured, explicitly authorized no-cost writer.
     if model_fn is None and not _external_providers_disabled():
         model_fn = _gemini_free_tier_text_model()
 
@@ -2068,6 +2177,8 @@ EXISTING PLAN JSON:
         "repair_passes": 0,
         "provider_attempt_error": provider_attempt_error,
         "writer_diagnostics": {
+            "local_ollama_configured": _local_ollama_text_model() is not None,
+            "local_ollama_model": os.getenv("AI_INFINITY_LOCAL_LLM_MODEL", "qwen2.5:7b").strip() if _local_ollama_text_model() is not None else None,
             "gemini_api_key_present": bool(_gemini_api_key()),
             "gemini_free_tier_acknowledged": _gemini_free_tier_acknowledgement() in {"1", "true", "yes", "on"},
             "gemini_model": os.getenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", "gemini-3.1-flash-lite").strip(),
