@@ -173,7 +173,15 @@ def test_narration_only_repair_preserves_scene_metadata_and_meets_longform_gates
 
     def model_fn(payload):
         calls.append(payload)
-        selected = initial if len(calls) == 1 else {"narrations": narrations}
+        if len(calls) == 1:
+            selected = initial
+        else:
+            repair_request = calls[-1]["messages"][0]["content"]
+            chapter_line = next(
+                line for line in repair_request.splitlines() if line.startswith("CHAPTER_INDEX:")
+            )
+            chapter_index = int(chapter_line.split(":", 1)[1].strip())
+            selected = {"narration": narrations[chapter_index - 1]["narration"]}
         return {"text": json.dumps(selected, ensure_ascii=False), "provider": "test-narration-only-writer"}
 
     plan, provider = studio.creative_plan(
@@ -192,15 +200,16 @@ def test_narration_only_repair_preserves_scene_metadata_and_meets_longform_gates
 
     generation = plan["script_generation"]
     repair_prompt = calls[1]["messages"][0]["content"]
-    assert len(calls) == 2
-    assert "NARRATION-ONLY REPAIR" in repair_prompt
+    assert len(calls) == 6
+    assert "SINGLE-CHAPTER REPAIR" in repair_prompt
+    assert "CHAPTER_INDEX: 1" in repair_prompt
     assert '"target_spoken_words"' in repair_prompt
     assert "image_prompt" not in repair_prompt
     assert generation["status"] == "complete"
     assert generation["required_spoken_words"] == 1875
     assert generation["actual_spoken_words"] >= 1875
     assert generation["unique_sentence_ratio"] >= 0.85
-    assert generation["repair_passes"] == 1
+    assert generation["repair_passes"] == 5
     assert plan["title"] == "A Practical Guide to Responsible Video Production"
     assert plan["hook"] == "A responsible production is a sequence of evidence-led decisions."
     assert plan["premise"] == "A useful documentary that preserves clear distinctions between fact and illustration."
