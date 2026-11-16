@@ -136,3 +136,72 @@ def test_creative_planner_uses_loopback_model_and_applies_real_longform_quality_
     assert generation["actual_spoken_words"] >= 1875
     assert generation["unique_sentence_ratio"] >= 0.85
     assert generation["repair_passes"] == 0
+
+
+def test_narration_only_repair_preserves_scene_metadata_and_meets_longform_gates():
+    calls = []
+    initial = {
+        "title": "A Practical Guide to Responsible Video Production",
+        "hook": "A responsible production is a sequence of evidence-led decisions.",
+        "premise": "A useful documentary that preserves clear distinctions between fact and illustration.",
+        "language": "English",
+        "chapters": [
+            {
+                "heading": f"Chapter {index}: verified production practice",
+                "narration": f"Chapter {index} introduces its subject and explains the central production question.",
+                "visual_query": f"distinct documentary visual treatment {index}",
+                "image_prompt": f"original documentary composition {index}",
+                "on_screen": f"Production practice {index}",
+                "duration": 180,
+                "proof_needed": [f"verify chapter {index} claims"],
+                "rights_status": "REVIEW_REQUIRED",
+            }
+            for index in range(1, 6)
+        ],
+    }
+    narrations = []
+    for chapter_index in range(1, 6):
+        text = " ".join(
+            (
+                f"Chapter {chapter_index} observation {sentence_index} examines a specific production decision, "
+                "the constraint that shaped it, the available alternatives, the practical consequence, "
+                "and the evidence a creator must inspect before treating the result as verified."
+            )
+            for sentence_index in range(1, 61)
+        )
+        narrations.append({"chapter_index": chapter_index, "narration": text})
+
+    def model_fn(payload):
+        calls.append(payload)
+        selected = initial if len(calls) == 1 else {"narrations": narrations}
+        return {"text": json.dumps(selected, ensure_ascii=False), "provider": "test-narration-only-writer"}
+
+    plan, provider = studio.creative_plan(
+        {
+            "title": "A Practical Guide to Responsible Video Production",
+            "objective": "Create a grounded 15-minute educational programme about responsible production.",
+            "topic": "responsible video production workflows",
+            "format": "long",
+            "duration": 900,
+            "speaking_rate_wpm": 125,
+            "language": "English",
+        },
+        {"sources": []},
+        model_fn,
+    )
+
+    generation = plan["script_generation"]
+    repair_prompt = calls[1]["messages"][0]["content"]
+    assert len(calls) == 2
+    assert "NARRATION-ONLY REPAIR" in repair_prompt
+    assert '"target_spoken_words"' in repair_prompt
+    assert "image_prompt" not in repair_prompt
+    assert generation["status"] == "complete"
+    assert generation["required_spoken_words"] == 1875
+    assert generation["actual_spoken_words"] >= 1875
+    assert generation["unique_sentence_ratio"] >= 0.85
+    assert generation["repair_passes"] == 1
+    assert plan["chapters"][0]["image_prompt"] == "original documentary composition 1"
+    assert plan["chapters"][0]["proof_needed"] == ["verify chapter 1 claims"]
+    assert plan["chapters"][0]["rights_status"] == "REVIEW_REQUIRED"
+    assert provider == "test-narration-only-writer"
