@@ -9,9 +9,20 @@ def deterministic_media_sources(monkeypatch, request):
         # The adapter-contract test deliberately supplies mocked HTTP/byte
         # responses and must execute the real NASA adapter rather than this
         # suite-wide no-network provider stub.
+        commons_motion_adapter_tests = {
+            "test_commons_motion_first_search_keeps_real_video_extension_and_license",
+            "test_commons_motion_uses_videoinfo_transcodes_and_falls_back_from_an_oversized_derivative",
+            "test_commons_motion_never_substitutes_a_poster_image_for_missing_video_transcodes",
+        }
         if (
-            request.node.name == "test_nasa_adapter_exports_asset_level_policy_url_and_rights_state"
-            and name == "_nasa_images"
+            (
+                request.node.name == "test_nasa_adapter_exports_asset_level_policy_url_and_rights_state"
+                and name == "_nasa_images"
+            )
+            or (
+                request.node.name in commons_motion_adapter_tests
+                and name == "_commons_media"
+            )
         ):
             continue
         monkeypatch.setattr(studio, name, no_remote)

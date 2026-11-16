@@ -1,0 +1,1164 @@
+"""Regression coverage for strict source-motion requirements on professional video jobs."""
+import hashlib
+import json
+from pathlib import Path
+
+import pytest
+
+import reality_first_3901 as reality
+import studio_ultimate as studio
+
+
+def _caption_file(path: Path) -> None:
+    cues = []
+    for index in range(12):
+        start = index * 5
+        end = start + 5
+        start_tc = f"00:{start // 60:02d}:{start % 60:02d},000"
+        end_tc = f"00:{end // 60:02d}:{end % 60:02d},000"
+        cues.append(f"{index + 1}\n{start_tc} --> {end_tc}\nA clear line of narration.")
+    path.write_text("\n\n".join(cues) + "\n", encoding="utf-8")
+
+
+def _setup_quality(monkeypatch, tmp_path):
+    monkeypatch.setattr(studio, "FAST_MODE", False)
+    monkeypatch.setattr(studio, "SMOKE", False)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "format": {"duration": "60.0"},
+        "streams": [
+            {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080},
+            {"codec_type": "audio", "codec_name": "aac", "duration": "60.0", "sample_rate": "48000", "channels": 2},
+            {"codec_type": "subtitle", "codec_name": "mov_text"},
+        ],
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 60.0)
+    monkeypatch.setattr(studio, "_audio_peak_db", lambda _path: -18.0)
+    master = tmp_path / "final.mp4"
+    master.write_bytes(b"x" * 20001)
+    captions = tmp_path / "captions.srt"
+    _caption_file(captions)
+    chapters = [{"duration": seconds, "actual_duration": seconds} for seconds in (8, 8, 9, 9, 9, 9, 8)]
+    return master, captions, chapters
+
+
+def _licensed_motion_assets(tmp_path, count):
+    rows = []
+    for index in range(count):
+        path = tmp_path / f"scene_{index + 1:02d}.mp4"
+        path.write_bytes((f"real-media-fixture-{index + 1}".encode("utf-8") * 3000))
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        rows.append({
+            "kind": "video",
+            "path": str(path),
+            "source_url": f"https://www.pexels.com/video/verified-free-clip-{index + 1}/",
+            "license": "Pexels License",
+            "license_url": "https://www.pexels.com/license/",
+            "rights_status": "license_metadata_present",
+            "source_id": index + 1,
+            "asset_sha256": digest,
+            "fallback": False,
+        })
+    return rows
+
+
+def _truthful_fallback(tmp_path):
+    return {
+        "kind": "image",
+        "path": str(tmp_path / "procedural_visual_end_card.png"),
+        "source": "AI Infinity original vector editorial fallback",
+        "fallback": True,
+        "fallback_record": {
+            "truthful": True,
+            "execution_state": "DEGRADED",
+            "fallback_method": "original vector brand end-card",
+            "quality_change": "Reduced live-action coverage",
+            "license_change": "Original illustrative artwork, not live-action footage",
+        },
+    }
+
+
+def test_professional_launch_video_passes_with_six_distinct_motion_sources_and_one_end_card_fallback(monkeypatch, tmp_path):
+    monkeypatch.setenv("AI_INFINITY_REQUIRE_SOURCE_VISUALS", "1")
+    master, captions, chapters = _setup_quality(monkeypatch, tmp_path)
+    assets = _licensed_motion_assets(tmp_path, 6) + [_truthful_fallback(tmp_path)]
+
+    result = studio.quality_check(master, chapters, assets, captions)
+
+    assert result["checks"]["required_source_motion_coverage"] is True, result["checks"]
+    assert result["checks"]["fallback_visual_budget_ok"] is True, result["checks"]
+    assert result["visual_source_coverage"] == {
+        "required": True,
+        "scene_count": 7,
+        "distinct_verified_motion_sources": 6,
+        "minimum_motion_sources": 5,
+        "fallback_visual_count": 1,
+        "maximum_fallback_visuals": 1,
+    }
+    assert result["passed"] is True, json.dumps(result, indent=2)
+
+
+def test_professional_launch_video_rejects_illustration_heavy_result_even_when_media_technical_checks_pass(monkeypatch, tmp_path):
+    monkeypatch.setenv("AI_INFINITY_REQUIRE_SOURCE_VISUALS", "1")
+    master, captions, chapters = _setup_quality(monkeypatch, tmp_path)
+    assets = _licensed_motion_assets(tmp_path, 1) + [_truthful_fallback(tmp_path) for _ in range(6)]
+
+    result = studio.quality_check(master, chapters, assets, captions)
+
+    assert result["checks"]["file_present"] is True
+    assert result["checks"]["full_hd"] is True
+    assert result["checks"]["audio_present"] is True
+    assert result["checks"]["required_source_motion_coverage"] is False
+    assert result["checks"]["fallback_visual_budget_ok"] is False
+    assert result["passed"] is False
+
+
+def test_standard_mode_can_still_label_visual_fallback_without_claiming_source_coverage(monkeypatch, tmp_path):
+    monkeypatch.delenv("AI_INFINITY_REQUIRE_SOURCE_VISUALS", raising=False)
+    master, captions, chapters = _setup_quality(monkeypatch, tmp_path)
+    monkeypatch.setattr(studio, "FAST_MODE", True)
+    assets = _licensed_motion_assets(tmp_path, 1) + [_truthful_fallback(tmp_path) for _ in range(6)]
+
+    result = studio.quality_check(master, chapters, assets, captions)
+
+    assert result["checks"]["fallback_visual_used"] is True
+    assert result["checks"]["required_source_motion_coverage"] is True
+    assert result["checks"]["fallback_visual_budget_ok"] is True
+
+def test_timecoded_ai_infinity_brand_film_sets_curated_campaign_profile():
+    brief = """Create an extraordinary 60-second cinematic brand film for AI Infinity.
+    0–4 seconds — The hook. A creator sees the first idea. Voiceover: “Every extraordinary world begins with something nobody else can see.”
+    4–12 seconds — The spark. A dramatic landscape reveals an imagined future city.
+    12–25 seconds — The transformation. Research notes and storyboards turn the idea into a script.
+    25–40 seconds — The cinematic experience. Landscapes, futuristic architecture and a luminous tunnel reveal possibility.
+    40–49 seconds — The craft. A creator edits the timeline and captions.
+    49–56 seconds — The payoff. The creator sees the finished film.
+    56–60 seconds — The signature ending. AI Infinity. One idea. Infinite worlds.
+    VISUAL DIRECTION: Deep midnight blues, controlled cyan and violet, warm gold practical light.
+    VOICE, MUSIC AND SOUND: Original narration and score."""
+    plan = studio._explicit_timed_storyboard_plan(
+        title="ONE IDEA. INFINITE WORLDS.",
+        objective=brief,
+        fmt="long",
+        duration=60,
+        audience="global creators",
+        tone="premium cinematic, human, emotionally intelligent",
+        language="English",
+        topic="AI Infinity — One Idea. Infinite Worlds.",
+    )
+
+    assert plan is not None
+    assert plan["storyboard_origin"] == "explicit_timecoded_user_brief"
+    assert all(scene["campaign_profile"] == "ai_infinity_launch" for scene in plan["chapters"])
+    # Keep every authored beat boundary, while splitting the two broad
+    # transformation beats into shots that can carry distinct verified footage.
+    assert len(plan["chapters"]) == 9
+    assert [(scene["timecode"]["start_seconds"], scene["timecode"]["end_seconds"])
+            for scene in plan["chapters"]] == [
+        (0, 4), (4, 12), (12, 19), (19, 25), (25, 32),
+        (32, 40), (40, 49), (49, 56), (56, 60),
+    ]
+    assert sum(float(scene["duration"]) for scene in plan["chapters"]) == 60.0
+    assert len({scene["visual_search_subject"] for scene in plan["chapters"]}) == 9
+    assert sum(len(scene["narration"].split()) for scene in plan["chapters"]) >= 120
+
+def test_delivery_loudness_mastering_caps_output_to_source_programme_duration(monkeypatch, tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source programme bytes" * 1000)
+    output = tmp_path / "mastered.mp4"
+    source_probe = {
+        "format": {"duration": "60.000"},
+        "streams": [
+            {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080, "duration": "60.000"},
+            {"codec_type": "audio", "codec_name": "aac", "duration": "60.000", "time_base": "1/48000"},
+            {"codec_type": "subtitle", "codec_name": "mov_text", "duration": "66.245"},
+        ],
+    }
+    output_probe = {
+        "format": {"duration": "60.000"},
+        "streams": [
+            {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080, "duration": "60.000"},
+            {"codec_type": "audio", "codec_name": "aac", "duration": "60.000", "time_base": "1/48000"},
+            {"codec_type": "subtitle", "codec_name": "mov_text", "duration": "60.000"},
+        ],
+    }
+    command = {}
+
+    def fake_ffmpeg(*args, timeout=240):
+        command["args"] = args
+        Path(args[-1]).write_bytes(b"mastered programme bytes" * 1000)
+
+    monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda path: source_probe if Path(path) == source else output_probe)
+
+    result = studio._normalize_delivery_loudness(source, output, fast_mode=False)
+
+    args = list(command["args"])
+    assert "-t" in args
+    assert args[args.index("-t") + 1] == "60.000"
+    assert result["output_duration_seconds"] == 60.0
+    assert result["audio_video_duration_match"] is True
+
+
+def test_final_loudness_mux_caps_a_sixty_six_second_input_to_the_requested_sixty_seconds(monkeypatch, tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source-master" * 2000)
+    out = tmp_path / "final.mp4"
+    captured = {}
+
+    def fake_ffmpeg(*args, timeout=240):
+        captured["args"] = [str(value) for value in args]
+        out_path = Path(str(args[-1]))
+        out_path.write_bytes(b"final-master" * 2000)
+
+    def fake_probe(path):
+        duration = "66.245" if Path(path) == source else "60.000"
+        return {
+            "format": {"duration": duration},
+            "streams": [
+                {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080, "duration": duration},
+                {"codec_type": "audio", "codec_name": "aac", "duration": duration},
+                {"codec_type": "subtitle", "codec_name": "mov_text"},
+            ],
+        }
+
+    monkeypatch.setattr(studio, "probe_duration", lambda path: 66.245)
+    monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(studio, "ffprobe_json", fake_probe)
+
+    result = studio._normalize_delivery_loudness(
+        source, out, fast_mode=False, target_duration_seconds=60.0
+    )
+
+    args = captured["args"]
+    assert args[args.index("-t") + 1] == "60.000"
+    audio_filter = args[args.index("-af") + 1]
+    assert "atrim=duration=60.000" in audio_filter
+    assert "apad=whole_dur=60.000" in audio_filter
+    assert args[args.index("-c:v") + 1] == "copy"
+    assert result["source_duration_seconds"] == 66.245
+    assert result["requested_duration_seconds"] == 60.0
+    assert result["output_duration_seconds"] == 60.0
+    assert result["audio_video_duration_match"] is True
+
+
+def test_programme_audio_master_resets_pts_and_pads_to_the_video_runtime(monkeypatch, tmp_path):
+    source = tmp_path / "final.mp4"
+    source.write_bytes(b"real programme container fixture" * 1000)
+    output = tmp_path / "audio_master.mp3"
+    captured = {}
+
+    def fake_ffmpeg(*args, timeout=240):
+        captured["args"] = list(args)
+        Path(args[-1]).write_bytes(b"padded audio master bytes" * 2000)
+
+    def fake_duration(path):
+        if Path(path) == source:
+            return 60.0
+        return 60.026
+
+    monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(studio, "probe_duration", fake_duration)
+    monkeypatch.setattr(studio, "_valid_audio_file", lambda _path, minimum_peak_db=-45.0: True)
+
+    result = studio._export_programme_audio_master(source, output, 60.0, fast_mode=False)
+
+    args = captured["args"]
+    audio_filter = args[args.index("-af") + 1]
+    assert audio_filter.startswith("aresample=48000:async=1:first_pts=0,asetpts=N/SR/TB,")
+    assert "apad=whole_dur=60.000" in audio_filter
+    assert "atrim=duration=60.000" in audio_filter
+    assert "loudnorm=I=-16.0:TP=-1.5:LRA=11.0" in audio_filter
+    assert args[args.index("-map") + 1] == "0:a:0"
+    assert args[args.index("-t") + 1] == "60.000"
+    assert result["status"] == "verified"
+    assert result["requested_duration_seconds"] == 60.0
+    assert result["output_duration_seconds"] == 60.026
+    assert result["truthful"] is True
+
+
+def test_programme_audio_master_rejects_still_short_output_after_pts_reset(monkeypatch, tmp_path):
+    source = tmp_path / "final.mp4"
+    source.write_bytes(b"real programme container fixture" * 1000)
+    output = tmp_path / "audio_master.mp3"
+
+    def fake_ffmpeg(*args, timeout=240):
+        Path(args[-1]).write_bytes(b"short audio master bytes" * 2000)
+
+    def fake_duration(path):
+        return 60.0 if Path(path) == source else 53.832
+
+    monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(studio, "probe_duration", fake_duration)
+    monkeypatch.setattr(studio, "_valid_audio_file", lambda _path, minimum_peak_db=-45.0: True)
+
+    with pytest.raises(RuntimeError, match="duration mismatch after timestamp reset and padding"):
+        studio._export_programme_audio_master(source, output, 60.0, fast_mode=False)
+
+
+def test_scene_concatenation_copies_rendered_video_but_reencodes_aac_audio(monkeypatch, tmp_path):
+    scenes = []
+    for index in range(2):
+        scene = tmp_path / f"scene_{index + 1:02d}.mp4"
+        scene.write_bytes((f"rendered scene fixture {index + 1}".encode("utf-8") * 2000))
+        scenes.append(scene)
+    output = tmp_path / "master.mp4"
+    captured = {"calls": [], "manifests": []}
+
+    def fake_ffmpeg(*args, timeout=240):
+        args = list(args)
+        captured["calls"].append(args)
+        if "-f" in args and args[args.index("-f") + 1] == "concat":
+            manifest_path = Path(args[args.index("-i") + 1])
+            captured["manifests"].append(manifest_path.read_text(encoding="utf-8"))
+        target = args[-1]
+        if str(target) != "-" and Path(target).suffix in {".wav", ".mp4"}:
+            Path(target).write_bytes(b"normalized media fixture" * 2000)
+
+    monkeypatch.setattr(studio, "ffmpeg", fake_ffmpeg)
+    # reality_first_3901 wraps the concat function during normal app startup and
+    # independently probes its output. This test is about command construction,
+    # so stub only that wrapper's acceptance helpers; the production smoke test
+    # still uses the real FFmpeg output probe and decoder.
+    monkeypatch.setattr(reality, "_valid_file", lambda path, minimum=1: Path(path).is_file() and Path(path).stat().st_size >= minimum)
+    monkeypatch.setattr(reality, "_media_probe", lambda _path: {"ok": True})
+    monkeypatch.setattr(reality, "_upsert_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr(reality, "_event", lambda *args, **kwargs: None)
+
+    studio.concat_segments(scenes, output)
+
+    final_mux = next(call for call in captured["calls"] if call[-1] == output)
+    assert final_mux[final_mux.index("-c:v") + 1] == "copy"
+    assert final_mux[final_mux.index("-c:a") + 1] == "aac"
+    assert final_mux[final_mux.index("-b:a") + 1] == "192k"
+    assert final_mux[final_mux.index("-ar") + 1] == "48000"
+    assert final_mux[final_mux.index("-ac") + 1] == "2"
+    assert final_mux[final_mux.index("-map") + 1] == "0:v:0"
+    assert final_mux[final_mux.index("-map", final_mux.index("-map") + 1) + 1] == "1:a:0"
+    assert sum(call[-1] != "-" and Path(call[-1]).suffix == ".wav" for call in captured["calls"]) >= 3
+    assert len(captured["manifests"]) == 2
+    assert all(str(scene) in captured["manifests"][1] for scene in scenes)
+    assert output.is_file()
+    assert output.stat().st_size > 10_000
+
+def test_curated_launch_uses_scene_focal_concept_when_brief_has_multiple_visual_concepts(monkeypatch):
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: False)
+    mountains = {
+        "title": "Clouds formation in the sky above the mountains",
+        "description": "Dynamic clouds move over peaceful mountain peaks during sunset.",
+        "tags": "cinematic mountains landscape clouds moving clouds panoramic horizon nature",
+    }
+    assert studio._curated_launch_visual_candidate_relevant(
+        mountains,
+        required_concepts={"landscape"},
+        scene_concepts={"landscape", "cityscape"},
+        explicit_launch_profile=True,
+        search_subject="dramatic mountains and futuristic city",
+        focus="mountain landscape opens into a futuristic city",
+    ) is True
+
+    unrelated = {
+        "title": "A cat in a garden",
+        "description": "A house cat sleeping in a garden",
+        "tags": "cat pet garden",
+    }
+    assert studio._curated_launch_visual_candidate_relevant(
+        unrelated,
+        required_concepts={"landscape"},
+        scene_concepts={"landscape", "cityscape"},
+        explicit_launch_profile=True,
+        search_subject="dramatic mountains and futuristic city",
+        focus="mountain landscape opens into a futuristic city",
+    ) is False
+    assert studio._curated_launch_visual_candidate_relevant(
+        mountains,
+        required_concepts={"landscape"},
+        scene_concepts={"landscape", "cityscape"},
+        explicit_launch_profile=False,
+        search_subject="dramatic mountains and futuristic city",
+        focus="mountain landscape opens into a futuristic city",
+    ) is False
+
+def test_explicit_launch_uses_scene_local_visual_query_for_landscape_clip(monkeypatch, tmp_path):
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: False)
+    media = tmp_path / "pexels_launch_video_5040711.mp4"
+    media.write_bytes(b"validated landscape source fixture" * 1500)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 8.0)
+    scene = {
+        "topic": "AI Infinity — One Idea. Infinite Worlds.",
+        "heading": "The Spark",
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": "An idea opens into an imagined world",
+        "visual_query": "dramatic mountain landscape opens toward a futuristic city",
+        "narration": "The first idea reveals a vast landscape of possibility.",
+        "on_screen": "Step into the vision",
+    }
+
+    monkeypatch.setattr(studio, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
+    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=2)
+
+    assert selected is not None
+    assert selected["source_id"] == 5040711
+    assert selected["source"] == "Pexels curated free editorial video"
+    assert selected["validated_media"] is True
+    assert selected["path"] == str(media)
+
+def test_procedural_fallback_title_uses_scene_subject_not_render_prompt_boilerplate(tmp_path):
+    prompt = (
+        "Premium cinematic live-action film still: AI Infinity logo reveal against a deep cinematic background. "
+        "Overall visual direction: midnight blue, restrained cyan and warm gold. "
+        "No fabricated UI, no gibberish text."
+    )
+
+    asset = studio._procedural_image(prompt, tmp_path, 7, width=640, height=360)
+
+    assert asset is not None
+    assert asset["topic"] == "AI Infinity logo reveal against a deep cinematic background"
+    assert "Premium cinematic" not in asset["topic"]
+    assert "Overall visual direction" not in asset["topic"]
+
+def test_curated_launch_retries_a_second_distinct_landscape_source(monkeypatch, tmp_path):
+    """A duplicate mountain clip must not force an avoidable illustrative fallback."""
+    monkeypatch.setattr(studio, "FAST_MODE", False)
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: True)
+    monkeypatch.setattr(studio, "_curated_launch_visual_candidate_relevant", lambda *_args: True)
+
+    first_bytes = b"previously selected landscape source" * 900
+    (tmp_path / "selected_visual_01.mp4").write_bytes(first_bytes)
+    # Simulate the first curated mountain clip having already been selected by
+    # an earlier scene in this same project.
+    (tmp_path / "pexels_launch_video_5040711.mp4").write_bytes(first_bytes)
+
+    def fake_download(url, path, **_kwargs):
+        if "28946305" in url:
+            Path(path).write_bytes(b"second distinct mountain landscape source" * 900)
+            return
+        raise AssertionError(f"Unexpected source download: {url}")
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 8.0)
+
+    scene = {
+        "topic": "AI Infinity — One Idea. Infinite Worlds.",
+        "heading": "The Spark",
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": "A dramatic mountain landscape with moving clouds",
+        "visual_query": "mountain landscape clouds moving at sunset",
+        "narration": "One idea opens into a world of possibility.",
+        "on_screen": "Step into the vision",
+    }
+
+    monkeypatch.setattr(studio, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
+    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=2)
+
+    assert selected is not None
+    assert selected["source_id"] == 28946305
+    assert selected["source_url"] == "https://www.pexels.com/video/clouds-over-mountain-landscape-timelapse-28946305/"
+    assert selected["validated_media"] is True
+    assert selected["quality_tier"] == "curated_free_source_motion_video"
+
+def test_curated_launch_uses_distinct_scriptwriting_source_instead_of_fallback(monkeypatch, tmp_path):
+    """A duplicate first writing clip should retry a second relevant source."""
+    monkeypatch.setattr(studio, "FAST_MODE", False)
+
+    duplicate_bytes = b"existing writing clip already assigned to another scene" * 900
+    alternate_bytes = b"second distinct scriptwriting and storyboard clip" * 1000
+    (tmp_path / "selected_visual_01.mp4").write_bytes(duplicate_bytes)
+
+    def fake_download(url, path, **_kwargs):
+        if "6550131" in url:
+            Path(path).write_bytes(duplicate_bytes)
+            return
+        if "8086204" in url:
+            Path(path).write_bytes(alternate_bytes)
+            return
+        raise AssertionError(f"Unexpected source download: {url}")
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 8.0)
+    monkeypatch.setattr(studio, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
+
+    scene = {
+        "topic": "AI Infinity — One Idea. Infinite Worlds.",
+        "heading": "The Transformation",
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": "Overhead script pages and storyboard thumbnails, deliberate marks and natural paper texture",
+        "visual_query": "close up of scriptwriting process with pen and script",
+        "visual_search_subject": "script pages and storyboard thumbnails",
+        "narration": "The idea becomes a researched story and a script.",
+        "on_screen": "Research. Shape. Create.",
+    }
+    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=13)
+
+    assert selected is not None
+    assert selected["source_id"] == 8086204
+    assert selected["source_url"] == "https://www.pexels.com/video/close-up-of-a-script-8086204/"
+    assert selected["quality_tier"] == "curated_free_source_motion_video"
+    assert selected["validated_media"] is True
+    assert hashlib.sha256(Path(selected["path"]).read_bytes()).hexdigest() == hashlib.sha256(alternate_bytes).hexdigest()
+    assert Path(selected["path"]).name == "pexels_launch_video_8086204.mp4"
+
+
+def test_source_black_frame_gate_detects_sustained_near_black_segments(monkeypatch, tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"test media bytes")
+    monkeypatch.setattr(studio.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+    simulated = {"returncode": 0, "stderr": "[blackdetect] black_start:3.29 black_end:5.00 black_duration:1.710000", "stdout": ""}
+
+    def fake_run(*_args, **_kwargs):
+        return type("ProcessResult", (), simulated)()
+
+    monkeypatch.setattr(studio.subprocess, "run", fake_run)
+    assert studio._source_has_prolonged_black_frames(source, threshold_seconds=0.75) is True
+
+    simulated["stderr"] = "ffmpeg decoded every frame; no sustained black interval"
+    assert studio._source_has_prolonged_black_frames(source, threshold_seconds=0.75) is False
+
+    simulated["returncode"] = 1
+    assert studio._source_has_prolonged_black_frames(source, threshold_seconds=0.75) is True
+
+
+def test_curated_launch_skips_a_black_source_and_selects_a_distinct_alternate(monkeypatch, tmp_path):
+    monkeypatch.setattr(studio, "FAST_MODE", False)
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: True)
+    monkeypatch.setattr(studio, "_curated_launch_visual_candidate_relevant", lambda *_args: True)
+
+    first_bytes = b"source containing prolonged near-black interval" * 800
+    second_bytes = b"distinct clean mountain-motion source bytes" * 900
+
+    def fake_download(url, path, **_kwargs):
+        if "5040711" in url:
+            Path(path).write_bytes(first_bytes)
+        elif "28946305" in url:
+            Path(path).write_bytes(second_bytes)
+        else:
+            raise AssertionError(f"Unexpected source download: {url}")
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 8.0)
+    monkeypatch.setattr(
+        studio, "_source_has_prolonged_black_frames",
+        lambda path, **_kwargs: "5040711" in str(path),
+    )
+
+    scene = {
+        "topic": "AI Infinity — One Idea. Infinite Worlds.",
+        "heading": "The Spark",
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": "A dramatic mountain landscape with moving clouds",
+        "visual_search_subject": "cinematic mountains and moving clouds",
+        "visual_query": "mountain landscape clouds moving at sunset",
+        "narration": "One idea opens into a world of possibility.",
+        "on_screen": "One idea. Infinite worlds.",
+    }
+    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=9)
+
+    assert selected is not None
+    assert selected["source_id"] == 28946305
+    assert hashlib.sha256(Path(selected["path"]).read_bytes()).hexdigest() == hashlib.sha256(second_bytes).hexdigest()
+    assert not (tmp_path / "pexels_launch_video_5040711.mp4").exists()
+
+
+def test_acquire_scene_asset_accepts_curated_focal_match_and_retries_duplicate_motion(monkeypatch, tmp_path):
+    """Curated concept matches bypass only duplicate generic relevance and retry collisions."""
+    monkeypatch.setattr(studio, "_external_providers_disabled", lambda: True)
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: False)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 8.0)
+
+    duplicate_bytes = b"same landscape source already committed by another scene" * 100
+    alternate_bytes = b"second distinct mountain source for the spark scene" * 100
+    prior = tmp_path / "selected_visual_01.mp4"
+    prior.write_bytes(duplicate_bytes)
+    duplicate_source = tmp_path / "pexels_launch_video_5040711.mp4"
+    duplicate_source.write_bytes(duplicate_bytes)
+    alternate_source = tmp_path / "pexels_launch_video_28946305.mp4"
+    alternate_source.write_bytes(alternate_bytes)
+
+    def curated(path, source_id, title, source_url):
+        return {
+            "kind": "video",
+            "path": str(path),
+            "source": "Pexels curated free editorial video",
+            "provider": "Pexels",
+            "source_id": source_id,
+            "source_url": source_url,
+            "creator": "Verified Pexels contributor",
+            "attribution": "Video by contributor / Pexels",
+            "license": "Pexels License",
+            "license_url": "https://www.pexels.com/license/",
+            "rights_status": "license_metadata_present",
+            "quality_tier": "curated_free_source_motion_video",
+            "selection_reason": "scene_concepts_and_source_metadata_match",
+            "validated_media": True,
+            "title": title,
+        }
+
+    candidates = [
+        curated(
+            duplicate_source, 5040711,
+            "Clouds formation in the sky above the mountains",
+            "https://www.pexels.com/video/clouds-formation-in-the-sky-above-the-mountains-5040711/",
+        ),
+        curated(
+            alternate_source, 28946305,
+            "Clouds Over Mountain Landscape Timelapse",
+            "https://www.pexels.com/video/clouds-over-mountain-landscape-timelapse-28946305/",
+        ),
+    ]
+    calls = []
+
+    def next_curated(_scene, _outdir, _index):
+        calls.append(1)
+        return candidates.pop(0) if candidates else None
+
+    monkeypatch.setattr(studio, "_curated_pexels_launch_video", next_curated)
+    scene = {
+        "topic": "AI Infinity — One Idea. Infinite Worlds.",
+        "heading": "The Spark",
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": "wide dramatic mountain landscape and futuristic cityscape",
+        "visual_search_subject": "cinematic mountains ocean and futuristic city",
+        "visual_query": "mountain landscape clouds moving at sunset",
+        "narration": "One small idea becomes a doorway into another world.",
+        "on_screen": "One idea. Infinite possibilities.",
+    }
+
+    selected = studio.acquire_scene_asset(scene, tmp_path, index=2, prefer_motion=True, duration=8)
+
+    assert len(calls) == 2, "a duplicate first choice should trigger a bounded second-source attempt"
+    assert selected["kind"] == "video"
+    assert selected["source_id"] == 28946305
+    assert selected["quality_tier"] == "curated_free_source_motion_video"
+    assert selected["asset_sha256"] == hashlib.sha256(alternate_bytes).hexdigest()
+    selected_path = Path(selected["path"])
+    assert selected_path.is_file()
+    assert selected_path.name == "selected_visual_02.mp4"
+
+def test_explicit_launch_profile_matches_scene_local_landscape_without_repeating_brand(monkeypatch, tmp_path):
+    """Project-level launch intent must not be lost when scene text names only its focal shot."""
+    monkeypatch.setattr(studio, "FAST_MODE", False)
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: False)
+    media_bytes = b"distinct validated mountain motion source" * 1200
+
+    def fake_download(url, path, **_kwargs):
+        assert "5040711" in url, f"unexpected source URL: {url}"
+        Path(path).write_bytes(media_bytes)
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 8.0)
+
+    scene = {
+        "topic": "A mountain landscape opens into a futuristic city",
+        "heading": "The Spark",
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": "A dramatic mountain landscape with moving clouds",
+        "visual_query": "mountain landscape clouds moving at sunset",
+        "narration": "One small idea opens into a vast world of possibility.",
+        "on_screen": "One idea. Infinite worlds.",
+    }
+
+    monkeypatch.setattr(studio, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
+    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=9)
+
+    assert selected is not None
+    assert selected["source_id"] == 5040711
+    assert selected["validated_media"] is True
+    assert selected["quality_tier"] == "curated_free_source_motion_video"
+    assert hashlib.sha256(Path(selected["path"]).read_bytes()).hexdigest() == hashlib.sha256(media_bytes).hexdigest()
+
+
+
+
+@pytest.mark.parametrize(
+    ("scene", "expected_source_id"),
+    [
+        ({
+            "topic": "AI Infinity — One Idea. Infinite Worlds.",
+            "heading": "The Cinematic World",
+            "campaign_profile": "ai_infinity_launch",
+            "visual_focus": "A futuristic cityscape skyline at night, tall illuminated architecture and moving city lights",
+            "visual_search_subject": "futuristic cityscape at night",
+            "visual_query": "futuristic cityscape skyline at night",
+            "narration": "The imagined idea expands into a city of tomorrow.",
+            "on_screen": "A world takes shape",
+        }, 34719182),
+        ({
+            "topic": "AI Infinity — One Idea. Infinite Worlds.",
+            "heading": "Transformation in Motion",
+            "campaign_profile": "ai_infinity_launch",
+            "visual_focus": "Abstract glowing-line tunnel transitioning from the imagined idea into a crafted visual world",
+            "visual_search_subject": "abstract tunnel with glowing lines cinematic transition",
+            "visual_query": "abstract tunnel with glowing lines cinematic transition",
+            "narration": "Each transition carries the same idea forward through light and motion.",
+            "on_screen": "Possibility becomes motion",
+        }, 29109378),
+    ],
+)
+def test_launch_focal_scenes_choose_matching_city_or_abstract_motion_source(
+    monkeypatch, tmp_path, scene, expected_source_id
+):
+    monkeypatch.setattr(studio, "FAST_MODE", False)
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: False)
+    payload = (f"source-{expected_source_id}-verified-motion-bytes\n".encode() * 1400)
+
+    def fake_download(url, path, **_kwargs):
+        assert str(expected_source_id) in url, f"focal source mismatch: {url}"
+        Path(path).write_bytes(payload)
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 8.0)
+    monkeypatch.setattr(studio, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
+
+    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=99)
+
+    assert selected is not None
+    assert selected["source_id"] == expected_source_id
+    assert selected["kind"] == "video"
+    assert selected["validated_media"] is True
+    assert selected["quality_tier"] == "curated_free_source_motion_video"
+    assert hashlib.sha256(Path(selected["path"]).read_bytes()).hexdigest() == hashlib.sha256(payload).hexdigest()
+    assert Path(selected["path"]).is_file()
+
+
+def test_real_campaign_tunnel_scene_uses_distinct_hd_source_after_curated_candidates_fail(monkeypatch, tmp_path):
+    """The real launch brief must not turn a tunnel shot into a repeated mountain or illustration."""
+    monkeypatch.setattr(studio, "FAST_MODE", False)
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: False)
+
+    # The earlier campaign scene has already used this mountain source. The
+    # tunnel scene must select a different, scene-relevant motion asset.
+    (tmp_path / "selected_visual_05.mp4").write_bytes(b"previously selected mountain footage" * 1200)
+    tunnel_bytes = b"verified-HD-abstract-tunnel-motion-source\n" * 2000
+
+    def fake_download(url, path, **_kwargs):
+        if "/download/video/31930508/" not in str(url):
+            raise OSError("fixture marks the older curated source unavailable")
+        Path(path).write_bytes(tunnel_bytes)
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 10.0)
+    monkeypatch.setattr(studio, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
+
+    scene = {
+        "topic": "AI Infinity — One Idea. Infinite Worlds.",
+        "heading": "Transformation in Motion",
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": (
+            "abstract glowing-line tunnel transitioning from the imagined landscape "
+            "into a crafted visual world; brief direction: the cinematic experience, "
+            "deliberate camera movement, atmospheric lighting and meaningful transitions"
+        ),
+        "visual_search_subject": "abstract tunnel with glowing lines cinematic transition",
+        "visual_query": (
+            "abstract tunnel with glowing lines cinematic transition; the cinematic "
+            "experience moves from an imagined landscape into a crafted visual world"
+        ),
+        "narration": (
+            "Each transition carries the same idea forward, changing scale and emotion "
+            "without losing the human story."
+        ),
+        "on_screen": "Possibility becomes motion",
+    }
+
+    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=6)
+
+    assert selected is not None
+    assert selected["source_id"] == 31930508
+    assert selected["kind"] == "video"
+    assert selected["validated_media"] is True
+    assert selected["quality_tier"] == "curated_free_source_motion_video"
+    assert selected["license"] == "Pexels License"
+    assert hashlib.sha256(Path(selected["path"]).read_bytes()).hexdigest() == hashlib.sha256(tunnel_bytes).hexdigest()
+
+
+def test_launch_signature_endcard_uses_real_screen_motion_source(monkeypatch, tmp_path):
+    monkeypatch.setattr(studio, "FAST_MODE", False)
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: False)
+    payload = b"genuine-metadata-validated-screen-motion-source-bytes\n" * 1400
+
+    def fake_download(url, path, **_kwargs):
+        assert any(str(source_id) in url for source_id in (15517230, 35820856, 12358562)), url
+        Path(path).write_bytes(payload)
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    monkeypatch.setattr(studio, "ffprobe_json", lambda _path: {
+        "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}]
+    })
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 8.0)
+    monkeypatch.setattr(studio, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
+
+    scene = {
+        "topic": "AI Infinity — One Idea. Infinite Worlds.",
+        "heading": "Signature Ending",
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": (
+            "Restrained midnight-blue brand end-card displayed on a large dark monitor, "
+            "subtle cyan and violet light, clean negative space, elegant AI Infinity title reveal"
+        ),
+        "visual_search_subject": "minimal dark cinematic brand end card",
+        "visual_query": "minimal dark cinematic brand end card; display the finished title on screen",
+        "narration": "AI Infinity. One idea. Infinite worlds.",
+        "on_screen": "AI INFINITY • ONE IDEA. INFINITE WORLDS.",
+    }
+
+    selected = studio._curated_pexels_launch_video(scene, tmp_path, index=99)
+
+    assert selected is not None
+    assert selected["source_id"] in {15517230, 35820856, 12358562}
+    assert selected["kind"] == "video"
+    assert selected["validated_media"] is True
+    assert selected["quality_tier"] == "curated_free_source_motion_video"
+    assert hashlib.sha256(Path(selected["path"]).read_bytes()).hexdigest() == hashlib.sha256(payload).hexdigest()
+
+@pytest.mark.parametrize(
+    "index,source_id,expected_title,heading,focus",
+    [
+        (
+            17, 8478102, "Close Up video of a Person Writing",
+            "Research notes and writing", "A close-up of a person writing research notes in a notebook",
+        ),
+        (
+            23, 7504395, "A Team Discussing and Brainstorming Ideas",
+            "Team brainstorming and collaboration", "Colleagues collaborating while developing an idea",
+        ),
+        (
+            26, 34707439, "Futuristic Abstract Light Tunnel Animation",
+            "Digital abstract light tunnel", "A glowing abstract tunnel carrying the idea into motion",
+        ),
+        (
+            31, 40304903, "Video Editing Software on Monitor Display",
+            "Editing software on a monitor", "A close-up of an editor's timeline on a monitor",
+        ),
+        (
+            33, 34663551, "Futuristic Neon Light Tunnel Animation",
+            "Digital tunnel", "A glowing neon tunnel carries an imagined world into motion",
+        ),
+        (
+            34, 36999006, "Futuristic Geometric Digital Tunnel",
+            "Digital tunnel", "A luminous geometric tunnel creates a feeling of entering a new world",
+        ),
+    ],
+)
+def test_curated_launch_expanded_catalog_selects_distinct_verified_source_motion(
+    monkeypatch, tmp_path, index, source_id, expected_title, heading, focus
+):
+    """New item-level sources are candidates, not unconditional successes.
+
+    The ordinary acquisition flow still applies the source metadata matcher,
+    media probe, minimum duration/resolution, black-frame check and byte-uniqueness
+    check before returning an item as usable motion footage.
+    """
+    monkeypatch.setattr(studio, "FAST_MODE", False)
+    monkeypatch.setattr(studio, "_visual_candidate_relevant", lambda *_args: True)
+    monkeypatch.setattr(
+        studio,
+        "_curated_launch_visual_candidate_relevant",
+        lambda candidate, *_args: candidate.get("title") == expected_title,
+    )
+    monkeypatch.setattr(
+        studio,
+        "ffprobe_json",
+        lambda _path: {
+            "streams": [
+                {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080}
+            ]
+        },
+    )
+    monkeypatch.setattr(studio, "probe_duration", lambda _path: 8.0)
+    monkeypatch.setattr(studio, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
+    output_dir = tmp_path / str(source_id)
+    output_dir.mkdir()
+    payload = (f"real source-media fixture {source_id} with distinct bytes ".encode("utf-8") * 900)
+
+    def fake_download(_url, path, **_kwargs):
+        Path(path).write_bytes(payload)
+
+    monkeypatch.setattr(studio, "download", fake_download)
+    scene = {
+        "topic": "AI Infinity product launch",
+        "heading": heading,
+        "campaign_profile": "ai_infinity_launch",
+        "visual_focus": focus,
+        "visual_query": focus,
+        "visual_search_subject": focus,
+        "narration": focus,
+        "on_screen": "",
+    }
+
+    selected = studio._curated_pexels_launch_video(scene, output_dir, index=index)
+
+    assert selected is not None
+    assert selected["source_id"] == source_id
+    assert selected["kind"] == "video"
+    assert selected["validated_media"] is True
+    assert selected["quality_tier"] == "curated_free_source_motion_video"
+    assert selected["source_url"].startswith("https://www.pexels.com/video/")
+    assert selected["license"] == "Pexels License"
+    assert selected["license_url"] == "https://www.pexels.com/license/"
+    assert hashlib.sha256(Path(selected["path"]).read_bytes()).hexdigest() == hashlib.sha256(payload).hexdigest()
+
+
+
+
+def test_commons_motion_uses_videoinfo_transcodes_and_falls_back_from_an_oversized_derivative(monkeypatch, tmp_path):
+    from urllib.parse import parse_qs, urlparse
+
+    calls = []
+    downloads = []
+    search_page = {
+        "pageid": 101,
+        "ns": 6,
+        "title": "File:Distinct documentary motion.webm",
+        "canonicalurl": "https://commons.wikimedia.org/wiki/File:Distinct_documentary_motion.webm",
+    }
+    media_page = {
+        "pageid": 101,
+        "ns": 6,
+        "title": "File:Distinct documentary motion.webm",
+        "canonicalurl": search_page["canonicalurl"],
+        "videoinfo": [{
+            "url": "https://upload.wikimedia.org/wikipedia/commons/1/10/Distinct_documentary_motion.webm",
+            "mime": "video/webm",
+            "extmetadata": {
+                "LicenseShortName": {"value": "CC BY 4.0"},
+                "LicenseUrl": {"value": "https://creativecommons.org/licenses/by/4.0/"},
+                "Artist": {"value": "Documentary Motion Creator"},
+                "Credit": {"value": "Documentary Motion Creator"},
+                "ImageDescription": {"value": "A real documentary motion shot of the intended subject."},
+                "UsageTerms": {"value": "Creative Commons Attribution 4.0"},
+            },
+            "derivatives": [
+                {
+                    "src": "https://upload.wikimedia.org/wikipedia/commons/transcoded/1/10/Distinct.webm/Distinct.1080p.vp9.webm",
+                    "type": "video/webm; codecs=vp9, opus",
+                    "transcodekey": "1080p.vp9.webm",
+                    "width": 1920,
+                    "height": 1080,
+                    "bandwidth": 4200000,
+                },
+                {
+                    "src": "https://upload.wikimedia.org/wikipedia/commons/transcoded/1/10/Distinct.webm/Distinct.720p.vp9.webm",
+                    "type": "video/webm; codecs=vp9, opus",
+                    "transcodekey": "720p.vp9.webm",
+                    "width": 1280,
+                    "height": 720,
+                    "bandwidth": 1800000,
+                },
+                {
+                    "src": "https://upload.wikimedia.org/wikipedia/commons/transcoded/1/10/Distinct.webm/Distinct.360p.vp9.webm",
+                    "type": "video/webm; codecs=vp9, opus",
+                    "transcodekey": "360p.vp9.webm",
+                    "width": 640,
+                    "height": 360,
+                    "bandwidth": 500000,
+                },
+            ],
+        }],
+    }
+
+    def fake_http_json(url, timeout=0):
+        params = parse_qs(urlparse(url).query)
+        calls.append(params)
+        if "generator" in params:
+            assert params.get("prop") == ["info"]
+            assert params.get("gsrsearch", [""])[0].endswith("filetype:video")
+            return {"query": {"pages": {"101": search_page}}}
+        assert params.get("pageids") == ["101"]
+        assert params.get("prop") == ["info|videoinfo"]
+        assert "derivatives" in params.get("viprop", [""])[0].split("|")
+        assert "imageinfo" not in params.get("prop", [""])[0]
+        return {"query": {"pages": {"101": media_page}}}
+
+    def fake_download(url, path, timeout=0, max_bytes=None, headers=None):
+        downloads.append((url, max_bytes))
+        if "1080p.vp9.webm" in url:
+            raise ValueError("file exceeded the bounded download size")
+        path.write_bytes(b"validated transcoded Commons motion bytes\n" * 300)
+        return path
+
+    monkeypatch.setattr(studio, "FAST_MODE", True)
+    function_globals = studio._commons_media.__globals__
+    assert function_globals is studio.__dict__, {
+        "function_module": studio._commons_media.__module__,
+        "module_name": studio.__name__,
+        "function_globals_module": function_globals.get("__name__"),
+        "function_name": studio._commons_media.__name__,
+    }
+    assert function_globals.get("_commons_media") is studio._commons_media, {
+        "function_name": studio._commons_media.__name__,
+        "module_global_name": getattr(function_globals.get("_commons_media"), "__name__", None),
+    }
+    monkeypatch.setitem(function_globals, "http_json", fake_http_json)
+    monkeypatch.setitem(studio._commons_media.__globals__, "download", fake_download)
+    monkeypatch.setattr(studio, "_commercial_use_from_license", lambda _name, _url: "commercial_use_allowed_with_attribution")
+    studio.MEDIA_DEBUG_ERRORS.clear()
+
+    result = studio._commons_media(
+        "documentary motion about a distinct topic",
+        tmp_path,
+        limit=4,
+        prefer_motion=True,
+    )
+
+    assert len(calls) == 2, {"calls": calls, "provider_errors": dict(studio.MEDIA_DEBUG_ERRORS)}
+    assert downloads[0][0].endswith("1080p.vp9.webm")
+    assert downloads[1][0].endswith("720p.vp9.webm")
+    assert all(max_bytes == 24_000_000 for _url, max_bytes in downloads)
+    assert len(result) == 1
+    selected = result[0]
+    assert selected["kind"] == "video"
+    assert selected["source"] == "Wikimedia Commons"
+    assert selected["source_id"] == 101
+    assert selected["source_url"] == search_page["canonicalurl"]
+    assert selected["source_media_url"] == media_page["videoinfo"][0]["url"]
+    assert selected["downloaded_media_url"].endswith("720p.vp9.webm")
+    assert selected["media_width"] == 1280
+    assert selected["media_height"] == 720
+    assert selected["transcode_key"] == "720p.vp9.webm"
+    assert selected["transcoded_from_original"] is True
+    assert selected["rights_status"] == "license_metadata_present"
+    assert selected["commercial_use_state"] == "commercial_use_allowed_with_attribution"
+    assert Path(selected["path"]).is_file()
+
+
+def test_commons_motion_never_substitutes_a_poster_image_for_missing_video_transcodes(monkeypatch, tmp_path):
+    from urllib.parse import parse_qs, urlparse
+
+    page = {
+        "pageid": 102,
+        "title": "File:Video without a transcode.webm",
+        "canonicalurl": "https://commons.wikimedia.org/wiki/File:Video_without_a_transcode.webm",
+        "videoinfo": [{
+            "url": "https://upload.wikimedia.org/wikipedia/commons/2/20/Video_without_a_transcode.webm",
+            "mime": "video/webm",
+            "extmetadata": {},
+            "derivatives": [],
+        }],
+    }
+    downloaded = []
+
+    def fake_http_json(url, timeout=0):
+        params = parse_qs(urlparse(url).query)
+        if "generator" in params:
+            return {"query": {"pages": {"102": {"pageid": 102, "title": page["title"]}}}}
+        return {"query": {"pages": {"102": page}}}
+
+    def fake_download(url, path, timeout=0, max_bytes=None, headers=None):
+        downloaded.append(url)
+        raise ValueError("original exceeds allowed size")
+
+    monkeypatch.setattr(studio, "FAST_MODE", True)
+    function_globals = studio._commons_media.__globals__
+    assert function_globals is studio.__dict__, {
+        "function_module": studio._commons_media.__module__,
+        "module_name": studio.__name__,
+        "function_globals_module": function_globals.get("__name__"),
+        "function_name": studio._commons_media.__name__,
+    }
+    assert function_globals.get("_commons_media") is studio._commons_media, {
+        "function_name": studio._commons_media.__name__,
+        "module_global_name": getattr(function_globals.get("_commons_media"), "__name__", None),
+    }
+    monkeypatch.setitem(function_globals, "http_json", fake_http_json)
+    monkeypatch.setitem(studio._commons_media.__globals__, "download", fake_download)
+    studio.MEDIA_DEBUG_ERRORS.clear()
+
+    result = studio._commons_media("documentary subject", tmp_path, limit=2, prefer_motion=True)
+    assert result == []
+    assert downloaded == [page["videoinfo"][0]["url"]], {"downloaded": downloaded, "provider_errors": dict(studio.MEDIA_DEBUG_ERRORS)}
+    assert all("thumb" not in url for url in downloaded)
+
+
+
+def test_untimed_ai_infinity_technology_campaign_becomes_cinematic_brand_film_not_generic_explainer():
+    brief = (
+        "Create the flagship film titled ONE IDEA. INFINITE WORLDS. Exactly 60 seconds, "
+        "1920x1080, 16:9 landscape. Premium global technology campaign fused with an "
+        "emotional cinematic short film. A lone creator sits at night before a blank screen; "
+        "a small idea grows through research, imagination, story shaping, creation, refinement "
+        "and the finished result. Use relevant distinct motion imagery, deliberate visual "
+        "progression, purposeful cinematography, controlled transitions and professional sound. "
+        "Avoid a slideshow, generic stock montage, tutorial and text-heavy advertisement. "
+        "Include this exact spoken narration sentence: Every extraordinary world begins with "
+        "something nobody else can see. End with AI Infinity. One idea. Infinite worlds."
+    )
+    plan = studio._fallback_creative_plan(
+        title="ONE IDEA. INFINITE WORLDS.",
+        objective=brief,
+        fmt="long",
+        duration=60,
+        audience="global technology audience",
+        tone="premium cinematic and emotionally intelligent",
+        research={"sources": []},
+        language="English",
+        topic="AI Infinity — One Idea. Infinite Worlds.",
+    )
+
+    chapters = plan["chapters"]
+    narration = " ".join(chapter["narration"] for chapter in chapters)
+    assert studio._is_explicit_ai_infinity_launch_brief(brief) is True
+    assert plan["title"] == "ONE IDEA. INFINITE WORLDS."
+    assert plan["storyboard_origin"] == "deterministic_ai_infinity_cinematic_brand_film"
+    assert plan["campaign_profile"] == "ai_infinity_launch"
+    assert len(chapters) == 8
+    assert all(chapter["campaign_profile"] == "ai_infinity_launch" for chapter in chapters)
+    assert "Every extraordinary world begins with something nobody else can see." in narration
+    assert narration.rstrip().endswith("AI Infinity. One idea. Infinite worlds.")
+    assert len({chapter["visual_focus"] for chapter in chapters}) == 8
+    assert len(narration.split()) >= 120
+    assert "night" in chapters[0]["visual_focus"].lower()
+    assert "research" in chapters[2]["visual_focus"].lower()
+    assert "storyboard" in chapters[3]["visual_focus"].lower()
+    assert "editing" in chapters[5]["visual_focus"].lower()
+    assert "camera" in chapters[6]["visual_focus"].lower()
+    assert "watching the finished film" in chapters[7]["visual_focus"].lower()
+    assert plan["brief_fidelity"]["exact_opening_line_preserved"] is True
+    assert plan["brief_fidelity"]["storyboard_replaced_by_generic_fallback"] is False
+
+
+def test_technology_campaign_is_promotional_and_unresolved_nasa_rights_are_not_usable():
+    scene = {
+        "heading": "A striking production frame",
+        "visual_focus": "camera operator filming a production",
+        "_production_context": {
+            "title": "ONE IDEA. INFINITE WORLDS.",
+            "objective": (
+                "Premium global technology campaign fused with an emotional cinematic short film. "
+                "End with AI Infinity. One idea. Infinite worlds."
+            ),
+        },
+    }
+    assert studio._scene_is_explicitly_promotional(scene) is True
+    nasa_candidate = {
+        "source": "NASA Image and Video Library",
+        "license": "NASA media-use guidelines (not a blanket license)",
+        "license_url": "https://www.nasa.gov/nasa-brand-center/images-and-media/",
+        "commercial_use_state": "commercial_use_allowed_under_provider_terms",
+        "rights_status": "license_metadata_present",
+    }
+    assessed = studio._apply_nasa_scene_usage_policy(nasa_candidate, scene)
+    assert assessed["rights_status"] == "REVIEW_REQUIRED"
+    assert assessed["commercial_use_state"] == "UNKNOWN_REVIEW_REQUIRED"

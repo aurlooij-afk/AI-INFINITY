@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse
+from ai_infinity.timeline_interchange import MAX_SCENES, SCENE_NAME
 
 VERSION = "TARGET-2050.PRO-CREATOR.2"
 BUILD = "PROFESSIONAL-CREATOR-SYSTEM-A-TO-Z"
@@ -73,11 +74,14 @@ def _normalise(studio,p,payload):
     root=studio._project_dir(p["project_id"])
     rows=payload.get("scenes")
     if not isinstance(rows,list) or not rows: raise HTTPException(422,"timeline.scenes is required")
+    if len(rows)>MAX_SCENES: raise HTTPException(413,f"timeline exceeds the {MAX_SCENES}-scene limit")
     out=[]; seen=set(); cursor=0.0
-    for pos,raw in enumerate(rows[:40],1):
+    for pos,raw in enumerate(rows,1):
         if not isinstance(raw,dict): continue
-        asset=Path(str(raw.get("source_asset") or "")).name
-        m=re.fullmatch(r"scene_([0-9]{2})\.mp4",asset)
+        raw_asset=str(raw.get("source_asset") or "").strip()
+        asset=Path(raw_asset).name
+        if raw_asset and raw_asset!=asset: raise HTTPException(422,"timeline contains an unsafe scene source")
+        m=SCENE_NAME.fullmatch(asset)
         if not m: raise HTTPException(422,"timeline contains an invalid scene source")
         source_index=int(m.group(1))
         if source_index in seen: raise HTTPException(422,"timeline contains a duplicate scene source")
@@ -146,6 +150,17 @@ def _variants(studio,pid,master):
         res.append({"ratio":ratio,"asset_name":name,"duration_seconds":meta["duration_seconds"]})
     return res
 
+def _concat_manifest_text(segment_paths):
+    """Build a valid FFmpeg concat-demuxer manifest with one physical line per file."""
+    records = []
+    for segment_path in segment_paths:
+        value = str(Path(segment_path).resolve())
+        if "\r" in value or "\n" in value:
+            raise ValueError("concat media paths cannot contain line breaks")
+        # FFmpeg concat syntax escapes an embedded apostrophe as '\'\''.
+        records.append("file '" + value.replace("'", "'\\''") + "'")
+    return "\n".join(records) + "\n"
+
 def _render(studio,pid,timeline):
     root=studio._project_dir(pid)
     selected=[x for x in timeline["scenes"] if x.get("enabled")]
@@ -160,7 +175,7 @@ def _render(studio,pid,timeline):
         if not out.exists() or out.stat().st_size<10000: raise RuntimeError("timeline segment render failed")
         segs.append(out); chapters.append({"heading":x["heading"],"narration":x["narration"],"duration":x["duration"],"actual_duration":x["duration"]})
     manifest=root/"timeline_concat.txt"
-    manifest.write_text("".join("file '"+str(p).replace("'","'\\''")+"'\\n" for p in segs),encoding="utf-8")
+    manifest.write_text(_concat_manifest_text(segs),encoding="utf-8")
     tmp=root/"final.timeline.tmp.mp4"; master=root/"final.mp4"
     studio.ffmpeg("-f","concat","-safe","0","-i",manifest,"-c","copy","-movflags","+faststart",tmp,timeout=1800)
     os.replace(tmp,master)

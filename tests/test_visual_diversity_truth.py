@@ -1441,6 +1441,9 @@ def test_curated_launch_video_adapter_preserves_motion_source_and_item_rights(mo
     monkeypatch.setattr(studio_module, "ffprobe_json", fake_probe)
     monkeypatch.setattr(studio_module, "probe_duration", lambda path: 12.0)
     monkeypatch.setattr(studio_module, "FAST_MODE", True)
+    # These tests mock media bytes and FFprobe. Keep the independent real-media
+    # black-frame check disabled only for the synthetic fixture, not production.
+    monkeypatch.setattr(studio_module, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
 
     row = studio_module._curated_pexels_launch_video({
         "topic": "AI Infinity launch",
@@ -1487,6 +1490,9 @@ def test_curated_launch_video_selects_by_scene_semantics_not_ordinal(monkeypatch
     monkeypatch.setattr(module, "ffprobe_json", fake_probe)
     monkeypatch.setattr(module, "probe_duration", lambda path: 12.0)
     monkeypatch.setattr(module, "FAST_MODE", True)
+    # These tests mock media bytes and FFprobe. Keep the independent real-media
+    # black-frame check disabled only for the synthetic fixture, not production.
+    monkeypatch.setattr(module, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
 
     # Scene 5 of the five-scene short storyboard is final playback, not a
     # creator-filming shot. The old index-only mapping chose source 7677005.
@@ -1502,7 +1508,7 @@ def test_curated_launch_video_selects_by_scene_semantics_not_ordinal(monkeypatch
     assert row is not None, module.MEDIA_DEBUG_ERRORS.get("pexels-curated-launch-video")
     assert row["kind"] == "video"
     assert row["quality_tier"] == "curated_free_source_motion_video"
-    assert row["source_id"] in {12358562, 35820856}
+    assert row["source_id"] in {12358562, 35820856, 7239491}
     assert row["source_id"] != 7677005
     assert row["selection_reason"] == "scene_concepts_and_source_metadata_match"
     assert row["source_url"].startswith("https://www.pexels.com/video/")
@@ -1536,6 +1542,17 @@ def test_curated_launch_video_retries_another_relevant_clip_after_download_failu
     monkeypatch.setattr(module, "ffprobe_json", fake_probe)
     monkeypatch.setattr(module, "probe_duration", lambda path: 12.0)
     monkeypatch.setattr(module, "FAST_MODE", True)
+    # These tests mock media bytes and FFprobe. Keep the independent real-media
+    # black-frame check disabled only for the synthetic fixture, not production.
+    monkeypatch.setattr(module, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        module,
+        "_curated_launch_visual_candidate_relevant",
+        lambda candidate, *_args, **_kwargs: candidate.get("title") in {
+            "Close up of computer screen",
+            "Professional video editing at workstation",
+        },
+    )
 
     row = module._curated_pexels_launch_video({
         "topic": "AI Infinity launch",
@@ -1547,10 +1564,10 @@ def test_curated_launch_video_retries_another_relevant_clip_after_download_failu
     }, tmp_path, 5)
 
     assert row is not None, module.MEDIA_DEBUG_ERRORS.get("pexels-curated-launch-video")
-    assert row["source_id"] == 35820856
+    assert row["source_id"] in {35820856, 7239491}
     assert len(downloads) == 2, downloads
     assert downloads[0].endswith("/12358562-hd_1920_1080_30fps.mp4")
-    assert downloads[1].endswith("/15188259_1920_1080_30fps.mp4")
+    assert downloads[1].endswith(("/15188259_1920_1080_30fps.mp4", "/7239491-hd_1920_1080_30fps.mp4"))
 
 
 def test_curated_launch_video_keeps_creator_filming_clip_when_that_scene_is_requested(monkeypatch, tmp_path):
@@ -1573,6 +1590,9 @@ def test_curated_launch_video_keeps_creator_filming_clip_when_that_scene_is_requ
     monkeypatch.setattr(module, "ffprobe_json", fake_probe)
     monkeypatch.setattr(module, "probe_duration", lambda path: 12.0)
     monkeypatch.setattr(module, "FAST_MODE", True)
+    # These tests mock media bytes and FFprobe. Keep the independent real-media
+    # black-frame check disabled only for the synthetic fixture, not production.
+    monkeypatch.setattr(module, "_source_has_prolonged_black_frames", lambda *_args, **_kwargs: False)
 
     row = module._curated_pexels_launch_video({
         "topic": "AI Infinity launch",

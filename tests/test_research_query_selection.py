@@ -297,3 +297,144 @@ def test_aspect_ratio_inference_requires_explicit_ratio_separator():
     for command, expected in cases:
         intent = ai_infinity_canonical.compile_intent(command, {"duration": 20})
         assert intent["constraints"]["aspect_ratio"] == expected, (command, intent["constraints"])
+
+
+
+def test_research_evidence_profile_counts_distinct_urls_substantive_excerpts_domains_and_archetypes():
+    archetype_words = [
+        "overview fundamentals context",
+        "historical timeline origin evolution",
+        "mechanism process method workflow",
+        "case study example implementation",
+        "peer reviewed research experiment study",
+        "quantitative benchmark statistics metrics",
+        "practical application deployment guide",
+        "impact outcome effect consequences",
+        "risk limitation challenge safety",
+        "debate critique counterargument alternative",
+    ]
+    sources = []
+    for index in range(40):
+        archetype = archetype_words[index % len(archetype_words)]
+        words = (
+            f"This evidence-backed source examines {archetype} in a specific real-world subject. "
+            "It describes the scope, method, context, observations, limitations, supporting material, "
+            "and implications. The excerpt is retained for source-aware writing and must not be used "
+            "to claim facts beyond what the cited page actually supports. "
+        ).split()
+        summary = " ".join(words * 12)
+        sources.append({
+            "title": f"Independent research record {index + 1}: {archetype}",
+            "url": f"https://research-{index}.example.org/record/{index + 1}?utm_source=collector",
+            "summary": summary,
+            "source": f"provider-{index % 5}",
+            "retrieved_at": "2026-11-02T00:00:00Z",
+        })
+
+    # Same canonical source under a tracking URL must not inflate the research count.
+    sources.append({
+        **sources[0],
+        "url": sources[0]["url"] + "&utm_campaign=duplicate#fragment",
+        "source": "another-provider",
+    })
+
+    profile = studio_ultimate._research_evidence_profile(sources)
+
+    assert profile["unique_source_url_count"] == 40
+    assert profile["substantive_excerpt_count"] == 40
+    assert profile["metadata_only_count"] == 0
+    assert profile["provider_family_count"] == 5
+    assert profile["unique_domain_count"] == 40
+    assert profile["archetype_count"] == 10
+    assert len(profile["archetypes"]) == 10
+    assert profile["truthful"] is True
+
+
+def test_research_evidence_profile_does_not_count_bibliographic_placeholders_as_substantive():
+    sources = [{
+        "title": "A scholarly work",
+        "url": "https://openalex.example.org/work/1",
+        "summary": "Scholarly work; abstract index available",
+        "source": "OpenAlex",
+    }, {
+        "title": "A Crossref record",
+        "url": "https://crossref.example.org/work/2",
+        "summary": "Crossref bibliographic record",
+        "source": "Crossref",
+    }, {
+        "title": "A short description",
+        "url": "https://example.org/record/3",
+        "summary": "A short metadata description.",
+        "source": "Web",
+    }]
+
+    profile = studio_ultimate._research_evidence_profile(sources)
+
+    assert profile["unique_source_url_count"] == 3
+    assert profile["substantive_excerpt_count"] == 0
+    assert profile["metadata_only_count"] == 3
+    assert profile["truthful"] is True
+
+
+def test_openalex_abstract_order():
+    index = {"evidence": [4], "A": [0], "well-grounded": [2], "documentary": [1], "requires": [3], "sources.": [5]}
+    assert studio_ultimate._reconstruct_openalex_abstract(index) == "A documentary well-grounded requires evidence sources."
+
+
+def test_openalex_incomplete_abstract_is_rejected():
+    assert studio_ultimate._reconstruct_openalex_abstract({"first": [0], "second": [2], "distant": [20]}) == ""
+    assert studio_ultimate._reconstruct_openalex_abstract(None) == ""
+
+
+
+def test_longform_research_expansion_targets_missing_evidence_without_weakening_gates(monkeypatch):
+    calls = []
+    archetype_evidence = (
+        "overview fundamentals historical timeline methodology workflows case studies "
+        "implementation peer-reviewed research experiments datasets quantitative "
+        "measurement benchmarks applications practice adoption impacts outcomes "
+        "limitations risks challenges failures safety debates critiques alternatives "
+    )
+    substantive_summary = (
+        "This independent source provides an " + archetype_evidence
+        + "analysis with documented context, scope, observations, methods, examples, "
+        "supporting evidence, uncertainty, limitations, and implications. "
+    ) * 5
+
+    def fake_research_topic(query, limit=10):
+        calls.append((query, limit))
+        query_index = len(calls) - 1
+        rows = []
+        for index in range(10):
+            rows.append({
+                "title": f"Independent production research record {query_index}-{index}",
+                "url": f"https://research-{index % 8}.example.org/record/{query_index}-{index}",
+                "summary": substantive_summary,
+                "source": f"provider-{index % 5}",
+                "retrieved_at": "2026-11-02T00:00:00Z",
+            })
+        return {
+            "sources": rows,
+            "source_count": len(rows),
+            "provider_count": 5,
+            "status": "READY",
+        }
+
+    monkeypatch.setattr(studio_ultimate, "research_topic", fake_research_topic)
+    result = studio_ultimate._expand_longform_research_evidence(
+        {"topic": "video editing workflow", "sources": []},
+        "video editing workflow",
+        limit=25,
+    )
+
+    profile = result["evidence_profile"]
+    assert len(calls) == 4
+    assert all(limit == 18 for _, limit in calls)
+    assert all(query.startswith("video editing workflow ") for query, _ in calls)
+    assert profile["unique_source_url_count"] == 40
+    assert profile["substantive_excerpt_count"] == 40
+    assert profile["provider_family_count"] == 5
+    assert profile["unique_domain_count"] == 8
+    assert profile["archetype_count"] == 10
+    assert result["research_expansion"]["requirements_met"] is True
+    assert result["research_expansion"]["truthful"] is True

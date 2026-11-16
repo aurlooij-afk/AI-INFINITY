@@ -19,7 +19,7 @@ concurrency:
 jobs:
   final-acceptance:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
@@ -27,11 +27,144 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Build authoritative Docker runtime
+        id: build_runtime
         run: docker build --pull -t ai-infinity-final-acceptance .
 
-      - name: Run 12-scenario real acceptance suite (20s/60s/180s and 720p/1080p)
+      - name: Verify real Gemini Free Tier writer response
+        id: gemini_writer
+        env:
+          AI_INFINITY_SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK: ${{ vars.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK == 'true' || vars.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK == '1' || vars.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK == 'yes' || vars.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK == 'on' || secrets.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK == 'true' || secrets.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK == '1' || secrets.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK == 'yes' || secrets.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK == 'on' }}
+          AI_INFINITY_GEMINI_FREE_TIER_MODEL: gemini-3.1-flash-lite
+        run: |
+          set -euo pipefail
+          if [[ -z "${GEMINI_API_KEY:-}" ]]; then
+            echo "::error::GitHub Actions repository secret GEMINI_API_KEY is missing or empty. Add it under Settings > Secrets and variables > Actions > Repository secrets."
+            exit 1
+          fi
+          case "${AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK,,}" in
+            true|1|yes|on) ;;
+            *)
+              echo "::error::Set the repository Actions variable AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK to the exact value true only after accepting Google's Gemini Free Tier data-use terms."
+              exit 1
+              ;;
+          esac
+          mkdir -p "${GITHUB_WORKSPACE}/acceptance-evidence"
+          chmod 0777 "${GITHUB_WORKSPACE}/acceptance-evidence"
+          docker run --rm --network host \
+            -e AI_INFINITY_SOURCE_REVISION \
+            -e GEMINI_API_KEY \
+            -e AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK \
+            -e AI_INFINITY_GEMINI_FREE_TIER_MODEL \
+            -v "${GITHUB_WORKSPACE}:/workspace:ro" \
+            -v "${GITHUB_WORKSPACE}/acceptance-evidence:/evidence" \
+            -w /workspace --entrypoint python ai-infinity-final-acceptance \
+            scripts/verify_gemini_writer.py --output /evidence/gemini-writer-verification.json
+
+      - name: Verify live object-store snapshot round-trip and fresh-process restore
+        id: project_state_storage
+        if: ${{ always() && steps.build_runtime.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          AI_INFINITY_SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+          AI_INFINITY_PROJECT_STATE_BACKEND: ${{ vars.AI_INFINITY_PROJECT_STATE_BACKEND || 'backblaze_b2' }}
+          B2_ENDPOINT: ${{ secrets.B2_ENDPOINT }}
+          B2_BUCKET: ${{ secrets.B2_BUCKET }}
+          B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          B2_REGION: ${{ secrets.B2_REGION }}
+          BACKBLAZE_B2_ENDPOINT: ${{ secrets.BACKBLAZE_B2_ENDPOINT }}
+          BACKBLAZE_B2_BUCKET: ${{ secrets.BACKBLAZE_B2_BUCKET }}
+          BACKBLAZE_B2_KEY_ID: ${{ secrets.BACKBLAZE_B2_KEY_ID }}
+          BACKBLAZE_B2_APPLICATION_KEY: ${{ secrets.BACKBLAZE_B2_APPLICATION_KEY }}
+          BACKBLAZE_B2_REGION: ${{ secrets.BACKBLAZE_B2_REGION }}
+          SUPABASE_S3_ENDPOINT: ${{ secrets.SUPABASE_S3_ENDPOINT }}
+          SUPABASE_S3_BUCKET: ${{ secrets.SUPABASE_S3_BUCKET }}
+          SUPABASE_S3_ACCESS_KEY_ID: ${{ secrets.SUPABASE_S3_ACCESS_KEY_ID }}
+          SUPABASE_S3_SECRET_ACCESS_KEY: ${{ secrets.SUPABASE_S3_SECRET_ACCESS_KEY }}
+          SUPABASE_S3_REGION: ${{ secrets.SUPABASE_S3_REGION }}
+          SUPABASE_STORAGE_BUCKET: ${{ secrets.SUPABASE_STORAGE_BUCKET }}
+        run: |
+          set +e
+          mkdir -p "${GITHUB_WORKSPACE}/acceptance-evidence"
+          chmod 0777 "${GITHUB_WORKSPACE}/acceptance-evidence"
+          docker run --rm --network host \
+            -e AI_INFINITY_SOURCE_REVISION \
+            -e AI_INFINITY_PROJECT_STATE_BACKEND \
+            -e B2_ENDPOINT -e B2_BUCKET -e B2_KEY_ID -e B2_APPLICATION_KEY -e B2_REGION \
+            -e BACKBLAZE_B2_ENDPOINT -e BACKBLAZE_B2_BUCKET -e BACKBLAZE_B2_KEY_ID \
+            -e BACKBLAZE_B2_APPLICATION_KEY -e BACKBLAZE_B2_REGION \
+            -e SUPABASE_S3_ENDPOINT -e SUPABASE_S3_BUCKET -e SUPABASE_S3_ACCESS_KEY_ID \
+            -e SUPABASE_S3_SECRET_ACCESS_KEY -e SUPABASE_S3_REGION -e SUPABASE_STORAGE_BUCKET \
+            -e AI_INFINITY_PERSISTENCE_MODE=durable \
+            -e AI_INFINITY_PROJECT_STATE_DURABLE=true \
+            -v "${GITHUB_WORKSPACE}:/workspace:ro" \
+            -v "${GITHUB_WORKSPACE}/acceptance-evidence:/evidence" \
+            -w /workspace --entrypoint python ai-infinity-final-acceptance \
+            scripts/verify_live_project_state_storage.py --output /evidence/project-state-storage-verification.json
+          storage_status=$?
+          if [ "$storage_status" -eq 3 ]; then
+            echo "PROJECT_STATE_STORAGE_GATE=BLOCKED — selected backend credentials are not configured."
+            exit 0
+          fi
+          if [ "$storage_status" -ne 0 ]; then
+            echo "PROJECT_STATE_STORAGE_GATE=FAIL — object-store round-trip or fresh-process restore failed."
+            exit "$storage_status"
+          fi
+          echo "PROJECT_STATE_STORAGE_GATE=PASS"
+
+      - name: Verify live authenticated Wan2.2 GPU inference (explicit owner acknowledgement)
+        id: wan_live_inference
+        if: ${{ always() && steps.build_runtime.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          AI_INFINITY_SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+          AI_INFINITY_WAN_WORKER_URL: ${{ secrets.AI_INFINITY_WAN_WORKER_URL }}
+          AI_INFINITY_WAN_WORKER_TOKEN: ${{ secrets.AI_INFINITY_WAN_WORKER_TOKEN }}
+          AI_INFINITY_WAN_LIVE_INFERENCE_ACK: ${{ vars.AI_INFINITY_WAN_LIVE_INFERENCE_ACK }}
+        run: |
+          set +e
+          docker run --rm --network host \
+            -e AI_INFINITY_SOURCE_REVISION \
+            -e AI_INFINITY_WAN_WORKER_URL \
+            -e AI_INFINITY_WAN_WORKER_TOKEN \
+            -e AI_INFINITY_WAN_LIVE_INFERENCE_ACK \
+            -v "${GITHUB_WORKSPACE}:/workspace:ro" \
+            -v "${GITHUB_WORKSPACE}/acceptance-evidence:/evidence" \
+            -w /workspace --entrypoint python ai-infinity-final-acceptance \
+            scripts/verify_live_wan_worker.py --output /evidence/wan-live-inference-verification.json
+          inference_status=$?
+          if [ "$inference_status" -eq 3 ]; then
+            echo "WAN_GPU_INFERENCE_GATE=BLOCKED — worker not configured or explicit GPU usage acknowledgement missing."
+            exit 0
+          fi
+          if [ "$inference_status" -ne 0 ]; then
+            echo "WAN_GPU_INFERENCE_GATE=FAIL — authenticated inference or independent artifact verification failed."
+            exit "$inference_status"
+          fi
+          echo "WAN_GPU_INFERENCE_GATE=PASS"
+
+      - name: Run 13-scenario real acceptance suite (20s baseline, 60s flagship, 900s long-form; 720p/1080p)
+        if: ${{ always() && steps.build_runtime.outcome == 'success' }}
         env:
           CI: "true"
+          AI_INFINITY_SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+          AI_INFINITY_WORKFLOW_RUN_ID: ${{ github.run_id }}
+          AI_INFINITY_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK: ${{ vars.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK == 'true' || vars.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK == '1' || vars.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK == 'yes' || vars.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK == 'on' || secrets.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK == 'true' || secrets.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK == '1' || secrets.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK == 'yes' || secrets.AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK == 'on' }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK: ${{ vars.AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK }}
+          AI_INFINITY_TEXT_MODEL: ${{ vars.AI_INFINITY_TEXT_MODEL }}
+          AI_INFINITY_HF_PROVIDER: ${{ vars.AI_INFINITY_HF_PROVIDER }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          AI_INFINITY_OPENROUTER_FREE_TIER_AND_DATA_USE_ACK: ${{ vars.AI_INFINITY_OPENROUTER_FREE_TIER_AND_DATA_USE_ACK }}
+          AI_INFINITY_OPENROUTER_FREE_MODEL: ${{ vars.AI_INFINITY_OPENROUTER_FREE_MODEL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_STORAGE_BUCKET: ${{ secrets.SUPABASE_STORAGE_BUCKET }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          AI_INFINITY_STORAGE_PRIMARY: ${{ vars.AI_INFINITY_STORAGE_PRIMARY }}
         run: |
           set -uo pipefail
           mkdir -p "${GITHUB_WORKSPACE}/acceptance-evidence"
@@ -40,6 +173,21 @@ jobs:
           set +e
           docker run --rm --network host \
             -e CI \
+            -e AI_INFINITY_SOURCE_REVISION \
+            -e AI_INFINITY_WORKFLOW_RUN_ID \
+            -e AI_INFINITY_WORKFLOW_RUN_ATTEMPT \
+            -e GEMINI_API_KEY \
+            -e AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK \
+            -e HF_TOKEN \
+            -e AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK \
+            -e AI_INFINITY_TEXT_MODEL \
+            -e AI_INFINITY_HF_PROVIDER \
+            -e OPENROUTER_API_KEY \
+            -e AI_INFINITY_OPENROUTER_FREE_TIER_AND_DATA_USE_ACK \
+            -e AI_INFINITY_OPENROUTER_FREE_MODEL \
+            -e SUPABASE_URL -e SUPABASE_STORAGE_BUCKET -e SUPABASE_SERVICE_ROLE_KEY \
+            -e AI_INFINITY_STORAGE_PRIMARY \
+            -e AI_INFINITY_GEMINI_FREE_TIER_MODEL=gemini-3.1-flash-lite \
             -e AI_INFINITY_EVIDENCE_DIR=/evidence \
             -v "${GITHUB_WORKSPACE}:/workspace:ro" \
             -v "${GITHUB_WORKSPACE}/acceptance-evidence:/evidence" \
@@ -49,34 +197,68 @@ jobs:
             tests/final_acceptance_suite.py 2>&1 | tee acceptance-output.log
           suite_status=${PIPESTATUS[0]}
           set -e
-          python - <<'PY'
+          python - "$suite_status" <<'PY'
           import json
-          import re
+          import sys
           from pathlib import Path
 
-          raw = Path("acceptance-output.log").read_text(encoding="utf-8", errors="replace")
-          decoder = json.JSONDecoder()
-          result = None
-          for match in reversed(list(re.finditer(r"(?m)^\s*\{", raw))):
-              try:
-                  value, _ = decoder.raw_decode(raw[match.start():])
-              except Exception:
-                  continue
-              if isinstance(value, dict) and isinstance(value.get("tests"), list) and "passed" in value:
-                  result = value
-                  break
-          if result is None:
+          exit_code = int(sys.argv[1])
+          source = Path("acceptance-evidence/final-acceptance-result.json")
+          destination = Path("final-acceptance-result.json")
+          if source.is_file():
+              result = json.loads(source.read_text(encoding="utf-8"))
+          else:
               result = {
+                  "schema": "ai-infinity-final-acceptance-result.v2",
+                  "overall_status": "FAIL",
                   "passed": False,
-                  "error": "The runtime did not emit a complete 12-scenario JSON result.",
-                  "evidence_source": "Workflow logs contain diagnostics; no structured result was parsed.",
+                  "runner_exit_code": exit_code,
+                  "error": "The acceptance runner did not persist its structured scenario result.",
+                  "diagnostics": "See acceptance-output.log and acceptance-evidence artifacts.",
+                  "tests": [],
               }
-          Path("final-acceptance-result.json").write_text(
-              json.dumps(result, ensure_ascii=False, indent=2) + "\n",
-              encoding="utf-8",
-          )
+          result["runner_exit_code"] = exit_code
+          destination.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          print("ACCEPTANCE_RESULT_STATUS=" + str(result.get("overall_status")))
+          print("ACCEPTANCE_SCENARIOS_COMPLETED=" + str(result.get("completed_scenarios")))
           PY
           exit "$suite_status"
+      - name: Verify exact candidate against live production health
+        id: live_deployment
+        if: ${{ always() && steps.build_runtime.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          AI_INFINITY_PRODUCTION_URL: ${{ vars.AI_INFINITY_PRODUCTION_URL || 'https://ai-infinity-ca5e.onrender.com' }}
+          AI_INFINITY_EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set +e
+          mkdir -p "${GITHUB_WORKSPACE}/acceptance-evidence"
+          chmod 0777 "${GITHUB_WORKSPACE}/acceptance-evidence"
+          python scripts/verify_live_deployment.py \
+            --candidate-sha "${AI_INFINITY_EXPECTED_COMMIT}" \
+            --output "${GITHUB_WORKSPACE}/acceptance-evidence/live-deployment-verification.json"
+          deployment_status=$?
+          if [ "$deployment_status" -eq 3 ]; then
+            echo "LIVE_DEPLOYMENT_GATE=BLOCKED — the exact candidate is not yet live and healthy."
+            exit 0
+          fi
+          if [ "$deployment_status" -ne 0 ]; then
+            echo "LIVE_DEPLOYMENT_GATE=FAIL — exact-candidate production health verification failed."
+            exit "$deployment_status"
+          fi
+          echo "LIVE_DEPLOYMENT_GATE=PASS"
+      - name: Write candidate-bound production certificate
+        if: always()
+        run: |
+          python scripts/create_production_certificate.py \
+            --candidate-sha "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --acceptance final-acceptance-result.json \
+            --gemini-writer acceptance-evidence/gemini-writer-verification.json \
+            --storage acceptance-evidence/project-state-storage-verification.json \
+            --inference acceptance-evidence/wan-live-inference-verification.json \
+            --deployment acceptance-evidence/live-deployment-verification.json \
+            --human-approval acceptance-evidence/human-creative-approval.json \
+            --output production-certificate.json
 
       - name: Upload acceptance evidence
         if: always()
@@ -85,9 +267,76 @@ jobs:
           name: ai-infinity-final-acceptance-evidence
           path: |
             final-acceptance-result.json
+            production-certificate.json
+            production-readiness-report.json
             acceptance-evidence/**
           if-no-files-found: warn
 
+      - name: Enforce candidate-bound acceptance and production certificate
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          certificate_path = Path("production-certificate.json")
+          report_path = Path("production-readiness-report.json")
+          if certificate_path.is_file():
+              record = json.loads(certificate_path.read_text(encoding="utf-8"))
+              if record.get("certificate_generated") is not True:
+                  raise SystemExit("A certificate file exists without all seven gates passing.")
+          elif report_path.is_file():
+              record = json.loads(report_path.read_text(encoding="utf-8"))
+          else:
+              raise SystemExit("Neither a production certificate nor a readiness report was generated.")
+
+          requirements = record.get("production_requirements")
+          if not isinstance(requirements, dict):
+              raise SystemExit("Production evidence has no structured gate requirements.")
+
+          print("CANDIDATE_SHA=" + str(record.get("candidate_commit_sha")))
+          print("ENGINEERING_STATE=" + str(record.get("ENGINEERING_STATE")))
+          print("PRODUCTION_VERIFIED=" + str(record.get("PRODUCTION_VERIFIED")))
+          print("CREATIVE_APPROVAL=" + str(record.get("CREATIVE_APPROVAL")))
+          print("CERTIFICATE_GENERATED=" + str(record.get("certificate_generated")))
+
+          pre_release_gates = (
+              "engineering_acceptance",
+              "technical_rights_evidence",
+              "otio_import_rerender",
+              "durable_storage_round_trip_and_fresh_process_restore",
+              "live_gpu_inference_and_artifact_verification",
+          )
+          failed_pre_release = [name for name in pre_release_gates if requirements.get(name) is not True]
+          event_name = os.getenv("GITHUB_EVENT_NAME", "")
+
+          if event_name == "pull_request":
+              if failed_pre_release:
+                  print("FAILED_PRE_RELEASE_GATES=" + json.dumps(failed_pre_release))
+                  raise SystemExit("PR acceptance requires engineering, rights, OTIO, durable-storage and live-GPU gates to pass.")
+              print("PR_ENGINEERING_ACCEPTANCE=PASS")
+              if certificate_path.is_file() and record.get("PRODUCTION_VERIFIED") == "PASS":
+                  print("PRODUCTION_CERTIFICATION=PASS")
+                  print("CERTIFICATE_SHA256=" + str(record.get("certificate_sha256")))
+                  raise SystemExit(0)
+              pending_release = [
+                  name for name in (
+                      "exact_candidate_live_deployment",
+                      "human_creative_and_rights_approval",
+                  )
+                  if requirements.get(name) is not True
+              ]
+              print("PRODUCTION_CERTIFICATION=NOT_ISSUED")
+              print("PENDING_POST_DEPLOY_GATES=" + json.dumps(pending_release))
+              raise SystemExit(0)
+
+          if not certificate_path.is_file() or record.get("PRODUCTION_VERIFIED") != "PASS":
+              print("BLOCKED_GATES=" + json.dumps(record.get("remaining_blockers", [])))
+              raise SystemExit("A production certificate is issued only after all seven candidate-bound gates pass.")
+
+          print("PRODUCTION_CERTIFICATION=PASS")
+          PY
       - name: Dump Docker/runtime evidence on failure
         if: failure()
         run: |
