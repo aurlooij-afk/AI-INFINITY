@@ -22,7 +22,7 @@ from universal_command_batch import normalize_commands
 MAX_GOAL_LENGTH = 8000
 MAX_PLAN_STEPS = 20
 _PLAN_SPLIT = re.compile(
-    r"\s+(?:and\s+then|then|after\s+that|next|aur\s+phir|uske\s+baad|phir)\s+",
+    r"\s+(?:and\s+then|then|after\s+that|aur\s+phir|uske\s+baad|phir)\s+",
     re.IGNORECASE,
 )
 _PROJECT_ID_REQUIRED = "project_id_required"
