@@ -28,6 +28,15 @@ def test_single_goal_compiles_to_a_preview_using_an_existing_capability(monkeypa
     assert dispatched == []
 
 
+def test_ordinary_next_generation_phrase_is_not_split_into_a_second_task():
+    goal = "Create a video for the next generation of creators"
+    plan = compile_goal(goal)
+
+    assert plan["status"] == "READY_FOR_REVIEW"
+    assert plan["step_count"] == 1
+    assert plan["commands"][0]["command"] == goal
+
+
 def test_goal_compiler_builds_a_valid_create_then_project_status_dependency():
     plan = compile_goal(
         "Create a 20 second video about responsible design then check the project status"
