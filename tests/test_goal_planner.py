@@ -86,6 +86,41 @@ def test_unsupported_goal_is_never_silently_rewritten_as_video_creation():
     assert plan["steps"][0]["route"] == "unsupported_deliverable"
 
 
+def test_http_endpoint_is_session_scoped_and_never_executes(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from ai_infinity import goal_planner
+
+    dispatched = []
+
+    def forbidden_dispatch(*args, **kwargs):
+        dispatched.append(args)
+        raise AssertionError("the preview endpoint must never dispatch commands")
+
+    monkeypatch.setattr(
+        goal_planner.canonical,
+        "current_user",
+        lambda request, response: "u_test_session_1234567890",
+    )
+    monkeypatch.setattr(goal_planner.canonical, "dispatch_command", forbidden_dispatch)
+
+    app = FastAPI()
+    goal_planner.register(app)
+    client = TestClient(app)
+    response = client.post(
+        "/infinity/canonical/plan",
+        json={"goal": "Create a 20 second video about responsible design"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["owner_context"] == "session_scoped"
+    assert payload["status"] == "READY_FOR_REVIEW"
+    assert payload["execution_started"] is False
+    assert payload["ready_for_submission"] is True
+    assert dispatched == []
+
+
 def test_goal_compiler_enforces_input_and_step_limits():
     with pytest.raises(HTTPException) as too_short:
         compile_goal("  ")
