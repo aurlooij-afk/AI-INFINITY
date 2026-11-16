@@ -98,13 +98,17 @@ def compile_goal(goal: Any, *, project_id: Any = None) -> dict[str, Any]:
         mode = str((capability or {}).get("mode") or "unregistered")
         status = "PLANNED"
 
-        if not capability:
+        if route == "authorization_required":
+            status = "NEEDS_AUTH"
+            blocked_status = "NEEDS_AUTH"
+            blocked_reason = reason or "This consequential action requires action-specific authorization."
+        elif not capability:
             status = "UNSUPPORTED"
             blocked_status = "NEEDS_CLARIFICATION"
             blocked_reason = reason or f"No registered capability matches step {index}."
         elif mode != "execute":
             status = "GUARDED"
-            blocked_status = "BLOCKED"
+            blocked_status = "NEEDS_CLARIFICATION"
             blocked_reason = reason or f"Step {index} resolves to a non-executable guard."
         elif route == "github_api" or route in _ROUTES_REQUIRING_OPERATOR_AUTH:
             status = "NEEDS_AUTH"
