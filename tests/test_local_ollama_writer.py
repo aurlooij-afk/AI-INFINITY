@@ -201,6 +201,9 @@ def test_narration_only_repair_preserves_scene_metadata_and_meets_longform_gates
     assert generation["actual_spoken_words"] >= 1875
     assert generation["unique_sentence_ratio"] >= 0.85
     assert generation["repair_passes"] == 1
+    assert plan["title"] == "A Practical Guide to Responsible Video Production"
+    assert plan["hook"] == "A responsible production is a sequence of evidence-led decisions."
+    assert plan["premise"] == "A useful documentary that preserves clear distinctions between fact and illustration."
     assert plan["chapters"][0]["image_prompt"] == "original documentary composition 1"
     assert plan["chapters"][0]["proof_needed"] == ["verify chapter 1 claims"]
     assert plan["chapters"][0]["rights_status"] == "REVIEW_REQUIRED"
