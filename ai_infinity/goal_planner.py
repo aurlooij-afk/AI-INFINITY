@@ -212,7 +212,7 @@ def compile_goal(goal: Any, *, project_id: Any = None) -> dict[str, Any]:
 
 
 def register(app: Any) -> None:
-    """Register the owner-authenticated, preview-only natural-language planner."""
+    """Register the session-scoped, preview-only natural-language planner."""
     if getattr(app.state, "ai_infinity_goal_planner_registered", False):
         return
 
@@ -225,7 +225,7 @@ def register(app: Any) -> None:
         goal = body.get("goal") or body.get("command") or ""
         return {
             **compile_goal(goal, project_id=body.get("project_id")),
-            "owner_context": "authenticated",
+            "owner_context": "session_scoped",
             "truthful": True,
         }
 
