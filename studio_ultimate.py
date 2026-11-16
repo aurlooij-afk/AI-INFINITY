@@ -2070,14 +2070,12 @@ Use 5-18 chapters. Total durations should approximately equal the target. Narrat
                     repair_passes = 0
                     last_repair_error = None
 
-                    # Three bounded attempts require both adequate spoken length
-                    # and non-repetitive narration. A first draft that reaches the
-                    # word count through repeated sentences is still underwritten.
-                    while (
-                        best_words < required_words or best_unique_sentence_ratio < 0.85
-                    ) and repair_passes < 3:
-                        repair_passes += 1
-                        missing_words = max(0, required_words - best_words)
+                    # Repair one chapter per model call. Small local models often
+                    # under-deliver when asked to produce a complete multi-chapter
+                    # long-form script in a single JSON response. Isolating each
+                    # chapter gives the writer a bounded, measurable target while
+                    # preserving all non-narration production metadata.
+                    if best_words < required_words or best_unique_sentence_ratio < 0.85:
                         chapter_durations = []
                         for chapter in clean["chapters"]:
                             try:
@@ -2086,126 +2084,132 @@ Use 5-18 chapters. Total durations should approximately equal the target. Narrat
                                 chapter_durations.append(1.0)
                         chapter_total_duration = max(1.0, sum(chapter_durations))
                         repair_target_words = required_words + max(100, int(required_words * 0.08))
-                        compact_chapters = []
-                        for chapter_index, (chapter, chapter_duration) in enumerate(
-                            zip(clean["chapters"], chapter_durations), 1
-                        ):
-                            if not isinstance(chapter, dict):
+
+                        for chapter_index, original_chapter in enumerate(list(clean["chapters"]), 1):
+                            if not isinstance(original_chapter, dict):
                                 continue
                             chapter_target = int(
-                                repair_target_words * chapter_duration / chapter_total_duration + 0.999
+                                repair_target_words * chapter_durations[chapter_index - 1] / chapter_total_duration + 0.999
                             )
-                            compact_chapters.append({
-                                "chapter_index": chapter_index,
-                                "heading": str(chapter.get("heading") or f"Chapter {chapter_index}")[:240],
-                                "duration_seconds": chapter_duration,
-                                "target_spoken_words": chapter_target,
-                                "current_spoken_words": _narration_word_count([chapter]),
-                                "current_narration": str(chapter.get("narration") or "")[:7000],
-                                "proof_needed": chapter.get("proof_needed") or [],
-                            })
-                        repair_prompt = f"""You are the lead documentary screenwriter repairing an underwritten long-form programme.
-TASK MODE: NARRATION-ONLY REPAIR. Do not regenerate the production blueprint, scene metadata, visual prompts, titles, overlays, timings, rights data, or other fields.
-The target runtime is {duration} seconds at {speaking_rate_wpm} spoken words per minute.
-The current script has {best_words} spoken words and a distinct-sentence ratio of {best_unique_sentence_ratio:.3f}. The COMPLETE script must contain at least {required_words} spoken words and a distinct-sentence ratio of at least 0.85. {missing_words} additional words are required if the current script is below the word minimum.
-Expand the existing story with genuinely useful, specific, original narration. Preserve every chapter's subject, sequence, language, audience, and intended duration. Meet the chapter-level spoken-word targets below; together they are designed to reach at least {repair_target_words} words, leaving a delivery margin above the hard minimum.
-Return ONLY valid JSON in this exact structure, with every chapter index exactly once and in the same order:
-{{"narrations":[{{"chapter_index":1,"narration":"complete spoken narration for chapter 1"}}]}}
-Do not include markdown fences, commentary, chapter metadata, or any keys other than the narrations array and its chapter_index/narration fields.
-Write complete, coherent paragraphs and meaningful transitions. Add mechanisms, worked examples, competing approaches, limitations, counterpoints, practical consequences, and actionable takeaways where supported. Do not repeat sentences or paragraphs, use generic padding, invent research, fabricate quotations, or present illustrative material as observed fact.
-For factual statements, use only the supplied research evidence. Do not create new factual claims merely to reach a word target. Unsupported claims must remain omitted; existing proof-needed items remain in the preserved chapter metadata.
-CHAPTERS AND WORD TARGETS:
-{json.dumps(compact_chapters, ensure_ascii=False)}
-RESEARCH EVIDENCE (cite only these source records; do not invent facts):
-{research_text[:24000]}
+                            current_chapter_words = _narration_word_count([original_chapter])
+                            if current_chapter_words >= chapter_target and best_unique_sentence_ratio >= 0.85:
+                                continue
+
+                            for chapter_attempt in range(2):
+                                repair_passes += 1
+                                current_chapter = clean["chapters"][chapter_index - 1]
+                                current_narration = str(current_chapter.get("narration") or "")
+                                current_chapter_words = _narration_word_count([current_chapter])
+                                repair_prompt = f"""You are the lead documentary screenwriter repairing one underwritten chapter of a long-form programme.
+TASK MODE: NARRATION-ONLY, SINGLE-CHAPTER REPAIR. Work on this chapter only. Do not regenerate the blueprint or any other chapter.
+PROGRAMME: {title}
+OBJECTIVE: {objective}
+LANGUAGE: {language}
+AUDIENCE: {audience}
+TONE: {tone}
+RUNTIME: {duration} seconds at {speaking_rate_wpm} spoken words per minute.
+CHAPTER_INDEX: {chapter_index}
+CHAPTER_HEADING: {str(current_chapter.get("heading") or f"Chapter {chapter_index}")[:240]}
+CHAPTER_DURATION_SECONDS: {chapter_durations[chapter_index - 1]}
+TARGET_SPOKEN_WORDS: at least {chapter_target}
+CURRENT_SPOKEN_WORDS: {current_chapter_words}
+Write a complete, coherent replacement narration for this chapter with at least {chapter_target} spoken words. The current narration is a starting point, not a word limit. Add distinct explanations, practical mechanisms, worked examples, trade-offs, limitations, counterpoints, consequences and transitions relevant to this chapter. Use natural spoken language and enough concrete detail to justify the chapter's duration. Do not provide an outline, summary, teaser, or short paragraph.
+Keep the chapter's subject, programme sequence, audience, language and intended duration. Do not repeat sentences or paragraphs, use generic padding, or invent unsupported facts. For factual statements, use only the supplied research evidence. Where evidence is absent, explain the concept without manufacturing factual claims and preserve the existing proof-needed requirement.
+RETURN ONLY this valid JSON object, with no markdown or additional keys:
+{{"narration":"the complete spoken narration for this chapter"}}
+CURRENT NARRATION:
+{current_narration[:7000]}
+PROOF NEEDED:
+{json.dumps(current_chapter.get("proof_needed") or [], ensure_ascii=False)}
+RESEARCH EVIDENCE (use only these records; do not invent sources):
+{research_text[:8000]}
 """
-                        try:
-                            repair_raw = model_fn({
-                                "messages": [{"role": "user", "content": repair_prompt}],
-                                "temperature": 0.45,
-                            }) or {}
-                            repaired_data = _extract_json(repair_raw.get("text") or repair_raw.get("answer") or "")
-                            repaired_chapters = None
-                            if isinstance(repaired_data, dict):
-                                narration_rows = repaired_data.get("narrations")
-                                if isinstance(narration_rows, list):
-                                    base_chapters = clean.get("chapters") or []
-                                    if len(narration_rows) == len(base_chapters) and all(
-                                        isinstance(chapter, dict) for chapter in base_chapters
-                                    ):
-                                        candidate_chapters = [dict(chapter) for chapter in base_chapters]
-                                        assigned_indices = set()
-                                        valid_narrations = True
-                                        for position, row in enumerate(narration_rows, 1):
-                                            if isinstance(row, str):
-                                                chapter_index, narration_text = position, row
-                                            elif isinstance(row, dict):
-                                                try:
-                                                    chapter_index = int(row.get("chapter_index", row.get("index", position)))
-                                                except (TypeError, ValueError, OverflowError):
-                                                    valid_narrations = False
+                                try:
+                                    repair_raw = model_fn({
+                                        "messages": [{"role": "user", "content": repair_prompt}],
+                                        "temperature": 0.42,
+                                    }) or {}
+                                    repaired_data = _extract_json(
+                                        repair_raw.get("text") or repair_raw.get("answer") or ""
+                                    )
+                                    narration_text = None
+                                    if isinstance(repaired_data, dict):
+                                        direct_narration = repaired_data.get("narration")
+                                        if isinstance(direct_narration, str):
+                                            narration_text = direct_narration
+                                        elif isinstance(repaired_data.get("narrations"), list):
+                                            rows = repaired_data["narrations"]
+                                            for row in rows:
+                                                if isinstance(row, str) and len(rows) == 1:
+                                                    narration_text = row
                                                     break
-                                                narration_text = row.get("narration") or row.get("text")
-                                            else:
-                                                valid_narrations = False
-                                                break
+                                                if isinstance(row, dict):
+                                                    try:
+                                                        row_index = int(row.get("chapter_index", row.get("index", chapter_index)))
+                                                    except (TypeError, ValueError, OverflowError):
+                                                        continue
+                                                    if row_index == chapter_index:
+                                                        narration_text = row.get("narration") or row.get("text")
+                                                        break
+                                        elif isinstance(repaired_data.get("chapters"), list):
+                                            legacy_chapters = repaired_data["chapters"]
                                             if (
-                                                chapter_index < 1
-                                                or chapter_index > len(candidate_chapters)
-                                                or chapter_index in assigned_indices
-                                                or not isinstance(narration_text, str)
-                                                or not narration_text.strip()
+                                                len(legacy_chapters) == len(clean["chapters"])
+                                                and all(isinstance(row, dict) for row in legacy_chapters)
                                             ):
-                                                valid_narrations = False
-                                                break
-                                            candidate_chapters[chapter_index - 1]["narration"] = narration_text.strip()
-                                            assigned_indices.add(chapter_index)
-                                        if valid_narrations and assigned_indices == set(range(1, len(candidate_chapters) + 1)):
-                                            repaired_chapters = candidate_chapters
-                                else:
-                                    # Backward compatibility for providers that still
-                                    # return a complete blueprint rather than narration-only JSON.
-                                    repaired_chapters = repaired_data.get("chapters")
-                            if (
-                                not isinstance(repaired_chapters, list)
-                                or len(repaired_chapters) < 4
-                                or not _language_text_compatible(language, repaired_chapters)
-                            ):
-                                last_repair_error = "writer_returned_invalid_or_language_incompatible_narration"
-                                continue
-                            repaired_chapters = repaired_chapters[:18]
-                            repaired_words = _narration_word_count(repaired_chapters)
-                            repaired_unique_sentence_ratio = _narration_sentence_uniqueness_ratio(repaired_chapters)
-                            # Reject duplicated padding and non-improving output.
-                            # If the first draft already meets the word target but
-                            # fails distinctness, allow a same-length rewrite only
-                            # when it meets both independent requirements.
-                            rewrite_only = (
-                                best_words >= required_words
-                                and best_unique_sentence_ratio < 0.85
-                                and repaired_words >= required_words
-                                and repaired_unique_sentence_ratio >= 0.85
-                            )
-                            if (
-                                (repaired_words <= best_words and not rewrite_only)
-                                or repaired_unique_sentence_ratio < 0.85
-                            ):
-                                last_repair_error = "writer_repair_did_not_add_sufficient_distinct_narration"
-                                continue
-                            if isinstance(repaired_data, dict) and isinstance(repaired_data.get("narrations"), list):
-                                # Narration-only repair must not erase the accepted
-                                # blueprint title, premise, hook, adaptations or other metadata.
-                                clean = {**clean, "chapters": repaired_chapters}
-                            else:
-                                clean = {**repaired_data, "chapters": repaired_chapters}
-                            clean["speaking_rate_wpm"] = speaking_rate_wpm
-                            best_words = repaired_words
-                            best_unique_sentence_ratio = repaired_unique_sentence_ratio
-                            raw = repair_raw
-                            provider = str(repair_raw.get("provider") or provider)
-                        except Exception as repair_exc:
-                            # Avoid leaking provider URLs, credentials or request bodies.
-                            last_repair_error = type(repair_exc).__name__
+                                                narration_text = legacy_chapters[chapter_index - 1].get("narration")
+
+                                    if (
+                                        not isinstance(narration_text, str)
+                                        or not narration_text.strip()
+                                        or not _language_text_compatible(
+                                            language, [{"narration": narration_text}]
+                                        )
+                                    ):
+                                        last_repair_error = "writer_returned_invalid_or_language_incompatible_chapter"
+                                        continue
+
+                                    candidate_chapters = [dict(row) for row in clean["chapters"]]
+                                    candidate_chapters[chapter_index - 1]["narration"] = narration_text.strip()
+                                    candidate_chapter_words = _narration_word_count(
+                                        [candidate_chapters[chapter_index - 1]]
+                                    )
+                                    candidate_chapter_uniqueness = _narration_sentence_uniqueness_ratio(
+                                        [candidate_chapters[chapter_index - 1]]
+                                    )
+                                    candidate_words = _narration_word_count(candidate_chapters)
+                                    candidate_unique_sentence_ratio = _narration_sentence_uniqueness_ratio(
+                                        candidate_chapters
+                                    )
+                                    # A partial but genuinely longer, non-repetitive
+                                    # chapter may be kept as an interim draft for the
+                                    # next bounded attempt. It can never pass the
+                                    # programme gate until the total word minimum is met.
+                                    if candidate_chapter_uniqueness < 0.85:
+                                        last_repair_error = "chapter_repair_failed_distinctness_gate"
+                                        continue
+                                    if (
+                                        candidate_chapter_words <= current_chapter_words
+                                        and candidate_unique_sentence_ratio <= best_unique_sentence_ratio
+                                    ):
+                                        last_repair_error = "chapter_repair_did_not_improve"
+                                        continue
+
+                                    clean = {**clean, "chapters": candidate_chapters}
+                                    clean["speaking_rate_wpm"] = speaking_rate_wpm
+                                    best_words = candidate_words
+                                    best_unique_sentence_ratio = candidate_unique_sentence_ratio
+                                    raw = repair_raw
+                                    provider = str(repair_raw.get("provider") or provider)
+
+                                    if (
+                                        candidate_chapter_words >= chapter_target
+                                        and best_unique_sentence_ratio >= 0.85
+                                    ):
+                                        break
+                                except Exception as repair_exc:
+                                    # Avoid leaking provider URLs, credentials or request bodies.
+                                    last_repair_error = type(repair_exc).__name__
 
                     clean["script_generation"] = {
                         "status": "complete" if best_words >= required_words and best_unique_sentence_ratio >= 0.85 else "underwritten",
