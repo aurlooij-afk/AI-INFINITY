@@ -2192,7 +2192,12 @@ RESEARCH EVIDENCE (cite only these source records; do not invent facts):
                             ):
                                 last_repair_error = "writer_repair_did_not_add_sufficient_distinct_narration"
                                 continue
-                            clean = {**repaired_data, "chapters": repaired_chapters}
+                            if isinstance(repaired_data, dict) and isinstance(repaired_data.get("narrations"), list):
+                                # Narration-only repair must not erase the accepted
+                                # blueprint title, premise, hook, adaptations or other metadata.
+                                clean = {**clean, "chapters": repaired_chapters}
+                            else:
+                                clean = {**repaired_data, "chapters": repaired_chapters}
                             clean["speaking_rate_wpm"] = speaking_rate_wpm
                             best_words = repaired_words
                             best_unique_sentence_ratio = repaired_unique_sentence_ratio
