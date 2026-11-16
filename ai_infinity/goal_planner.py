@@ -77,21 +77,24 @@ def compile_goal(goal: Any, *, project_id: Any = None) -> dict[str, Any]:
     for index, phrase in enumerate(phrases, 1):
         step_id = f"step-{index}"
         payload: dict[str, Any] = {}
-        if existing_project_id and index == 1:
-            payload["project_id"] = existing_project_id
-
         decision = canonical.classify_command(phrase, payload)
         route = str(decision.get("route") or "unsupported")
 
-        # A status/edit step following a create step may safely bind to that
-        # task's real project id at execution time. The placeholder is used only
-        # for route classification and is never returned or dispatched.
+        # Resolve project-scoped commands only when a real project context was
+        # supplied or an earlier create step can provide its runtime project id.
+        # A placeholder is used only for route classification and is never
+        # returned or dispatched.
         project_id_from = None
-        if route == _PROJECT_ID_REQUIRED and latest_created_step_id:
-            decision = canonical.classify_command(phrase, {"project_id": "__planned_project_id__"})
-            route = str(decision.get("route") or "unsupported")
-            if route in {"project_status", "edit"}:
-                project_id_from = latest_created_step_id
+        if route == _PROJECT_ID_REQUIRED:
+            if existing_project_id:
+                payload["project_id"] = existing_project_id
+                decision = canonical.classify_command(phrase, payload)
+                route = str(decision.get("route") or "unsupported")
+            elif latest_created_step_id:
+                decision = canonical.classify_command(phrase, {"project_id": "__planned_project_id__"})
+                route = str(decision.get("route") or "unsupported")
+                if route in {"project_status", "edit"}:
+                    project_id_from = latest_created_step_id
 
         capability = capabilities.get(route)
         reason = str(decision.get("reason") or "")
