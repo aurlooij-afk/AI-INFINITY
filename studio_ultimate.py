@@ -2078,16 +2078,46 @@ Use 5-18 chapters. Total durations should approximately equal the target. Narrat
                     ) and repair_passes < 3:
                         repair_passes += 1
                         missing_words = max(0, required_words - best_words)
-                        repair_prompt = f"""You are the lead documentary screenwriter finishing an underwritten long-form programme.
+                        chapter_durations = []
+                        for chapter in clean["chapters"]:
+                            try:
+                                chapter_durations.append(max(1.0, float(chapter.get("duration") or 1.0)))
+                            except (AttributeError, TypeError, ValueError, OverflowError):
+                                chapter_durations.append(1.0)
+                        chapter_total_duration = max(1.0, sum(chapter_durations))
+                        repair_target_words = required_words + max(100, int(required_words * 0.08))
+                        compact_chapters = []
+                        for chapter_index, (chapter, chapter_duration) in enumerate(
+                            zip(clean["chapters"], chapter_durations), 1
+                        ):
+                            if not isinstance(chapter, dict):
+                                continue
+                            chapter_target = int(
+                                repair_target_words * chapter_duration / chapter_total_duration + 0.999
+                            )
+                            compact_chapters.append({
+                                "chapter_index": chapter_index,
+                                "heading": str(chapter.get("heading") or f"Chapter {chapter_index}")[:240],
+                                "duration_seconds": chapter_duration,
+                                "target_spoken_words": chapter_target,
+                                "current_spoken_words": _narration_word_count([chapter]),
+                                "current_narration": str(chapter.get("narration") or "")[:7000],
+                                "proof_needed": chapter.get("proof_needed") or [],
+                            })
+                        repair_prompt = f"""You are the lead documentary screenwriter repairing an underwritten long-form programme.
+TASK MODE: NARRATION-ONLY REPAIR. Do not regenerate the production blueprint, scene metadata, visual prompts, titles, overlays, timings, rights data, or other fields.
 The target runtime is {duration} seconds at {speaking_rate_wpm} spoken words per minute.
 The current script has {best_words} spoken words and a distinct-sentence ratio of {best_unique_sentence_ratio:.3f}. The COMPLETE script must contain at least {required_words} spoken words and a distinct-sentence ratio of at least 0.85. {missing_words} additional words are required if the current script is below the word minimum.
-Return a complete revised JSON blueprint with the same chapter schema. Expand the existing story with genuinely useful, distinct narration that explains the topic in depth. Keep the intended audience, language, tone, chapter sequence, and visual direction. Add concrete mechanisms, examples, counterpoints, limitations, transitions, and actionable takeaways where supported.
-Do not repeat sentences or paragraphs, pad with generic motivation, invent research, fabricate quotations, imply that illustrative material is observed fact, or claim product capabilities that are not demonstrated. For factual statements, use only the supplied research context and retain proof_needed for anything not supported.
-Aim for approximately {required_words + max(100, int(required_words * 0.08))} spoken words so normal editing does not make the delivered narration under-length.
+Expand the existing story with genuinely useful, specific, original narration. Preserve every chapter's subject, sequence, language, audience, and intended duration. Meet the chapter-level spoken-word targets below; together they are designed to reach at least {repair_target_words} words, leaving a delivery margin above the hard minimum.
+Return ONLY valid JSON in this exact structure, with every chapter index exactly once and in the same order:
+{{"narrations":[{{"chapter_index":1,"narration":"complete spoken narration for chapter 1"}}]}}
+Do not include markdown fences, commentary, chapter metadata, or any keys other than the narrations array and its chapter_index/narration fields.
+Write complete, coherent paragraphs and meaningful transitions. Add mechanisms, worked examples, competing approaches, limitations, counterpoints, practical consequences, and actionable takeaways where supported. Do not repeat sentences or paragraphs, use generic padding, invent research, fabricate quotations, or present illustrative material as observed fact.
+For factual statements, use only the supplied research evidence. Do not create new factual claims merely to reach a word target. Unsupported claims must remain omitted; existing proof-needed items remain in the preserved chapter metadata.
+CHAPTERS AND WORD TARGETS:
+{json.dumps(compact_chapters, ensure_ascii=False)}
 RESEARCH EVIDENCE (cite only these source records; do not invent facts):
 {research_text[:24000]}
-EXISTING PLAN JSON:
-{json.dumps(clean, ensure_ascii=False)[:45000]}
 """
                         try:
                             repair_raw = model_fn({
@@ -2095,13 +2125,53 @@ EXISTING PLAN JSON:
                                 "temperature": 0.45,
                             }) or {}
                             repaired_data = _extract_json(repair_raw.get("text") or repair_raw.get("answer") or "")
-                            repaired_chapters = repaired_data.get("chapters") if isinstance(repaired_data, dict) else None
+                            repaired_chapters = None
+                            if isinstance(repaired_data, dict):
+                                narration_rows = repaired_data.get("narrations")
+                                if isinstance(narration_rows, list):
+                                    base_chapters = clean.get("chapters") or []
+                                    if len(narration_rows) == len(base_chapters) and all(
+                                        isinstance(chapter, dict) for chapter in base_chapters
+                                    ):
+                                        candidate_chapters = [dict(chapter) for chapter in base_chapters]
+                                        assigned_indices = set()
+                                        valid_narrations = True
+                                        for position, row in enumerate(narration_rows, 1):
+                                            if isinstance(row, str):
+                                                chapter_index, narration_text = position, row
+                                            elif isinstance(row, dict):
+                                                try:
+                                                    chapter_index = int(row.get("chapter_index", row.get("index", position)))
+                                                except (TypeError, ValueError, OverflowError):
+                                                    valid_narrations = False
+                                                    break
+                                                narration_text = row.get("narration") or row.get("text")
+                                            else:
+                                                valid_narrations = False
+                                                break
+                                            if (
+                                                chapter_index < 1
+                                                or chapter_index > len(candidate_chapters)
+                                                or chapter_index in assigned_indices
+                                                or not isinstance(narration_text, str)
+                                                or not narration_text.strip()
+                                            ):
+                                                valid_narrations = False
+                                                break
+                                            candidate_chapters[chapter_index - 1]["narration"] = narration_text.strip()
+                                            assigned_indices.add(chapter_index)
+                                        if valid_narrations and assigned_indices == set(range(1, len(candidate_chapters) + 1)):
+                                            repaired_chapters = candidate_chapters
+                                else:
+                                    # Backward compatibility for providers that still
+                                    # return a complete blueprint rather than narration-only JSON.
+                                    repaired_chapters = repaired_data.get("chapters")
                             if (
                                 not isinstance(repaired_chapters, list)
                                 or len(repaired_chapters) < 4
                                 or not _language_text_compatible(language, repaired_chapters)
                             ):
-                                last_repair_error = "writer_returned_invalid_or_language_incompatible_chapters"
+                                last_repair_error = "writer_returned_invalid_or_language_incompatible_narration"
                                 continue
                             repaired_chapters = repaired_chapters[:18]
                             repaired_words = _narration_word_count(repaired_chapters)
