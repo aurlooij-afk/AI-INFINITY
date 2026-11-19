@@ -66,7 +66,7 @@ jobs:
             exit 0
           fi
           if [[ "${writer_status}" == "BLOCKED" ]]; then
-            echo "::warning::Gemini writer is blocked; B2 and GPU evidence will still be collected, but the 20-scenario suite will not run."
+            echo "::warning::Gemini writer is blocked; B2 and GPU evidence will still be collected. The 20-scenario suite will run for diagnostics, but its long-form scenario remains blocked until an approved writer passes preflight."
             exit 0
           fi
           echo "::error::Gemini writer verification failed; see the redacted verification artifact."
