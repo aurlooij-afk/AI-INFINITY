@@ -126,3 +126,11 @@ def test_runtime_review_packet_reports_candidate_gates_without_stale_suspension_
     assert "authenticated wan2.2 gpu inference" in text
     assert "authorized reviewer" in text
     assert "service is suspended" not in text
+
+
+def test_blocked_gemini_warning_matches_the_acceptance_workflow_behavior():
+    workflow_path = SUITE_PATH.parents[1] / ".github" / "workflows" / "final-acceptance-suite.yml"
+    workflow = workflow_path.read_text(encoding="utf-8")
+    assert "The 20-scenario suite will run for diagnostics" in workflow
+    assert "its long-form scenario remains blocked until an approved writer passes preflight" in workflow
+    assert "the 20-scenario suite will not run" not in workflow
