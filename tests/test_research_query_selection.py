@@ -431,6 +431,10 @@ def test_longform_research_expansion_targets_missing_evidence_without_weakening_
     assert len(calls) == 4
     assert all(limit == 18 for _, limit in calls)
     assert all(query.startswith("video editing workflow ") for query, _ in calls)
+    assert all(
+        len(query.split()) <= len("video editing workflow".split()) + 2
+        for query, _ in calls
+    )
     assert profile["unique_source_url_count"] == 40
     assert profile["substantive_excerpt_count"] == 40
     assert profile["provider_family_count"] == 5
@@ -512,3 +516,57 @@ def test_longform_research_fetches_publisher_sources_for_url_shortfall_after_dom
     assert result["research_expansion"]["requirements_met"] is True
     assert result["research_expansion"]["additional_unique_source_urls"] == 1
     assert any(row.get("source") == "official_media_reference_catalog" for row in result["sources"])
+
+
+def test_stackexchange_longform_research_preserves_content_attribution_and_license(monkeypatch):
+    from urllib.parse import parse_qs, urlparse
+
+    calls = []
+    body_text = (
+        "This detailed community answer explains video editing workflows, caption timing, "
+        "subtitle formats, accessibility checks, FFmpeg processing, audio synchronization, "
+        "render validation, practical troubleshooting, implementation tradeoffs, and known "
+        "limitations for real creator production systems. "
+    ) * 4
+
+    def fake_http_json(url, timeout=8):
+        params = parse_qs(urlparse(url).query)
+        site = params["site"][0]
+        calls.append(params)
+        host = {
+            "stackoverflow": "stackoverflow.com",
+            "video": "video.stackexchange.com",
+            "superuser": "superuser.com",
+        }[site]
+        return {
+            "items": [{
+                "question_id": 12345,
+                "title": "Video editing captions and subtitle workflow",
+                "link": f"https://{host}/questions/12345/example",
+                "body": f"<p>{body_text}</p>",
+                "owner": {"display_name": "Community contributor"},
+            }],
+            "license": {
+                "name": "CC BY-SA 4.0",
+                "url": "https://creativecommons.org/licenses/by-sa/4.0/",
+            },
+        }
+
+    monkeypatch.setattr(studio_ultimate, "http_json", fake_http_json)
+    rows = studio_ultimate._stackexchange_research_sources(
+        "video editing captions subtitles accessibility",
+        limit=3,
+    )
+
+    assert len(calls) == 3
+    assert {params["site"][0] for params in calls} == {
+        "stackoverflow", "video", "superuser",
+    }
+    assert all(params["filter"] == ["withbody"] for params in calls)
+    assert len(rows) == 3
+    assert all(row["source_id"].startswith("stackexchange:") for row in rows)
+    assert all(row["attribution"] == "Community contributor" for row in rows)
+    assert all(row["license_name"] == "CC BY-SA 4.0" for row in rows)
+    assert all(row["license_status"] == "LICENSE_METADATA_PRESENT" for row in rows)
+    assert all(len(row["summary"].split()) >= 80 for row in rows)
+
