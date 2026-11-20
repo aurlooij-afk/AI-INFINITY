@@ -1108,6 +1108,75 @@ def _longform_media_reference_sources(topic: str) -> List[Dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict)]
 
 
+def _stackexchange_research_sources(topic: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """Retrieve attributable, content-bearing community research from public Stack Exchange sites.
+
+    This provider is only enabled for deep-research requests. It uses the public API,
+    preserves question URLs/IDs and attribution, and records the API-reported license
+    rather than assuming that community content is unrestricted.
+    """
+    clean_topic = re.sub(r"\\s+", " ", str(topic or "")).strip()[:500]
+    if not clean_topic:
+        return []
+    per = max(1, min(int(limit or 10), 25))
+    sites = ("stackoverflow", "video", "superuser")
+    rows: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    for site in sites:
+        endpoint = "https://api.stackexchange.com/2.3/search/advanced?" + urlencode({
+            "order": "desc",
+            "sort": "relevance",
+            "q": clean_topic,
+            "site": site,
+            "pagesize": per,
+            "filter": "withbody",
+        })
+        try:
+            payload = http_json(
+                endpoint,
+                timeout=max(5, int(os.getenv("AI_INFINITY_RESEARCH_TIMEOUT", "8"))),
+            ) or {}
+            license_info = payload.get("license") if isinstance(payload.get("license"), dict) else {}
+            for item in payload.get("items") or []:
+                if not isinstance(item, dict):
+                    continue
+                title = re.sub(r"\\s+", " ", str(item.get("title") or "")).strip()
+                source_url = str(item.get("link") or "").strip()
+                if not title or not source_url:
+                    continue
+                body = str(item.get("body") or "")
+                body = re.sub(
+                    r"(?is)<(script|style|pre|code)\\b[^>]*>.*?</\\1\\s*>",
+                    " ",
+                    body,
+                )
+                summary = html.unescape(re.sub(r"(?is)<[^>]+>", " ", body))
+                summary = re.sub(r"\\s+", " ", summary).strip()
+                owner = item.get("owner") if isinstance(item.get("owner"), dict) else {}
+                question_id = item.get("question_id")
+                rows.append({
+                    "title": title[:500],
+                    "url": source_url,
+                    "summary": summary[:5000],
+                    "source_id": f"stackexchange:{site}:{question_id}" if question_id is not None else "",
+                    "source_community": site,
+                    "content_type": "community_question",
+                    "attribution": str(owner.get("display_name") or ""),
+                    "license_name": str(license_info.get("name") or ""),
+                    "license_url": str(license_info.get("url") or ""),
+                    "license_status": (
+                        "LICENSE_METADATA_PRESENT"
+                        if license_info.get("name") and license_info.get("url")
+                        else "REVIEW_REQUIRED"
+                    ),
+                })
+        except Exception as exc:
+            errors.append(f"{site}:{type(exc).__name__}")
+    if not rows and errors:
+        raise RuntimeError("Stack Exchange public research unavailable: " + ", ".join(errors))
+    return rows
+
+
 def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
     """Multi-source public research with explicit provider outcomes and truthful degradation."""
     from urllib.parse import quote_plus
@@ -1274,6 +1343,13 @@ def research_topic(topic: str, limit: int = 10) -> Dict[str, Any]:
         ("GDELT",gdelt),("Wikidata",wikidata),("OpenAlex",openalex),("Crossref",crossref),
         ("Europe PMC",europe_pmc),("arXiv",arxiv),("Internet Archive",europe_archive)
     ]
+    # Stack Exchange adds a no-key, content-bearing community evidence family to
+    # long-form research only; short briefs avoid the extra API fan-out.
+    if per >= 18:
+        providers_to_run.append((
+            "Stack Exchange API",
+            lambda: _stackexchange_research_sources(clean_topic, per),
+        ))
     with ThreadPoolExecutor(max_workers=min(6,len(providers_to_run)),thread_name_prefix="studio-research") as pool:
         futures={pool.submit(fn):name for name,fn in providers_to_run}
         for future in as_completed(futures):
@@ -1382,11 +1458,13 @@ def _expand_longform_research_evidence(
     # Each bounded facet aims to surface different evidence archetypes without
     # changing the subject. These are new acquisition queries, not fabricated
     # records or synthetic expansions of existing abstracts.
+    # Keep each facet compact. Long appended query strings inflate the relevance
+    # overlap threshold and reject useful results from independent providers.
     facets = (
-        "fundamentals background history historical timeline principles framework",
-        "methods methodology workflows process mechanisms case studies examples implementation",
-        "empirical studies experiments datasets quantitative measurement metrics benchmarks outcomes impacts",
-        "applications practice adoption limitations risks failures safety debates critiques alternatives",
+        "fundamentals history",
+        "methods workflows",
+        "case studies benchmarks",
+        "risks limitations",
     )
     clean_topic = re.sub(r"\s+", " ", str(topic or base.get("topic") or "")).strip()[:420]
     queries = [f"{clean_topic} {facet}".strip()[:500] for facet in facets if clean_topic]
@@ -9445,6 +9523,41 @@ def run_project(project_id: str, model_fn: Optional[Callable]) -> None:
                 + "; ".join(evidence_shortfalls or ["no usable source returned"])
             )
             if requested_duration_for_research >= 600:
+                profile_keys = (
+                    "unique_source_url_count", "substantive_excerpt_count",
+                    "metadata_only_count", "provider_family_count",
+                    "unique_domain_count", "archetype_count",
+                )
+                expansion = research.get("research_expansion") if isinstance(research.get("research_expansion"), dict) else {}
+                provider_outcomes = {}
+                for provider_name, provider_row in (research.get("providers") or {}).items():
+                    if not isinstance(provider_row, dict):
+                        continue
+                    provider_outcomes[str(provider_name)] = {
+                        "status": str(provider_row.get("status") or "unknown"),
+                        "retrieved_count": int(provider_row.get("retrieved_count") or provider_row.get("count") or 0),
+                        "accepted_count": int(provider_row.get("count") or 0),
+                        "irrelevant_rejected_count": int(provider_row.get("irrelevant_rejected_count") or 0),
+                    }
+                preflight_diagnostic = {
+                    "status": "BLOCKED",
+                    "requested_duration_seconds": requested_duration_for_research,
+                    "evidence_profile": {key: int(evidence_profile.get(key) or 0) for key in profile_keys},
+                    "evidence_requirements": dict(evidence_requirement),
+                    "shortfalls": list(evidence_shortfalls),
+                    "provider_outcomes": provider_outcomes,
+                    "expansion": {
+                        "status": str(expansion.get("status") or "not_recorded"),
+                        "additional_unique_source_urls": int(expansion.get("additional_unique_source_urls") or 0),
+                        "query_results": expansion.get("query_results") if isinstance(expansion.get("query_results"), dict) else {},
+                        "errors": expansion.get("errors") if isinstance(expansion.get("errors"), list) else [],
+                    },
+                    "truthful": True,
+                }
+                # Preserve a compact, secret-free diagnosis before failing closed.
+                audit_event(project_id, "research_preflight_blocked", preflight_diagnostic)
+                checkpoint(project_id, "research_preflight_blocked", preflight_diagnostic)
+                _update_project(project_id, blueprint_json=jdump({"research_preflight": preflight_diagnostic}))
                 raise RuntimeError(
                     "Long-form research preflight blocked before writing or rendering: "
                     + research["degraded_reason"]
