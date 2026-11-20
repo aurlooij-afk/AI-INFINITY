@@ -1115,7 +1115,7 @@ def _stackexchange_research_sources(topic: str, limit: int = 10) -> List[Dict[st
     preserves question URLs/IDs and attribution, and records the API-reported license
     rather than assuming that community content is unrestricted.
     """
-    clean_topic = re.sub(r"\\s+", " ", str(topic or "")).strip()[:500]
+    clean_topic = re.sub(r"\s+", " ", str(topic or "")).strip()[:500]
     if not clean_topic:
         return []
     per = max(1, min(int(limit or 10), 25))
@@ -1140,18 +1140,18 @@ def _stackexchange_research_sources(topic: str, limit: int = 10) -> List[Dict[st
             for item in payload.get("items") or []:
                 if not isinstance(item, dict):
                     continue
-                title = re.sub(r"\\s+", " ", str(item.get("title") or "")).strip()
+                title = re.sub(r"\s+", " ", str(item.get("title") or "")).strip()
                 source_url = str(item.get("link") or "").strip()
                 if not title or not source_url:
                     continue
                 body = str(item.get("body") or "")
                 body = re.sub(
-                    r"(?is)<(script|style|pre|code)\\b[^>]*>.*?</\\1\\s*>",
+                    r"(?is)<(script|style|pre|code)\b[^>]*>.*?</\1\s*>",
                     " ",
                     body,
                 )
                 summary = html.unescape(re.sub(r"(?is)<[^>]+>", " ", body))
-                summary = re.sub(r"\\s+", " ", summary).strip()
+                summary = re.sub(r"\s+", " ", summary).strip()
                 owner = item.get("owner") if isinstance(item.get("owner"), dict) else {}
                 question_id = item.get("question_id")
                 rows.append({
