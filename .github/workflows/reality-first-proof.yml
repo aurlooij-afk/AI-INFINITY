@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: ai-infinity-reality-proof-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   reality-proof:

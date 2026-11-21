@@ -10,7 +10,7 @@ on:
 
 concurrency:
   group: ai-infinity-production-graph-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   production-graph-check:

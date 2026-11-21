@@ -1,0 +1,48 @@
+services:
+  wan-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.wan-worker
+      args:
+        WAN_SOURCE_REVISION: "1ea34ff48f87168174e12956e200b1d908b1c5ff"
+    image: ai-infinity-wan-worker:local
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 5m
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      WAN_SOURCE_DIR: /opt/Wan2.2
+      WAN_MODEL_DIR: /models/Wan2.2-TI2V-5B
+      WAN_WORKER_DATA_DIR: /data/wan-worker
+      WAN_WORKER_PERSISTENT_STORAGE_CONFIRMED: ${WAN_WORKER_PERSISTENT_STORAGE_CONFIRMED:-false}
+      AI_INFINITY_WAN_MODEL_TERMS_ACKNOWLEDGED: ${AI_INFINITY_WAN_MODEL_TERMS_ACKNOWLEDGED:-false}
+      AI_INFINITY_WAN_WORKER_TOKEN: ${AI_INFINITY_WAN_WORKER_TOKEN:?Set a long random AI_INFINITY_WAN_WORKER_TOKEN in your private env file}
+      WAN_WORKER_MAX_RUNTIME_SECONDS: ${WAN_WORKER_MAX_RUNTIME_SECONDS:-1800}
+    ports:
+      # Loopback-only default; a remote app needs a private HTTPS service path.
+      - "127.0.0.1:${WAN_WORKER_HOST_PORT:-8765}:8765"
+    volumes:
+      - wan-worker-state:/data/wan-worker
+      - wan-model-snapshot:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=3).read()"
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+
+volumes:
+  wan-worker-state:
+  wan-model-snapshot:

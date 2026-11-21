@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: ai-infinity-divine-closure-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   syntax-and-closure:

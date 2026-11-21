@@ -21,8 +21,8 @@ from typing import Any
 
 MAX_OTIO_BYTES = 2 * 1024 * 1024
 MAX_BUNDLE_BYTES = 512 * 1024 * 1024
-MAX_SCENES = 40
-SCENE_NAME = re.compile(r"scene_(\d{2})\.mp4\Z")
+MAX_SCENES = 360
+SCENE_NAME = re.compile(r"scene_(\d{2,3})\.mp4\Z")
 SIDE_CARS = (
     "captions.srt", "script.md", "article.md", "sources.json", "rights.json",
     "rights_manifest.json", "visual_rights.json", "manifest.json",
@@ -121,7 +121,7 @@ def export_otio_bundle(
         raise TimelineInterchangeError("project directory is unavailable")
     rows = timeline_data.get("scenes")
     if not isinstance(rows, list) or not rows or len(rows) > MAX_SCENES:
-        raise TimelineInterchangeError("timeline must contain between 1 and 40 scenes")
+        raise TimelineInterchangeError("timeline must contain between 1 and 360 scenes")
     try:
         fps = int(timeline_data.get("fps") or 30)
     except (TypeError, ValueError):
@@ -172,6 +172,28 @@ def export_otio_bundle(
         "media_references": "project-relative",
         "included_sidecars_recorded_in_bundle_manifest": True,
     }
+    review_export = timeline_data.get("review_export")
+    if isinstance(review_export, dict):
+        # Only explicit QC-failed review exports carry this metadata. Keep the
+        # omitted scene identities inside both the OTIO and portable bundle.
+        missing = [
+            str(name) for name in (review_export.get("missing_scene_masters") or [])
+            if isinstance(name, str) and name.startswith("scene_") and name.endswith(".mp4")
+            and len(name) == 12 and name[6:8].isdigit()
+        ]
+        included = [
+            str(name) for name in (review_export.get("included_scene_masters") or [])
+            if isinstance(name, str) and name.startswith("scene_") and name.endswith(".mp4")
+            and len(name) == 12 and name[6:8].isdigit()
+        ]
+        metadata["review_export"] = {
+            "status": "partial_scene_master_review_only",
+            "complete": False,
+            "missing_scene_masters": sorted(set(missing)),
+            "included_scene_masters": included,
+            "publish_allowed": False,
+            "reason": str(review_export.get("reason") or "Partial QC-failed scene-master review export.")[:700],
+        }
 
     with tempfile.TemporaryDirectory(prefix=".aii-otio-", dir=str(root)) as work_value:
         work = Path(work_value)
@@ -415,6 +437,7 @@ def export_otio_bundle(
         "truth_state": metadata["truth_state"],
         "truth_verified": metadata["truth_verified"],
         "human_review_status": "PENDING",
+        "review_export": metadata.get("review_export"),
         "truthful": True,
     }
 
@@ -472,7 +495,7 @@ def import_otio_timeline(
                 # custom properties attached to Gap objects. Recover the gap
                 # only when the same ordered catalog position explicitly marks
                 # a disabled AI Infinity scene; unrelated edits fail closed.
-                name_match = re.search(r"\[ai-infinity-disabled=(scene_\d{2}\.mp4)\]$", str(item.name or ""))
+                name_match = re.search(r"\[ai-infinity-disabled=(scene_\d{2,3}\.mp4)\]$", str(item.name or ""))
                 candidate = None
                 if name_match:
                     marker_asset = name_match.group(1)
@@ -543,7 +566,7 @@ def import_otio_timeline(
             "enabled": enabled,
         })
         if len(rows) > MAX_SCENES:
-            raise TimelineInterchangeError("OTIO timeline exceeds the 40-scene limit")
+            raise TimelineInterchangeError(f"OTIO timeline exceeds the {MAX_SCENES}-scene limit")
 
     if not rows or not any(row["enabled"] for row in rows):
         raise TimelineInterchangeError("OTIO timeline must include at least one enabled scene")

@@ -1131,6 +1131,51 @@ def test_general_executor_auto_preflights_an_explicitly_authorized_write(monkeyp
     assert "--allow-writes" in calls[3]
 
 
+def test_general_api_anything_executor_expires_write_preview_before_execution(monkeypatch, tmp_path):
+    monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
+    monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))
+    connector._GENERIC_COOLDOWNS.clear()
+    clock = [1_800_000_000]
+    monkeypatch.setattr(connector.time, "time", lambda: clock[0])
+    calls = []
+
+    def fake_run(runner, executable, args, *, cwd, env, timeout):
+        calls.append(list(args))
+        if args == ["sites"]:
+            return [{"name": "messages.example.com", "source": "user"}], None
+        if args == ["ops", "messages.example.com"]:
+            return {"operations": [{
+                "name": "sendMessage", "readOnly": False, "minTier": 2,
+                "parameters": [{"name": "recipient"}, {"name": "body"}],
+            }]}, None
+        if args[:3] == ["call", "messages.example.com", "sendMessage"] and "--dry" in args:
+            return {"ok": True, "dry": True, "request": {"url": "https://messages.example.com/send"}}, None
+        if args[:3] == ["call", "messages.example.com", "sendMessage"]:
+            raise AssertionError("expired approval must not execute the external write")
+        raise AssertionError(f"unexpected CLI request: {args}")
+
+    monkeypatch.setattr(connector, "_run_json", fake_run)
+    params = {"recipient": "reviewer", "body": "Hello"}
+    preview = connector.execute_api_anything_operation(
+        "messages.example.com", "sendMessage", params,
+        user_id="expiry-user", allow_writes=True, max_tier=2, dry_run=True,
+    )
+    assert preview["status"] == "dry_run_ready"
+    assert preview["preview_receipt_saved"] is True
+
+    clock[0] += connector.WRITE_PREVIEW_TTL_SECONDS + 1
+    connector._GENERIC_COOLDOWNS.clear()
+    expired = connector.execute_api_anything_operation(
+        "messages.example.com", "sendMessage", params,
+        user_id="expiry-user", allow_writes=True, max_tier=2,
+    )
+
+    assert expired["status"] == "write_approval_expired"
+    assert expired["executed"] is False
+    assert len(calls) == 5
+    assert sum("--dry" in call for call in calls) == 1
+
+
 def test_general_executor_reports_write_timeout_as_ambiguous_without_retry(monkeypatch, tmp_path):
     monkeypatch.setattr(connector.shutil, "which", lambda _: "/usr/local/bin/api-anything")
     monkeypatch.setenv("AI_INFINITY_DATA_DIR", str(tmp_path))

@@ -12,6 +12,7 @@ creator production to Studio rather than duplicating them.
 import json
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import Request
@@ -40,23 +41,74 @@ def _route_paths() -> set[str]:
     return {str(getattr(r, "path", "")) for r in APP.router.routes}
 
 def _local_capabilities() -> list[dict[str, Any]]:
-    return [
-        {"id":"chat","name":"Unified chat","status":"ready","local":True},
-        {"id":"command","name":"Natural-language command routing","status":"ready","local":True},
-        {"id":"creator","name":"Creator Studio production","status":"ready","local":True},
-        {"id":"knowledge","name":"Source-grounded knowledge","status":"ready","local":True},
-        {"id":"research","name":"Research and evidence workflows","status":"ready","local":True},
-        {"id":"storyboard","name":"Editable storyboard","status":"ready","local":True},
-        {"id":"transcript","name":"Transcript-first editing","status":"ready","local":True},
-        {"id":"image-lab","name":"Image editing","status":"ready","local":True},
-        {"id":"interactive","name":"Interactive export","status":"ready","local":True},
-        {"id":"variant-matrix","name":"Multi-ratio variants","status":"ready","local":True},
-        {"id":"automation","name":"Workflow automation","status":"ready","local":True},
-        {"id":"simulation","name":"Deterministic simulation","status":"ready","local":True},
-        {"id":"storage","name":"Five-provider storage fabric","status":"configured","local":True},
-        {"id":"quality","name":"Quality and self-test","status":"ready","local":True},
-        {"id":"economy","name":"Verified accounting and opportunity tracking","status":"ready","local":True},
+    """Report route evidence, not unconditional readiness claims.
+
+    A registered route proves only that an execution surface exists. Runtime
+    dependencies, provider credentials, durable storage, and successful output
+    verification are separate gates and must not be inferred here.
+    """
+    paths = _route_paths()
+    contracts = [
+        ("command", "Natural-language command routing", ("/infinity/canonical/execute",)),
+        ("creator", "Creator Studio production", ("/infinity/studio/project",)),
+        ("knowledge", "Knowledge notebooks", ("/infinity/3701/knowledge/notebooks",)),
+        ("research", "Research and evidence workflows", ("/infinity/3701/knowledge/query",)),
+        ("storyboard", "Editable storyboard", ("/infinity/studio/project/{project_id}/storyboard",)),
+        ("transcript", "Transcript-first editing", ("/infinity/studio/project/{project_id}/transcript",)),
+        ("image-lab", "Image editing", ("/infinity/studio/project/{project_id}/image/edit",)),
+        ("interactive", "Interactive export", ("/infinity/studio/project/{project_id}/interactive",)),
+        ("variant-matrix", "Multi-ratio variants", ("/infinity/studio/project/{project_id}/variant-matrix",)),
+        ("automation", "Workflow automation", ("/infinity/studio/agents/run", "/infinity/studio/tools/run", "/infinity/studio/calendar")),
+        ("storage", "Object storage fabric", ("/infinity/storage/v1/status",)),
+        ("quality", "Quality and self-test", ("/infinity/3705/readiness", "/infinity/3705/self-test")),
+        ("internal-completeness", "Internal completeness verification", ("/infinity/3706/internal-100",)),
     ]
+    output = []
+    for capability_id, name, candidates in contracts:
+        route = next((candidate for candidate in candidates if candidate in paths), None)
+        output.append({
+            "id": capability_id,
+            "name": name,
+            "status": "route_available" if route else "unavailable",
+            "route": route,
+            "local": True,
+            "verification_basis": "registered_route_presence_only",
+            "runtime_probe_required": True,
+        })
+    return output
+
+def _registry_summary() -> dict[str, Any]:
+    """Expose inventory counts without presenting registrations as executable tools."""
+    path = Path(__file__).resolve().parent / "capability_registry.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        entries = payload.get("entries") if isinstance(payload, dict) else None
+        if not isinstance(entries, list):
+            raise ValueError("registry_entries_missing")
+        counts: dict[str, int] = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            state = str(entry.get("integration_state") or "UNCLASSIFIED")
+            counts[state] = counts.get(state, 0) + 1
+        return {
+            "status": "inventory_only",
+            "entry_count": len(entries),
+            "declared_count": payload.get("count"),
+            "integration_state_counts": counts,
+            "readiness_claimed": False,
+            "policy": str(payload.get("truthfulness_policy") or ""),
+            "truthful": True,
+        }
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "entry_count": 0,
+            "readiness_claimed": False,
+            "error_type": type(exc).__name__,
+            "truthful": True,
+        }
+
 
 def _gated_capabilities() -> list[dict[str, Any]]:
     return [
@@ -69,13 +121,24 @@ def _gated_capabilities() -> list[dict[str, Any]]:
 
 @APP.get("/infinity/3702/health")
 def health():
+    paths = _route_paths()
+    required = (
+        "/infinity/canonical/execute",
+        "/infinity/studio/project",
+        "/infinity/3701/knowledge/query",
+        "/infinity/storage/v1/status",
+        "/infinity/3705/readiness",
+        "/infinity/3706/internal-100",
+    )
+    checks = [{"route": path, "available": path in paths} for path in required]
     return {
-        "status":"healthy",
-        "version":VERSION,
-        "build":BUILD,
-        "routes":len(_route_paths()),
-        "truthful":True,
-        "external_authority_excluded":True,
+        "status": "healthy" if all(item["available"] for item in checks) else "degraded",
+        "version": VERSION,
+        "build": BUILD,
+        "routes": len(paths),
+        "required_route_checks": checks,
+        "truthful": True,
+        "external_authority_excluded": True,
     }
 
 @APP.get("/infinity/3702/capabilities")
@@ -86,8 +149,11 @@ def capabilities(request: Request):
         "version":VERSION,
         "local":local,
         "gated":gated,
-        "local_ready":len(local),
+        "local_ready":sum(item.get("status") == "ready" for item in local),
+        "route_available_count":sum(item.get("status") == "route_available" for item in local),
+        "unavailable_count":sum(item.get("status") == "unavailable" for item in local),
         "gated_count":len(gated),
+        "registry":_registry_summary(),
         "free_first":True,
         "truthful":True,
     }
