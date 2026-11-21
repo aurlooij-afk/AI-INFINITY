@@ -950,3 +950,47 @@ def test_creative_planner_uses_privacy_filtered_openrouter_free_writer_for_15_mi
     assert plan["script_generation"]["required_spoken_words"] == 1875
     assert plan["script_generation"]["actual_spoken_words"] >= 1875
     assert plan["script_generation"]["unique_sentence_ratio"] >= 0.85
+
+
+def test_longform_fallback_reports_all_free_writer_gates_without_exposing_credentials(monkeypatch):
+    import json
+
+    monkeypatch.setattr(studio, "_external_providers_disabled", lambda: True)
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret-test-value")
+    monkeypatch.setenv("AI_INFINITY_GEMINI_FREE_TIER_AND_DATA_USE_ACK", "true")
+    monkeypatch.setenv("AI_INFINITY_GEMINI_FREE_TIER_MODEL", "gemini-3.1-flash-lite")
+    monkeypatch.setenv("HF_TOKEN", "hf-secret-test-value")
+    monkeypatch.setenv("AI_INFINITY_HF_FREE_TIER_AND_DATA_USE_ACK", "false")
+    monkeypatch.setenv("AI_INFINITY_TEXT_MODEL", "Qwen/Qwen2.5-7B-Instruct-1M")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-secret-test-value")
+    monkeypatch.setenv("AI_INFINITY_OPENROUTER_FREE_TIER_AND_DATA_USE_ACK", "true")
+    monkeypatch.setenv("AI_INFINITY_OPENROUTER_FREE_MODEL", "openrouter/free")
+
+    plan, provider = studio.creative_plan(
+        {
+            "title": "A practical guide to long-form production",
+            "objective": "Explain a real production workflow with evidence and limitations.",
+            "topic": "long-form production",
+            "format": "long",
+            "duration": 900,
+            "language": "English",
+        },
+        {"sources": []},
+        None,
+    )
+
+    diagnostics = plan["script_generation"]["writer_diagnostics"]
+    assert provider == "builtin-creative-engine"
+    assert diagnostics["gemini_api_key_present"] is True
+    assert diagnostics["gemini_free_tier_acknowledged"] is True
+    assert diagnostics["gemini_model_is_approved_free_tier"] is True
+    assert diagnostics["hf_token_present"] is True
+    assert diagnostics["hf_free_tier_acknowledged"] is False
+    assert diagnostics["openrouter_api_key_present"] is True
+    assert diagnostics["openrouter_free_tier_acknowledged"] is True
+    assert diagnostics["openrouter_model_is_free_router"] is True
+    assert diagnostics["external_providers_disabled"] is True
+    serialized = json.dumps(diagnostics)
+    assert "gemini-secret-test-value" not in serialized
+    assert "hf-secret-test-value" not in serialized
+    assert "openrouter-secret-test-value" not in serialized
