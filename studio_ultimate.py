@@ -1463,7 +1463,7 @@ def _expand_longform_research_evidence(
     facets = (
         "fundamentals history",
         "methods workflows",
-        "case studies benchmarks",
+        "case-study benchmarks",
         "risks limitations",
     )
     clean_topic = re.sub(r"\s+", " ", str(topic or base.get("topic") or "")).strip()[:420]
