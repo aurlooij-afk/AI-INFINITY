@@ -5,6 +5,7 @@ import sys
 from fastapi import FastAPI, Request, Response
 import ai_infinity_canonical
 import universal_command_batch
+import ai_infinity.goal_planner as goal_planner
 import reality_first_3901
 import studio_ultimate
 import production_graph
@@ -78,6 +79,7 @@ _install_native_image_runtime(studio_ultimate)
 del _install_native_image_runtime
 ai_infinity_canonical.register(app)
 universal_command_batch.register(app)
+goal_planner.register(app)
 studio_ultimate.register(app)
 reality_first_3901.register(app)
 production_graph.register(app)
