@@ -60,6 +60,7 @@ def test_dispatches_and_waits_for_a_distinct_exact_sha_acceptance_run():
     assert payload == {
         "ref": "ai-infinity/master-v2",
         "inputs": {"acceptance_role": "repeat"},
+        "return_run_details": True,
     }
     assert calls[1].get_method() == "GET"
     assert "Bearer test-token" in calls[0].get_header("Authorization")
