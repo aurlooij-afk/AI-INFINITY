@@ -120,3 +120,6 @@ def test_terminal_guard_reconciles_when_cached_truth_is_stale(monkeypatch):
     assert calls == ["status-latency-test"]
     assert result is expected
 
+
+
+# Temporary AI Infinity GitHub autonomy benchmark marker: 44993564317-1. This line is removed with the benchmark branch.
