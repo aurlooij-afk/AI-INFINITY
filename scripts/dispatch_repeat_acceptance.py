@@ -79,7 +79,7 @@ def dispatch_and_wait(
         "POST",
         f"{base}/actions/workflows/{quote(workflow, safe='')}/dispatches",
         token,
-        {"ref": ref, "inputs": {"acceptance_role": "repeat"}},
+        {"ref": ref, "inputs": {"acceptance_role": "repeat"}, "return_run_details": True},
         opener,
     )
     run_id = str(dispatch.get("workflow_run_id") or "")
