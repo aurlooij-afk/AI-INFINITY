@@ -3,7 +3,8 @@ from __future__ import annotations
 """Create a candidate-SHA-bound production certificate from real evidence files.
 
 This script does not infer live deployment, durable storage, GPU inference or
-human approval from code/tests. Missing external evidence remains BLOCKED/PENDING.
+human approval from code/tests. GPU inference is an optional accelerator unless a
+worker is configured and the owner explicitly authorizes a live inference request.
 """
 
 import argparse
@@ -360,10 +361,30 @@ def build_certificate(
         and (storage or {}).get("truthful") is True
     )
 
+    inference_worker_configured = isinstance(inference, dict) and inference.get("worker_configured") is True
+    inference_owner_acknowledged = isinstance(inference, dict) and inference.get("owner_acknowledged") is True
+    inference_required = bool(inference_worker_configured and inference_owner_acknowledged)
+    inference_policy_valid = bool(
+        isinstance(inference, dict)
+        and isinstance(inference.get("worker_configured"), bool)
+        and isinstance(inference.get("owner_acknowledged"), bool)
+        and isinstance(inference.get("required_for_certificate"), bool)
+        and inference.get("required_for_certificate") is inference_required
+        and inference.get("truthful") is True
+    )
+    inference_request_sent = (inference or {}).get("inference_request_sent") is True
+    inference_not_required = bool(
+        inference_policy_valid
+        and not inference_required
+        and inference_status == "BLOCKED"
+        and (inference or {}).get("inference_request_sent") is False
+    )
     inference_gpu = (inference or {}).get("gpu") if isinstance((inference or {}).get("gpu"), dict) else {}
     inference_sha = str((inference or {}).get("artifact_sha256") or "")
     inference_pass = bool(
-        inference_status == "PASS"
+        inference_policy_valid
+        and inference_required
+        and inference_status == "PASS"
         and (inference or {}).get("provider") == "wan2.2-ti2v-5b"
         and (inference or {}).get("model_id") == "Wan-AI/Wan2.2-TI2V-5B"
         and _valid_hex_digest((inference or {}).get("model_revision"), 40)
@@ -386,13 +407,24 @@ def build_certificate(
         and (inference or {}).get("full_decode") == "PASS"
         and (inference or {}).get("truthful") is True
     )
+    inference_requirement_met = bool(inference_pass or inference_not_required)
+    if inference_pass:
+        gpu_gate_status = "PASS"
+    elif inference_policy_valid and not inference_required:
+        gpu_gate_status = "NOT_CONFIGURED" if not inference_worker_configured else "NOT_AUTHORIZED"
+    elif inference_required and inference_status in {"BLOCKED", "FAIL"}:
+        gpu_gate_status = inference_status
+    elif inference_status == "PASS":
+        gpu_gate_status = "FAIL_OR_INCOMPLETE"
+    else:
+        gpu_gate_status = "BLOCKED"
 
     production_requirements = {
         "engineering_acceptance": engineering_pass,
         "technical_rights_evidence": technical_rights_pass,
         "otio_import_rerender": otio_rerender_pass,
         "durable_storage_round_trip_and_fresh_process_restore": storage_pass,
-        "live_gpu_inference_and_artifact_verification": inference_pass,
+        "live_gpu_inference_when_configured_and_authorized": inference_requirement_met,
         "exact_candidate_live_deployment": live_deployment_pass,
         "human_creative_and_rights_approval": creative_approval == "PASS",
     }
@@ -422,17 +454,23 @@ def build_certificate(
                 storage_status if storage_status == "FAIL" else
                 "FAIL_OR_INCOMPLETE"
             ),
-            "live_gpu_inference": (
-                "PASS" if inference_pass else
-                inference_status if inference_status in {"FAIL", "BLOCKED"} else
-                "FAIL_OR_INCOMPLETE"
-            ),
+            "live_gpu_inference": gpu_gate_status,
             "live_deployment": (
                 "PASS" if live_deployment_pass else
                 "FAIL" if deployment_status == "PASS" and deployment_sha != candidate_sha else
                 "BLOCKED"
             ),
             "human_creative_and_rights_approval": creative_approval,
+        },
+        "optional_capabilities": {
+            "wan2_2_gpu_inference": {
+                "status": gpu_gate_status,
+                "required_for_certificate": inference_required if inference_policy_valid else None,
+                "worker_configured": inference_worker_configured if inference_policy_valid else None,
+                "owner_acknowledged": inference_owner_acknowledged if inference_policy_valid else None,
+                "inference_request_sent": inference_request_sent,
+                "artifact_verified": inference_pass,
+            }
         },
         "production_requirements": production_requirements,
         "remaining_blockers": blockers,
