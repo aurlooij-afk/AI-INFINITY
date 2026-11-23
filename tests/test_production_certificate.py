@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from scripts.create_production_certificate import build_certificate
+from scripts.verify_live_wan_worker import _authorization_state
 
 
 def _passing_acceptance(candidate_sha: str = "b" * 40, run_id: str = "1001"):
@@ -94,6 +95,9 @@ def _passing_storage():
 def _passing_inference():
     return {
         "status": "PASS",
+        "worker_configured": True,
+        "owner_acknowledged": True,
+        "required_for_certificate": True,
         "provider": "wan2.2-ti2v-5b",
         "model_id": "Wan-AI/Wan2.2-TI2V-5B",
         "model_revision": "a" * 40,
@@ -169,6 +173,141 @@ def _passing_deployment(candidate):
         },
         "truthful": True,
     }
+
+
+def _passing_human_approval(candidate_sha: str):
+    return {
+        "candidate_commit_sha": candidate_sha,
+        "reviewed_media_sha256": "a" * 64,
+        "reviewer": "project_owner",
+        "reviewed_at_utc": "2026-11-04T00:00:00Z",
+        "review_notes": "Reviewed the complete exact media cut and approved the creative result.",
+        "approved": True,
+        "average_score": 4.6167,
+        "dimension_scores": {
+            "director": 4.8,
+            "cinematographer": 4.5,
+            "editor": 4.7,
+            "sound": 4.2,
+            "story": 4.8,
+            "rights": 4.7,
+        },
+        "rights_approval": True,
+        "rights_notes": "Reviewed source and licence records for the exact media SHA.",
+    }
+
+
+def _passing_gemini_writer():
+    return {
+        "status": "PASS",
+        "model": "gemini-3.1-flash-lite",
+        "http_status": 200,
+        "finish_reason": "STOP",
+        "response_characters": 42,
+        "response_sha256": "c" * 64,
+    }
+
+
+def test_live_gpu_verifier_records_only_configuration_and_authorization_booleans():
+    assert _authorization_state("", "", False) == {
+        "worker_configured": False,
+        "owner_acknowledged": False,
+        "required_for_certificate": False,
+    }
+    assert _authorization_state("https://worker.example", "not-a-real-token", False) == {
+        "worker_configured": True,
+        "owner_acknowledged": False,
+        "required_for_certificate": False,
+    }
+    assert _authorization_state("https://worker.example", "not-a-real-token", True) == {
+        "worker_configured": True,
+        "owner_acknowledged": True,
+        "required_for_certificate": True,
+    }
+
+
+def test_unconfigured_gpu_is_optional_but_explicitly_not_verified():
+    candidate = "2" * 40
+    inference = {
+        "status": "BLOCKED",
+        "worker_configured": False,
+        "owner_acknowledged": False,
+        "required_for_certificate": False,
+        "inference_request_sent": False,
+        "reason": "authenticated Wan2.2 worker URL/token are not configured",
+        "truthful": True,
+    }
+    certificate = build_certificate(
+        candidate_sha=candidate,
+        acceptance=_passing_acceptance(candidate),
+        acceptance_repeat=_passing_repeat(candidate),
+        storage=_passing_storage(),
+        inference=inference,
+        deployment=_passing_deployment(candidate),
+        human_approval=_passing_human_approval(candidate),
+        evidence_hashes={},
+        gemini_writer=_passing_gemini_writer(),
+    )
+    assert certificate["ENGINEERING_STATE"] == "PASS"
+    assert certificate["PRODUCTION_VERIFIED"] == "PASS"
+    assert certificate["gates"]["live_gpu_inference"] == "NOT_CONFIGURED"
+    assert certificate["optional_capabilities"]["wan2_2_gpu_inference"]["required_for_certificate"] is False
+    assert certificate["optional_capabilities"]["wan2_2_gpu_inference"]["artifact_verified"] is False
+    assert certificate["production_requirements"]["live_gpu_inference_when_configured_and_authorized"] is True
+
+
+def test_configured_gpu_without_owner_acknowledgement_is_not_invoked_or_required():
+    candidate = "3" * 40
+    inference = {
+        "status": "BLOCKED",
+        "worker_configured": True,
+        "owner_acknowledged": False,
+        "required_for_certificate": False,
+        "inference_request_sent": False,
+        "reason": "owner has not authorized a live GPU inference smoke job",
+        "truthful": True,
+    }
+    certificate = build_certificate(
+        candidate_sha=candidate,
+        acceptance=_passing_acceptance(candidate),
+        acceptance_repeat=_passing_repeat(candidate),
+        storage=_passing_storage(),
+        inference=inference,
+        deployment=_passing_deployment(candidate),
+        human_approval=_passing_human_approval(candidate),
+        evidence_hashes={},
+        gemini_writer=_passing_gemini_writer(),
+    )
+    assert certificate["PRODUCTION_VERIFIED"] == "PASS"
+    assert certificate["gates"]["live_gpu_inference"] == "NOT_AUTHORIZED"
+    assert certificate["optional_capabilities"]["wan2_2_gpu_inference"]["inference_request_sent"] is False
+
+
+def test_configured_and_acknowledged_gpu_failure_remains_a_certification_blocker():
+    candidate = "4" * 40
+    inference = {
+        "status": "BLOCKED",
+        "worker_configured": True,
+        "owner_acknowledged": True,
+        "required_for_certificate": True,
+        "inference_request_sent": False,
+        "reason": "worker capabilities did not satisfy the verified GPU contract",
+        "truthful": True,
+    }
+    certificate = build_certificate(
+        candidate_sha=candidate,
+        acceptance=_passing_acceptance(candidate),
+        acceptance_repeat=_passing_repeat(candidate),
+        storage=_passing_storage(),
+        inference=inference,
+        deployment=_passing_deployment(candidate),
+        human_approval=_passing_human_approval(candidate),
+        evidence_hashes={},
+        gemini_writer=_passing_gemini_writer(),
+    )
+    assert certificate["PRODUCTION_VERIFIED"] == "BLOCKED"
+    assert certificate["gates"]["live_gpu_inference"] == "BLOCKED"
+    assert "live_gpu_inference_when_configured_and_authorized" in certificate["remaining_blockers"]
 
 
 def test_production_certificate_keeps_external_and_human_gates_separate():
