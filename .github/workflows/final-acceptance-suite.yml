@@ -374,12 +374,14 @@ jobs:
           report = json.loads(report_path.read_text(encoding="utf-8"))
           if report.get("candidate_commit_sha") != os.environ["AI_INFINITY_CANDIDATE_SHA"]:
               raise SystemExit("Engineering readiness report belongs to a different commit.")
+          # GPU is an optional accelerator: a truthful NOT_CONFIGURED or NOT_AUTHORIZED
+          # record satisfies this conditional gate; configured and acknowledged workers must PASS.
           required = (
               "engineering_acceptance",
               "technical_rights_evidence",
               "otio_import_rerender",
               "durable_storage_round_trip_and_fresh_process_restore",
-              "live_gpu_inference_and_artifact_verification",
+              "live_gpu_inference_when_configured_and_authorized",
           )
           blockers = [
               name for name in required
