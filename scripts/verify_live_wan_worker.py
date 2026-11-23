@@ -43,6 +43,16 @@ def _flag(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _authorization_state(base: str, token: str, acknowledged: bool) -> dict[str, bool]:
+    """Expose only whether optional GPU execution is configured and authorized."""
+    configured = bool(base and token)
+    return {
+        "worker_configured": configured,
+        "owner_acknowledged": bool(acknowledged),
+        "required_for_certificate": bool(configured and acknowledged),
+    }
+
+
 def _safe_error(value: Any, limit: int = 700) -> str:
     text = str(value or "")
     text = re.sub(r"(?i)https?://[^\s\"']+", "[redacted-url]", text)
@@ -138,6 +148,7 @@ def main() -> int:
     acknowledged = _flag(os.getenv("AI_INFINITY_WAN_LIVE_INFERENCE_ACK"))
     if not base or not token:
         _emit({
+            **_authorization_state(base, token, acknowledged),
             "status": "BLOCKED",
             "reason": "authenticated Wan2.2 worker URL/token are not configured",
             "inference_request_sent": False,
@@ -146,6 +157,7 @@ def main() -> int:
         return 3
     if not acknowledged:
         _emit({
+            **_authorization_state(base, token, acknowledged),
             "status": "BLOCKED",
             "reason": "owner has not authorized a live GPU inference smoke job",
             "inference_request_sent": False,
@@ -156,6 +168,7 @@ def main() -> int:
     parsed = urlsplit(base)
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
         _emit({
+            **_authorization_state(base, token, acknowledged),
             "status": "FAIL",
             "reason": "worker URL must be a valid HTTPS origin without embedded credentials, query or fragment",
             "inference_request_sent": False,
@@ -252,6 +265,7 @@ def main() -> int:
                 raise RuntimeError("full FFmpeg decode failed on the downloaded Wan output")
 
         _emit({
+            **_authorization_state(base, token, acknowledged),
             "status": "PASS",
             "provider": PROVIDER_ID,
             "model_id": MODEL_ID,
@@ -277,6 +291,7 @@ def main() -> int:
         return 0
     except VerificationBlocked as exc:
         _emit({
+            **_authorization_state(base, token, acknowledged),
             "status": "BLOCKED",
             "reason": _safe_error(exc),
             "job_id": job_id,
@@ -286,6 +301,7 @@ def main() -> int:
         return 3
     except Exception as exc:
         _emit({
+            **_authorization_state(base, token, acknowledged),
             "status": "FAIL",
             "error_type": type(exc).__name__,
             "error": _safe_error(exc),
