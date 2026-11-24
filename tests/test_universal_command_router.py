@@ -72,6 +72,17 @@ def test_unimplemented_spreadsheets_and_web_apps_remain_explicitly_unsupported()
     assert canonical.classify_command("Build a web application for task management")["route"] == "unsupported_deliverable"
 
 
+def test_unsupported_route_advertises_only_actual_executable_canonical_routes():
+    result = canonical.dispatch_command("Create a spreadsheet for expenses", "user-1", {})
+    assert result["status"] == "unsupported_or_incomplete"
+    assert result["route"] == "unsupported_deliverable"
+    assert result["supported_routes"] == [
+        "research", "create", "edit", "project_status", "capabilities",
+        "script", "strategy", "marketing", "seo", "analytics", "publisher",
+        "monetization", "public_api", "github_api",
+    ]
+
+
 def test_supported_multilingual_native_content_requests_use_the_existing_creation_route():
     examples = {
         "ویب سائٹ بنائیں": "website",
