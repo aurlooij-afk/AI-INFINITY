@@ -254,3 +254,42 @@ def test_earth_from_space_fallback_does_not_read_unrelated_search_hits_as_script
         "show the process", "test and improve"
     } for overlay in overlays)
 
+
+
+
+def test_music_recovery_wrapper_preserves_query_aware_canonical_generator(monkeypatch, tmp_path):
+    from ai_infinity.music_recovery import wrap_music_generator
+
+    calls = []
+
+    def canonical_music(outdir, seconds, query="default soundtrack"):
+        calls.append({"seconds": seconds, "query": query})
+        output = Path(outdir) / "music.m4a"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"verified-test-audio" * 200)
+        return output
+
+    def valid_music_file(path):
+        candidate = Path(path)
+        return candidate.is_file() and candidate.stat().st_size >= 1000
+
+    monkeypatch.setattr(
+        studio,
+        "make_music",
+        wrap_music_generator(canonical_music, valid_music_file),
+    )
+
+    result = studio._resolve_music_bed(
+        tmp_path,
+        12.0,
+        query="quiet cinematic ambient with a measured climax",
+        project_id="music_query_wrapper_regression",
+    )
+
+    assert calls == [{
+        "seconds": 12.0,
+        "query": "quiet cinematic ambient with a measured climax",
+    }]
+    assert result == tmp_path / "music.m4a"
+    assert result.is_file()
+    assert result.stat().st_size > 1024

@@ -18,6 +18,7 @@ creator runtime without replacing the existing creator engine:
 - evidence-first UI banner
 """
 import json
+import io
 import os
 import shutil
 import sqlite3
@@ -311,6 +312,199 @@ def _source_assets(p: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [r for r in rows if str(r.get("kind") or "").lower() == "visual"]
 
 
+def _native_primary_delivery_eligible(
+    project_id: str,
+    expected_req: Dict[str, Any],
+    files: Dict[str, Path],
+    checks: Dict[str, Any],
+    failures: List[str],
+) -> bool:
+    """Allow a verified native deliverable to survive an explicitly gated video companion.
+
+    This never verifies or releases the companion MP4/package. It accepts only a
+    primary-content record whose own artifacts, production-manifest binding,
+    rights/research evidence and durable artifact-registry hashes all agree.
+    """
+    kind = str(expected_req.get("content_type") or "").strip().lower()
+    required_by_kind = {
+        "article": {"article.md", "seo.json", "fact_check.json"},
+        "podcast": {"audio_master.mp3", "podcast_rss.xml"},
+        "social": {"social_campaign.json"},
+        "website": {"website.zip", "website_manifest.json", "website_README.md"},
+        "document": {"document.docx", "document_manifest.json"},
+        "presentation": {"presentation.pptx", "presentation_manifest.json"},
+    }
+    required = required_by_kind.get(kind)
+    if not required:
+        return False
+
+    # This predicate means "the primary draft is intact and can be reviewed by
+    # its owner", not "its visuals are rights-cleared or safe to publish".
+    # Companion-video visual QC and rights counters are intentionally separate:
+    # they keep the final MP4 and public release blocked, while an independently
+    # hashed native document/social/site draft remains available for review.
+    # The exact primary artifacts, research, facts, provenance and rights records
+    # are checked below; missing or malformed records still fail closed.
+    if not (
+        checks.get("research_required_and_present") is True
+        and checks.get("fresh_evidence_ok") is True
+        and checks.get("fact_check_present") is True
+        and checks.get("provenance_present") is True
+    ):
+        return False
+
+    try:
+        primary_path = files.get("primary_content_delivery.json")
+        production_path = files.get("production_manifest.json")
+        sources_path = files.get("sources.json")
+        rights_path = files.get("rights_manifest.json")
+        visual_rights_path = files.get("visual_rights.json")
+        fact_path = files.get("fact_check.json")
+        provenance_path = files.get("provenance.json")
+        required_metadata_paths = (
+            primary_path, production_path, sources_path, rights_path,
+            visual_rights_path, fact_path, provenance_path,
+        )
+        if any(path is None or not path.is_file() or path.is_symlink() for path in required_metadata_paths):
+            return False
+
+        primary = json.loads(primary_path.read_text(encoding="utf-8"))
+        production = json.loads(production_path.read_text(encoding="utf-8"))
+        sources = json.loads(sources_path.read_text(encoding="utf-8"))
+        rights = json.loads(rights_path.read_text(encoding="utf-8"))
+        visual_rights = json.loads(visual_rights_path.read_text(encoding="utf-8"))
+        facts = json.loads(fact_path.read_text(encoding="utf-8"))
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+
+        if not (
+            primary.get("schema") == "ai-infinity-primary-content-delivery.v1"
+            and primary.get("project_id") == project_id
+            and primary.get("content_type") == kind
+            and primary.get("status") == "PASS"
+            and primary.get("primary_delivery_verified") is True
+            and primary.get("primary_scope_only") is True
+            and primary.get("truthful") is True
+            and primary.get("human_review_status") == "PENDING"
+            and primary.get("rights_review_status") == "PENDING"
+            and primary.get("external_publication_status") == "NOT_PUBLISHED"
+            and int(primary.get("research_source_count") or 0) >= 1
+            and isinstance(primary.get("checks"), dict)
+            and bool(primary["checks"])
+            and all(value is True for value in primary["checks"].values())
+            and primary.get("companion_video", {}).get("status") in {
+                "REVIEW_REQUIRED", "NOT_ASSESSED_BY_PRIMARY_GATE",
+            }
+            and (
+                primary.get("companion_video", {}).get("status") != "REVIEW_REQUIRED"
+                or int(primary.get("companion_video", {}).get("fallback_visual_count") or 0)
+                    == int(checks.get("fallback_visual_count") or 0)
+            )
+        ):
+            return False
+
+        visual_rights_assets = visual_rights.get("assets")
+        known_rights_states = {
+            "cleared", "original_generated", "review_required",
+            "blocked_fallback", "unknown",
+        }
+        visual_rights_records_valid = (
+            isinstance(visual_rights_assets, list)
+            and bool(visual_rights_assets)
+            and all(
+                isinstance(row, dict)
+                and bool(str(row.get("asset") or "").strip())
+                and str(row.get("rights_state") or "") in known_rights_states
+                and row.get("truthful") is True
+                for row in visual_rights_assets
+            )
+        )
+        if not (
+            production.get("project_id") == project_id
+            and production.get("truthful") is True
+            and sources.get("truthful") is True
+            and int(sources.get("source_count") or len(sources.get("sources") or [])) >= 1
+            and rights.get("project_id") == project_id
+            and rights.get("truthful") is True
+            and bool(rights.get("assets"))
+            and visual_rights.get("project_id") == project_id
+            and visual_rights.get("truthful") is True
+            and visual_rights_records_valid
+            and bool(facts.get("claims") is not None or facts.get("review_items") is not None)
+            and bool(provenance)
+        ):
+            return False
+
+        binding = production.get("primary_content_delivery")
+        if not isinstance(binding, dict) or not (
+            binding.get("status") == "PASS"
+            and binding.get("manifest") == primary_path.name
+            and binding.get("sha256") == _studio().file_sha256(primary_path)
+            and int(binding.get("size_bytes") or 0) == primary_path.stat().st_size
+            and binding.get("scope") == "primary native output only; companion video is gated independently"
+        ):
+            return False
+
+        artifact_rows = primary.get("artifacts")
+        if not isinstance(artifact_rows, list):
+            return False
+        by_name = {}
+        for row in artifact_rows:
+            if not isinstance(row, dict):
+                return False
+            name = str(row.get("name") or "")
+            if not name or Path(name).name != name or name in by_name:
+                return False
+            by_name[name] = row
+
+        if not required.issubset(by_name) or not {"sources.json", "rights_manifest.json"}.issubset(by_name):
+            return False
+
+        registry = _artifact_registry(project_id)
+        # The project-scoped visual-rights ledger is independently hash-bound.
+        # REVIEW_REQUIRED/blocked_fallback states remain visible for the human
+        # reviewer; they are never rewritten as cleared by this native gate.
+        registered_visual_rights = registry.get(visual_rights_path.name)
+        if not isinstance(registered_visual_rights, dict) or (
+            str(registered_visual_rights.get("sha256") or "").lower()
+                != _studio().file_sha256(visual_rights_path)
+            or int(registered_visual_rights.get("size_bytes") or 0)
+                != visual_rights_path.stat().st_size
+        ):
+            return False
+        # Check every file named by the primary manifest, not only the subset
+        # required by the current output mode.
+        for name, row in by_name.items():
+            path = files.get(name)
+            if path is None or not path.is_file() or path.is_symlink():
+                return False
+            digest = str(row.get("sha256") or "").lower()
+            size = int(row.get("size_bytes") or 0)
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                return False
+            if size <= 0 or path.stat().st_size != size or _studio().file_sha256(path) != digest:
+                return False
+            registered = registry.get(name)
+            if not isinstance(registered, dict):
+                return False
+            if (
+                str(registered.get("sha256") or "").lower() != digest
+                or int(registered.get("size_bytes") or 0) != size
+            ):
+                return False
+
+        # The primary manifest itself is also registered and hash-bound.
+        registered_primary = registry.get(primary_path.name)
+        if not isinstance(registered_primary, dict) or (
+            str(registered_primary.get("sha256") or "").lower() != _studio().file_sha256(primary_path)
+            or int(registered_primary.get("size_bytes") or 0) != primary_path.stat().st_size
+        ):
+            return False
+        return True
+    except Exception:
+        # Missing or unreadable evidence is never converted into a degraded pass.
+        return False
+
+
 def _minimum_professional_scene_count(req: Dict[str, Any]) -> int:
     """Return the minimum real shot coverage for a normal video brief.
 
@@ -342,7 +536,7 @@ def _minimum_professional_scene_count(req: Dict[str, Any]) -> int:
         return min(5, max(3, int((duration + 11.999) // 12)))
 
     launch_profile = bool(re.search(
-        r"\b(?:launch|promotional? video|promo film|brand film|product film|product launch|trailer)\b",
+        r"\b(?:launch|promotional? video|promo film|brand film|product film|product launch|technology campaign|brand campaign|campaign|trailer)\b",
         brief, re.I,
     ))
     if launch_profile and duration >= 30:
@@ -428,16 +622,66 @@ def _is_qualified_illustrative_fallback(row: Dict[str, Any]) -> bool:
     )
 
 
-def _visual_diversity_metrics(
-    visual_rows: List[Dict[str, Any]], scene_count: int
-) -> Dict[str, Any]:
-    """Measure visual diversity against rendered scenes, not asset-row count.
+def _visual_difference_hash(path: Path, image_module: Any) -> Optional[str]:
+    """Hash a still or the midpoint frame of a rendered scene master."""
+    try:
+        if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}:
+            with image_module.open(path) as source:
+                frame = source.convert("L")
+        else:
+            ffmpeg = shutil.which("ffmpeg")
+            ffprobe = shutil.which("ffprobe")
+            if not ffmpeg or not ffprobe:
+                return None
+            probe = subprocess.run(
+                [ffprobe, "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            if probe.returncode != 0:
+                return None
+            duration = float((probe.stdout or "").strip())
+            if duration <= 0:
+                return None
+            sample_time = max(0.0, duration / 2.0)
+            decoded = subprocess.run(
+                [ffmpeg, "-hide_banner", "-loglevel", "error", "-ss", f"{sample_time:.3f}",
+                 "-i", str(path), "-frames:v", "1", "-vf", "scale=9:8",
+                 "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"],
+                capture_output=True, timeout=20, check=False,
+            )
+            if decoded.returncode != 0 or not decoded.stdout:
+                return None
+            with image_module.open(io.BytesIO(decoded.stdout)) as source:
+                frame = source.convert("L")
+        resampling = getattr(image_module, "Resampling", image_module)
+        lanczos = getattr(resampling, "LANCZOS", getattr(image_module, "LANCZOS", 1))
+        pixels = list(frame.resize((9, 8), resample=lanczos).getdata())
+        bits = 0
+        bit_index = 0
+        for row in range(8):
+            for column in range(8):
+                if pixels[row * 9 + column] > pixels[row * 9 + column + 1]:
+                    bits |= 1 << bit_index
+                bit_index += 1
+        return f"{bits:016x}"
+    except Exception:
+        return None
 
-    A single rendered scene has no cross-scene diversity requirement. Duplicate
-    database rows must not manufacture an extra required visual. For multi-scene
-    edits, retain the existing 60% distinct-visual threshold, bounded by the
-    number of scene masters actually rendered.
-    """
+
+def _perceptual_hash_distance(left: str, right: str) -> int:
+    try:
+        return (int(left, 16) ^ int(right, 16)).bit_count()
+    except (TypeError, ValueError):
+        return 64
+
+
+def _visual_diversity_metrics(
+    visual_rows: List[Dict[str, Any]],
+    scene_count: int,
+    rendered_scene_paths: Optional[List[Path]] = None,
+) -> Dict[str, Any]:
+    """Keep source-byte evidence separate from perceptual QC on rendered scenes."""
     s = _studio()
     unique_visual_hashes = set()
     for row in visual_rows:
@@ -449,14 +693,57 @@ def _visual_diversity_metrics(
             pass
 
     rendered_scene_count = max(1, int(scene_count or 1))
-    required_unique = min(
-        rendered_scene_count,
-        max(1, int((rendered_scene_count * 0.6) + 0.999)),
+    required_unique = min(rendered_scene_count, max(1, int((rendered_scene_count * 0.6) + 0.999)))
+    sample_source = "rendered_scene_masters" if rendered_scene_paths is not None else "source_media_fallback"
+    sample_paths = (
+        [Path(path) for path in rendered_scene_paths]
+        if rendered_scene_paths is not None
+        else [Path(str(row.get("path") or "")) for row in visual_rows]
+    )
+    perceptual_hashes = []
+    unreadable = 0
+    for path in sample_paths:
+        if not path.is_file():
+            unreadable += 1
+            continue
+        perceptual_hash = _visual_difference_hash(path, getattr(s, "Image", None))
+        if perceptual_hash is None:
+            unreadable += 1
+        else:
+            perceptual_hashes.append(perceptual_hash)
+
+    representatives = []
+    for value in perceptual_hashes:
+        if not any(_perceptual_hash_distance(value, item) <= 6 for item in representatives):
+            representatives.append(value)
+    duplicate_pairs = sum(
+        1
+        for index, left in enumerate(perceptual_hashes)
+        for right in perceptual_hashes[index + 1:]
+        if _perceptual_hash_distance(left, right) <= 6
+    )
+    perceptual_unique = len(representatives)
+    perceptual_ok = (
+        rendered_scene_count <= 1
+        or (
+            unreadable == 0
+            and len(sample_paths) == rendered_scene_count
+            and len(perceptual_hashes) == rendered_scene_count
+            and perceptual_unique >= required_unique
+        )
     )
     return {
         "unique_visual_hashes": len(unique_visual_hashes),
         "required_unique_visual_hashes": required_unique,
         "visual_diversity_ok": len(unique_visual_hashes) >= required_unique,
+        "perceptual_sample_source": sample_source,
+        "perceptual_sample_count": len(perceptual_hashes),
+        "perceptual_unique_visual_hashes": perceptual_unique,
+        "required_perceptual_unique_visual_hashes": required_unique,
+        "perceptual_duplicate_visual_pairs": duplicate_pairs,
+        "perceptual_unreadable_visual_count": unreadable,
+        "perceptual_hash_distance_threshold": 6,
+        "perceptual_diversity_ok": perceptual_ok,
     }
 
 
@@ -554,29 +841,6 @@ def _write_production_evidence(project_id: str, truth: Optional[Dict[str, Any]] 
     root = s._project_dir(project_id)
     root.mkdir(parents=True, exist_ok=True)
 
-    try:
-        events = s._timeline_rows(project_id)
-    except Exception:
-        events = []
-    timeline = {
-        "version": CLOSURE_VERSION,
-        "project_id": project_id,
-        "events": events,
-        "event_count": len(events),
-        "truthful": True,
-    }
-    (root / "timeline.json").write_text(json.dumps(timeline, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-
-    registry = _artifact_registry(project_id)
-    registry_payload = {
-        "version": CLOSURE_VERSION,
-        "project_id": project_id,
-        "integrity": "sha256",
-        "artifacts": sorted([dict(item) for item in registry.values()], key=lambda x: str(x.get("asset_name") or "")),
-        "truthful": True,
-    }
-    (root / "asset_registry.json").write_text(json.dumps(registry_payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-
     # Persist source-level rights evidence without silently promoting incomplete metadata.
     rights = []
     for row in _source_assets(s._get_project(project_id) or {}):
@@ -619,6 +883,41 @@ def _write_production_evidence(project_id: str, truth: Optional[Dict[str, Any]] 
         "truthful": True,
     }
     (root / "visual_rights.json").write_text(json.dumps(rights_report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+    try:
+        events = s._timeline_rows(project_id)
+    except Exception:
+        events = []
+    timeline = {
+        "version": CLOSURE_VERSION,
+        "project_id": project_id,
+        "events": events,
+        "event_count": len(events),
+        "truthful": True,
+    }
+    (root / "timeline.json").write_text(json.dumps(timeline, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+    registry_error = None
+    try:
+        registry = _artifact_registry(project_id)
+    except Exception as exc:
+        # Rights evidence has already been written above. Keep the failure visible
+        # in the registry artifact, while allowing the professional truth gate to
+        # report the actual registry mismatch instead of losing all evidence files.
+        registry = {}
+        registry_error = f"{type(exc).__name__}: {str(exc)[:500]}"
+    registry_payload = {
+        "version": CLOSURE_VERSION,
+        "project_id": project_id,
+        "integrity": "sha256",
+        "registry_read_status": "available" if registry_error is None else "unavailable",
+        "registry_read_error": registry_error,
+        "artifacts": sorted([dict(item) for item in registry.values()], key=lambda x: str(x.get("asset_name") or "")),
+        "truthful": True,
+    }
+    (root / "asset_registry.json").write_text(json.dumps(registry_payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+
 
     if truth is not None:
         (root / "production_truth.json").write_text(json.dumps(truth, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
@@ -748,6 +1047,15 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     blueprint = _parse_blueprint(p)
     plan = blueprint.get("plan") if isinstance(blueprint.get("plan"), dict) else blueprint
     chapters = list((plan or {}).get("chapters") or [])
+    evidence_write_error = None
+    rights_path = Path(s._project_dir(project_id)) / "visual_rights.json"
+    if not rights_path.is_file():
+        try:
+            # Repair only missing metadata derived from already-recorded real
+            # source assets. Unknown rights remain review-required and cannot pass.
+            _write_production_evidence(project_id, None)
+        except Exception as exc:
+            evidence_write_error = f"{type(exc).__name__}: {str(exc)[:500]}"
     files = _project_files(project_id)
     # Canonical contract is the source of user intent. Validate the rendered media
     # against it even if a legacy worker or heuristic altered request_json later.
@@ -806,6 +1114,8 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     }
     warnings: List[str] = []
     failures: List[str] = []
+    if evidence_write_error:
+        failures.append("visual-rights evidence write failed: " + evidence_write_error)
 
     if final and final.exists():
         try:
@@ -985,7 +1295,7 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     cinematic_launch_profile = bool(
         video_quality_gate_required
         and re.search(
-            r"\b(?:launch|promotional? video|promo film|brand film|product film|product launch|trailer)\b",
+            r"\b(?:launch|promotional? video|promo film|brand film|product film|product launch|technology campaign|brand campaign|campaign|trailer)\b",
             launch_profile_text, re.I,
         )
         and float(checks.get("requested_duration") or 0) >= 30
@@ -1024,16 +1334,24 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     elif fallback_rows:
         warnings.append(f"{len(fallback_rows)} unverified fallback visual(s) used; professional verification remains blocked")
 
-    visual_diversity = _visual_diversity_metrics(visual_rows, effective_scene_count)
+    visual_diversity = _visual_diversity_metrics(visual_rows, effective_scene_count, scene_files)
     checks["unique_visual_hashes"] = visual_diversity["unique_visual_hashes"]
     checks["visual_diversity_required_unique_hashes"] = visual_diversity["required_unique_visual_hashes"]
     checks["visual_diversity_ok"] = visual_diversity["visual_diversity_ok"]
+    for metric in (
+        "perceptual_unique_visual_hashes", "required_perceptual_unique_visual_hashes",
+        "perceptual_sample_source", "perceptual_sample_count",
+        "perceptual_duplicate_visual_pairs", "perceptual_unreadable_visual_count",
+        "perceptual_hash_distance_threshold", "perceptual_diversity_ok",
+    ):
+        checks[metric] = visual_diversity[metric]
     required_professional_unique = min(minimum_scene_count, actual_rendered_scene_count) if actual_rendered_scene_count else minimum_scene_count
     checks["professional_unique_visuals_required"] = required_professional_unique
     checks["professional_visual_diversity_passed"] = (
         not video_quality_gate_required or (
             actual_rendered_scene_count >= minimum_scene_count
             and int(visual_diversity.get("unique_visual_hashes") or 0) >= required_professional_unique
+            and visual_diversity.get("perceptual_diversity_ok") is True
         )
     )
     if actual_rendered_scene_count > 1 and not checks["visual_diversity_ok"]:
@@ -1042,6 +1360,14 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         failures.append(
             f"professional visual diversity failed: {visual_diversity.get('unique_visual_hashes', 0)} unique "
             f"visual(s), {required_professional_unique} required across the rendered scenes"
+        )
+    if video_quality_gate_required and not visual_diversity.get("perceptual_diversity_ok", False):
+        failures.append(
+            "perceptual visual diversity failed: "
+            f"{visual_diversity.get('perceptual_unique_visual_hashes', 0)} perceptually distinct frame(s), "
+            f"{visual_diversity.get('required_perceptual_unique_visual_hashes', required_professional_unique)} required; "
+            f"{visual_diversity.get('perceptual_duplicate_visual_pairs', 0)} near-duplicate pair(s), "
+            f"{visual_diversity.get('perceptual_unreadable_visual_count', 0)} unreadable source(s)"
         )
 
     # The branded launch profile must contain actual source-motion footage,
@@ -1230,7 +1556,15 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
     # The persisted QC is evidence, but re-check its critical truth here.
     persisted_qc = result.get("quality") if isinstance(result.get("quality"), dict) else {}
     checks["persisted_qc_passed"] = bool(persisted_qc.get("passed"))
-    if not checks["persisted_qc_passed"] and p.get("status") == "completed":
+    requested_content_type = str(expected_req.get("content_type") or "video").strip().lower()
+    native_primary_content_mode = requested_content_type in {
+        "article", "podcast", "social", "website", "document", "presentation",
+    }
+    if (
+        not checks["persisted_qc_passed"]
+        and p.get("status") == "completed"
+        and not native_primary_content_mode
+    ):
         failures.append("project reports completed while persisted QC is not passed")
 
     draft_quality_keys = (
@@ -1249,6 +1583,13 @@ def _professional_truth(p: Dict[str, Any], reconcile: bool = True) -> Dict[str, 
         qualified_vector_fallbacks
         and all(bool(checks.get(key)) for key in draft_quality_keys)
         and not failures
+    )
+    # Native outputs have a separate integrity/provenance gate. A qualified
+    # illustrative companion video can remain REVIEW_REQUIRED without turning
+    # an independently verified DOCX, PPTX, website, article, podcast or social
+    # package into a failed project. This flag never grants video verification.
+    checks["primary_native_delivery_eligible"] = _native_primary_delivery_eligible(
+        project_id, expected_req, files, checks, failures
     )
 
     verified = bool(
@@ -1574,7 +1915,42 @@ def _patch_functions():
                 # artifact is itself backed by the same final state we report.
                 smoke_closure_override = (getattr(s, "SMOKE", False) and os.getenv("AI_INFINITY_SMOKE_ALLOW_UNVERIFIED_DELIVERY","0").strip().lower() in {"1","true","yes","on"}) or (os.getenv("CI","").strip().lower() == "true" and getattr(s, "FAST_MODE", False))
                 if p.get("status") in {"completed", "completed_with_qc_warnings"} and not truth.get("verified") and not smoke_closure_override:
-                    if bool((truth.get("checks") or {}).get("illustrative_fallback_delivery_eligible")):
+                    if bool((truth.get("checks") or {}).get("primary_native_delivery_eligible")):
+                        content_type = str((truth.get("requested") or {}).get("content_type") or "native content")
+                        warning = (
+                            f"Primary {content_type} deliverable passed its native-content, source, rights, "
+                            "integrity and artifact-registry checks. The companion video remains REVIEW_REQUIRED; "
+                            "the final MP4, mixed creator package and external publication remain blocked "
+                            "until the video passes its independent visual-quality gate and human review."
+                        )
+                        draft_result = _parse_result(p)
+                        draft_result["status"] = "completed_with_qc_warnings"
+                        draft_result["truthful"] = True
+                        draft_result["quality_warning"] = warning
+                        draft_result["professional_gate"] = truth
+                        draft_result["professional_visual_verification"] = "REVIEW_REQUIRED"
+                        primary_path = _project_files(project_id).get("primary_content_delivery.json")
+                        if primary_path and primary_path.is_file():
+                            draft_result["primary_content_delivery"] = json.loads(
+                                primary_path.read_text(encoding="utf-8")
+                            )
+                        s.audit_event(project_id, "native_primary_deliverable_review_required", {
+                            "content_type": content_type,
+                            "primary_delivery_verified": True,
+                            "companion_video": "REVIEW_REQUIRED",
+                            "final_video_and_mixed_package_blocked": True,
+                            "external_publication": "NOT_PUBLISHED",
+                            "truthful": True,
+                        })
+                        s._update_project(
+                            project_id,
+                            status="completed_with_qc_warnings",
+                            error=warning[:1200],
+                            stage="quality_review_required",
+                            progress=99.0,
+                            result_json=s.jdump(draft_result),
+                        )
+                    elif bool((truth.get("checks") or {}).get("illustrative_fallback_delivery_eligible")):
                         warning = (
                             "Editable draft created with clearly labelled original vector illustrations. "
                             "Professional visual verification and auto-publishing remain blocked until real "
@@ -1831,7 +2207,7 @@ def _readiness(user_id: str, request: Any) -> Dict[str, Any]:
             "tts": local_tts,
             "captions": True,
             "timeline": True,
-            "persistent_queue": True,
+            "persistent_queue": bool(persistence.get("persistent")),
         },
         "connections": configured,
         "worker": {

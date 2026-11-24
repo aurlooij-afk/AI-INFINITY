@@ -1,0 +1,252 @@
+name: AI Infinity — Human Approval and Production Certificate
+
+on:
+  workflow_dispatch:
+    inputs:
+      acceptance_run_id:
+        description: "Completed Final Complete Acceptance run ID from the main branch"
+        required: true
+        type: string
+      candidate_sha:
+        description: "Exact deployed main commit SHA recorded by that acceptance run"
+        required: true
+        type: string
+      human_review_json:
+        description: "One-line JSON with approved, rights_approval, reviewed_media_sha256, review_notes, rights_notes, and six dimension_scores."
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  certify:
+    if: github.actor == 'aurlooij-afk'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout the exact accepted main candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      - name: Validate main acceptance run and download its evidence bundle
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACCEPTANCE_RUN_ID: ${{ inputs.acceptance_run_id }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, subprocess
+          run_id = os.environ["ACCEPTANCE_RUN_ID"].strip()
+          candidate = os.environ["CANDIDATE_SHA"].strip().lower()
+          repo = os.environ["GITHUB_REPOSITORY"]
+          if not run_id.isdigit() or len(candidate) != 40:
+              raise SystemExit("Invalid acceptance_run_id or candidate SHA.")
+          raw = subprocess.check_output(
+              ["gh", "api", f"repos/{repo}/actions/runs/{run_id}"],
+              text=True,
+          )
+          run = json.loads(raw)
+          if run.get("path") != ".github/workflows/final-acceptance-suite.yml":
+              raise SystemExit("The supplied run is not the Final Complete Acceptance workflow.")
+          if run.get("event") != "push" or run.get("head_branch") != "main":
+              raise SystemExit("Human certification requires a completed main-branch acceptance run.")
+          if run.get("status") != "completed":
+              raise SystemExit("The supplied acceptance run has not completed.")
+          if str(run.get("head_sha") or "").lower() != candidate:
+              raise SystemExit("Candidate SHA does not match the acceptance run's exact commit.")
+          print("ACCEPTANCE_RUN_VALIDATED", run_id, candidate)
+          PY
+          gh run download "$ACCEPTANCE_RUN_ID" --name ai-infinity-final-acceptance-evidence --dir ./certification-inputs
+          test -s certification-inputs/final-acceptance-result.json
+          test -s certification-inputs/production-gate-report.json
+          test -s certification-inputs/acceptance-evidence/gemini-writer-verification.json
+          test -s certification-inputs/acceptance-evidence/project-state-storage-verification.json
+          test -s certification-inputs/acceptance-evidence/wan-live-inference-verification.json
+          test -s certification-inputs/acceptance-evidence/live-deployment-verification.json
+          mkdir -p acceptance-evidence
+          cp certification-inputs/final-acceptance-result.json ./final-acceptance-result.json
+          cp certification-inputs/acceptance-evidence/*.json ./acceptance-evidence/
+
+      - name: Require all six non-human gates to have passed on the exact media and commit
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          candidate = os.environ["CANDIDATE_SHA"].lower()
+          report = json.loads(Path("certification-inputs/production-gate-report.json").read_text(encoding="utf-8"))
+          acceptance = json.loads(Path("final-acceptance-result.json").read_text(encoding="utf-8"))
+          if report.get("candidate_commit_sha") != candidate:
+              raise SystemExit("Gate report is not bound to the supplied candidate.")
+          if report.get("ENGINEERING_STATE") != "PASS":
+              raise SystemExit("Engineering acceptance was not PASS.")
+          if report.get("remaining_blockers") != ["human_creative_and_rights_approval"]:
+              raise SystemExit("The gate report contains blockers beyond human approval.")
+          requirements = report.get("production_requirements") or {}
+          expected = {
+              "engineering_acceptance",
+              "technical_rights_evidence",
+              "otio_import_rerender",
+              "durable_storage_round_trip_and_fresh_process_restore",
+              "live_gpu_inference_and_artifact_verification",
+              "exact_candidate_live_deployment",
+              "human_creative_and_rights_approval",
+          }
+          if set(requirements) != expected:
+              raise SystemExit("The gate report does not contain the complete seven-gate schema.")
+          if any(requirements.get(key) is not True for key in expected - {"human_creative_and_rights_approval"}):
+              raise SystemExit("At least one non-human production gate is not PASS.")
+          if requirements.get("human_creative_and_rights_approval") is not False:
+              raise SystemExit("The candidate already contains an unexpected human approval state.")
+          if acceptance.get("overall_status") != "PASS" or acceptance.get("passed") is not True:
+              raise SystemExit("Full engineering acceptance is not PASS.")
+          expected_scenario_ids = {f"{index:02d}" for index in range(1, 21)}
+          if int(acceptance.get("scenario_count") or 0) != len(expected_scenario_ids):
+              raise SystemExit("The acceptance result must declare all 20 required scenarios.")
+          if int(acceptance.get("completed_scenarios") or 0) != len(expected_scenario_ids):
+              raise SystemExit("All 20 acceptance scenarios must be completed.")
+          tests = acceptance.get("tests") or []
+          scenario_map = {
+              str(row.get("scenario_id") or "").zfill(2): row
+              for row in tests
+              if isinstance(row, dict) and row.get("scenario_id") is not None
+          }
+          if len(tests) != 20 or set(scenario_map) != expected_scenario_ids:
+              raise SystemExit("The acceptance result must contain each scenario ID 01 through 20 exactly once.")
+          if any(row.get("status") != "PASS" for row in scenario_map.values()):
+              raise SystemExit("Every one of the 20 acceptance scenarios must pass.")
+          evidence = {
+              "gemini-writer-verification.json": "PASS",
+              "project-state-storage-verification.json": "PASS",
+              "wan-live-inference-verification.json": "PASS",
+              "live-deployment-verification.json": "PASS",
+          }
+          for filename, expected_status in evidence.items():
+              path = Path("acceptance-evidence") / filename
+              if not path.is_file():
+                  raise SystemExit(f"Missing external evidence: {filename}")
+              item = json.loads(path.read_text(encoding="utf-8"))
+              if item.get("status") != expected_status:
+                  raise SystemExit(f"{filename} is not PASS.")
+              if filename == "live-deployment-verification.json":
+                  if str(item.get("deployed_commit_sha") or "").lower() != candidate:
+                      raise SystemExit("Live Render revision does not match the accepted candidate.")
+          scenarios = {str(row.get("scenario_id") or "").zfill(2): row for row in tests}
+          flagship = (scenarios.get("01") or {}).get("result") or {}
+          media_sha = str(flagship.get("final_media_sha256") or "")
+          if len(media_sha) != 64 or any(ch not in "0123456789abcdef" for ch in media_sha.lower()):
+              raise SystemExit("Flagship media SHA-256 is missing or invalid.")
+          Path("acceptance-evidence/expected-human-review.json").write_text(
+              json.dumps({
+                  "candidate_commit_sha": candidate,
+                  "reviewed_media_sha256": media_sha,
+                  "dimensions": ["director", "cinematographer", "editor", "sound", "story", "rights"],
+              }, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print("NON_HUMAN_GATES=PASS")
+          print("CANDIDATE_SHA=" + candidate)
+          print("FLAGSHIP_MEDIA_SHA256=" + media_sha)
+          PY
+
+      - name: Validate human review and bind approval to the exact media SHA
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          HUMAN_REVIEW_JSON: ${{ inputs.human_review_json }}
+          REVIEWER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          from pathlib import Path
+          supplied = json.loads(os.environ["HUMAN_REVIEW_JSON"])
+          if not isinstance(supplied, dict):
+              raise SystemExit("Human review must be a JSON object.")
+          expected = json.loads(Path("acceptance-evidence/expected-human-review.json").read_text(encoding="utf-8"))
+          required_roles = {"director", "cinematographer", "editor", "sound", "story", "rights"}
+          scores = supplied.get("dimension_scores")
+          if not isinstance(scores, dict) or set(scores) != required_roles:
+              raise SystemExit("Provide exactly six dimension scores: director, cinematographer, editor, sound, story, rights.")
+          normalized = {role: float(scores[role]) for role in required_roles}
+          if any(score < 4.0 or score > 5.0 for score in normalized.values()):
+              raise SystemExit("Every dimension score must be between 4.0 and 5.0; the minimum passing score is 4.0.")
+          average = sum(normalized.values()) / 6
+          if average < 4.5:
+              raise SystemExit(f"Creative average {average:.3f} is below the required 4.5.")
+          if supplied.get("approved") is not True:
+              raise SystemExit("The reviewer did not explicitly approve this exact media.")
+          if supplied.get("rights_approval") is not True:
+              raise SystemExit("Explicit rights approval is required.")
+          review_notes = str(supplied.get("review_notes") or "").strip()
+          rights_notes = str(supplied.get("rights_notes") or "").strip()
+          if len(review_notes) < 20:
+              raise SystemExit("Review notes must describe the actual creative review.")
+          if len(rights_notes) < 20:
+              raise SystemExit("Rights notes must describe the actual rights and provenance review.")
+          if supplied.get("reviewed_media_sha256") != expected["reviewed_media_sha256"]:
+              raise SystemExit("Reviewed media SHA does not match the flagship delivered in the accepted run.")
+          record = {
+              "candidate_commit_sha": expected["candidate_commit_sha"],
+              "reviewed_media_sha256": expected["reviewed_media_sha256"],
+              "reviewer": os.environ["REVIEWER"],
+              "reviewed_at_utc": datetime.now(timezone.utc).isoformat(),
+              "approved": True,
+              "review_notes": review_notes,
+              "average_score": round(average, 4),
+              "dimension_scores": normalized,
+              "rights_approval": True,
+              "rights_notes": rights_notes,
+              "source": "owner-triggered GitHub Actions human review workflow",
+          }
+          path = Path("acceptance-evidence/human-creative-approval.json")
+          path.write_text(json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+          print("HUMAN_APPROVAL_BOUND_TO_CANDIDATE=" + record["candidate_commit_sha"])
+          print("HUMAN_APPROVAL_BOUND_TO_MEDIA_SHA256=" + record["reviewed_media_sha256"])
+          print("HUMAN_REVIEWER=" + record["reviewer"])
+          print("HUMAN_AVERAGE_SCORE=" + str(record["average_score"]))
+          PY
+
+      - name: Issue the final candidate-bound production certificate
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          python scripts/create_production_certificate.py \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --acceptance final-acceptance-result.json \
+            --gemini-writer acceptance-evidence/gemini-writer-verification.json \
+            --storage acceptance-evidence/project-state-storage-verification.json \
+            --inference acceptance-evidence/wan-live-inference-verification.json \
+            --deployment acceptance-evidence/live-deployment-verification.json \
+            --human-approval acceptance-evidence/human-creative-approval.json \
+            --output production-certificate.json \
+            --report production-gate-report.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          certificate = json.loads(Path("production-certificate.json").read_text(encoding="utf-8"))
+          if certificate.get("PRODUCTION_VERIFIED") != "PASS":
+              raise SystemExit("Production certificate did not reach PASS.")
+          if certificate.get("remaining_blockers") != []:
+              raise SystemExit("Certificate contains remaining blockers.")
+          print("PRODUCTION_CERTIFIED=PASS")
+          print("CANDIDATE_SHA=" + certificate["candidate_commit_sha"])
+          print("CERTIFICATE_SHA256=" + certificate["certificate_sha256"])
+          PY
+
+      - name: Upload final certificate and complete evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-infinity-production-certificate
+          path: |
+            production-certificate.json
+            final-acceptance-result.json
+            acceptance-evidence/**
+          if-no-files-found: error

@@ -212,7 +212,9 @@ def _fingerprint(project: Dict[str, Any], files: Dict[str, Path]) -> str:
         "transcript.txt", "sources.json", "fact_check.json", "provenance.json",
         "visual_rights.json", "manifest.json", "production_manifest.json",
         "rights_manifest.json", "seo.json", "social_campaign.json", "package.zip",
-        "accessibility.json", "timeline.json",
+        "accessibility.json", "timeline.json", "image.png", "image_manifest.json",
+        "image_package.zip", "image_package_manifest.json", "image_package_README.md",
+        "primary_content_delivery.json",
     }
     artifacts = []
     for name, path in sorted(files.items()):
@@ -241,6 +243,304 @@ def _fingerprint(project: Dict[str, Any], files: Dict[str, Path]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+
+_IMAGE_REVIEW_ROLES = {
+    "art_direction", "visual_design", "composition", "color", "accessibility", "rights",
+}
+
+
+def _image_role_review_validation(payload: Dict[str, Any]) -> Tuple[bool, Dict[str, float], str]:
+    scores_raw = payload.get("dimension_scores")
+    if not isinstance(scores_raw, dict) or set(str(k).strip().casefold() for k in scores_raw) != _IMAGE_REVIEW_ROLES:
+        return False, {}, "exactly six image-review scores are required: art_direction, visual_design, composition, color, accessibility, rights"
+    try:
+        scores = {str(k).strip().casefold(): float(v) for k, v in scores_raw.items()}
+    except (TypeError, ValueError, OverflowError):
+        return False, {}, "all six image-review scores must be numeric"
+    if any(not (1.0 <= value <= 5.0) for value in scores.values()):
+        return False, scores, "image-review scores must be between 1 and 5"
+    average = sum(scores.values()) / len(scores)
+    if min(scores.values()) < 4.0 or average < 4.5:
+        return False, scores, "image approval requires every role score to be at least 4.0 and the six-role average to be at least 4.5"
+    if payload.get("rights_approval") is not True:
+        return False, scores, "explicit image rights approval is required"
+    rights_notes = str(payload.get("rights_notes") or "").strip()
+    if len(rights_notes) < 20:
+        return False, scores, "rights notes must describe the actual rights/provenance review in at least 20 characters"
+    review_note = str(payload.get("note") or "").strip()
+    if len(review_note) < 20:
+        return False, scores, "review notes must explain the image approval in at least 20 characters"
+    return True, scores, ""
+
+
+def _build_image_scorecard(
+    project: Dict[str, Any],
+    files: Dict[str, Path],
+    req: Dict[str, Any],
+    blueprint: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Image-specific primary-deliverable review; never requires or invents an MP4."""
+    pid = str(project.get("project_id") or "")
+    image_path = files.get("image.png")
+    image_manifest = _read_json(files.get("image_manifest.json"))
+    image_package_manifest = _read_json(files.get("image_package_manifest.json"))
+    primary = _read_json(files.get("primary_content_delivery.json"))
+    production = _read_json(files.get("production_manifest.json"))
+    package_path = files.get("image_package.zip")
+    package_sha = ""
+    package_integrity = False
+    package_names = set()
+    packaged_manifest_sha = ""
+    try:
+        if package_path and package_path.is_file():
+            import zipfile
+            package_sha = _studio().file_sha256(package_path)
+            with zipfile.ZipFile(package_path, "r") as bundle:
+                package_integrity = bundle.testzip() is None
+                package_names = set(bundle.namelist())
+                manifest_member = "ai-infinity-image/image_package_manifest.json"
+                if manifest_member in package_names:
+                    packaged_manifest_sha = hashlib.sha256(bundle.read(manifest_member)).hexdigest()
+    except Exception:
+        package_integrity = False
+        package_names = set()
+    rights = _read_json(files.get("rights_manifest.json"))
+    prompt = str(req.get("image_prompt") or req.get("prompt") or req.get("objective") or req.get("topic") or "").strip()
+    title = str(req.get("title") or project.get("title") or "").strip()
+    image = {}
+    image_opened = False
+    image_sha = ""
+    image_size = 0
+    try:
+        if image_path and image_path.is_file():
+            from PIL import Image
+            with Image.open(image_path) as opened:
+                opened.verify()
+            with Image.open(image_path) as opened:
+                image = {
+                    "format": str(opened.format or "").upper(),
+                    "width": int(opened.width),
+                    "height": int(opened.height),
+                    "mode": str(opened.mode or ""),
+                }
+            image_opened = True
+            image_size = image_path.stat().st_size
+            image_sha = _studio().file_sha256(image_path)
+    except Exception:
+        image = {}
+        image_opened = False
+
+    manifest_output = image_manifest.get("output") if isinstance(image_manifest.get("output"), dict) else {}
+    generation = image_manifest.get("generation") if isinstance(image_manifest.get("generation"), dict) else {}
+    right_assets = rights.get("assets") if isinstance(rights.get("assets"), list) else []
+    matching_right = next((
+        row for row in right_assets
+        if isinstance(row, dict)
+        and str(row.get("asset") or "") == "image.png"
+        and str(row.get("sha256") or "") == image_sha
+    ), {})
+    primary_checks = primary.get("checks") if isinstance(primary.get("checks"), dict) else {}
+    primary_artifacts = primary.get("artifacts") if isinstance(primary.get("artifacts"), list) else []
+    primary_image = next((
+        row for row in primary_artifacts
+        if isinstance(row, dict)
+        and str(row.get("name") or "") == "image.png"
+        and str(row.get("sha256") or "") == image_sha
+    ), {})
+    primary_package = next((
+        row for row in primary_artifacts
+        if isinstance(row, dict)
+        and str(row.get("name") or "") == "image_package.zip"
+        and str(row.get("sha256") or "") == package_sha
+    ), {})
+    package_manifest_image = next((
+        row for row in (image_package_manifest.get("files") if isinstance(image_package_manifest.get("files"), list) else [])
+        if isinstance(row, dict)
+        and str(row.get("path") or "") == "image.png"
+        and str(row.get("sha256") or "") == image_sha
+    ), {})
+    package_manifest_rights = (
+        image_package_manifest.get("rights_status") == "REVIEW_REQUIRED"
+        and image_package_manifest.get("redistribution_authorized") is False
+        and image_package_manifest.get("publication_status") == "NOT_PUBLISHED"
+    )
+    required_package_names = {
+        "ai-infinity-image/image.png",
+        "ai-infinity-image/image_manifest.json",
+        "ai-infinity-image/sources.json",
+        "ai-infinity-image/rights_manifest.json",
+        "ai-infinity-image/production_manifest.json",
+        "ai-infinity-image/image_package_manifest.json",
+        "ai-infinity-image/image_package_README.md",
+    }
+    integrity_checks = {
+        "image_opens_and_decodes": image_opened,
+        "png_format": image.get("format") == "PNG",
+        "minimum_dimensions": int(image.get("width") or 0) >= 640 and int(image.get("height") or 0) >= 360,
+        "image_manifest_project_binding": image_manifest.get("project_id") == pid,
+        "image_manifest_sha256_matches": bool(image_sha) and manifest_output.get("sha256") == image_sha,
+        "primary_delivery_project_binding": primary.get("project_id") == pid,
+        "primary_delivery_status_pass": primary.get("status") == "PASS" and primary.get("primary_delivery_verified") is True,
+        "primary_delivery_artifact_sha_matches": bool(primary_image),
+        "image_package_project_binding": image_package_manifest.get("project_id") == pid,
+        "image_package_archive_integrity_passed": (
+            bool(package_path and package_path.is_file())
+            and package_integrity
+            and required_package_names.issubset(package_names)
+        ),
+        "image_package_manifest_sha_matches_archive": (
+            bool(packaged_manifest_sha)
+            and packaged_manifest_sha == _studio().file_sha256(files["image_package_manifest.json"])
+            if files.get("image_package_manifest.json") and files["image_package_manifest.json"].is_file()
+            else False
+        ),
+        "image_package_manifest_image_sha_matches": bool(package_manifest_image),
+        "primary_delivery_package_sha_matches": bool(primary_package),
+        "image_package_rights_remain_review_required": package_manifest_rights,
+        "rights_manifest_project_binding": rights.get("project_id") == pid,
+        "rights_manifest_asset_sha_matches": bool(matching_right),
+        "production_manifest_project_binding": production.get("project_id") == pid,
+        "production_manifest_primary_sha_matches": (
+            isinstance(production.get("primary_deliverable"), dict)
+            and production["primary_deliverable"].get("sha256") == image_sha
+        ),
+    }
+    critical_failures = [key for key, passed in integrity_checks.items() if not passed]
+    rights_status = str(rights.get("rights_status") or rights.get("status") or "REVIEW_REQUIRED").upper()
+    rights_review_required = rights_status != "CLEARED"
+    dimensions = [
+        {
+            "id": "brief_alignment", "dimension": "Brief alignment and image intent",
+            "critic_pass": "image_integrity", "applicable": True, "score": 4 if bool(title and prompt) else 2,
+            "scale": "1–5 evidence scale",
+            "evidence": [f"title_present={bool(title)}", f"prompt_present={bool(prompt)}", f"language={req.get('language') or 'unknown'}"],
+            "method": "Checks persisted creator brief and prompt binding; does not claim the output semantically fulfils the brief.",
+            "limitation": "Semantic visual alignment requires human viewing.",
+        },
+        {
+            "id": "image_file_integrity", "dimension": "Image file integrity and provenance binding",
+            "critic_pass": "image_integrity", "applicable": True, "score": 5 if not critical_failures else 1,
+            "scale": "1–5 evidence scale",
+            "evidence": [f"{key}={passed}" for key, passed in integrity_checks.items()],
+            "method": "Opens the actual PNG, inspects dimensions, computes SHA-256 and compares the exact bytes with image, primary-delivery, production and rights manifests.",
+            "limitation": "Byte integrity proves identity and decode, not aesthetic quality or legal ownership.",
+        },
+        {
+            "id": "composition_framing", "dimension": "Composition, framing and resolution",
+            "critic_pass": "image_integrity", "applicable": True,
+            "score": 5 if image.get("width", 0) >= 1920 and image.get("height", 0) >= 1080 else 4 if image.get("width", 0) >= 1280 and image.get("height", 0) >= 720 else 3 if image_opened else 1,
+            "scale": "1–5 evidence scale",
+            "evidence": [f"width={image.get('width', 0)}", f"height={image.get('height', 0)}", f"format={image.get('format', 'unknown')}"],
+            "method": "Measures decoded pixel dimensions and format only.",
+            "limitation": "Composition, visual hierarchy, crop quality and colour judgement need human inspection.",
+        },
+        {
+            "id": "visual_design", "dimension": "Visual design and stylistic coherence",
+            "critic_pass": "human_review", "applicable": True, "score": 3 if image_opened else 1,
+            "scale": "1–5 evidence scale",
+            "evidence": [f"generation_mode={generation.get('mode') or 'unknown'}", f"provider_or_method={generation.get('provider_or_method') or 'unknown'}"],
+            "method": "Reports the generation method; does not infer visual appeal from a filename or prompt.",
+            "limitation": "A human must inspect the actual image for visual quality, coherence and brief fidelity.",
+        },
+        {
+            "id": "accessibility_description", "dimension": "Accessibility description and language",
+            "critic_pass": "human_review", "applicable": True,
+            "score": 4 if str((image_manifest.get("accessibility") or {}).get("alt_text_draft") or "").strip() else 2,
+            "scale": "1–5 evidence scale",
+            "evidence": [f"alt_text_draft_present={bool(str((image_manifest.get('accessibility') or {}).get('alt_text_draft') or '').strip())}", f"language={image_manifest.get('language') or 'unknown'}"],
+            "method": "Checks for a non-empty draft alternative description and declared language.",
+            "limitation": "Alternative text accuracy and suitability must be reviewed by a person.",
+        },
+        {
+            "id": "rights_provenance", "dimension": "Rights, source and provenance review",
+            "critic_pass": "human_review", "applicable": True,
+            "score": 3 if bool(matching_right) and rights_review_required else 1 if not matching_right else 4,
+            "scale": "1–5 evidence scale",
+            "evidence": [f"rights_status={rights_status}", f"rights_asset_sha_matches={bool(matching_right)}", f"declared_license={matching_right.get('declared_license') or 'not supplied'}"],
+            "method": "Binds the rights record to the exact image SHA-256; keeps REVIEW_REQUIRED visible until explicit human rights approval.",
+            "limitation": "A manifest is not a legal opinion or a license grant.",
+        },
+    ]
+    applicable = [row for row in dimensions if row.get("applicable")]
+    avg = round(sum(float(row["score"]) for row in applicable) / len(applicable), 3) if applicable else 0.0
+    min_score = min([float(row["score"]) for row in applicable] or [0])
+    image_integrity_passed = not critical_failures
+    # This means ready for a human review, not approved or publishable.
+    eligible_for_human_approval = image_integrity_passed and bool(matching_right)
+    fingerprint = _fingerprint(project, files)
+    return {
+        "schema": SCHEMA,
+        "version": VERSION,
+        "project_id": pid,
+        "project_status": project.get("status"),
+        "content_type": "image",
+        "content_fingerprint": fingerprint,
+        "generated_at_epoch": int(project.get("updated_at") or project.get("created_at") or 0),
+        "scoring_policy": {
+            "scale": {"1": "critical weakness", "2": "weak", "3": "adequate but needs review", "4": "strong observable evidence", "5": "strong evidence across applicable checks"},
+            "thresholds": {"automated_average_reference": 4.0, "human_image_role_average_at_least": 4.5, "each_human_role_at_least": 4.0, "critical_failures_allowed": 0},
+            "automated_judgements_are_not_human_taste": True,
+            "automatic_publish_approval": False,
+        },
+        "brief": {
+            "title": title, "objective": prompt, "content_type": "image",
+            "language": req.get("language"), "visual_style": req.get("visual_style"),
+        },
+        "media": {
+            "image_png_present": bool(image_path and image_path.is_file()),
+            "image_size_bytes": image_size,
+            "image_sha256": image_sha or None,
+            "image_package_sha256": package_sha or None,
+            "image_package_size_bytes": package_path.stat().st_size if package_path and package_path.is_file() else 0,
+            "width": image.get("width"), "height": image.get("height"),
+            "format": image.get("format"), "generation_mode": generation.get("mode"),
+            "fallback_used": generation.get("fallback_used") is True,
+        },
+        "dimensions": dimensions,
+        "critique_passes": {
+            "native_image_integrity": {
+                "type": "independent deterministic PNG decode, byte-hash and manifest-binding checks",
+                "conclusion": "confirms exact image identity and integrity only",
+            },
+            "human_visual_review": {
+                "type": "requires human visual judgement; automated metadata is not a critic",
+                "required_roles": sorted(_IMAGE_REVIEW_ROLES),
+                "minimum_role_score": 4.0,
+                "minimum_average_score": 4.5,
+                "explicit_rights_approval_required": True,
+            },
+        },
+        "technical_truth": {
+            "verified": image_integrity_passed,
+            "scope": "native_primary_image_integrity_only",
+            "checks": integrity_checks,
+            "failures": critical_failures,
+            "warnings": ["rights and creative approval remain separate human decisions"] if rights_review_required else [],
+        },
+        "release_gate": {
+            "average_score": avg,
+            "minimum_dimension_score": min_score,
+            "critical_failure_count": len(critical_failures),
+            "critical_failures": critical_failures,
+            "technical_truth_passed": image_integrity_passed,
+            "score_threshold_passed": avg >= 4.0 and min_score >= 3.0,
+            "eligible_for_human_approval": eligible_for_human_approval,
+            "rights_review_required": rights_review_required,
+            "explicit_rights_approval_required": True,
+            "required_human_roles": sorted(_IMAGE_REVIEW_ROLES),
+            "human_role_score_minimum": 4.0,
+            "human_role_average_minimum": 4.5,
+            "publish_ready": False,
+            "publish_ready_reason": "Image review can record an owner-bound visual and rights decision; external image publishing is not enabled by this review panel.",
+        },
+        "human_approval": {
+            "state": "pending", "required": True, "publish_ready": False,
+            "rights_approval_required": True,
+        },
+        "truthful": True,
+    }
+
+
 def _security_scan(files: Dict[str, Path]) -> List[str]:
     findings = []
     scan_names = {
@@ -265,6 +565,8 @@ def build_scorecard(project: Dict[str, Any]) -> Dict[str, Any]:
     files = _project_files(pid)
     req = _loads(project.get("request_json"))
     blueprint = _loads(project.get("blueprint_json"))
+    if str(req.get("content_type") or "").strip().lower() == "image":
+        return _build_image_scorecard(project, files, req, blueprint)
     plan = blueprint.get("plan") if isinstance(blueprint.get("plan"), dict) else blueprint
     chapters = _scene_list(blueprint)
     script = _read_text(files.get("script.md")) or _read_text(files.get("transcript.txt"))
@@ -641,18 +943,33 @@ def _ensure_review_table() -> None:
                 decision TEXT NOT NULL,
                 note TEXT NOT NULL DEFAULT '',
                 scorecard_version TEXT NOT NULL,
-                created_at REAL NOT NULL
+                created_at REAL NOT NULL,
+                dimension_scores_json TEXT NOT NULL DEFAULT '{}',
+                rights_approval INTEGER NOT NULL DEFAULT 0,
+                rights_notes TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_aii_editorial_reviews_project
                 ON aii_editorial_reviews(project_id, created_at DESC);
         """)
+        columns = {
+            str(row["name"])
+            for row in db.execute("PRAGMA table_info(aii_editorial_reviews)").fetchall()
+        }
+        migrations = {
+            "dimension_scores_json": "ALTER TABLE aii_editorial_reviews ADD COLUMN dimension_scores_json TEXT NOT NULL DEFAULT '{}'",
+            "rights_approval": "ALTER TABLE aii_editorial_reviews ADD COLUMN rights_approval INTEGER NOT NULL DEFAULT 0",
+            "rights_notes": "ALTER TABLE aii_editorial_reviews ADD COLUMN rights_notes TEXT NOT NULL DEFAULT ''",
+        }
+        for name, statement in migrations.items():
+            if name not in columns:
+                db.execute(statement)
 
 
 def _review_rows(project_id: str, user_id: str) -> List[Dict[str, Any]]:
     s = _studio()
     with s.DB_LOCK, s._connect() as db:
         rows = db.execute(
-            "SELECT review_id, project_id, user_id, content_fingerprint, decision, note, scorecard_version, created_at FROM aii_editorial_reviews WHERE project_id=? AND user_id=? ORDER BY created_at DESC",
+            "SELECT review_id, project_id, user_id, content_fingerprint, decision, note, scorecard_version, created_at, dimension_scores_json, rights_approval, rights_notes FROM aii_editorial_reviews WHERE project_id=? AND user_id=? ORDER BY created_at DESC",
             (project_id, user_id),
         ).fetchall()
     return [dict(row) for row in rows]
@@ -670,10 +987,33 @@ def _review_state(rows: List[Dict[str, Any]], fingerprint: str) -> Dict[str, Any
             "latest_review": latest,
         }
     state = "approved" if latest.get("decision") == "approve" else "rejected"
+    scores_raw = latest.get("dimension_scores_json")
+    has_image_roles = bool(scores_raw and str(scores_raw).strip() not in {"", "{}"})
+    if has_image_roles:
+        try:
+            image_scores = json.loads(str(scores_raw))
+            valid_roles = isinstance(image_scores, dict) and set(image_scores) == _IMAGE_REVIEW_ROLES
+            numeric_scores = {key: float(value) for key, value in image_scores.items()} if valid_roles else {}
+            roles_valid = (
+                valid_roles
+                and all(1.0 <= value <= 5.0 for value in numeric_scores.values())
+                and min(numeric_scores.values()) >= 4.0
+                and sum(numeric_scores.values()) / 6.0 >= 4.5
+            )
+        except (TypeError, ValueError, OverflowError, json.JSONDecodeError):
+            roles_valid = False
+        rights_valid = int(latest.get("rights_approval") or 0) == 1 and len(str(latest.get("rights_notes") or "").strip()) >= 20
+        if state == "approved" and not (roles_valid and rights_valid):
+            state = "incomplete"
     return {
         "state": state,
         "required": state != "approved",
-        "publish_ready": state == "approved",
+        # A reviewed image remains a private/reviewable asset. The review panel
+        # records an owner decision but does not implement external image publishing.
+        "publish_ready": state == "approved" and not has_image_roles,
+        "review_complete": state == "approved" and has_image_roles,
+        "image_role_scores": numeric_scores if has_image_roles and roles_valid else None,
+        "rights_approved_for_exact_asset": bool(has_image_roles and rights_valid),
         "latest_review": latest,
     }
 
@@ -754,6 +1094,9 @@ def _persist_scorecard(project: Dict[str, Any], scorecard: Dict[str, Any], revie
         "state": review_state.get("state") or "pending",
         "required": bool(review_state.get("required", True)),
         "publish_ready": bool(review_state.get("publish_ready", False)),
+        "review_complete": bool(review_state.get("review_complete", False)),
+        "rights_approved_for_exact_asset": bool(review_state.get("rights_approved_for_exact_asset", False)),
+        "image_role_scores": review_state.get("image_role_scores"),
         "latest_review": review_state.get("latest_review"),
     }
     encoded = json.dumps(scorecard, ensure_ascii=False, sort_keys=True, indent=2, default=str)
@@ -848,12 +1191,12 @@ def install() -> None:
       var rows=dims.map(function(d){
         return '<div class="aiiDim"><b>'+escHtml(d.dimension)+(d.applicable?'':' <span class="aiiSmall">(N/A)</span>')+'</b><span class="aiiScore">'+(d.applicable?escHtml(d.score)+'/5':'—')+'</span><div class="aiiEvidence"><div class="aiiSmall">'+escHtml((d.evidence||[]).join(' · '))+'</div><div class="aiiSmall">'+escHtml(d.method||'')+'</div></div></div>';
       }).join('');
-      var status=gate.eligible_for_human_approval?'Eligible for human review':'Repair required before approval';
-      var approveDisabled=!(gate.eligible_for_human_approval);
+      var status=review.state==='approved'?'Human review complete':(gate.eligible_for_human_approval?'Eligible for human review':'Repair required before approval');
+      var approveDisabled=!(gate.eligible_for_human_approval) || (q.content_type==='image' && review.state==='approved');
       var panel=document.getElementById('aiiEditorialPanel');
       if(!panel){panel=document.createElement('section');panel.id='aiiEditorialPanel';findHost().appendChild(panel);}
       panel.innerHTML='<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><b>Editorial scorecard '+escHtml(q.version||'')+'</b><span>'+escHtml(review.state||'pending')+'</span></div>'+
-        '<p class="aiiSmall">Automated evidence review only. It does not guarantee human-level taste. Publication requires explicit human approval tied to this exact artifact fingerprint.</p>'+
+        '<p class="aiiSmall">'+(q.content_type==='image'?'Image bytes and manifests are verified independently. Image approval requires six human role scores and an explicit rights attestation for this exact fingerprint. The rights manifest remains REVIEW_REQUIRED; this panel does not publish images.':'Automated evidence review only. It does not guarantee human-level taste. Publication requires explicit human approval tied to this exact artifact fingerprint.')+'</p>'+
         '<div class="aiiSmall">Automated average: '+escHtml(gate.average_score)+'/5 · minimum dimension: '+escHtml(gate.minimum_dimension_score)+'/5 · critical failures: '+escHtml(gate.critical_failure_count)+'</div>'+
         '<div class="aiiSmall">'+escHtml(status)+'</div>'+
         rows+
@@ -863,16 +1206,41 @@ def install() -> None:
           '<a class="btn" target="_blank" rel="noopener" href="/infinity/studio/project/'+encodeURIComponent(activeId)+'/asset/editorial_scorecard.json">Open scorecard JSON</a>'+
         '</div><div class="aiiSmall" style="margin-top:8px">Fingerprint: '+escHtml(q.content_fingerprint||'')+'</div>'+
         '<div id="aiiEditorialActionResult" class="aiiSmall" style="margin-top:8px"></div>';
-      document.getElementById('aiiEditorialApprove').onclick=function(){submit('approve',q.content_fingerprint);};
-      document.getElementById('aiiEditorialReject').onclick=function(){submit('reject',q.content_fingerprint);};
+      document.getElementById('aiiEditorialApprove').onclick=function(){submit('approve',q.content_fingerprint,q);};
+      document.getElementById('aiiEditorialReject').onclick=function(){submit('reject',q.content_fingerprint,q);};
     }catch(e){}
   }
-  async function submit(decision,fingerprint){
+  async function submit(decision,fingerprint,scorecard){
     if(!activeId)return;
     var note='';
-    try{note=window.prompt(decision==='approve'?'Optional human review note (what was checked)':'Describe required repairs or rejection reason','')||'';}catch(e){}
+    var payload={decision:decision,expected_fingerprint:fingerprint};
     try{
-      var result=await api('/infinity/studio/project/'+encodeURIComponent(activeId)+'/editorial-review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({decision:decision,note:note,expected_fingerprint:fingerprint})});
+      note=window.prompt(decision==='approve'?'Describe what you personally inspected in this exact image version (minimum 20 characters).':'Describe required repairs or rejection reason','');
+      if(note===null)return;
+      payload.note=note;
+      if(decision==='approve' && scorecard && scorecard.content_type==='image'){
+        var roles=['art_direction','visual_design','composition','color','accessibility','rights'];
+        var scores={};
+        for(var i=0;i<roles.length;i++){
+          var value=window.prompt('Enter your '+roles[i].replace(/_/g,' ')+' review score for this exact image (1–5). Approval requires at least 4 in every role and 4.5 average.','');
+          if(value===null)return;
+          if(String(value).trim()==='' || !Number.isFinite(Number(value))){throw new Error('A numeric score is required for every image-review role.');}
+          scores[roles[i]]=Number(value);
+        }
+        if(!window.confirm('Have you personally reviewed the source, generation method, license and redistribution rights for this exact image, and do you explicitly approve those rights? This does not publish the image.'))return;
+        var rightsNotes=window.prompt('Describe the source, generation method and rights/provenance basis for this exact image (minimum 20 characters).','');
+        if(rightsNotes===null)return;
+        payload.dimension_scores=scores;
+        payload.rights_approval=true;
+        payload.rights_notes=rightsNotes;
+      }
+    }catch(e){
+      var validationBox=document.getElementById('aiiEditorialActionResult');
+      if(validationBox)validationBox.textContent=String(e.message||e);
+      return;
+    }
+    try{
+      var result=await api('/infinity/studio/project/'+encodeURIComponent(activeId)+'/editorial-review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
       var box=document.getElementById('aiiEditorialActionResult');
       if(box)box.textContent='Saved review: '+String((result.review||{}).decision||decision)+'. Reloading evidence…';
       await load(activeId);
@@ -946,6 +1314,15 @@ def register(app) -> None:
                 "message": "approval blocked until technical truth and the documented score thresholds pass with zero critical failures",
                 "release_gate": gate,
             })
+        dimension_scores = {}
+        rights_approval = False
+        rights_notes = ""
+        if str(card.get("content_type") or "").lower() == "image" and decision == "approve":
+            valid_image_review, dimension_scores, review_error = _image_role_review_validation(payload or {})
+            if not valid_image_review:
+                raise HTTPException(422, review_error)
+            rights_approval = True
+            rights_notes = str((payload or {}).get("rights_notes") or "").strip()[:4000]
         review = {
             "review_id": "edrev_" + uuid.uuid4().hex,
             "project_id": project_id,
@@ -954,12 +1331,19 @@ def register(app) -> None:
             "decision": decision,
             "note": note,
             "scorecard_version": VERSION,
+            "dimension_scores": dimension_scores,
+            "rights_approval": rights_approval,
+            "rights_notes": rights_notes,
             "created_at": time.time(),
         }
         with s.DB_LOCK, s._connect() as db:
             db.execute(
-                "INSERT INTO aii_editorial_reviews(review_id,project_id,user_id,content_fingerprint,decision,note,scorecard_version,created_at) VALUES(?,?,?,?,?,?,?,?)",
-                (review["review_id"], project_id, user_id, current, decision, note, VERSION, review["created_at"]),
+                "INSERT INTO aii_editorial_reviews(review_id,project_id,user_id,content_fingerprint,decision,note,scorecard_version,created_at,dimension_scores_json,rights_approval,rights_notes) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    review["review_id"], project_id, user_id, current, decision, note,
+                    VERSION, review["created_at"], json.dumps(dimension_scores, sort_keys=True),
+                    1 if rights_approval else 0, rights_notes,
+                ),
             )
         try:
             s.audit_event(project_id, "editorial_human_review", {
@@ -967,6 +1351,9 @@ def register(app) -> None:
                 "review_id": review["review_id"],
                 "content_fingerprint": current,
                 "scorecard_version": VERSION,
+                "dimension_scores": dimension_scores,
+                "rights_approval": rights_approval,
+                "rights_notes_present": len(rights_notes) >= 20,
             })
         except Exception:
             pass

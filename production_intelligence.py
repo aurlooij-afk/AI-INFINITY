@@ -42,6 +42,16 @@ def own(pid,request):
     return p
 
 def provider_status():
+    vision_key = bool(os.getenv("OPENAI_API_KEY", "").strip())
+    vision_ack = os.getenv("AI_INFINITY_OPENAI_VISION_PAID_USAGE_ACK", "").strip().lower() in {"1", "true", "yes", "on"}
+    vision_model = os.getenv("AI_INFINITY_VISION_MODEL", "").strip()
+    vision_enabled = vision_key and vision_ack and bool(vision_model)
+    vision_state = (
+        "not_configured" if not vision_key else
+        "model_not_configured" if not vision_model else
+        "paid_usage_not_authorized" if not vision_ack else
+        "billing_acknowledged_unverified"
+    )
     return {
       "version":VERSION,"build":BUILD,
       "research":{
@@ -50,7 +60,12 @@ def provider_status():
         "api_anything":api_anything_connector.status(),
         "fallback":"Wikipedia + DuckDuckGo"
       },
-      "vision":{"openai":bool(os.getenv("OPENAI_API_KEY","").strip()),"model":os.getenv("AI_INFINITY_VISION_MODEL","gpt-5.6-luna")},
+      "vision":{
+        "openai":vision_key,"configured":bool(vision_key and vision_model),
+        "enabled":bool(vision_enabled),"status":vision_state,
+        "pricing_class":"paid_metered","availability":"not_verified",
+        "model":vision_model or None
+      },
       "voice":{"elevenlabs":bool(os.getenv("ELEVENLABS_API_KEY","").strip()),"model":os.getenv("AI_INFINITY_ELEVEN_MODEL","eleven_multilingual_v2")},
       "sound_effects":{"elevenlabs":bool(os.getenv("ELEVENLABS_API_KEY","").strip())},
       "truthful":True
@@ -194,7 +209,17 @@ def frame_image(path:Path)->tuple[Path,Optional[Path]]:
 
 def openai_vision(path:Path,shot:Dict[str,Any])->Dict[str,Any]:
     key=os.getenv("OPENAI_API_KEY","").strip()
-    if not key:return {"status":"not_configured","provider":"openai","truthful":True}
+    ack=os.getenv("AI_INFINITY_OPENAI_VISION_PAID_USAGE_ACK","").strip().lower() in {"1","true","yes","on"}
+    model=os.getenv("AI_INFINITY_VISION_MODEL","").strip()
+    policy_check=getattr(studio(),"_external_providers_disabled",None)
+    if callable(policy_check) and policy_check():
+        return {"status":"disabled_by_policy","provider":"openai","api_request_sent":False,"truthful":True}
+    if not key:
+        return {"status":"not_configured","provider":"openai","api_request_sent":False,"truthful":True}
+    if not ack:
+        return {"status":"paid_provider_authorization_required","provider":"openai","pricing_class":"paid_metered","api_request_sent":False,"truthful":True}
+    if not model:
+        return {"status":"model_not_configured","provider":"openai","api_request_sent":False,"truthful":True}
     frame,temporary=frame_image(path)
     try:
         mime=mimetypes.guess_type(str(frame))[0] or "image/jpeg"
@@ -202,23 +227,23 @@ def openai_vision(path:Path,shot:Dict[str,Any])->Dict[str,Any]:
         prompt={
           "role":"strict senior film editor and visual QC director",
           "shot":{"purpose":shot.get("purpose"),"duration":shot.get("duration"),"narration":shot.get("narration"),"visual_prompt":shot.get("visual_prompt"),"metadata":shot.get("metadata")},
-          "task":"Judge this actual generated frame against the shot intent. Do not reward technical existence alone.",
+          "task":"Judge this actual generated frame against the shot intent. Do not reward technical existence alone. Return scores from 0 to 100, concrete issues, a specific revision prompt, and a cautious recommendation.",
           "return_json":{
-            "narration_alignment":"0-100",
-            "composition":"0-100",
-            "visual_quality":"0-100",
-            "cinematography":"0-100",
-            "continuity":"0-100",
-            "brand_match":"0-100",
-            "artifact_free":"0-100",
+            "narration_alignment":"number 0-100",
+            "composition":"number 0-100",
+            "visual_quality":"number 0-100",
+            "cinematography":"number 0-100",
+            "continuity":"number 0-100",
+            "brand_match":"number 0-100",
+            "artifact_free":"number 0-100",
             "specific_issues":["string"],
             "revision_prompt":"string",
             "decision":"accept|review|reject"
           }
         }
-        payload={"model":os.getenv("AI_INFINITY_VISION_MODEL","gpt-5.6-luna"),
+        payload={"model":model,
                  "input":[{"role":"user","content":[
-                   {"type":"input_text","text":"Return JSON only.\n"+json.dumps(prompt,ensure_ascii=False)},
+                   {"type":"input_text","text":"Return JSON only.\\n"+json.dumps(prompt,ensure_ascii=False)},
                    {"type":"input_image","image_url":f"data:{mime};base64,{b64}","detail":"high"}
                  ]}]}
         r=requests.post("https://api.openai.com/v1/responses",
@@ -227,7 +252,9 @@ def openai_vision(path:Path,shot:Dict[str,Any])->Dict[str,Any]:
         r.raise_for_status()
         parsed=parse_json_text(parse_output_text(r.json()))
         parsed["provider"]="openai"
-        parsed["model"]=payload["model"]
+        parsed["model"]=model
+        parsed["status"]="completed" if not parsed.get("parse_error") else "invalid_response"
+        parsed["api_request_sent"]=True
         parsed["truthful"]=True
         return parsed
     finally:
@@ -238,46 +265,93 @@ def openai_vision(path:Path,shot:Dict[str,Any])->Dict[str,Any]:
 def vision_review(pid,cid,user):
     with db() as c:
         row=c.execute("SELECT * FROM pg_candidates WHERE candidate_id=? AND project_id=?",(cid,pid)).fetchone()
-        shot=c.execute("SELECT * FROM pg_shots WHERE shot_id=?",(row["shot_id"],)).fetchone() if row else None
+        shot=c.execute("SELECT * FROM pg_shots WHERE shot_id=? AND project_id=?",(row["shot_id"],pid)).fetchone() if row else None
     if not row:raise HTTPException(404,"candidate not found")
-    path=Path(row["asset_path"] or "")
-    tech=pg().tech(path)
-    visual=openai_vision(path,dict(shot or {}))
-    nums=[]
-    for k in ("narration_alignment","composition","visual_quality","cinematography","continuity","brand_match","artifact_free"):
+    if row["status"] != "ready_for_creative_review":
+        raise HTTPException(409,"candidate must pass technical QA before vision review")
+    resolved=pg().candidate_local_path(pid,cid,user)
+    technical=pg().tech(resolved)
+    if technical.get("decision") != "technical_pass":
+        raise HTTPException(409,"candidate must pass full technical decode and HD checks before vision review")
+    visual=openai_vision(resolved,dict(shot or {}))
+    required=("narration_alignment","composition","visual_quality","cinematography","continuity","brand_match","artifact_free")
+    numbers={}
+    for key in required:
         try:
-            v=float(visual.get(k)); nums.append(v)
-        except Exception:pass
-    score=round(sum(nums)/len(nums),1) if nums else float(tech.get("score") or 0)
-    if visual.get("status")=="not_configured": score=float(tech.get("score") or 0)
-    decision="accept" if score>=80 else ("review" if score>=60 else "reject")
+            value=float(visual.get(key))
+            if not (0.0 <= value <= 100.0):
+                raise ValueError("score outside 0–100")
+            numbers[key]=value
+        except (TypeError,ValueError,OverflowError):
+            pass
+    score=round(sum(numbers.values())/len(required),1) if len(numbers)==len(required) and visual.get("status")=="completed" else None
+    if score is None:
+        recommendation="vision_unavailable" if visual.get("status")!="completed" else "incomplete_vision_report"
+    elif score>=80:
+        recommendation="recommended_accept"
+    elif score>=60:
+        recommendation="recommended_review"
+    else:
+        recommendation="recommended_reject"
+    report={
+        "technical":technical,
+        "vision":visual,
+        "vision_scores":numbers,
+        "vision_score":score,
+        "creative_recommendation":recommendation,
+        "creative_approval":"PENDING",
+        "human_review_status":"PENDING",
+        "rights_status":"REVIEW_REQUIRED",
+        "truthful":True,
+    }
     rid="rev_"+uuid.uuid4().hex
-    report={"technical":tech,"vision":visual,"score":score,"decision":decision,"truthful":True}
     with db() as c:
         c.execute("INSERT INTO pg_reviews(review_id,project_id,shot_id,candidate_id,reviewer,score,decision,report_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                  (rid,pid,row["shot_id"],cid,"multimodal-qc" if visual.get("provider") else "technical-qc",score,decision,json.dumps(report,ensure_ascii=False,sort_keys=True),time.time()))
-        c.execute("UPDATE pg_candidates SET score=?,critic_json=?,status=?,updated_at=? WHERE candidate_id=?",
-                  (score,json.dumps(report,ensure_ascii=False,sort_keys=True),"accepted" if decision=="accept" else "reviewed",time.time(),cid))
-    return {"review_id":rid,"candidate_id":cid,"score":score,"decision":decision,"report":report,"truthful":True}
+                  (rid,pid,row["shot_id"],cid,"multimodal-qc" if score is not None else "vision-qc-unavailable",score,
+                   "vision_"+recommendation,json.dumps(report,ensure_ascii=False,sort_keys=True),time.time()))
+        # Vision recommendations never mutate technical readiness or set a shot
+        # winner. The creator must still explicitly select a candidate, and
+        # rights/human approval remain separate release gates.
+        c.execute("UPDATE pg_candidates SET critic_json=?,updated_at=? WHERE candidate_id=?",
+                  (json.dumps(report,ensure_ascii=False,sort_keys=True),time.time(),cid))
+    return {
+        "review_id":rid,"candidate_id":cid,"score":score,
+        "decision":recommendation,"report":report,
+        "creative_approval":"PENDING","human_review_status":"PENDING",
+        "truthful":True,
+    }
 
 def autoselect(pid,user,threshold=80):
+    """Rank explicit vision recommendations without mutating project selection."""
+    threshold=max(0.0,min(100.0,float(threshold)))
     with db() as c:
         shots=c.execute("SELECT * FROM pg_shots WHERE project_id=? ORDER BY seq",(pid,)).fetchall()
         result=[]
-        for sh in shots:
-            rows=c.execute("SELECT * FROM pg_candidates WHERE shot_id=? AND status IN ('ready','reviewed','accepted') ORDER BY created_at DESC",(sh["shot_id"],)).fetchall()
+        for shot in shots:
+            rows=c.execute(
+                "SELECT * FROM pg_candidates WHERE shot_id=? AND project_id=? AND status='ready_for_creative_review' ORDER BY created_at DESC",
+                (shot["shot_id"],pid),
+            ).fetchall()
             ranked=[]
             for row in rows:
-                if row["score"] is not None: ranked.append((float(row["score"]),row))
-                elif row["asset_path"]: ranked.append((float(pg().tech(Path(row["asset_path"])).get("score") or 0),row))
-            ranked.sort(key=lambda x:x[0],reverse=True)
-            winner=None
-            if ranked and ranked[0][0]>=threshold:
-                winner=ranked[0][1]
-                c.execute("UPDATE pg_candidates SET status='accepted',updated_at=? WHERE candidate_id=?",(time.time(),winner["candidate_id"]))
-                c.execute("UPDATE pg_shots SET winner_candidate_id=?,critic_score=?,status='approved',updated_at=? WHERE shot_id=?",(winner["candidate_id"],ranked[0][0],time.time(),sh["shot_id"]))
-            result.append({"shot_id":sh["shot_id"],"candidate_count":len(ranked),"winner":winner["candidate_id"] if winner else None,"score":ranked[0][0] if ranked else None})
-    return {"project_id":pid,"threshold":threshold,"shots":result,"truthful":True}
+                try:report=json.loads(row["critic_json"] or "{}")
+                except Exception:report={}
+                score=report.get("vision_score")
+                if isinstance(score,(int,float)):
+                    ranked.append((float(score),row["candidate_id"],report.get("creative_recommendation")))
+            ranked.sort(key=lambda item:item[0],reverse=True)
+            suggested=ranked[0] if ranked and ranked[0][0]>=threshold else None
+            result.append({
+                "shot_id":shot["shot_id"],
+                "candidate_count":len(rows),
+                "suggested_candidate_id":suggested[1] if suggested else None,
+                "vision_score":suggested[0] if suggested else None,
+                "recommendation":suggested[2] if suggested else "no_vision_recommendation_above_threshold",
+                "creator_selection_required":True,
+                "truthful":True,
+            })
+    return {"project_id":pid,"threshold":threshold,"shots":result,
+            "mutated_project":False,"truthful":True}
 
 def char_srt(text_value,alignment):
     chars=list(alignment.get("characters") or [])
