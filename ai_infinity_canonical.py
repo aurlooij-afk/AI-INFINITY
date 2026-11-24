@@ -1061,7 +1061,7 @@ def dispatch_command(command, user_id, raw=None, request=None):
             "status": "unsupported_or_incomplete", "route": route,
             "reason": decision["reason"],
             "supported_routes": [
-                "research", "create", "edit_existing_project", "project_status", "capabilities",
+                "research", "create", "edit", "project_status", "capabilities",
                 "script", "strategy", "marketing", "seo", "analytics", "publisher", "monetization",
                 "public_api", "github_api",
             ],
